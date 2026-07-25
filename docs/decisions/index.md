@@ -18,4 +18,5 @@ than silent divergence or knowingly faithful implementation of a defect.
 9. [Future non-USD pricing normalization](0009-future-non-usd-pricing.md)
 10. [Durable v1 runtime composition](0010-durable-v1-runtime-composition.md)
 11. [Durable Generate phase runner](0011-durable-generate-phase-runner.md)
+12. [Snapshot-scoped v1 runtime source](0012-snapshot-scoped-v1-runtime-source.md)
 13. [Durable Compact phase runner](0013-durable-compact-phase-runner.md)
