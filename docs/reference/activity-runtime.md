@@ -133,6 +133,16 @@ work. Production composition must still provide those operations behind the
 state-aware runtime and must map authenticated request context to the durable
 scope identifier; raw tenant/project concatenation is intentionally not used.
 
+After a successful materializer read, the Activity seam performs a second,
+storage-neutral contract check before dispatch. The returned handle and scope
+must match the requested values; lineage must be non-empty, acyclic, and end
+at that handle; depth and the materialized root model must be valid; and the
+tool-call frontier must exactly match `ValidateTranscript` over the returned
+items. A mismatch is classified as non-retryable `state_corrupt` with no
+provider dispatch. This is defense in depth for adapter composition, not a
+replacement for the durable materializer's graph, blob, expiry, and size
+validation.
+
 The Generate and Compact request/response records carry only bounded deltas,
 settings, result metadata, and opaque checkpoint handles. A regression test
 serializes synthetic one-, 100-, and 10,000-turn ancestor lineages, including

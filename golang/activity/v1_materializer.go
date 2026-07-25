@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -53,6 +54,15 @@ type MaterializingV1Runtime struct {
 	Scope        ScopeResolver
 	Limits       state.MaterializeLimits
 }
+
+// errMaterializedStateInvalid marks a repository/materializer contract
+// violation. A checkpoint materializer is trusted to enforce scope and
+// lineage invariants before its result crosses into the runtime; accepting a
+// mismatched handle or an invalid transcript here could route an operation
+// against another checkpoint or produce a response from corrupted state.
+// Keep this marker private so callers receive only the stable state-corrupt
+// provider error below.
+var errMaterializedStateInvalid = errors.New("materialized checkpoint state is invalid")
 
 var _ V1Runtime = (*MaterializingV1Runtime)(nil)
 
@@ -115,9 +125,61 @@ func (runtime *MaterializingV1Runtime) materialize(ctx context.Context, requestC
 	}
 	materialized, err := runtime.Materializer.MaterializeHandle(ctx, scopeID, handle, runtime.Limits)
 	if err == nil {
+		if err := validateMaterializedState(materialized, scopeID, handle); err != nil {
+			return state.MaterializedState{}, mapMaterializationError(err)
+		}
 		return materialized, nil
 	}
 	return state.MaterializedState{}, mapMaterializationError(err)
+}
+
+// validateMaterializedState checks the part of the materializer contract that
+// is observable at the Activity boundary. Storage implementations perform the
+// complete graph/blob validation; this second check prevents a faulty adapter
+// or future implementation from silently substituting a different checkpoint
+// or an invalid tool-call frontier after the read has succeeded.
+func validateMaterializedState(materialized state.MaterializedState, scopeID, handle string) error {
+	fail := func(format string, args ...any) error {
+		return fmt.Errorf("%w: %s", errMaterializedStateInvalid, fmt.Sprintf(format, args...))
+	}
+	if handle == "" || materialized.Handle != state.Handle(handle) {
+		return fail("materialized handle does not match requested checkpoint")
+	}
+	if scopeID == "" || materialized.Tenant != scopeID {
+		return fail("materialized scope does not match requested scope")
+	}
+	if materialized.Depth < 0 {
+		return fail("materialized depth is negative")
+	}
+	if len(materialized.Lineage) == 0 || materialized.Lineage[len(materialized.Lineage)-1] != materialized.Handle {
+		return fail("materialized lineage does not terminate at requested checkpoint")
+	}
+	seen := make(map[state.Handle]struct{}, len(materialized.Lineage))
+	for index, lineageHandle := range materialized.Lineage {
+		if lineageHandle == "" {
+			return fail("materialized lineage entry %d is empty", index)
+		}
+		if _, exists := seen[lineageHandle]; exists {
+			return fail("materialized lineage contains a cycle")
+		}
+		seen[lineageHandle] = struct{}{}
+	}
+	if materialized.Settings.Model == "" {
+		return fail("materialized root model is missing")
+	}
+	pending, err := state.ValidateTranscript(materialized.Items)
+	if err != nil {
+		return fail("materialized transcript: %v", err)
+	}
+	if len(pending) != len(materialized.PendingToolCalls) {
+		return fail("materialized tool frontier does not match transcript")
+	}
+	for index := range pending {
+		if pending[index] != materialized.PendingToolCalls[index] {
+			return fail("materialized tool frontier does not match transcript")
+		}
+	}
+	return nil
 }
 
 func runtimeConfigurationError(message string) error {
@@ -140,6 +202,9 @@ func mapMaterializationError(err error) error {
 	}
 	if errors.Is(err, state.ErrNotFound) || errors.Is(err, state.ErrTenantMismatch) || errors.Is(err, state.ErrExpired) {
 		return provider.NewError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "checkpoint could not be materialized")
+	}
+	if errors.Is(err, errMaterializedStateInvalid) {
+		return provider.NewError(provider.CodeStateCorrupt, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "checkpoint materialization returned invalid state")
 	}
 	// Corrupt lineage and blob failures are worker/state failures. Preserve the
 	// retryable distinction only at this sanitized provider boundary.
