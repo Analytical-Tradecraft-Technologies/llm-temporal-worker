@@ -152,11 +152,13 @@ type productionClientSet struct {
 	queryRepos      PostgresQueryRepositories
 	queryService    activity.QueryService
 	checkpoints     CheckpointCapabilities
+	v1Capabilities  V1RuntimeCapabilities
 	v1Runtime       activity.V1Runtime
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
 var _ CheckpointCapabilitiesSource = (*productionClientSet)(nil)
+var _ V1RuntimeCapabilitiesSource = (*productionClientSet)(nil)
 
 func (set *productionClientSet) Close(ctx context.Context) error {
 	if set == nil || set.close == nil {
@@ -210,6 +212,16 @@ func (set *productionClientSet) CheckpointCapabilities() CheckpointCapabilities 
 		return CheckpointCapabilities{}
 	}
 	return set.checkpoints
+}
+
+// V1RuntimeCapabilities returns the preparatory typed dependency bundle owned
+// by this immutable snapshot. The zero value is intentionally unconfigured; no
+// legacy engine or process-global dependency is synthesized here.
+func (set *productionClientSet) V1RuntimeCapabilities() V1RuntimeCapabilities {
+	if set == nil {
+		return V1RuntimeCapabilities{}
+	}
+	return set.v1Capabilities
 }
 
 // V1Runtime returns the durable one-shot implementation composed for this
@@ -443,8 +455,11 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if planner == nil {
 		planner = routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
 	}
+	snapshotSource := engine.StaticSnapshot{Value: engineSnapshot}
+	adapterRegistry := engine.AdapterMap(adapters)
+	capabilityAdapterRegistry := newSnapshotAdapterRegistry(adapters)
 	engineValue, err := engine.New(engine.Dependencies{
-		Snapshots: engine.StaticSnapshot{Value: engineSnapshot}, Planner: planner, Adapters: engine.AdapterMap(adapters), Admission: admissionStore, Continuations: continuationStore, Results: results,
+		Snapshots: snapshotSource, Planner: planner, Adapters: adapterRegistry, Admission: admissionStore, Continuations: continuationStore, Results: results,
 		Clock: clock, Estimator: estimator, MaxAttempts: value.Limits.RouteAttempts, FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout), ProviderControl: providerControl,
 	})
 	if err != nil {
@@ -455,12 +470,21 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if postgresProbe != nil {
 		probes = append(probes, postgresProbe)
 	}
+	checkpointCapabilities := checkpointCapabilitiesFromCloser(postgresCloser)
 	clients := &productionClientSet{
 		probes:          probes,
 		providerControl: providerControl,
 		queryRepos:      queryRepos,
 		queryService:    queryService,
-		checkpoints:     checkpointCapabilitiesFromCloser(postgresCloser),
+		checkpoints:     checkpointCapabilities,
+		v1Capabilities: V1RuntimeCapabilities{
+			Snapshot:               snapshotSource,
+			Planner:                planner,
+			Adapters:               capabilityAdapterRegistry,
+			Checkpoints:            checkpointCapabilities,
+			ProviderStatusRecorder: providerControl,
+			Clock:                  clock,
+		},
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
 				closeContext = context.Background()
@@ -537,14 +561,25 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	if planner == nil {
 		planner = routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
 	}
+	snapshotSource := engine.StaticSnapshot{Value: engineSnapshot}
+	adapterRegistry := engine.AdapterMap(adapters)
+	capabilityAdapterRegistry := newSnapshotAdapterRegistry(adapters)
 	engineValue, err := engine.New(engine.Dependencies{
-		Snapshots: engine.StaticSnapshot{Value: engineSnapshot}, Planner: planner, Adapters: engine.AdapterMap(adapters), Admission: admissionStore, Continuations: continuationStore, Results: results,
+		Snapshots: snapshotSource, Planner: planner, Adapters: adapterRegistry, Admission: admissionStore, Continuations: continuationStore, Results: results,
 		Clock: clock, Estimator: estimator, MaxAttempts: value.Limits.RouteAttempts, FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("construct memory engine: %w", err)
 	}
-	return engineValue, &productionClientSet{close: func(context.Context) error { return nil }}, nil
+	return engineValue, &productionClientSet{
+		v1Capabilities: V1RuntimeCapabilities{
+			Snapshot: snapshotSource,
+			Planner:  planner,
+			Adapters: capabilityAdapterRegistry,
+			Clock:    clock,
+		},
+		close: func(context.Context) error { return nil },
+	}, nil
 }
 
 func (factory *ProductionEngineFactory) buildPostgres(ctx context.Context, value config.Config) (DependencyProbe, io.Closer, error) {

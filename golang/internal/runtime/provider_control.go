@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
@@ -64,6 +67,60 @@ type PostgresCheckpointCapabilitiesSource interface {
 // or another durable repository implementation.
 type CheckpointCapabilitiesSource interface {
 	CheckpointCapabilities() CheckpointCapabilities
+}
+
+// V1RuntimeCapabilities is the preparatory storage- and provider-neutral
+// dependency bundle owned by one immutable configuration snapshot. It exposes
+// only the snapshot/planning/adapter contracts and the checkpoint capability
+// that are safe to carry into the future durable composition. It deliberately
+// omits the legacy Redis admission, continuation, and blob-result stores:
+// Task 19 must supply PostgreSQL durable operations, BudgetMaterializer/Journal,
+// and the corresponding result/continuation ports before the V1 runtime can
+// compose them. Adapters own provider credentials. A nil optional recorder or
+// clock is an unconfigured capability; callers must not fall back to a legacy
+// engine or a process-global dependency.
+type V1RuntimeCapabilities struct {
+	Snapshot               engine.SnapshotSource
+	Planner                routing.Planner
+	Adapters               engine.AdapterRegistry
+	Checkpoints            CheckpointCapabilities
+	ProviderStatusRecorder engine.ProviderStatusRecorder
+	Clock                  func() time.Time
+}
+
+// snapshotAdapterRegistry owns a private copy of the endpoint map for one
+// immutable snapshot. It intentionally does not expose engine.AdapterMap as
+// its dynamic type, so a capability consumer cannot mutate the legacy engine's
+// map through a type assertion or retain an alias to the factory input.
+type snapshotAdapterRegistry struct {
+	adapters map[string]provider.Adapter
+}
+
+func (registry snapshotAdapterRegistry) Adapter(ctx context.Context, candidate routing.Candidate) (provider.Adapter, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	adapter := registry.adapters[candidate.EndpointID]
+	if adapter == nil {
+		return nil, fmt.Errorf("no adapter configured for endpoint %q", candidate.EndpointID)
+	}
+	return adapter, nil
+}
+
+func newSnapshotAdapterRegistry(adapters map[string]provider.Adapter) engine.AdapterRegistry {
+	owned := make(map[string]provider.Adapter, len(adapters))
+	for endpointID, adapter := range adapters {
+		owned[endpointID] = adapter
+	}
+	return snapshotAdapterRegistry{adapters: owned}
+}
+
+// V1RuntimeCapabilitiesSource is the client-set seam consumed by a future
+// V1RuntimeBuilder. The aggregate value is copied into each snapshot client
+// set, so a reload cannot accidentally retain stores, adapters, or a clock
+// from a previous snapshot.
+type V1RuntimeCapabilitiesSource interface {
+	V1RuntimeCapabilities() V1RuntimeCapabilities
 }
 
 // snapshotCheckpointRepository deliberately erases the concrete PostgreSQL
