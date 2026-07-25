@@ -719,6 +719,10 @@ Status: snapshot-scoped composition and reload-aware readiness seams landed; the
 factory now accepts an optional per-snapshot `V1RuntimeBuilder`, and the
 Activity registration resolves that source while holding the snapshot lease;
 readiness re-evaluates the source after every reload;
+the snapshot client set also copies a preparatory typed
+`V1RuntimeCapabilities` bundle with private adapter-map ownership, while
+leaving legacy admission/continuation/result stores out until Task 19's
+durable ports exist; it never falls back to the legacy engine;
 see [ADR 0010](../../decisions/0010-durable-v1-runtime-composition.md) and
 [ADR 0012](../../decisions/0012-snapshot-scoped-v1-runtime-source.md). The
 Storage-neutral Generate and Compact phase runners are recorded in [ADR

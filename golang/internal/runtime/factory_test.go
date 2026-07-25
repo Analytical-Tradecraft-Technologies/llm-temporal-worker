@@ -218,6 +218,93 @@ func TestCheckpointCapabilitiesCopyTypedBundleFromPostgresCloser(t *testing.T) {
 	}
 }
 
+func TestProductionClientSetReturnsSnapshotOwnedV1CapabilitiesWithoutFallback(t *testing.T) {
+	firstClock := nowFunc(time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC))
+	secondClock := nowFunc(time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC))
+	first := V1RuntimeCapabilities{
+		Snapshot: engine.StaticSnapshot{Value: engine.Snapshot{Version: "first"}},
+		Planner:  routing.DeterministicPlanner{MaxRejections: 1},
+		Adapters: engine.AdapterMap{},
+		Clock:    firstClock,
+	}
+	second := V1RuntimeCapabilities{
+		Snapshot: engine.StaticSnapshot{Value: engine.Snapshot{Version: "second"}},
+		Planner:  routing.DeterministicPlanner{MaxRejections: 2},
+		Adapters: engine.AdapterMap{},
+		Clock:    secondClock,
+	}
+	firstSet := &productionClientSet{v1Capabilities: first}
+	secondSet := &productionClientSet{v1Capabilities: second, v1Runtime: testV1Runtime{}}
+
+	gotFirst := firstSet.V1RuntimeCapabilities()
+	if gotFirst.Snapshot == nil || gotFirst.Planner == nil || gotFirst.Adapters == nil || gotFirst.Clock == nil {
+		t.Fatalf("first snapshot capability bundle is incomplete: %#v", gotFirst)
+	}
+	firstSnapshot, err := gotFirst.Snapshot.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSnapshot.Version != "first" || gotFirst.Clock() != firstClock().UTC() {
+		t.Fatalf("first snapshot capabilities = %#v, snapshot=%#v", gotFirst, firstSnapshot)
+	}
+	gotSecond := secondSet.V1RuntimeCapabilities()
+	if gotSecond.Snapshot == nil || gotSecond.Planner == nil || gotSecond.Adapters == nil || gotSecond.Clock == nil {
+		t.Fatalf("second snapshot capability bundle is incomplete: %#v", gotSecond)
+	}
+	secondSnapshot, err := gotSecond.Snapshot.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondSnapshot.Version != "second" || gotSecond.Clock() != secondClock().UTC() {
+		t.Fatalf("second snapshot capabilities = %#v, snapshot=%#v", gotSecond, secondSnapshot)
+	}
+
+	// A client set with only the legacy v1 runtime must not synthesize a
+	// capability bundle from that process-level value.
+	empty := (&productionClientSet{v1Runtime: testV1Runtime{}}).V1RuntimeCapabilities()
+	if empty.Snapshot != nil || empty.Planner != nil || empty.Adapters != nil || empty.ProviderStatusRecorder != nil || empty.Clock != nil {
+		t.Fatalf("legacy runtime leaked into empty capability bundle: %#v", empty)
+	}
+	if empty.Checkpoints.Repository != nil || empty.Checkpoints.Blobs != nil {
+		t.Fatalf("legacy runtime leaked checkpoint capabilities: %#v", empty.Checkpoints)
+	}
+}
+
+type capabilityAdapterStub struct{}
+
+func (*capabilityAdapterStub) Name() string { return "capability-test" }
+func (*capabilityAdapterStub) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
+	return provider.CapabilitySet{}, nil
+}
+func (*capabilityAdapterStub) Compile(context.Context, provider.CompileInput) (provider.Call, error) {
+	return provider.Call{}, nil
+}
+func (*capabilityAdapterStub) Invoke(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
+	return provider.Result{}, nil
+}
+
+func TestSnapshotAdapterRegistryOwnsPrivateMap(t *testing.T) {
+	adapter := &capabilityAdapterStub{}
+	input := engine.AdapterMap{"endpoint": adapter}
+	registry := newSnapshotAdapterRegistry(input)
+	if _, aliasesLegacyMap := registry.(engine.AdapterMap); aliasesLegacyMap {
+		t.Fatal("snapshot adapter registry exposed mutable engine.AdapterMap type")
+	}
+
+	input["endpoint"] = nil
+	got, err := registry.Adapter(context.Background(), routing.Candidate{EndpointID: "endpoint"})
+	if err != nil {
+		t.Fatalf("snapshot adapter registry lost copied adapter after input mutation: %v", err)
+	}
+	if got != adapter {
+		t.Fatalf("snapshot adapter registry adapter = %p, want %p", got, adapter)
+	}
+	input["other"] = adapter
+	if _, err := registry.Adapter(context.Background(), routing.Candidate{EndpointID: "other"}); err == nil {
+		t.Fatal("snapshot adapter registry observed endpoint added to original map")
+	}
+}
+
 type queryCompositionCloser struct {
 	postgresPoolCloser
 	repositories PostgresQueryRepositories
@@ -299,6 +386,10 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	}
 	if recorder := clients.(*productionClientSet).ProviderStatusRecorder(); recorder != nil {
 		t.Fatal("memory composition exposed a durable provider status recorder")
+	}
+	capabilities := clients.(*productionClientSet).V1RuntimeCapabilities()
+	if capabilities.Snapshot == nil || capabilities.Planner == nil || capabilities.Adapters == nil || capabilities.Clock == nil {
+		t.Fatalf("memory composition omitted v1 capability: %#v", capabilities)
 	}
 	if err := clients.Close(context.Background()); err != nil {
 		t.Fatalf("memory client close = %v", err)

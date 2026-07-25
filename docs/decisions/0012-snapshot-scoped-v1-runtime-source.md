@@ -64,6 +64,23 @@ callers must fail closed. The bundle is copied into each immutable client set
 so a future builder cannot accidentally retain a dependency from a previous
 reload.
 
+The client set also exposes `runtime.V1RuntimeCapabilitiesSource`, whose
+snapshot-owned `V1RuntimeCapabilities` value groups only the preparatory
+contracts needed to compose the durable runtime: an `engine.SnapshotSource`,
+`routing.Planner`, a private-copy `engine.AdapterRegistry`, the nested
+checkpoint bundle, and optional `engine.ProviderStatusRecorder` and clock.
+The bundle deliberately omits the legacy Redis admission, continuation, and
+blob-result stores. Task 19 must supply PostgreSQL durable operations,
+`BudgetMaterializer`/`Journal`, and the corresponding result/continuation ports
+before a V1 runtime can compose them. These retained capabilities are copied
+from the same snapshot build that constructs the legacy engine; the source
+never derives them from that engine and never falls back to process-global
+clients. The adapter registry copies its endpoint map behind an unexported
+implementation, so consumers cannot mutate the legacy `engine.AdapterMap`
+through aliasing or a type assertion. A reload therefore gives a builder the
+preparatory capabilities of the replacement snapshot or an explicitly
+incomplete value.
+
 This capability bundle is an input to the future checkpoint-aware V1 runtime;
 it does not implement provider dispatch, Redis reservation/reconciliation,
 PostgreSQL journaling/finalization, Compact, Query, or the complete durable
@@ -80,7 +97,8 @@ production V1 seam.
   every readiness-monitor pass, so reloads cannot leave an unconfigured v1
   worker reporting ready.
 - `golang/internal/runtime/factory_test.go` covers builder inputs, source
-  attachment, and cleanup on builder failure.
+  attachment, cleanup on builder failure, snapshot-owned capability copy
+  without legacy fallback, and private adapter-map ownership.
 - `golang/internal/runtime/snapshot_v1_runtime_test.go` covers reload source
   selection and legacy fallback boundaries.
 - `golang/internal/runtime/runtime_test.go` covers readiness pause/resume when
