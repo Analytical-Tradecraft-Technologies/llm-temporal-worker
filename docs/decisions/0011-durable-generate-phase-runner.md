@@ -20,7 +20,7 @@ seam. A snapshot-owned composition supplies typed ports for this order:
 ```text
 replay/materialize
   -> route-isolated cache lookup
-  -> compaction decision
+  -> compaction decision and (when required) Compact child/rematerialization
   -> route selection
   -> Redis reservation
   -> PostgreSQL journal
@@ -30,12 +30,17 @@ replay/materialize
 ```
 
 The runner validates operation, generation, reservation, journal, and bounded
-response identities at every phase boundary. It fails closed before provider
-dispatch when any pre-dispatch phase fails. A cache hit finalizes without
-dispatching inference. A reconciliation failure is returned as
-`ErrReconcilePending` after finalization so Temporal can retry reconciliation
-without silently rerunning provider work. Ports must be idempotent across
-Activity retries and must not log or serialize raw prompt/provider state.
+response identities at every phase boundary. A replayed completed operation
+returns its durable response before cache lookup or admission. It fails closed
+before provider dispatch when any pre-dispatch phase fails. A required
+compaction invokes the distinct Compact child and replaces the replay with its
+newly materialized state before routing. A cache hit finalizes without
+dispatching inference. Reservation denial is a typed, retry-after budget
+error. A reconciliation failure is returned as a typed retryable
+`ErrReconcilePending` condition after finalization so Temporal can retry
+reconciliation without silently rerunning provider work. Ports must be
+idempotent across Activity retries and must not log or serialize raw
+prompt/provider state.
 
 This slice intentionally does not construct clients or claim that V1 is
 production-complete. Concrete Redis/PostgreSQL/provider ports, snapshot

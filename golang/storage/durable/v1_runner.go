@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
@@ -26,7 +27,8 @@ var (
 // phase.  It contains no ancestor transcript in the Activity payload; the
 // materialized view is held only in the worker process.
 type GenerateReplay struct {
-	State state.MaterializedState
+	State     state.MaterializedState
+	Completed *llm.GenerateResponseV1
 }
 
 // CacheDisposition identifies the result of the route-isolated cache lookup.
@@ -151,13 +153,17 @@ type GeneratePorts struct {
 	Replay             func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error)
 	CacheLookup        func(context.Context, llm.GenerateRequestV1, GenerateReplay) (CacheDecision, error)
 	CompactionDecision func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error)
-	Route              func(context.Context, llm.GenerateRequestV1, GenerateReplay, CompactionDecision) (RoutePlan, error)
-	Reserve            func(context.Context, llm.GenerateRequestV1, RoutePlan) (ReserveResult, error)
-	Journal            func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error)
-	Dispatch           func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, JournalReceipt) (DispatchResult, error)
-	Finalize           func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) (GenerateFinalization, error)
-	FinalizeCache      func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (GenerateFinalization, error)
-	Reconcile          func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult, GenerateFinalization) error
+	// Compact is required only when CompactionDecision.Required is true. It
+	// dispatches the distinct Compact child and rematerializes its checkpoint;
+	// it is never an alias for Generate or provider dispatch.
+	Compact       func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error)
+	Route         func(context.Context, llm.GenerateRequestV1, GenerateReplay, CompactionDecision) (RoutePlan, error)
+	Reserve       func(context.Context, llm.GenerateRequestV1, RoutePlan) (ReserveResult, error)
+	Journal       func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error)
+	Dispatch      func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, JournalReceipt) (DispatchResult, error)
+	Finalize      func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) (GenerateFinalization, error)
+	FinalizeCache func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (GenerateFinalization, error)
+	Reconcile     func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult, GenerateFinalization) error
 }
 
 func (ports GeneratePorts) validate() error {
@@ -202,6 +208,12 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("replay", err)
 	}
+	if replay.Completed != nil {
+		if err := validateGenerateResponse(request, "", *replay.Completed); err != nil {
+			return llm.GenerateResponseV1{}, stageError("replay", err)
+		}
+		return *replay.Completed, nil
+	}
 	decision, err := ports.CacheLookup(ctx, request, replay)
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("cache lookup", err)
@@ -214,7 +226,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		if err != nil {
 			return llm.GenerateResponseV1{}, stageError("cache finalization", err)
 		}
-		if err := validateGenerateFinalization(request, finalization); err != nil {
+		if err := validateGenerateFinalization(request, "", finalization); err != nil {
 			return llm.GenerateResponseV1{}, stageError("cache finalization", err)
 		}
 		return finalization.Response, nil
@@ -223,6 +235,15 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	compaction, err := ports.CompactionDecision(ctx, request, replay, decision)
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("compaction decision", err)
+	}
+	if compaction.Required {
+		if ports.Compact == nil {
+			return llm.GenerateResponseV1{}, stageError("compaction", fmt.Errorf("%w: compact port is required", ErrV1PortsInvalid))
+		}
+		replay, err = ports.Compact(ctx, request, replay)
+		if err != nil {
+			return llm.GenerateResponseV1{}, stageError("compaction", err)
+		}
 	}
 	route, err := ports.Route(ctx, request, replay, compaction)
 	if err != nil {
@@ -239,7 +260,10 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		return llm.GenerateResponseV1{}, stageError("Redis reservation", err)
 	}
 	if !reservation.Accepted {
-		return llm.GenerateResponseV1{}, fmt.Errorf("%w: retry after %s", ErrReservationDenied, reservation.RetryAfter)
+		mapped := provider.NewError(provider.CodeBudgetDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryAfter, "budget reservation denied")
+		mapped.OperationID = string(route.OperationID)
+		mapped.RetryAfter = reservation.RetryAfter
+		return llm.GenerateResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
 	}
 	journal, err := ports.Journal(ctx, request, route, reservation)
 	if err != nil {
@@ -256,11 +280,14 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
 	}
-	if err := validateGenerateFinalization(request, finalization); err != nil {
+	if err := validateGenerateFinalization(request, route.OperationID, finalization); err != nil {
 		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
 	}
 	if err := ports.Reconcile(ctx, request, route, reservation, finalization); err != nil {
-		return llm.GenerateResponseV1{}, fmt.Errorf("%w: Redis reconciliation: %v", ErrReconcilePending, err)
+		mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "Redis reconciliation is pending")
+		mapped.OperationID = string(route.OperationID)
+		mapped.Cause = err
+		return llm.GenerateResponseV1{}, fmt.Errorf("%w: %w", ErrReconcilePending, mapped)
 	}
 	return finalization.Response, nil
 }
@@ -302,14 +329,21 @@ func validateJournalForRequest(_ llm.GenerateRequestV1, reservation ReserveResul
 	return nil
 }
 
-func validateGenerateFinalization(request llm.GenerateRequestV1, finalization GenerateFinalization) error {
-	if finalization.Response.OperationKey != request.OperationKey {
+func validateGenerateFinalization(request llm.GenerateRequestV1, expectedOperationID OperationID, finalization GenerateFinalization) error {
+	return validateGenerateResponse(request, expectedOperationID, finalization.Response)
+}
+
+func validateGenerateResponse(request llm.GenerateRequestV1, expectedOperationID OperationID, response llm.GenerateResponseV1) error {
+	if response.OperationKey != request.OperationKey {
 		return errors.New("finalized response operation key does not match request")
 	}
-	if finalization.Response.OperationID == "" {
+	if response.OperationID == "" {
 		return errors.New("finalized response operation ID is required")
 	}
-	if _, err := json.Marshal(finalization.Response); err != nil {
+	if expectedOperationID != "" && response.OperationID != string(expectedOperationID) {
+		return errors.New("finalized response operation ID does not match reserved operation")
+	}
+	if _, err := json.Marshal(response); err != nil {
 		return err
 	}
 	return nil
@@ -319,5 +353,5 @@ func stageError(stage string, err error) error {
 	if err == nil {
 		return fmt.Errorf("%w: %s", ErrV1Stage, stage)
 	}
-	return fmt.Errorf("%w: %s: %v", ErrV1Stage, stage, err)
+	return fmt.Errorf("%w: %s: %w", ErrV1Stage, stage, err)
 }
