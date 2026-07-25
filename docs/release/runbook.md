@@ -153,14 +153,15 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `29953059759`](https://github.com/mfow/llm-temporal-worker/actions/runs/29953059759) at revision
-`6db3055dbd1b37a0ce7f7fa8fd7831672fc56344`. The artifact is named
-`release-evidence` (artifact `8543414094`) and has SHA-256 digest
-`6c86c70262f938a384cdd54bfbedaa1bd78a105e5df13fd07f02f5fbe25a9880`.
+artifact: [workflow run `30143376123`](https://github.com/mfow/llm-temporal-worker/actions/runs/30143376123) at revision
+`560ec137035fb186f45c7b913f81ca67726f6ec7`. The artifact is named
+`release-evidence` (artifact `8615380385`) and has SHA-256 digest
+`e4b3c5055afb3aa0e62d34adbe6ae1258325b6a677de633f7a7048d887e97151`.
+The artifact was downloaded and inspected before rebinding: its evidence
+record names revision `560ec137`, all fifteen retained summaries report
+`status: pass`, and its image scan is bound to the immutable image digest.
 The v1 catalog binds offline implementation and conformance records to this
-run and digest. A newer successful master run does not replace this pin: the
-catalog must only be rebound after its retained artifact has been deliberately
-inspected and the evidence record updated together. This is not production SLO
+run and digest. This is not production SLO
 evidence: the admission/compilation p99 and worker-error-rate requirements
 remain explicitly unrecorded, protected live-provider runs remain pending, and
 publication remains authorization-gated.
