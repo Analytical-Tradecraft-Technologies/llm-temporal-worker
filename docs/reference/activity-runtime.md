@@ -133,6 +133,19 @@ work. Production composition must still provide those operations behind the
 state-aware runtime and must map authenticated request context to the durable
 scope identifier; raw tenant/project concatenation is intentionally not used.
 
+The snapshot client set exposes an optional typed `CheckpointCapabilities`
+bundle for that composition. Its fields are the storage-neutral checkpoint
+repository and scoped blob-reader interfaces only; PostgreSQL pools,
+credentials, encryption keys, and raw blob locators never cross the runtime
+boundary. A builder obtains it from the exported
+`runtime.CheckpointCapabilitiesSource` client-set interface rather than
+depending on a concrete client-set type. The default PostgreSQL factory
+supplies the repository but leaves the blob reader unconfigured until a
+deployment composes its locator and object-store binding. A V1 builder must
+treat either missing capability as fail-closed. This bundle is a composition
+input, not evidence that the durable Generate/Compact/Query runtime or provider
+dispatch is complete.
+
 After a successful materializer read, the Activity seam performs a second,
 storage-neutral contract check before dispatch. The returned handle and scope
 must match the requested values; lineage must be non-empty, acyclic, and end

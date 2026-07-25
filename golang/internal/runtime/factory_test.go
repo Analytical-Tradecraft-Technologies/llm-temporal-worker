@@ -19,6 +19,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
@@ -170,6 +171,50 @@ func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
 	}
 	if repositories.Inventory != nil || repositories.QueryAudit != nil {
 		t.Fatal("default closer exposed unconfigured inventory or query-audit repositories")
+	}
+	checkpoints := checkpointCapabilitiesFromCloser(closer)
+	checkpointRepository, ok := checkpoints.Repository.(snapshotCheckpointRepository)
+	if !ok {
+		t.Fatalf("checkpoint repository = %T, want snapshot-scoped repository wrapper", checkpoints.Repository)
+	}
+	if checkpointRepository.delegate == nil {
+		t.Fatal("snapshot checkpoint repository wrapper omitted delegate")
+	}
+	if checkpoints.Blobs != nil {
+		t.Fatal("default closer exposed an unconfigured checkpoint blob reader")
+	}
+}
+
+type checkpointBlobReaderStub struct{}
+
+func (checkpointBlobReaderStub) Read(context.Context, string, state.CheckpointBlobReference) ([]byte, error) {
+	return nil, nil
+}
+
+type checkpointCompositionCloser struct {
+	postgresPoolCloser
+	blobs state.CheckpointBlobReader
+}
+
+func (closer checkpointCompositionCloser) CheckpointBlobReader() state.CheckpointBlobReader {
+	return closer.blobs
+}
+
+func TestCheckpointCapabilitiesCopyTypedBundleFromPostgresCloser(t *testing.T) {
+	reader := checkpointBlobReaderStub{}
+	closer := checkpointCompositionCloser{blobs: reader}
+	capabilities := checkpointCapabilitiesFromCloser(closer)
+	if capabilities.Repository == nil {
+		t.Fatal("checkpoint capability bundle omitted repository")
+	}
+	if capabilities.Blobs != reader {
+		t.Fatalf("checkpoint blob reader = %T, want supplied reader", capabilities.Blobs)
+	}
+	if got := (&productionClientSet{checkpoints: capabilities}).CheckpointCapabilities(); got.Repository == nil || got.Blobs != reader {
+		t.Fatalf("snapshot client set checkpoint capabilities = %#v, want copied bundle", got)
+	}
+	if got := (&productionClientSet{}).CheckpointCapabilities(); got.Repository != nil || got.Blobs != nil {
+		t.Fatalf("empty snapshot client set checkpoint capabilities = %#v", got)
 	}
 }
 

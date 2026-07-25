@@ -151,10 +151,12 @@ type productionClientSet struct {
 	providerControl engine.ProviderStatusRecorder
 	queryRepos      PostgresQueryRepositories
 	queryService    activity.QueryService
+	checkpoints     CheckpointCapabilities
 	v1Runtime       activity.V1Runtime
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
+var _ CheckpointCapabilitiesSource = (*productionClientSet)(nil)
 
 func (set *productionClientSet) Close(ctx context.Context) error {
 	if set == nil || set.close == nil {
@@ -197,6 +199,17 @@ func (set *productionClientSet) QueryService() activity.QueryService {
 		return nil
 	}
 	return set.queryService
+}
+
+// CheckpointCapabilities returns the typed durable checkpoint bundle owned by
+// this immutable snapshot. A nil repository or blob reader is an explicit
+// unconfigured capability; callers must not reach into PostgreSQL or invent a
+// process-local substitute.
+func (set *productionClientSet) CheckpointCapabilities() CheckpointCapabilities {
+	if set == nil {
+		return CheckpointCapabilities{}
+	}
+	return set.checkpoints
 }
 
 // V1Runtime returns the durable one-shot implementation composed for this
@@ -447,6 +460,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		providerControl: providerControl,
 		queryRepos:      queryRepos,
 		queryService:    queryService,
+		checkpoints:     checkpointCapabilitiesFromCloser(postgresCloser),
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
 				closeContext = context.Background()
@@ -1124,6 +1138,18 @@ func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
 	repository := closer.ProviderStatusRepository()
 	spend := postgresstore.SpendSummaryRepository{Pool: closer.pool, Namespace: closer.namespace}
 	return PostgresQueryRepositories{ProviderStatus: &repository, SpendSummary: &spend}
+}
+
+// CheckpointRepository exposes only the storage-neutral repository contract.
+// The default factory cannot construct a blob reader because PostgreSQL
+// locator encryption keys and the object-store binding are deployment-owned;
+// custom closers may implement CheckpointBlobReader as well.
+func (closer postgresPoolCloser) CheckpointRepository() state.CheckpointRepository {
+	return snapshotCheckpointRepository{delegate: postgresstore.DurableCheckpointRepository{Pool: closer.pool, Namespace: closer.namespace}}
+}
+
+func (closer postgresPoolCloser) CheckpointBlobReader() state.CheckpointBlobReader {
+	return nil
 }
 
 func (closer postgresPoolCloser) Close() error {
