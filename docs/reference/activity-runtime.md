@@ -44,11 +44,15 @@ The production client set forwards a query service only when it is supplied by
 the same snapshot-scoped PostgreSQL closer as its repositories; the default
 composition does not invent authorization, cursor keys, or handlers. Query
 families without a configured service therefore fail closed. The reusable
-PostgreSQL composition for provider status, model inventory, and credit status
-is documented in [persisted-query-service.md](persisted-query-service.md) and
-is installed only through an explicit `ProductionFactoryOptions.QueryServiceBuilder`.
-Refresh requests, budget status, and spend summary remain fail-closed until
-their dedicated repositories and management adapters are supplied. Remaining
+PostgreSQL composition for provider status, model inventory, credit status,
+and spend summary is documented in
+[persisted-query-service.md](persisted-query-service.md) and is installed only
+through an explicit `ProductionFactoryOptions.QueryServiceBuilder`. Spend
+summary additionally requires `PersistedQueryOptions.ResolveScope`, an
+authenticated deployment resolver for the opaque PostgreSQL scope UUID;
+missing, failed, or nil scope resolution fails closed. Refresh requests and
+budget status remain fail-closed until their management and Redis-generation
+adapters are supplied. Remaining
 complete Activity composition work is tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
