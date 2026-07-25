@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -19,6 +20,16 @@ type fakePersistedProvider struct {
 	status   postgresstore.ProviderStatusPage
 	credit   control.CreditStatusPage
 	lastOpts postgresstore.ProviderStatusListOptions
+}
+
+type fakeSpendSummary struct {
+	result   control.SpendSummaryResult
+	lastOpts postgresstore.SpendSummaryListOptions
+}
+
+func (fake *fakeSpendSummary) ListSpendSummary(_ context.Context, options postgresstore.SpendSummaryListOptions) (control.SpendSummaryResult, error) {
+	fake.lastOpts = options
+	return fake.result, nil
 }
 
 func (fake *fakePersistedProvider) ListRouteStatuses(_ context.Context, options postgresstore.ProviderStatusListOptions) (postgresstore.ProviderStatusPage, error) {
@@ -98,6 +109,82 @@ func TestPersistedQueryBudgetAndSpendFailClosed(t *testing.T) {
 		if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
 			t.Fatalf("kind %s error=%v, want non-retryable unsupported capability", kind, err)
 		}
+	}
+}
+
+func TestPersistedQuerySpendSummaryUsesExplicitScopeResolver(t *testing.T) {
+	const expectedTenant = "tenant"
+	const expectedProject = "project"
+	scopeID := uuid.MustParse("019c6e27-e55b-73d1-87d8-4e01f1f75043")
+	start := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	spend := &fakeSpendSummary{result: control.SpendSummaryResult{
+		StartTime: start, EndTime: end,
+		Buckets: []control.SpendBucket{{KnownActualCostUSD: "1.25", ExactOperationCount: 1, Completeness: "complete"}},
+	}}
+	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	now := end.Add(time.Minute)
+	var resolved control.QueryScope
+	handler := &persistedQueryHandler{
+		spend: spend,
+		resolveScope: func(_ context.Context, scope control.QueryScope) (uuid.UUID, error) {
+			resolved = scope
+			return scopeID, nil
+		},
+		cursor: codec,
+		clock:  func() time.Time { return now },
+	}
+	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return now }}
+	request, err := control.EncodeQueryRequest(control.QueryRequest{
+		OperationKey: "spend-op",
+		Scope:        control.QueryScope{Tenant: expectedTenant, Project: expectedProject, Actor: "actor"},
+		Kind:         llm.QuerySpendSummary,
+		Filter:       control.SpendSummaryQuery{StartTime: start, EndTime: end, GroupBy: []control.SpendDimension{control.SpendByProvider}, OperationKinds: []control.OperationKind{control.OperationGenerate}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.Execute(context.Background(), request)
+	if err != nil {
+		t.Fatalf("spend summary query: %v", err)
+	}
+	decoded, err := control.DecodeQueryResponse(response)
+	if err != nil {
+		t.Fatalf("decode spend summary response: %v", err)
+	}
+	result, ok := decoded.Result.(control.SpendSummaryResult)
+	if !ok || len(result.Buckets) != 1 || result.Buckets[0].KnownActualCostUSD != "1.25" {
+		t.Fatalf("unexpected spend summary result: %#v", decoded.Result)
+	}
+	if resolved.Tenant != expectedTenant || resolved.Project != expectedProject {
+		t.Fatalf("resolver received wrong scope: %#v", resolved)
+	}
+	if spend.lastOpts.ScopeID != scopeID || !spend.lastOpts.StartTime.Equal(start) || !spend.lastOpts.EndTime.Equal(end) || len(spend.lastOpts.GroupBy) != 1 || spend.lastOpts.GroupBy[0] != control.SpendByProvider || len(spend.lastOpts.OperationKinds) != 1 || spend.lastOpts.OperationKinds[0] != control.OperationGenerate {
+		t.Fatalf("repository options were not scope/filter bound: %#v", spend.lastOpts)
+	}
+}
+
+func TestPersistedQuerySpendSummaryFailsClosedWithoutScopeResolver(t *testing.T) {
+	spend := &fakeSpendSummary{}
+	service := persistedQueryTestService(t, &fakePersistedProvider{}, nil)
+	service.TypedHandler = &persistedQueryHandler{
+		spend:  spend,
+		cursor: service.CursorCodec,
+		clock:  func() time.Time { return time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC) },
+	}
+	request, err := control.EncodeQueryRequest(control.QueryRequest{
+		OperationKey: "spend-op",
+		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
+		Kind:         llm.QuerySpendSummary,
+		Filter:       control.SpendSummaryQuery{StartTime: time.Unix(1, 0).UTC(), EndTime: time.Unix(2, 0).UTC()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Execute(context.Background(), request)
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+		t.Fatalf("error=%v, want non-retryable unsupported capability", err)
 	}
 }
 

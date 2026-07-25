@@ -1063,7 +1063,8 @@ func (closer postgresPoolCloser) ProviderStatusRepository() postgresstore.Provid
 
 func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
 	repository := closer.ProviderStatusRepository()
-	return PostgresQueryRepositories{ProviderStatus: &repository}
+	spend := postgresstore.SpendSummaryRepository{Pool: closer.pool, Namespace: closer.namespace}
+	return PostgresQueryRepositories{ProviderStatus: &repository, SpendSummary: &spend}
 }
 
 func (closer postgresPoolCloser) Close() error {

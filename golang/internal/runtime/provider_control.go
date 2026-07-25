@@ -26,6 +26,7 @@ type providerStatusRepositorySource interface {
 type PostgresQueryRepositories struct {
 	ProviderStatus *postgresstore.ProviderStatusRepository
 	Inventory      *postgresstore.InventoryRepository
+	SpendSummary   *postgresstore.SpendSummaryRepository
 	QueryAudit     *postgresstore.QueryExecutionRepository
 }
 

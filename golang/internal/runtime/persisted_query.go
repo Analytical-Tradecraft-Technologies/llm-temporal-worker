@@ -1,9 +1,9 @@
 package runtime
 
 // This file composes the storage-neutral typed query contract with the
-// PostgreSQL read pages. It intentionally stops at persisted provider status,
-// model inventory, and credit status. Budget and spend remain explicit
-// fail-closed capabilities until their Redis/ledger repositories are wired.
+// PostgreSQL read pages. Budget remains a fail-closed capability until its
+// Redis generation reader is wired. Spend is read from the PostgreSQL ledgers
+// when an authenticated deployment supplies the scope-ID resolver.
 
 import (
 	"context"
@@ -39,17 +39,28 @@ type inventoryReader interface {
 	ListInventoryModels(context.Context, postgresstore.InventoryModelListOptions) (postgresstore.InventoryModelPage, error)
 }
 
+type spendSummaryReader interface {
+	ListSpendSummary(context.Context, postgresstore.SpendSummaryListOptions) (control.SpendSummaryResult, error)
+}
+
+// QueryScopeResolver maps an already-authorized tenant/project scope to its
+// opaque PostgreSQL scope ID. The runtime never derives or guesses this ID:
+// deployments must supply the same keyed resolver used by their durable
+// repositories. Returning uuid.Nil or an error fails the query closed.
+type QueryScopeResolver func(context.Context, control.QueryScope) (uuid.UUID, error)
+
 // PersistedQueryOptions are the mandatory security and observability seams
 // for NewPersistedQueryService. No default authorization, cursor key, or
 // audit sink is safe to infer from a config snapshot.
 type PersistedQueryOptions struct {
-	Authorize control.AuthorizeFunc
-	Cursor    *control.CursorCodec
-	Audit     control.AuditFunc
-	Clock     func() time.Time
+	Authorize    control.AuthorizeFunc
+	Cursor       *control.CursorCodec
+	Audit        control.AuditFunc
+	Clock        func() time.Time
+	ResolveScope QueryScopeResolver
 }
 
-// NewPersistedQueryService builds the three persisted query families against
+// NewPersistedQueryService builds the persisted query families against
 // one snapshot digest. Missing repository capabilities remain fail-closed;
 // callers must not receive an empty answer that could be mistaken for state.
 func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQueryRepositories, options PersistedQueryOptions) (activity.QueryService, error) {
@@ -74,6 +85,8 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 			configDigest: snapshot.Digest(),
 			provider:     repositories.ProviderStatus,
 			inventory:    repositories.Inventory,
+			spend:        repositories.SpendSummary,
+			resolveScope: options.ResolveScope,
 			cursor:       options.Cursor,
 			clock:        clock,
 		},
@@ -88,6 +101,8 @@ type persistedQueryHandler struct {
 	configDigest [32]byte
 	provider     providerStatusReader
 	inventory    inventoryReader
+	spend        spendSummaryReader
+	resolveScope QueryScopeResolver
 	cursor       *control.CursorCodec
 	clock        func() time.Time
 }
@@ -112,11 +127,42 @@ func (handler *persistedQueryHandler) ExecuteTypedQuery(ctx context.Context, req
 		return handler.modelInventory(ctx, request, claims, now)
 	case llm.QueryCreditStatus:
 		return handler.creditStatus(ctx, request, claims, now)
-	case llm.QueryBudgetStatus, llm.QuerySpendSummary:
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "budget and spend repositories are not configured")
+	case llm.QuerySpendSummary:
+		return handler.spendSummary(ctx, request, now)
+	case llm.QueryBudgetStatus:
+		return control.QueryResponse{}, unsupportedQuery(request.Kind, "budget repository is not configured")
 	default:
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "query kind is not configured")
 	}
+}
+
+func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request control.QueryRequest, now time.Time) (control.QueryResponse, error) {
+	if handler.spend == nil {
+		return control.QueryResponse{}, unsupportedQuery(request.Kind, "spend summary repository is not configured")
+	}
+	if handler.resolveScope == nil {
+		return control.QueryResponse{}, unsupportedQuery(request.Kind, "spend summary scope resolver is not configured")
+	}
+	query, ok := request.Filter.(control.SpendSummaryQuery)
+	if !ok {
+		return control.QueryResponse{}, fmt.Errorf("spend summary filter has unexpected type")
+	}
+	scopeID, err := handler.resolveScope(ctx, request.Scope)
+	if err != nil {
+		return control.QueryResponse{}, fmt.Errorf("resolve spend summary scope: %w", err)
+	}
+	if scopeID == uuid.Nil {
+		return control.QueryResponse{}, errors.New("resolve spend summary scope: resolver returned nil scope id")
+	}
+	result, err := handler.spend.ListSpendSummary(ctx, postgresstore.SpendSummaryListOptions{
+		ScopeID: scopeID, StartTime: query.StartTime, EndTime: query.EndTime,
+		GroupBy:        append([]control.SpendDimension(nil), query.GroupBy...),
+		OperationKinds: append([]control.OperationKind(nil), query.OperationKinds...),
+	})
+	if err != nil {
+		return control.QueryResponse{}, err
+	}
+	return handler.response(request, result, control.QueryFreshCurrent, now, nil), nil
 }
 
 func (handler *persistedQueryHandler) providerStatus(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
