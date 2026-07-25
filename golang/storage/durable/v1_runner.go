@@ -29,6 +29,21 @@ var (
 type GenerateReplay struct {
 	State     state.MaterializedState
 	Completed *llm.GenerateResponseV1
+	// ReconciliationPending is populated when PostgreSQL finalization has
+	// committed but the Redis completion event did not. A Temporal retry must
+	// reconcile the committed identities before returning the response; it
+	// must not dispatch the provider a second time.
+	ReconciliationPending *GenerateReconciliation
+}
+
+// GenerateReconciliation carries the durable identities needed to retry a
+// post-finalization Redis reconciliation. The response is already
+// authoritative in PostgreSQL; this value is only a bounded retry handoff and
+// must never be treated as permission to run provider work again.
+type GenerateReconciliation struct {
+	Route        RoutePlan
+	Reservation  ReserveResult
+	Finalization GenerateFinalization
 }
 
 // CacheDisposition identifies the result of the route-isolated cache lookup.
@@ -208,6 +223,23 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("replay", err)
 	}
+	if replay.ReconciliationPending != nil {
+		pending := replay.ReconciliationPending
+		if err := validateGeneratePendingReconciliation(request, *pending); err != nil {
+			return llm.GenerateResponseV1{}, stageError("replay", err)
+		}
+		// A replay implementation should return either a completed response or
+		// the pending handoff. If it returns both, require them to refer to the
+		// same operation before reconciling, rather than trusting an ambiguous
+		// result from a mixed snapshot.
+		if replay.Completed != nil && replay.Completed.OperationID != pending.Finalization.Response.OperationID {
+			return llm.GenerateResponseV1{}, stageError("replay", errors.New("completed response does not match pending reconciliation"))
+		}
+		if err := ports.Reconcile(ctx, request, pending.Route, pending.Reservation, pending.Finalization); err != nil {
+			return llm.GenerateResponseV1{}, generateReconciliationError(pending.Route, err)
+		}
+		return pending.Finalization.Response, nil
+	}
 	if replay.Completed != nil {
 		if err := validateGenerateResponse(request, "", *replay.Completed); err != nil {
 			return llm.GenerateResponseV1{}, stageError("replay", err)
@@ -284,10 +316,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
 	}
 	if err := ports.Reconcile(ctx, request, route, reservation, finalization); err != nil {
-		mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "Redis reconciliation is pending")
-		mapped.OperationID = string(route.OperationID)
-		mapped.Cause = err
-		return llm.GenerateResponseV1{}, fmt.Errorf("%w: %w", ErrReconcilePending, mapped)
+		return llm.GenerateResponseV1{}, generateReconciliationError(route, err)
 	}
 	return finalization.Response, nil
 }
@@ -333,6 +362,16 @@ func validateGenerateFinalization(request llm.GenerateRequestV1, expectedOperati
 	return validateGenerateResponse(request, expectedOperationID, finalization.Response)
 }
 
+func validateGeneratePendingReconciliation(request llm.GenerateRequestV1, pending GenerateReconciliation) error {
+	if err := pending.Route.Validate(); err != nil {
+		return err
+	}
+	if err := validateReservationForRequest(request, pending.Route, pending.Reservation); err != nil {
+		return err
+	}
+	return validateGenerateFinalization(request, pending.Route.OperationID, pending.Finalization)
+}
+
 func validateGenerateResponse(request llm.GenerateRequestV1, expectedOperationID OperationID, response llm.GenerateResponseV1) error {
 	if response.OperationKey != request.OperationKey {
 		return errors.New("finalized response operation key does not match request")
@@ -354,4 +393,11 @@ func stageError(stage string, err error) error {
 		return fmt.Errorf("%w: %s", ErrV1Stage, stage)
 	}
 	return fmt.Errorf("%w: %s: %w", ErrV1Stage, stage, err)
+}
+
+func generateReconciliationError(route RoutePlan, cause error) error {
+	mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "Redis reconciliation is pending")
+	mapped.OperationID = string(route.OperationID)
+	mapped.Cause = cause
+	return fmt.Errorf("%w: %w", ErrReconcilePending, mapped)
 }

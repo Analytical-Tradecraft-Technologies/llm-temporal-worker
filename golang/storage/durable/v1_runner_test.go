@@ -225,6 +225,66 @@ func TestGenerateV1ReconciliationFailureIsRetryableAfterFinalization(t *testing.
 	}
 }
 
+func TestGenerateV1RetriesPendingReconciliationWithoutDispatch(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	request := testGenerateRequest()
+	route := testRoutePlan()
+	reservation := testReservation(route)
+	finalization := testFinalization(request)
+	finalization.Response.OperationID = string(route.OperationID)
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		events = append(events, "replay")
+		return GenerateReplay{ReconciliationPending: &GenerateReconciliation{
+			Route: route, Reservation: reservation, Finalization: finalization,
+		}}, nil
+	}
+	ports.Reconcile = func(_ context.Context, _ llm.GenerateRequestV1, gotRoute RoutePlan, gotReservation ReserveResult, gotFinalization GenerateFinalization) error {
+		events = append(events, "reconcile")
+		if gotRoute.OperationID != route.OperationID || gotReservation.OperationID != route.OperationID || gotFinalization.Response.OperationID != string(route.OperationID) {
+			t.Fatalf("pending reconciliation identities = %#v %#v %#v", gotRoute, gotReservation, gotFinalization)
+		}
+		return nil
+	}
+	response, err := GenerateV1(context.Background(), request, ports)
+	if err != nil {
+		t.Fatalf("GenerateV1 pending reconciliation error = %v", err)
+	}
+	if response.OperationID != string(route.OperationID) {
+		t.Fatalf("response operation id = %q", response.OperationID)
+	}
+	if got, want := events, []string{"replay", "reconcile"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending reconciliation phases = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1RejectsMismatchedCompletedAndPendingReplay(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	request := testGenerateRequest()
+	completed := testFinalization(request).Response
+	completed.OperationID = "completed-operation"
+	route := testRoutePlan()
+	reservation := testReservation(route)
+	finalization := testFinalization(request)
+	finalization.Response.OperationID = string(route.OperationID)
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		return GenerateReplay{
+			Completed: &completed,
+			ReconciliationPending: &GenerateReconciliation{
+				Route: route, Reservation: reservation, Finalization: finalization,
+			},
+		}, nil
+	}
+	_, err := GenerateV1(context.Background(), request, ports)
+	if err == nil || !errors.Is(err, ErrV1Stage) {
+		t.Fatalf("error = %v, want replay validation failure", err)
+	}
+	if contains(events, "reconcile") || contains(events, "dispatch") {
+		t.Fatalf("ambiguous replay reached side effects: %v", events)
+	}
+}
+
 func TestGenerateV1CacheHitNeverDispatchesProvider(t *testing.T) {
 	events := []string{}
 	ports := testGeneratePorts(&events, "")
