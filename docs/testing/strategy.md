@@ -456,6 +456,17 @@ Tests use `httptest.Server` or SDK-supported transports that can:
 TLS mock variants verify certificate/redirect/base-URL policy. No mock behavior
 is inferred from HTTP status alone; the fixture declares dispatch/cost contract.
 
+### Deterministic provider-poll recovery evidence
+
+`go test ./engine -run '^TestGenerateResumesDurableProviderOperationWithoutSubmit$'`
+provides a fast, credential-free recovery proof for the durable provider-poll
+boundary. The fixture interrupts the first poll after the provider operation ID
+is persisted, then retries with that same ID. It asserts exactly one submission,
+two polls of the persisted ID, and bounded `started`, `retry`, and `completed`
+poll metrics. This is deterministic unit evidence for the no-resubmission
+invariant; it does not replace a live Temporal worker crash, database
+backup/restore, or provider contract run.
+
 ## Golden fixture governance
 
 Each profile directory contains a manifest and metadata file plus the local
