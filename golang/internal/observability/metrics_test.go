@@ -86,10 +86,24 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.SetBudgetReserved("policy-a", "hour", 12.5)
 	metrics.RecordCost("endpoint-a", "model-a", "standard", "provider", 7.25)
 	metrics.RecordExactCost("endpoint-a", "model-a", "standard", "provider")
+	metrics.RecordCostStatus("endpoint-a", "model-a", "standard", "exact", "provider")
+	metrics.RecordCostStatus("endpoint-a", "model-a", "standard", "unknown", "")
 	metrics.RecordOperationState("started")
 	metrics.RecordAmbiguous("endpoint-a")
 	metrics.RecordContinuation("continue")
 	metrics.RecordConfigReload("success")
+	metrics.RecordMaintenance("cache", "tombstoned", 2, time.Second)
+	metrics.RecordMaintenance("cache", "skipped", 1, time.Second)
+	metrics.RecordMaintenanceFailure("cache")
+	metrics.RecordPostgresPool(4, 2, 2, 8)
+	metrics.RecordPostgresLatency("query", 2*time.Millisecond)
+	metrics.RecordPostgresLatency("lock", -time.Second)
+	metrics.RecordPostgresTableTuples("cache", 20, 3)
+	metrics.RecordCache("hit")
+	metrics.RecordCache("use")
+	metrics.RecordCache("fill")
+	metrics.RecordPendingPoll("started")
+	metrics.RecordPendingPoll("retry")
 	metrics.SetWorkerPolling(true)
 	metrics.SetWorkerPolling(false)
 	metrics.SetHeartbeatAge(-time.Second)
@@ -104,7 +118,10 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		"llmtw_budget_admission_total", "llmtw_budget_reserved_micro_usd", "llmtw_cost_micro_usd_total",
 		"llmtw_cost_usd_total", "llmtw_operation_state_total", "llmtw_ambiguous_total",
 		"llmtw_continuation_total", "llmtw_config_reload_total", "llmtw_worker_polling",
-		"llmtw_heartbeat_age_seconds",
+		"llmtw_heartbeat_age_seconds", "llmtw_maintenance_rows_total",
+		"llmtw_maintenance_failures_total", "llmtw_maintenance_duration_seconds",
+		"llmtw_postgres_pool_connections", "llmtw_postgres_latency_seconds", "llmtw_postgres_table_tuples",
+		"llmtw_cache_events_total", "llmtw_provider_poll_total", "llmtw_cost_status_total",
 	}
 	seen := make(map[string]bool, len(families))
 	for _, family := range families {
@@ -128,6 +145,30 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		"endpoint": "endpoint-a", "model": "model-a", "class": "standard", "method": "provider",
 	}); got != 1 {
 		t.Fatalf("exact cost event count = %v, want 1", got)
+	}
+	if got := metricValue(families, "llmtw_maintenance_rows_total", map[string]string{"resource": "cache", "outcome": "tombstoned"}); got != 2 {
+		t.Fatalf("maintenance tombstone count = %v, want 2", got)
+	}
+	if got := metricValue(families, "llmtw_maintenance_failures_total", map[string]string{"resource": "cache"}); got != 1 {
+		t.Fatalf("maintenance failure count = %v, want 1", got)
+	}
+	if got := metricValue(families, "llmtw_postgres_pool_connections", map[string]string{"state": "max"}); got != 8 {
+		t.Fatalf("postgres max pool gauge = %v, want 8", got)
+	}
+	if got := metricValue(families, "llmtw_postgres_latency_seconds", map[string]string{"kind": "lock"}); got < 0 {
+		t.Fatalf("postgres lock latency = %v, want non-negative", got)
+	}
+	if got := metricValue(families, "llmtw_postgres_table_tuples", map[string]string{"resource": "cache", "state": "dead"}); got != 3 {
+		t.Fatalf("postgres dead tuples = %v, want 3", got)
+	}
+	if got := metricValue(families, "llmtw_cache_events_total", map[string]string{"event": "use"}); got != 1 {
+		t.Fatalf("cache use count = %v, want 1", got)
+	}
+	if got := metricValue(families, "llmtw_provider_poll_total", map[string]string{"outcome": "retry"}); got != 1 {
+		t.Fatalf("provider poll retry count = %v, want 1", got)
+	}
+	if got := metricValue(families, "llmtw_cost_status_total", map[string]string{"status": "unknown"}); got != 1 {
+		t.Fatalf("unknown cost count = %v, want 1", got)
 	}
 
 	response := httptest.NewRecorder()
@@ -161,10 +202,18 @@ func TestMetricsNilBindingsAndDefaultBuiltInsAreSafe(t *testing.T) {
 	metrics.SetBudgetReserved("policy", "window", 1)
 	metrics.RecordCost("endpoint", "model", "standard", "provider", 1)
 	metrics.RecordExactCost("endpoint", "model", "standard", "provider")
+	metrics.RecordCostStatus("endpoint", "model", "standard", "unknown", "secret-method")
 	metrics.RecordOperationState("started")
 	metrics.RecordAmbiguous("endpoint")
 	metrics.RecordContinuation("continue")
 	metrics.RecordConfigReload("success")
+	metrics.RecordMaintenance("secret-resource", "secret-outcome", 1, time.Second)
+	metrics.RecordMaintenanceFailure("secret-resource")
+	metrics.RecordPostgresPool(-1, -2, -3, -4)
+	metrics.RecordPostgresLatency("secret-kind", time.Second)
+	metrics.RecordPostgresTableTuples("secret-resource", -1, -2)
+	metrics.RecordCache("secret-event")
+	metrics.RecordPendingPoll("secret-outcome")
 	metrics.SetWorkerPolling(true)
 	metrics.SetHeartbeatAge(time.Second)
 

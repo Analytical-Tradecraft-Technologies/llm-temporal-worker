@@ -92,8 +92,9 @@ func (repository MaintenanceRepository) blobGCTables() (map[string]string, error
 // MarkExpiredBlobsEligible performs one bounded, locked pass.  Expiration is
 // only a candidate signal: every retained reference is rechecked while the
 // row is locked before the state changes.
-func (repository MaintenanceRepository) MarkExpiredBlobsEligible(ctx context.Context, now time.Time, limit int) (BlobGCResult, error) {
-	var result BlobGCResult
+func (repository MaintenanceRepository) MarkExpiredBlobsEligible(ctx context.Context, now time.Time, limit int) (result BlobGCResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeBlobMaintenance(ctx, "blob", started, result, returnErr) }()
 	if err := validateBatch(now, limit); err != nil {
 		return result, err
 	}

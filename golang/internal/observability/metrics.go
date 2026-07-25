@@ -64,6 +64,15 @@ type Metrics struct {
 	ambiguousTotal       *prometheus.CounterVec
 	continuationTotal    *prometheus.CounterVec
 	configReloadTotal    *prometheus.CounterVec
+	maintenanceRows      *prometheus.CounterVec
+	maintenanceFailures  *prometheus.CounterVec
+	maintenanceDuration  *prometheus.HistogramVec
+	postgresPool         *prometheus.GaugeVec
+	postgresLatency      *prometheus.HistogramVec
+	postgresTableTuples  *prometheus.GaugeVec
+	cacheEvents          *prometheus.CounterVec
+	pendingPolls         *prometheus.CounterVec
+	costStatus           *prometheus.CounterVec
 	workerPolling        prometheus.Gauge
 	heartbeatAge         prometheus.Gauge
 }
@@ -117,12 +126,23 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.ambiguousTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_ambiguous_total", Help: "Operations whose provider dispatch is unresolved."}, []string{"endpoint"})
 	m.continuationTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_continuation_total", Help: "Continuation decisions."}, []string{"decision"})
 	m.configReloadTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_config_reload_total", Help: "Configuration reload outcomes."}, []string{"outcome"})
+	m.maintenanceRows = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_maintenance_rows_total", Help: "Bounded maintenance rows by resource and outcome."}, []string{"resource", "outcome"})
+	m.maintenanceFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_maintenance_failures_total", Help: "Bounded maintenance pass failures by resource."}, []string{"resource"})
+	m.maintenanceDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_maintenance_duration_seconds", Help: "Duration of bounded maintenance passes by resource."}, []string{"resource"})
+	m.postgresPool = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_postgres_pool_connections", Help: "PostgreSQL pool connections by bounded state."}, []string{"state"})
+	m.postgresLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_postgres_latency_seconds", Help: "PostgreSQL pool, lock, query, and maintenance boundary latency."}, []string{"kind"})
+	m.postgresTableTuples = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_postgres_table_tuples", Help: "Approximate PostgreSQL table tuples by bounded resource and liveness state."}, []string{"resource", "state"})
+	m.cacheEvents = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cache_events_total", Help: "Response cache hits, uses, fills, misses, and bounded failures."}, []string{"event"})
+	m.pendingPolls = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_poll_total", Help: "Provider-owned operation poll outcomes."}, []string{"outcome"})
+	m.costStatus = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_status_total", Help: "Exact and unknown cost accounting events; amounts remain in the durable ledger."}, []string{"endpoint", "model", "class", "status", "method"})
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
 	collectors := []prometheus.Collector{
 		m.activityTotal, m.activityFailureTotal, m.activityDuration, m.providerAttemptTotal, m.providerDuration,
 		m.serviceClassActual, m.budgetAdmission, m.budgetReserved, m.costTotal, m.costExactTotal,
 		m.operationState, m.ambiguousTotal, m.continuationTotal, m.configReloadTotal,
+		m.maintenanceRows, m.maintenanceFailures, m.maintenanceDuration, m.postgresPool, m.postgresLatency,
+		m.postgresTableTuples, m.cacheEvents, m.pendingPolls, m.costStatus,
 		m.workerPolling, m.heartbeatAge,
 	}
 	for _, collector := range collectors {
@@ -255,6 +275,26 @@ func (metrics *Metrics) RecordExactCost(endpoint, model, class, method string) {
 	metrics.costExactTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, classes), metrics.allow(method, metrics.allowed.methods)).Inc()
 }
 
+// RecordCostStatus records whether a completed operation has an exact or
+// unknown cost. The amount and unknown reason remain in the durable ledger;
+// this counter deliberately exposes only bounded dimensions.
+func (metrics *Metrics) RecordCostStatus(endpoint, model, class, status, method string) {
+	if metrics == nil {
+		return
+	}
+	classes := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
+	statuses := map[string]struct{}{"exact": {}, "unknown": {}}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.costStatus.WithLabelValues(
+		metrics.allow(endpoint, metrics.allowed.endpoints),
+		metrics.allow(model, metrics.allowed.models),
+		metrics.builtIn(class, classes),
+		metrics.builtIn(status, statuses),
+		metrics.allow(method, metrics.allowed.methods),
+	).Inc()
+}
+
 func (metrics *Metrics) RecordOperationState(state string) {
 	if metrics == nil {
 		return
@@ -287,6 +327,136 @@ func (metrics *Metrics) RecordConfigReload(outcome string) {
 		return
 	}
 	metrics.configReloadTotal.WithLabelValues(metrics.builtIn(outcome, metrics.allowed.outcomes)).Inc()
+}
+
+// RecordMaintenance records bounded row progress.  The resource and outcome
+// vocabularies are deliberately fixed so table names and operator input never
+// become unbounded Prometheus labels.
+func (metrics *Metrics) RecordMaintenance(resource, outcome string, rows int, duration time.Duration) {
+	if metrics == nil {
+		return
+	}
+	if rows < 0 {
+		rows = 0
+	}
+	resources := map[string]struct{}{
+		"cache": {}, "status": {}, "inventory": {}, "query_execution": {},
+		"checkpoint": {}, "blob": {}, "outbox": {},
+	}
+	outcomes := map[string]struct{}{
+		"eligible": {}, "tombstoned": {}, "deleted": {}, "skipped": {},
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.maintenanceRows.WithLabelValues(metrics.builtIn(resource, resources), metrics.builtIn(outcome, outcomes)).Add(float64(rows))
+	metrics.maintenanceDuration.WithLabelValues(metrics.builtIn(resource, resources)).Observe(nonNegativeDuration(duration).Seconds())
+}
+
+// RecordMaintenanceFailure records a failed bounded pass without exposing
+// database error text or caller-controlled table names.
+func (metrics *Metrics) RecordMaintenanceFailure(resource string) {
+	if metrics == nil {
+		return
+	}
+	resources := map[string]struct{}{
+		"cache": {}, "status": {}, "inventory": {}, "query_execution": {},
+		"checkpoint": {}, "blob": {}, "outbox": {},
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.maintenanceFailures.WithLabelValues(metrics.builtIn(resource, resources)).Inc()
+}
+
+// RecordPostgresPool records only numeric pool state; it never accepts a
+// database, namespace, or tenant as a label.
+func (metrics *Metrics) RecordPostgresPool(total, acquired, idle, max int32) {
+	if metrics == nil {
+		return
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.postgresPool.WithLabelValues("total").Set(float64(maxInt32(total)))
+	metrics.postgresPool.WithLabelValues("acquired").Set(float64(maxInt32(acquired)))
+	metrics.postgresPool.WithLabelValues("idle").Set(float64(maxInt32(idle)))
+	metrics.postgresPool.WithLabelValues("max").Set(float64(maxInt32(max)))
+}
+
+// RecordPostgresLatency records a bounded database boundary. Callers should
+// use one of pool, lock, query, or maintenance for kind.
+func (metrics *Metrics) RecordPostgresLatency(kind string, duration time.Duration) {
+	if metrics == nil {
+		return
+	}
+	kinds := map[string]struct{}{"pool": {}, "lock": {}, "query": {}, "maintenance": {}}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.postgresLatency.WithLabelValues(metrics.builtIn(kind, kinds)).Observe(nonNegativeDuration(duration).Seconds())
+}
+
+// RecordPostgresTableTuples records approximate pg_stat_user_tables values.
+// Resource names are fixed logical names, never physical relation names.
+func (metrics *Metrics) RecordPostgresTableTuples(resource string, live, dead int64) {
+	if metrics == nil {
+		return
+	}
+	resources := map[string]struct{}{
+		"cache": {}, "status": {}, "inventory": {}, "operation": {},
+		"budget": {}, "checkpoint": {}, "query_execution": {}, "outbox": {}, "blob": {},
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.postgresTableTuples.WithLabelValues(metrics.builtIn(resource, resources), "live").Set(float64(maxInt64(live)))
+	metrics.postgresTableTuples.WithLabelValues(metrics.builtIn(resource, resources), "dead").Set(float64(maxInt64(dead)))
+}
+
+// RecordCache records one bounded response-cache lifecycle event. Use and hit
+// are deliberately separate: a replayed operation can be a hit without
+// inserting a second use row.
+func (metrics *Metrics) RecordCache(event string) {
+	if metrics == nil {
+		return
+	}
+	events := map[string]struct{}{
+		"hit": {}, "use": {}, "miss": {}, "fill": {}, "fill_existing": {},
+		"fill_busy": {}, "fill_failed": {}, "error": {},
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.cacheEvents.WithLabelValues(metrics.builtIn(event, events)).Inc()
+}
+
+// RecordPendingPoll records a provider-owned poll boundary. The worker may
+// retry a pending operation many times, so this is a counter rather than an
+// in-memory gauge that could be lost on restart.
+func (metrics *Metrics) RecordPendingPoll(outcome string) {
+	if metrics == nil {
+		return
+	}
+	outcomes := map[string]struct{}{"started": {}, "completed": {}, "retry": {}, "failed": {}}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.pendingPolls.WithLabelValues(metrics.builtIn(outcome, outcomes)).Inc()
+}
+
+func nonNegativeDuration(duration time.Duration) time.Duration {
+	if duration < 0 {
+		return 0
+	}
+	return duration
+}
+
+func maxInt32(value int32) int32 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func maxInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func (metrics *Metrics) SetWorkerPolling(polling bool) {

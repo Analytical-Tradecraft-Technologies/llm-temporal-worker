@@ -31,8 +31,11 @@ var (
 // MaintenanceRepository owns only maintenance-role operations. It is not
 // used by the worker runtime, which must not receive DELETE privileges.
 type MaintenanceRepository struct {
-	Pool          *pgxpool.Pool
-	Namespace     Namespace
+	Pool      *pgxpool.Pool
+	Namespace Namespace
+	// Observer is optional. When set, bounded retention/blob passes report
+	// progress and PostgreSQL pool state after each repository boundary.
+	Observer      MaintenanceObserver
 	NewID         func() (uuid.UUID, error)
 	NewLeaseToken func() (maintenance.LeaseToken, error)
 }
@@ -58,8 +61,9 @@ func validateBatch(now time.Time, limit int) error {
 // blob-delete intent in the same transaction. Reference/fill checks are
 // repeated in the locked candidate query; a concurrent reference therefore
 // prevents tombstoning rather than racing a blob deletion.
-func (repository MaintenanceRepository) PruneExpiredCache(ctx context.Context, now, unusedBefore time.Time, limit int) (maintenance.RetentionResult, error) {
-	var result maintenance.RetentionResult
+func (repository MaintenanceRepository) PruneExpiredCache(ctx context.Context, now, unusedBefore time.Time, limit int) (result maintenance.RetentionResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeMaintenance(ctx, "cache", started, result, returnErr) }()
 	if err := repository.validate(); err != nil {
 		return result, err
 	}
@@ -168,8 +172,9 @@ func (repository MaintenanceRepository) PruneExpiredCache(ctx context.Context, n
 // candidate rows are locked with SKIP LOCKED before deletion; the foreign-key
 // reference therefore cannot be deleted underneath a concurrent projection
 // update. Current projections remain available for status queries.
-func (repository MaintenanceRepository) PruneExpiredProviderStatus(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
-	var result maintenance.RetentionResult
+func (repository MaintenanceRepository) PruneExpiredProviderStatus(ctx context.Context, now, expiresBefore time.Time, limit int) (result maintenance.RetentionResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeMaintenance(ctx, "status", started, result, returnErr) }()
 	if err := repository.validate(); err != nil {
 		return result, err
 	}
@@ -226,8 +231,9 @@ func (repository MaintenanceRepository) PruneExpiredProviderStatus(ctx context.C
 // epoch (even if that snapshot is itself expired). Parent rows are locked
 // before children are deleted so a concurrent model insert cannot race the
 // foreign-key cleanup.
-func (repository MaintenanceRepository) PruneExpiredInventory(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
-	var result maintenance.RetentionResult
+func (repository MaintenanceRepository) PruneExpiredInventory(ctx context.Context, now, expiresBefore time.Time, limit int) (result maintenance.RetentionResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeMaintenance(ctx, "inventory", started, result, returnErr) }()
 	if err := repository.validate(); err != nil {
 		return result, err
 	}
@@ -288,8 +294,9 @@ func (repository MaintenanceRepository) PruneExpiredInventory(ctx context.Contex
 // the indexed expiry candidates. The short transaction keeps the SKIP LOCKED
 // claim and delete atomic while allowing other maintenance workers to make
 // progress on the remainder of the ledger.
-func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
-	var result maintenance.RetentionResult
+func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.Context, now, expiresBefore time.Time, limit int) (result maintenance.RetentionResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeMaintenance(ctx, "query_execution", started, result, returnErr) }()
 	if err := repository.validate(); err != nil {
 		return result, err
 	}
@@ -347,8 +354,9 @@ func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.
 // foreign-key key-share locking makes a concurrent child/reference insert wait
 // for this lock, so the locked reference predicates remain authoritative for
 // the delete transaction.
-func (repository MaintenanceRepository) PruneExpiredCheckpoints(ctx context.Context, now, expiresBefore time.Time, limit int) (maintenance.RetentionResult, error) {
-	var result maintenance.RetentionResult
+func (repository MaintenanceRepository) PruneExpiredCheckpoints(ctx context.Context, now, expiresBefore time.Time, limit int) (result maintenance.RetentionResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeMaintenance(ctx, "checkpoint", started, result, returnErr) }()
 	if err := repository.validate(); err != nil {
 		return result, err
 	}

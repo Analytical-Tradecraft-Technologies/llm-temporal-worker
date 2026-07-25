@@ -208,12 +208,27 @@ Metric labels use bounded configured IDs, never tenant-provided free text:
 - `llmtw_budget_admission_total{policy,outcome}`;
 - `llmtw_budget_reserved_micro_usd{policy,window}`;
 - `llmtw_cost_micro_usd_total{endpoint,model,class,method}`;
+- `llmtw_cost_status_total{endpoint,model,class,status,method}` where `status`
+  is `exact` or `unknown`; the amount and unknown reason remain in PostgreSQL;
 - `llmtw_operation_state_total{state}`;
 - `llmtw_ambiguous_total{endpoint}`;
 - `llmtw_continuation_total{decision}`;
 - `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
-- `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat).
+- `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat);
+- `llmtw_maintenance_rows_total{resource,outcome}` and
+  `llmtw_maintenance_failures_total{resource}` for bounded eligible,
+  tombstoned, deleted, skipped, and failed passes;
+- `llmtw_maintenance_duration_seconds{resource}`;
+- `llmtw_postgres_pool_connections{state}` and
+  `llmtw_postgres_latency_seconds{kind}` for pool, lock, query, and
+  maintenance boundaries;
+- `llmtw_postgres_table_tuples{resource,state}` for approximate live/dead
+  tuples from `pg_stat_user_tables` (dead tuples are a maintenance signal,
+  not an exact row count);
+- `llmtw_cache_events_total{event}` for bounded hit/use/miss/fill events;
+- `llmtw_provider_poll_total{outcome}` for started, completed, retry, and
+  failed polls of provider-owned operations.
 
 Reload failures leave the active snapshot and readiness state unchanged, record
 the bounded failure outcome, and log only a safe error classification. Success
@@ -227,7 +242,8 @@ The target Phase A PostgreSQL change removes the two **micro_usd** metrics as
 authoritative money. Prometheus floating-point samples cannot faithfully carry
 **NUMERIC(38,18)**. Exact totals come from the typed PostgreSQL query Activity;
 telemetry exposes bounded counts such as
-**llmtw_cost_status_total{status,method}** and unknown-cost/price conditions.
+**llmtw_cost_status_total{endpoint,model,class,status,method}** and
+unknown-cost/price conditions.
 Dashboards must not reconstruct actual spend by treating an unknown observation
 as zero.
 

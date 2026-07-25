@@ -148,9 +148,12 @@ type CachePublishRequest struct {
 }
 
 type ResponseCacheRepository struct {
-	Pool           *pgxpool.Pool
-	Namespace      Namespace
-	Keys           Keyring
+	Pool      *pgxpool.Pool
+	Namespace Namespace
+	Keys      Keyring
+	// Observer is optional. It receives bounded cache and PostgreSQL query
+	// latency signals after each cache boundary.
+	Observer       CacheObserver
 	MaxInlineBytes int
 	MaxLookupAge   time.Duration
 	NewID          func() (uuid.UUID, error)
@@ -285,8 +288,18 @@ func (repository ResponseCacheRepository) relations() (entries, uses, fills stri
 // transaction. A retry with the same operation ID inserts no second use and
 // does not increment use_count. Staleness is based on completed_at, never on
 // last_used_at.
-func (repository ResponseCacheRepository) Lookup(ctx context.Context, request CacheLookupRequest) (CacheLookupResult, error) {
-	var result CacheLookupResult
+func (repository ResponseCacheRepository) Lookup(ctx context.Context, request CacheLookupRequest) (result CacheLookupResult, returnErr error) {
+	started := time.Now()
+	defer func() {
+		event := "miss"
+		if result.Hit {
+			event = "hit"
+			if returnErr == nil && repository.Observer != nil {
+				repository.Observer.RecordCache("use")
+			}
+		}
+		repository.observeCache(event, started, returnErr)
+	}()
 	if ctx == nil {
 		return result, errors.New("response cache lookup context is nil")
 	}
@@ -360,8 +373,22 @@ func (repository ResponseCacheRepository) Lookup(ctx context.Context, request Ca
 
 // BeginFill acquires an idempotent, expiring lease. A ready entry wins over a
 // stale fill, while an active lease is reported as busy without waiting.
-func (repository ResponseCacheRepository) BeginFill(ctx context.Context, request CacheFillRequest) (CacheFillResult, error) {
-	var result CacheFillResult
+func (repository ResponseCacheRepository) BeginFill(ctx context.Context, request CacheFillRequest) (result CacheFillResult, returnErr error) {
+	started := time.Now()
+	defer func() {
+		event := "error"
+		if returnErr == nil {
+			switch result.Status {
+			case CacheFillAcquired:
+				event = "fill"
+			case CacheFillExisting:
+				event = "fill_existing"
+			case CacheFillBusy:
+				event = "fill_busy"
+			}
+		}
+		repository.observeCache(event, started, returnErr)
+	}()
 	if ctx == nil {
 		return result, errors.New("response cache fill context is nil")
 	}
@@ -445,8 +472,15 @@ func (repository ResponseCacheRepository) BeginFill(ctx context.Context, request
 // Publish completes a fill and inserts a ready entry in the same transaction.
 // It is safe to call again after a committed response: the completed fill
 // returns the existing entry rather than inserting a duplicate template.
-func (repository ResponseCacheRepository) Publish(ctx context.Context, request CachePublishRequest) (CacheEntry, error) {
-	var entry CacheEntry
+func (repository ResponseCacheRepository) Publish(ctx context.Context, request CachePublishRequest) (entry CacheEntry, returnErr error) {
+	started := time.Now()
+	defer func() {
+		event := "fill"
+		if returnErr != nil {
+			event = "error"
+		}
+		repository.observeCache(event, started, returnErr)
+	}()
 	if ctx == nil {
 		return entry, errors.New("response cache publish context is nil")
 	}
@@ -559,7 +593,9 @@ func (repository ResponseCacheRepository) Publish(ctx context.Context, request C
 
 // FailFill lets an owner release a failed provider attempt without deleting
 // the row. The failed marker allows a later operation to take over safely.
-func (repository ResponseCacheRepository) FailFill(ctx context.Context, request CacheFillRequest) error {
+func (repository ResponseCacheRepository) FailFill(ctx context.Context, request CacheFillRequest) (returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeCache("fill_failed", started, returnErr) }()
 	if ctx == nil {
 		return errors.New("response cache fill context is nil")
 	}

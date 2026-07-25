@@ -52,6 +52,7 @@ func recordCompletion(ctx context.Context, response llm.Response) {
 	metrics.RecordServiceClass(string(response.Service.Requested), string(actual), response.Route.EndpointID)
 	if response.Cost.Status == llm.CostStatusKnown {
 		if response.Cost.ActualCostUSD != nil {
+			metrics.RecordCostStatus(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), "exact", response.Cost.Method)
 			metrics.RecordExactCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method)
 		}
 		if response.Cost.ActualCostUSD != nil {
@@ -59,5 +60,7 @@ func recordCompletion(ctx context.Context, response llm.Response) {
 				metrics.RecordCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method, float64(materialized))
 			}
 		}
+	} else if response.Cost.Status == llm.CostStatusUnknown {
+		metrics.RecordCostStatus(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), "unknown", "")
 	}
 }
