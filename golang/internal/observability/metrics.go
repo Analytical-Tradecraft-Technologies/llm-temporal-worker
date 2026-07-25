@@ -349,7 +349,12 @@ func (metrics *Metrics) RecordMaintenance(resource, outcome string, rows int, du
 	metrics.mu.RLock()
 	defer metrics.mu.RUnlock()
 	metrics.maintenanceRows.WithLabelValues(metrics.builtIn(resource, resources), metrics.builtIn(outcome, outcomes)).Add(float64(rows))
-	metrics.maintenanceDuration.WithLabelValues(metrics.builtIn(resource, resources)).Observe(nonNegativeDuration(duration).Seconds())
+	// A maintenance pass reports one row counter for each outcome. Observe its
+	// duration only on the single eligible event so one pass contributes one
+	// histogram sample rather than multiplying latency by outcome count.
+	if outcome == "eligible" {
+		metrics.maintenanceDuration.WithLabelValues(metrics.builtIn(resource, resources)).Observe(nonNegativeDuration(duration).Seconds())
+	}
 }
 
 // RecordMaintenanceFailure records a failed bounded pass without exposing

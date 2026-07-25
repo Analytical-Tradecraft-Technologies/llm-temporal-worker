@@ -51,6 +51,20 @@ func (repository MaintenanceRepository) observeBlobMaintenance(ctx context.Conte
 	repository.observePostgresBoundary(ctx, started)
 }
 
+func (repository MaintenanceRepository) observeBlobDeletion(ctx context.Context, started time.Time, deleted bool, err error) {
+	if repository.Observer == nil {
+		return
+	}
+	duration := time.Since(started)
+	if deleted {
+		repository.Observer.RecordMaintenance("blob", "deleted", 1, duration)
+	}
+	if err != nil {
+		repository.Observer.RecordMaintenanceFailure("blob")
+	}
+	repository.observePostgresBoundary(ctx, started)
+}
+
 func (repository MaintenanceRepository) observePostgresBoundary(ctx context.Context, started time.Time) {
 	if repository.Observer == nil {
 		return

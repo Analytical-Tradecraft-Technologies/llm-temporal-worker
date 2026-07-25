@@ -52,3 +52,16 @@ func TestMaintenanceObserverRecordsBoundedProgressWithoutPool(t *testing.T) {
 		t.Fatalf("latency observations = %#v", recorder.latencies)
 	}
 }
+
+func TestMaintenanceObserverRecordsBlobDeletionOnlyWhenFinalized(t *testing.T) {
+	recorder := &maintenanceObserverRecorder{}
+	repository := MaintenanceRepository{Observer: recorder}
+	repository.observeBlobDeletion(context.Background(), time.Now(), false, nil)
+	if len(recorder.rows) != 0 {
+		t.Fatalf("idempotent deletion rows = %#v, want no deletion", recorder.rows)
+	}
+	repository.observeBlobDeletion(context.Background(), time.Now(), true, nil)
+	if len(recorder.rows) != 1 || recorder.rows[0] != "blob:deleted" {
+		t.Fatalf("finalized deletion rows = %#v, want blob:deleted", recorder.rows)
+	}
+}

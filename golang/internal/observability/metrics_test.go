@@ -92,6 +92,7 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.RecordAmbiguous("endpoint-a")
 	metrics.RecordContinuation("continue")
 	metrics.RecordConfigReload("success")
+	metrics.RecordMaintenance("cache", "eligible", 0, time.Second)
 	metrics.RecordMaintenance("cache", "tombstoned", 2, time.Second)
 	metrics.RecordMaintenance("cache", "skipped", 1, time.Second)
 	metrics.RecordMaintenanceFailure("cache")
@@ -151,6 +152,9 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	}
 	if got := metricValue(families, "llmtw_maintenance_failures_total", map[string]string{"resource": "cache"}); got != 1 {
 		t.Fatalf("maintenance failure count = %v, want 1", got)
+	}
+	if got := histogramCount(families, "llmtw_maintenance_duration_seconds", map[string]string{"resource": "cache"}); got != 1 {
+		t.Fatalf("maintenance duration samples = %v, want one sample per pass", got)
 	}
 	if got := metricValue(families, "llmtw_postgres_pool_connections", map[string]string{"state": "max"}); got != 8 {
 		t.Fatalf("postgres max pool gauge = %v, want 8", got)
@@ -231,6 +235,34 @@ func TestMetricsNilBindingsAndDefaultBuiltInsAreSafe(t *testing.T) {
 	}); got != 1 {
 		t.Fatalf("default built-in labels were not retained: %v", got)
 	}
+}
+
+func histogramCount(families []*dto.MetricFamily, name string, labels map[string]string) uint64 {
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			matched := true
+			for key, want := range labels {
+				found := false
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == key && label.GetValue() == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					matched = false
+					break
+				}
+			}
+			if matched && metric.Histogram != nil {
+				return metric.Histogram.GetSampleCount()
+			}
+		}
+	}
+	return 0
 }
 
 func metricValue(families []*dto.MetricFamily, name string, labels map[string]string) float64 {

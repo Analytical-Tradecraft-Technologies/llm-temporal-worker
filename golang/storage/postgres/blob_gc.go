@@ -247,7 +247,10 @@ func scanBlobDeletionClaim(row blobClaimRow) (BlobDeletionClaim, error) {
 // FinalizeBlobDeletion records successful physical deletion.  A missing
 // metadata row (or an already-finalized row) is an idempotent success, which
 // also makes an object-store not-found result safe to acknowledge.
-func (repository MaintenanceRepository) FinalizeBlobDeletion(ctx context.Context, blobID uuid.UUID) error {
+func (repository MaintenanceRepository) FinalizeBlobDeletion(ctx context.Context, blobID uuid.UUID) (returnErr error) {
+	started := time.Now()
+	deleted := false
+	defer func() { repository.observeBlobDeletion(ctx, started, deleted, returnErr) }()
 	if err := repository.validate(); err != nil {
 		return err
 	}
@@ -278,9 +281,11 @@ func (repository MaintenanceRepository) FinalizeBlobDeletion(ctx context.Context
 		if !free {
 			return ErrBlobDeletionReferences
 		}
-		if _, err := tx.Exec(ctx, "UPDATE "+tables["blobs"]+" SET deletion_state = 'deleted' WHERE blob_id = $1 AND deletion_state = 'deleting'", blobID); err != nil {
+		updated, err := tx.Exec(ctx, "UPDATE "+tables["blobs"]+" SET deletion_state = 'deleted' WHERE blob_id = $1 AND deletion_state = 'deleting'", blobID)
+		if err != nil {
 			return redactPostgresError(fmt.Errorf("finalize blob deletion: %w", err))
 		}
+		deleted = updated.RowsAffected() > 0
 		return nil
 	})
 }

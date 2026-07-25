@@ -290,11 +290,12 @@ func (repository ResponseCacheRepository) relations() (entries, uses, fills stri
 // last_used_at.
 func (repository ResponseCacheRepository) Lookup(ctx context.Context, request CacheLookupRequest) (result CacheLookupResult, returnErr error) {
 	started := time.Now()
+	useRecorded := false
 	defer func() {
 		event := "miss"
 		if result.Hit {
 			event = "hit"
-			if returnErr == nil && repository.Observer != nil {
+			if returnErr == nil && useRecorded && repository.Observer != nil {
 				repository.Observer.RecordCache("use")
 			}
 		}
@@ -346,7 +347,8 @@ func (repository ResponseCacheRepository) Lookup(ctx context.Context, request Ca
 		if err != nil {
 			return redactPostgresError(fmt.Errorf("record PostgreSQL response cache use: %w", err))
 		}
-		if inserted.RowsAffected() == 0 {
+		useRecorded = inserted.RowsAffected() > 0
+		if !useRecorded {
 			var usedEntry uuid.UUID
 			if err := tx.QueryRow(ctx, "SELECT cache_entry_id FROM "+uses+" WHERE operation_id=$1", opID).Scan(&usedEntry); err != nil {
 				return redactPostgresError(fmt.Errorf("check PostgreSQL response cache use: %w", err))
