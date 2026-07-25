@@ -714,6 +714,11 @@ directory unless a command explicitly says otherwise.
 
 ### Task 15: Wire Generate v1 and Compact Activities end to end
 
+Status: preparatory composition guard only. The reusable legacy
+`llm.Engine` is intentionally not adapted to the v1 Activity boundary; see
+[ADR 0010](../../decisions/0010-durable-v1-runtime-composition.md). The
+durable implementation and protected integration evidence remain pending.
+
 **Files:**
 
 - Modify: **activity/activities.go**, **activity/types.go**

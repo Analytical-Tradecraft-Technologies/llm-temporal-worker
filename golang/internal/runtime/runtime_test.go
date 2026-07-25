@@ -201,6 +201,25 @@ func TestDevelopmentRuntimeOmitsV1ActivitiesWithoutRuntime(t *testing.T) {
 	}
 }
 
+func TestProductionCompositionDoesNotAdaptLegacyEngineToV1(t *testing.T) {
+	// The legacy engine has one Generate(llm.Request) entry point. It cannot
+	// safely implement the closed Generate/Compact/Query v1 contract: Compact
+	// and Query have different durable state and accounting phases, while
+	// checkpoint-aware Generate requires materialization before dispatch.
+	// Keep this guard close to composition so a future refactor cannot silently
+	// turn the legacy engine into a partial production runtime.
+	activities := composeRuntimeActivities(config.Config{Environment: "production"}, testEngine{}, nil, nil, nil, nil)
+	if activities == nil || activities.Engine == nil {
+		t.Fatal("production composition lost the legacy engine used for direct helper tests")
+	}
+	if _, ok := activities.V1Runtime.(appactivity.UnconfiguredV1Runtime); !ok {
+		t.Fatalf("production composition adapted legacy engine to V1Runtime: %T", activities.V1Runtime)
+	}
+	if isV1RuntimeConfigured(activities.V1Runtime) {
+		t.Fatal("legacy engine was treated as a configured durable v1 runtime")
+	}
+}
+
 func TestUnknownEnvironmentStillRequiresV1Runtime(t *testing.T) {
 	if !v1RuntimeRequired(config.Config{Environment: "staging"}) {
 		t.Fatal("staging environment must require durable v1 runtime")
