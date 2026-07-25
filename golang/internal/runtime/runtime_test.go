@@ -91,6 +91,22 @@ func (clients *testQueryClientSet) QueryService() appactivity.QueryService {
 
 var _ QueryServiceSource = (*testQueryClientSet)(nil)
 
+type testV1ClientSet struct {
+	runtime appactivity.V1Runtime
+	closed  atomic.Int32
+}
+
+func (clients *testV1ClientSet) Close(context.Context) error {
+	clients.closed.Add(1)
+	return nil
+}
+
+func (clients *testV1ClientSet) V1Runtime() appactivity.V1Runtime {
+	return clients.runtime
+}
+
+var _ V1RuntimeSource = (*testV1ClientSet)(nil)
+
 type testQueryEngineFactory struct {
 	service appactivity.QueryService
 }
@@ -525,6 +541,110 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	waitForRuntime(t, func() bool { return runtime.Health.Ready() && controller.starts.Load() >= 2 })
 	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusOK {
 		t.Fatalf("ready status after dependency recovery = %d", got)
+	}
+}
+
+func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
+	probe := &mutableRuntimeProbe{}
+	probe.healthy.Store(true)
+	initial := &monitoringWorker{}
+	replacement := &monitoringWorker{}
+	var workerBuilds atomic.Int32
+	var clientBuilds atomic.Int32
+	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
+	options.V1Runtime = nil
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		if workerBuilds.Add(1) == 1 {
+			return initial, &testRegistry{}, nil
+		}
+		return replacement, &testRegistry{}, nil
+	}
+	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
+		var v1Runtime appactivity.V1Runtime
+		if clientBuilds.Add(1) != 2 {
+			v1Runtime = testV1Runtime{}
+		}
+		return testEngine{}, &testV1ClientSet{runtime: v1Runtime}, nil
+	})
+	options.DependencyProbes = []DependencyProbe{probe}
+	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	if !runtime.Health.Ready() || initial.starts.Load() != 1 {
+		t.Fatalf("initial runtime state ready=%v starts=%d", runtime.Health.Ready(), initial.starts.Load())
+	}
+
+	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && initial.stops.Load() >= 1 })
+	if runtime.Health.Live() != true {
+		t.Fatal("unconfigured v1 reload changed liveness")
+	}
+	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusServiceUnavailable {
+		t.Fatalf("ready status after unconfigured v1 reload = %d", got)
+	}
+
+	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() >= 1 })
+	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusOK {
+		t.Fatalf("ready status after configured v1 reload = %d", got)
+	}
+}
+
+func TestRuntimeMonitorTracksReloadedV1ReadinessWithoutDependencyProbes(t *testing.T) {
+	initial := &monitoringWorker{}
+	var workerBuilds atomic.Int32
+	var clientBuilds atomic.Int32
+	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
+	options.V1Runtime = nil
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		if workerBuilds.Add(1) == 1 {
+			return initial, &testRegistry{}, nil
+		}
+		return &monitoringWorker{}, &testRegistry{}, nil
+	}
+	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
+		var v1Runtime appactivity.V1Runtime
+		if clientBuilds.Add(1) != 2 {
+			v1Runtime = testV1Runtime{}
+		}
+		return testEngine{}, &testV1ClientSet{runtime: v1Runtime}, nil
+	})
+	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	if !runtime.Health.Ready() || initial.starts.Load() != 1 {
+		t.Fatalf("initial runtime state ready=%v starts=%d", runtime.Health.Ready(), initial.starts.Load())
+	}
+
+	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && initial.stops.Load() >= 1 })
+	if runtime.Health.Live() != true {
+		t.Fatal("unconfigured v1 reload changed liveness")
+	}
+	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusServiceUnavailable {
+		t.Fatalf("ready status after unconfigured v1 reload without probes = %d", got)
 	}
 }
 
