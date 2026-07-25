@@ -147,6 +147,58 @@ func TestV1ActivitiesDispatchTypedRecords(t *testing.T) {
 	}
 }
 
+func TestUnconfiguredV1RuntimeFailsClosedForEveryOperation(t *testing.T) {
+	runtime := UnconfiguredV1Runtime{}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "generate",
+			call: func() error {
+				_, err := runtime.GenerateV1(context.Background(), validGenerateV1Request())
+				return err
+			},
+		},
+		{
+			name: "compact",
+			call: func() error {
+				_, err := runtime.CompactV1(context.Background(), validCompactV1Request())
+				return err
+			},
+		},
+		{
+			name: "query",
+			call: func() error {
+				_, err := runtime.QueryV1(context.Background(), validQueryV1Request())
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.call()
+			if err == nil {
+				t.Fatal("unconfigured v1 runtime unexpectedly succeeded")
+			}
+			var providerErr *provider.Error
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("error = %T %v, want provider error", err, err)
+			}
+			if providerErr.Code != provider.CodeConfiguration ||
+				providerErr.Phase != provider.PhaseStateLoad ||
+				providerErr.Dispatch != provider.DispatchNotDispatched ||
+				providerErr.Retry != provider.RetryNever {
+				t.Fatalf("provider error = %#v, want configuration/state-load/not-dispatched/never", providerErr)
+			}
+			if got, want := err.Error(), "durable v1 runtime is not configured"; got != want {
+				t.Fatalf("error text = %q, want stable redacted message %q", got, want)
+			}
+		})
+	}
+}
+
 func TestV1GeneratePreservesHeartbeatLifecycleDuringRuntimeDispatch(t *testing.T) {
 	ticker := newManualHeartbeatTicker()
 	heartbeater := newRecordingHeartbeater()
