@@ -786,11 +786,20 @@ directory unless a command explicitly says otherwise.
   explicitly outside the v1 boundary.
 - [x] Encode Keep by omission, Set/Clear distinctly, decimal as string, variant
   as int32, and all query tags closed.
-- [ ] Add three exact Activity descriptors and low-level invoke functions.
+- [x] Add three exact Activity descriptors and low-level invoke functions. The
+  descriptors and one-attempt helpers are implemented in
+  [`llm_temporal_invocation.ml`](../../../ocaml/llm_temporal_worker/lib/llm_temporal_invocation.ml),
+  with compile-time signature and remote-descriptor coverage in
+  [`test_activity.ml`](../../../ocaml/llm_temporal_worker/test/test_activity.ml).
 - [x] Consume Go golden fixtures for the bounded Generate/Compact/Query
   positive/negative shapes and assert
   canonical round trips.
-- [ ] Run Dune build/test with the pinned Temporal SDK.
+- [x] Run Dune build/test with the pinned Temporal SDK. The pull-request and
+  master workflows pin the SDK commit before running `dune build` and
+  `dune runtest` (see
+  [master.yml](../../../.github/workflows/master.yml#L96-L108)); the same job
+  installs the package through its Git subpath and compiles both downstream
+  consumer fixtures.
 - [ ] Commit: **feat(ocaml): add conversation compact query and usd protocols**.
 
 ### Task 18: Add natural OCaml Conversation and Query GADT APIs
@@ -805,19 +814,23 @@ directory unless a command explicitly says otherwise.
 - Create: **ocaml/llm_temporal_worker/test/test_query.ml**
 - Add downstream compile fixture
 
-- [ ] Implement immutable root/checkpoint/fork/respond/compact values. A success
-  returns response plus child conversation; no mutable implicit head.
-- [ ] Add natural persistent builders for Settings.Patch and Cache_policy.
-- [ ] Implement the five-constructor GADT and safe tag/result matcher without
+- [x] Implement immutable root/checkpoint/fork/respond/compact values. A
+  success returns response plus child conversation; no mutable implicit head.
+- [x] Add natural persistent builders for Settings.Patch and Cache_policy.
+- [x] Implement the five-constructor GADT and safe tag/result matcher without
   **Obj.magic** or unchecked JSON.
-- [ ] Keep cursor/result type associated across pagination.
+- [x] Keep cursor/result type associated across pagination.
 - [x] Add the additive typed `Llm_temporal.Generate` facade for direct,
   non-streaming one-shot v1 calls while preserving legacy `Request` names.
 - [ ] Rebuild existing one-shot helpers on a Generate v1 root in the same
   package/facade, replacing the current unreleased wire shape in place.
-- [ ] Test three siblings from one parent, no inherited fields on wire, decimal
+- [x] Test three siblings from one parent, no inherited fields on wire, decimal
   exactness, compaction tool/output isolation, query type inference/mismatch,
-  and unchanged Temporal errors.
+  and unchanged Temporal errors. The focused Conversation and Query suites are
+  [`test_conversation.ml`](../../../ocaml/llm_temporal_worker/test/test_conversation.ml)
+  and [`test_query.ml`](../../../ocaml/llm_temporal_worker/test/test_query.ml);
+  the external workflow fixture also type-checks the immutable fan-out and
+  all five query constructors ([`workflow_sample.ml`](../../../ocaml/consumer_workflow_smoke/workflow_sample.ml)).
 - [x] Compile the exact end-to-end sample in the OCaml architecture document
   as the external `ocaml/consumer_workflow_smoke` package importing only
   **Llm_temporal**. The compile-only fixture type-checks all five typed Query
