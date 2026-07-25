@@ -714,10 +714,13 @@ directory unless a command explicitly says otherwise.
 
 ### Task 15: Wire Generate v1 and Compact Activities end to end
 
-Status: preparatory composition guard only. The reusable legacy
-`llm.Engine` is intentionally not adapted to the v1 Activity boundary; see
-[ADR 0010](../../decisions/0010-durable-v1-runtime-composition.md). The
-durable implementation and protected integration evidence remain pending.
+Status: preparatory composition seams only. The reusable legacy `llm.Engine`
+is intentionally not adapted to the v1 Activity boundary; see [ADR
+0010](../../decisions/0010-durable-v1-runtime-composition.md). Storage-neutral
+Generate and Compact phase runners are recorded in [ADR 0011](../../decisions/0011-durable-generate-phase-runner.md)
+and [ADR 0013](../../decisions/0013-durable-compact-phase-runner.md), but the
+durable implementation, snapshot factory wiring, and protected integration
+evidence remain pending.
 
 **Files:**
 
