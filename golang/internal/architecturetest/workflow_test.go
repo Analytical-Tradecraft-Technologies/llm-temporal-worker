@@ -67,8 +67,8 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 		assertJobUsesAction(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf")
 		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-from", "type=gha,scope="+test.scope)
 		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-to", "type=gha,mode=max,scope="+test.scope+",ignore-error=true")
-		if !strings.Contains(workflow.raw, "go-version: stable") {
-			t.Fatalf("%s container build does not use the latest stable Go toolchain", workflow.name)
+		if !strings.Contains(workflow.raw, "go-version-file: golang/.go-version") {
+			t.Fatalf("%s container build does not use the reviewed Go toolchain file", workflow.name)
 		}
 		if !strings.Contains(workflow.raw, "GO_VERSION=${{ steps.metadata.outputs.go_version }}") ||
 			!strings.Contains(workflow.raw, "REVISION=${{ steps.metadata.outputs.revision }}") ||

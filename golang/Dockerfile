@@ -1,8 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-# The latest stable Go image is intentionally tag-based so each build pulls
-# the current patch release instead of reusing a pinned digest.
-ARG GO_IMAGE=docker.io/library/golang:latest
+# Use the same reviewed patch release as CI and the security verifier. The
+# version tag remains mutable (rather than a digest) so image maintenance can
+# update it in one reviewed dependency change.
+ARG GO_IMAGE=docker.io/library/golang:1.26.5
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
