@@ -1,8 +1,8 @@
 # Persisted control-plane query composition
 
 The runtime now exposes an explicit `runtime.NewPersistedQueryService`
-composition for the PostgreSQL-backed provider-status, model-inventory, and
-credit-status query families. It binds every page to the immutable
+composition for the PostgreSQL-backed provider-status, model-inventory,
+credit-status, and spend-summary query families. It binds every page to the immutable
 configuration snapshot digest and uses the storage pages only after the
 control layer has authenticated the tenant scope and signed cursor.
 
@@ -30,17 +30,22 @@ an empty result.
 The composition is persisted-only. Refresh requests are rejected until an
 explicit management refresh adapter is supplied. Budget status remains
 fail-closed until its Redis budget-generation repository is composed. The
-PostgreSQL `SpendSummaryRepository` now provides the storage read seam for
-spend: it unions completed `operations` with completed `query_executions`,
-joins each operation to its highest-numbered durable attempt for provider and
-model grouping, uses the operation scope/time index plus a bounded lateral
-attempt lookup, and aggregates exact NUMERIC(38,18) amounts without treating
-unknown costs as zero. Its interval is half-open (`start_time <= completed_at
-< end_time`) and groups are ordered by their typed dimensions with NULLs first.
-The runtime still requires an explicit builder to inject that repository, so
-an unconfigured deployment continues to fail closed rather than returning an
-incomplete answer. No provider call or streaming path is used by these
-Temporal query Activities.
+PostgreSQL `SpendSummaryRepository` provides the storage read seam for spend:
+it unions completed `operations` with completed `query_executions`, joins each
+operation to its highest-numbered durable attempt for provider and model
+grouping, uses the operation scope/time index plus a bounded lateral attempt
+lookup, and aggregates exact NUMERIC(38,18) amounts without treating unknown
+costs as zero. Its interval is half-open (`start_time <= completed_at <
+end_time`) and groups are ordered by their typed dimensions with NULLs first.
+
+Spend composition also requires `PersistedQueryOptions.ResolveScope`. This
+explicit resolver maps the already-authorized tenant/project pair to the
+opaque PostgreSQL scope UUID using the deployment's existing keyed scope
+repository. The runtime rejects the query if the resolver is absent, fails, or
+returns the nil UUID; it never invents HMAC keys or creates a scope as a query
+side effect. An unconfigured deployment therefore fails closed rather than
+returning an incomplete answer. No provider call or streaming path is used by
+these Temporal query Activities.
 
 Example deployment wiring:
 
@@ -51,6 +56,9 @@ factory, _ := runtime.NewProductionEngineFactory(runtime.ProductionFactoryOption
             Authorize: authorizeTenant,
             Cursor:    &control.CursorCodec{Key: cursorKey, TTL: 15 * time.Minute},
             Audit:     auditQuery,
+            ResolveScope: func(ctx context.Context, scope control.QueryScope) (uuid.UUID, error) {
+                return authenticatedScopeIDs.Lookup(ctx, string(scope.Tenant), string(scope.Project))
+            },
         })
     },
 })
