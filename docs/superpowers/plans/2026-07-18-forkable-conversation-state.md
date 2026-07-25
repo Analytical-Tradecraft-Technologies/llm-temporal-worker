@@ -738,12 +738,13 @@ directory unless a command explicitly says otherwise.
 
 ### Task 16: Enforce the USD-only catalog boundary and defer FX
 
-Status: complete for the implementation boundary. The strict loader, exact
-USD persistence adapter, unknown-component handling, atomic snapshot reload,
-and focused unit/integration coverage are present in
+Status: complete for the implementation boundary and checked-in offline
+fixture coverage. The strict loader, exact USD persistence adapter,
+unknown-component handling, atomic snapshot reload, and focused
+unit/integration coverage are present in
 `golang/internal/catalog`, `golang/internal/runtime`, and
-`golang/storage/postgres`. Protected release evidence remains tracked in the
-v1 catalog rather than being implied by these offline tests.
+`golang/storage/postgres`. Protected deployment/release evidence remains
+tracked in the v1 catalog and is not implied by these offline tests.
 
 **Files:**
 
@@ -768,8 +769,9 @@ v1 catalog rather than being implied by these offline tests.
   catalog snapshot if a replacement fails validation.
 - [x] Add fixtures for valid USD, rejected non-USD input, missing/unknown price,
   and excessive precision.
-- [ ] Add source-outage, rotation, and audit-linkage fixtures/evidence; these
-  remain separate from the completed strict USD and persistence boundaries.
+- [x] Add source-outage, rotation, and audit-linkage fixtures/evidence in the
+  checked-in catalog tests. Protected deployment/release evidence remains
+  separate release work and is not inferred from these fixtures.
 - [x] Record that the first concrete non-USD provider requires a superseding ADR
   defining worker-owned rate retrieval, exact conversion, staleness, and audit
   behavior. The worker will still persist and report only USD after that ADR.

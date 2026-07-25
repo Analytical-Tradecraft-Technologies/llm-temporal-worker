@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -173,6 +174,99 @@ entries:
 	}
 	if _, err := pricing.CostFromUsage(entry, pricing.Usage{CacheReadTokens: 1}); err == nil {
 		t.Fatal("CostFromUsage accepted omitted cache price as known zero")
+	}
+}
+
+func TestLoadPricingPreservesAuditLinkageAcrossRotation(t *testing.T) {
+	body := `version: llmtw-prices/v2
+id: catalog-rotating
+entries:
+  - provider: openai
+    endpoint_id: openai-production
+    endpoint_family: openai_responses
+    region: global
+    model: gpt-example
+    provider_tier: standard
+    effective_from: 2026-01-01T00:00:00Z
+    effective_until: 2026-02-01T00:00:00Z
+    input_per_million: "1.250000"
+    output_per_million: "10.000000"
+    source: provider-price-sheet-2026-01
+  - provider: openai
+    endpoint_id: openai-production
+    endpoint_family: openai_responses
+    region: global
+    model: gpt-example
+    provider_tier: standard
+    effective_from: 2026-02-01T00:00:00Z
+    input_per_million: "1.500000"
+    output_per_million: "12.000000"
+    provenance: provider-price-sheet-2026-02
+`
+	loaded, err := LoadPricing(writeCatalog(t, body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Digest == ([32]byte{}) || loaded.Catalog.Digest == ([32]byte{}) {
+		t.Fatal("source and compiled digests must be recorded")
+	}
+	if got := len(loaded.Catalog.Entries); got != 2 {
+		t.Fatalf("rotated entries = %d, want 2", got)
+	}
+	for index, want := range []string{"provider-price-sheet-2026-01", "provider-price-sheet-2026-02"} {
+		if got := loaded.Catalog.Entries[index].Provenance; got != want {
+			t.Fatalf("entry %d provenance = %q, want %q", index, got, want)
+		}
+	}
+	for _, test := range []struct {
+		name string
+		at   string
+		want string
+		cost string
+	}{
+		{name: "before rotation", at: "2026-01-31T23:59:59Z", want: "provider-price-sheet-2026-01", cost: "1.250000"},
+		{name: "after rotation", at: "2026-02-01T00:00:00Z", want: "provider-price-sheet-2026-02", cost: "1.500000"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			at, err := time.Parse(time.RFC3339, test.at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			quote, err := loaded.Catalog.Resolve(pricing.Query{Provider: "openai", Family: "openai_responses", EndpointID: "openai-production", Region: "global", Model: "gpt-example", ProviderTier: "standard", At: at})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if quote.Entry.Provenance != test.want || quote.Entry.Prices.InputPerMillion.String() != test.cost {
+				t.Fatalf("quote = (%q, %s), want (%q, %s)", quote.Entry.Provenance, quote.Entry.Prices.InputPerMillion.String(), test.want, test.cost)
+			}
+		})
+	}
+}
+
+func TestLoadPricingRejectsAuditLinkageMismatch(t *testing.T) {
+	ref := writeCatalog(t, `version: llmtw-prices/v1
+id: catalog-audit-mismatch
+entries:
+  - provider: openai
+    endpoint_id: openai-production
+    endpoint_family: openai_responses
+    region: global
+    model: gpt-example
+    provider_tier: standard
+    input_per_million: "1"
+    output_per_million: "2"
+    source: source-a
+    provenance: source-b
+`)
+	if _, err := LoadPricing(ref); err == nil || !strings.Contains(err.Error(), "provenance and source disagree") {
+		t.Fatalf("audit linkage error = %v, want source/provenance mismatch", err)
+	}
+}
+
+func TestLoadPricingFailsClosedWhenSourceIsUnavailable(t *testing.T) {
+	ref := config.CatalogRef{File: filepath.Join(t.TempDir(), "unavailable.yaml"), SHA256: strings.Repeat("0", 64)}
+	if _, err := LoadPricing(ref); err == nil || !strings.Contains(err.Error(), "open catalog") {
+		t.Fatalf("source outage error = %v, want bounded open failure", err)
 	}
 }
 
