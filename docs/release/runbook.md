@@ -153,12 +153,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30143376123`](https://github.com/mfow/llm-temporal-worker/actions/runs/30143376123) at revision
-`560ec137035fb186f45c7b913f81ca67726f6ec7`. The artifact is named
-`release-evidence` (artifact `8615380385`) and has SHA-256 digest
-`e4b3c5055afb3aa0e62d34adbe6ae1258325b6a677de633f7a7048d887e97151`.
+artifact: [workflow run `30148789045`](https://github.com/mfow/llm-temporal-worker/actions/runs/30148789045) at revision
+`c53a23951f855671661cab29874feb9393c3a1e5`. The artifact is named
+`release-evidence` (artifact `8617113406`) and has SHA-256 digest
+`43d4c6dd8b65c5b34cb0f77d387a3e78279480b886afb0d26b4680d2242bf6a5`.
 The artifact was downloaded and inspected before rebinding: its evidence
-record names revision `560ec137`, the thirteen retained summary records report
+record names revision `c53a2395`, the thirteen retained summary records report
 `status: pass`, and the separate SBOM and Trivy image-scan documents are bound
 to the immutable image digest.
 The v1 catalog binds offline implementation and conformance records to this
