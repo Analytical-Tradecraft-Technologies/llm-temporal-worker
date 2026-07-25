@@ -17,3 +17,4 @@ than silent divergence or knowingly faithful implementation of a defect.
 8. [Resumable provider operations and typed queries](0008-resumable-provider-operations-and-typed-queries.md)
 9. [Future non-USD pricing normalization](0009-future-non-usd-pricing.md)
 10. [Durable v1 runtime composition](0010-durable-v1-runtime-composition.md)
+11. [Durable Generate phase runner](0011-durable-generate-phase-runner.md)
