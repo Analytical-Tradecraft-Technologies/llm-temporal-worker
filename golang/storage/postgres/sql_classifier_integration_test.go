@@ -13,6 +13,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
 // TestBudgetJournalIntegrationHasNoBudgetReads runs the real durable journal
@@ -90,6 +91,56 @@ func TestBudgetJournalIntegrationHasNoBudgetReads(t *testing.T) {
 	for _, statement := range budgetStatements {
 		if statement.BudgetRead || (statement.Kind != SQLStatementInsert && statement.Kind != SQLStatementUpdate) {
 			t.Fatalf("budget statement was not an allowed write: kind=%d read=%v sql=%q", statement.Kind, statement.BudgetRead, statement.StatementSQL)
+		}
+	}
+}
+
+// TestOperationLifecycleIntegrationHasNoBudgetReads traces the normal durable
+// operation admission/dispatch/finalization path. Budget admission is owned by
+// Redis; this PostgreSQL path must never acquire a budget-table read as a
+// fallback. The classifier deliberately rejects unknown statement shapes so a
+// future CTE or stored procedure cannot silently weaken this contract.
+func TestOperationLifecycleIntegrationHasNoBudgetReads(t *testing.T) {
+	recorder := &SQLTraceRecorder{}
+	repository, ctx, cleanup := tracedOperationIntegrationRepository(t, recorder)
+	defer cleanup()
+
+	operationKey := "operation-sql-classifier-" + uuid.NewString()
+	configDigest := sha256.Sum256([]byte(operationKey))
+	request := admission.BeginRequest{
+		ID: operationKey, ScopeKey: "operation-sql-classifier/fixtures",
+		RequestDigest:  admission.Digest([]byte(operationKey)),
+		ReservationUSD: pricing.MustUSD("0"), ConfigVersion: operationKey,
+		ConfigDigest: configDigest, ExpiresAt: time.Now().UTC().Add(time.Hour),
+		RequestManifest: []byte(`{"model":"fixture"}`),
+	}
+	started, err := repository.Begin(ctx, request)
+	if err != nil {
+		t.Fatalf("begin operation: %v", err)
+	}
+	if started.Existing {
+		t.Fatal("new integration operation unexpectedly replayed")
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{
+		OperationID: operationKey, DispatchToken: started.Operation.DispatchToken,
+		Attempt: admission.AttemptFacts{RouteID: "route", EndpointID: "endpoint", Provider: "fixture"},
+	}); err != nil {
+		t.Fatalf("mark dispatching: %v", err)
+	}
+	result := &state.BlobRef{Digest: admission.Digest([]byte(operationKey + ":result")), Size: 6, Media: "application/json"}
+	if err := repository.Complete(ctx, admission.CompleteRequest{
+		OperationID: operationKey, DispatchToken: started.Operation.DispatchToken,
+		ResultRef: result, ActualCostUSD: pricing.MustUSD("0"),
+	}); err != nil {
+		t.Fatalf("complete operation: %v", err)
+	}
+
+	for _, statement := range recorder.Snapshot() {
+		if !statement.BudgetTable {
+			continue
+		}
+		if statement.BudgetRead || (statement.Kind != SQLStatementInsert && statement.Kind != SQLStatementUpdate) {
+			t.Fatalf("operation lifecycle issued a non-write budget statement: kind=%d read=%v sql=%q", statement.Kind, statement.BudgetRead, statement.StatementSQL)
 		}
 	}
 }
