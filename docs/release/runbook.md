@@ -158,8 +158,9 @@ artifact: [workflow run `30143376123`](https://github.com/mfow/llm-temporal-work
 `release-evidence` (artifact `8615380385`) and has SHA-256 digest
 `e4b3c5055afb3aa0e62d34adbe6ae1258325b6a677de633f7a7048d887e97151`.
 The artifact was downloaded and inspected before rebinding: its evidence
-record names revision `560ec137`, all fifteen retained summaries report
-`status: pass`, and its image scan is bound to the immutable image digest.
+record names revision `560ec137`, the thirteen retained summary records report
+`status: pass`, and the separate SBOM and Trivy image-scan documents are bound
+to the immutable image digest.
 The v1 catalog binds offline implementation and conformance records to this
 run and digest. This is not production SLO
 evidence: the admission/compilation p99 and worker-error-rate requirements
