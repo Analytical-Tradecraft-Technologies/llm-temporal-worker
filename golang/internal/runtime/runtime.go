@@ -67,6 +67,15 @@ type QueryServiceSource interface {
 	QueryService() activity.QueryService
 }
 
+// V1RuntimeSource exposes the durable one-shot implementation built for one
+// immutable configuration snapshot. A source is intentionally attached to
+// ClientSet rather than EngineFactory: reload constructs a new client set,
+// and the runtime must never dispatch a request through a previous snapshot's
+// closed state clients.
+type V1RuntimeSource interface {
+	V1Runtime() activity.V1Runtime
+}
+
 // EngineFactoryFunc adapts a function to EngineFactory.
 type EngineFactoryFunc func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error)
 
@@ -180,6 +189,13 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			if source, ok := clients.(dependencyProbeSource); ok {
 				probes = append(probes, source.DependencyProbes()...)
 			}
+			v1Runtime := options.V1Runtime
+			if source, ok := clients.(V1RuntimeSource); ok {
+				// A source is authoritative even when it returns nil. This keeps a
+				// reload from falling back to a runtime that is bound to a previous
+				// snapshot and may already be draining.
+				v1Runtime = source.V1Runtime()
+			}
 			queryService, err := composeQueryService(buildContext, snapshot, engineFactory, clients)
 			if err != nil {
 				if clients != nil {
@@ -187,7 +203,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 				}
 				return nil, &engineFactoryError{cause: err}
 			}
-			return &snapshotClients{engine: engine, clients: clients, probes: probes, queryService: queryService}, nil
+			return &snapshotClients{engine: engine, clients: clients, probes: probes, queryService: queryService, v1Runtime: v1Runtime}, nil
 		},
 		Verify: verifySnapshotDependencies,
 	})
@@ -227,7 +243,12 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if identity == "" {
 		identity = (DefaultTemporalClientFactory{}).identity(configuration.Temporal.IdentityPrefix)
 	}
-	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, options.V1Runtime, &snapshotQueryService{application: application})
+	initialV1Runtime := v1RuntimeForSnapshot(application.Current(), options.V1Runtime)
+	var workerV1Runtime activity.V1Runtime
+	if isV1RuntimeConfigured(initialV1Runtime) {
+		workerV1Runtime = &snapshotV1Runtime{application: application, fallback: options.V1Runtime}
+	}
+	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, workerV1Runtime, &snapshotQueryService{application: application, fallback: workerV1Runtime})
 	worker, err := app.NewWorker(app.WorkerOptions{
 		Client:                         temporalClient,
 		TaskQueue:                      configuration.Temporal.TaskQueue,
@@ -297,7 +318,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		shutdown: coordinator, timeout: timeout,
 		readinessProbeInterval: time.Duration(configuration.Server.ReadinessProbeInterval),
 		readinessProbeTimeout:  time.Duration(configuration.Server.ReadinessProbeTimeout),
-		v1RuntimeConfigured:    !v1RuntimeRequired(configuration) || isV1RuntimeConfigured(activities.V1Runtime),
+		v1RuntimeConfigured:    !v1RuntimeRequired(configuration) || isV1RuntimeConfigured(initialV1Runtime),
 	}, nil
 }
 
@@ -624,7 +645,10 @@ type snapshotClients struct {
 	clients      app.ClientSet
 	probes       []DependencyProbe
 	queryService activity.QueryService
+	v1Runtime    activity.V1Runtime
 }
+
+var _ V1RuntimeSource = (*snapshotClients)(nil)
 
 func (clients *snapshotClients) Engine() llm.Engine {
 	if clients == nil {
@@ -656,6 +680,23 @@ func (clients *snapshotClients) QueryService() activity.QueryService {
 		return nil
 	}
 	return clients.queryService
+}
+
+func (clients *snapshotClients) V1Runtime() activity.V1Runtime {
+	if clients == nil {
+		return nil
+	}
+	return clients.v1Runtime
+}
+
+func v1RuntimeForSnapshot(snapshot *app.RuntimeSnapshot, fallback activity.V1Runtime) activity.V1Runtime {
+	if snapshot == nil {
+		return fallback
+	}
+	if source, ok := snapshot.Clients.(V1RuntimeSource); ok {
+		return source.V1Runtime()
+	}
+	return fallback
 }
 
 func queryServiceFromClients(clients app.ClientSet) activity.QueryService {

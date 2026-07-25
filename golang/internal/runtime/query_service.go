@@ -16,6 +16,10 @@ import (
 // engine lease.
 type snapshotQueryService struct {
 	application *app.App
+	// fallback is the snapshot-dispatching V1Runtime used when a snapshot has
+	// no dedicated control-plane QueryService. It is intentionally a runtime
+	// seam, not a legacy engine adapter.
+	fallback activity.V1Runtime
 }
 
 func (service *snapshotQueryService) Execute(ctx context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
@@ -29,10 +33,19 @@ func (service *snapshotQueryService) Execute(ctx context.Context, request llm.Qu
 	defer lease.Release()
 	snapshot := lease.Snapshot()
 	clients, ok := snapshot.Clients.(*snapshotClients)
-	if !ok || clients == nil || clients.QueryService() == nil {
+	if !ok || clients == nil {
 		return llm.QueryResponseV1{}, queryServiceUnavailable("runtime query service is not configured")
 	}
-	return clients.QueryService().Execute(ctx, request)
+	if service := clients.QueryService(); service != nil {
+		return service.Execute(ctx, request)
+	}
+	if runtime := clients.V1Runtime(); runtime != nil {
+		return runtime.QueryV1(ctx, request)
+	}
+	if service.fallback != nil {
+		return service.fallback.QueryV1(ctx, request)
+	}
+	return llm.QueryResponseV1{}, queryServiceUnavailable("runtime query service is not configured")
 }
 
 func queryServiceUnavailable(message string) error {

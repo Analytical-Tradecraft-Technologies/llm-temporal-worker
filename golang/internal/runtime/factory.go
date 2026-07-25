@@ -86,6 +86,19 @@ type AWSConfigFactory func(context.Context, string) (aws.Config, error)
 type AzureCredentialFactory func(context.Context, config.EndpointConfig) (azcore.TokenCredential, error)
 type AnthropicAWSClientFactory func(context.Context, anthropicmessages.AWSClientConfig) (*anthropicmessages.Client, error)
 
+// V1RuntimeBuilder is the snapshot-scoped composition seam for the durable
+// one-shot Activity boundary. It runs only after the ProductionEngineFactory
+// has constructed the engine and every client owned by that immutable
+// snapshot. The builder may inspect the engine/client bundle and return a
+// runtime that owns no independent copy of those resources; the production
+// client set closes them when the snapshot drains.
+//
+// A nil builder intentionally leaves the v1 runtime unconfigured. The
+// process-level runtime then fails closed before Temporal polling. In
+// particular, this seam never adapts the legacy llm.Engine.Generate method or
+// fabricates Compact/Query responses.
+type V1RuntimeBuilder func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error)
+
 // ProductionFactoryOptions provides explicit seams for tests and deployment
 // composition. If a client/factory is omitted, the official SDK defaults are
 // used only for the corresponding documented authentication mode; unsupported
@@ -112,6 +125,10 @@ type ProductionFactoryOptions struct {
 	AzureCredentialFactory    AzureCredentialFactory
 	AnthropicAWSClientFactory AnthropicAWSClientFactory
 	AzureAPIVersions          map[string]string
+	// V1RuntimeBuilder is optional until the durable phase ports are composed.
+	// When supplied, it is invoked independently for every immutable config
+	// snapshot, including reloads.
+	V1RuntimeBuilder V1RuntimeBuilder
 	// QueryServiceBuilder is optional by design. A deployment must provide
 	// authorization, cursor-key, and audit composition explicitly before the
 	// production factory exposes persisted control-plane queries.
@@ -134,7 +151,10 @@ type productionClientSet struct {
 	providerControl engine.ProviderStatusRecorder
 	queryRepos      PostgresQueryRepositories
 	queryService    activity.QueryService
+	v1Runtime       activity.V1Runtime
 }
+
+var _ V1RuntimeSource = (*productionClientSet)(nil)
 
 func (set *productionClientSet) Close(ctx context.Context) error {
 	if set == nil || set.close == nil {
@@ -177,6 +197,16 @@ func (set *productionClientSet) QueryService() activity.QueryService {
 		return nil
 	}
 	return set.queryService
+}
+
+// V1Runtime returns the durable one-shot implementation composed for this
+// immutable snapshot. A nil value is an explicit fail-closed capability, not
+// a request to adapt the legacy engine.
+func (set *productionClientSet) V1Runtime() activity.V1Runtime {
+	if set == nil {
+		return nil
+	}
+	return set.v1Runtime
 }
 
 func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEngineFactory, error) {
@@ -235,7 +265,15 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	if value.State.Kind == config.StateKindMemory {
-		return factory.buildMemory(ctx, value, engineSnapshot, adapters)
+		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters)
+		if err != nil {
+			return nil, nil, err
+		}
+		set, ok := clients.(*productionClientSet)
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: memory factory returned an unsupported client set", ErrProductionFactoryInvalid)
+		}
+		return factory.attachV1Runtime(ctx, snapshot, engineValue, set)
 	}
 	redisClient, redisOwned, err := factory.buildRedis(ctx, value)
 	if err != nil {
@@ -404,7 +442,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if postgresProbe != nil {
 		probes = append(probes, postgresProbe)
 	}
-	return engineValue, &productionClientSet{
+	clients := &productionClientSet{
 		probes:          probes,
 		providerControl: providerControl,
 		queryRepos:      queryRepos,
@@ -416,7 +454,28 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			closeAll()
 			return nil
 		},
-	}, nil
+	}
+	return factory.attachV1Runtime(ctx, snapshot, engineValue, clients)
+}
+
+// attachV1Runtime invokes the optional snapshot-bound builder only after the
+// complete client set has been assembled. A failed builder closes that set so
+// a rejected reload cannot leak provider/state credentials or connections.
+func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, snapshot *config.Snapshot, engineValue llm.Engine, clients *productionClientSet) (llm.Engine, app.ClientSet, error) {
+	if factory == nil || clients == nil {
+		return nil, nil, fmt.Errorf("%w: v1 runtime composition requires factory and clients", ErrProductionFactoryInvalid)
+	}
+	builder := factory.options.V1RuntimeBuilder
+	if builder == nil {
+		return engineValue, clients, nil
+	}
+	v1Runtime, err := builder(ctx, snapshot, engineValue, clients)
+	if err != nil {
+		_ = clients.Close(context.Background())
+		return nil, nil, fmt.Errorf("construct durable v1 runtime: %w", err)
+	}
+	clients.v1Runtime = v1Runtime
+	return engineValue, clients, nil
 }
 
 // buildMemory composes the explicitly development-only, single-process state

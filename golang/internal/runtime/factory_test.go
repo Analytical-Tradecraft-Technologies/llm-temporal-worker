@@ -13,6 +13,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -98,6 +99,52 @@ func TestBuildPostgresSkipsRedisOnlyComposition(t *testing.T) {
 	probe, closer, err := factory.buildPostgres(context.Background(), config.Config{State: config.StateConfig{Kind: config.StateKindRedis}})
 	if err != nil || probe != nil || closer != nil || called {
 		t.Fatalf("Redis-only composition built PostgreSQL: probe=%#v closer=%#v err=%v called=%v", probe, closer, err, called)
+	}
+}
+
+func TestProductionFactoryAttachesSnapshotV1RuntimeAfterClientConstruction(t *testing.T) {
+	snapshot := &config.Snapshot{}
+	expected := testV1Runtime{}
+	var gotSnapshot *config.Snapshot
+	var gotEngine llm.Engine
+	var gotClients app.ClientSet
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		V1RuntimeBuilder: func(_ context.Context, got *config.Snapshot, engineValue llm.Engine, clients app.ClientSet) (activity.V1Runtime, error) {
+			gotSnapshot, gotEngine, gotClients = got, engineValue, clients
+			return expected, nil
+		},
+	}}
+	clients := &productionClientSet{}
+	engineValue := testEngine{}
+	gotEngineValue, gotClientSet, err := factory.attachV1Runtime(context.Background(), snapshot, engineValue, clients)
+	if err != nil {
+		t.Fatalf("attachV1Runtime() error = %v", err)
+	}
+	if gotSnapshot != snapshot || gotEngine != engineValue || gotClients != clients {
+		t.Fatalf("builder inputs snapshot=%p engine=%T clients=%T", gotSnapshot, gotEngine, gotClients)
+	}
+	if gotEngineValue != engineValue || gotClientSet != clients {
+		t.Fatalf("attached values engine=%T clients=%T", gotEngineValue, gotClientSet)
+	}
+	if got := clients.V1Runtime(); got != expected {
+		t.Fatalf("attached v1 runtime = %T, want %T", got, expected)
+	}
+}
+
+func TestProductionFactoryV1RuntimeBuilderFailureClosesSnapshotClients(t *testing.T) {
+	closed := false
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
+			return nil, errors.New("durable ports are incomplete")
+		},
+	}}
+	clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
+	_, _, err := factory.attachV1Runtime(context.Background(), &config.Snapshot{}, testEngine{}, clients)
+	if err == nil || !strings.Contains(err.Error(), "construct durable v1 runtime") {
+		t.Fatalf("attachV1Runtime() error = %v, want wrapped builder failure", err)
+	}
+	if !closed {
+		t.Fatal("builder failure did not close snapshot clients")
 	}
 }
 
