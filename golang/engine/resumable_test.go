@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
@@ -126,8 +127,10 @@ var _ provider.ResumableAdapter = (*resumableEngineAdapter)(nil)
 func TestGenerateResumesDurableProviderOperationWithoutSubmit(t *testing.T) {
 	adapter := &resumableEngineAdapter{}
 	harness := newHarness(t, adapter)
+	metrics := newEngineTestMetrics(t)
 	request := baseRequest("resumable-retry")
-	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
+	ctx := observability.WithMetrics(context.Background(), metrics)
+	if _, err := harness.engine.Generate(ctx, request); err == nil {
 		t.Fatal("first attempt unexpectedly completed")
 	}
 	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
@@ -137,7 +140,7 @@ func TestGenerateResumesDurableProviderOperationWithoutSubmit(t *testing.T) {
 	if string(operation.State) != "provider_pending" {
 		t.Fatalf("operation state after interrupted poll = %q, want provider_pending", operation.State)
 	}
-	response, err := harness.engine.Generate(context.Background(), request)
+	response, err := harness.engine.Generate(ctx, request)
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
@@ -153,6 +156,9 @@ func TestGenerateResumesDurableProviderOperationWithoutSubmit(t *testing.T) {
 	if polls != 2 {
 		t.Fatalf("Poll calls = %d, want 2", polls)
 	}
+	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "started"}, 2)
+	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "retry"}, 1)
+	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "completed"}, 1)
 }
 
 func TestGenerateResumesDurableProviderOperationAfterEngineRestart(t *testing.T) {
