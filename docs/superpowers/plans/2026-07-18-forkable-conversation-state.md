@@ -953,9 +953,10 @@ the implemented maintenance primitives.
 - [x] Add metrics for eligible/deleted/skipped/failure, dead tuples, pool and
   maintenance/query latency, cache hit/use/fill, pending polls, and
   exact/unknown cost.
-- [ ] Instrument PostgreSQL lock latency at an actual production lock boundary;
-  the current observers do not emit this metric (the `lock` label exists only
-  in a unit fixture).
+- [x] Instrument PostgreSQL lock latency at the provider-route transaction
+  advisory-lock boundary. The observer records the bounded `lock` histogram
+  from the Activity metrics context (or an explicit composition observer),
+  without exposing route, tenant, or database identifiers.
 - [ ] Load test autovacuum/fillfactor and record table-specific production
   settings instead of guessing.
 - [ ] Commit: **feat(maintenance): add safe state and cache retention**.
