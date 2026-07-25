@@ -68,7 +68,10 @@ The client set also exposes `runtime.V1RuntimeCapabilitiesSource`, whose
 snapshot-owned `V1RuntimeCapabilities` value groups only the preparatory
 contracts needed to compose the durable runtime: an `engine.SnapshotSource`,
 `routing.Planner`, a private-copy `engine.AdapterRegistry`, the nested
-checkpoint bundle, and optional `engine.ProviderStatusRecorder` and clock.
+checkpoint bundle, an optional write-only `durable.Journal`, and optional
+`engine.ProviderStatusRecorder` and clock. The journal is exposed both through
+the bundle and the snapshot client's `runtime.JournalSource`; both are
+snapshot-owned and are closed with the PostgreSQL client set.
 The bundle deliberately omits the legacy Redis admission, continuation, and
 blob-result stores. Task 19 must supply PostgreSQL durable operations,
 `BudgetMaterializer`/`Journal`, and the corresponding result/continuation ports
@@ -79,7 +82,7 @@ clients. The adapter registry copies its endpoint map behind an unexported
 implementation, so consumers cannot mutate the legacy `engine.AdapterMap`
 through aliasing or a type assertion. A reload therefore gives a builder the
 preparatory capabilities of the replacement snapshot or an explicitly
-incomplete value.
+incomplete value. A memory-state client set leaves `Journal` nil.
 
 This capability bundle is an input to the future checkpoint-aware V1 runtime;
 it does not implement provider dispatch, Redis reservation/reconciliation,
@@ -98,7 +101,8 @@ production V1 seam.
   worker reporting ready.
 - `golang/internal/runtime/factory_test.go` covers builder inputs, source
   attachment, cleanup on builder failure, snapshot-owned capability copy
-  without legacy fallback, and private adapter-map ownership.
+  without legacy fallback, private adapter-map ownership, and journal
+  ownership/closure without concrete PostgreSQL pool leakage.
 - `golang/internal/runtime/snapshot_v1_runtime_test.go` covers reload source
   selection and legacy fallback boundaries.
 - `golang/internal/runtime/runtime_test.go` covers readiness pause/resume when
