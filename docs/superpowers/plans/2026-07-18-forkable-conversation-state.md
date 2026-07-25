@@ -738,6 +738,13 @@ directory unless a command explicitly says otherwise.
 
 ### Task 16: Enforce the USD-only catalog boundary and defer FX
 
+Status: complete for the implementation boundary. The strict loader, exact
+USD persistence adapter, unknown-component handling, atomic snapshot reload,
+and focused unit/integration coverage are present in
+`golang/internal/catalog`, `golang/internal/runtime`, and
+`golang/storage/postgres`. Protected release evidence remains tracked in the
+v1 catalog rather than being implied by these offline tests.
+
 **Files:**
 
 - Create: **storage/postgres/pricing.go**
@@ -746,27 +753,34 @@ directory unless a command explicitly says otherwise.
 - Test: **pricing/catalog_currency_test.go**
 - Test: **internal/runtime/catalog_reload_test.go**
 
-- [ ] Remove externally supplied currency/rate values and all downstream
+- [x] Remove externally supplied currency/rate values and all downstream
   currency fields. Public Go/JSON/OCaml money values are exact decimal USD by
   contract, so they do not redundantly carry **currency = USD**.
-- [ ] Validate that every initially configured provider price source is USD.
+- [x] Validate that every initially configured provider price source is USD.
   Reject a non-USD catalog entry rather than accepting a caller-supplied rate,
   silently treating it as USD, or adding an incomplete FX subsystem.
-- [ ] Persist only exact USD price entries. Do not add an FX adapter, rate table,
+- [x] Persist only exact USD price entries. Do not add an FX adapter, rate table,
   refresh job, configuration surface, or foreign-currency operation field in
   this release.
-- [ ] Preserve unresolved catalog components as NULL with partial/unknown
+- [x] Preserve unresolved catalog components as NULL with partial/unknown
   status. Do not make a route look free when source pricing is uncertain.
-- [ ] Make price/config reload atomic and preserve the last still-valid USD
+- [x] Make price/config reload atomic and preserve the last still-valid USD
   catalog snapshot if a replacement fails validation.
-- [ ] Add fixtures for valid USD, rejected non-USD input, missing/unknown price,
-  excessive precision, source outage, rotation, and audit linkage.
-- [ ] Record that the first concrete non-USD provider requires a superseding ADR
+- [x] Add fixtures for valid USD, rejected non-USD input, missing/unknown price,
+  and excessive precision.
+- [ ] Add source-outage, rotation, and audit-linkage fixtures/evidence; these
+  remain separate from the completed strict USD and persistence boundaries.
+- [x] Record that the first concrete non-USD provider requires a superseding ADR
   defining worker-owned rate retrieval, exact conversion, staleness, and audit
   behavior. The worker will still persist and report only USD after that ADR.
-- [ ] Commit: **refactor(pricing): enforce usd-only catalog contracts**.
+- [x] Landed across the USD boundary, catalog persistence, and catalog evidence
+  commits; the implementation remains USD-only until a superseding ADR.
 
 ### Task 17: Extend the OCaml protocol layer
+
+Status: complete for the protocol layer and its checked-in offline evidence.
+The separate natural-facade compatibility decision is tracked under Task 18;
+protected release evidence is not inferred from these checks.
 
 **Files:**
 
@@ -800,9 +814,14 @@ directory unless a command explicitly says otherwise.
   [master.yml](../../../.github/workflows/master.yml#L96-L108)); the same job
   installs the package through its Git subpath and compiles both downstream
   consumer fixtures.
-- [ ] Commit: **feat(ocaml): add conversation compact query and usd protocols**.
+- [x] Landed across the OCaml protocol, fixture, and dependency-update commits.
 
 ### Task 18: Add natural OCaml Conversation and Query GADT APIs
+
+Status: partially complete. The immutable conversation/query facade and
+downstream compile fixture are implemented. Rebuilding the pre-v1 one-shot
+helpers is deliberately deferred until the compatibility decision below is
+made; no wire-shape replacement is implied by the additive facade.
 
 **Files:**
 
@@ -824,6 +843,8 @@ directory unless a command explicitly says otherwise.
   non-streaming one-shot v1 calls while preserving legacy `Request` names.
 - [ ] Rebuild existing one-shot helpers on a Generate v1 root in the same
   package/facade, replacing the current unreleased wire shape in place.
+  **Deferred pending an explicit compatibility decision; retain the existing
+  legacy helper wire shape until that decision is recorded.**
 - [x] Test three siblings from one parent, no inherited fields on wire, decimal
   exactness, compaction tool/output isolation, query type inference/mismatch,
   and unchanged Temporal errors. The focused Conversation and Query suites are
@@ -843,7 +864,8 @@ directory unless a command explicitly says otherwise.
   `generate_v1_activity`, `compact_v1_activity`, and `query_v1_activity` with
   the exported one-attempt retry policy, while also asserting the facade's
   `Temporal.Future.all` fan-out has no hidden mutable conversation head.
-- [ ] Commit: **feat(ocaml): expose immutable conversations and typed queries**.
+- [ ] Commit: **feat(ocaml): expose immutable conversations and typed queries**
+  (Task 18 remains open while legacy helper migration is deferred).
 
 ### Task 19: Compose Redis budgets with PostgreSQL durable state
 
@@ -894,6 +916,12 @@ directory unless a command explicitly says otherwise.
 
 ### Task 20: Add retention, GC, outbox, and database operations
 
+Status: partially complete. Bounded maintenance, retention fences, outbox
+leases, checkpoint/cache safety, and observability are implemented. Budget and
+operation retention, authoritative unknown-cost resolution, and production
+autovacuum/fillfactor load evidence remain open and must not be inferred from
+the implemented maintenance primitives.
+
 **Files:**
 
 - Create: **maintenance/cache_gc.go**
@@ -904,12 +932,15 @@ directory unless a command explicitly says otherwise.
 - Test: **maintenance/retention_integration_test.go**
 - Test: **maintenance/outbox_integration_test.go**
 
-- [ ] Implement bounded **SKIP LOCKED** batches and separate maintenance role.
-- [ ] Cache eligibility uses last use; old-but-used-yesterday is retained.
-- [ ] Recheck child/fill/use/blob references inside deletion transaction.
-- [ ] Publish external deletion in outbox and make missing object success.
-- [ ] Add status/inventory/budget/operation retention without deleting active
-  retry/poll/audit state.
+- [x] Implement bounded **SKIP LOCKED** batches and separate maintenance role.
+- [x] Cache eligibility uses last use; old-but-used-yesterday is retained.
+- [x] Recheck child/fill/use/blob references inside deletion transaction.
+- [x] Publish external deletion in outbox and make missing object success.
+- [x] Add bounded status/inventory/query/checkpoint retention without deleting
+  active retry/poll/audit state.
+- [ ] Add budget/operation retention without deleting active retry/poll/audit
+  state; the current adapter leaves those projections disabled pending their
+  restrictive foreign-key, journal, and cold-rebuild obligations.
 - [ ] Budget retention uses bounded indexed DELETE/UPDATE statements but never
   loads the active budget working set into a running worker. It must preserve
   every row required by the maximum window, open reservation, and allowed cold
@@ -919,7 +950,7 @@ directory unless a command explicitly says otherwise.
   PostgreSQL transaction update operation cost, reservation, bucket projection,
   and journal revision; then idempotently reconcile Redis. Retain the prior
   conservative bound on any failure.
-- [ ] Add metrics for eligible/deleted/skipped/failure, dead tuples, pool/lock/
+- [x] Add metrics for eligible/deleted/skipped/failure, dead tuples, pool/lock/
   query latency, cache hit/use/fill, pending polls, and exact/unknown cost.
 - [ ] Load test autovacuum/fillfactor and record table-specific production
   settings instead of guessing.
