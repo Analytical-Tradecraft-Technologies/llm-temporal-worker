@@ -102,6 +102,15 @@ reserved for an explicitly quoted free component). `pricing.CostFromUsage` and
 the budget estimator fail closed when a request needs an unknown component, so
 partial catalogs cannot silently undercharge.
 
+Each entry also retains its optional `source`/`provenance` audit linkage. When
+both are supplied they must agree, and the linkage contributes to the compiled
+catalog digest. Effective intervals allow a new price source to replace an
+older one without rewriting history; resolution at the boundary selects the
+new interval and preserves the source identity in the quote. A missing source
+file, digest mismatch, or invalid replacement rejects the complete candidate
+catalog. Reload publication is atomic, so the last verified snapshot remains
+active during a source outage rather than exposing a partial or guessed price.
+
 ## PostgreSQL catalog snapshots
 
 `storage/postgres.PricingCatalogRepository` is the maintenance/control-plane
