@@ -13,16 +13,18 @@ for checkpoints, provider state, and control history.
 (maximum 10,000). A cache row is eligible only when its `last_used_at` is
 older than the cache cutoff and it is ready, inactive, has no retained
 descendant, has no active fill, has no non-terminal operation recorded in
-`response_cache_uses`, and has no retained blob reference. Other resource kinds
-use their own expiry horizon. The in-memory adapter rechecks these facts while
-holding its lock; PostgreSQL adapters must repeat them in the locked SQL
-statement.
+`response_cache_uses`, and has no retained blob reference owned by another row.
+The candidate's own blob is released by its tombstone/delete lifecycle and is
+not an external reference. Other resource kinds use their own expiry horizon.
+The in-memory adapter rechecks these facts while holding its lock; PostgreSQL
+adapters must repeat them in the locked SQL statement.
 
 Cache rows are tombstoned rather than immediately deleted. This preserves the
 dedupe boundary and lets the transaction enqueue an external blob deletion.
 Rows that are active, recently used, referenced by a retained descendant, under
-an active fill, or still backed by a retained blob are skipped. A batch never
-loads the active budget working set into a worker process.
+an active fill, or still referenced by another retained row are skipped. A
+candidate-owned blob follows the candidate's tombstone/outbox lifecycle. A
+batch never loads the active budget working set into a worker process.
 
 The policy contract includes status, inventory, operation, budget, and
 checkpoint horizons so adapters can add table-specific retention safely. It

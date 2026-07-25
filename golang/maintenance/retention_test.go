@@ -16,7 +16,8 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 		{ID: "cache-child", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasRetainedDescendant: true},
 		{ID: "cache-fill", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasActiveFill: true},
 		{ID: "cache-use", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasActiveUse: true},
-		{ID: "cache-blob", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasBlobReference: true},
+		{ID: "cache-owned-blob", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasCandidateBlobReference: true},
+		{ID: "cache-external-blob", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasExternalBlobReference: true},
 		{ID: "operation-old", Kind: ResourceOperation, ExpiresAt: now.Add(-time.Hour)},
 		{ID: "query-old", Kind: ResourceQueryExecution, ExpiresAt: now.Add(-time.Hour)},
 	})
@@ -29,11 +30,11 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Examined != 3 || result.Tombstoned != 1 || result.Deleted != 2 || result.Skipped != 0 {
+	if result.Examined != 4 || result.Tombstoned != 2 || result.Deleted != 2 || result.Skipped != 0 {
 		t.Fatalf("unexpected retention result: %+v", result)
 	}
 	records := store.Snapshot()
-	if len(records) != 7 {
+	if len(records) != 8 {
 		t.Fatalf("expected protected rows plus tombstone, got %d", len(records))
 	}
 	for _, record := range records {
@@ -43,8 +44,11 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 		if record.ID == "cache-used" && record.State != "ready" {
 			t.Fatalf("recently used cache was removed: %+v", record)
 		}
-		if record.ID == "cache-blob" && record.State != "ready" {
-			t.Fatalf("cache with a retained blob reference was removed: %+v", record)
+		if record.ID == "cache-owned-blob" && record.State != "tombstoned" {
+			t.Fatalf("candidate-owned blob did not follow its tombstone lifecycle: %+v", record)
+		}
+		if record.ID == "cache-external-blob" && record.State != "ready" {
+			t.Fatalf("cache with an external retained blob reference was removed: %+v", record)
 		}
 	}
 }
