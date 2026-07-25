@@ -16,7 +16,7 @@ the `llm` package.
 | Go module language | `go 1.26` | The module declares the Go 1.26 language/toolchain line. |
 | Current patch at baseline | `go1.26.5` | [Go release history](https://go.dev/doc/devel/release), checked 2026-07-13. |
 | Minimum bootstrap for Go 1.26 | `go1.24.6` | [Go 1.26 release notes](https://go.dev/doc/go1.26), checked 2026-07-13. |
-| Local version hint | `.go-version` = `1.26` | CI resolves the latest available 1.26 patch through `actions/setup-go`. |
+| Local version hint | `.go-version` = `1.26.5` | CI and the container use the reviewed Go 1.26.5 patch through `actions/setup-go`. |
 
 ## Direct modules
 

@@ -166,8 +166,8 @@ server-time windows, fail-closed errors, and an explicit persistence profile.
   [setup-go](https://github.com/actions/setup-go) are the official actions used
   in CI.
 - [Go releases](https://go.dev/doc/devel/release) identify the current stable
-  release; CI and the container build resolve the latest stable toolchain while
-  the module records Go 1.26 language compatibility.
+  release; CI and the container build use the reviewed Go patch from
+  `golang/.go-version` while the module records Go 1.26 language compatibility.
 
 ## Upgrade rule
 

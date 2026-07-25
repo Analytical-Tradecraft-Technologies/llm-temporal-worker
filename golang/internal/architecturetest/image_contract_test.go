@@ -45,14 +45,14 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 	}
 }
 
-func TestImageBuildToolchainVersionPolicyUsesLatestStableTag(t *testing.T) {
+func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
 	dockerfileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, want := range []string{
-		"ARG GO_IMAGE=docker.io/library/golang:latest",
+		"ARG GO_IMAGE=docker.io/library/golang:1.26.5",
 		"FROM gcr.io/distroless/static-debian12:nonroot",
 	} {
 		if !strings.Contains(string(dockerfileData), want) {
@@ -65,7 +65,7 @@ func TestImageBuildToolchainVersionPolicyUsesLatestStableTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(makefileData), "IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)") {
-		t.Error("Makefile image verification must use the installed stable Go toolchain")
+		t.Error("Makefile image verification must use the installed reviewed Go toolchain")
 	}
 }
 

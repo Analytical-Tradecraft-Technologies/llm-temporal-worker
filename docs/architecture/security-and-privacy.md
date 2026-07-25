@@ -149,7 +149,8 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
 
 ## Supply chain
 
-- Go modules and Actions are version-pinned and updated through reviewed PRs.
+- Go modules, Actions, and the Go toolchain patch are version-pinned and
+  updated through reviewed PRs.
 - Official provider SDKs are preferred; raw HTTP requires an ADR, scoped package,
   wire fixtures, and a migration/removal condition.
 - `make security-verify` runs source/fixture/test-output redaction checks,
