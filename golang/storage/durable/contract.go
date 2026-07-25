@@ -106,6 +106,9 @@ type ReserveRequest struct {
 }
 
 type ReserveResult struct {
+	// OperationID is echoed by Redis so the journal cannot be bound to a
+	// different caller operation during a retry or snapshot swap.
+	OperationID   OperationID
 	Accepted      bool
 	GenerationID  GenerationID
 	IncarnationID IncarnationID
@@ -117,6 +120,12 @@ type ReserveResult struct {
 func (result ReserveResult) Validate(request ReserveRequest) error {
 	if err := request.OperationID.Validate(); err != nil {
 		return err
+	}
+	if err := result.OperationID.Validate(); err != nil {
+		return err
+	}
+	if result.OperationID != request.OperationID {
+		return fmt.Errorf("operation id changed during Redis acceptance")
 	}
 	if err := request.GenerationID.Validate(); err != nil {
 		return err

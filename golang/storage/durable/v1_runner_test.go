@@ -1,0 +1,301 @@
+package durable
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/state"
+)
+
+func testGenerateRequest() llm.GenerateRequestV1 {
+	return llm.GenerateRequestV1{
+		APIVersion:   llm.APIVersion,
+		OperationKey: "operation-1",
+		Context:      llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"},
+	}
+}
+
+func testRoutePlan() RoutePlan {
+	return RoutePlan{OperationID: "operation-id", GenerationID: "generation-id", RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider", Model: "model"}
+}
+
+func testReservation(route RoutePlan) ReserveResult {
+	now := time.Now().UTC()
+	return ReserveResult{
+		OperationID: route.OperationID, Accepted: true, GenerationID: route.GenerationID,
+		IncarnationID: "incarnation-id", Events: []budget.ReservationEvent{{
+			EventID: "event-1", GenerationID: string(route.GenerationID), OperationID: string(route.OperationID), WindowID: "window-1",
+			BucketStart: now, ReservationRevision: 1, AmountUSD: pricing.MustUSD("0.01"), OccurredAt: now,
+		}},
+	}
+}
+
+func testFinalization(request llm.GenerateRequestV1) GenerateFinalization {
+	return GenerateFinalization{Response: llm.GenerateResponseV1{
+		APIVersion: llm.APIVersion, OperationKey: request.OperationKey, OperationID: "operation-id",
+		Status:     llm.ResponseStatusCompleted,
+		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-1", Kind: "generation", Depth: 0},
+		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
+		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPtr("0"), Method: "provider_reported"},
+	}}
+}
+
+func stringPtr(value string) *string { return &value }
+
+func testGeneratePorts(events *[]string, failStage string) GeneratePorts {
+	request := testGenerateRequest()
+	route := testRoutePlan()
+	reservation := testReservation(route)
+	fail := func(stage string) error {
+		if stage == failStage {
+			return errors.New("injected failure")
+		}
+		return nil
+	}
+	return GeneratePorts{
+		Replay: func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+			*events = append(*events, "replay")
+			return GenerateReplay{}, fail("replay")
+		},
+		CacheLookup: func(context.Context, llm.GenerateRequestV1, GenerateReplay) (CacheDecision, error) {
+			*events = append(*events, "cache")
+			return CacheDecision{Disposition: CacheMiss}, fail("cache")
+		},
+		CompactionDecision: func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
+			*events = append(*events, "compaction")
+			return CompactionDecision{}, fail("compaction")
+		},
+		Route: func(context.Context, llm.GenerateRequestV1, GenerateReplay, CompactionDecision) (RoutePlan, error) {
+			*events = append(*events, "route")
+			return route, fail("route")
+		},
+		Reserve: func(context.Context, llm.GenerateRequestV1, RoutePlan) (ReserveResult, error) {
+			*events = append(*events, "reserve")
+			return reservation, fail("reserve")
+		},
+		Journal: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error) {
+			*events = append(*events, "journal")
+			return JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, fail("journal")
+		},
+		Dispatch: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, JournalReceipt) (DispatchResult, error) {
+			*events = append(*events, "dispatch")
+			return DispatchResult{}, fail("dispatch")
+		},
+		Finalize: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) (GenerateFinalization, error) {
+			*events = append(*events, "finalize")
+			return testFinalization(request), fail("finalize")
+		},
+		FinalizeCache: func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (GenerateFinalization, error) {
+			*events = append(*events, "cache-finalize")
+			return testFinalization(request), fail("cache-finalize")
+		},
+		Reconcile: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult, GenerateFinalization) error {
+			*events = append(*events, "reconcile")
+			return fail("reconcile")
+		},
+	}
+}
+
+func TestGenerateV1RunsDurablePhasesInOrder(t *testing.T) {
+	events := []string{}
+	response, err := GenerateV1(context.Background(), testGenerateRequest(), testGeneratePorts(&events, ""))
+	if err != nil {
+		t.Fatalf("GenerateV1 error = %v", err)
+	}
+	if got, want := events, []string{"replay", "cache", "compaction", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase order = %v, want %v", got, want)
+	}
+	if response.OperationKey != "operation-1" || response.Checkpoint.Kind != "generation" {
+		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestGenerateV1CompletedReplayReturnsWithoutCacheOrProviderWork(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	completed := testFinalization(testGenerateRequest()).Response
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		events = append(events, "replay")
+		return GenerateReplay{Completed: &completed}, nil
+	}
+	response, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+	if err != nil {
+		t.Fatalf("GenerateV1 error = %v", err)
+	}
+	if response.OperationKey != "operation-1" {
+		t.Fatalf("response operation key = %q", response.OperationKey)
+	}
+	if got, want := events, []string{"replay"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("completed replay phases = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.CompactionDecision = func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
+		events = append(events, "compaction")
+		return CompactionDecision{Required: true}, nil
+	}
+	ports.Compact = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error) {
+		events = append(events, "compact")
+		return GenerateReplay{State: state.MaterializedState{Handle: "compacted"}}, nil
+	}
+	var routeHandle, dispatchHandle state.Handle
+	ports.Route = func(_ context.Context, _ llm.GenerateRequestV1, replay GenerateReplay, _ CompactionDecision) (RoutePlan, error) {
+		events = append(events, "route")
+		routeHandle = replay.State.Handle
+		return testRoutePlan(), nil
+	}
+	ports.Dispatch = func(_ context.Context, _ llm.GenerateRequestV1, replay GenerateReplay, _ RoutePlan, _ JournalReceipt) (DispatchResult, error) {
+		events = append(events, "dispatch")
+		dispatchHandle = replay.State.Handle
+		return DispatchResult{}, nil
+	}
+	if _, err := GenerateV1(context.Background(), testGenerateRequest(), ports); err != nil {
+		t.Fatalf("GenerateV1 error = %v", err)
+	}
+	if routeHandle != "compacted" || dispatchHandle != "compacted" {
+		t.Fatalf("compacted state handles = route %q, dispatch %q", routeHandle, dispatchHandle)
+	}
+	if got, want := events, []string{"replay", "cache", "compaction", "compact", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase order = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1FailsClosedBeforeDispatchWhenPreDispatchPhaseFails(t *testing.T) {
+	for _, failStage := range []string{"replay", "cache", "compaction", "route", "reserve", "journal"} {
+		t.Run(failStage, func(t *testing.T) {
+			events := []string{}
+			_, err := GenerateV1(context.Background(), testGenerateRequest(), testGeneratePorts(&events, failStage))
+			if err == nil || !errors.Is(err, ErrV1Stage) {
+				t.Fatalf("error = %v, want stage failure", err)
+			}
+			if contains(events, "dispatch") {
+				t.Fatalf("phase failure %q reached provider dispatch: %v", failStage, events)
+			}
+		})
+	}
+}
+
+func TestGenerateV1StopsWhenRedisReservationIsDenied(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Reserve = func(context.Context, llm.GenerateRequestV1, RoutePlan) (ReserveResult, error) {
+		events = append(events, "reserve")
+		return ReserveResult{
+			OperationID:  "operation-id",
+			GenerationID: "generation-id",
+			Accepted:     false,
+			RetryAfter:   time.Second,
+		}, nil
+	}
+	_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+	var providerErr *provider.Error
+	if err == nil || !errors.Is(err, ErrReservationDenied) || !errors.As(err, &providerErr) {
+		t.Fatalf("error = %v, want reservation denial provider error", err)
+	}
+	if providerErr.Code != provider.CodeBudgetDenied || providerErr.RetryAfter != time.Second {
+		t.Fatalf("provider error = %#v", providerErr)
+	}
+	if got, want := events, []string{"replay", "cache", "compaction", "route", "reserve"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase order = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1ReconciliationFailureIsRetryableAfterFinalization(t *testing.T) {
+	events := []string{}
+	_, err := GenerateV1(context.Background(), testGenerateRequest(), testGeneratePorts(&events, "reconcile"))
+	var providerErr *provider.Error
+	if err == nil || !errors.Is(err, ErrReconcilePending) || !errors.As(err, &providerErr) {
+		t.Fatalf("error = %v, want reconciliation-pending provider error", err)
+	}
+	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Retry != provider.RetrySameOperation {
+		t.Fatalf("provider error = %#v", providerErr)
+	}
+	if got, want := events, []string{"replay", "cache", "compaction", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase order = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1CacheHitNeverDispatchesProvider(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.CacheLookup = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (CacheDecision, error) {
+		events = append(events, "cache")
+		response := testFinalization(testGenerateRequest()).Response
+		return CacheDecision{Disposition: CacheHit, Response: &response}, nil
+	}
+	response, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+	if err != nil {
+		t.Fatalf("GenerateV1 cache hit error = %v", err)
+	}
+	if response.OperationKey != "operation-1" {
+		t.Fatalf("response operation key = %q", response.OperationKey)
+	}
+	if got, want := events, []string{"replay", "cache", "cache-finalize"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cache-hit phases = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1RejectsMismatchedJournalIdentity(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Journal = func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error) {
+		return JournalReceipt{OperationID: "other-operation", GenerationID: "generation-id"}, nil
+	}
+	_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+	if err == nil || !errors.Is(err, ErrV1Stage) {
+		t.Fatalf("error = %v, want journal identity failure", err)
+	}
+	if contains(events, "dispatch") {
+		t.Fatalf("mismatched journal reached dispatch: %v", events)
+	}
+}
+
+func TestGenerateV1PreservesTypedStageErrors(t *testing.T) {
+	raw := provider.NewError(provider.CodeStateUnavailable, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetrySameOperation, "state unavailable")
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		return GenerateReplay{}, raw
+	}
+	_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+	var got *provider.Error
+	if err == nil || !errors.Is(err, ErrV1Stage) || !errors.As(err, &got) {
+		t.Fatalf("error = %v, want typed stage error", err)
+	}
+	if got.Code != provider.CodeStateUnavailable {
+		t.Fatalf("provider code = %q", got.Code)
+	}
+}
+
+func TestGenerateV1RejectsFinalizationFromAnotherOperation(t *testing.T) {
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Finalize = func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) (GenerateFinalization, error) {
+		response := testFinalization(testGenerateRequest())
+		response.Response.OperationID = "other-operation"
+		return response, nil
+	}
+	_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+	if err == nil || !errors.Is(err, ErrV1Stage) {
+		t.Fatalf("error = %v, want finalization identity failure", err)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

@@ -45,7 +45,7 @@ func TestReserveResultRequiresJournalEventsAfterAcceptance(t *testing.T) {
 		GenerationID: GenerationID("gen-1"),
 		ExpiresAt:    time.Now().Add(time.Minute),
 	}
-	result := ReserveResult{Accepted: true, GenerationID: request.GenerationID, IncarnationID: IncarnationID("inc-1")}
+	result := ReserveResult{OperationID: request.OperationID, Accepted: true, GenerationID: request.GenerationID, IncarnationID: IncarnationID("inc-1")}
 	if err := result.Validate(request); err == nil {
 		t.Fatal("accepted reservation without journal event passed validation")
 	}
