@@ -127,3 +127,12 @@ The seam does not perform provider, cache, budget, or checkpoint publication
 work. Production composition must still provide those operations behind the
 state-aware runtime and must map authenticated request context to the durable
 scope identifier; raw tenant/project concatenation is intentionally not used.
+
+The Generate and Compact request/response records carry only bounded deltas,
+settings, result metadata, and opaque checkpoint handles. A regression test
+serializes synthetic one-, 100-, and 10,000-turn ancestor lineages, including
+their realistic serialized checkpoint depths. Request sizes remain identical;
+response sizes can grow only by the decimal digit count of that depth, never by
+the ancestor transcript length. The materialized transcript therefore stays in
+the worker's state store rather than growing Temporal history or Activity
+arguments with conversation depth.
