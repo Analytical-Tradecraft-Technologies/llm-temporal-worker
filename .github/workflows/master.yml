@@ -91,7 +91,6 @@ jobs:
         uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3
         with:
           ocaml-compiler: 5.2.0
-          disable-cache: true
 
       - name: Install pinned nested package dependencies
         working-directory: ocaml/llm_temporal_worker
