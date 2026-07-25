@@ -46,7 +46,7 @@ type RetentionRecord struct {
 	// HasActiveUse is true when a cache-use ledger row points at a
 	// non-terminal operation. Cache maintenance must keep the entry usable
 	// until that operation leaves retry/poll state.
-	HasActiveUse     bool
+	HasActiveUse bool
 	// HasCandidateBlobReference identifies a blob owned by this row. The
 	// candidate's tombstone/delete lifecycle releases that reference, so it
 	// must not make an otherwise eligible row ineligible.
