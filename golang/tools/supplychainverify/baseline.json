@@ -69,7 +69,7 @@
     },
     {
       "path": "github.com/openai/openai-go/v3",
-      "version": "v3.45.0",
+      "version": "v3.46.0",
       "license": "Apache-2.0",
       "source": "https://github.com/openai/openai-go"
     },
