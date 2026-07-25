@@ -41,6 +41,27 @@ typed phase ports from ADR 0011, materializes checkpoints, and preserves
 redaction, heartbeats, idempotency, and cancellation. A missing builder still
 causes production startup to fail before Temporal polling.
 
+The snapshot client set also exposes an optional typed
+`CheckpointCapabilities` bundle. It contains only the storage-neutral
+`state.CheckpointRepository` and `state.CheckpointBlobReader` interfaces; it
+does not expose a PostgreSQL pool, credentials, encryption keys, or raw object
+store locators. A builder receives it by type-asserting the exported
+`runtime.CheckpointCapabilitiesSource` interface on `app.ClientSet`; it does
+not need to know the concrete client-set type. The PostgreSQL closer uses the
+separate `runtime.PostgresCheckpointCapabilitiesSource` contract to supply the
+repository from its own pool. A blob reader is present only when the
+deployment's closer has composed the scoped locator, object-store, and
+encryption-key boundary; the default factory leaves that capability nil and
+callers must fail closed. The bundle is copied into each immutable client set
+so a future builder cannot accidentally retain a dependency from a previous
+reload.
+
+This capability bundle is an input to the future checkpoint-aware V1 runtime;
+it does not implement provider dispatch, Redis reservation/reconciliation,
+PostgreSQL journaling/finalization, Compact, Query, or the complete durable
+runtime. It therefore does not change the accepted fail-closed status of the
+production V1 seam.
+
 ## Evidence
 
 - `golang/internal/runtime/factory.go` invokes the builder after complete
