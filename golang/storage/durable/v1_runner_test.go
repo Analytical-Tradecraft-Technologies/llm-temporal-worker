@@ -291,17 +291,84 @@ func TestGenerateV1CacheHitNeverDispatchesProvider(t *testing.T) {
 	ports.CacheLookup = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (CacheDecision, error) {
 		events = append(events, "cache")
 		response := testFinalization(testGenerateRequest()).Response
+		response.OperationKey = "origin-operation"
+		response.OperationID = "origin-operation-id"
+		response.Checkpoint.Handle = "origin-checkpoint"
 		return CacheDecision{Disposition: CacheHit, Response: &response}, nil
+	}
+	ports.FinalizeCache = func(_ context.Context, request llm.GenerateRequestV1, _ GenerateReplay, _ CacheDecision) (GenerateFinalization, error) {
+		events = append(events, "cache-finalize")
+		response := testFinalization(request).Response
+		response.Checkpoint.Kind = "cache_replay"
+		response.Checkpoint.Handle = "cache-replay-checkpoint"
+		response.Cache = llm.CacheDispositionV1{Disposition: "hit"}
+		return GenerateFinalization{Response: response}, nil
 	}
 	response, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
 	if err != nil {
 		t.Fatalf("GenerateV1 cache hit error = %v", err)
 	}
-	if response.OperationKey != "operation-1" {
-		t.Fatalf("response operation key = %q", response.OperationKey)
+	if response.OperationKey != "operation-1" || response.Checkpoint.Kind != "cache_replay" || response.Cache.Disposition != "hit" {
+		t.Fatalf("response = %#v", response)
 	}
 	if got, want := events, []string{"replay", "cache", "cache-finalize"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cache-hit phases = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1RejectsInvalidCacheHitFinalization(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*llm.GenerateResponseV1)
+	}{
+		{name: "origin operation id", mutate: func(response *llm.GenerateResponseV1) {
+			response.OperationID = "origin-operation-id"
+		}},
+		{name: "origin operation key", mutate: func(response *llm.GenerateResponseV1) {
+			response.OperationKey = "origin-operation"
+		}},
+		{name: "origin checkpoint", mutate: func(response *llm.GenerateResponseV1) {
+			response.Checkpoint.Handle = "origin-checkpoint"
+		}},
+		{name: "wrong checkpoint kind", mutate: func(response *llm.GenerateResponseV1) {
+			response.Checkpoint.Kind = "generation"
+		}},
+		{name: "wrong cache disposition", mutate: func(response *llm.GenerateResponseV1) {
+			response.Cache.Disposition = "miss_populated"
+		}},
+		{name: "nonzero cost", mutate: func(response *llm.GenerateResponseV1) {
+			response.Cost.ActualCostUSD = stringPtr("0.01")
+		}},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			events := []string{}
+			ports := testGeneratePorts(&events, "")
+			ports.CacheLookup = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (CacheDecision, error) {
+				origin := testFinalization(testGenerateRequest()).Response
+				origin.OperationKey = "origin-operation"
+				origin.OperationID = "origin-operation-id"
+				origin.Checkpoint.Handle = "origin-checkpoint"
+				return CacheDecision{Disposition: CacheHit, Response: &origin}, nil
+			}
+			ports.FinalizeCache = func(_ context.Context, request llm.GenerateRequestV1, _ GenerateReplay, _ CacheDecision) (GenerateFinalization, error) {
+				response := testFinalization(request).Response
+				response.Checkpoint.Kind = "cache_replay"
+				response.Checkpoint.Handle = "cache-replay-checkpoint"
+				response.Cache = llm.CacheDispositionV1{Disposition: "hit"}
+				test.mutate(&response)
+				return GenerateFinalization{Response: response}, nil
+			}
+
+			_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+			if err == nil || !errors.Is(err, ErrV1Stage) {
+				t.Fatalf("error = %v, want cache finalization stage failure", err)
+			}
+			if contains(events, "dispatch") {
+				t.Fatalf("invalid cache hit reached provider dispatch: %v", events)
+			}
+		})
 	}
 }
 
