@@ -16,6 +16,7 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 		{ID: "cache-child", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasRetainedDescendant: true},
 		{ID: "cache-fill", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasActiveFill: true},
 		{ID: "cache-use", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasActiveUse: true},
+		{ID: "cache-blob", Kind: ResourceCache, State: "ready", LastUsedAt: now.Add(-48 * time.Hour), HasBlobReference: true},
 		{ID: "operation-old", Kind: ResourceOperation, ExpiresAt: now.Add(-time.Hour)},
 		{ID: "query-old", Kind: ResourceQueryExecution, ExpiresAt: now.Add(-time.Hour)},
 	})
@@ -32,7 +33,7 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 		t.Fatalf("unexpected retention result: %+v", result)
 	}
 	records := store.Snapshot()
-	if len(records) != 6 {
+	if len(records) != 7 {
 		t.Fatalf("expected protected rows plus tombstone, got %d", len(records))
 	}
 	for _, record := range records {
@@ -41,6 +42,9 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 		}
 		if record.ID == "cache-used" && record.State != "ready" {
 			t.Fatalf("recently used cache was removed: %+v", record)
+		}
+		if record.ID == "cache-blob" && record.State != "ready" {
+			t.Fatalf("cache with a retained blob reference was removed: %+v", record)
 		}
 	}
 }

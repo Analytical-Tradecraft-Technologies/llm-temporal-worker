@@ -88,7 +88,7 @@ func (policy RetentionPolicy) Validate() error {
 // SQL adapters must repeat the same predicates in their locked query rather
 // than relying on a previously returned RetentionRecord.
 func (record RetentionRecord) Eligible(policy RetentionPolicy) bool {
-	if record.ID == "" || record.Active || record.HasRetainedDescendant || record.HasActiveFill || record.HasActiveUse {
+	if record.ID == "" || record.Active || record.HasRetainedDescendant || record.HasActiveFill || record.HasActiveUse || record.HasBlobReference {
 		return false
 	}
 	var cutoff time.Time
