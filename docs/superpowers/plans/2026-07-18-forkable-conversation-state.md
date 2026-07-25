@@ -950,8 +950,12 @@ the implemented maintenance primitives.
   PostgreSQL transaction update operation cost, reservation, bucket projection,
   and journal revision; then idempotently reconcile Redis. Retain the prior
   conservative bound on any failure.
-- [x] Add metrics for eligible/deleted/skipped/failure, dead tuples, pool/lock/
-  query latency, cache hit/use/fill, pending polls, and exact/unknown cost.
+- [x] Add metrics for eligible/deleted/skipped/failure, dead tuples, pool and
+  maintenance/query latency, cache hit/use/fill, pending polls, and
+  exact/unknown cost.
+- [ ] Instrument PostgreSQL lock latency at an actual production lock boundary;
+  the current observers do not emit this metric (the `lock` label exists only
+  in a unit fixture).
 - [ ] Load test autovacuum/fillfactor and record table-specific production
   settings instead of guessing.
 - [ ] Commit: **feat(maintenance): add safe state and cache retention**.
