@@ -74,6 +74,14 @@ Activity registrations entirely; it does not dispatch inference or advertise
 a partially configured v1 worker. Any other environment value, including
 `production`, remains fail-closed.
 
+The explicit composition guard is recorded in
+[ADR 0010](../decisions/0010-durable-v1-runtime-composition.md). In
+particular, the production factory's reusable `llm.Engine` is not a v1
+runtime: it cannot be losslessly adapted to Compact or Query, nor can it
+perform checkpoint materialization and the required Redis/PostgreSQL phase
+ordering. A durable v1 implementation must therefore be supplied separately
+or through an adapter that owns the complete phase order.
+
 ## Payload contract
 
 Each v1 Activity has a closed request and response record in the `llm` package:

@@ -15,3 +15,5 @@ than silent divergence or knowingly faithful implementation of a defect.
 6. [Forkable conversation checkpoints](0006-forkable-conversation-checkpoints.md)
 7. [PostgreSQL durable state, Redis budgets, and exact-response cache](0007-postgresql-authoritative-state-and-response-cache.md)
 8. [Resumable provider operations and typed queries](0008-resumable-provider-operations-and-typed-queries.md)
+9. [Future non-USD pricing normalization](0009-future-non-usd-pricing.md)
+10. [Durable v1 runtime composition](0010-durable-v1-runtime-composition.md)
