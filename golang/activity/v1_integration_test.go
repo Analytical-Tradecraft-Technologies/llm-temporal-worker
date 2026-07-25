@@ -125,7 +125,9 @@ func validMaterializedCompactResponse(operationKey string) llm.CompactResponseV1
 func TestMaterializingV1RuntimeMaterializesBeforeGenerateDispatch(t *testing.T) {
 	events := []string{}
 	runtime := &materializingRuntimeProbe{events: &events}
-	materializer := &materializingMaterializerProbe{events: &events, result: validMaterializedState("parent")}
+	materialized := validMaterializedState("parent")
+	materialized.Tenant = "tenant/project"
+	materializer := &materializingMaterializerProbe{events: &events, result: materialized}
 	wrapped := &MaterializingV1Runtime{
 		Runtime: runtime, Materializer: materializer,
 		Scope: func(requestContext llm.RequestContext) (string, error) {
