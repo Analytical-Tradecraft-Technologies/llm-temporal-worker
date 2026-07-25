@@ -1,9 +1,9 @@
 package runtime
 
 // This file composes the storage-neutral typed query contract with the
-// PostgreSQL read pages. Budget remains a fail-closed capability until its
-// Redis generation reader is wired. Spend is read from the PostgreSQL ledgers
-// when an authenticated deployment supplies the scope-ID resolver.
+// PostgreSQL read pages. Budget status is exposed only when a snapshot-scoped
+// Redis generation reader is supplied. Spend is read from the PostgreSQL
+// ledgers when an authenticated deployment supplies the scope-ID resolver.
 
 import (
 	"context"
@@ -43,6 +43,17 @@ type spendSummaryReader interface {
 	ListSpendSummary(context.Context, postgresstore.SpendSummaryListOptions) (control.SpendSummaryResult, error)
 }
 
+// BudgetStatusReader is the snapshot-scoped Redis read seam for the budget
+// status query. The reader owns the Redis generation/manifest/window
+// validation: it must reject a requested instant outside the active coverage,
+// bind the result to the active generation and Stream high-water mark, and
+// never consult PostgreSQL budget tables. Keeping this contract above the
+// storage package avoids inventing a Redis window-hash field layout before
+// the generation materializer publishes that format.
+type BudgetStatusReader interface {
+	ReadBudgetStatus(context.Context, control.BudgetStatusQuery, time.Time) (control.BudgetStatusResult, error)
+}
+
 // QueryScopeResolver maps an already-authorized tenant/project scope to its
 // opaque PostgreSQL scope ID. The runtime never derives or guesses this ID:
 // deployments must supply the same keyed resolver used by their durable
@@ -58,6 +69,9 @@ type PersistedQueryOptions struct {
 	Audit        control.AuditFunc
 	Clock        func() time.Time
 	ResolveScope QueryScopeResolver
+	// BudgetStatus is required to expose budget_status. It must be backed by
+	// the active Redis generation and must not fall back to PostgreSQL.
+	BudgetStatus BudgetStatusReader
 }
 
 // NewPersistedQueryService builds the persisted query families against
@@ -86,6 +100,7 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 			provider:     repositories.ProviderStatus,
 			inventory:    repositories.Inventory,
 			spend:        repositories.SpendSummary,
+			budget:       options.BudgetStatus,
 			resolveScope: options.ResolveScope,
 			cursor:       options.Cursor,
 			clock:        clock,
@@ -102,6 +117,7 @@ type persistedQueryHandler struct {
 	provider     providerStatusReader
 	inventory    inventoryReader
 	spend        spendSummaryReader
+	budget       BudgetStatusReader
 	resolveScope QueryScopeResolver
 	cursor       *control.CursorCodec
 	clock        func() time.Time
@@ -130,10 +146,35 @@ func (handler *persistedQueryHandler) ExecuteTypedQuery(ctx context.Context, req
 	case llm.QuerySpendSummary:
 		return handler.spendSummary(ctx, request, now)
 	case llm.QueryBudgetStatus:
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "budget repository is not configured")
+		return handler.budgetStatus(ctx, request, now)
 	default:
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "query kind is not configured")
 	}
+}
+
+func (handler *persistedQueryHandler) budgetStatus(ctx context.Context, request control.QueryRequest, now time.Time) (control.QueryResponse, error) {
+	if handler.budget == nil {
+		return control.QueryResponse{}, unsupportedQuery(request.Kind, "Redis budget status reader is not configured")
+	}
+	query, ok := request.Filter.(control.BudgetStatusQuery)
+	if !ok {
+		return control.QueryResponse{}, fmt.Errorf("budget status filter has unexpected type")
+	}
+	activeAt := now
+	if query.ActiveAt != nil {
+		activeAt = query.ActiveAt.UTC()
+		if activeAt.IsZero() {
+			return control.QueryResponse{}, fmt.Errorf("budget status active_at is invalid")
+		}
+	}
+	result, err := handler.budget.ReadBudgetStatus(ctx, query, activeAt)
+	if err != nil {
+		return control.QueryResponse{}, err
+	}
+	if result.ActiveAt.IsZero() || !result.ActiveAt.UTC().Equal(activeAt) {
+		return control.QueryResponse{}, fmt.Errorf("budget status reader returned a mismatched active_at")
+	}
+	return handler.response(request, result, control.QueryFreshCurrent, activeAt, nil), nil
 }
 
 func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request control.QueryRequest, now time.Time) (control.QueryResponse, error) {

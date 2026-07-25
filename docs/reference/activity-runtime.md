@@ -52,7 +52,12 @@ summary additionally requires `PersistedQueryOptions.ResolveScope`, an
 authenticated deployment resolver for the opaque PostgreSQL scope UUID;
 missing, failed, or nil scope resolution fails closed. Refresh requests and
 budget status remain fail-closed until their management and Redis-generation
-adapters are supplied. Remaining
+adapters are supplied. `PersistedQueryOptions.BudgetStatus` is the typed
+snapshot-scoped reader seam for that Redis adapter; it must bind the requested
+instant to active generation/manifest/Stream provenance and cannot fall back
+to PostgreSQL. The current storage package does not yet publish a versioned
+window-hash field reader, so a manifest-only adapter is intentionally rejected.
+Remaining
 complete Activity composition work is tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
