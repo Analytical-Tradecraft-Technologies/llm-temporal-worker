@@ -740,6 +740,37 @@ func (runtime *Runtime) dependencyProbes() []DependencyProbe {
 	return source.DependencyProbes()
 }
 
+// currentV1RuntimeConfigured resolves the durable capability from the active
+// configuration snapshot. V1 composition is snapshot-scoped, just like the
+// Redis, PostgreSQL, and provider clients it owns; caching the initial value
+// would let a reload publish an unconfigured runtime while readiness remained
+// true.
+func (runtime *Runtime) currentV1RuntimeConfigured() bool {
+	if runtime == nil || runtime.App == nil {
+		return false
+	}
+	current := runtime.App.Current()
+	if current == nil || current.Config == nil {
+		return false
+	}
+	configuration := current.Config.Config()
+	if !v1RuntimeRequired(configuration) {
+		return true
+	}
+	return isV1RuntimeConfigured(v1RuntimeForSnapshot(current, nil))
+}
+
+func (runtime *Runtime) currentV1RuntimeRequired() bool {
+	if runtime == nil || runtime.App == nil {
+		return false
+	}
+	current := runtime.App.Current()
+	if current == nil || current.Config == nil {
+		return false
+	}
+	return v1RuntimeRequired(current.Config.Config())
+}
+
 // syncDependencyReadiness applies the fail-closed state transition in one
 // place. A failed probe pauses polling and leaves liveness alone; a successful
 // probe resumes only after every required probe passed.
@@ -749,6 +780,11 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if !runtime.currentV1RuntimeConfigured() {
+		runtime.Health.SetReady(false)
+		runtime.Worker.Pause()
+		return nil
 	}
 	probes := runtime.dependencyProbes()
 	if len(probes) > 0 {
@@ -772,7 +808,14 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 }
 
 func (runtime *Runtime) startDependencyMonitor() {
-	if runtime == nil || len(runtime.dependencyProbes()) == 0 || runtime.readinessProbeInterval <= 0 {
+	if runtime == nil || runtime.readinessProbeInterval <= 0 {
+		return
+	}
+	// A production snapshot may have no explicit dependency probes when the
+	// ClientSet is supplied by an embedding. Still monitor reloads so an
+	// authoritative V1 source disappearing from a later snapshot cannot leave
+	// readiness stuck true indefinitely.
+	if len(runtime.dependencyProbes()) == 0 && !runtime.currentV1RuntimeRequired() {
 		return
 	}
 	runtime.mu.Lock()

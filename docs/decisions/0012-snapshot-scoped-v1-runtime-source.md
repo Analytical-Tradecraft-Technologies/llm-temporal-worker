@@ -35,6 +35,14 @@ falling back to a stale process-level runtime. Legacy custom `ClientSet`
 implementations without the source may continue using the explicit embedding
 fallback for compatibility.
 
+Readiness follows the same current-snapshot capability. The dependency monitor
+must treat a missing or `UnconfiguredV1Runtime` source in a non-development
+snapshot as unavailable: it keeps liveness up, marks readiness false, and
+pauses Temporal polling. Once a replacement snapshot supplies a configured
+source and its dependency probes pass, the monitor may resume polling. The
+initial startup guard remains fail-closed, but the monitor must not cache that
+initial v1 result across reloads.
+
 The builder is a seam, not a production claim. It must eventually return a
 runtime that implements the full Generate/Compact/Query contracts, owns the
 typed phase ports from ADR 0011, materializes checkpoints, and preserves
@@ -68,10 +76,15 @@ production V1 seam.
   client construction and closes clients if composition fails.
 - `golang/internal/runtime/snapshot_v1_runtime.go` holds a snapshot lease for
   each one-shot method and rejects an authoritative nil source.
+- `golang/internal/runtime/runtime.go` re-evaluates the current source during
+  every readiness-monitor pass, so reloads cannot leave an unconfigured v1
+  worker reporting ready.
 - `golang/internal/runtime/factory_test.go` covers builder inputs, source
   attachment, and cleanup on builder failure.
 - `golang/internal/runtime/snapshot_v1_runtime_test.go` covers reload source
   selection and legacy fallback boundaries.
+- `golang/internal/runtime/runtime_test.go` covers readiness pause/resume when
+  a reload removes and then restores the v1 source.
 
 This ADR does not replace `activity.UnconfiguredV1Runtime` and does not mark
 Task 15 complete; concrete durable ports, Compact, Query, and protected

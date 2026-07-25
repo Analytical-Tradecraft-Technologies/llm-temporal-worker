@@ -714,10 +714,11 @@ directory unless a command explicitly says otherwise.
 
 ### Task 15: Wire Generate v1 and Compact Activities end to end
 
-Status: snapshot-scoped composition seam landed; the reusable legacy
+Status: snapshot-scoped composition and reload-aware readiness seams landed; the reusable legacy
 `llm.Engine` is intentionally not adapted to the v1 Activity boundary. The
 factory now accepts an optional per-snapshot `V1RuntimeBuilder`, and the
 Activity registration resolves that source while holding the snapshot lease;
+readiness re-evaluates the source after every reload;
 see [ADR 0010](../../decisions/0010-durable-v1-runtime-composition.md) and
 [ADR 0012](../../decisions/0012-snapshot-scoped-v1-runtime-source.md). The
 Storage-neutral Generate and Compact phase runners are recorded in [ADR
