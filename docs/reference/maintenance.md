@@ -78,3 +78,19 @@ The SQL adapter is deliberately separate from runtime repositories. It uses
 the namespace renderer for every relation and rejects unbounded limits,
 invalid leases, invalid identifiers, and malformed payloads before issuing
 SQL.
+
+## Maintenance observability
+
+`storage/postgres` accepts an optional `MaintenanceObserver` and the response
+cache repository accepts an optional `CacheObserver`. A deployment can wire
+these interfaces to the bounded Prometheus recorders in
+`internal/observability`; leaving them nil is a no-op.
+Retention and blob passes report eligible, tombstoned, deleted, skipped, and
+failed counts, elapsed maintenance time, PostgreSQL pool state, and query
+latency. After a pass, the adapter samples only its own namespace from
+`pg_stat_user_tables` and reports approximate live/dead tuple counts using
+logical resource labels; physical relation names and tenant identifiers never
+become metric labels. Cache lookup/fill boundaries report hit, use, miss, and
+fill outcomes, while provider-owned polls report started, completed, retry,
+or failed outcomes. Cost status telemetry records exact versus unknown
+without exporting the amount or unknown reason.

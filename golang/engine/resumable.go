@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
@@ -81,9 +82,11 @@ func (engine *Engine) handleResumableOutcome(ctx context.Context, operation admi
 		}); err != nil {
 			return provider.Result{}, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetryNever, "provider operation persistence failed", err), false
 		}
+		recordPendingPoll(ctx, "started")
 		result, pollErr := PollProviderOperation(ctx, resumable, call, outcome.ProviderOperationID, observer, ProviderPollOptions{InitialDelay: outcome.NextPollAfter})
 		if pollErr != nil {
 			mapped := pendingPollError(pollErr)
+			recordPendingPoll(ctx, pollOutcome(mapped))
 			if mapped.Retry != provider.RetrySameOperation && mapped.Code != provider.CodeCanceled {
 				// A terminal poll outcome (for example provider not-found or a
 				// provider-declared failure) must pass through the normal ledger
@@ -93,6 +96,7 @@ func (engine *Engine) handleResumableOutcome(ctx context.Context, operation admi
 			}
 			return provider.Result{}, mapped, true
 		}
+		recordPendingPoll(ctx, "completed")
 		return result, nil, false
 	default:
 		return provider.Result{}, fmt.Errorf("resumable provider state %q was not handled", outcome.State), false
@@ -169,9 +173,11 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "provider_wait", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
 		return llm.Response{}, err
 	}
+	recordPendingPoll(ctx, "started")
 	result, pollErr := PollProviderOperation(ctx, resumable, call, providerOperationID, observer, ProviderPollOptions{InitialDelay: initialDelay})
 	if pollErr != nil {
 		mapped := pendingPollError(pollErr)
+		recordPendingPoll(ctx, pollOutcome(mapped))
 		engine.recordProviderStatus(ctx, snapshot, operation, candidate.candidate, provider.Result{}, mapped)
 		if mapped.Retry == provider.RetrySameOperation || mapped.Code == provider.CodeCanceled {
 			mapped.OperationID = operation.ID
@@ -179,8 +185,25 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 		}
 		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
 	}
+	recordPendingPoll(ctx, "completed")
 	engine.recordProviderStatus(ctx, snapshot, operation, candidate.candidate, result, nil)
 	return engine.finalizeSuccess(ctx, request, snapshot, quoted, index, operation, parent, call, result.Response)
+}
+
+func recordPendingPoll(ctx context.Context, outcome string) {
+	if metrics := observability.MetricsFromContext(ctx); metrics != nil {
+		metrics.RecordPendingPoll(outcome)
+	}
+}
+
+func pollOutcome(err *provider.Error) string {
+	if err == nil {
+		return "failed"
+	}
+	if err.Retry == provider.RetrySameOperation || err.Code == provider.CodeCanceled {
+		return "retry"
+	}
+	return "failed"
 }
 
 // pendingPollError preserves retry guidance while an operation is already
