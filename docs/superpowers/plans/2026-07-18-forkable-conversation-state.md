@@ -722,7 +722,9 @@ readiness re-evaluates the source after every reload;
 the snapshot client set also copies a preparatory typed
 `V1RuntimeCapabilities` bundle with private adapter-map ownership, while
 leaving legacy admission/continuation/result stores out until Task 19's
-durable ports exist; it never falls back to the legacy engine;
+durable ports exist. The bundle now carries only an optional write-only
+PostgreSQL `durable.Journal` capability (nil in memory mode); it never
+activates V1 composition or falls back to the legacy engine;
 see [ADR 0010](../../decisions/0010-durable-v1-runtime-composition.md) and
 [ADR 0012](../../decisions/0012-snapshot-scoped-v1-runtime-source.md). The
 Storage-neutral Generate and Compact phase runners are recorded in [ADR

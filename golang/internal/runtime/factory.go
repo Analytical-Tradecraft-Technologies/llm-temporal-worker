@@ -39,6 +39,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
+	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 	"github.com/mfow/llm-temporal-worker/golang/storage/fileblob"
 	memorystore "github.com/mfow/llm-temporal-worker/golang/storage/memory"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
@@ -152,12 +153,14 @@ type productionClientSet struct {
 	queryRepos      PostgresQueryRepositories
 	queryService    activity.QueryService
 	checkpoints     CheckpointCapabilities
+	journal         durablestore.Journal
 	v1Capabilities  V1RuntimeCapabilities
 	v1Runtime       activity.V1Runtime
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
 var _ CheckpointCapabilitiesSource = (*productionClientSet)(nil)
+var _ JournalSource = (*productionClientSet)(nil)
 var _ V1RuntimeCapabilitiesSource = (*productionClientSet)(nil)
 
 func (set *productionClientSet) Close(ctx context.Context) error {
@@ -212,6 +215,16 @@ func (set *productionClientSet) CheckpointCapabilities() CheckpointCapabilities 
 		return CheckpointCapabilities{}
 	}
 	return set.checkpoints
+}
+
+// Journal returns the optional write-only PostgreSQL budget journal owned by
+// this immutable snapshot. It is not active-budget state and must not be used
+// for normal admission reads. A nil value is an explicit unconfigured seam.
+func (set *productionClientSet) Journal() durablestore.Journal {
+	if set == nil {
+		return nil
+	}
+	return set.journal
 }
 
 // V1RuntimeCapabilities returns the preparatory typed dependency bundle owned
@@ -471,17 +484,20 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		probes = append(probes, postgresProbe)
 	}
 	checkpointCapabilities := checkpointCapabilitiesFromCloser(postgresCloser)
+	journal := journalFromCloser(postgresCloser)
 	clients := &productionClientSet{
 		probes:          probes,
 		providerControl: providerControl,
 		queryRepos:      queryRepos,
 		queryService:    queryService,
 		checkpoints:     checkpointCapabilities,
+		journal:         journal,
 		v1Capabilities: V1RuntimeCapabilities{
 			Snapshot:               snapshotSource,
 			Planner:                planner,
 			Adapters:               capabilityAdapterRegistry,
 			Checkpoints:            checkpointCapabilities,
+			Journal:                journal,
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
 		},
@@ -1173,6 +1189,13 @@ func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
 	repository := closer.ProviderStatusRepository()
 	spend := postgresstore.SpendSummaryRepository{Pool: closer.pool, Namespace: closer.namespace}
 	return PostgresQueryRepositories{ProviderStatus: &repository, SpendSummary: &spend}
+}
+
+// Journal exposes only the write-only durable journal contract. The runtime
+// wraps it before storing it on the snapshot client set so callers cannot
+// recover this concrete repository or its pool through a type assertion.
+func (closer postgresPoolCloser) Journal() durablestore.Journal {
+	return &postgresstore.BudgetJournalRepository{Pool: closer.pool, Namespace: closer.namespace}
 }
 
 // CheckpointRepository exposes only the storage-neutral repository contract.

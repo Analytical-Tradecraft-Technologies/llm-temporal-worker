@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
@@ -69,10 +71,28 @@ type CheckpointCapabilitiesSource interface {
 	CheckpointCapabilities() CheckpointCapabilities
 }
 
+// PostgresJournalSource is implemented by a PostgreSQL client closer that
+// exposes only the write-only durable budget journal. It deliberately returns
+// the storage-neutral durable.Journal contract instead of a pool or concrete
+// repository so a future V1 composition cannot read budget projections during
+// normal admission.
+type PostgresJournalSource interface {
+	Journal() durablestore.Journal
+}
+
+// JournalSource is the optional snapshot-client capability consumed by a
+// future durable V1 builder. The journal is owned by the same immutable client
+// set and is closed with that set; nil means PostgreSQL journal composition is
+// not configured.
+type JournalSource interface {
+	Journal() durablestore.Journal
+}
+
 // V1RuntimeCapabilities is the preparatory storage- and provider-neutral
 // dependency bundle owned by one immutable configuration snapshot. It exposes
-// only the snapshot/planning/adapter contracts and the checkpoint capability
-// that are safe to carry into the future durable composition. It deliberately
+// only the snapshot/planning/adapter contracts, checkpoint capability, and
+// optional write-only journal that are safe to carry into the future durable
+// composition. It deliberately
 // omits the legacy Redis admission, continuation, and blob-result stores:
 // Task 19 must supply PostgreSQL durable operations, BudgetMaterializer/Journal,
 // and the corresponding result/continuation ports before the V1 runtime can
@@ -80,10 +100,13 @@ type CheckpointCapabilitiesSource interface {
 // clock is an unconfigured capability; callers must not fall back to a legacy
 // engine or a process-global dependency.
 type V1RuntimeCapabilities struct {
-	Snapshot               engine.SnapshotSource
-	Planner                routing.Planner
-	Adapters               engine.AdapterRegistry
-	Checkpoints            CheckpointCapabilities
+	Snapshot    engine.SnapshotSource
+	Planner     routing.Planner
+	Adapters    engine.AdapterRegistry
+	Checkpoints CheckpointCapabilities
+	// Journal is the optional write-only PostgreSQL budget journal. It is
+	// preparatory input for Task 19 and does not activate V1 composition.
+	Journal                durablestore.Journal
 	ProviderStatusRecorder engine.ProviderStatusRecorder
 	Clock                  func() time.Time
 }
@@ -138,6 +161,23 @@ func (repository snapshotCheckpointRepository) BeginCheckpoint(ctx context.Conte
 	return repository.delegate.BeginCheckpoint(ctx)
 }
 
+// snapshotJournal erases the concrete PostgreSQL repository before it enters
+// the client set. It preserves the write-only durable.Journal contract while
+// preventing callers from reaching into a pgx pool through a type assertion.
+type snapshotJournal struct {
+	delegate durablestore.Journal
+}
+
+var _ durablestore.Journal = snapshotJournal{}
+
+func (journal snapshotJournal) AppendReservation(ctx context.Context, event budget.ReservationEvent) (postgresstore.JournalRecord, error) {
+	return journal.delegate.AppendReservation(ctx, event)
+}
+
+func (journal snapshotJournal) AppendCompletion(ctx context.Context, event budget.CompletionEvent) (postgresstore.JournalRecord, error) {
+	return journal.delegate.AppendCompletion(ctx, event)
+}
+
 // queryServiceSource lets an embedding supply the typed control-plane query
 // implementation from the same PostgreSQL pool. It is deliberately optional:
 // until handlers for a query kind are composed, QueryService remains nil and
@@ -165,6 +205,17 @@ func checkpointCapabilitiesFromCloser(closer io.Closer) CheckpointCapabilities {
 		}
 	}
 	return CheckpointCapabilities{}
+}
+
+func journalFromCloser(closer io.Closer) durablestore.Journal {
+	if source, ok := closer.(PostgresJournalSource); ok {
+		journal := source.Journal()
+		if journal == nil {
+			return nil
+		}
+		return snapshotJournal{delegate: journal}
+	}
+	return nil
 }
 
 type postgresProviderStatusRecorder struct {
