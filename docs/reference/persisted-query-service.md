@@ -2,16 +2,28 @@
 
 The runtime now exposes an explicit `runtime.NewPersistedQueryService`
 composition for the PostgreSQL-backed provider-status, model-inventory,
-credit-status, and spend-summary query families. It binds every page to the immutable
+credit-status, and spend-summary query families, plus an explicitly supplied
+Redis budget-status reader. It binds every page to the immutable
 configuration snapshot digest and uses the storage pages only after the
 control layer has authenticated the tenant scope and signed cursor.
 
-Deployments must supply all three security/observability seams:
+Deployments must supply the three security/observability seams below; a
+fourth budget-status seam is required only when that query kind is enabled:
 
 - `control.AuthorizeFunc` for tenant/project/actor authorization;
 - a keyed `control.CursorCodec` for scope/filter/horizon-bound cursors; and
 - a `control.AuditFunc` that records the completed query before the Activity
   returns.
+
+`PersistedQueryOptions.BudgetStatus` is the fourth, deliberately explicit
+composition seam. Its `runtime.BudgetStatusReader` receives the typed budget
+filter and requested instant and must read the active Redis generation only.
+The reader is responsible for validating the active pointer and manifest,
+rejecting instants outside manifest coverage, checking every expected window
+member, and binding the result to the generation, manifest digest, and Stream
+high-water mark. It must never fall back to PostgreSQL budget tables. The
+runtime also rejects a reader result whose `active_at` does not exactly match
+the requested instant.
 
 `control.CursorCodec` also validates the typed request itself whenever a token
 is signed or decoded. Direct storage adapters therefore cannot mint a cursor
@@ -27,9 +39,13 @@ read repositories through `PostgresQueryRepositoriesSource`; missing
 repositories remain a permanent unsupported-capability response rather than
 an empty result.
 
-The composition is persisted-only. Refresh requests are rejected until an
-explicit management refresh adapter is supplied. Budget status remains
-fail-closed until its Redis budget-generation repository is composed. The
+The PostgreSQL composition is persisted-only. Refresh requests are rejected
+until an explicit management refresh adapter is supplied. Budget status
+remains fail-closed until a concrete Redis generation/window reader is
+composed through `BudgetStatus`. The storage package currently exposes the
+generation pointer/manifest port, but not yet a versioned window-hash field
+reader; deployments must not infer that layout or treat a manifest-only read
+as a complete budget answer. The
 PostgreSQL `SpendSummaryRepository` provides the storage read seam for spend:
 it unions completed `operations` with completed `query_executions`, joins each
 operation to its highest-numbered durable attempt for provider and model
@@ -56,6 +72,7 @@ factory, _ := runtime.NewProductionEngineFactory(runtime.ProductionFactoryOption
             Authorize: authorizeTenant,
             Cursor:    &control.CursorCodec{Key: cursorKey, TTL: 15 * time.Minute},
             Audit:     auditQuery,
+            BudgetStatus: redisBudgetReader,
             ResolveScope: func(ctx context.Context, scope control.QueryScope) (uuid.UUID, error) {
                 return authenticatedScopeIDs.Lookup(ctx, string(scope.Tenant), string(scope.Project))
             },

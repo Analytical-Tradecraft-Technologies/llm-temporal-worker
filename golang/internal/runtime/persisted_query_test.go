@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,20 @@ type fakePersistedProvider struct {
 type fakeSpendSummary struct {
 	result   control.SpendSummaryResult
 	lastOpts postgresstore.SpendSummaryListOptions
+}
+
+type fakeBudgetStatus struct {
+	result   control.BudgetStatusResult
+	query    control.BudgetStatusQuery
+	activeAt time.Time
+	calls    int
+}
+
+func (fake *fakeBudgetStatus) ReadBudgetStatus(_ context.Context, query control.BudgetStatusQuery, activeAt time.Time) (control.BudgetStatusResult, error) {
+	fake.query = query
+	fake.activeAt = activeAt
+	fake.calls++
+	return fake.result, nil
 }
 
 func (fake *fakeSpendSummary) ListSpendSummary(_ context.Context, options postgresstore.SpendSummaryListOptions) (control.SpendSummaryResult, error) {
@@ -94,6 +109,80 @@ func TestPersistedQueryProviderStatusIsAuditedAndCursorBound(t *testing.T) {
 	}
 	if second.NextCursor != nil || providerReader.lastOpts.AfterRouteID != "route-b" {
 		t.Fatalf("continuation was not bound: response=%+v options=%+v", second, providerReader.lastOpts)
+	}
+}
+
+func TestPersistedQueryBudgetStatusUsesRedisReaderContract(t *testing.T) {
+	activeAt := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
+	policy := control.PolicyKey("daily")
+	includeWindows := true
+	reader := &fakeBudgetStatus{result: control.BudgetStatusResult{
+		ActiveAt:            activeAt,
+		GenerationID:        control.BudgetGenerationID("generation-1"),
+		ManifestDigest:      control.ManifestDigest(strings.Repeat("a", 64)),
+		StreamHighWaterMark: control.StreamHighWaterMark("42-0"),
+		Windows: []control.BudgetWindow{{
+			PolicyKey:        policy,
+			WindowKey:        control.WindowKey("hour"),
+			CoverageStart:    activeAt.Add(-time.Hour),
+			CoverageEnd:      activeAt.Add(time.Hour),
+			LimitUSD:         "10",
+			ReservedCostUSD:  "1",
+			AccountedCostUSD: "2",
+			AvailableUSD:     "7",
+		}},
+	}}
+	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
+	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
+	request, err := control.EncodeQueryRequest(control.QueryRequest{
+		OperationKey: "budget-op",
+		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
+		Kind:         llm.QueryBudgetStatus,
+		Filter:       control.BudgetStatusQuery{PolicyKey: &policy, ActiveAt: &activeAt, IncludeWindows: &includeWindows},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.Execute(context.Background(), request)
+	if err != nil {
+		t.Fatalf("budget status query: %v", err)
+	}
+	decoded, err := control.DecodeQueryResponse(response)
+	if err != nil {
+		t.Fatalf("decode budget status response: %v", err)
+	}
+	result, ok := decoded.Result.(control.BudgetStatusResult)
+	if !ok || result.GenerationID != "generation-1" || len(result.Windows) != 1 || result.Windows[0].AvailableUSD != "7" {
+		t.Fatalf("unexpected budget status result: %#v", decoded.Result)
+	}
+	if reader.calls != 1 || !reader.activeAt.Equal(activeAt) || reader.query.PolicyKey == nil || *reader.query.PolicyKey != policy || reader.query.IncludeWindows == nil || !*reader.query.IncludeWindows {
+		t.Fatalf("reader was not bound to query/instant: calls=%d active_at=%s query=%#v", reader.calls, reader.activeAt, reader.query)
+	}
+}
+
+func TestPersistedQueryBudgetStatusRejectsMismatchedReaderInstant(t *testing.T) {
+	requested := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
+	reader := &fakeBudgetStatus{result: control.BudgetStatusResult{
+		ActiveAt:            requested.Add(time.Second),
+		GenerationID:        control.BudgetGenerationID("generation-1"),
+		ManifestDigest:      control.ManifestDigest(strings.Repeat("a", 64)),
+		StreamHighWaterMark: control.StreamHighWaterMark("42-0"),
+	}}
+	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return requested }}
+	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return requested }}
+	request, err := control.EncodeQueryRequest(control.QueryRequest{
+		OperationKey: "budget-op",
+		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
+		Kind:         llm.QueryBudgetStatus,
+		Filter:       control.BudgetStatusQuery{ActiveAt: &requested},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Execute(context.Background(), request); err == nil {
+		t.Fatal("mismatched budget reader instant unexpectedly accepted")
 	}
 }
 
