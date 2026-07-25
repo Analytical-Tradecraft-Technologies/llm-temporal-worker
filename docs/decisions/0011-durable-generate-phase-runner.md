@@ -38,7 +38,11 @@ newly materialized state before routing. A cache hit finalizes without
 dispatching inference. Reservation denial is a typed, retry-after budget
 error. A reconciliation failure is returned as a typed retryable
 `ErrReconcilePending` condition after finalization so Temporal can retry
-reconciliation without silently rerunning provider work. Ports must be
+reconciliation without silently rerunning provider work. Replay therefore
+returns a bounded `GenerateReconciliation` handoff when PostgreSQL has already
+committed the response but Redis completion is still pending; the runner
+validates its operation, generation, reservation, and response identities,
+reconciles it, and only then returns the committed response. Ports must be
 idempotent across Activity retries and must not log or serialize raw
 prompt/provider state.
 
@@ -56,5 +60,6 @@ remain pending.
   ordering.
 - `golang/storage/durable/v1_runner_test.go` covers normal ordering, cache-hit
   short-circuiting, pre-dispatch fail-closed behavior, identity mismatches, and
-  retryable reconciliation failure.
+  retryable reconciliation failure, including replay of a finalized response
+  with pending Redis reconciliation without a second provider dispatch.
 - `make -C golang test` passes with the runner included.
