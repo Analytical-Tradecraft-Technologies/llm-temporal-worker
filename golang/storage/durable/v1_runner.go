@@ -258,7 +258,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		if err != nil {
 			return llm.GenerateResponseV1{}, stageError("cache finalization", err)
 		}
-		if err := validateGenerateFinalization(request, "", finalization); err != nil {
+		if err := validateGenerateCacheFinalization(request, decision, finalization); err != nil {
 			return llm.GenerateResponseV1{}, stageError("cache finalization", err)
 		}
 		return finalization.Response, nil
@@ -370,6 +370,50 @@ func validateGeneratePendingReconciliation(request llm.GenerateRequestV1, pendin
 		return err
 	}
 	return validateGenerateFinalization(request, pending.Route.OperationID, pending.Finalization)
+}
+
+// validateGenerateCacheFinalization prevents a cache lookup from returning the
+// origin operation or checkpoint as though it were the current call's result.
+// A hit is a distinct immutable cache-replay child, carries the hit
+// disposition, and has exact zero provider cost.
+func validateGenerateCacheFinalization(request llm.GenerateRequestV1, decision CacheDecision, finalization GenerateFinalization) error {
+	if decision.Response == nil {
+		return errors.New("cache hit has no origin response")
+	}
+	if err := validateGenerateFinalization(request, "", finalization); err != nil {
+		return err
+	}
+	if finalization.Response.OperationID == decision.Response.OperationID {
+		return errors.New("cache hit must create a distinct operation")
+	}
+	if finalization.Response.OperationKey == decision.Response.OperationKey {
+		return errors.New("cache hit must not reuse the origin operation key")
+	}
+	if finalization.Response.Checkpoint.Handle == decision.Response.Checkpoint.Handle {
+		return errors.New("cache hit must create a distinct checkpoint")
+	}
+	if finalization.Response.Checkpoint.Kind != "cache_replay" {
+		return errors.New("cache hit must create a cache_replay checkpoint")
+	}
+	if finalization.Response.Cache.Disposition != "hit" {
+		return errors.New("cache hit must produce hit disposition")
+	}
+	if !exactZeroCost(finalization.Response.Cost) {
+		return errors.New("cache hit must have exact zero cost")
+	}
+	return nil
+}
+
+func exactZeroCost(cost llm.CostV1) bool {
+	if cost.Status != "exact" || cost.ActualCostUSD == nil || *cost.ActualCostUSD == "" {
+		return false
+	}
+	for _, character := range *cost.ActualCostUSD {
+		if character != '0' && character != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateGenerateResponse(request llm.GenerateRequestV1, expectedOperationID OperationID, response llm.GenerateResponseV1) error {
