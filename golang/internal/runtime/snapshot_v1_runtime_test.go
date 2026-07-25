@@ -13,6 +13,7 @@ import (
 
 type recordingV1Runtime struct {
 	generateCalls atomic.Int32
+	queryCalls    atomic.Int32
 }
 
 func (runtime *recordingV1Runtime) GenerateV1(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
@@ -25,6 +26,7 @@ func (runtime *recordingV1Runtime) CompactV1(context.Context, llm.CompactRequest
 }
 
 func (runtime *recordingV1Runtime) QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	runtime.queryCalls.Add(1)
 	return llm.QueryResponseV1{}, nil
 }
 
@@ -111,5 +113,27 @@ func TestSnapshotV1RuntimeUsesFallbackForLegacyClientSet(t *testing.T) {
 	}
 	if fallback.generateCalls.Load() != 1 {
 		t.Fatalf("fallback calls = %d, want 1", fallback.generateCalls.Load())
+	}
+}
+
+func TestSnapshotQueryServiceFallsBackToSnapshotV1Runtime(t *testing.T) {
+	v1Runtime := &recordingV1Runtime{}
+	application, err := app.New(context.Background(), app.Options{
+		InitialConfig: runtimeConfig(t),
+		Builder:       app.SnapshotBuilder{},
+		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
+			return &snapshotClients{v1Runtime: v1Runtime}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("app.New() error = %v", err)
+	}
+	defer application.Close(context.Background())
+	service := &snapshotQueryService{application: application}
+	if _, err := service.Execute(context.Background(), llm.QueryRequestV1{}); err != nil {
+		t.Fatalf("snapshot query fallback error = %v", err)
+	}
+	if v1Runtime.queryCalls.Load() != 1 {
+		t.Fatalf("v1 QueryV1 calls = %d, want 1", v1Runtime.queryCalls.Load())
 	}
 }

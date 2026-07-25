@@ -248,7 +248,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if isV1RuntimeConfigured(initialV1Runtime) {
 		workerV1Runtime = &snapshotV1Runtime{application: application, fallback: options.V1Runtime}
 	}
-	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, workerV1Runtime, &snapshotQueryService{application: application})
+	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, workerV1Runtime, &snapshotQueryService{application: application, fallback: workerV1Runtime})
 	worker, err := app.NewWorker(app.WorkerOptions{
 		Client:                         temporalClient,
 		TaskQueue:                      configuration.Temporal.TaskQueue,
