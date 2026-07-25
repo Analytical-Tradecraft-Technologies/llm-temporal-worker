@@ -44,8 +44,11 @@ prompt/provider state.
 
 This slice intentionally does not construct clients or claim that V1 is
 production-complete. Concrete Redis/PostgreSQL/provider ports, snapshot
-factory wiring, the distinct Compact runner, and the query-only control-plane
-service remain required before `UnconfiguredV1Runtime` can be replaced.
+factory wiring, and the query-only control-plane service remain required
+before `UnconfiguredV1Runtime` can be replaced. The distinct Compact
+orchestration seam is recorded in [ADR 0013](0013-durable-compact-phase-runner.md);
+its concrete storage/provider composition and protected integration evidence
+remain pending.
 
 ## Evidence
 
