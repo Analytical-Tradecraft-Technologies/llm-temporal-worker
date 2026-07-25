@@ -24,6 +24,9 @@ var ErrProviderStatusNotFound = errors.New("provider route status not found")
 type ProviderStatusRepository struct {
 	Pool      *pgxpool.Pool
 	Namespace Namespace
+	// Observer is optional. When absent, PersistStatusEvent uses the metrics
+	// collector bound to its Activity context, if any.
+	Observer ProviderStatusObserver
 }
 
 // providerStatusTestHooks coordinate the deterministic missing-row race test
@@ -106,8 +109,11 @@ func (repository ProviderStatusRepository) persistStatusEvent(ctx context.Contex
 		hooks.beforeRouteLock(event)
 	}
 	lockKey := providerRouteAdvisoryLockKey(repository.Namespace, event.ConfigDigest, event.RouteID)
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey); err != nil {
-		return false, redactPostgresError(fmt.Errorf("lock provider route projection: %w", err))
+	lockStarted := time.Now()
+	_, lockErr := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", lockKey)
+	repository.observeProviderStatusLock(ctx, lockStarted)
+	if lockErr != nil {
+		return false, redactPostgresError(fmt.Errorf("lock provider route projection: %w", lockErr))
 	}
 
 	var eventID int64
