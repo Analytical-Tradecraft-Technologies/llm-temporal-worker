@@ -415,10 +415,13 @@ explicit preloaded-Lua compatibility mode. It tests:
 - same timestamp, boundary timestamp, clock rollback, and expiry;
 - refunds tied to original bucket and underestimation excess;
 - ambiguous reservation retention;
-- Redis timeout after mutation followed by read resolution;
+- deterministic lost-reply contracts after `Begin`, `Complete`, `Fail`, and
+  `Continue`, resolved by reading the operation record; the live Redis gate
+  exercises the same `Begin` path against the provisioned daemon;
 - Function version/digest mismatch;
 - continuation immutable branching, MAC/tenant/digest checks, BlobRefs, and
-  namespace isolation across prefix/hash-tag/key-secret changes;
+  namespace isolation across prefix/hash-tag/key-secret changes, and a lost
+  `PutChild` reply resolved by its operation-idempotency index;
 - every worker-owned Redis key family, including throttles and budget
   generation/Stream coordination, retains the configured literal hash tag;
 - continuation record, handle-index, and child operation-idempotency TTLs,
