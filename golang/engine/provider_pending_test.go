@@ -173,6 +173,24 @@ func TestPollProviderOperationRejectsChangedProviderIdentity(t *testing.T) {
 	}
 }
 
+func TestPollProviderOperationRejectsMalformedPendingResult(t *testing.T) {
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{
+		State:    provider.ResumablePending,
+		Dispatch: provider.DispatchAccepted,
+	}}}
+	_, err := PollProviderOperation(context.Background(), adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
+	if err == nil {
+		t.Fatal("pending result without a provider operation id was accepted")
+	}
+	mapped, ok := err.(*provider.Error)
+	if !ok || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+		t.Fatalf("error = %#v, want ambiguous non-retryable invalid response", err)
+	}
+	if adapter.submits != 0 || adapter.polls != 1 {
+		t.Fatalf("provider calls = submits:%d polls:%d, want no submit and one poll", adapter.submits, adapter.polls)
+	}
+}
+
 func TestPollProviderOperationRejectsChangedTerminalIdentity(t *testing.T) {
 	cases := []provider.ResumableState{provider.ResumableCompleted, provider.ResumableFailed}
 	for _, state := range cases {

@@ -155,6 +155,12 @@ it for resumption. This is a bounded encrypted-identifier integrity proof; it
 does not replace the engine's no-resubmission test, a full backup/restore drill,
 or a live provider contract.
 
+`TestPollProviderOperationRejectsMalformedPendingResult` covers the engine side
+of that boundary: a resumed poll that returns a pending state without its
+provider operation ID is treated as an ambiguous provider protocol failure.
+The engine performs no submit or retry, so malformed durable provider state
+cannot turn into a duplicate provider request.
+
 The staged Redis/PostgreSQL/conversation work has an unimplemented
 [production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
 whose phase/status authority is centralized in
