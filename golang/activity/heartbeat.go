@@ -73,25 +73,37 @@ func (heartbeater *TemporalHeartbeater) Beat(ctx context.Context, progress engin
 	if heartbeater == nil {
 		return nil
 	}
+	// Use one observation timestamp for the lifecycle update and the age
+	// metric. The metric is the age of the most recent event, not the elapsed
+	// duration of the Activity since its first heartbeat.
+	now := heartbeater.now()
 	heartbeater.mu.Lock()
 	if heartbeater.started.IsZero() {
 		heartbeater.started = progress.At
 		if heartbeater.started.IsZero() {
-			heartbeater.started = heartbeater.now()
+			heartbeater.started = now
 		}
 	}
 	started := heartbeater.started
 	heartbeater.mu.Unlock()
 	last := progress.At
 	if last.IsZero() {
-		last = heartbeater.now()
+		last = now
 	}
 	details := normalizeHeartbeatProgress(progress, started, last)
 	if heartbeater.metrics != nil {
-		heartbeater.metrics.SetHeartbeatAge(details.LastEventAt.Sub(details.StartedAt))
+		heartbeater.metrics.SetHeartbeatAge(nonNegativeHeartbeatAge(now, details.LastEventAt))
 	}
 	sdkactivity.RecordHeartbeat(ctx, details)
 	return ctx.Err()
+}
+
+func nonNegativeHeartbeatAge(now, eventAt time.Time) time.Duration {
+	age := now.Sub(eventAt)
+	if age < 0 {
+		return 0
+	}
+	return age
 }
 
 func normalizeHeartbeatProgress(progress engine.Progress, started, last time.Time) HeartbeatDetails {

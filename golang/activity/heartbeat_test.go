@@ -1,11 +1,13 @@
 package activity
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"go.temporal.io/sdk/testsuite"
 )
 
 func TestNormalizeHeartbeatProgressBoundsProviderControlledFacts(t *testing.T) {
@@ -55,4 +57,42 @@ func TestNormalizeHeartbeatProgressClampsEventOrder(t *testing.T) {
 	if !got.LastEventAt.Equal(started.Add(48 * time.Hour)) {
 		t.Fatalf("valid long-running timestamp = %s, want %s", got.LastEventAt, started.Add(48*time.Hour))
 	}
+}
+
+func TestTemporalHeartbeaterRecordsAgeSinceMostRecentEvent(t *testing.T) {
+	now := time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC)
+	metrics := &heartbeatAgeRecorder{}
+	heartbeater := NewTemporalHeartbeater(TemporalHeartbeaterOptions{
+		Clock:   func() time.Time { return now },
+		Metrics: metrics,
+	})
+
+	var suite testsuite.WorkflowTestSuite
+	environment := suite.NewTestActivityEnvironment()
+	beat := func(ctx context.Context, progress engine.Progress) error {
+		return heartbeater.Beat(ctx, progress)
+	}
+	environment.RegisterActivity(beat)
+	_, err := environment.ExecuteActivity(beat, engine.Progress{Phase: "planning", At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.age != 0 {
+		t.Fatalf("initial heartbeat age = %s, want zero", metrics.age)
+	}
+
+	now = now.Add(4 * time.Second)
+	_, err = environment.ExecuteActivity(beat, engine.Progress{Phase: "provider_wait", At: now.Add(-time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.age != time.Second {
+		t.Fatalf("most recent heartbeat age = %s, want 1s", metrics.age)
+	}
+}
+
+type heartbeatAgeRecorder struct{ age time.Duration }
+
+func (recorder *heartbeatAgeRecorder) SetHeartbeatAge(age time.Duration) {
+	recorder.age = age
 }
