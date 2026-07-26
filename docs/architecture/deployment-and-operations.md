@@ -225,7 +225,9 @@ Metric labels use bounded configured IDs, never tenant-provided free text:
 - `llmtw_continuation_total{decision}`;
 - `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
-- `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat);
+- `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat,
+  updated when a heartbeat is emitted; it is not Activity elapsed duration and
+  may remain unchanged between heartbeats);
 - `llmtw_maintenance_rows_total{resource,outcome}` and
   `llmtw_maintenance_failures_total{resource}` for bounded eligible,
   tombstoned, deleted, skipped, and failed passes;
