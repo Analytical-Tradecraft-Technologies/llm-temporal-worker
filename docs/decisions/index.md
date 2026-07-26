@@ -20,3 +20,4 @@ than silent divergence or knowingly faithful implementation of a defect.
 11. [Durable Generate phase runner](0011-durable-generate-phase-runner.md)
 12. [Snapshot-scoped v1 runtime source](0012-snapshot-scoped-v1-runtime-source.md)
 13. [Durable Compact phase runner](0013-durable-compact-phase-runner.md)
+14. [Reference budget materializer](0014-reference-budget-materializer.md)
