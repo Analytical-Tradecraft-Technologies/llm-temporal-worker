@@ -53,7 +53,9 @@ preloaded script, but neither mode lets the runtime load, replace, or rewrite
 shared Redis code. A transport error is never retried blindly; the caller reads
 the operation or continuation index to resolve whether the write committed.
 Offline command/function harnesses exercise the same store ports without
-requiring a Redis daemon. `storage/conformance` then runs the same public
+requiring a Redis daemon, including lost replies after admission terminal and
+continuation mutations and immutable child creation. `storage/conformance` then
+runs the same public
 admission and continuation contract against memory and the pinned live Redis
 fixture in both Function mode and the explicitly configured preloaded-Lua
 compatibility mode. `make redis-integration` creates one uniquely named
