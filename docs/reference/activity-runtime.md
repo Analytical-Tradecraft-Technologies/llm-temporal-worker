@@ -143,6 +143,13 @@ lease. A zero or partial port set remains fail-closed; this adapter is a bridge
 to the durable composition, not evidence that deployment wiring has been
 completed.
 
+The Activity integration tests compose this wrapper with in-process phase
+ports and assert the complete one-shot order for both Generate and Compact,
+including replay, cache, route, Redis reservation, PostgreSQL journal,
+provider dispatch, finalization, and Redis reconciliation. These tests verify
+the boundary wiring without claiming protected live-provider or deployment
+evidence; those gates still require the release workflow's credentialed runs.
+
 The boundary is one-shot by design. It does not register or dispatch
 `llm.StreamingEngine`, token events, or provider stream decoders. Provider
 fragment decoders remain parser-regression code only.
