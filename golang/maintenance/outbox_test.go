@@ -34,6 +34,52 @@ func TestNormalizeSafePayloadBoundsAndCanonicalizes(t *testing.T) {
 	}
 }
 
+func TestDeleteBlobPayloadIsTypedAndBoundToAggregate(t *testing.T) {
+	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	event := testBlobEvent(t, "typed", at)
+
+	tests := []struct {
+		name    string
+		payload string
+		wantErr string
+	}{
+		{name: "unknown field", payload: `{"blob_id":"blob-typed","prompt":"never persist this"}`, wantErr: "unknown field"},
+		{name: "mismatched aggregate", payload: `{"blob_id":"other-blob"}`, wantErr: "match aggregate"},
+		{name: "missing identifier", payload: `{}`, wantErr: "blob_id is required"},
+		{name: "trailing value", payload: `{"blob_id":"blob-typed"} false`, wantErr: "trailing"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := event
+			candidate.SafePayload = json.RawMessage(test.payload)
+			err := candidate.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Validate(%s) error=%v, want substring %q", test.payload, err, test.wantErr)
+			}
+		})
+	}
+
+	// Non-canonical key order is still accepted: validation checks the typed
+	// contract while Publish/Claim canonicalize the representation for dedupe.
+	valid := event
+	valid.SafePayload = json.RawMessage(`{ "blob_id": "blob-typed" }`)
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid reordered delete-blob payload rejected: %v", err)
+	}
+
+	wrongAggregateType := event
+	wrongAggregateType.AggregateType = "provider_state"
+	if err := wrongAggregateType.Validate(); err == nil || !strings.Contains(err.Error(), "aggregate type") {
+		t.Fatalf("wrong aggregate type accepted: %v", err)
+	}
+
+	reserved := event
+	reserved.Kind = EventRefreshInventory
+	if err := reserved.Validate(); err == nil || !strings.Contains(err.Error(), "typed payload contract") {
+		t.Fatalf("untyped reserved event accepted: %v", err)
+	}
+}
+
 func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	event := testBlobEvent(t, "event-1", at)
@@ -55,6 +101,7 @@ func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	conflict := event
 	conflict.ID = "event-2"
 	conflict.AggregateID = "different"
+	conflict.SafePayload = json.RawMessage(`{"blob_id":"different"}`)
 	if err := store.Publish(context.Background(), conflict); !errors.Is(err, ErrOutboxConflict) {
 		t.Fatalf("expected dedupe conflict, got %v", err)
 	}
