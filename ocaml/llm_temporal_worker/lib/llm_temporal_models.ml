@@ -32,6 +32,7 @@ module Query_execution_id = Identifier.Query_execution_id
 module Budget_policy_key = Identifier.Budget_policy_key
 module Budget_generation_id = Identifier.Budget_generation_id
 module Provider_model_id = Identifier.Provider_model_id
+module Model_prefix = Identifier.Model_prefix
 module Window_key = Identifier.Window_key
 module Checkpoint = Identifier.Checkpoint
 module Query_cursor = Identifier.Query_cursor
@@ -356,7 +357,7 @@ type provider_status_filter = {
 type model_inventory_filter = {
   provider : Provider_id.t option;
   endpoint : Endpoint_id.t option;
-  model_prefix : string option;
+  model_prefix : Model_prefix.t option;
   lifecycle : model_lifecycle option;
   refresh_if_older_than_seconds : int64 option;
   page_size : int;

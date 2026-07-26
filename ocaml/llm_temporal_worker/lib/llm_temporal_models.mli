@@ -113,6 +113,7 @@ module Query_execution_id : Opaque_identifier
 module Budget_policy_key : Opaque_identifier
 module Budget_generation_id : Opaque_identifier
 module Provider_model_id : Opaque_identifier
+module Model_prefix : Opaque_identifier
 module Window_key : Opaque_identifier
 module Checkpoint : sig
   type t = private string
@@ -245,7 +246,7 @@ module Safe_metadata : sig
 end
 
 type provider_status_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; availability : availability option; include_healthy : bool; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
-type model_inventory_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; model_prefix : string option; lifecycle : model_lifecycle option; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
+type model_inventory_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; model_prefix : Model_prefix.t option; lifecycle : model_lifecycle option; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
 type credit_status_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; include_ok : bool; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
 type budget_status_filter = { policy_key : Budget_policy_key.t option; active_at : Ptime.t option; include_windows : bool }
 type spend_summary_filter = { start_time : Ptime.t; end_time : Ptime.t; group_by : spend_group_by list; operation_kinds : operation_kind list }
