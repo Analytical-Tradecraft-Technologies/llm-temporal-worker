@@ -419,6 +419,8 @@ explicit preloaded-Lua compatibility mode. It tests:
 - Function version/digest mismatch;
 - continuation immutable branching, MAC/tenant/digest checks, BlobRefs, and
   namespace isolation across prefix/hash-tag/key-secret changes;
+- every worker-owned Redis key family, including throttles and budget
+  generation/Stream coordination, retains the configured literal hash tag;
 - continuation record, handle-index, and child operation-idempotency TTLs,
   plus expired-index versus dangling-index fail-closed behavior.
 
