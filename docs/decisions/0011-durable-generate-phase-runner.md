@@ -46,7 +46,19 @@ committed the response but Redis completion is still pending; the runner
 validates its operation, generation, reservation, and response identities,
 reconciles it, and only then returns the committed response. Ports must be
 idempotent across Activity retries and must not log or serialize raw
-prompt/provider state.
+prompt/provider state. The runner checks the Activity context after each
+read/decision/routing callback and before the first paid admission, and again
+before reconciliation after finalization. A port may finish concurrently with
+Activity cancellation, so an entry-only check could otherwise continue into
+another pre-dispatch side effect or return a cache/finalization result as a
+success. Automatic Compact is a committed child boundary: cancellation after
+that child returns stops before the parent Generate admission so a retry can
+reuse the child. Once Redis accepts a reservation or a provider dispatch
+returns, this slice deliberately leaves the existing journal/finalization
+behavior unchanged; it does not claim compensation or cancellation-safe
+cleanup for those committed boundaries. The guard returns the context error
+directly where it is safe to stop, preserving Temporal cancellation/deadline
+handling without making already-committed state disappear.
 
 This slice intentionally does not construct clients or claim that V1 is
 production-complete. Concrete Redis/PostgreSQL/provider ports, snapshot
@@ -64,5 +76,7 @@ remain pending.
   short-circuiting and replay-child invariants, pre-dispatch fail-closed
   behavior, identity mismatches, and retryable reconciliation failure, including
   replay of a finalized response with pending Redis reconciliation without a
-  second provider dispatch.
+  second provider dispatch. Its cancellation tests cover the pre-dispatch
+  phase boundaries, prove cancellation after Compact stops before parent
+  admission, and cover the post-finalization reconciliation handoff.
 - `make -C golang test` passes with the runner included.

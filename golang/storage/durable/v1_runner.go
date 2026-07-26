@@ -223,6 +223,9 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("replay", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
+	}
 	if replay.ReconciliationPending != nil {
 		pending := replay.ReconciliationPending
 		if err := validateGeneratePendingReconciliation(request, *pending); err != nil {
@@ -234,6 +237,9 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		// result from a mixed snapshot.
 		if replay.Completed != nil && replay.Completed.OperationID != pending.Finalization.Response.OperationID {
 			return llm.GenerateResponseV1{}, stageError("replay", errors.New("completed response does not match pending reconciliation"))
+		}
+		if err := contextErr(ctx); err != nil {
+			return llm.GenerateResponseV1{}, err
 		}
 		if err := ports.Reconcile(ctx, request, pending.Route, pending.Reservation, pending.Finalization); err != nil {
 			return llm.GenerateResponseV1{}, generateReconciliationError(pending.Route, err)
@@ -250,8 +256,14 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("cache lookup", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
+	}
 	if err := decision.Validate(); err != nil {
 		return llm.GenerateResponseV1{}, stageError("cache decision", err)
+	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
 	}
 	if decision.Disposition == CacheHit {
 		finalization, err := ports.FinalizeCache(ctx, request, replay, decision)
@@ -261,6 +273,9 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		if err := validateGenerateCacheFinalization(request, decision, finalization); err != nil {
 			return llm.GenerateResponseV1{}, stageError("cache finalization", err)
 		}
+		if err := contextErr(ctx); err != nil {
+			return llm.GenerateResponseV1{}, err
+		}
 		return finalization.Response, nil
 	}
 
@@ -268,21 +283,36 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("compaction decision", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
+	}
 	if compaction.Required {
 		if ports.Compact == nil {
 			return llm.GenerateResponseV1{}, stageError("compaction", fmt.Errorf("%w: compact port is required", ErrV1PortsInvalid))
+		}
+		if err := contextErr(ctx); err != nil {
+			return llm.GenerateResponseV1{}, err
 		}
 		replay, err = ports.Compact(ctx, request, replay)
 		if err != nil {
 			return llm.GenerateResponseV1{}, stageError("compaction", err)
 		}
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
+	}
 	route, err := ports.Route(ctx, request, replay, compaction)
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("route", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
+	}
 	if err := route.Validate(); err != nil {
 		return llm.GenerateResponseV1{}, stageError("route", err)
+	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
 	}
 	reservation, err := ports.Reserve(ctx, request, route)
 	if err != nil {
@@ -315,10 +345,29 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err := validateGenerateFinalization(request, route.OperationID, finalization); err != nil {
 		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.GenerateResponseV1{}, err
+	}
 	if err := ports.Reconcile(ctx, request, route, reservation, finalization); err != nil {
 		return llm.GenerateResponseV1{}, generateReconciliationError(route, err)
 	}
 	return finalization.Response, nil
+}
+
+// contextErr is checked at safe phase boundaries. A read/decision/routing port
+// may return after cancellation (for example, after an I/O operation races
+// Activity shutdown), so checking only at runner entry is insufficient. The
+// guard deliberately returns the context error directly so Temporal observes
+// cancellation/deadline semantics rather than a wrapped application failure.
+// A completed Compact child is treated as durable and retry-reusable, so its
+// cancellation boundary is before parent admission. After Redis admission or
+// provider dispatch this runner adds no new cancellation exit; compensation
+// and outcome recovery remain concrete-port responsibilities.
+func contextErr(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	return ctx.Err()
 }
 
 func validateReservationForRequest(request llm.GenerateRequestV1, route RoutePlan, reservation ReserveResult) error {

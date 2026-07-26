@@ -140,6 +140,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	if err != nil {
 		return llm.CompactResponseV1{}, stageError("compact replay", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, err
+	}
 	if replay.ReconciliationPending != nil {
 		pending := replay.ReconciliationPending
 		if err := validateCompactPendingReconciliation(request, *pending); err != nil {
@@ -147,6 +150,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		}
 		if replay.Completed != nil && replay.Completed.OperationID != pending.Finalization.Response.OperationID {
 			return llm.CompactResponseV1{}, stageError("compact replay", errors.New("completed response does not match pending reconciliation"))
+		}
+		if err := contextErr(ctx); err != nil {
+			return llm.CompactResponseV1{}, err
 		}
 		if err := ports.Reconcile(ctx, request, pending.Route, pending.Reservation, pending.Finalization); err != nil {
 			return llm.CompactResponseV1{}, compactReconciliationError(pending.Route, err)
@@ -170,6 +176,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	if err := cache.Validate(); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact cache decision", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, err
+	}
 	if cache.Disposition == CacheHit {
 		finalization, err := ports.FinalizeCache(ctx, request, replay, cache)
 		if err != nil {
@@ -190,15 +199,27 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		if err := validateWorkerCacheProvenance(finalization.Response.Provenance); err != nil {
 			return llm.CompactResponseV1{}, stageError("compact cache finalization", err)
 		}
+		if err := contextErr(ctx); err != nil {
+			return llm.CompactResponseV1{}, err
+		}
 		return finalization.Response, nil
 	}
 
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, err
+	}
 	route, err := ports.Route(ctx, request, replay)
 	if err != nil {
 		return llm.CompactResponseV1{}, stageError("compact route", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, err
+	}
 	if err := route.Validate(); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact route", err)
+	}
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, err
 	}
 	reservation, err := ports.Reserve(ctx, request, route)
 	if err != nil {
@@ -231,6 +252,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	}
 	if err := validateCompactResponse(request, route.OperationID, finalization.Response); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact PostgreSQL finalization", err)
+	}
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, err
 	}
 	if err := ports.Reconcile(ctx, request, route, reservation, finalization); err != nil {
 		return llm.CompactResponseV1{}, compactReconciliationError(route, err)

@@ -45,6 +45,16 @@ project scope. When finalization has already committed but Redis reconciliation
 is pending, replay carries the finalized identities and retries reconciliation
 without dispatching the summarizer again.
 
+The runner checks the Activity context after each read/decision/routing port
+returns and before the first paid admission, and again before reconciliation
+after finalization. This closes the race where a storage call finishes
+concurrently with Activity cancellation without adding a new exit after an
+accepted Redis reservation or known summarizer result. Post-admission
+cancellation cleanup remains the existing port/recovery contract; this slice
+does not claim compensation. The context error is returned directly where it
+is safe to stop so Temporal preserves its cancellation/deadline semantics; this
+does not roll back state already committed by a completed port.
+
 The runner does not construct Redis/PostgreSQL clients, select a provider, or
 claim that the production factory is wired. Provider adapters remain
 responsible for generic/native compaction policy, plain-text/tool isolation,
@@ -59,7 +69,8 @@ replaced.
 - `golang/storage/durable/compact_runner_test.go` covers normal ordering,
   completed replay, cache-hit child finalization, pre-dispatch fail-closed
   behavior, reservation/reconciliation retry mapping, pending reconciliation
-  recovery, materialized scope validation, and identity/variant rejection.
+  recovery, materialized scope validation, identity/variant rejection, and
+  cancellation at the pre-dispatch and post-finalization boundaries.
 - The existing `llm.CompactRequestV1`/`llm.CompactResponseV1` wire contracts
   and `compaction` package remain the authority for policy and provider-input
   isolation.
