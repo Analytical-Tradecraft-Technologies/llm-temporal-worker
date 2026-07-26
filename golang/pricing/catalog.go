@@ -20,6 +20,24 @@ type Catalog struct {
 	Digest  [32]byte
 }
 
+// Validate verifies that a catalog is a complete, compiled USD snapshot.
+// Catalog values are immutable once published; the compiled digest is part of
+// the audit identity and must match the entries before a resolver accepts a
+// replacement.
+func (catalog Catalog) Validate() error {
+	compiled, err := CompileUSD(catalog.Version, catalog.Entries)
+	if err != nil {
+		return err
+	}
+	if catalog.Digest == ([32]byte{}) {
+		return errors.New("pricing catalog compiled digest is required")
+	}
+	if catalog.Digest != compiled.Digest {
+		return fmt.Errorf("pricing catalog compiled digest does not match entries")
+	}
+	return nil
+}
+
 // CompileUSD compiles the public USD-only catalog contract. Currency is not
 // part of the API or canonical digest: every DecimalUSD price is USD by
 // contract, and a non-USD source must be rejected before this boundary.
@@ -102,14 +120,34 @@ type PriceResolver struct {
 
 func NewResolver(catalog Catalog) *PriceResolver {
 	resolver := &PriceResolver{}
-	resolver.catalog.Store(catalog)
+	// Initialize the atomic value even if defensive validation rejects the
+	// initial catalog. Resolve then fails closed instead of panicking on an
+	// uninitialized atomic.Value.
+	resolver.catalog.Store(Catalog{})
+	_ = resolver.ReloadValidated(catalog)
 	return resolver
 }
 
+// Reload publishes a verified USD catalog. The historical no-error signature
+// is retained for compatibility; invalid replacements are rejected and the
+// previous snapshot remains active. Call ReloadValidated when the caller
+// needs the validation error for diagnostics or metrics.
 func (resolver *PriceResolver) Reload(catalog Catalog) {
-	if resolver != nil {
-		resolver.catalog.Store(catalog)
+	_ = resolver.ReloadValidated(catalog)
+}
+
+// ReloadValidated atomically publishes catalog only after validating its
+// compiled USD digest. A failed validation never mutates the current
+// resolver snapshot.
+func (resolver *PriceResolver) ReloadValidated(catalog Catalog) error {
+	if resolver == nil {
+		return errors.New("price resolver is nil")
 	}
+	if err := catalog.Validate(); err != nil {
+		return fmt.Errorf("validate pricing catalog reload: %w", err)
+	}
+	resolver.catalog.Store(cloneCatalog(catalog))
+	return nil
 }
 
 func (resolver *PriceResolver) Resolve(query Query) (Quote, error) {
@@ -127,8 +165,18 @@ func (catalog Catalog) Resolve(query Query) (Quote, error) {
 	}
 	for _, entry := range catalog.Entries {
 		if entry.Provider == query.Provider && entry.Family == query.Family && entry.EndpointID == query.EndpointID && entry.Region == query.Region && entry.Model == query.Model && entry.ProviderTier == query.ProviderTier && entry.Active(when) {
+			entry.UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
 			return Quote{Entry: entry, CatalogVersion: catalog.Version, CatalogDigest: catalog.DigestHex()}, nil
 		}
 	}
 	return Quote{}, fmt.Errorf("%w for %s/%s/%s/%s/%s/%s", ErrNoActivePrice, query.Provider, query.Family, query.EndpointID, query.Region, query.Model, query.ProviderTier)
+}
+
+func cloneCatalog(catalog Catalog) Catalog {
+	entries := make([]Entry, len(catalog.Entries))
+	for index, entry := range catalog.Entries {
+		entries[index] = entry
+		entries[index].UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
+	}
+	return Catalog{Version: catalog.Version, Entries: entries, Digest: catalog.Digest}
 }

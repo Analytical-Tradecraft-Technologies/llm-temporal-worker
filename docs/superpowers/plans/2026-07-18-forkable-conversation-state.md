@@ -763,6 +763,8 @@ unit/integration coverage are present in
 `golang/internal/catalog`, `golang/internal/runtime`, and
 `golang/storage/postgres`. Protected deployment/release evidence remains
 tracked in the v1 catalog and is not implied by these offline tests.
+In-process resolver reloads also recheck the compiled digest and retain the
+last valid snapshot when a replacement fails validation.
 
 **Files:**
 
