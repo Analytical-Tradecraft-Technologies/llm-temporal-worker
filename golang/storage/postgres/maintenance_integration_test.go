@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,8 +62,8 @@ func TestMaintenanceOutboxFencesReclaimedLeaseAndDeduplicatesCompletion(t *testi
 	typeConflict := event
 	typeConflict.ID = uuid.New().String()
 	typeConflict.AggregateType = "provider_state"
-	if err := repository.PublishOutbox(ctx, typeConflict); !errors.Is(err, ErrMaintenanceOutboxConflict) {
-		t.Fatalf("aggregate-type dedupe conflict was accepted: %v", err)
+	if err := repository.PublishOutbox(ctx, typeConflict); err == nil || !strings.Contains(err.Error(), "aggregate type") {
+		t.Fatalf("invalid aggregate-type payload was accepted: %v", err)
 	}
 	first, err := repository.ClaimOutbox(ctx, maintenance.ClaimOptions{Now: now, Limit: 1, Lease: 10 * time.Minute})
 	if err != nil || len(first) != 1 {
