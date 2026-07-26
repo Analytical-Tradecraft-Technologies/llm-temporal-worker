@@ -19,8 +19,7 @@ func TestRenderRoleGrantsUsesLeastPrivilegeRuntimeCatalog(t *testing.T) {
 		t.Fatal("role ACL must not grant all table privileges")
 	}
 	for _, required := range []string{
-		`REVOKE ALL ON ALL TABLES IN SCHEMA "private" FROM llmtw_runtime;`,
-		`GRANT USAGE ON SCHEMA "private" TO llmtw_runtime;`,
+		`REVOKE ALL ON TABLE "private"."tenant_operations" FROM llmtw_runtime;`,
 		`GRANT SELECT, INSERT ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_runtime;`,
 		`GRANT SELECT, INSERT ON TABLE "private"."tenant_checkpoint_provider_state" TO llmtw_runtime;`,
 		`GRANT SELECT, INSERT ON TABLE "private"."tenant_checkpoint_provider_affinities" TO llmtw_runtime;`,
@@ -32,11 +31,24 @@ func TestRenderRoleGrantsUsesLeastPrivilegeRuntimeCatalog(t *testing.T) {
 		`GRANT UPDATE (response_digest) ON TABLE "private"."tenant_query_executions" TO llmtw_runtime;`,
 		`GRANT SELECT ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
 		`GRANT INSERT, UPDATE, DELETE ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
-		`GRANT USAGE ON ALL SEQUENCES IN SCHEMA "private" TO llmtw_runtime;`,
+		`GRANT USAGE ON SEQUENCE "private"."tenant_budget_journal_events_journal_id_seq" TO llmtw_runtime;`,
 	} {
 		if !strings.Contains(sql, required) {
 			t.Errorf("rendered role grants missing %q", required)
 		}
+	}
+	if strings.Contains(sql, "ON ALL TABLES") || strings.Contains(sql, "ON ALL SEQUENCES") {
+		t.Fatal("shared-schema role ACL must not sweep unrelated relations")
+	}
+	if strings.Contains(sql, `GRANT USAGE ON SCHEMA "private"`) {
+		t.Fatal("shared-schema role ACL must leave schema privileges to the operator")
+	}
+	owned, err := renderRoleGrants(namespace, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(owned, `GRANT USAGE ON SCHEMA "private" TO llmtw_runtime;`) {
+		t.Fatal("dedicated schema grants omitted runtime schema usage")
 	}
 
 	// Immutable checkpoint/provider records must never acquire destructive or

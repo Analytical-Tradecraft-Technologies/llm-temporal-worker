@@ -281,6 +281,10 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 		return fmt.Errorf("begin PostgreSQL schema install: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	schemaOwned, err := ensureSchema(ctx, tx, namespace)
+	if err != nil {
+		return err
+	}
 
 	relation, err := namespace.Render("schema_contract")
 	if err != nil {
@@ -303,7 +307,7 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 		// Role grants are deliberately reconciled on every idempotent install.
 		// This repairs a namespace installed by an older worker version without
 		// mutating any schema objects or changing the contract digest.
-		if err := grantRuntimeRoles(ctx, tx, namespace); err != nil {
+		if err := grantRuntimeRoles(ctx, tx, namespace, schemaOwned); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
@@ -314,16 +318,45 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 	if _, err := tx.Exec(ctx, sql); err != nil {
 		return fmt.Errorf("apply PostgreSQL schema migration: %w", err)
 	}
-	if err := renameGeneratedConstraints(ctx, tx, namespace); err != nil {
+	if err := renameGeneratedConstraints(ctx, tx, namespace, sql); err != nil {
 		return err
 	}
-	if err := grantRuntimeRoles(ctx, tx, namespace); err != nil {
+	if err := grantRuntimeRoles(ctx, tx, namespace, schemaOwned); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, "INSERT INTO "+relation+" (contract_name, contract_version, migration_digest) VALUES ($1, $2, $3)", ContractVersion, ContractVersion, digest[:]); err != nil {
 		return fmt.Errorf("record PostgreSQL schema contract: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// ensureSchema creates and locks down a worker-owned schema only when the
+// configured schema does not already exist. An existing schema may be shared
+// with Temporal or another application; changing its ACL would violate the
+// namespace boundary, so Install leaves shared-schema privileges to the
+// operator. A transaction-scoped advisory lock serializes first installation
+// without holding a PostgreSQL lock after the transaction commits.
+func ensureSchema(ctx context.Context, tx pgx.Tx, namespace Namespace) (bool, error) {
+	// The lock key is only coordination metadata. Schema names are validated
+	// before reaching this function and remain query parameters, never SQL.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", namespace.Schema); err != nil {
+		return false, fmt.Errorf("lock PostgreSQL schema installation: %w", err)
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)", namespace.Schema).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check PostgreSQL worker schema: %w", err)
+	}
+	if exists {
+		return false, nil
+	}
+	schema := namespace.SchemaIdentifier().Sanitize()
+	if _, err := tx.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		return false, fmt.Errorf("create PostgreSQL worker schema: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "REVOKE ALL ON SCHEMA "+schema+" FROM PUBLIC"); err != nil {
+		return false, fmt.Errorf("lock down PostgreSQL worker schema: %w", err)
+	}
+	return true, nil
 }
 
 func verifyDatabase(ctx context.Context, pool interface {
@@ -339,13 +372,17 @@ func verifyDatabase(ctx context.Context, pool interface {
 	return nil
 }
 
-func renameGeneratedConstraints(ctx context.Context, tx pgx.Tx, namespace Namespace) error {
+func renameGeneratedConstraints(ctx context.Context, tx pgx.Tx, namespace Namespace, migration string) error {
+	tables, _ := migrationObjectNames(migration, namespace)
+	if len(tables) == 0 {
+		return fmt.Errorf("PostgreSQL migration has no worker tables for constraint naming")
+	}
 	rows, err := tx.Query(ctx, `SELECT c.oid, c.conname, c.contype, t.relname
 FROM pg_constraint c
 JOIN pg_class t ON t.oid = c.conrelid
 JOIN pg_namespace n ON n.oid = t.relnamespace
-WHERE n.nspname = $1
-ORDER BY t.relname, c.conname`, namespace.Schema)
+WHERE n.nspname = $1 AND t.relname = ANY($2::text[])
+ORDER BY t.relname, c.conname`, namespace.Schema, tables)
 	if err != nil {
 		return fmt.Errorf("inspect PostgreSQL constraints: %w", err)
 	}
@@ -402,8 +439,8 @@ func constraintKind(kind string) string {
 	}
 }
 
-func grantRuntimeRoles(ctx context.Context, tx pgx.Tx, namespace Namespace) error {
-	statement, err := RenderRoleGrants(namespace)
+func grantRuntimeRoles(ctx context.Context, tx pgx.Tx, namespace Namespace, schemaOwned bool) error {
+	statement, err := renderRoleGrants(namespace, schemaOwned)
 	if err != nil {
 		return err
 	}
@@ -413,13 +450,24 @@ func grantRuntimeRoles(ctx context.Context, tx pgx.Tx, namespace Namespace) erro
 	return nil
 }
 
-// RenderRoleGrants renders the role ACL reconciliation applied by Install.
+// RenderRoleGrants renders the shared-schema-safe role ACL reconciliation
+// applied by Install. It never changes schema-wide privileges, so callers can
+// inspect or apply it when the worker shares a schema with Temporal.
 //
 // The runtime role is intentionally allow-listed. In particular, immutable
 // checkpoint/blob/provider/control records are append-only for the worker;
 // retention and other destructive operations belong to llmtw_maintenance.
 // The schema owner remains the only role that can create or alter objects.
 func RenderRoleGrants(namespace Namespace) (string, error) {
+	return renderRoleGrants(namespace, false)
+}
+
+// renderRoleGrants renders object-level ACL reconciliation. Existing/shared
+// schemas intentionally receive no schema-wide REVOKE or GRANT statements;
+// those would affect Temporal or another application's relations. When
+// schemaOwned is true, Install also grants schema USAGE to the two worker
+// roles after creating a fresh dedicated schema.
+func renderRoleGrants(namespace Namespace, schemaOwned bool) (string, error) {
 	if err := namespace.Validate(); err != nil {
 		return "", err
 	}
@@ -480,9 +528,14 @@ func RenderRoleGrants(namespace Namespace) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "DO $$\nBEGIN\n")
 	fmt.Fprintf(&b, "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'llmtw_runtime') THEN\n")
-	fmt.Fprintf(&b, "    REVOKE ALL ON ALL TABLES IN SCHEMA %s FROM llmtw_runtime;\n", schema)
-	fmt.Fprintf(&b, "    REVOKE ALL ON ALL SEQUENCES IN SCHEMA %s FROM llmtw_runtime;\n", schema)
-	fmt.Fprintf(&b, "    GRANT USAGE ON SCHEMA %s TO llmtw_runtime;\n", schema)
+	for _, table := range allTables {
+		if err := appendRoleRevoke(&b, namespace, table, "llmtw_runtime"); err != nil {
+			return "", err
+		}
+	}
+	if schemaOwned {
+		fmt.Fprintf(&b, "    GRANT USAGE ON SCHEMA %s TO llmtw_runtime;\n", schema)
+	}
 	for _, grant := range runtime {
 		if err := appendRoleGrant(&b, namespace, grant, "llmtw_runtime"); err != nil {
 			return "", err
@@ -490,13 +543,22 @@ func RenderRoleGrants(namespace Namespace) (string, error) {
 	}
 	// Identity columns are used by append-only event tables. USAGE is enough
 	// for INSERT and does not allow a worker to alter or restart a sequence.
-	fmt.Fprintf(&b, "    GRANT USAGE ON ALL SEQUENCES IN SCHEMA %s TO llmtw_runtime;\n", schema)
+	for _, sequence := range workerSequences {
+		if err := appendSequenceGrant(&b, namespace, sequence, "llmtw_runtime"); err != nil {
+			return "", err
+		}
+	}
 	fmt.Fprintf(&b, "  END IF;\n")
 
 	fmt.Fprintf(&b, "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'llmtw_maintenance') THEN\n")
-	fmt.Fprintf(&b, "    REVOKE ALL ON ALL TABLES IN SCHEMA %s FROM llmtw_maintenance;\n", schema)
-	fmt.Fprintf(&b, "    REVOKE ALL ON ALL SEQUENCES IN SCHEMA %s FROM llmtw_maintenance;\n", schema)
-	fmt.Fprintf(&b, "    GRANT USAGE ON SCHEMA %s TO llmtw_maintenance;\n", schema)
+	for _, table := range allTables {
+		if err := appendRoleRevoke(&b, namespace, table, "llmtw_maintenance"); err != nil {
+			return "", err
+		}
+	}
+	if schemaOwned {
+		fmt.Fprintf(&b, "    GRANT USAGE ON SCHEMA %s TO llmtw_maintenance;\n", schema)
+	}
 	for _, table := range allTables {
 		if err := appendRoleGrant(&b, namespace, roleGrant{table: table, privileges: "SELECT"}, "llmtw_maintenance"); err != nil {
 			return "", err
@@ -510,9 +572,18 @@ func RenderRoleGrants(namespace Namespace) (string, error) {
 			return "", err
 		}
 	}
-	fmt.Fprintf(&b, "    GRANT USAGE ON ALL SEQUENCES IN SCHEMA %s TO llmtw_maintenance;\n", schema)
+	for _, sequence := range workerSequences {
+		if err := appendSequenceGrant(&b, namespace, sequence, "llmtw_maintenance"); err != nil {
+			return "", err
+		}
+	}
 	fmt.Fprintf(&b, "  END IF;\nEND $$;\n")
 	return b.String(), nil
+}
+
+var workerSequences = []string{
+	"budget_journal_events_journal_id_seq",
+	"provider_status_events_event_id_seq",
 }
 
 type roleGrant struct {
@@ -526,5 +597,23 @@ func appendRoleGrant(b *strings.Builder, namespace Namespace, grant roleGrant, r
 		return err
 	}
 	fmt.Fprintf(b, "    GRANT %s ON TABLE %s TO %s;\n", grant.privileges, relation, role)
+	return nil
+}
+
+func appendRoleRevoke(b *strings.Builder, namespace Namespace, table, role string) error {
+	relation, err := namespace.Render(table)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(b, "    REVOKE ALL ON TABLE %s FROM %s;\n", relation, role)
+	return nil
+}
+
+func appendSequenceGrant(b *strings.Builder, namespace Namespace, logical, role string) error {
+	sequence, err := namespace.Render(logical)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(b, "    GRANT USAGE ON SEQUENCE %s TO %s;\n", sequence, role)
 	return nil
 }
