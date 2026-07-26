@@ -672,6 +672,13 @@ func (repository MaintenanceRepository) RetryOutbox(ctx context.Context, id stri
 	return repository.updateOutboxState(ctx, id, token, retriedAt, availableAt, "failed", false)
 }
 
+func outboxStateUpdateSQL(outboxTable string, completed bool) string {
+	if completed {
+		return "UPDATE " + outboxTable + " SET state = 'completed', lease_expires_at = NULL, completed_at = $3 WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > $3"
+	}
+	return "UPDATE " + outboxTable + " SET state = 'failed', lease_expires_at = NULL, available_at = $3, completed_at = NULL WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > $4"
+}
+
 func (repository MaintenanceRepository) updateOutboxState(ctx context.Context, id string, token maintenance.LeaseToken, at, availableAt time.Time, state string, completed bool) error {
 	if err := repository.validate(); err != nil {
 		return err
@@ -693,11 +700,15 @@ func (repository MaintenanceRepository) updateOutboxState(ctx context.Context, i
 	var query string
 	var args []any
 	if completed {
-		query = "UPDATE " + outboxTable + " SET state = 'completed', lease_expires_at = NULL, completed_at = $3 WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > clock_timestamp()"
+		// Compare the lease with the caller's bounded maintenance clock.  The
+		// in-memory contract and ClaimOutbox both use explicit timestamps; a
+		// database wall-clock check here would let a caller's deterministic
+		// clock advance past the lease without fencing the stale worker.
+		query = outboxStateUpdateSQL(outboxTable, true)
 		args = []any{outboxID, uuid.UUID(token), at}
 	} else {
-		query = "UPDATE " + outboxTable + " SET state = 'failed', lease_expires_at = NULL, available_at = $3, completed_at = NULL WHERE outbox_id = $1 AND lease_token = $2 AND state = 'processing' AND lease_expires_at > clock_timestamp()"
-		args = []any{outboxID, uuid.UUID(token), availableAt}
+		query = outboxStateUpdateSQL(outboxTable, false)
+		args = []any{outboxID, uuid.UUID(token), availableAt, at}
 	}
 	tag, err := repository.Pool.Exec(ctx, query, args...)
 	if err != nil {

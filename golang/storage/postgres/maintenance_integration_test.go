@@ -86,6 +86,13 @@ func TestMaintenanceOutboxFencesReclaimedLeaseAndDeduplicatesCompletion(t *testi
 	if err := repository.CompleteOutbox(ctx, event.ID, first[0].LeaseToken, time.Now().UTC()); !errors.Is(err, maintenance.ErrOutboxNotClaimed) {
 		t.Fatalf("stale claimant completed reclaimed row: %v", err)
 	}
+	// Lease ownership is evaluated against the caller's explicit maintenance
+	// clock, just like the storage-neutral outbox contract. Advancing that
+	// clock beyond the lease must fence the claimant even when the database
+	// wall clock has not advanced by the same amount.
+	if err := repository.CompleteOutbox(ctx, event.ID, second[0].LeaseToken, now.Add(11*time.Minute)); !errors.Is(err, maintenance.ErrOutboxNotClaimed) {
+		t.Fatalf("completion past explicit lease horizon was accepted: %v", err)
+	}
 	if err := repository.CompleteOutbox(ctx, event.ID, second[0].LeaseToken, time.Now().UTC()); err != nil {
 		t.Fatalf("current claimant completion failed: %v", err)
 	}

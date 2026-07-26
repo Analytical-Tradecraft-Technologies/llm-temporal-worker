@@ -85,6 +85,12 @@ transition so a duplicate completion/failure request with the same token is an
 idempotent success, while a different or expired token returns an ownership
 error.
 
+PostgreSQL evaluates lease expiry against the completion/retry timestamp
+supplied by the maintenance caller, not an implicit database wall clock. This
+keeps deterministic maintenance runs and the in-memory contract aligned: a
+caller whose bounded clock has passed the lease is fenced even if the database
+clock has not moved by the same amount.
+
 External deletion happens after the transaction commits. A missing object is
 success, so retries cannot turn an already-cleaned object into a permanent
 failure. Other handler failures move the event to `failed` with a bounded

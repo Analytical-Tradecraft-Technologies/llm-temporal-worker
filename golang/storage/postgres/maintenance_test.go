@@ -2,12 +2,24 @@ package postgres
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/maintenance"
 )
+
+func TestOutboxStateUpdateUsesCallerClockForLeaseFence(t *testing.T) {
+	completed := outboxStateUpdateSQL(`"llm_worker"."maintenance_outbox"`, true)
+	if strings.Contains(completed, "clock_timestamp()") || !strings.Contains(completed, "lease_expires_at > $3") {
+		t.Fatalf("completion update does not use caller timestamp: %s", completed)
+	}
+	retried := outboxStateUpdateSQL(`"llm_worker"."maintenance_outbox"`, false)
+	if strings.Contains(retried, "clock_timestamp()") || !strings.Contains(retried, "lease_expires_at > $4") {
+		t.Fatalf("retry update does not use caller timestamp: %s", retried)
+	}
+}
 
 func TestNewDeleteBlobOutboxEventUsesTypedContract(t *testing.T) {
 	now := time.Date(2026, 7, 26, 4, 0, 0, 0, time.UTC)
