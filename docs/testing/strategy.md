@@ -250,6 +250,13 @@ not claim that PostgreSQL/blob backup restore, Temporal crash-boundary injection
 or Redis generation rebuild has been exercised. Those remain integration gates
 in the production implementation plan.
 
+`state.TestScopedBlobReaderRejectsCorruptedPayload` complements the checkpoint
+replay tests by simulating an object-store restore that returns bytes different
+from the immutable locator digest. The scoped reader rejects the payload before
+decoding it, so a backup/restore exercise cannot silently materialize corrupted
+checkpoint state. This is a storage-reader integrity proof, not a substitute
+for the still-planned PostgreSQL, blob, and Redis backup/restore drill.
+
 `memory.TestContinuationStoreHundredWaySameKeyReplay` complements that graph
 test with a 100-way retry storm. Distinct operation keys must create 100
 independent immutable siblings, while 100 concurrent retries of one
