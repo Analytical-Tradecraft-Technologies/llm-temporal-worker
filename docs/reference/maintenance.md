@@ -97,6 +97,12 @@ failure. Other handler failures move the event to `failed` with a bounded
 retry time. `Dispatcher.RunOnce` processes one batch and reports claimed,
 completed, missing-object, and retried counts for metrics.
 
+Explicit blob IDs supplied by an outbox worker are also bounded to the
+maintenance batch maximum (10,000) and nil IDs are rejected before SQL is
+issued. The result limit still bounds claims from that list; bounding the
+input prevents a caller from constructing an arbitrarily large PostgreSQL
+array.
+
 The SQL adapter is deliberately separate from runtime repositories. It uses
 the namespace renderer for every relation and rejects unbounded limits,
 invalid leases, invalid identifiers, and malformed payloads before issuing

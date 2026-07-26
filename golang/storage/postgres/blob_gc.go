@@ -160,6 +160,18 @@ func (repository MaintenanceRepository) ClaimBlobDeletion(ctx context.Context, n
 	if err := validateBatch(now, limit); err != nil {
 		return nil, err
 	}
+	// Explicit outbox targets are still a maintenance input boundary.  The
+	// result limit bounds the number of rows claimed, but an unbounded ID list
+	// would otherwise let a caller construct an arbitrarily large PostgreSQL
+	// array and defeat the short, bounded maintenance contract.
+	if len(ids) > maxMaintenanceBatch {
+		return nil, fmt.Errorf("blob deletion ID list must contain at most %d IDs", maxMaintenanceBatch)
+	}
+	for _, id := range ids {
+		if id == uuid.Nil {
+			return nil, errors.New("blob deletion ID list contains a nil ID")
+		}
+	}
 	tables, err := repository.blobGCTables()
 	if err != nil {
 		return nil, err
