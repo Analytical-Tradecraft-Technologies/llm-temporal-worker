@@ -230,12 +230,20 @@ production recovery gates are complete.
 The same seam has a bounded scale regression in
 `state.TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks`. It publishes
 10,000 bounded turns, takes a materialized snapshot every 500 turns, forks one
-immutable parent into three concurrent children, and rebuilds a replacement
-graph from the published rows before replaying every branch. The snapshots are
-the storage-neutral artifact used by the compaction path; the test deliberately
-does not claim that PostgreSQL/blob backup restore, Temporal crash-boundary
-injection, or Redis generation rebuild has been exercised. Those remain
-integration gates in the production implementation plan.
+immutable parent into 100 concurrent children, and rebuilds a replacement graph
+from the published rows before replaying every branch. The snapshots are the
+storage-neutral artifact used by the compaction path; the test deliberately does
+not claim that PostgreSQL/blob backup restore, Temporal crash-boundary injection,
+or Redis generation rebuild has been exercised. Those remain integration gates
+in the production implementation plan.
+
+`memory.TestContinuationStoreHundredWaySameKeyReplay` complements that graph
+test with a 100-way retry storm. Distinct operation keys must create 100
+independent immutable siblings, while 100 concurrent retries of one
+parent/operation key must all return one elected child handle. This test also
+guards the in-process contract against the check-then-publish race that could
+otherwise mint duplicate branches; it is an offline storage contract and does
+not claim durable PostgreSQL or Temporal execution evidence.
 
 The storage-neutral Generate runner also has a deterministic crash-boundary
 contract in `TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit`. The

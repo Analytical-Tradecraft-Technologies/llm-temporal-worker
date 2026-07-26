@@ -123,12 +123,15 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 	if child.Depth > store.maxDepth {
 		return "", fmt.Errorf("continuation depth exceeds limit")
 	}
+	// Keep the operation-key lookup and publication in one critical section.
+	// A retry storm can call PutChild concurrently with the same parent and
+	// operation key; checking under RLock and publishing later allowed every
+	// caller to mint a different child before any caller populated byOp.
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	if request.OperationKey != "" {
 		operationKey := continuationOperationKey{tenant: parent.Tenant, parent: request.Parent, operation: request.OperationKey}
-		store.mu.RLock()
-		handle, exists := store.byOp[operationKey]
-		store.mu.RUnlock()
-		if exists {
+		if handle, exists := store.byOp[operationKey]; exists {
 			return handle, nil
 		}
 	}
@@ -137,14 +140,15 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 		return "", err
 	}
 	child.ID = handle
-	if _, err := store.put(state.Handle(handle), child); err != nil {
+	if err := child.Validate(store.clock()); err != nil {
+		return "", err
+	}
+	if _, err := store.putLocked(state.Handle(handle), child); err != nil {
 		return "", err
 	}
 	if request.OperationKey != "" {
 		operationKey := continuationOperationKey{tenant: child.Tenant, parent: request.Parent, operation: request.OperationKey}
-		store.mu.Lock()
 		store.byOp[operationKey] = state.Handle(handle)
-		store.mu.Unlock()
 	}
 	return state.Handle(handle), nil
 }
@@ -156,6 +160,10 @@ func (store *ContinuationStore) put(handle state.Handle, continuation state.Cont
 	continuation.ID = handle.String()
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	return store.putLocked(handle, continuation)
+}
+
+func (store *ContinuationStore) putLocked(handle state.Handle, continuation state.Continuation) (state.Handle, error) {
 	if existing, ok := store.records[handle]; ok {
 		if existing.value.TranscriptDigest == continuation.TranscriptDigest && existing.value.LastOperationID == continuation.LastOperationID {
 			return handle, nil
