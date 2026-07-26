@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,30 @@ func queryResponseForKind(request llm.QueryRequestV1) llm.QueryResponseV1 {
 }
 
 func stringPointer(value string) *string { return &value }
+
+func providerRouteRows(count int) []json.RawMessage {
+	rows := make([]json.RawMessage, count)
+	for index := range rows {
+		rows[index] = json.RawMessage(fmt.Sprintf(`{"route_id":"route-%d","provider":"provider","endpoint":"endpoint","availability":"available","observed_at":"2026-07-20T00:00:00Z","stale_after":"2026-07-21T00:00:00Z"}`, index))
+	}
+	return rows
+}
+
+func modelInventoryRows(count int) []json.RawMessage {
+	rows := make([]json.RawMessage, count)
+	for index := range rows {
+		rows[index] = json.RawMessage(fmt.Sprintf(`{"provider":"provider","endpoint":"endpoint","provider_model_id":"model-%d","lifecycle":"available","capabilities":[],"complete_snapshot":true}`, index))
+	}
+	return rows
+}
+
+func creditStatusRows(count int) []json.RawMessage {
+	rows := make([]json.RawMessage, count)
+	for index := range rows {
+		rows[index] = json.RawMessage(fmt.Sprintf(`{"provider":"provider","endpoint":"endpoint-%d","credit_state":"ok","billing_state":"ok","evidence_source":"unknown"}`, index))
+	}
+	return rows
+}
 
 func typedProviderRequest() QueryRequest {
 	return QueryRequest{
@@ -231,6 +256,48 @@ func TestQueryServiceDoesNotAuditInvalidResponse(t *testing.T) {
 	}
 	if called {
 		t.Fatal("audit callback ran for an invalid response")
+	}
+}
+
+func TestQueryServiceRejectsResponseRowsAboveRequestedPageSize(t *testing.T) {
+	tests := []struct {
+		kind   llm.QueryKind
+		result llm.QueryResult
+	}{
+		{kind: llm.QueryProviderStatus, result: llm.ProviderStatusPage{Routes: providerRouteRows(2)}},
+		{kind: llm.QueryModelInventory, result: llm.ModelInventoryPage{Models: modelInventoryRows(2)}},
+		{kind: llm.QueryCreditStatus, result: llm.CreditStatusPage{Endpoints: creditStatusRows(2)}},
+	}
+
+	for _, test := range tests {
+		t.Run(string(test.kind), func(t *testing.T) {
+			request := queryRequest()
+			request.Kind = test.kind
+			request.Query = json.RawMessage(`{"page_size":1}`)
+			service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+				response := queryResponseForKind(request)
+				response.Result = test.result
+				return response, nil
+			}), func(context.Context, Authorization) error { return nil })
+
+			if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page contains 2 rows; limit is 1") {
+				t.Fatalf("Execute() error = %v, want response page-size bound", err)
+			}
+		})
+	}
+}
+
+func TestQueryServiceAppliesDefaultResponsePageSize(t *testing.T) {
+	request := queryRequest()
+	request.Query = json.RawMessage(`{}`)
+	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		response := queryResponse(request)
+		response.Result = llm.ProviderStatusPage{Routes: providerRouteRows(101)}
+		return response, nil
+	}), func(context.Context, Authorization) error { return nil })
+
+	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page contains 101 rows; limit is 100") {
+		t.Fatalf("Execute() error = %v, want default response page-size bound", err)
 	}
 }
 

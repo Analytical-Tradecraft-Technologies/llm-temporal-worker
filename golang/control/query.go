@@ -381,20 +381,34 @@ func requestCursor(raw json.RawMessage) (string, bool, error) {
 	return cursor, true, nil
 }
 
-func validatePageSize(raw json.RawMessage) error {
+const (
+	defaultQueryPageSize = 100
+	maxQueryPageSize     = 1000
+)
+
+// queryPageSize returns the effective limit for a paginated query. Storage
+// adapters use the same 100-row default, but the Activity boundary must keep
+// this invariant even when a handler is supplied by a different composition
+// layer (or is accidentally misconfigured).
+func queryPageSize(raw json.RawMessage) (int, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
-		return fmt.Errorf("query object is invalid: %w", err)
+		return 0, fmt.Errorf("query object is invalid: %w", err)
 	}
 	value, ok := fields["page_size"]
 	if !ok {
-		return nil
+		return defaultQueryPageSize, nil
 	}
 	var pageSize int
-	if err := json.Unmarshal(value, &pageSize); err != nil || pageSize < 1 || pageSize > 1000 {
-		return fmt.Errorf("query page_size must be between 1 and 1000")
+	if err := json.Unmarshal(value, &pageSize); err != nil || pageSize < 1 || pageSize > maxQueryPageSize {
+		return 0, fmt.Errorf("query page_size must be between 1 and %d", maxQueryPageSize)
 	}
-	return nil
+	return pageSize, nil
+}
+
+func validatePageSize(raw json.RawMessage) error {
+	_, err := queryPageSize(raw)
+	return err
 }
 
 func queryHash(raw json.RawMessage) string {
@@ -432,5 +446,59 @@ func validateResponse(request llm.QueryRequestV1, response llm.QueryResponseV1) 
 	if _, err := json.Marshal(response); err != nil {
 		return fmt.Errorf("query response is invalid: %w", err)
 	}
+	if err := validateResponsePageSize(request, response); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateResponsePageSize keeps paginated results bounded at the Activity
+// boundary. A handler is an intentionally injectable seam, so relying solely
+// on storage repository limits would allow a misconfigured adapter to return a
+// larger page than the caller requested. Budget and spend are complete,
+// non-paginated snapshots and therefore have no page-size limit.
+func validateResponsePageSize(request llm.QueryRequestV1, response llm.QueryResponseV1) error {
+	if request.Kind == llm.QueryBudgetStatus || request.Kind == llm.QuerySpendSummary {
+		return nil
+	}
+	limit, err := queryPageSize(request.Query)
+	if err != nil {
+		return err
+	}
+	count, err := queryResponseRowCount(response)
+	if err != nil {
+		return err
+	}
+	if count > limit {
+		return fmt.Errorf("query response page contains %d rows; limit is %d", count, limit)
+	}
+	return nil
+}
+
+func queryResponseRowCount(response llm.QueryResponseV1) (int, error) {
+	switch result := response.Result.(type) {
+	case llm.ProviderStatusPage:
+		return len(result.Routes), nil
+	case *llm.ProviderStatusPage:
+		if result == nil {
+			return 0, fmt.Errorf("query response result is nil")
+		}
+		return len(result.Routes), nil
+	case llm.ModelInventoryPage:
+		return len(result.Models), nil
+	case *llm.ModelInventoryPage:
+		if result == nil {
+			return 0, fmt.Errorf("query response result is nil")
+		}
+		return len(result.Models), nil
+	case llm.CreditStatusPage:
+		return len(result.Endpoints), nil
+	case *llm.CreditStatusPage:
+		if result == nil {
+			return 0, fmt.Errorf("query response result is nil")
+		}
+		return len(result.Endpoints), nil
+	default:
+		return 0, fmt.Errorf("query response result has unexpected type")
+	}
 }
