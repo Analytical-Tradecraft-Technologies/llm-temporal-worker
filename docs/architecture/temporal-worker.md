@@ -253,6 +253,14 @@ The Activity converts common errors to Temporal Application Errors:
 | corrupt durable state | `llm_state_corrupt` | non-retryable and alert |
 
 Error details include operation ID, safe code, retry-after, and request ID only.
+The two correlation IDs are copied only when they are at most 128 bytes and
+contain no control characters; oversized or malformed values are omitted.
+Code, phase, and dispatch are closed allow-listed enums, with unknown values
+collapsed to the stable internal/finalize/not-dispatched facts. Retry hints are
+encoded as a non-negative millisecond integer (including a one-millisecond
+minimum for a positive sub-millisecond hint). No provider message, response
+body, arbitrary detail map, prompt, credential, or SDK object crosses this
+boundary.
 
 ## Worker lifecycle
 

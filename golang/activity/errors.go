@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 	"errors"
+	"unicode"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"go.temporal.io/sdk/temporal"
@@ -30,6 +31,61 @@ type SafeErrorDetails struct {
 	ProviderRequestID string `json:"provider_request_id,omitempty"`
 }
 
+const maxSafeErrorIdentifierBytes = 128
+
+// normalizeSafeErrorDetails is the last boundary before provider errors become
+// Temporal history. Provider adapters can observe upstream headers and
+// identifiers, so even fields that are useful for correlation must be bounded
+// and rejected when they contain control characters. Error classes and phases
+// are closed enums; unknown values collapse to a stable internal failure rather
+// than copying provider-controlled text into the payload.
+func normalizeSafeErrorDetails(err *provider.Error) SafeErrorDetails {
+	if err == nil {
+		return SafeErrorDetails{Code: string(provider.CodeInternal), Phase: string(provider.PhaseFinalize), Dispatch: string(provider.DispatchNotDispatched)}
+	}
+	code := err.Code
+	if !code.Valid() {
+		code = provider.CodeInternal
+	}
+	phase := err.Phase
+	if !phase.Valid() {
+		phase = provider.PhaseFinalize
+	}
+	dispatch := err.Dispatch
+	if !dispatch.Valid() {
+		dispatch = provider.DispatchNotDispatched
+	}
+	retryAfterMillis := int64(0)
+	if err.RetryAfter > 0 {
+		retryAfterMillis = err.RetryAfter.Milliseconds()
+		// A sub-millisecond duration is still a positive retry hint, but zero
+		// is reserved for an omitted detail by the wire contract.
+		if retryAfterMillis == 0 {
+			retryAfterMillis = 1
+		}
+	}
+	return SafeErrorDetails{
+		OperationID:       safeErrorIdentifier(err.OperationID),
+		Code:              string(code),
+		Phase:             string(phase),
+		Dispatch:          string(dispatch),
+		RetryAfterMillis:  retryAfterMillis,
+		ProviderRequestID: safeErrorIdentifier(err.Provider.RequestID),
+	}
+}
+
+func safeErrorIdentifier(value string) string {
+	if value == "" || len(value) > maxSafeErrorIdentifierBytes {
+		return ""
+	}
+	for _, runeValue := range value {
+		if unicode.IsControl(runeValue) {
+			return ""
+		}
+	}
+	return value
+}
+
 func ToTemporalError(err error) error {
 	if err == nil {
 		return nil
@@ -44,7 +100,7 @@ func ToTemporalError(err error) error {
 			return context.Canceled
 		}
 		typeName, nonRetryable := classify(providerErr)
-		details := SafeErrorDetails{OperationID: providerErr.OperationID, Code: string(providerErr.Code), Phase: string(providerErr.Phase), Dispatch: string(providerErr.Dispatch), RetryAfterMillis: providerErr.RetryAfter.Milliseconds(), ProviderRequestID: providerErr.Provider.RequestID}
+		details := normalizeSafeErrorDetails(providerErr)
 		message := stableMessage(typeName)
 		options := temporal.ApplicationErrorOptions{NonRetryable: nonRetryable, Details: []interface{}{details}}
 		if !nonRetryable && providerErr.RetryAfter > 0 {

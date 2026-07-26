@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -103,5 +104,63 @@ func TestErrorMappingHonorsCertifiedPreDispatchCancellationRetryNever(t *testing
 	}
 	if details.OperationID != canceled.OperationID || details.Code != string(provider.CodeCanceled) || details.Dispatch != string(provider.DispatchNotDispatched) {
 		t.Fatalf("safe details = %#v", details)
+	}
+}
+
+func TestErrorMappingBoundsProviderControlledDetails(t *testing.T) {
+	providerErr := provider.NewError(
+		provider.CodeProviderUnavailable,
+		provider.PhaseDispatch,
+		provider.DispatchRejected,
+		provider.RetryAfter,
+		"provider body must never enter Temporal history",
+	)
+	providerErr.OperationID = strings.Repeat("o", maxSafeErrorIdentifierBytes+1)
+	providerErr.Provider.RequestID = "request-id\nwith-control-data"
+	providerErr.RetryAfter = 500 * time.Microsecond
+
+	mapped := ToTemporalError(providerErr)
+	var application *temporal.ApplicationError
+	if !errors.As(mapped, &application) {
+		t.Fatalf("mapped error = %T %v, want application error", mapped, mapped)
+	}
+	var details SafeErrorDetails
+	if err := application.Details(&details); err != nil {
+		t.Fatal(err)
+	}
+	if details.OperationID != "" || details.ProviderRequestID != "" {
+		t.Fatalf("unsafe identifiers were copied into Temporal details: %#v", details)
+	}
+	if details.Code != string(provider.CodeProviderUnavailable) || details.Phase != string(provider.PhaseDispatch) || details.Dispatch != string(provider.DispatchRejected) {
+		t.Fatalf("closed error facts changed during normalization: %#v", details)
+	}
+	if details.RetryAfterMillis != 1 {
+		t.Fatalf("sub-millisecond retry hint = %d, want one millisecond minimum", details.RetryAfterMillis)
+	}
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > 512 {
+		t.Fatalf("safe error details are not bounded: %d bytes", len(encoded))
+	}
+}
+
+func TestErrorMappingCollapsesUnknownProviderEnums(t *testing.T) {
+	providerErr := provider.NewError(provider.Code("provider-controlled-code"), provider.Phase("provider-controlled-phase\nsecret"), provider.DispatchCertainty("provider-controlled-dispatch"), provider.RetryNever, "unsafe provider diagnostic")
+	mapped := ToTemporalError(providerErr)
+	var application *temporal.ApplicationError
+	if !errors.As(mapped, &application) {
+		t.Fatalf("mapped error = %T %v, want application error", mapped, mapped)
+	}
+	var details SafeErrorDetails
+	if err := application.Details(&details); err != nil {
+		t.Fatal(err)
+	}
+	if details.Code != string(provider.CodeInternal) || details.Phase != string(provider.PhaseFinalize) || details.Dispatch != string(provider.DispatchNotDispatched) {
+		t.Fatalf("unknown provider enums were copied into Temporal details: %#v", details)
+	}
+	if strings.Contains(application.Error(), "provider-controlled") || strings.Contains(application.Error(), "unsafe provider diagnostic") {
+		t.Fatalf("provider-controlled error text leaked: %v", application)
 	}
 }
