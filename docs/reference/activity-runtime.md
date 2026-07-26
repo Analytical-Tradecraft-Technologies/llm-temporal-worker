@@ -8,6 +8,18 @@ The worker registers three exact names on its configured Temporal task queue:
 | `llm.compact.v1` | `llm.CompactRequestV1` | `llm.CompactResponseV1` |
 | `llm.query.v1` | `llm.QueryRequestV1` | `llm.QueryResponseV1` |
 
+The Go adapter exposes these same bindings through
+`activity.V1ActivityDescriptors(taskQueue)`. Each descriptor carries the
+validated task-queue name, exact Activity name, and the typed input/output
+labels above; it rejects empty, control-character, whitespace, and oversized
+queues. `internal/app.NewWorker` validates this contract before adding any
+handler to the Temporal registry. The registry is still bound to one queue by
+the Temporal worker itself, so descriptors are an inspection and startup
+guard rather than a second payload codec. A configured v1 runtime registers
+all three descriptors in Generate/Compact/Query order; the checked-in
+development fixture may retain only the legacy Generate helper while the
+durable runtime is intentionally absent.
+
 The Activity adapter validates the closed JSON record and the configured
 application payload limit before calling the injected `activity.V1Runtime`.
 Responses are validated against the same limit before Temporal serialization;
@@ -112,6 +124,15 @@ worker uses `environment: development` only for parser/configuration/readiness
 checks; when the durable seam is absent it omits the v1 Activity registrations
 and cannot dispatch inference. It is not a development fallback for any other
 environment, and never silently falls back to the pre-release envelope.
+
+When a deployment has assembled the storage-neutral phase ports, it can wrap
+them with `activity.DurableV1Runtime`: Generate and Compact delegate to
+`storage/durable.GenerateV1` and `storage/durable.CompactV1`, while Query is an
+independent authorized callback. The wrapper owns no PostgreSQL, Redis, blob,
+provider, or credential clients and therefore cannot bypass the snapshot
+lease. A zero or partial port set remains fail-closed; this adapter is a bridge
+to the durable composition, not evidence that deployment wiring has been
+completed.
 
 The boundary is one-shot by design. It does not register or dispatch
 `llm.StreamingEngine`, token events, or provider stream decoders. Provider

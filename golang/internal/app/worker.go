@@ -95,7 +95,9 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 		if controller == nil || registry == nil {
 			return nil, fmt.Errorf("Temporal worker factory returned incomplete worker")
 		}
-		options.Activities.Register(registry)
+		if err := options.Activities.RegisterForTaskQueue(registry, options.TaskQueue); err != nil {
+			return nil, fmt.Errorf("register Temporal Activities: %w", err)
+		}
 		return controller, nil
 	}
 	controller, err := build()
