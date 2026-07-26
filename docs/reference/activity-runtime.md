@@ -160,15 +160,21 @@ repository, scoped blob-reader, and complete handle-materializer interfaces;
 PostgreSQL pools, credentials, encryption keys, and raw blob locators never
 cross the runtime boundary. A builder obtains it from the exported
 `runtime.CheckpointCapabilitiesSource` client-set interface rather than
-depending on a concrete client-set type. The default PostgreSQL factory
-supplies the repository but leaves the blob reader unconfigured until a
-deployment composes its scoped locator and object-store binding. The complete
-materializer is exposed only by a deployment-owned PostgreSQL closer after the
-repository, blob reader, encryption/key binding, and opaque-handle verifier are
-all available. A V1 builder must treat any missing capability as fail-closed;
-the runtime never fabricates an in-memory or unscoped substitute. This bundle
-is a composition input, not evidence that the durable Generate/Compact/Query
-runtime or provider dispatch is complete.
+depending on a concrete client-set type. `Validate()` permits an intentionally
+partial bundle for staged deployment but rejects a materializer that is missing
+either storage-neutral input. A builder that needs replay must call
+`RequireMaterializer()` and fail closed when the repository, scoped blob reader,
+or handle materializer is incomplete. The default PostgreSQL factory supplies
+the repository but leaves the blob reader unconfigured until a deployment
+composes its scoped locator and object-store binding. The complete materializer
+is exposed only by a deployment-owned PostgreSQL closer after the repository,
+blob reader, encryption/key binding, and opaque-handle verifier are all
+available. Private snapshot adapters erase concrete PostgreSQL/blob-reader
+types before publication so a capability consumer cannot recover a pool,
+locator, or key binding through a type assertion. The runtime never fabricates
+an in-memory or unscoped substitute. This bundle is a composition input, not
+evidence that the durable Generate/Compact/Query runtime or provider dispatch
+is complete.
 
 After a successful materializer read, the Activity seam performs a second,
 storage-neutral contract check before dispatch. The returned handle and scope

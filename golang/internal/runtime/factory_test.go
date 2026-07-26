@@ -210,6 +210,12 @@ func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
 	if checkpoints.Blobs != nil {
 		t.Fatal("default closer exposed an unconfigured checkpoint blob reader")
 	}
+	if err := checkpoints.Validate(); err != nil {
+		t.Fatalf("partial checkpoint capabilities failed optional validation: %v", err)
+	}
+	if err := checkpoints.RequireMaterializer(); err == nil {
+		t.Fatal("partial checkpoint capabilities unexpectedly satisfied materializer requirement")
+	}
 }
 
 type checkpointBlobReaderStub struct{}
@@ -249,10 +255,14 @@ func TestCheckpointCapabilitiesCopyTypedBundleFromPostgresCloser(t *testing.T) {
 	if capabilities.Repository == nil {
 		t.Fatal("checkpoint capability bundle omitted repository")
 	}
-	if capabilities.Blobs != reader {
-		t.Fatalf("checkpoint blob reader = %T, want supplied reader", capabilities.Blobs)
+	wrappedReader, ok := capabilities.Blobs.(snapshotCheckpointBlobReader)
+	if !ok {
+		t.Fatalf("checkpoint blob reader = %T, want snapshot-scoped reader wrapper", capabilities.Blobs)
 	}
-	if got := (&productionClientSet{checkpoints: capabilities}).CheckpointCapabilities(); got.Repository == nil || got.Blobs != reader {
+	if wrappedReader.delegate != reader {
+		t.Fatalf("checkpoint blob reader delegate = %T, want supplied reader", wrappedReader.delegate)
+	}
+	if got := (&productionClientSet{checkpoints: capabilities}).CheckpointCapabilities(); got.Repository == nil || got.Blobs == nil {
 		t.Fatalf("snapshot client set checkpoint capabilities = %#v, want copied bundle", got)
 	}
 	if got := (&productionClientSet{}).CheckpointCapabilities(); got.Repository != nil || got.Blobs != nil {
@@ -293,8 +303,12 @@ func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing
 	if wrapped.delegate != materializer {
 		t.Fatalf("checkpoint materializer delegate = %T, want supplied materializer", wrapped.delegate)
 	}
-	if capabilities.Repository == nil || capabilities.Blobs != reader {
+	wrappedReader, ok := capabilities.Blobs.(snapshotCheckpointBlobReader)
+	if capabilities.Repository == nil || !ok || wrappedReader.delegate != reader {
 		t.Fatalf("complete checkpoint capabilities = %#v, want repository and blob reader", capabilities)
+	}
+	if err := capabilities.RequireMaterializer(); err != nil {
+		t.Fatalf("complete checkpoint capabilities failed validation: %v", err)
 	}
 	if got := (&productionClientSet{checkpoints: capabilities, v1Capabilities: V1RuntimeCapabilities{Checkpoints: capabilities}}).CheckpointCapabilities().Materializer; got == nil {
 		t.Fatal("snapshot client set omitted complete checkpoint materializer")
@@ -314,6 +328,34 @@ func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing
 	}
 	if got := checkpointCapabilitiesFromCloser(nil); got.Repository != nil || got.Blobs != nil || got.Materializer != nil {
 		t.Fatalf("nil closer capabilities = %#v, want zero value", got)
+	}
+}
+
+func TestCheckpointCapabilitiesRejectsIncompleteMaterializerBundles(t *testing.T) {
+	materializer := &checkpointMaterializerStub{}
+	reader := checkpointBlobReaderStub{}
+	repository := checkpointCompositionCloser{}.CheckpointRepository()
+	tests := []struct {
+		name         string
+		capabilities CheckpointCapabilities
+		wantValidate bool
+	}{
+		{name: "optional empty", capabilities: CheckpointCapabilities{}, wantValidate: true},
+		{name: "optional repository", capabilities: CheckpointCapabilities{Repository: repository}, wantValidate: true},
+		{name: "materializer without repository", capabilities: CheckpointCapabilities{Blobs: reader, Materializer: materializer}, wantValidate: false},
+		{name: "materializer without blobs", capabilities: CheckpointCapabilities{Repository: repository, Materializer: materializer}, wantValidate: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.capabilities.Validate(); (err == nil) != test.wantValidate {
+				t.Fatalf("Validate() error = %v, wantValid=%v", err, test.wantValidate)
+			}
+			if test.name == "optional empty" {
+				if err := test.capabilities.RequireMaterializer(); err == nil {
+					t.Fatal("RequireMaterializer accepted empty capability")
+				}
+			}
+		})
 	}
 }
 
