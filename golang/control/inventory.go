@@ -146,7 +146,7 @@ func ConfiguredModel(configured []string, discovered string) bool {
 // caller can still receive a stale snapshot if refresh fails.
 type RefreshCoordinator struct {
 	mu      sync.Mutex
-	entries map[string]refreshEntry
+	entries map[string]*refreshEntry
 }
 
 type refreshEntry struct {
@@ -156,7 +156,7 @@ type refreshEntry struct {
 }
 
 func NewRefreshCoordinator() *RefreshCoordinator {
-	return &RefreshCoordinator{entries: make(map[string]refreshEntry)}
+	return &RefreshCoordinator{entries: make(map[string]*refreshEntry)}
 }
 
 func (coordinator *RefreshCoordinator) Refresh(ctx context.Context, endpoint string, fetch func(context.Context) (InventorySnapshot, error)) (InventorySnapshot, error) {
@@ -171,14 +171,19 @@ func (coordinator *RefreshCoordinator) Refresh(ctx context.Context, endpoint str
 		case <-ctx.Done():
 			return InventorySnapshot{}, ctx.Err()
 		case <-wait:
-			coordinator.mu.Lock()
-			current = coordinator.entries[endpoint]
-			coordinator.mu.Unlock()
+			// Keep the in-flight entry captured above. A later refresh can
+			// replace the map entry immediately after this one completes; reading
+			// the map again could therefore return that later attempt's
+			// not-yet-completed result (and incorrectly report a nil error).
 			return current.snapshot, current.err
 		}
 	}
 	previous := coordinator.entries[endpoint]
-	coordinator.entries[endpoint] = refreshEntry{snapshot: previous.snapshot, wait: make(chan struct{})}
+	entry := &refreshEntry{wait: make(chan struct{})}
+	if previous != nil {
+		entry.snapshot = previous.snapshot
+	}
+	coordinator.entries[endpoint] = entry
 	coordinator.mu.Unlock()
 
 	snapshot, err := fetch(ctx)
@@ -186,7 +191,6 @@ func (coordinator *RefreshCoordinator) Refresh(ctx context.Context, endpoint str
 		err = snapshot.Validate()
 	}
 	coordinator.mu.Lock()
-	entry := coordinator.entries[endpoint]
 	closeWait := entry.wait
 	if err == nil {
 		entry.snapshot = snapshot

@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +68,66 @@ func TestRefreshCoordinatorReturnsStaleSnapshotOnFailure(t *testing.T) {
 	})
 	if err == nil || got.InventoryDigest != want.InventoryDigest {
 		t.Fatalf("failed refresh = digest %x, err %v; want stale digest %x and error", got.InventoryDigest, err, want.InventoryDigest)
+	}
+}
+
+// signalContext lets the test deterministically stop the waiter after it has
+// captured the in-flight entry but before that entry is completed. This makes
+// sure a subsequent refresh cannot cause the waiter to observe the wrong
+// attempt's result.
+type signalContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func (ctx *signalContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.done) })
+	return ctx.Context.Done()
+}
+
+func TestRefreshCoordinatorWaiterKeepsCompletedAttempt(t *testing.T) {
+	coordinator := NewRefreshCoordinator()
+	wantErr := errors.New("first refresh failed")
+	first := &refreshEntry{
+		snapshot: snapshot(time.Unix(100, 0)),
+		wait:     make(chan struct{}),
+		err:      wantErr,
+	}
+	coordinator.mu.Lock()
+	coordinator.entries["endpoint"] = first
+	coordinator.mu.Unlock()
+
+	ctx := &signalContext{Context: context.Background(), done: make(chan struct{})}
+	result := make(chan struct {
+		snapshot InventorySnapshot
+		err      error
+	}, 1)
+	go func() {
+		got, err := coordinator.Refresh(ctx, "endpoint", func(context.Context) (InventorySnapshot, error) {
+			return InventorySnapshot{}, errors.New("waiter unexpectedly became refresh owner")
+		})
+		result <- struct {
+			snapshot InventorySnapshot
+			err      error
+		}{got, err}
+	}()
+	<-ctx.done
+
+	// Complete the first attempt while replacing the map entry with a new
+	// refresh. The waiter must still return the first attempt's error and
+	// snapshot, rather than reading this replacement entry.
+	coordinator.mu.Lock()
+	close(first.wait)
+	coordinator.entries["endpoint"] = &refreshEntry{snapshot: snapshot(time.Unix(200, 0))}
+	coordinator.mu.Unlock()
+
+	got := <-result
+	if !errors.Is(got.err, wantErr) {
+		t.Fatalf("waiter error = %v, want %v", got.err, wantErr)
+	}
+	if got.snapshot.InventoryDigest != first.snapshot.InventoryDigest {
+		t.Fatalf("waiter snapshot = %x, want first attempt %x", got.snapshot.InventoryDigest, first.snapshot.InventoryDigest)
 	}
 }
 
