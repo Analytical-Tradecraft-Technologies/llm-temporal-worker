@@ -153,14 +153,13 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30148789045`](https://github.com/mfow/llm-temporal-worker/actions/runs/30148789045) at revision
-`c53a23951f855671661cab29874feb9393c3a1e5`. The artifact is named
-`release-evidence` (artifact `8617113406`) and has SHA-256 digest
-`43d4c6dd8b65c5b34cb0f77d387a3e78279480b886afb0d26b4680d2242bf6a5`.
-The artifact was downloaded and inspected before rebinding: its evidence
-record names revision `c53a2395`, the thirteen retained summary records report
-`status: pass`, and the separate SBOM and Trivy image-scan documents are bound
-to the immutable image digest.
+artifact: [workflow run `30196872445`](https://github.com/mfow/llm-temporal-worker/actions/runs/30196872445) at revision
+`46a1a7f96b74aece3ec21d2071e97d54442882b0`. The artifact is named
+`release-evidence` (artifact `8630696667`) and has SHA-256 digest
+`f608adf4d35b6ded979f37e43eb282612cac68c97f7fe58d1c7c2f74f2e6c785`.
+The catalog refresh binds the thirteen already-recorded offline requirements
+to this successful master run. Pending protected-provider and publication
+requirements, plus the two unrecorded SLO measurements, remain unchanged.
 The v1 catalog binds offline implementation and conformance records to this
 run and digest. This is not production SLO
 evidence: the admission/compilation p99 and worker-error-rate requirements
