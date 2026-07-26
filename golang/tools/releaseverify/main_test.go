@@ -335,6 +335,13 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory, imageReference, imag
 		"test_summary": gateSummary("test_summary"),
 		"race_summary": gateSummary("race_summary"),
 		"fuzz_summary": gateSummary("fuzz_summary"),
+		"benchmark_summary": map[string]any{
+			"schema_version": 1, "kind": "benchmark_summary", "status": "pass",
+			"benchmark": "BenchmarkGenerateMemoryAdmissionAndCompile", "scope": "memory",
+			"samples": 4267, "ns_per_op": 255245, "p99_ms_per_op": 0.7286,
+			"target_ms": 25, "objective_status": "measurement_only",
+			"output_sha256": digest, "output_bytes": 256, "redacted": true,
+		},
 		"fixture_manifest": map[string]any{
 			"schema_version": 1, "kind": "fixture_manifest", "status": "pass", "version": 1,
 			"fixtures": []any{map[string]any{

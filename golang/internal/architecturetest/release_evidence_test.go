@@ -19,6 +19,7 @@ var requiredReleaseEvidenceArtifacts = []string{
 	"test_summary",
 	"race_summary",
 	"fuzz_summary",
+	"benchmark_summary",
 	"fixture_manifest",
 	"redis_summary",
 	"temporal_summary",
@@ -37,6 +38,7 @@ var releaseEvidenceArtifactPaths = map[string]string{
 	"test_summary":          "test-summary.json",
 	"race_summary":          "race-summary.json",
 	"fuzz_summary":          "fuzz-summary.json",
+	"benchmark_summary":     "benchmark-summary.json",
 	"fixture_manifest":      "fixture-manifest.json",
 	"redis_summary":         "redis-summary.json",
 	"temporal_summary":      "temporal-summary.json",
@@ -1879,6 +1881,56 @@ func TestReleaseEvidenceCollectorRunsFuzzGateFromModuleRoot(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceCollectorRetainsMemoryBenchmarkMeasurement(t *testing.T) {
+	root := repositoryRoot(t)
+	collector := readRepositoryFile(t, root, "scripts", "release", "collect.sh")
+	if !strings.Contains(collector, "BenchmarkGenerateMemoryAdmissionAndCompile") {
+		t.Fatal("release evidence collector does not run the memory admission benchmark")
+	}
+	pythonCollector := readRepositoryFile(t, root, "scripts", "release", "collect.py")
+	for _, required := range []string{"benchmark-summary", "p99_ms_per_op", "measurement_only"} {
+		if !strings.Contains(pythonCollector, required) {
+			t.Fatalf("benchmark collector is missing %q", required)
+		}
+	}
+}
+
+func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
+	root := repositoryRoot(t)
+	inputPath := filepath.Join(t.TempDir(), "benchmark.out")
+	outputPath := filepath.Join(t.TempDir(), "benchmark-summary.json")
+	input := "goos: linux\n" +
+		"BenchmarkGenerateMemoryAdmissionAndCompile-14    4267    255245 ns/op         0.7286 p99_ms/op  350632 B/op    4851 allocs/op\n" +
+		"PASS\n"
+	writeReleaseArtifact(t, inputPath, []byte(input))
+	command := exec.Command(
+		"python3", filepath.Join(root, "scripts", "release", "collect.py"), "benchmark-summary",
+		"--kind", "benchmark_summary", "--input", inputPath, "--output", outputPath,
+	)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("benchmark collector rejected valid output: %v\n%s", err, output)
+	}
+	document := readReleaseEvidenceJSONArtifact(t, filepath.Dir(outputPath), "benchmark_summary")
+	if document["scope"] != "memory" || document["objective_status"] != "measurement_only" {
+		t.Fatalf("benchmark summary scope/status = %#v/%#v", document["scope"], document["objective_status"])
+	}
+	if document["p99_ms_per_op"] != 0.7286 {
+		t.Fatalf("benchmark summary p99 = %#v", document["p99_ms_per_op"])
+	}
+
+	writeReleaseArtifact(t, inputPath, []byte(input+"BenchmarkGenerateMemoryAdmissionAndCompile-14 1 1 ns/op 1 p99_ms/op\n"))
+	if err := os.Remove(outputPath); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("benchmark collector accepted multiple measurements:\n%s", output)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("benchmark collector retained output after rejecting multiple measurements: %v", err)
+	}
+}
+
 func TestReleaseEvidenceMakeTargetIgnoresEvidencePathEnvironment(t *testing.T) {
 	root := repositoryRoot(t)
 	command := exec.Command("make", "--no-print-directory", "-n", "release-verify")
@@ -1914,6 +1966,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		"test_summary":          releaseEvidenceGateSummary("test_summary"),
 		"race_summary":          releaseEvidenceGateSummary("race_summary"),
 		"fuzz_summary":          releaseEvidenceGateSummary("fuzz_summary"),
+		"benchmark_summary":     `{"schema_version":1,"kind":"benchmark_summary","status":"pass","benchmark":"BenchmarkGenerateMemoryAdmissionAndCompile","scope":"memory","samples":4267,"ns_per_op":255245,"p99_ms_per_op":0.7286,"target_ms":25,"objective_status":"measurement_only","output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_bytes":256,"redacted":true}`,
 		"fixture_manifest":      `{"schema_version":1,"kind":"fixture_manifest","status":"pass","version":1,"fixtures":[{"profile":"openai-responses","upstream_url":"https://platform.openai.com/docs/api-reference/responses","upstream_date":"2026-07-14","manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"redacted":true}`,
 		"redis_summary":         `{"schema_version":1,"kind":"redis_summary","status":"pass","service":"redis","state":"running","health":"healthy","redacted":true}`,
 		"temporal_summary":      `{"schema_version":1,"kind":"temporal_summary","status":"pass","service":"temporal","state":"running","health":"healthy","redacted":true}`,

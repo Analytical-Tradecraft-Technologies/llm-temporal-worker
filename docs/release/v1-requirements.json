@@ -711,17 +711,25 @@
       },
       "implementation_paths": [
         "Makefile",
+        "docs/release/artifact.schema.json",
         "docs/testing/strategy.md",
         "golang/engine/benchmark_redis_test.go",
-        "golang/engine/benchmark_test.go"
+        "golang/engine/benchmark_test.go",
+        "scripts/release/collect.py",
+        "scripts/release/collect.sh"
       ],
       "verification": {
         "make_targets": [
           "benchmark",
           "redis-benchmark",
-          "redis-benchmark-compile"
+          "redis-benchmark-compile",
+          "release-verify"
         ],
         "workflow_jobs": [
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "release-evidence"
+          },
           {
             "path": ".github/workflows/master.yml",
             "job": "verify"

@@ -54,6 +54,13 @@ normal CI gate because runner scheduling and hardware change latency samples.
 Do not compare its p99 output with the service objectives until repeatable,
 controlled memory and same-region Redis evidence is available.
 
+Trusted master release-evidence collection retains this output as a redacted
+`benchmark-summary.json` artifact. The artifact records the benchmark's sample
+count, p99 measurement, and `scope=memory`, but deliberately marks it
+`objective_status=measurement_only`; it is a reproducible offline measurement,
+not proof that either the memory or same-region Redis release objective has
+been met.
+
 ## Controlled Redis measurement
 
 For a controlled, same-region Redis measurement, an operator may run:

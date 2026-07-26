@@ -438,6 +438,7 @@ jobs:
             -artifact test_summary=test-summary.json \
             -artifact race_summary=race-summary.json \
             -artifact fuzz_summary=fuzz-summary.json \
+            -artifact benchmark_summary=benchmark-summary.json \
             -artifact fixture_manifest=fixture-manifest.json \
             -artifact redis_summary=redis-summary.json \
             -artifact temporal_summary=temporal-summary.json \
