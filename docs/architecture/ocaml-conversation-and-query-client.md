@@ -580,6 +580,7 @@ module Settings : sig
     ?service_class:service_class ->
     ?temperature:Decimal.t ->
     ?reasoning_effort:reasoning_effort ->
+    ?reasoning_summary:reasoning_summary ->
     ?tools:tool list ->
     ?tool_policy:tool_policy ->
     ?output:output_config ->
@@ -613,6 +614,12 @@ There is no Boolean **use_cache** that leaves freshness undefined. Omitting
 **cache** means no read and no population. Variant defaults to **Int32.zero**.
 No random key is generated automatically; callers deliberately choose stable
 variants for smoke-test fixtures.
+
+The optional reasoning controls are part of the same typed sparse settings
+builder as service class, temperature, tools, and output.  An omitted control
+is encoded as **Keep** on a resumed checkpoint; an explicit value emits the
+closed v1 enum.  The facade never accepts a free-form reasoning string or
+silently clears an inherited value.
 
 Compact accepts the same `Cache_policy.t`, but its effective compaction
 sampling contract permits only variant zero. Automatic compaction receives the

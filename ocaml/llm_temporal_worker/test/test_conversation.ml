@@ -37,13 +37,16 @@ let () =
       ~service_class:Priority
       ~service_class_fallbacks:[ Standard ]
       ~instructions:[ Text_instruction { level = Application; text = "Be brief." } ]
+      ~reasoning_effort:Medium ~reasoning_summary:Concise
       ~tools:[ tool ] ~output ()
   in
   let cache = expect_valid (Conversation.Cache_policy.accept_up_to ~max_age_seconds:60L ~variant:1l ()) in
   let patch =
     Conversation.Settings.Patch.set_temperature
       (expect_valid (Usd_decimal.of_string "0.25"))
-      (Conversation.Settings.Patch.set_service_class Economy Conversation.Settings.Patch.keep)
+      (Conversation.Settings.Patch.set_reasoning_summary Detailed
+         (Conversation.Settings.Patch.set_reasoning_effort High
+            (Conversation.Settings.Patch.set_service_class Economy Conversation.Settings.Patch.keep)))
   in
   let parent = Conversation.root ~context ~model ~settings () in
   let parent_request = Conversation.to_request ~operation_key:(operation_key "parent") ~append:[] parent in
@@ -51,6 +54,10 @@ let () =
    | None, Set value when Model_selector.to_string value = "gpt-test" -> ()
    | _ -> failwith "root did not emit model patch");
   (match parent_request.settings_patch.service_class with Set Priority -> () | _ -> failwith "root settings omitted");
+  (match parent_request.settings_patch.reasoning_effort,
+         parent_request.settings_patch.reasoning_summary with
+   | Set Medium, Set Concise -> ()
+   | _ -> failwith "root reasoning settings omitted");
   let calls = ref [] in
   let dispatch ?task_queue activity (request : generate_request) =
     (match task_queue with Some queue when Temporal_task_queue.to_string queue = "conversation-queue" -> () | _ -> failwith "task queue dropped");
@@ -67,12 +74,20 @@ let () =
       ~settings_patch:patch ~operation_key:(operation_key "b") ~append:[ message "B" ]
       (Conversation.fork parent)) in
   if List.length !calls <> 2 then failwith "expected two immutable sibling dispatches";
+  (match (List.hd !calls).settings_patch.reasoning_effort,
+         (List.hd !calls).settings_patch.reasoning_summary with
+   | Set High, Set Detailed -> ()
+   | _ -> failwith "explicit reasoning patch was not sent");
   if Conversation.checkpoint parent <> None then failwith "parent was mutated";
   (match Conversation.checkpoint branch_a.conversation, Conversation.checkpoint branch_b.conversation with
    | Some a, Some b when Checkpoint.to_string a <> Checkpoint.to_string b -> ()
    | _ -> failwith "children did not retain distinct checkpoints");
   let child_request = Conversation.to_request ~operation_key:(operation_key "child") ~append:[] branch_a.conversation in
   (match child_request.parent with Some _ -> () | None -> failwith "child omitted checkpoint parent");
+  (match child_request.settings_patch.reasoning_effort,
+         child_request.settings_patch.reasoning_summary with
+   | Keep, Keep -> ()
+   | _ -> failwith "inherited reasoning settings were resent on child");
   if child_request.cache <> None then failwith "cache leaked between calls";
 
   let mismatched_dispatch ?task_queue:_ activity (request : generate_request) =
