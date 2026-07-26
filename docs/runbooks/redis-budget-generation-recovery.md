@@ -13,12 +13,20 @@ and policy/window hashes, concrete journal/Stream high-water marks, complete
 coverage, every expected member, catalog identity, and the conservative
 rounding version. `RedisBudgetGenerationPort` atomically stores an immutable
 manifest and switches the active pointer, while `RedisBudgetEventPort` tails
-the coordination Stream without consumer groups. These adapters do not
-materialize window keys or execute the Redis admission Function; runtime
-composition and the fenced recovery coordinator remain subject to the
-procedures below. The event adapter intentionally never trims the Stream: a
-separate retention coordinator must use the minimum non-expired worker cursor
-plus a configured safety margin, and remains a pending Task 6 slice.
+the coordination Stream without consumer groups. `BudgetStreamTailer` now
+provides the worker-side bounded poll contract: each worker owns an independent
+cursor, disabled consumption and retained-stream gaps perform a Redis-only
+manifest reload, and a generation-switch hint is never applied to the old
+local plan. The tailer returns its latest cursor for the runtime owner to
+persist in the worker lease; hints remain non-authoritative and every paid
+decision still goes through the atomic Redis Function.
+
+These adapters do not materialize window keys or execute the Redis admission
+Function; runtime composition and the fenced recovery coordinator remain
+subject to the procedures below. The event adapter and tailer intentionally
+never trim the Stream: a separate retention coordinator must use the minimum
+non-expired worker cursor plus a configured safety margin, and remains a
+pending Task 6 slice.
 
 ## Purpose and safety invariant
 
