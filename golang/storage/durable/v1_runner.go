@@ -226,6 +226,16 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err := contextErr(ctx); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
+	// A normal replay is the only durable view of the ancestor transcript that
+	// reaches this runner. Validate its tool frontier before cache, routing, or
+	// admission so a malformed tool-result delta cannot reach a provider port.
+	// Completed/reconciliation replays do not need the transcript because their
+	// response is already authoritative and is validated below.
+	if replay.Completed == nil && replay.ReconciliationPending == nil {
+		if err := validateGenerateReplayFrontier(request, replay, request.Parent != nil); err != nil {
+			return llm.GenerateResponseV1{}, stageError("replay", err)
+		}
+	}
 	if replay.ReconciliationPending != nil {
 		pending := replay.ReconciliationPending
 		if err := validateGeneratePendingReconciliation(request, *pending); err != nil {
@@ -295,6 +305,12 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		}
 		replay, err = ports.Compact(ctx, request, replay)
 		if err != nil {
+			return llm.GenerateResponseV1{}, stageError("compaction", err)
+		}
+		if err := contextErr(ctx); err != nil {
+			return llm.GenerateResponseV1{}, err
+		}
+		if err := validateGenerateReplayFrontier(request, replay, true); err != nil {
 			return llm.GenerateResponseV1{}, stageError("compaction", err)
 		}
 	}
@@ -419,6 +435,49 @@ func validateGeneratePendingReconciliation(request llm.GenerateRequestV1, pendin
 		return err
 	}
 	return validateGenerateFinalization(request, pending.Route.OperationID, pending.Finalization)
+}
+
+// validateGenerateReplayFrontier verifies the storage-neutral transcript
+// boundary before a replay can reach routing or provider dispatch. The
+// durable materializer validates the full graph and blob digests; this check
+// is intentionally limited to the tool-call frontier that is observable by
+// the Activity runner. request.Append is a bounded delta, so validating the
+// replay plus delta catches unmatched results, duplicate calls, and a new
+// turn inserted before an outstanding tool result without copying ancestor
+// state into an Activity payload.
+func validateGenerateReplayFrontier(request llm.GenerateRequestV1, replay GenerateReplay, requireMaterialized bool) error {
+	if requireMaterialized && replay.State.Handle == "" {
+		return errors.New("materialized replay state is required")
+	}
+	if replay.State.Handle == "" && (len(replay.State.Items) != 0 || len(replay.State.PendingToolCalls) != 0) {
+		return errors.New("replay transcript requires a materialized checkpoint handle")
+	}
+	basePending, err := state.ValidateTranscript(replay.State.Items)
+	if err != nil {
+		return fmt.Errorf("replay transcript: %w", err)
+	}
+	if !equalStrings(basePending, replay.State.PendingToolCalls) {
+		return errors.New("replay tool frontier does not match transcript")
+	}
+	combined := make([]llm.Item, 0, len(replay.State.Items)+len(request.Append))
+	combined = append(combined, replay.State.Items...)
+	combined = append(combined, request.Append...)
+	if _, err := state.ValidateTranscript(combined); err != nil {
+		return fmt.Errorf("request append violates replay tool frontier: %w", err)
+	}
+	return nil
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // validateGenerateCacheFinalization prevents a cache lookup from returning the

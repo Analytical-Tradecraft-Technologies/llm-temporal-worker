@@ -285,6 +285,13 @@ func validateCompactReplay(request llm.CompactRequestV1, replay CompactReplay) e
 	if replay.State.Project != request.Context.Project {
 		return errors.New("materialized compact parent project does not match request")
 	}
+	pending, err := state.ValidateTranscript(replay.State.Items)
+	if err != nil {
+		return fmt.Errorf("materialized compact transcript: %w", err)
+	}
+	if !equalStrings(pending, replay.State.PendingToolCalls) {
+		return errors.New("materialized compact tool frontier does not match transcript")
+	}
 	return nil
 }
 

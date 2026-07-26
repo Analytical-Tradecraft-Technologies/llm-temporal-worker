@@ -60,6 +60,15 @@ cleanup for those committed boundaries. The guard returns the context error
 directly where it is safe to stop, preserving Temporal cancellation/deadline
 handling without making already-committed state disappear.
 
+Before cache lookup or routing, the runner also validates the materialized
+transcript's tool frontier and applies the bounded `GenerateRequestV1.append`
+delta to that frontier in memory. An unmatched tool result, duplicate tool
+call, or new turn inserted before outstanding tool results therefore fails
+closed before admission or provider dispatch. The same frontier check guards
+Compact replay. This validation does not copy ancestor state into the
+Temporal payload and does not replace the durable materializer's graph/blob
+integrity checks.
+
 This slice intentionally does not construct clients or claim that V1 is
 production-complete. Concrete Redis/PostgreSQL/provider ports, snapshot
 factory wiring, and the query-only control-plane service remain required
@@ -75,8 +84,10 @@ remain pending.
 - `golang/storage/durable/v1_runner_test.go` covers normal ordering, cache-hit
   short-circuiting and replay-child invariants, pre-dispatch fail-closed
   behavior, identity mismatches, and retryable reconciliation failure, including
-  replay of a finalized response with pending Redis reconciliation without a
-  second provider dispatch. Its cancellation tests cover the pre-dispatch
-  phase boundaries, prove cancellation after Compact stops before parent
-  admission, and cover the post-finalization reconciliation handoff.
+replay of a finalized response with pending Redis reconciliation without a
+second provider dispatch. Its cancellation tests cover the pre-dispatch
+phase boundaries, prove cancellation after Compact stops before parent
+admission, and cover the post-finalization reconciliation handoff. It also
+proves that a tool-result delta resolves the replay frontier and that an
+unmatched result is rejected before cache or admission.
 - `make -C golang test` passes with the runner included.

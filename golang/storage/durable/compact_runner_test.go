@@ -113,6 +113,25 @@ func TestCompactV1RunsDistinctDurablePhasesInOrder(t *testing.T) {
 	}
 }
 
+func TestCompactV1RejectsReplayWithMismatchedToolFrontier(t *testing.T) {
+	events := []string{}
+	ports := testCompactPorts(&events, "")
+	request := testCompactRequest()
+	ports.Replay = func(context.Context, llm.CompactRequestV1) (CompactReplay, error) {
+		events = append(events, "replay")
+		return CompactReplay{State: state.MaterializedState{
+			Handle: state.Handle(request.Parent), Tenant: request.Context.Tenant, Project: request.Context.Project,
+			Items: []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)}},
+		}}, nil
+	}
+	if _, err := CompactV1(context.Background(), request, ports); err == nil || !errors.Is(err, ErrV1Stage) {
+		t.Fatalf("CompactV1 error = %v, want replay frontier stage failure", err)
+	}
+	if got, want := events, []string{"replay"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phases after invalid frontier = %v, want %v", got, want)
+	}
+}
+
 func TestCompactV1CompletedReplayReturnsWithoutCacheOrProviderWork(t *testing.T) {
 	events := []string{}
 	ports := testCompactPorts(&events, "")
