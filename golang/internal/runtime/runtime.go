@@ -175,8 +175,9 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	var engineFactory = options.EngineFactory
 	configuredProbes := append([]DependencyProbe(nil), options.DependencyProbes...)
 	application, err := app.New(ctx, app.Options{
-		InitialConfig: data,
-		Builder:       builder,
+		InitialConfig:        data,
+		Builder:              builder,
+		ReplacementValidator: validateRuntimeReplacement,
 		Clients: func(buildContext context.Context, snapshot *config.Snapshot) (app.ClientSet, error) {
 			engine, clients, err := engineFactory.Build(buildContext, snapshot)
 			if err != nil {

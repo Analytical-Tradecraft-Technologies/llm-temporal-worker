@@ -582,7 +582,7 @@ func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 		t.Fatalf("initial runtime state ready=%v starts=%d", runtime.Health.Ready(), initial.starts.Load())
 	}
 
-	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); err != nil {
+	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
 		t.Fatal(err)
 	}
 	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && initial.stops.Load() >= 1 })
@@ -593,7 +593,7 @@ func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 		t.Fatalf("ready status after unconfigured v1 reload = %d", got)
 	}
 
-	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); err != nil {
+	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
 		t.Fatal(err)
 	}
 	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() >= 1 })
@@ -636,7 +636,7 @@ func TestRuntimeMonitorTracksReloadedV1ReadinessWithoutDependencyProbes(t *testi
 		t.Fatalf("initial runtime state ready=%v starts=%d", runtime.Health.Ready(), initial.starts.Load())
 	}
 
-	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); err != nil {
+	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
 		t.Fatal(err)
 	}
 	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && initial.stops.Load() >= 1 })

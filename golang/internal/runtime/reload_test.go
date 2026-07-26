@@ -45,6 +45,45 @@ func TestRuntimeReloadFileRejectsBadReplacementAndRecordsBoundedFailure(t *testi
 	}
 }
 
+func TestRuntimeReloadFileRejectsProcessLifetimeReplacementAndRecordsBoundedFailure(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, controller, &closed)
+	var logs bytes.Buffer
+	options.LogOutput = &logs
+	data := runtimeConfig(t)
+	runtime, err := New(context.Background(), data, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	old := runtime.App.Current()
+	oldVersion := old.Config.ConfigVersion()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	const replacementQueue = "llm-inference-restart-required"
+	replacement := strings.Replace(string(data), "task_queue: llm-inference", "task_queue: "+replacementQueue, 1)
+	if replacement == string(data) {
+		t.Fatal("test replacement did not change the task queue")
+	}
+	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = runtime.ReloadFile(context.Background(), path)
+	if err == nil || err.Error() != "reload configuration failed" {
+		t.Fatalf("reload error = %v, want sanitized rejection", err)
+	}
+	if runtime.App.Current() != old || runtime.App.Current().Config.ConfigVersion() != oldVersion {
+		t.Fatal("process-lifetime replacement changed the active snapshot or version")
+	}
+	if got := reloadOutcome(t, runtime.Metrics, "failure"); got != 1 {
+		t.Fatalf("reload failure metric = %v, want 1", got)
+	}
+	if strings.Contains(logs.String(), replacementQueue) || strings.Contains(logs.String(), path) {
+		t.Fatalf("reload log leaked replacement data or path: %q", logs.String())
+	}
+}
+
 func TestRuntimeReloadFileCountsPublishedDrainCancellationAsSuccess(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
@@ -63,7 +102,7 @@ func TestRuntimeReloadFileCountsPublishedDrainCancellationAsSuccess(t *testing.T
 	defer lease.Release()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	replacement := strings.Replace(string(data), "readiness_probe_interval: 5s", "readiness_probe_interval: 6s", 1)
+	replacement := strings.Replace(string(data), "provider_timeout: 120s", "provider_timeout: 121s", 1)
 	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +159,7 @@ func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
 	go func() { done <- runtime.RunWithReload(ctx, path, reloads) }()
 	waitForReloadRuntimeStart(t, runtime, done)
 	oldVersion := runtime.App.Current().Config.ConfigVersion()
-	replacement := strings.Replace(string(data), "readiness_probe_interval: 5s", "readiness_probe_interval: 6s", 1)
+	replacement := strings.Replace(string(data), "provider_timeout: 120s", "provider_timeout: 121s", 1)
 	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
 		t.Fatal(err)
 	}

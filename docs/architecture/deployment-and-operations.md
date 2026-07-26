@@ -195,9 +195,13 @@ candidate before validation. Repeated notifications are coalesced. Environment
 variables are not hot-reloaded.
 
 Reload updates the request snapshot and its provider/state clients only.
-Listener addresses, Temporal client/task-queue and worker settings, monitor
-cadence, and telemetry process wiring remain process-lifetime settings and
-require a restart when changed.
+The environment, listener addresses, shutdown and monitor settings, inline
+Activity payload limit, Temporal client/task-queue and worker settings,
+telemetry process wiring, Redis key prefix, PostgreSQL
+database/schema/table-prefix namespace, and endpoint outbound-host allowlists
+remain process-lifetime settings. The replacement validator rejects changes to
+those fields before constructing replacement clients; a rollout is required
+to change them.
 
 ## Required metrics
 

@@ -2,15 +2,12 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 )
-
-var errRedisKeyPrefixImmutable = errors.New("redis key prefix cannot change during reload")
 
 type ClientSet interface {
 	Close(context.Context) error
@@ -140,6 +137,10 @@ type Options struct {
 	InitialConfig []byte
 	Builder       SnapshotBuilder
 	Clients       func(context.Context, *config.Snapshot) (ClientSet, error)
+	// ReplacementValidator rejects configuration changes that cannot be
+	// applied to resources constructed once for the process. It runs after the
+	// replacement is compiled but before any replacement clients are built.
+	ReplacementValidator func(current, replacement *config.Snapshot) error
 	// Verify runs after replacement clients are constructed but before their
 	// snapshot is published. It is intentionally generic: runtime supplies
 	// dependency readiness checks without making the app package know about
@@ -148,10 +149,11 @@ type Options struct {
 }
 
 type App struct {
-	builder SnapshotBuilder
-	clients func(context.Context, *config.Snapshot) (ClientSet, error)
-	verify  func(context.Context, *config.Snapshot, ClientSet) error
-	current atomic.Pointer[RuntimeSnapshot]
+	builder             SnapshotBuilder
+	clients             func(context.Context, *config.Snapshot) (ClientSet, error)
+	validateReplacement func(current, replacement *config.Snapshot) error
+	verify              func(context.Context, *config.Snapshot, ClientSet) error
+	current             atomic.Pointer[RuntimeSnapshot]
 }
 
 func New(ctx context.Context, options Options) (*App, error) {
@@ -180,7 +182,10 @@ func New(ctx context.Context, options Options) (*App, error) {
 		closeUnpublishedClients(clients)
 		return nil, err
 	}
-	app := &App{builder: options.Builder, clients: options.Clients, verify: options.Verify}
+	app := &App{
+		builder: options.Builder, clients: options.Clients,
+		validateReplacement: options.ReplacementValidator, verify: options.Verify,
+	}
 	app.current.Store(runtimeSnapshot)
 	return app, nil
 }
@@ -211,11 +216,11 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if current := app.current.Load(); current != nil && current.Config != nil {
-		currentPrefix := current.Config.Config().State.Redis.KeyPrefix
-		nextPrefix := nextConfig.Config().State.Redis.KeyPrefix
-		if currentPrefix != nextPrefix {
-			return errRedisKeyPrefixImmutable
+	if app.validateReplacement != nil {
+		if current := app.current.Load(); current != nil {
+			if err := app.validateReplacement(current.Config, nextConfig); err != nil {
+				return fmt.Errorf("validate replacement configuration: %w", err)
+			}
 		}
 	}
 	var clients ClientSet
