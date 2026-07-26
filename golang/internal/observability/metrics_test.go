@@ -96,6 +96,8 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.RecordMaintenance("cache", "tombstoned", 2, time.Second)
 	metrics.RecordMaintenance("cache", "skipped", 1, time.Second)
 	metrics.RecordMaintenanceFailure("cache")
+	metrics.RecordMaintenance("budget", "deleted", 3, time.Second)
+	metrics.RecordMaintenanceFailure("budget")
 	metrics.RecordPostgresPool(4, 2, 2, 8)
 	metrics.RecordPostgresLatency("query", 2*time.Millisecond)
 	metrics.RecordPostgresLatency("lock", -time.Second)
@@ -155,6 +157,12 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	}
 	if got := histogramCount(families, "llmtw_maintenance_duration_seconds", map[string]string{"resource": "cache"}); got != 1 {
 		t.Fatalf("maintenance duration samples = %v, want one sample per pass", got)
+	}
+	if got := metricValue(families, "llmtw_maintenance_rows_total", map[string]string{"resource": "budget", "outcome": "deleted"}); got != 3 {
+		t.Fatalf("budget maintenance delete count = %v, want 3", got)
+	}
+	if got := metricValue(families, "llmtw_maintenance_failures_total", map[string]string{"resource": "budget"}); got != 1 {
+		t.Fatalf("budget maintenance failure count = %v, want 1", got)
 	}
 	if got := metricValue(families, "llmtw_postgres_pool_connections", map[string]string{"state": "max"}); got != 8 {
 		t.Fatalf("postgres max pool gauge = %v, want 8", got)

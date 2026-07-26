@@ -344,6 +344,81 @@ func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.
 	return result, nil
 }
 
+// PruneExpiredBudgetBuckets removes a bounded set of empty historical budget
+// buckets. maxWindow is the largest configured budget window horizon; a cutoff
+// newer than now-maxWindow is rejected so callers cannot accidentally delete a
+// bucket still needed by a window. The method intentionally does not infer that
+// horizon from Redis or load the active budget working set. A bucket is deleted
+// only after its exact reserved/accounted projection is zero and no operation
+// reservation still references it. Journal history remains intact for a future
+// cold rebuild, and an open/finalized reservation remains a retention fence
+// until operation retention has dealt with that row explicitly.
+func (repository MaintenanceRepository) PruneExpiredBudgetBuckets(ctx context.Context, now, bucketsBefore time.Time, maxWindow time.Duration, limit int) (result maintenance.RetentionResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeMaintenance(ctx, "budget", started, result, returnErr) }()
+	if err := repository.validate(); err != nil {
+		return result, err
+	}
+	if err := validateBatch(now, limit); err != nil {
+		return result, err
+	}
+	if maxWindow <= 0 {
+		return result, errors.New("budget maximum window must be positive")
+	}
+	if bucketsBefore.IsZero() || bucketsBefore.After(now) {
+		return result, errors.New("budget bucket cutoff must not be after maintenance time")
+	}
+	if bucketsBefore.After(now.Add(-maxWindow)) {
+		return result, errors.New("budget bucket cutoff is newer than the maximum window horizon")
+	}
+	bucketsTable, err := repository.Namespace.Render("budget_buckets")
+	if err != nil {
+		return result, err
+	}
+	reservationsTable, err := repository.Namespace.Render("operation_budget_reservations")
+	if err != nil {
+		return result, err
+	}
+	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "WITH candidates AS ("+
+			" SELECT b.window_id, b.bucket_start"+
+			" FROM "+bucketsTable+" b"+
+			" WHERE b.bucket_start < $1"+
+			" AND b.reserved_cost_usd = 0"+
+			" AND b.accounted_cost_usd = 0"+
+			" AND NOT EXISTS (SELECT 1 FROM "+reservationsTable+" r"+
+			" WHERE r.window_id = b.window_id AND r.bucket_start = b.bucket_start)"+
+			" ORDER BY b.bucket_start, b.window_id LIMIT $2"+
+			" FOR UPDATE OF b SKIP LOCKED"+
+			"), deleted AS ("+
+			" DELETE FROM "+bucketsTable+" b USING candidates c"+
+			" WHERE b.window_id = c.window_id AND b.bucket_start = c.bucket_start"+
+			" RETURNING b.window_id, b.bucket_start"+
+			") SELECT window_id, bucket_start FROM deleted", bucketsBefore, limit)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("claim expired budget buckets: %w", err))
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var windowID uuid.UUID
+			var bucketStart time.Time
+			if err := rows.Scan(&windowID, &bucketStart); err != nil {
+				return fmt.Errorf("scan expired budget bucket: %w", err)
+			}
+			result.Examined++
+			result.Deleted++
+		}
+		if err := rows.Err(); err != nil {
+			return redactPostgresError(fmt.Errorf("iterate expired budget buckets: %w", err))
+		}
+		return nil
+	})
+	if err != nil {
+		return maintenance.RetentionResult{}, err
+	}
+	return result, nil
+}
+
 // PruneExpiredCheckpoints removes a bounded set of expired checkpoints after
 // proving that no retained graph, operation, or cache row still refers to
 // each candidate. Provider-state and affinity rows are deleted in the same
