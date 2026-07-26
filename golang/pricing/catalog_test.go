@@ -26,6 +26,53 @@ func TestCatalogResolveExactEntryAndReload(t *testing.T) {
 	}
 }
 
+func TestCatalogReloadRejectsUnverifiedReplacementAndRetainsSnapshot(t *testing.T) {
+	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Region: "global", Model: "gpt", ProviderTier: "standard", Version: "catalog-v1", Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	valid, err := CompileUSD("catalog-v1", []Entry{entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := NewResolver(valid)
+	// Publishing owns the entry slice: mutating the source value after reload
+	// must not mutate the resolver's active snapshot.
+	valid.Entries[0].Prices.InputPerMillion = MustDecimalUSD("9")
+	quote, err := resolver.Resolve(Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Region: entry.Region, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Now()})
+	if err != nil || quote.Entry.Prices.InputPerMillion.String() != "1" {
+		t.Fatalf("resolver retained caller-owned catalog storage: quote=%#v err=%v", quote, err)
+	}
+
+	changedEntry := entry
+	changedEntry.Prices.InputPerMillion = MustDecimalUSD("2")
+	invalid := valid
+	invalid.Entries = []Entry{changedEntry}
+	if err := resolver.ReloadValidated(invalid); err == nil {
+		t.Fatal("ReloadValidated accepted a replacement with a stale compiled digest")
+	}
+	quote, err = resolver.Resolve(Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Region: entry.Region, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := quote.Entry.Prices.InputPerMillion.String(); got != "1" {
+		t.Fatalf("failed replacement changed active price to %q", got)
+	}
+
+	// The compatibility method has the same fail-closed behavior even when a
+	// caller cannot consume an error return.
+	resolver.Reload(invalid)
+	quote, err = resolver.Resolve(Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Region: entry.Region, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Now()})
+	if err != nil || quote.Entry.Prices.InputPerMillion.String() != "1" {
+		t.Fatalf("Reload compatibility path replaced the valid snapshot: quote=%#v err=%v", quote, err)
+	}
+}
+
+func TestCatalogValidateRequiresCompiledDigest(t *testing.T) {
+	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard", Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	withoutDigest := Catalog{Version: "catalog-v1", Entries: []Entry{entry}}
+	if err := withoutDigest.Validate(); err == nil {
+		t.Fatal("Validate accepted a catalog without a compiled digest")
+	}
+}
+
 func TestCostFromUsageRejectsUnknownCatalogComponent(t *testing.T) {
 	entry := Entry{
 		Prices:            UnitPrices{InputPerMillion: MustDecimalUSD("1")},

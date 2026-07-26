@@ -110,6 +110,10 @@ new interval and preserves the source identity in the quote. A missing source
 file, digest mismatch, or invalid replacement rejects the complete candidate
 catalog. Reload publication is atomic, so the last verified snapshot remains
 active during a source outage rather than exposing a partial or guessed price.
+The `pricing.PriceResolver` applies the same boundary to in-process reloads:
+`ReloadValidated` checks the compiled digest before publishing, and a failed
+replacement leaves the previous snapshot in place. The compatibility `Reload`
+method is also fail-closed when its caller does not need the returned error.
 
 ## PostgreSQL catalog snapshots
 
