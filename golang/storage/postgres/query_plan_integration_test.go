@@ -171,7 +171,7 @@ func TestProviderQueryPlansUseProjectionIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 	routeQuery := "SELECT config_digest, config_epoch, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, availability, credit_state, billing_state, circuit_state, consecutive_definite_failures, last_event_digest, observed_at, stale_after, credit_confirmed_at FROM " + routes + " WHERE config_digest = $1 AND ($2 = '' OR provider = $2) AND ($3 = '' OR endpoint_id = $3) AND ($4 = '' OR availability = $4) AND ($5 OR availability <> 'available' OR credit_state <> 'ok' OR billing_state <> 'ok' OR circuit_state <> 'closed') AND ($6::timestamptz IS NULL OR observed_at <= $6) AND ($7 = '' OR route_id > $7) ORDER BY route_id LIMIT $8"
-	routePlan := explainJSONPlan(t, ctx, pool, routeQuery, configDigest[:], "", "", "", false, nil, "", 101)
+	routePlan := explainJSONPlan(t, ctx, pool, routeQuery, configDigest[:], "", "", "", false, nil, "route-5000", 101)
 	assertPlanUsesIndex(t, routePlan, routeIndex)
 
 	creditIndex, err := namespace.PrefixName("provider_route_credit_query_idx")
