@@ -148,6 +148,10 @@ type Runtime struct {
 
 	mu      sync.Mutex
 	started bool
+	// readinessMu serializes the monitor's cancellation handoff with the
+	// final Pause/Resume transition. Without this handoff, shutdown could
+	// cancel a monitor tick between its probe result and Worker.Resume.
+	readinessMu sync.Mutex
 }
 
 // New validates and composes a runtime. It performs no provider calls when
@@ -783,17 +787,23 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	if !runtime.currentV1RuntimeConfigured() {
+		runtime.readinessMu.Lock()
+		defer runtime.readinessMu.Unlock()
 		runtime.Health.SetReady(false)
 		runtime.Worker.Pause()
 		return nil
 	}
 	probes := runtime.dependencyProbes()
+	var probeErr error
 	if len(probes) > 0 {
-		if err := CheckDependencyProbes(ctx, probes, runtime.readinessProbeTimeout); err != nil {
-			runtime.Health.SetReady(false)
-			runtime.Worker.Pause()
-			return nil
-		}
+		probeErr = CheckDependencyProbes(ctx, probes, runtime.readinessProbeTimeout)
+	}
+	runtime.readinessMu.Lock()
+	defer runtime.readinessMu.Unlock()
+	if ctx.Err() != nil || probeErr != nil {
+		runtime.Health.SetReady(false)
+		runtime.Worker.Pause()
+		return nil
 	}
 	if runtime.Worker.Started() {
 		return nil
@@ -858,7 +868,13 @@ func (runtime *Runtime) stopDependencyMonitor(ctx context.Context) {
 	if cancel == nil {
 		return
 	}
+	// Signal cancellation before waiting on readinessMu. A dependency client
+	// that ignores its context must not prevent the monitor from observing the
+	// shutdown request. The lock handoff then serializes any already in-flight
+	// final Pause/Resume transition before shutdown waits for the monitor.
 	cancel()
+	runtime.readinessMu.Lock()
+	runtime.readinessMu.Unlock()
 	if done == nil {
 		return
 	}

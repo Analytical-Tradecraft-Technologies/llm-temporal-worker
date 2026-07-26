@@ -278,6 +278,40 @@ func TestDependencyProbesBoundEachProbeWithContextDeadline(t *testing.T) {
 	}
 }
 
+func TestDependencyProbesRejectCanceledParentBeforeInvokingProbe(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	err := CheckDependencyProbes(ctx, []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult {
+		calls++
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	})}, time.Second)
+	if !errors.Is(err, errRequiredDependencyUnavailable) {
+		t.Fatalf("canceled probe gate error = %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("canceled probe gate invoked %d probes", calls)
+	}
+}
+
+func TestDependencyProbesRejectCancellationAfterProbeReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	err := CheckDependencyProbes(ctx, []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult {
+		calls++
+		// Model an injected implementation that completes successfully without
+		// observing its context. The gate must still fail closed.
+		cancel()
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	})}, time.Second)
+	if !errors.Is(err, errRequiredDependencyUnavailable) {
+		t.Fatalf("canceled-after-probe gate error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("canceled-after-probe invoked %d probes, want 1", calls)
+	}
+}
+
 func TestBlobDependencyProbeUsesOnlyBucketCapabilityAndMasksErrors(t *testing.T) {
 	bucket := &fakeBucketProbe{err: errors.New("bucket secret marker")}
 	probe, err := NewBlobDependencyProbe(bucket)

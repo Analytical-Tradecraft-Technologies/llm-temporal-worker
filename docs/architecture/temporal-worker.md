@@ -297,7 +297,10 @@ Redis and blob dependencies. A later dependency failure keeps liveness
 responsive, makes readiness false, and stops polling; the bounded monitor
 resumes polling only after every required check recovers. Provider availability
 is a route-health concern and is evaluated by request planning rather than by
-this probe.
+this probe. The monitor checks cancellation before and after every bounded
+dependency probe, so a late success from a client that did not observe
+cancellation cannot be treated as a healthy dependency result. The existing
+worker drain/stop sequencing still owns the final poller transition.
 
 The monitor keeps running while a paused Temporal poller completes its graceful
 drain. It does not start a replacement poller until that drain completes, so a
