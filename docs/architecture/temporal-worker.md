@@ -186,8 +186,11 @@ type HeartbeatDetails struct {
 
 Phases are `planning`, `admission`, `pre_write`, `provider_wait`,
 `response_received`, `lift`, `finalization`, and, when applicable,
-`continuation_write`. No text, tool arguments/results, provider state, secret,
-raw error, or SDK object is allowed.
+`continuation_write`. Unexpected adapter progress is reduced to the fixed
+`other` phase; its source text is never copied into Temporal history. Operation
+identifiers containing control characters or exceeding 128 bytes are omitted,
+and route/class/output counts are clamped to bounded limits. No text, tool
+arguments/results, provider state, secret, raw error, or SDK object is allowed.
 
 The Activity heartbeats:
 

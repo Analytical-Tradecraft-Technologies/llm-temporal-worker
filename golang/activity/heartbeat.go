@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -17,6 +18,22 @@ type HeartbeatDetails struct {
 	StartedAt   time.Time `json:"started_at"`
 	LastEventAt time.Time `json:"last_event_at"`
 	OutputItems int       `json:"output_items"`
+}
+
+const (
+	// Temporal heartbeats are a liveness signal, not a second payload channel.
+	// Keep every field bounded even if an adapter or embedding supplies malformed
+	// progress to the public Heartbeater seam.
+	maxHeartbeatIdentifierBytes = 128
+	maxHeartbeatIndex           = 1 << 16
+	maxHeartbeatOutputItems     = 1 << 20
+	heartbeatUnknownPhase       = "other"
+)
+
+var heartbeatPhases = map[string]struct{}{
+	"planning": {}, "admission": {}, "pre_write": {}, "provider_wait": {},
+	"response_received": {}, "lift": {}, "finalization": {},
+	"continuation_write": {},
 }
 
 type Heartbeater interface {
@@ -69,11 +86,61 @@ func (heartbeater *TemporalHeartbeater) Beat(ctx context.Context, progress engin
 	if last.IsZero() {
 		last = heartbeater.now()
 	}
+	details := normalizeHeartbeatProgress(progress, started, last)
 	if heartbeater.metrics != nil {
-		heartbeater.metrics.SetHeartbeatAge(last.Sub(started))
+		heartbeater.metrics.SetHeartbeatAge(details.LastEventAt.Sub(details.StartedAt))
 	}
-	sdkactivity.RecordHeartbeat(ctx, HeartbeatDetails{OperationID: progress.OperationID, Phase: progress.Phase, RouteIndex: progress.RouteIndex, ClassIndex: progress.ClassIndex, StartedAt: started, LastEventAt: last, OutputItems: progress.OutputItems})
+	sdkactivity.RecordHeartbeat(ctx, details)
 	return ctx.Err()
+}
+
+func normalizeHeartbeatProgress(progress engine.Progress, started, last time.Time) HeartbeatDetails {
+	started = started.UTC()
+	last = last.UTC()
+	if last.Before(started) {
+		last = started
+	}
+	return HeartbeatDetails{
+		OperationID: safeHeartbeatIdentifier(progress.OperationID),
+		Phase:       safeHeartbeatPhase(progress.Phase),
+		RouteIndex:  boundedHeartbeatInt(progress.RouteIndex, maxHeartbeatIndex),
+		ClassIndex:  boundedHeartbeatInt(progress.ClassIndex, maxHeartbeatIndex),
+		StartedAt:   started.UTC(),
+		LastEventAt: last.UTC(),
+		OutputItems: boundedHeartbeatInt(progress.OutputItems, maxHeartbeatOutputItems),
+	}
+}
+
+func safeHeartbeatIdentifier(value string) string {
+	if value == "" || len(value) > maxHeartbeatIdentifierBytes {
+		return ""
+	}
+	for _, runeValue := range value {
+		if unicode.IsControl(runeValue) {
+			return ""
+		}
+	}
+	return value
+}
+
+func safeHeartbeatPhase(value string) string {
+	if _, ok := heartbeatPhases[value]; ok {
+		return value
+	}
+	// Do not copy provider-controlled phase text into Temporal history. The
+	// fixed fallback preserves a useful liveness fact without exposing an
+	// unbounded or undocumented value.
+	return heartbeatUnknownPhase
+}
+
+func boundedHeartbeatInt(value, maximum int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
 }
 
 func (heartbeater *TemporalHeartbeater) now() time.Time {
