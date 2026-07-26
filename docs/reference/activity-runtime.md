@@ -56,6 +56,11 @@ including the opaque storage position and horizon, so a repeatable-read
 adapter can enforce the same snapshot before reading its next page. Cursors
 must be issued with the worker's typed `CursorCodec` key; the raw `Handler`
 seam remains available for adapters migrating from the legacy cursor envelope.
+Before a response is audited or returned, the Activity boundary also enforces
+the effective page size on provider, model, and credit pages: it uses the
+caller-provided `page_size`, or the 100-row default when that field is omitted,
+and rejects a handler response containing more rows. Budget status and spend
+summary remain complete bounded snapshots without a page-size field.
 The production client set forwards a query service only when it is supplied by
 the same snapshot-scoped PostgreSQL closer as its repositories; the default
 composition does not invent authorization, cursor keys, or handlers. Query
