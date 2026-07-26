@@ -11,12 +11,13 @@ import (
 )
 
 type budgetWorkerHashFake struct {
-	values   map[string]string
-	getErr   error
-	hsetErr  error
-	hdelErr  error
-	lastHSet []interface{}
-	lastHDel []string
+	values     map[string]string
+	getErr     error
+	hsetErr    error
+	hdelErr    error
+	lastHSet   []interface{}
+	lastHDel   []string
+	beforeEval func(string)
 }
 
 func (fake *budgetWorkerHashFake) HGet(_ context.Context, _ string, field string) *redisclient.StringCmd {
@@ -51,6 +52,19 @@ func (fake *budgetWorkerHashFake) HGetAll(_ context.Context, _ string) *rediscli
 	return redisclient.NewMapStringStringResult(copyValues, nil)
 }
 
+func (fake *budgetWorkerHashFake) HScan(ctx context.Context, _ string, _ uint64, match string, _ int64) *redisclient.ScanCmd {
+	page := make([]string, 0, len(fake.values)*2)
+	for field, value := range fake.values {
+		if strings.HasSuffix(match, "*") && !strings.HasPrefix(field, strings.TrimSuffix(match, "*")) {
+			continue
+		}
+		page = append(page, field, value)
+	}
+	cmd := redisclient.NewScanCmd(ctx, nil)
+	cmd.SetVal(page, 0)
+	return cmd
+}
+
 func (fake *budgetWorkerHashFake) HDel(_ context.Context, _ string, fields ...string) *redisclient.IntCmd {
 	fake.lastHDel = append([]string(nil), fields...)
 	if fake.hdelErr != nil {
@@ -64,6 +78,33 @@ func (fake *budgetWorkerHashFake) HDel(_ context.Context, _ string, fields ...st
 		}
 	}
 	return redisclient.NewIntResult(removed, nil)
+}
+
+func (fake *budgetWorkerHashFake) Eval(_ context.Context, _ string, _ []string, args ...interface{}) *redisclient.Cmd {
+	field, _ := args[0].(string)
+	if fake.beforeEval != nil {
+		beforeEval := fake.beforeEval
+		fake.beforeEval = nil
+		beforeEval(field)
+	}
+	expected, _ := args[1].(string)
+	current, exists := fake.values[field]
+	if !exists {
+		return redisclient.NewCmdResult(int64(-1), nil)
+	}
+	if current != expected {
+		return redisclient.NewCmdResult(int64(-2), nil)
+	}
+	if len(args) == 5 {
+		leaseJSON, _ := args[2].(string)
+		rosterField, _ := args[3].(string)
+		rosterJSON, _ := args[4].(string)
+		fake.values[field] = leaseJSON
+		fake.values[rosterField] = rosterJSON
+		return redisclient.NewCmdResult(int64(1), nil)
+	}
+	delete(fake.values, field)
+	return redisclient.NewCmdResult(int64(1), nil)
 }
 
 func testBudgetWorkerKeys(t *testing.T) BudgetKeySpace {
@@ -138,6 +179,35 @@ func TestBudgetWorkerLeaseRejectsExpiredAndRegressingRenewals(t *testing.T) {
 	}
 }
 
+func TestBudgetWorkerLeaseRenewRejectsStaleCompareAndSwap(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	fake := &budgetWorkerHashFake{values: make(map[string]string)}
+	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-cas", Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Register(context.Background(), "generation-a", "1-0", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	staleRaw := fake.values[store.leaseField()]
+	now = now.Add(time.Second)
+	if _, err := store.Renew(context.Background(), "generation-a", "1-1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	current, err := decodeBudgetWorkerLease(fake.values[store.leaseField()])
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Cursor = "1-2"
+	roster, err := decodeBudgetWorkerRoster(fake.values[store.rosterField()])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeRecords(context.Background(), current, roster, staleRaw); !errors.Is(err, ErrBudgetWorkerLeaseConflict) {
+		t.Fatalf("stale renewal error = %v", err)
+	}
+}
+
 func TestBudgetWorkerLeasePrunesOnlyExpiredGenerationLeases(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
@@ -162,6 +232,34 @@ func TestBudgetWorkerLeasePrunesOnlyExpiredGenerationLeases(t *testing.T) {
 	}
 	if len(fake.values) != 3 { // first roster, second lease, second roster
 		t.Fatalf("prune removed unexpected records: %#v", fake.values)
+	}
+}
+
+func TestBudgetWorkerLeasePruneDoesNotDeleteRenewedLease(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	fake := &budgetWorkerHashFake{values: make(map[string]string)}
+	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-prune-cas", Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Register(context.Background(), "generation-a", "1-0", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	fake.beforeEval = func(field string) {
+		lease := BudgetWorkerLease{Schema: BudgetWorkerLeaseSchema, SessionID: "session-prune-cas", GenerationID: "generation-a", Cursor: "1-1", LeaseExpiresAt: now.Add(time.Minute), UpdatedAt: now}
+		raw, marshalErr := marshalBudgetWorkerRecord(lease)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		fake.values[field] = raw
+	}
+	removed, err := store.PruneExpired(context.Background(), "generation-a", now, 1)
+	if err != nil || removed != 0 {
+		t.Fatalf("PruneExpired = %d, %v", removed, err)
+	}
+	if _, err := decodeBudgetWorkerLease(fake.values[store.leaseField()]); err != nil {
+		t.Fatalf("renewed lease was removed or invalid: %v", err)
 	}
 }
 

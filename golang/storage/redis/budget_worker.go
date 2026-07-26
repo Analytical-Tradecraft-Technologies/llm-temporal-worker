@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	redisclient "github.com/redis/go-redis/v9"
@@ -25,6 +26,27 @@ const (
 	budgetWorkerLeaseFieldPrefix  = "lease:"
 	budgetWorkerRosterFieldPrefix = "roster:"
 )
+
+// These scripts make the lease transitions compare-and-swap operations. The
+// serialized prior record is the CAS token, so a concurrent renew cannot
+// overwrite a newer cursor and pruning cannot delete a lease that was just
+// renewed after a scan observed it as expired.
+const budgetWorkerRenewScript = `
+local current = redis.call('HGET', KEYS[1], ARGV[1])
+if not current then return -1 end
+if current ~= ARGV[2] then return -2 end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3], ARGV[4], ARGV[5])
+return 1
+`
+
+const budgetWorkerPruneScript = `
+local current = redis.call('HGET', KEYS[1], ARGV[1])
+if current == ARGV[2] then
+  redis.call('HDEL', KEYS[1], ARGV[1])
+  return 1
+end
+return 0
+`
 
 var (
 	ErrBudgetWorkerLeaseMissing     = errors.New("budget worker lease is missing")
@@ -73,7 +95,9 @@ type BudgetWorkerLeaseRedisClient interface {
 	HGet(context.Context, string, string) *redisclient.StringCmd
 	HSet(context.Context, string, ...interface{}) *redisclient.IntCmd
 	HGetAll(context.Context, string) *redisclient.MapStringStringCmd
+	HScan(context.Context, string, uint64, string, int64) *redisclient.ScanCmd
 	HDel(context.Context, string, ...string) *redisclient.IntCmd
+	Eval(context.Context, string, []string, ...interface{}) *redisclient.Cmd
 }
 
 // BudgetWorkerLeaseStore persists one process session's roster and liveness
@@ -81,10 +105,12 @@ type BudgetWorkerLeaseRedisClient interface {
 // expiring timestamp rather than a Redis key TTL so roster data survives an
 // outage and can distinguish reconnecting sessions from a new process.
 type BudgetWorkerLeaseStore struct {
-	client    BudgetWorkerLeaseRedisClient
-	keys      BudgetKeySpace
-	clock     func() time.Time
-	sessionID string
+	client      BudgetWorkerLeaseRedisClient
+	keys        BudgetKeySpace
+	clock       func() time.Time
+	sessionID   string
+	pruneMu     sync.Mutex
+	pruneCursor uint64
 }
 
 var _ BudgetWorkerLeaseStorePort = (*BudgetWorkerLeaseStore)(nil)
@@ -171,7 +197,7 @@ func (store *BudgetWorkerLeaseStore) Register(ctx context.Context, generation Bu
 	} else if !errors.Is(err, redisclient.Nil) {
 		return BudgetWorkerLease{}, fmt.Errorf("read existing budget worker lease: %w", err)
 	}
-	if err := store.writeRecords(ctx, lease, roster, false); err != nil {
+	if err := store.writeRecords(ctx, lease, roster, ""); err != nil {
 		return BudgetWorkerLease{}, err
 	}
 	return lease, nil
@@ -232,7 +258,7 @@ func (store *BudgetWorkerLeaseStore) Renew(ctx context.Context, generation Budge
 	} else if !errors.Is(rosterErr, redisclient.Nil) {
 		return BudgetWorkerLease{}, fmt.Errorf("read budget worker roster: %w", rosterErr)
 	}
-	if err := store.writeRecords(ctx, lease, roster, true); err != nil {
+	if err := store.writeRecords(ctx, lease, roster, raw); err != nil {
 		return BudgetWorkerLease{}, err
 	}
 	return lease, nil
@@ -335,31 +361,35 @@ func (store *BudgetWorkerLeaseStore) PruneExpired(ctx context.Context, generatio
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	values, err := store.client.HGetAll(ctx, store.keys.WorkersKey()).Result()
+	// HSCAN is incremental, unlike HGETALL, and the cursor is retained by this
+	// process so each maintenance call inspects only one bounded page.
+	store.pruneMu.Lock()
+	defer store.pruneMu.Unlock()
+	values, cursor, err := store.client.HScan(ctx, store.keys.WorkersKey(), store.pruneCursor, budgetWorkerLeaseFieldPrefix+"*", int64(limit)).Result()
 	if err != nil {
 		return 0, fmt.Errorf("scan budget worker leases: %w", err)
 	}
-	fields := make([]string, 0, limit)
-	for field, raw := range values {
-		if len(fields) == limit || !strings.HasPrefix(field, budgetWorkerLeaseFieldPrefix) {
-			continue
-		}
+	store.pruneCursor = cursor
+	removed := 0
+	inspected := 0
+	for index := 0; index+1 < len(values) && inspected < limit; index += 2 {
+		inspected++
+		field, raw := values[index], values[index+1]
 		lease, decodeErr := decodeBudgetWorkerLease(raw)
 		if decodeErr != nil {
 			return 0, decodeErr
 		}
 		if lease.GenerationID == generation && !lease.LeaseExpiresAt.After(now.UTC()) {
-			fields = append(fields, field)
+			result, evalErr := store.client.Eval(ctx, budgetWorkerPruneScript, []string{store.keys.WorkersKey()}, field, raw).Int64()
+			if evalErr != nil {
+				return 0, fmt.Errorf("prune budget worker lease: %w", evalErr)
+			}
+			if result == 1 {
+				removed++
+			}
 		}
 	}
-	if len(fields) == 0 {
-		return 0, nil
-	}
-	removed, err := store.client.HDel(ctx, store.keys.WorkersKey(), fields...).Result()
-	if err != nil {
-		return 0, fmt.Errorf("prune budget worker leases: %w", err)
-	}
-	return int(removed), nil
+	return removed, nil
 }
 
 func (store *BudgetWorkerLeaseStore) validateRequest(ctx context.Context, generation BudgetGenerationID, cursor string, ttl time.Duration) error {
@@ -408,7 +438,7 @@ func (store *BudgetWorkerLeaseStore) rosterField() string {
 	return budgetWorkerRosterFieldPrefix + store.keys.space.digest("budget-worker-session", store.sessionID)
 }
 
-func (store *BudgetWorkerLeaseStore) writeRecords(ctx context.Context, lease BudgetWorkerLease, roster BudgetWorkerRoster, requireExisting bool) error {
+func (store *BudgetWorkerLeaseStore) writeRecords(ctx context.Context, lease BudgetWorkerLease, roster BudgetWorkerRoster, expectedLeaseRaw string) error {
 	leaseJSON, err := marshalBudgetWorkerRecord(lease)
 	if err != nil {
 		return err
@@ -417,20 +447,23 @@ func (store *BudgetWorkerLeaseStore) writeRecords(ctx context.Context, lease Bud
 	if err != nil {
 		return err
 	}
-	if requireExisting {
-		raw, getErr := store.client.HGet(ctx, store.keys.WorkersKey(), store.leaseField()).Result()
-		if errors.Is(getErr, redisclient.Nil) {
+	if expectedLeaseRaw != "" {
+		result, evalErr := store.client.Eval(ctx, budgetWorkerRenewScript, []string{store.keys.WorkersKey()}, store.leaseField(), expectedLeaseRaw, leaseJSON, store.rosterField(), rosterJSON).Int64()
+		if errors.Is(evalErr, redisclient.Nil) {
 			return ErrBudgetWorkerLeaseMissing
 		}
-		if getErr != nil {
-			return fmt.Errorf("verify budget worker lease: %w", getErr)
+		if evalErr != nil {
+			return fmt.Errorf("renew budget worker lease: %w", evalErr)
 		}
-		prior, decodeErr := decodeBudgetWorkerLease(raw)
-		if decodeErr != nil {
-			return decodeErr
-		}
-		if prior.SessionID != lease.SessionID || prior.GenerationID != lease.GenerationID {
+		switch result {
+		case -1:
+			return ErrBudgetWorkerLeaseMissing
+		case -2:
 			return ErrBudgetWorkerLeaseConflict
+		case 1:
+			return nil
+		default:
+			return fmt.Errorf("renew budget worker lease: unexpected result %d", result)
 		}
 	}
 	if _, err := store.client.HSet(ctx, store.keys.WorkersKey(), store.leaseField(), leaseJSON, store.rosterField(), rosterJSON).Result(); err != nil {
