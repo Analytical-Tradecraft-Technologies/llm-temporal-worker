@@ -362,6 +362,45 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 	}
 }
 
+func TestComposeRedisDeclaresNoEvictionAndPersistencePolicy(t *testing.T) {
+	document, raw := readCompose(t)
+	redis, ok := document.Services["redis"]
+	if !ok {
+		t.Fatal("Compose fixture is missing Redis")
+	}
+	if redis.Healthcheck == nil {
+		t.Fatal("Redis must expose a healthcheck")
+	}
+	test, ok := redis.Healthcheck["test"]
+	if !ok || test.Kind != yaml.SequenceNode || len(test.Content) != 2 {
+		t.Fatalf("Redis healthcheck must be a CMD-SHELL sequence, got %#v", test)
+	}
+	if got, want := test.Content[0].Value, "CMD-SHELL"; got != want {
+		t.Fatalf("Redis healthcheck mode = %q, want %q", got, want)
+	}
+	command := test.Content[1].Value
+	for _, required := range []string{
+		"CONFIG GET maxmemory-policy",
+		"= noeviction",
+		"CONFIG GET appendonly",
+		"= yes",
+		"CONFIG GET save",
+	} {
+		if !strings.Contains(command, required) {
+			t.Errorf("Redis healthcheck is missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		"--appendonly yes",
+		"--save 60 1",
+		"--maxmemory-policy noeviction",
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("Compose Redis command is missing explicit policy %q", required)
+		}
+	}
+}
+
 func TestComposeProvisionerShellScriptsAreSingleArguments(t *testing.T) {
 	document, _ := readCompose(t)
 	for _, name := range []string{"redis-function-provisioner", "blob-volume-provisioner"} {

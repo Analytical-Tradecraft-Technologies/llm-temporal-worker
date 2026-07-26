@@ -339,6 +339,13 @@ live provider credential. Local smoke checks remain
 parser/configuration/readiness checks because the provider mock resolves to a
 Docker-private address and the worker deliberately denies it:
 
+The Compose Redis service declares the same minimum state policy enforced by
+worker readiness: AOF and RDB persistence, `maxmemory-policy noeviction`, and a
+prefix-scoped ACL. Its healthcheck reads the effective Redis settings before
+the worker profile starts, preventing a local stack from masking a policy
+mismatch. This does not replace production persistence monitoring, backup, or
+restart evidence.
+
 1. validate the Compose model, generated configuration, and fixture invariants
    without creating containers;
 2. use `LLMTW_COMPOSE_LIVE=1 make compose-live-integration` in an authorized
