@@ -3,9 +3,13 @@
 package compose_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +20,9 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -24,6 +31,7 @@ const (
 	composeStatusRequestTimeout          = time.Second
 	composeContainerHealthPollInterval   = 100 * time.Millisecond
 	composeContainerHealthInspectTimeout = time.Second
+	composeMetricsBodyLimit              = 256 * 1024
 	// This idle Compose recovery test exercises the Temporal SDK v1.43.0
 	// AggregatedWorker's two remote-poller stop phases: workflow then activity.
 	// Each may consume WorkerStopTimeout, which this application maps from
@@ -297,14 +305,16 @@ func TestComposeReadinessTransitionTimeoutUsesWorkerAndProbeConfiguration(t *tes
 // polling becomes eligible again after the same Redis instance is restored.
 func TestComposeWorkerReadinessTracksRedis(t *testing.T) {
 	address := os.Getenv("LLMTW_COMPOSE_WORKER_HEALTH_ADDR")
+	metricsAddress := os.Getenv("LLMTW_COMPOSE_WORKER_METRICS_ADDR")
 	container := os.Getenv("LLMTW_COMPOSE_REDIS_CONTAINER")
-	if address == "" || container == "" {
-		t.Skip("make compose-live-integration supplies the worker health address and isolated Redis container")
+	if address == "" || metricsAddress == "" || container == "" {
+		t.Skip("make compose-live-integration supplies worker health/metrics addresses and the isolated Redis container")
 	}
 	readinessTransitionTimeout := composeReadinessTransitionTimeout(t)
 
 	assertComposeStatus(t, address, "/health/live", http.StatusOK)
 	assertComposeStatus(t, address, "/health/ready", http.StatusOK)
+	assertComposeMetric(t, metricsAddress, "llmtw_worker_polling", 1)
 
 	stopped := false
 	t.Cleanup(func() {
@@ -316,6 +326,7 @@ func TestComposeWorkerReadinessTracksRedis(t *testing.T) {
 	stopped = true
 	waitForComposeStatus(t, address, "/health/ready", http.StatusServiceUnavailable, readinessTransitionTimeout)
 	assertComposeStatus(t, address, "/health/live", http.StatusOK)
+	waitForComposeMetric(t, metricsAddress, "llmtw_worker_polling", 0, readinessTransitionTimeout)
 
 	runComposeDocker(t, "start", container)
 	stopped = false
@@ -323,6 +334,58 @@ func TestComposeWorkerReadinessTracksRedis(t *testing.T) {
 	waitForComposeContainerHealthy(t, address, container, restartedAt, composeContainerHealthTransitionTimeout(composeRedisHealthcheckTiming(t)))
 	waitForComposeStatus(t, address, "/health/ready", http.StatusOK, readinessTransitionTimeout)
 	assertComposeStatus(t, address, "/health/live", http.StatusOK)
+	waitForComposeMetric(t, metricsAddress, "llmtw_worker_polling", 1, readinessTransitionTimeout)
+}
+
+func TestComposeMetricScrapeIsBoundedAndReadsWorkerPolling(t *testing.T) {
+	if got, want := composeMetricsBodyLimit, 256*1024; got != want {
+		t.Fatalf("metrics body limit = %d, want %d", got, want)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/metrics" {
+			http.NotFound(response, request)
+			return
+		}
+		response.Header().Set("Content-Type", string(expfmt.FmtText))
+		_, _ = io.WriteString(response, "# HELP llmtw_worker_polling Whether the Temporal worker is polling.\n# TYPE llmtw_worker_polling gauge\nllmtw_worker_polling 1\n")
+	}))
+	defer server.Close()
+
+	value, err := composeMetricValue(strings.TrimPrefix(server.URL, "http://"), "llmtw_worker_polling")
+	if err != nil {
+		t.Fatalf("scrape worker polling metric: %v", err)
+	}
+	if value != 1 {
+		t.Fatalf("worker polling metric = %v, want 1", value)
+	}
+}
+
+func TestComposeMetricScrapeRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(response, strings.Repeat("x", composeMetricsBodyLimit+1))
+	}))
+	defer server.Close()
+
+	_, err := composeMetricValue(strings.TrimPrefix(server.URL, "http://"), "llmtw_worker_polling")
+	if err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("oversized metrics response error = %v, want bounded-response error", err)
+	}
+}
+
+func TestComposeMetricScrapeSanitizesParserErrors(t *testing.T) {
+	secret := "metric-secret-token"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(response, "llmtw_worker_polling{token=\""+secret+"\" 1\n")
+	}))
+	defer server.Close()
+
+	_, err := composeMetricValue(strings.TrimPrefix(server.URL, "http://"), "llmtw_worker_polling")
+	if err == nil {
+		t.Fatal("malformed metrics response unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("parser error leaked metric payload: %v", err)
+	}
 }
 
 func runComposeDocker(t *testing.T, arguments ...string) {
@@ -639,6 +702,70 @@ func assertComposeStatus(t *testing.T, address, path string, want int) {
 	if status != want {
 		t.Fatalf("%s status = %d, want %d", path, status, want)
 	}
+}
+
+func assertComposeMetric(t *testing.T, address, name string, want float64) {
+	t.Helper()
+	value, err := composeMetricValue(address, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != want {
+		t.Fatalf("%s = %v, want %v", name, value, want)
+	}
+}
+
+func waitForComposeMetric(t *testing.T, address, name string, want float64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last error
+	for time.Now().Before(deadline) {
+		value, err := composeMetricValue(address, name)
+		if err == nil && value == want {
+			return
+		}
+		if err != nil {
+			last = err
+		} else {
+			last = fmt.Errorf("value %v", value)
+		}
+		time.Sleep(composeStatusPollInterval)
+	}
+	t.Fatalf("%s did not reach %v within %s: %v", name, want, timeout, last)
+}
+
+// composeMetricValue reads only the bounded, non-secret metric needed by the
+// lifecycle proof. It deliberately never includes the exposition body in an
+// error so a future label mistake cannot leak the worker's metrics payload.
+func composeMetricValue(address, name string) (float64, error) {
+	response, err := (&http.Client{Timeout: composeStatusRequestTimeout}).Get("http://" + address + "/metrics")
+	if err != nil {
+		return 0, fmt.Errorf("metrics request: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("metrics request returned HTTP %d", response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, composeMetricsBodyLimit+1))
+	if err != nil {
+		return 0, fmt.Errorf("read metrics response: %w", err)
+	}
+	if len(body) > composeMetricsBodyLimit {
+		return 0, fmt.Errorf("metrics response exceeded %d-byte bound", composeMetricsBodyLimit)
+	}
+	parser := expfmt.NewTextParser(model.LegacyValidation)
+	families, err := parser.TextToMetricFamilies(bytes.NewReader(body))
+	if err != nil {
+		return 0, errors.New("parse metrics response")
+	}
+	family, ok := families[name]
+	if !ok {
+		return 0, fmt.Errorf("metrics response omitted %s", name)
+	}
+	if family.GetType() != dto.MetricType_GAUGE || len(family.GetMetric()) != 1 || family.GetMetric()[0].GetGauge() == nil {
+		return 0, fmt.Errorf("metrics response %s was not one gauge", name)
+	}
+	return family.GetMetric()[0].GetGauge().GetValue(), nil
 }
 
 func composeStatus(address, path string) (int, error) {
