@@ -17,9 +17,13 @@ the coordination Stream without consumer groups. `BudgetStreamTailer` now
 provides the worker-side bounded poll contract: each worker owns an independent
 cursor, disabled consumption and retained-stream gaps perform a Redis-only
 manifest reload, and a generation-switch hint is never applied to the old
-local plan. The tailer returns its latest cursor for the runtime owner to
-persist in the worker lease; hints remain non-authoritative and every paid
-decision still goes through the atomic Redis Function.
+local plan. Recovery captures the live Stream last entry immediately before
+the reload instead of reusing the manifest's historical high-water mark; this
+prevents a retained-prefix gap from looping forever and preserves hints
+appended while the reload runs. A reload with no concrete current cursor fails
+closed. The tailer returns its latest cursor for the runtime owner to persist
+in the worker lease; hints remain non-authoritative and every paid decision
+still goes through the atomic Redis Function.
 
 These adapters do not materialize window keys or execute the Redis admission
 Function; runtime composition and the fenced recovery coordinator remain

@@ -11,6 +11,12 @@ import (
 // reload the active Redis manifest before applying any further hints.
 var ErrBudgetStreamGenerationChanged = errors.New("budget stream generation changed")
 
+// ErrBudgetStreamCursorUnavailable means a recovery path could not capture a
+// concrete current Stream position. Advancing from a historical manifest
+// watermark in that situation could skip hints published during reload, so a
+// tailer must remain fail-closed.
+var ErrBudgetStreamCursorUnavailable = errors.New("current budget stream cursor is unavailable")
+
 // BudgetStreamCursorState is the worker-local checkpoint for the broadcast
 // budget Stream. The generation ID is part of the checkpoint so a worker can
 // never apply a hint from a previous immutable generation to the current one.
@@ -23,9 +29,19 @@ type BudgetStreamCursorState struct {
 // BudgetStreamReload is returned by the authoritative Redis-only reload path
 // after a disabled tailer, a retained-stream gap, or a generation switch.
 // The reload must read the active pointer and manifest directly from Redis and
-// return the manifest's high-water mark as Cursor. PostgreSQL is intentionally
-// not part of this callback.
+// return a concrete manifest high-water mark as Cursor. The tailer replaces
+// that historical watermark with a live position captured immediately before
+// the reload, so records published during the reload remain replayable.
+// PostgreSQL is intentionally not part of this callback.
 type BudgetStreamReload func(context.Context) (BudgetStreamCursorState, error)
+
+// BudgetStreamCursorSource exposes the live Redis Stream position required
+// for safe recovery. Implementations capture it immediately before the
+// authoritative generation reload; events published after that position are
+// then observed by the next poll instead of being skipped.
+type BudgetStreamCursorSource interface {
+	CurrentCursor(context.Context) (string, error)
+}
 
 // BudgetStreamApply receives a validated coordination hint. Hints may
 // invalidate local plans or wake waiters, but they must never authorize work;
@@ -169,6 +185,23 @@ func budgetStreamIDAdvances(previous, next string) bool {
 }
 
 func (tailer *BudgetStreamTailer) reloadCheckpoint(ctx context.Context) (BudgetStreamTailerResult, error) {
+	// Capture the live Stream position before reading the manifest. The
+	// manifest high-water mark can be older than the retained Stream prefix,
+	// and events appended while the reload runs must remain replayable.
+	cursorSource, ok := tailer.port.(BudgetStreamCursorSource)
+	if !ok {
+		return BudgetStreamTailerResult{State: tailer.state}, ErrBudgetStreamCursorUnavailable
+	}
+	currentCursor, err := cursorSource.CurrentCursor(ctx)
+	if err != nil {
+		return BudgetStreamTailerResult{State: tailer.state}, fmt.Errorf("capture current budget stream cursor: %w", err)
+	}
+	if len(currentCursor) == 0 || len(currentCursor) > MaxBudgetStreamIDBytes {
+		return BudgetStreamTailerResult{State: tailer.state}, fmt.Errorf("%w: cursor is empty or oversized", ErrBudgetStreamCursorUnavailable)
+	}
+	if _, _, err := parseRedisStreamID(currentCursor); err != nil {
+		return BudgetStreamTailerResult{State: tailer.state}, fmt.Errorf("%w: %v", ErrBudgetStreamCursorUnavailable, err)
+	}
 	state, err := tailer.reload(ctx)
 	if err != nil {
 		return BudgetStreamTailerResult{State: tailer.state}, fmt.Errorf("reload budget generation: %w", err)
@@ -176,6 +209,13 @@ func (tailer *BudgetStreamTailer) reloadCheckpoint(ctx context.Context) (BudgetS
 	if err := validateBudgetStreamCursorState(state); err != nil {
 		return BudgetStreamTailerResult{State: tailer.state}, fmt.Errorf("reload budget checkpoint: %w", err)
 	}
+	if state.Cursor == "" {
+		return BudgetStreamTailerResult{State: tailer.state}, fmt.Errorf("reload budget checkpoint: %w", ErrBudgetStreamCursorUnavailable)
+	}
+	// Keep the pre-reload live position rather than the historical manifest
+	// watermark. This is the ordering fence that prevents hints appended while
+	// the reload executes from disappearing between polls.
+	state.Cursor = currentCursor
 	tailer.state = state
 	return BudgetStreamTailerResult{State: state, Reloaded: true}, nil
 }

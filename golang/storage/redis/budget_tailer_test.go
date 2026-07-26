@@ -73,7 +73,7 @@ func TestBudgetStreamTailerReloadsOnDisabledConsumptionGapAndGenerationSwitch(t 
 
 	// A retained-stream gap is recovered by the same Redis-only reload path.
 	tailer.SetEnabled(true)
-	gapPort := &scriptedBudgetEventPort{err: ErrBudgetStreamGap}
+	gapPort := &scriptedBudgetEventPort{err: ErrBudgetStreamGap, currentCursor: "8-0"}
 	gapTailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
 		Port:      gapPort,
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "1-0"},
@@ -87,8 +87,23 @@ func TestBudgetStreamTailerReloadsOnDisabledConsumptionGapAndGenerationSwitch(t 
 		t.Fatal(err)
 	}
 	result, err = gapTailer.Poll(context.Background())
-	if err != nil || !result.Reloaded || result.State.Cursor != "9-0" || gapPort.reads != 1 {
+	if err != nil || !result.Reloaded || result.State.Cursor != "8-0" || gapPort.reads != 1 {
 		t.Fatalf("gap poll = %#v, %v, reads=%d", result, err, gapPort.reads)
+	}
+	withoutCursor, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+		Port:      &scriptedBudgetEventPort{err: ErrBudgetStreamGap},
+		Initial:   BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "1-0"},
+		BatchSize: 1,
+		Enabled:   true,
+		Reload: func(context.Context) (BudgetStreamCursorState, error) {
+			return BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "9-0"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := withoutCursor.Poll(context.Background()); !errors.Is(err, ErrBudgetStreamCursorUnavailable) {
+		t.Fatalf("gap without current cursor = %v, want ErrBudgetStreamCursorUnavailable", err)
 	}
 
 	// A generation-switch event is never applied to the old local plan.
@@ -229,9 +244,10 @@ func testTailerEvent(generation string, revision int64) BudgetStreamEvent {
 }
 
 type scriptedBudgetEventPort struct {
-	reads   int
-	records []BudgetStreamRecord
-	err     error
+	reads         int
+	records       []BudgetStreamRecord
+	err           error
+	currentCursor string
 }
 
 func (port *scriptedBudgetEventPort) Append(context.Context, BudgetStreamEvent) (string, error) {
@@ -241,4 +257,11 @@ func (port *scriptedBudgetEventPort) Append(context.Context, BudgetStreamEvent) 
 func (port *scriptedBudgetEventPort) Read(context.Context, string, int) ([]BudgetStreamRecord, error) {
 	port.reads++
 	return port.records, port.err
+}
+
+func (port *scriptedBudgetEventPort) CurrentCursor(context.Context) (string, error) {
+	if port.currentCursor == "" {
+		return "", ErrBudgetStreamCursorUnavailable
+	}
+	return port.currentCursor, nil
 }
