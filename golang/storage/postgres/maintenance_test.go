@@ -62,3 +62,19 @@ func TestNewDeleteBlobOutboxEventRejectsMissingIDsOrTime(t *testing.T) {
 		})
 	}
 }
+
+func TestClaimBlobDeletionBoundsExplicitTargets(t *testing.T) {
+	now := time.Date(2026, 7, 26, 4, 0, 0, 0, time.UTC)
+	repository := MaintenanceRepository{}
+
+	ids := make([]uuid.UUID, maxMaintenanceBatch+1)
+	for index := range ids {
+		ids[index] = uuid.New()
+	}
+	if _, err := repository.ClaimBlobDeletion(nil, now, ids, 1); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("unbounded blob deletion target list was accepted: %v", err)
+	}
+	if _, err := repository.ClaimBlobDeletion(nil, now, []uuid.UUID{uuid.Nil}, 1); err == nil || !strings.Contains(err.Error(), "nil ID") {
+		t.Fatalf("nil blob deletion target was accepted: %v", err)
+	}
+}
