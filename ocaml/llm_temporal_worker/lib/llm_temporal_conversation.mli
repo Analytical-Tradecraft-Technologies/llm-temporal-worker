@@ -5,9 +5,10 @@ open Llm_temporal_models
 module Settings : sig
   type t
 
-  (** The v1 facade exposes only settings represented by the one-shot
-      Generate v1 patch. Legacy sampling and reasoning records are kept on
-      the lower-level request API and cannot be silently dropped here. *)
+  (** Settings are the locally known effective values used to build the first
+      sparse Generate patch. Every field maps to its exact v1 wire type; an
+      omitted optional value remains [Keep] so inherited worker state is not
+      accidentally cleared. *)
   val make :
     ?service_class:service_class ->
     ?service_class_fallbacks:service_class list ->
@@ -17,6 +18,8 @@ module Settings : sig
     ?tool_policy:tool_policy ->
     ?output:output_spec ->
     ?temperature:Usd_decimal.t ->
+    ?reasoning_effort:reasoning_effort ->
+    ?reasoning_summary:reasoning_summary ->
     ?extensions:(string * Yojson.Safe.t) list ->
     unit -> t
 

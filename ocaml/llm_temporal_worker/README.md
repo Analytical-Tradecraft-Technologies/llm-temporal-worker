@@ -49,6 +49,8 @@ let request =
                  ~service_class:Priority
                  ~instructions:[ Text_instruction { level = Application; text = "Return JSON." } ]
                  ~service_class_fallbacks:[ Standard ]
+                 ~reasoning_effort:High
+                 ~reasoning_summary:Concise
                  ~output:{ max_tokens = Some 200; format = Json_format }
                  ())
     ~input:[ Message { actor = Human; content = [ Text "Summarise this invoice." ] } ]
@@ -104,6 +106,14 @@ let temperature =
 let settings = Settings.make ~temperature ()
 let root = Conversation.root ~context ~model ~settings ()
 ```
+
+`Conversation.Settings.make` also accepts the typed v1
+`~reasoning_effort` and `~reasoning_summary` controls.  Omitting either leaves
+the corresponding sparse patch as `Keep`, so a checkpoint's inherited worker
+setting is preserved; supplying one emits an exact closed v1 enum rather than
+an untyped string.  Per-turn overrides remain available through
+`Settings.Patch.set_reasoning_effort` and
+`Settings.Patch.set_reasoning_summary`.
 
 The repository's `ocaml/consumer_smoke` project is that downstream-package
 check.  It executes deterministic injected dispatchers for one root Generate,

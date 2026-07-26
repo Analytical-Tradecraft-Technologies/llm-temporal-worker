@@ -103,6 +103,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
       let root =
         Conversation.root ~context:input.context ~model:input.model
           ~settings:(Settings.make ~temperature:(decimal_constant "0")
+            ~reasoning_effort:Medium ~reasoning_summary:Concise
             ~tools:input.tools ~tool_policy:{ choice = Auto; parallel = false }
             ~output:input.output ()) ()
       in

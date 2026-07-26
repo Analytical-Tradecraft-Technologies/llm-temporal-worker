@@ -10,6 +10,8 @@ module Settings = struct
     tool_policy : tool_policy;
     output : output_spec option;
     temperature : Usd_decimal.t option;
+    reasoning_effort : reasoning_effort option;
+    reasoning_summary : reasoning_summary option;
     extensions : (string * Yojson.Safe.t) list;
   }
 
@@ -22,10 +24,13 @@ module Settings = struct
       ?(tool_policy = { choice = Auto; parallel = false })
       ?output
       ?temperature
+      ?reasoning_effort
+      ?reasoning_summary
       ?(extensions = [])
       () =
     { service_class; service_class_fallbacks; portability; instructions; tools;
-      tool_policy; output; temperature; extensions }
+      tool_policy; output; temperature; reasoning_effort; reasoning_summary;
+      extensions }
 
   let default = make ()
 
@@ -156,8 +161,8 @@ let initial_patch conversation : settings_patch =
     tool_policy = Set settings.tool_policy;
     output = (match settings.output with None -> Clear | Some value -> Set value);
     temperature = (match settings.temperature with None -> Keep | Some value -> Set value);
-    reasoning_effort = Keep;
-    reasoning_summary = Keep;
+    reasoning_effort = (match settings.reasoning_effort with None -> Keep | Some value -> Set value);
+    reasoning_summary = (match settings.reasoning_summary with None -> Keep | Some value -> Set value);
     compaction_policy = Keep;
     extensions = Set settings.extensions }
 
@@ -189,6 +194,8 @@ let apply_patch (settings : Settings.t) (patch : settings_patch) =
     tool_policy = value_or ~cleared:{ choice = Auto; parallel = false } settings.tool_policy patch.tool_policy;
     output = option_or settings.output patch.output;
     temperature = option_or settings.temperature patch.temperature;
+    reasoning_effort = option_or settings.reasoning_effort patch.reasoning_effort;
+    reasoning_summary = option_or settings.reasoning_summary patch.reasoning_summary;
     extensions = value_or ~cleared:[] settings.extensions patch.extensions } : Settings.t)
 
 let request_patch conversation (explicit : settings_patch option) : settings_patch =
