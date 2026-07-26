@@ -87,21 +87,34 @@ thresholds; it does not execute a benchmark or make a release claim.
 
 ## PostgreSQL query-plan checks
 
-The PostgreSQL integration suite includes
-`TestInventoryQueryPlansUseTheLatestIndex`. It loads 10,000 immutable inventory
-snapshots across 100 endpoint routes, runs `ANALYZE`, and asks PostgreSQL for
-JSON plans for both the latest-snapshot horizon query and its model-page query.
-The test uses normal planner settings and requires the configured
-`provider_inventory_latest_account_idx`; a regression to an unbounded
-sequential scan fails the integration gate. This is an index eligibility check
-at a bounded representative cardinality, not a latency or production-SLO
-measurement.
+The PostgreSQL integration suite includes representative-cardinality
+`EXPLAIN (FORMAT JSON, COSTS OFF)` gates for the production read shapes:
 
-The fixture is isolated by a unique configuration digest and removes its model,
-snapshot, and configuration rows before closing the integration pool. It runs
-through `make postgres-integration`, so local runs without
-`LLMTW_POSTGRES_ADDR` remain a deterministic skip while CI executes the real
-PostgreSQL plan.
+- `TestInventoryQueryPlansUseTheLatestIndex` loads 10,000 immutable inventory
+  snapshots across 100 endpoint routes and requires
+  `provider_inventory_latest_account_idx` for provider-filtered latest-account
+  reads, plus `provider_inventory_latest_idx` for the endpoint-only horizon
+  read.
+- `TestProviderQueryPlansUseProjectionIndexes` loads 10,000 route projections
+  and status events, then requires `provider_route_query_idx` (or the
+  equivalent generated route primary-key path) for the bounded route page and
+  `provider_route_credit_query_idx` for the DISTINCT-ON credit page. PostgreSQL
+  may choose the primary-key path because it has the same `(config_digest,
+  route_id)` leading keys; both are valid route-identity plans.
+- `TestSpendSummaryQueryPlanUsesLedgerIndexes` loads 10,000 completed
+  operations and query executions and requires `operations_scope_spend_idx` and
+  `query_executions_scope_time_idx` for the scoped spend-summary ledger scan.
+
+Each gate runs with normal planner settings and fails if PostgreSQL regresses to
+a sequential scan instead of the checked-in index path. These are index
+eligibility checks at bounded representative cardinality, not latency or
+production-SLO measurements.
+
+Each fixture is isolated by a unique configuration digest and removes its
+provider rows, ledger rows, and configuration rows before closing the
+integration pool. It runs through `make postgres-integration`, so local runs
+without `LLMTW_POSTGRES_ADDR` remain a deterministic skip while CI executes the
+real PostgreSQL plan.
 
 The same integration package includes `TestBudgetJournalIntegrationHasNoBudgetReads`.
 It attaches a `pgx.QueryTracer` to the real journal append/finalize pool and
