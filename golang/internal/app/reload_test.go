@@ -105,12 +105,22 @@ func TestReloadClientConstructionFailureKeepsOldSnapshot(t *testing.T) {
 	}
 }
 
-func TestReloadRejectsRedisKeyPrefixChangeBeforeConstructingClients(t *testing.T) {
+func TestReloadRunsReplacementValidatorBeforeConstructingClients(t *testing.T) {
 	initial := exampleConfig(t)
 	created := 0
+	rejected := errors.New("replacement requires process restart")
 	application, err := New(context.Background(), Options{
 		InitialConfig: initial,
 		Builder:       SnapshotBuilder{},
+		ReplacementValidator: func(current, replacement *config.Snapshot) error {
+			if current == nil || replacement == nil {
+				t.Fatal("replacement validator received a nil snapshot")
+			}
+			if current.Config().State.Redis.KeyPrefix == replacement.Config().State.Redis.KeyPrefix {
+				t.Fatal("replacement validator did not receive the changed configuration")
+			}
+			return rejected
+		},
 		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) {
 			created++
 			return ClientSetFunc(func(context.Context) error { return nil }), nil
@@ -120,8 +130,8 @@ func TestReloadRejectsRedisKeyPrefixChangeBeforeConstructingClients(t *testing.T
 		t.Fatal(err)
 	}
 	changed := strings.Replace(string(initial), "key_prefix: llmtw", "key_prefix: worker-b", 1)
-	if err := application.Reload(context.Background(), []byte(changed)); !errors.Is(err, errRedisKeyPrefixImmutable) {
-		t.Fatalf("reload error = %v, want immutable redis key prefix", err)
+	if err := application.Reload(context.Background(), []byte(changed)); !errors.Is(err, rejected) {
+		t.Fatalf("reload error = %v, want replacement rejection", err)
 	}
 	if created != 1 {
 		t.Fatalf("reload constructed %d client sets, want 1", created)
