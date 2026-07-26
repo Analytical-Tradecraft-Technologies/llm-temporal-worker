@@ -62,6 +62,7 @@ services:
         exec /usr/local/bin/docker-entrypoint.sh redis-server \
           --appendonly yes \
           --save 60 1 \
+          --maxmemory-policy noeviction \
           --aclfile "$${acl_file}"
     command: []
     ports:
@@ -69,7 +70,10 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", 'redis-cli --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" ping']
+      # Keep the local dependency contract as strict as worker readiness. The
+      # worker profile must not start against an evicting or non-persistent
+      # Redis instance.
+      test: ["CMD-SHELL", 'redis-cli --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" ping | grep -qx PONG && test "$$(redis-cli --raw --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" CONFIG GET maxmemory-policy | tail -n1)" = noeviction && test "$$(redis-cli --raw --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" CONFIG GET appendonly | tail -n1)" = yes && test -n "$$(redis-cli --raw --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" CONFIG GET save | tail -n1)"']
       interval: 5s
       timeout: 3s
       retries: 24

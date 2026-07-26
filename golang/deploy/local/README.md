@@ -7,6 +7,10 @@ used. Postgres and Temporal share the development-only
 non-local use. Redis disables its default user and gives the worker and
 provisioner the development-only `${LLMTW_REDIS_USERNAME:-local}` /
 `${LLMTW_REDIS_PASSWORD:-local-only}` ACL; override both for any non-local use.
+The Redis command explicitly enables AOF and RDB snapshots and sets
+`maxmemory-policy noeviction`; its healthcheck reads those settings before the
+worker profile can start. This is a local contract check, not evidence of a
+production backup or restore exercise.
 The worker profile is deliberately opt-in because it needs a continuation
 HMAC key. The supported lifecycle gate creates that key with restrictive
 permissions, uses a development-only durable file-blob volume, and removes its
