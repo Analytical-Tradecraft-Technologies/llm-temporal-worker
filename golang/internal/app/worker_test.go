@@ -167,6 +167,28 @@ func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 	}
 }
 
+func TestWorkerRejectsUnsafeTaskQueueBeforeConstructingTemporalWorker(t *testing.T) {
+	var factoryCalls atomic.Int32
+	for _, taskQueue := range []string{" queue-a", "queue-a\n", "queue-a\x00"} {
+		t.Run(taskQueue, func(t *testing.T) {
+			_, err := app.NewWorker(app.WorkerOptions{
+				TaskQueue: taskQueue, MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+				GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
+				Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+					factoryCalls.Add(1)
+					return &fakeWorker{}, &fakeRegistry{}, nil
+				},
+			})
+			if err == nil {
+				t.Fatal("NewWorker unexpectedly accepted unsafe task queue")
+			}
+		})
+	}
+	if got := factoryCalls.Load(); got != 0 {
+		t.Fatalf("Temporal worker factory calls = %d, want 0 for rejected queues", got)
+	}
+}
+
 func TestWorkerStartErrorLeavesReadinessFalse(t *testing.T) {
 	health := httpserver.NewHealthState()
 	controller := &fakeWorker{startErr: errors.New("start failed")}

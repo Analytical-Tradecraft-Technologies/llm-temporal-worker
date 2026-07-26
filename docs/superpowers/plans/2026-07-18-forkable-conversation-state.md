@@ -740,7 +740,10 @@ durable implementation and protected integration evidence remain pending.
 - Test: **activity/v1_integration_test.go**
 - Test: **integration/temporal/conversation_lifecycle_test.go**
 
-- [ ] Register exact three Activity names on the existing task queue.
+- [x] Register exact three Activity names on the existing task queue. Worker
+  construction rejects unsafe queues before creating a Temporal worker, then
+  binds the registration through `RegisterForTaskQueue`; descriptor tests and
+  the app-level startup guard cover the one-shot v1 boundary.
 - [ ] Keep heartbeats/errors/payloads small and redacted. Set limits well below
   current Temporal limits and reverify official limits at implementation time.
 - [ ] Order Generate as replay, materialize/validate, route-isolated
