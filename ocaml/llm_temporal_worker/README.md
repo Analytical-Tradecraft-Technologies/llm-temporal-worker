@@ -231,6 +231,27 @@ match Llm_temporal.Query.execute
 | Error error -> handle_temporal_error error
 ```
 
+For application code, `Query.Filter` provides validated builders instead of
+requiring callers to assemble page records by hand.  The builders apply the
+wire bounds before the GADT is constructed: page sizes are 1--1000, refresh
+ages are 1--86400 seconds, tagged cursors must belong to the corresponding
+query, and spend intervals must be strictly increasing with unique grouping
+dimensions.  The raw filter records remain available for protocol fixtures.
+
+```ocaml
+let* provider_filter =
+  Llm_temporal.Query.Filter.provider_status
+    ~include_healthy:false ~page_size:100
+    ~refresh_if_older_than_seconds:300L ()
+in
+Llm_temporal.Query.execute ~operation_key ~context
+  (Llm_temporal.Query.Provider_status provider_filter)
+```
+
+Validation failures are ordinary `validation_error` strings and happen before
+an Activity is scheduled, which makes malformed query construction explicit in
+deterministic Workflow code.
+
 The `Provider_status`, `Model_inventory`, `Credit_status`, `Budget_status`,
 and `Spend_summary` constructors are exhaustive. The facade validates that
 the closed result tag matches the requested constructor and returns a codec

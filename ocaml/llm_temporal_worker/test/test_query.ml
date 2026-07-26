@@ -68,6 +68,15 @@ let dispatch ?task_queue:_ activity envelope =
 
 let run query = ok (Query.execute_with ~dispatch ~operation_key ~context query)
 
+let expect_filter_error label expected = function
+  | Error error when String.equal error expected -> ()
+  | Error error -> failf "%s returned unexpected validation error: %s" label error
+  | Ok _ -> failwith (label ^ " accepted an invalid filter")
+
+let filter_ok = function
+  | Ok value -> value
+  | Error error -> failwith ("unexpected filter validation error: " ^ error)
+
 let () =
   (match Budget_stream_id.of_string "not-a-stream-id" with
    | Error _ -> ()
@@ -232,6 +241,51 @@ let () =
    | Error error when String.equal (Temporal.Error.message error) "query failed" -> ()
    | Error error -> failf "unexpected Activity error: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "Activity error was swallowed");
+
+  (* Natural builders validate query invariants before callers wrap the
+     filter in a GADT constructor.  Tagged cursors from another query kind
+     are rejected locally; untagged cursors remain available for externally
+     supplied continuation tokens. *)
+  expect_filter_error "provider page size"
+    "provider_status.page_size must be between 1 and 1000"
+    (Query.Filter.provider_status ~page_size:0 ());
+  expect_filter_error "provider refresh age"
+    "provider_status.refresh_if_older_than_seconds must be between 1 and 86400"
+    (Query.Filter.provider_status ~refresh_if_older_than_seconds:0L ());
+  expect_filter_error "provider cursor kind"
+    "provider_status.cursor kind mismatch: expected provider_status, got model_inventory"
+    (Query.Filter.provider_status
+       ~cursor:(tagged_cursor Query_cursor.Model_inventory "model-page-2") ());
+  let built_provider =
+    filter_ok (Query.Filter.provider_status ~include_healthy:false ~page_size:25
+          ~refresh_if_older_than_seconds:300L ())
+  in
+  if built_provider.page_size <> 25 || built_provider.include_healthy
+     || built_provider.refresh_if_older_than_seconds <> Some 300L then
+    failwith "validated provider filter lost its fields";
+  let built_model = filter_ok (Query.Filter.model_inventory ()) in
+  if built_model.page_size <> 100 then
+    failwith "validated model filter did not apply the default page size";
+  (match (Query.to_envelope ~operation_key ~context
+            (Query.Provider_status built_provider)).query with
+   | Provider_status_request { page_size = 25; include_healthy = false;
+                               refresh_if_older_than_seconds = Some 300L; _ } -> ()
+   | _ -> failwith "validated provider filter did not build the expected query");
+  expect_filter_error "spend interval"
+    "spend_summary.end_time must be after start_time"
+    (Query.Filter.spend_summary
+       ~start_time:(time "2026-01-02T00:00:00Z")
+       ~end_time:(time "2026-01-01T00:00:00Z") ());
+  expect_filter_error "duplicate spend dimension"
+    "spend_summary.group_by contains duplicate value"
+    (Query.Filter.spend_summary ~start_time:(time "2026-01-01T00:00:00Z")
+       ~end_time:(time "2026-01-02T00:00:00Z")
+       ~group_by:[ By_provider; By_provider ] ());
+  expect_filter_error "duplicate spend operation kind"
+    "spend_summary.operation_kinds contains duplicate value"
+    (Query.Filter.spend_summary ~start_time:(time "2026-01-01T00:00:00Z")
+       ~end_time:(time "2026-01-02T00:00:00Z")
+       ~operation_kinds:[ Generate; Generate ] ());
 
   let unknown = Bytes.of_string
     {|{"api_version":"llm.temporal/query/v1","operation_key":"query-1","query_execution_id":"execution-1","kind":"future_kind","observed_at":"2026-01-01T00:00:00Z","source":"persisted","freshness":"current","complete":true,"next_cursor":null,"result":{},"cost_status":"unknown","actual_cost_usd":null,"cost_unknown_reason_code":"state_unavailable"}|}
