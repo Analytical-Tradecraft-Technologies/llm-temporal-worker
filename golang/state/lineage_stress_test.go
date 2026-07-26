@@ -23,6 +23,7 @@ func TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks(t *testing.T) {
 		turns            = 10_000
 		snapshotInterval = 500
 		forkTurn         = 7_500
+		forks            = 100
 	)
 	now := time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC)
 	limits := MaterializeLimits{
@@ -86,8 +87,10 @@ func TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks(t *testing.T) {
 	}
 
 	// Fork concurrently from one immutable parent. Each child must retain the
-	// complete parent transcript and add only its own bounded turn.
-	forked := make([]Checkpoint, 3)
+	// complete parent transcript and add only its own bounded turn. One hundred
+	// siblings exercises the production fan-out envelope without requiring a
+	// provider, database, or Temporal server.
+	forked := make([]Checkpoint, forks)
 	var group sync.WaitGroup
 	for index := range forked {
 		index := index
