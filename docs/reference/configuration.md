@@ -521,9 +521,12 @@ choices. A post-release namespace change requires a separate migration design.
 
 The schema foundation lives in
 [`golang/storage/postgres`](../../golang/storage/postgres/namespace.go). The
-checked-in migration template is rendered only after namespace validation and
-uses schema-qualified `pgx.Identifier` values; startup verification is
-read-only, while `Install` is reserved for an explicit provisioning step.
+checked-in worker-object migration is rendered only after namespace validation
+and uses schema-qualified `pgx.Identifier` values. `Install` is reserved for
+an explicit provisioning step: it creates and locks down a missing dedicated
+schema, but leaves an existing schema's ACL untouched so an operator can use a
+shared schema with a dedicated table prefix. Startup verification remains
+read-only and never creates or alters a schema.
 Run `make postgres-integration` from `golang/` to exercise the namespace and
 contract gates against the pinned PostgreSQL service image.
 

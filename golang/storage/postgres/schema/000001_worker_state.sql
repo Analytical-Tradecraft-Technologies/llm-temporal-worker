@@ -1,10 +1,10 @@
 -- PostgreSQL worker-state migration template.
 -- __SCHEMA__ and __PREFIX__ are replaced only after Namespace validation.
 -- This template is intentionally schema-qualified and does not alter session
--- namespace resolution.
-
-CREATE SCHEMA __SCHEMA__;
-REVOKE ALL ON SCHEMA __SCHEMA__ FROM PUBLIC;
+-- namespace resolution. The installer creates a missing schema and revokes
+-- PUBLIC access only for that newly created, worker-owned schema. An existing
+-- schema may be operator-owned/shared and must retain its schema-level ACL;
+-- the installer creates only the prefixed worker objects in that case.
 
 CREATE TABLE __SCHEMA__.__PREFIX__schema_contract (
     contract_name text PRIMARY KEY,

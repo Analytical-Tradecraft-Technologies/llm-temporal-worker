@@ -56,7 +56,6 @@ func TestMigrationTemplateContract(t *testing.T) {
 	}
 	sql := string(data)
 	for _, expected := range []string{
-		"CREATE SCHEMA __SCHEMA__",
 		"__SCHEMA__.__PREFIX__operations",
 		"__SCHEMA__.__PREFIX__response_cache_entries",
 		"__SCHEMA__.__PREFIX__budget_buckets",
@@ -71,6 +70,9 @@ func TestMigrationTemplateContract(t *testing.T) {
 	}
 	if strings.Contains(sql, "WITH inserted") || strings.Contains(sql, "search_path") {
 		t.Fatal("migration contains runtime DML or search_path")
+	}
+	if strings.Contains(sql, "CREATE SCHEMA") || strings.Contains(sql, "REVOKE ALL ON SCHEMA") {
+		t.Fatal("worker object migration must not mutate a pre-existing shared schema ACL")
 	}
 	ns, err := NewNamespace("llm_worker", "private", "tenant_")
 	if err != nil {
