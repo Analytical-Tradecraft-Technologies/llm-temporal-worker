@@ -1,5 +1,108 @@
 open Llm_temporal_models
 
+let ( let* ) = Result.bind
+
+module Filter = struct
+  (** The wire records remain available for protocol fixtures, but callers
+      should prefer these constructors.  They validate values before an
+      Activity is scheduled, so a malformed page or spend interval cannot
+      become a workflow-side protocol failure. *)
+
+  let validate_page_size ~kind value =
+    if value < 1 || value > 1000 then
+      Error (Printf.sprintf "%s.page_size must be between 1 and 1000" kind)
+    else Ok value
+
+  let refresh_age ~kind value =
+    match value with
+    | None -> Ok None
+    | Some value when Int64.compare value 1L >= 0
+                    && Int64.compare value 86400L <= 0 -> Ok (Some value)
+    | Some _ ->
+        Error (Printf.sprintf
+                 "%s.refresh_if_older_than_seconds must be between 1 and 86400"
+                 kind)
+
+  let validate_cursor ~kind expected value =
+    match value with
+    | None -> Ok None
+    | Some cursor ->
+        (match Query_cursor.kind cursor with
+         | None -> Ok (Some cursor)
+         | Some actual when actual = expected -> Ok (Some cursor)
+         | Some actual ->
+             Error (Printf.sprintf "%s.cursor kind mismatch: expected %s, got %s"
+                      kind (Query_cursor.kind_to_string expected)
+                      (Query_cursor.kind_to_string actual)))
+
+  let paginated ~kind expected ?page_size ?cursor () f =
+    let page_size = Option.value ~default:100 page_size in
+    match validate_page_size ~kind page_size with
+    | Error error -> Error error
+    | Ok page_size ->
+        (match validate_cursor ~kind expected cursor with
+         | Error error -> Error error
+         | Ok cursor -> Ok (f page_size cursor))
+
+  let provider_status
+      ?provider ?endpoint ?availability ?(include_healthy = true)
+      ?refresh_if_older_than_seconds ?page_size ?cursor () =
+    let* refresh_if_older_than_seconds =
+      refresh_age ~kind:"provider_status" refresh_if_older_than_seconds
+    in
+    paginated ~kind:"provider_status" Query_cursor.Provider_status
+      ?page_size ?cursor ()
+      (fun page_size cursor ->
+         { provider; endpoint; availability; include_healthy;
+           refresh_if_older_than_seconds; page_size; cursor })
+
+  let model_inventory
+      ?provider ?endpoint ?model_prefix ?lifecycle
+      ?refresh_if_older_than_seconds ?page_size ?cursor () =
+    let* refresh_if_older_than_seconds =
+      refresh_age ~kind:"model_inventory" refresh_if_older_than_seconds
+    in
+    paginated ~kind:"model_inventory" Query_cursor.Model_inventory
+      ?page_size ?cursor ()
+      (fun page_size cursor ->
+         { provider; endpoint; model_prefix; lifecycle;
+           refresh_if_older_than_seconds; page_size; cursor })
+
+  let credit_status
+      ?provider ?endpoint ?(include_ok = true)
+      ?refresh_if_older_than_seconds ?page_size ?cursor () =
+    let* refresh_if_older_than_seconds =
+      refresh_age ~kind:"credit_status" refresh_if_older_than_seconds
+    in
+    paginated ~kind:"credit_status" Query_cursor.Credit_status
+      ?page_size ?cursor ()
+      (fun page_size cursor ->
+         { provider; endpoint; include_ok; refresh_if_older_than_seconds;
+           page_size; cursor })
+
+  let budget_status ?policy_key ?active_at ?(include_windows = true) () =
+    Ok { policy_key; active_at; include_windows }
+
+  let duplicate ~field values equal =
+    let rec loop seen = function
+      | [] -> Ok ()
+      | value :: _rest when List.exists (equal value) seen ->
+          Error (Printf.sprintf "%s contains duplicate value" field)
+      | value :: rest -> loop (value :: seen) rest
+    in
+    loop [] values
+
+  let spend_summary ~start_time ~end_time ?(group_by = [])
+      ?(operation_kinds = []) () =
+    if Ptime.compare end_time start_time <= 0 then
+      Error "spend_summary.end_time must be after start_time"
+    else
+      let* () = duplicate ~field:"spend_summary.group_by" group_by ( = ) in
+      let* () = duplicate ~field:"spend_summary.operation_kinds"
+          operation_kinds ( = ) in
+      Ok { start_time; end_time; group_by; operation_kinds }
+end
+
 type _ t =
   | Provider_status : provider_status_filter -> provider_status_page t
   | Model_inventory : model_inventory_filter -> model_inventory_page t

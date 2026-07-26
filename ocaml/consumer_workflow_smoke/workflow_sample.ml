@@ -33,6 +33,13 @@ type workflow_output = {
 let operation_key input suffix =
   Operation_key.of_string (input.run_key ^ ":" ^ suffix)
 
+(* Query.Filter builders validate before scheduling.  Workflow code that
+   combines their construction with Activity results can deliberately map the
+   package's validation string into the same Temporal error channel. *)
+let filter_result = function
+  | Ok value -> Ok value
+  | Error message -> Error (Temporal.Error.codec ~message)
+
 let decimal_constant value =
   match Decimal.of_string value with
   | Ok value -> value
@@ -84,21 +91,22 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
     ~name:"claims.cached-branching.v1"
     ~input:input_codec ~output:output_codec
     (fun input ->
+      let* credit_filter =
+        filter_result (Query.Filter.credit_status ~include_ok:false
+          ~refresh_if_older_than_seconds:300L ~page_size:100 ())
+      in
       let* credit =
         Query.execute ~task_queue
           ~operation_key:(operation_key input "credit-before")
           ~context:input.context
-          (Query.Credit_status {
-             provider = None; endpoint = None; include_ok = false;
-             refresh_if_older_than_seconds = Some 300L; page_size = 100;
-             cursor = None })
+          (Query.Credit_status credit_filter)
       in
+      let* budget_filter = filter_result (Query.Filter.budget_status ()) in
       let* budget =
         Query.execute ~task_queue
           ~operation_key:(operation_key input "budget-before")
           ~context:input.context
-          (Query.Budget_status {
-             policy_key = None; active_at = None; include_windows = true })
+          (Query.Budget_status budget_filter)
       in
       let root =
         Conversation.root ~context:input.context ~model:input.model
@@ -144,32 +152,37 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
           ~operation_key:(operation_key input "after-compaction") ~cache:cache_0
           ~append:[ message "Return the final structured answer." ] compacted
       in
+      let* provider_filter =
+        filter_result
+          (Query.Filter.provider_status ~include_healthy:false ~page_size:100 ())
+      in
       let* provider_status =
         Query.execute ~task_queue
           ~operation_key:(operation_key input "provider-status-after")
           ~context:input.context
-          (Query.Provider_status {
-             provider = None; endpoint = None; availability = None;
-             include_healthy = false; refresh_if_older_than_seconds = None;
-             page_size = 100; cursor = None })
+          (Query.Provider_status provider_filter)
+      in
+      let* model_filter =
+        filter_result (Query.Filter.model_inventory ~page_size:100 ())
       in
       let* model_inventory =
         Query.execute ~task_queue
           ~operation_key:(operation_key input "model-inventory-after")
           ~context:input.context
-          (Query.Model_inventory {
-             provider = None; endpoint = None; model_prefix = None;
-             lifecycle = None; refresh_if_older_than_seconds = None;
-             page_size = 100; cursor = None })
+          (Query.Model_inventory model_filter)
+      in
+      let* spend_filter =
+        filter_result
+          (Query.Filter.spend_summary ~start_time:input.spend_from
+             ~end_time:input.spend_until
+             ~group_by:[ By_operation_kind; By_provider; By_model ]
+             ~operation_kinds:[ Generate; Compact; Query ] ())
       in
       let* spend_summary =
         Query.execute ~task_queue
           ~operation_key:(operation_key input "spend-after")
           ~context:input.context
-          (Query.Spend_summary {
-             start_time = input.spend_from; end_time = input.spend_until;
-             group_by = [ By_operation_kind; By_provider; By_model ];
-             operation_kinds = [ Generate; Compact; Query ] })
+          (Query.Spend_summary spend_filter)
       in
       Ok {
         final_turn = final.response;

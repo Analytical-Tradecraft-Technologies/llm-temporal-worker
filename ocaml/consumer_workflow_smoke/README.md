@@ -5,6 +5,7 @@ only the installed `llm-temporal-ocaml` package and type-checks the
 architecture's one-shot, non-streaming workflow shape:
 
 - all five typed `Query` constructors;
+- validated `Query.Filter` builders for each query kind;
 - a cached immutable root and three sibling `Conversation.start_respond`
   futures composed with `Temporal.Future.all`;
 - explicit `Conversation.compact`; and

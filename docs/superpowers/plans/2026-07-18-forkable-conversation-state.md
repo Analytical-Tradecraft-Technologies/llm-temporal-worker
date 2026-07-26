@@ -863,6 +863,8 @@ made; no wire-shape replacement is implied by the additive facade.
 - [x] Add natural persistent builders for Settings.Patch and Cache_policy.
 - [x] Implement the five-constructor GADT and safe tag/result matcher without
   **Obj.magic** or unchecked JSON.
+- [x] Add validated `Query.Filter` builders for bounded pagination, refresh
+  ages, cursor-kind association, spend intervals, and unique dimensions.
 - [x] Keep cursor/result type associated across pagination.
 - [x] Add the additive typed `Llm_temporal.Generate` facade for direct,
   non-streaming one-shot v1 calls while preserving legacy `Request` names.

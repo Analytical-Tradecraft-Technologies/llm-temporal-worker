@@ -679,6 +679,23 @@ module Query : sig
 end
 ~~~
 
+The same module exposes `Query.Filter` builders for natural call sites. They
+return `(filter, validation_error) result` before a filter is wrapped in a
+GADT constructor. A builder applies the protocol's page-size (`1..1000`) and
+refresh-age (`1..86400` seconds) bounds, rejects a tagged cursor belonging to
+another query kind, and checks that a spend interval is strictly increasing
+with unique grouping dimensions and operation kinds. The low-level filter
+records remain available for codec fixtures and generated protocol values;
+application Workflow code should use the builders so invalid queries cannot
+reach Activity scheduling.
+
+~~~ocaml
+let* provider_filter =
+  Query.Filter.provider_status ~include_healthy:false ~page_size:100 ()
+in
+Query.execute ~operation_key ~context (Query.Provider_status provider_filter)
+~~~
+
 `start` keeps the Activity's Temporal error as the Future error and returns
 the protocol-kind matcher result as its successful value. This preserves a
 typed error for a mismatched closed result without raising from a workflow

@@ -8,6 +8,54 @@
 
 open Llm_temporal_models
 
+module Filter : sig
+  (** Validated builders for the five query filters.  Page sizes are bounded
+      to 1..1000, refresh ages to 1..86400 seconds, cursors to their query
+      kind when tagged, and spend intervals/dimensions are checked before the
+      returned filter is wrapped in a GADT constructor. *)
+  val provider_status :
+    ?provider:Provider_id.t ->
+    ?endpoint:Endpoint_id.t ->
+    ?availability:availability ->
+    ?include_healthy:bool ->
+    ?refresh_if_older_than_seconds:int64 ->
+    ?page_size:int ->
+    ?cursor:Query_cursor.t ->
+    unit -> (provider_status_filter, validation_error) result
+
+  val model_inventory :
+    ?provider:Provider_id.t ->
+    ?endpoint:Endpoint_id.t ->
+    ?model_prefix:string ->
+    ?lifecycle:model_lifecycle ->
+    ?refresh_if_older_than_seconds:int64 ->
+    ?page_size:int ->
+    ?cursor:Query_cursor.t ->
+    unit -> (model_inventory_filter, validation_error) result
+
+  val credit_status :
+    ?provider:Provider_id.t ->
+    ?endpoint:Endpoint_id.t ->
+    ?include_ok:bool ->
+    ?refresh_if_older_than_seconds:int64 ->
+    ?page_size:int ->
+    ?cursor:Query_cursor.t ->
+    unit -> (credit_status_filter, validation_error) result
+
+  val budget_status :
+    ?policy_key:Budget_policy_key.t ->
+    ?active_at:Ptime.t ->
+    ?include_windows:bool ->
+    unit -> (budget_status_filter, validation_error) result
+
+  val spend_summary :
+    start_time:Ptime.t ->
+    end_time:Ptime.t ->
+    ?group_by:spend_group_by list ->
+    ?operation_kinds:operation_kind list ->
+    unit -> (spend_summary_filter, validation_error) result
+end
+
 type _ t =
   | Provider_status : provider_status_filter -> provider_status_page t
   | Model_inventory : model_inventory_filter -> model_inventory_page t
