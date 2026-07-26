@@ -1,12 +1,15 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
@@ -92,6 +95,74 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 	attempts, err := repository.Attempts(ctx, id)
 	if err != nil || len(attempts) != 1 {
 		t.Fatalf("attempts=%#v err=%v", attempts, err)
+	}
+}
+
+// TestProviderOperationTamperingFailsClosed proves the recovery boundary for
+// persisted provider poll IDs.  The ID is envelope-encrypted and authenticated
+// in PostgreSQL; the reconciliation loader must refuse to resume when an
+// operator, bad backup, or storage fault changes either the ciphertext or its
+// binding digest.
+func TestProviderOperationTamperingFailsClosed(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	newPending := func(providerID string) string {
+		id := "operation-provider-integrity-" + uuid.NewString()
+		started, err := repository.Begin(ctx, admission.BeginRequest{
+			ID: id, ScopeKey: "provider-integrity/project", RequestDigest: admission.Digest([]byte(id)),
+			ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: started.Operation.DispatchToken}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repository.MarkProviderPending(ctx, admission.ProviderPendingRequest{
+			OperationID: id, DispatchToken: started.Operation.DispatchToken,
+			ProviderOperationID: providerID, EndpointID: "integrity-endpoint", Provider: "fixture",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	operations, err := repository.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const providerID = "provider-operation-secret"
+	ciphertextID := newPending(providerID)
+	var ciphertext []byte
+	if err := repository.Pool.QueryRow(ctx, "SELECT provider_operation_id_ciphertext FROM "+operations+" WHERE operation_id=$1", operationUUID(ciphertextID)).Scan(&ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if len(ciphertext) == 0 || bytes.Contains(ciphertext, []byte(providerID)) {
+		t.Fatalf("provider operation ID is not encrypted at rest: %x", ciphertext)
+	}
+	if got, err := repository.ProviderOperation(ctx, ciphertextID); err != nil || got != providerID {
+		t.Fatalf("untampered provider operation = %q, %v; want %q", got, err, providerID)
+	}
+	if _, err := repository.Pool.Exec(ctx, "UPDATE "+operations+" SET provider_operation_id_ciphertext = provider_operation_id_ciphertext || $2 WHERE operation_id=$1", operationUUID(ciphertextID), []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repository.ProviderOperation(ctx, ciphertextID); err == nil {
+		t.Fatalf("tampered provider ciphertext unexpectedly opened as %q", got)
+	} else if strings.Contains(err.Error(), providerID) {
+		t.Fatalf("tampered provider error leaked provider ID: %v", err)
+	}
+
+	// The provider-operation uniqueness index is endpoint-scoped, so use a
+	// distinct fixture ID for the second independent corruption case.
+	digestID := newPending(providerID + "-digest")
+	if _, err := repository.Pool.Exec(ctx, "UPDATE "+operations+" SET provider_operation_id_hmac = decode(repeat('00', 32), 'hex') WHERE operation_id=$1", operationUUID(digestID)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repository.ProviderOperation(ctx, digestID); err == nil {
+		t.Fatalf("tampered provider digest unexpectedly opened as %q", got)
+	} else if strings.Contains(err.Error(), providerID) {
+		t.Fatalf("tampered provider digest error leaked provider ID: %v", err)
 	}
 }
 

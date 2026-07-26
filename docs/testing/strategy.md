@@ -147,6 +147,14 @@ immutable parent. It proves persistent repository/blob restart recovery; it
 does not claim a PostgreSQL backup procedure, a Temporal crash boundary, or
 end-to-end Generate/Compact runtime composition.
 
+`TestProviderOperationTamperingFailsClosed` exercises the complementary
+provider-poll recovery boundary. It verifies that a persisted provider
+operation ID is not plaintext in PostgreSQL and that changing either its
+authenticated ciphertext or binding HMAC makes the repository refuse to load
+it for resumption. This is a bounded encrypted-identifier integrity proof; it
+does not replace the engine's no-resubmission test, a full backup/restore drill,
+or a live provider contract.
+
 The staged Redis/PostgreSQL/conversation work has an unimplemented
 [production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
 whose phase/status authority is centralized in
