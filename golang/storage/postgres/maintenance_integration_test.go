@@ -54,6 +54,7 @@ func TestMaintenanceOutboxFencesReclaimedLeaseAndDeduplicatesCompletion(t *testi
 	conflict := event
 	conflict.ID = uuid.New().String()
 	conflict.AggregateID = uuid.New().String()
+	conflict.SafePayload = []byte(`{"blob_id":"` + conflict.AggregateID + `"}`)
 	if err := repository.PublishOutbox(ctx, conflict); !errors.Is(err, ErrMaintenanceOutboxConflict) {
 		t.Fatalf("conflicting dedupe enqueue was accepted: %v", err)
 	}
