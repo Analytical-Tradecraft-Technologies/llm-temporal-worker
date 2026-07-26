@@ -12,8 +12,9 @@ The Go adapter exposes these same bindings through
 `activity.V1ActivityDescriptors(taskQueue)`. Each descriptor carries the
 validated task-queue name, exact Activity name, and the typed input/output
 labels above; it rejects empty, control-character, whitespace, and oversized
-queues. `internal/app.NewWorker` validates this contract before adding any
-handler to the Temporal registry. The registry is still bound to one queue by
+queues. `internal/app.NewWorker` validates this contract before constructing a
+Temporal worker or adding any handler to its registry. The registry is still
+bound to one queue by
 the Temporal worker itself, so descriptors are an inspection and startup
 guard rather than a second payload codec. A configured v1 runtime registers
 all three descriptors in Generate/Compact/Query order; the checked-in

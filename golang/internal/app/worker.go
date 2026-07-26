@@ -67,6 +67,9 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 	if options.TaskQueue == "" {
 		return nil, fmt.Errorf("Temporal task queue is required")
 	}
+	if _, err := activity.V1ActivityDescriptors(options.TaskQueue); err != nil {
+		return nil, fmt.Errorf("invalid Temporal task queue: %w", err)
+	}
 	if options.Activities == nil {
 		return nil, fmt.Errorf("Activity implementation is required")
 	}
