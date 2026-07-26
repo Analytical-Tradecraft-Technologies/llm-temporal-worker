@@ -74,6 +74,7 @@ func TestBuildPostgresResolvesDurableNamespaceAndKeepsSecretsOutOfProbe(t *testi
 	value := config.Config{State: config.StateConfig{Kind: config.StateKindDurable, Postgres: config.PostgresConfig{
 		Addresses: []string{"postgres:5432"}, Database: "worker_db", Schema: "worker_state", TablePrefix: "tenant_",
 		Username: config.SecretRef{Kind: config.SecretEnv, Name: "POSTGRES_USER"}, Password: config.SecretRef{Kind: config.SecretEnv, Name: "POSTGRES_PASSWORD"},
+		MinConnections: 3, MaxConnections: 12, IdleTransactionTimeout: config.Duration(17 * time.Second),
 	}}}
 	gotProbe, closer, err := factory.buildPostgres(context.Background(), value)
 	if err != nil {
@@ -85,8 +86,32 @@ func TestBuildPostgresResolvesDurableNamespaceAndKeepsSecretsOutOfProbe(t *testi
 	if gotProbe == nil || gotUsername != "worker-user" || gotPassword != "worker-password" {
 		t.Fatalf("Postgres factory inputs probe=%#v username=%q password=%q", gotProbe, gotUsername, gotPassword)
 	}
-	if gotNamespace.String() != "worker_db/worker_state/tenant_" || got.Database != "worker_db" {
+	if gotNamespace.String() != "worker_db/worker_state/tenant_" || got.Database != "worker_db" || got.MinConnections != 3 || got.MaxConnections != 12 || time.Duration(got.IdleTransactionTimeout) != 17*time.Second {
 		t.Fatalf("Postgres namespace/config = %s/%#v", gotNamespace, got)
+	}
+}
+
+func TestPostgresPoolOptionsCarryConfiguredBoundsAndTimeouts(t *testing.T) {
+	namespace, err := postgresstore.NewNamespace("worker_db", "worker_state", "tenant_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := config.PostgresConfig{
+		Addresses:      []string{"postgres:5432"},
+		TLS:            config.TLSConfig{Enabled: true, ServerName: "postgres.example.internal", CAFile: "/var/run/ca/postgres.pem"},
+		MinConnections: 3, MaxConnections: 12,
+		DialTimeout: config.Duration(2 * time.Second), StatementTimeout: config.Duration(30 * time.Second),
+		LockTimeout: config.Duration(2 * time.Second), IdleTransactionTimeout: config.Duration(17 * time.Second),
+	}
+	options := postgresPoolOptions(value, namespace, "worker", "password")
+	if options.Namespace != namespace || options.Username != "worker" || options.Password != "password" {
+		t.Fatalf("pool identity = %#v", options)
+	}
+	if options.MinConnections != 3 || options.MaxConnections != 12 || options.DialTimeout != 2*time.Second || options.StatementTimeout != 30*time.Second || options.LockTimeout != 2*time.Second || options.IdleTxTimeout != 17*time.Second {
+		t.Fatalf("pool bounds/timeouts = %#v", options)
+	}
+	if !options.TLS.Enabled || options.TLS.ServerName != "postgres.example.internal" || options.TLS.CAFile != "/var/run/ca/postgres.pem" {
+		t.Fatalf("pool TLS = %#v", options.TLS)
 	}
 }
 

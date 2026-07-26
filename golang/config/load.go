@@ -98,6 +98,8 @@ func applyDefaults(config *Config) {
 	if config.State.Postgres.MaxConnections == 0 {
 		config.State.Postgres.MaxConnections = 32
 	}
+	// A zero minimum is intentional: startup must not wait for a warm pool;
+	// the readiness probe establishes the dependency contract separately.
 	if config.State.Postgres.DialTimeout == 0 {
 		config.State.Postgres.DialTimeout = Duration(2 * time.Second)
 	}
@@ -106,6 +108,9 @@ func applyDefaults(config *Config) {
 	}
 	if config.State.Postgres.LockTimeout == 0 {
 		config.State.Postgres.LockTimeout = Duration(2 * time.Second)
+	}
+	if config.State.Postgres.IdleTransactionTimeout == 0 {
+		config.State.Postgres.IdleTransactionTimeout = Duration(30 * time.Second)
 	}
 	if config.State.Redis.KeyPrefix == "" {
 		config.State.Redis.KeyPrefix = "llmtw"

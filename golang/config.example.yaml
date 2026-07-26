@@ -68,10 +68,12 @@ state:
       enabled: true
       server_name: postgres.example.internal
       ca_file: /var/run/ca/postgres.pem
+    min_connections: 8
     max_connections: 64
     dial_timeout: 2s
     statement_timeout: 30s
     lock_timeout: 2s
+    idle_transaction_timeout: 30s
 
 blob_store:
   kind: s3
