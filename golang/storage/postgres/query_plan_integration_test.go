@@ -179,7 +179,12 @@ func TestProviderQueryPlansUseProjectionIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creditPlan := explainJSONPlan(t, ctx, pool, creditStatusListQuery(routes, events), configDigest[:], "", "", nil, false, "", "", 101)
+	// Scope the DISTINCT-ON page to one provider/endpoint pair.  An unfiltered
+	// page would make all 10,000 fixture rows eligible, so PostgreSQL can
+	// correctly prefer a sequential scan even though the covering index is
+	// available.  The selective predicates model the bounded control-plane
+	// lookup and make the intended index path cost-meaningful.
+	creditPlan := explainJSONPlan(t, ctx, pool, creditStatusListQuery(routes, events), configDigest[:], "provider-7", "endpoint-7", nil, false, "", "", 101)
 	assertPlanUsesIndex(t, creditPlan, creditIndex)
 }
 
