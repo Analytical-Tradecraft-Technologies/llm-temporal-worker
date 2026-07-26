@@ -107,7 +107,7 @@ func verify(root, testOutput string) error {
 			return fmt.Errorf("source safety verification cannot read %s", filepath.ToSlash(relative))
 		}
 		scan := scanContent
-		if strings.EqualFold(filepath.Ext(relative), ".go") {
+		if isSourceCode(relative) {
 			scan = scanSourceContent
 		}
 		found, err := scan(data)
@@ -140,6 +140,15 @@ func verify(root, testOutput string) error {
 	return unsafeFinding("test output", *found)
 }
 
+func isSourceCode(relative string) bool {
+	switch strings.ToLower(filepath.Ext(relative)) {
+	case ".go", ".ml", ".mli":
+		return true
+	default:
+		return false
+	}
+}
+
 func ignoredDirectory(name string) bool {
 	switch name {
 	case ".git", ".cache", "node_modules", "vendor":
@@ -166,7 +175,7 @@ func shouldScanSource(relative string) bool {
 		return true
 	}
 	switch strings.ToLower(filepath.Ext(name)) {
-	case ".go", ".json", ".yaml", ".yml", ".toml", ".env", ".sh", ".bash", ".zsh", ".properties", ".ini", ".cfg", ".conf":
+	case ".go", ".ml", ".mli", ".json", ".yaml", ".yml", ".toml", ".env", ".sh", ".bash", ".zsh", ".properties", ".ini", ".cfg", ".conf":
 		return true
 	default:
 		return false

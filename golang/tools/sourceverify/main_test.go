@@ -99,6 +99,24 @@ func TestVerifyScansSourceFixturesAndTestOutputWithoutLeakingPayload(t *testing.
 			wantLocation: "internal/config.go",
 		},
 		{
+			name:         "repository root workflow",
+			fixturePath:  ".github/workflows/release.yml",
+			fixtureBytes: []byte(`api_key: "` + secret + `"`),
+			wantLocation: ".github/workflows/release.yml",
+		},
+		{
+			name:         "OCaml implementation source",
+			fixturePath:  "ocaml/llm_temporal_worker/lib/provider.ml",
+			fixtureBytes: []byte(`let api_key = "` + secret + `"`),
+			wantLocation: "ocaml/llm_temporal_worker/lib/provider.ml",
+		},
+		{
+			name:         "OCaml interface source",
+			fixturePath:  "ocaml/llm_temporal_worker/lib/provider.mli",
+			fixtureBytes: []byte(`val api_key : string` + "\n" + `let api_key = "` + secret + `"`),
+			wantLocation: "ocaml/llm_temporal_worker/lib/provider.mli",
+		},
+		{
 			name:         "fixture",
 			fixturePath:  "llm/testdata/request.fixture",
 			fixtureBytes: []byte(base64.StdEncoding.EncodeToString([]byte(raw))),
@@ -280,6 +298,7 @@ func TestMakefileComposesBoundedSecurityVerify(t *testing.T) {
 		"golang.org/x/vuln/cmd/govulncheck@v1.6.0",
 		"GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN)",
 		"mktemp",
+		"./tools/sourceverify -root ..",
 	} {
 		if !strings.Contains(target, expected) {
 			t.Fatalf("security-verify target does not contain %q", expected)
@@ -288,6 +307,22 @@ func TestMakefileComposesBoundedSecurityVerify(t *testing.T) {
 	for _, externalTool := range []string{"gitleaks", "trivy", "curl", "go install"} {
 		if strings.Contains(target, externalTool) {
 			t.Fatalf("security-verify target invokes external tool %q", externalTool)
+		}
+	}
+}
+
+func TestSourceScannerIncludesOCamlSourceFiles(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"ocaml/llm_temporal_worker/lib/client.ml",
+		"ocaml/llm_temporal_worker/lib/client.mli",
+	} {
+		if !shouldScanSource(path) {
+			t.Fatalf("shouldScanSource(%q) = false, want true", path)
+		}
+		if !isSourceCode(path) {
+			t.Fatalf("isSourceCode(%q) = false, want true", path)
 		}
 	}
 }
