@@ -180,6 +180,12 @@ outside the v1 boundary and must not be used to call the production Go
 `llm.generate.v1` Activity. New code must use `Generate` or `Conversation`,
 which emit the exact v1 wire shape.
 
+The synchronous `Generate.invoke_with` and `Generate.invoke` helpers also
+require the response `operation_key` to match the request key. A mismatched
+key is returned as a typed codec error before the response is exposed to the
+workflow, preserving the idempotency boundary used by the Conversation and
+Query facades.
+
 `Conversation.compact` creates an explicit compaction child from a checkpoint;
 the following Generate restores the branch's application tools and output
 configuration. The wrapper does not stream, retain a mutable implicit head, or
