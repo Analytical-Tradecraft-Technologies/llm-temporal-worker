@@ -2,8 +2,10 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
@@ -54,6 +56,57 @@ type CheckpointCapabilities struct {
 	Repository   state.CheckpointRepository
 	Blobs        state.CheckpointBlobReader
 	Materializer state.CheckpointHandleMaterializer
+}
+
+// Validate checks the optional checkpoint bundle's capability relationships.
+// A repository or blob reader may be supplied ahead of the complete replay
+// binding, but a materializer is never valid without both of those inputs.
+// This lets a builder distinguish an intentionally partial rollout from an
+// accidentally unsafe capability without inspecting concrete storage types.
+func (capabilities CheckpointCapabilities) Validate() error {
+	if isNilCapability(capabilities.Repository) {
+		capabilities.Repository = nil
+	}
+	if isNilCapability(capabilities.Blobs) {
+		capabilities.Blobs = nil
+	}
+	if isNilCapability(capabilities.Materializer) {
+		capabilities.Materializer = nil
+	}
+	if capabilities.Materializer != nil && capabilities.Repository == nil {
+		return errors.New("checkpoint materializer requires a repository capability")
+	}
+	if capabilities.Materializer != nil && capabilities.Blobs == nil {
+		return errors.New("checkpoint materializer requires a blob-reader capability")
+	}
+	return nil
+}
+
+// RequireMaterializer is the fail-closed check used by a builder that needs
+// durable replay. The default PostgreSQL factory intentionally returns a
+// partial bundle until deployment supplies the scoped blob and handle
+// bindings, so callers must opt into this stronger requirement explicitly.
+func (capabilities CheckpointCapabilities) RequireMaterializer() error {
+	if err := capabilities.Validate(); err != nil {
+		return err
+	}
+	if isNilCapability(capabilities.Repository) || isNilCapability(capabilities.Blobs) || isNilCapability(capabilities.Materializer) {
+		return errors.New("complete checkpoint materializer capability is not configured")
+	}
+	return nil
+}
+
+func isNilCapability(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 // PostgresCheckpointCapabilitiesSource is implemented by PostgreSQL client
@@ -174,6 +227,19 @@ func (repository snapshotCheckpointRepository) BeginCheckpoint(ctx context.Conte
 	return repository.delegate.BeginCheckpoint(ctx)
 }
 
+// snapshotCheckpointBlobReader prevents a snapshot capability consumer from
+// type-asserting the deployment's concrete blob reader and reaching an object
+// store, locator, or encryption binding outside the storage-neutral port.
+type snapshotCheckpointBlobReader struct {
+	delegate state.CheckpointBlobReader
+}
+
+var _ state.CheckpointBlobReader = snapshotCheckpointBlobReader{}
+
+func (reader snapshotCheckpointBlobReader) Read(ctx context.Context, scopeID string, reference state.CheckpointBlobReference) ([]byte, error) {
+	return reader.delegate.Read(ctx, scopeID, reference)
+}
+
 // snapshotCheckpointMaterializer erases deployment-specific repository,
 // blob-store, keyring, and locator types before the capability enters an
 // immutable snapshot client set. It preserves both the ID and opaque-handle
@@ -233,14 +299,30 @@ func checkpointCapabilitiesFromCloser(closer io.Closer) CheckpointCapabilities {
 		return CheckpointCapabilities{}
 	}
 	if source, ok := closer.(PostgresCheckpointCapabilitiesSource); ok {
-		capabilities := CheckpointCapabilities{
-			Repository: source.CheckpointRepository(),
-			Blobs:      source.CheckpointBlobReader(),
+		capabilities := CheckpointCapabilities{}
+		if repository := source.CheckpointRepository(); !isNilCapability(repository) {
+			if wrapped, ok := repository.(snapshotCheckpointRepository); ok {
+				capabilities.Repository = wrapped
+			} else {
+				capabilities.Repository = snapshotCheckpointRepository{delegate: repository}
+			}
+		}
+		if blobs := source.CheckpointBlobReader(); !isNilCapability(blobs) {
+			if wrapped, ok := blobs.(snapshotCheckpointBlobReader); ok {
+				capabilities.Blobs = wrapped
+			} else {
+				capabilities.Blobs = snapshotCheckpointBlobReader{delegate: blobs}
+			}
 		}
 		if materializerSource, ok := closer.(PostgresCheckpointMaterializerSource); ok {
-			if materializer := materializerSource.CheckpointMaterializer(); materializer != nil && capabilities.Repository != nil && capabilities.Blobs != nil {
+			if materializer := materializerSource.CheckpointMaterializer(); !isNilCapability(materializer) && capabilities.Repository != nil && capabilities.Blobs != nil {
 				capabilities.Materializer = snapshotCheckpointMaterializer{delegate: materializer}
 			}
+		}
+		// Keep this guard adjacent to construction so a future source cannot
+		// accidentally publish a materializer with incomplete dependencies.
+		if err := capabilities.Validate(); err != nil {
+			return CheckpointCapabilities{}
 		}
 		return capabilities
 	}

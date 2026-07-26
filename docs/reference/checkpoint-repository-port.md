@@ -72,3 +72,12 @@ snapshot checks to `CheckpointGraph`. `MaterializeHandle` verifies the opaque
 scope-bound handle before lookup. This is a read-side prerequisite only: it
 does not publish blobs or checkpoint rows and is not wired into Generate or
 Compact.
+
+The runtime's `CheckpointCapabilities` bundle carries these ports with the
+same immutable configuration snapshot as the worker clients. Its `Validate`
+method permits an explicitly partial rollout, but `RequireMaterializer` is a
+fail-closed gate for any builder that needs replay: repository, scoped blob
+reader, and handle materializer must all be present. Runtime-owned private
+adapters erase concrete PostgreSQL/blob-reader implementations before the
+bundle is published, so the storage-neutral interface cannot be bypassed by a
+type assertion to a pool, locator, or key binding.

@@ -65,9 +65,15 @@ callers must fail closed. A complete handle materializer is an additional
 optional `runtime.PostgresCheckpointMaterializerSource` capability. The
 runtime accepts it only when the same closer also supplies both repository and
 blob-reader capabilities, so a deployment cannot accidentally publish an
-unscoped or partially configured replay path. The bundle is copied into each
-immutable client set so a future builder cannot accidentally retain a
-dependency from a previous reload.
+unscoped or partially configured replay path. `CheckpointCapabilities.Validate`
+allows a staged repository-only or repository-plus-blob rollout but rejects a
+materializer without both storage-neutral inputs; a builder that needs replay
+must call `RequireMaterializer` and fail closed until all three are present.
+Private snapshot adapters erase the concrete repository/blob-reader dynamic
+types before the bundle is published, so consumers cannot recover a PostgreSQL
+pool, object locator, or key binding through a type assertion. The bundle is
+copied into each immutable client set so a future builder cannot accidentally
+retain a dependency from a previous reload.
 
 The client set also exposes `runtime.V1RuntimeCapabilitiesSource`, whose
 snapshot-owned `V1RuntimeCapabilities` value groups only the preparatory
