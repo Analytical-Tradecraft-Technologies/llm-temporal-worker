@@ -248,6 +248,22 @@ Llm_temporal.Query.execute ~operation_key ~context
   (Llm_temporal.Query.Provider_status provider_filter)
 ```
 
+Model-inventory prefixes use the nominal `Model_prefix.t` wrapper, keeping a
+prefix distinct from a complete `Model_selector.t` or `Provider_model_id.t`:
+
+```ocaml
+let* model_filter =
+  Llm_temporal.Query.Filter.model_inventory
+    ~model_prefix:(Llm_temporal.Model_prefix.of_string "gpt-") ()
+in
+Llm_temporal.Query.execute ~operation_key ~context
+  (Llm_temporal.Query.Model_inventory model_filter)
+```
+
+The wrapper preserves arbitrary provider model naming and is encoded as the
+same JSON string expected by the Go query Activity.  Use `None` when no prefix
+filter is desired.
+
 Validation failures are ordinary `validation_error` strings and happen before
 an Activity is scheduled, which makes malformed query construction explicit in
 deterministic Workflow code.

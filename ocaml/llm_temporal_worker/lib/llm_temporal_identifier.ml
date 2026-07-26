@@ -44,6 +44,11 @@ module Query_execution_id = Make_nonempty ()
 module Budget_policy_key = Make_nonempty ()
 module Budget_generation_id = Make_nonempty ()
 module Provider_model_id = Make_nonempty ()
+(* A model-inventory prefix is a distinct wire value from a complete model
+   identifier.  It intentionally permits the empty string because the Go
+   query contract treats an empty prefix as equivalent to omitting the
+   filter; callers can still use [None] for the usual unfiltered case. *)
+module Model_prefix = Make ()
 module Window_key = Make_nonempty ()
 
 module Checkpoint = struct

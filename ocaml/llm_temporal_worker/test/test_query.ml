@@ -266,6 +266,30 @@ let () =
   let built_model = filter_ok (Query.Filter.model_inventory ()) in
   if built_model.page_size <> 100 then
     failwith "validated model filter did not apply the default page size";
+  let prefix = Model_prefix.of_string "gpt-" in
+  let built_model_with_prefix =
+    filter_ok (Query.Filter.model_inventory ~model_prefix:prefix ())
+  in
+  (match built_model_with_prefix.model_prefix with
+   | Some value when String.equal (Model_prefix.to_string value) "gpt-" -> ()
+   | _ -> failwith "typed model prefix was not retained");
+  let prefix_envelope =
+    Query.to_envelope ~operation_key ~context
+      (Query.Model_inventory built_model_with_prefix)
+  in
+  let prefix_payload =
+    ok (V1_codec.encode_query_request prefix_envelope.query)
+  in
+  let prefix_json = Yojson.Safe.from_string (Bytes.to_string prefix_payload) in
+  (match prefix_json with
+   | `Assoc fields ->
+       (match List.assoc_opt "query" fields with
+        | Some (`Assoc query_fields) ->
+            (match List.assoc_opt "model_prefix" query_fields with
+             | Some (`String value) when String.equal value "gpt-" -> ()
+             | _ -> failwith "typed model prefix was not encoded as a string")
+        | _ -> failwith "model inventory query payload is missing its query object")
+   | _ -> failwith "query request payload is not an object");
   (match (Query.to_envelope ~operation_key ~context
             (Query.Provider_status built_provider)).query with
    | Provider_status_request { page_size = 25; include_healthy = false;

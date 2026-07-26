@@ -295,12 +295,18 @@ type provider_status_filter = {
 type model_inventory_filter = {
   provider : Provider.t option;
   endpoint : Endpoint.t option;
-  model_prefix : string option;
+  model_prefix : Model_prefix.t option;
   lifecycle : model_lifecycle option;
   refresh_if_older_than_seconds : Int64.t option;
   page_size : int;
   cursor : Query_cursor.t option;
 }
+
+`Model_prefix.t` is a nominal wrapper around the provider's arbitrary model
+prefix. It is intentionally distinct from both `Model_selector.t` (the
+requested model in Generate) and `Provider_model_id.t` (a complete inventory
+entry), while retaining the unchanged JSON string on the wire. Use `None` to
+omit the prefix filter.
 
 type credit_status_filter = {
   provider : Provider.t option;

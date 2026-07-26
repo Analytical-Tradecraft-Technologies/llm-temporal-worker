@@ -26,7 +26,7 @@ module Filter : sig
   val model_inventory :
     ?provider:Provider_id.t ->
     ?endpoint:Endpoint_id.t ->
-    ?model_prefix:string ->
+    ?model_prefix:Model_prefix.t ->
     ?lifecycle:model_lifecycle ->
     ?refresh_if_older_than_seconds:int64 ->
     ?page_size:int ->
