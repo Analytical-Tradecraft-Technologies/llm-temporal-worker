@@ -37,6 +37,33 @@ func TestDecodeStreamPreservesTextToolAndReasoningAcrossFragments(t *testing.T) 
 	}
 }
 
+func TestDecodeStreamEnumeratesSplitPointsEmptyReadsAndCRLF(t *testing.T) {
+	wire := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\nevent: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\nevent: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {}\n\n")
+	for _, variant := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "lf", wire: wire},
+		{name: "crlf", wire: streamtest.CRLF(wire)},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			want, err := DecodeStream(bytes.NewReader(variant.wire))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for split, chunks := range streamtest.TwoPartFragments(variant.wire) {
+				got, err := DecodeStream(&anthropicChunkReader{chunks: streamtest.WithEmptyChunks(chunks)})
+				if err != nil {
+					t.Fatalf("split %d: %v", split, err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("split %d differs\n got: %#v\nwant: %#v", split, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodeStreamRejectsEventAfterTerminal(t *testing.T) {
 	wire := "event: message_stop\ndata: {}\n\nevent: ping\ndata: {}\n\n"
 	if _, err := DecodeStream(strings.NewReader(wire)); err == nil {

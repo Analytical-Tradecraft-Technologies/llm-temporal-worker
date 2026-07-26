@@ -287,16 +287,13 @@ silently change encoding.
 
 ### Legacy decoder regression tests
 
-The checked-in provider decoder tests currently exercise representative provider
-event payloads
-as complete input, one byte at a time, and deterministic seeded random chunks.
-The chunk readers tolerate zero-length reads, but the provider tests do not yet
-inject empty chunks or enumerate every two-part split point and CR/LF boundary.
-Those cases remain part of the v1 completion matrix and must be added before
-claiming exhaustive fragmentation coverage. For every case that is exercised,
-the decoder must produce the same typed events and final response. Tests also cover
-duplicate/out-of-order IDs, invalid UTF-8, partial JSON/tool arguments, missing
-terminal event, terminal error after deltas, cancellation, and oversized event.
+The checked-in provider decoder tests exercise representative provider event
+payloads as complete input, one byte at a time, deterministic seeded random
+chunks, every two-part split point, empty transport reads, and both LF and CRLF
+line endings. For every case, the decoder must produce the same typed events
+and final response. Tests also cover duplicate/out-of-order IDs, invalid UTF-8,
+partial JSON/tool arguments, missing terminal event, terminal error after
+deltas, cancellation, and oversized event.
 
 These decoder tests do not establish a streaming API, engine dispatch path, or
 Temporal capability. Activity and integration tests prove that one-shot
