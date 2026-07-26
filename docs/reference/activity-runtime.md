@@ -26,6 +26,9 @@ application payload limit before calling the injected `activity.V1Runtime`.
 Responses are validated against the same limit before Temporal serialization;
 errors are converted to bounded `SafeErrorDetails` and never include prompts,
 outputs, provider bodies, or identifiers from a runtime error message.
+Correlation identifiers are limited to 128 bytes and control-character-free
+values; closed error facts are allow-listed and malformed values are replaced
+with stable internal facts before they are serialized.
 The Activity boundary tests exercise that redaction contract independently for
 Generate, Compact, and Query so a new entry point cannot accidentally expose a
 provider or storage detail through its Temporal error.
