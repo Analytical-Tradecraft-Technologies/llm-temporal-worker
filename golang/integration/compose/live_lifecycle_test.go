@@ -275,8 +275,16 @@ func TestComposeRedisHealthcheckTimingComesFromManifest(t *testing.T) {
 	if got, want := healthcheckTest.Content[0].Value, "CMD-SHELL"; got != want {
 		t.Fatalf("Redis healthcheck mode = %q, want %q", got, want)
 	}
-	if got, want := healthcheckTest.Content[1].Value, `redis-cli --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" ping`; got != want {
-		t.Fatalf("Redis healthcheck command = %q, want %q", got, want)
+	command := healthcheckTest.Content[1].Value
+	for _, required := range []string{
+		`redis-cli --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" ping | grep -qx PONG`,
+		`CONFIG GET maxmemory-policy | tail -n1)" = noeviction`,
+		`CONFIG GET appendonly | tail -n1)" = yes`,
+		`CONFIG GET save | tail -n1)"`,
+	} {
+		if !strings.Contains(command, required) {
+			t.Errorf("Redis healthcheck command = %q, missing required policy check %q", command, required)
+		}
 	}
 }
 
