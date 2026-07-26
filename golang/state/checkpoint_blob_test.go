@@ -147,6 +147,40 @@ func TestScopedBlobReaderBindsScopeAndReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestScopedBlobReaderRejectsCorruptedPayload(t *testing.T) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	written := []byte("checkpoint")
+	corrupted := []byte("checkpoinT")
+	if len(written) != len(corrupted) {
+		t.Fatal("corruption fixture must preserve the published byte length")
+	}
+	digest := sha256.Sum256(written)
+	store := &testCheckpointBlobStore{
+		tenant: "scope-a",
+		data:   corrupted,
+		ref: blob.Ref{
+			Store: "test", Locator: "scope-a/blob-corrupt", Digest: blob.Digest(written),
+			ByteLength: int64(len(written)), MediaType: "application/json", ExpiresAt: now.Add(time.Hour),
+		},
+	}
+	reader := ScopedBlobReader{
+		Store: store,
+		Now:   func() time.Time { return now },
+		Resolve: func(_ context.Context, scope string, id BlobID) (blob.Ref, error) {
+			if scope != "scope-a" || id != "blob-corrupt" {
+				return blob.Ref{}, blob.ErrTenantMismatch
+			}
+			return store.ref, nil
+		},
+	}
+	reference := CheckpointBlobReference{
+		ID: "blob-corrupt", Digest: digest, ByteLength: int64(len(written)), MediaType: "application/json",
+	}
+	if _, err := reader.Read(context.Background(), "scope-a", reference); err == nil || !strings.Contains(err.Error(), "digest or length mismatch") {
+		t.Fatalf("Read() = %v, want corrupted-payload digest error", err)
+	}
+}
+
 type testCheckpointBlobStore struct {
 	tenant string
 	data   []byte
