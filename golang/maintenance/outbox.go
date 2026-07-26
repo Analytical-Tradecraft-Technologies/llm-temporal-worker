@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -119,6 +120,9 @@ func (event Event) Validate() error {
 	if _, err := NormalizeSafePayload(event.SafePayload); err != nil {
 		return err
 	}
+	if err := validateEventPayload(event); err != nil {
+		return err
+	}
 	if event.AttemptCount < 0 {
 		return errors.New("maintenance outbox attempt count must not be negative")
 	}
@@ -135,6 +139,47 @@ func (event Event) Validate() error {
 	}
 	if !event.LeaseExpiresAt.IsZero() && !event.LeaseExpiresAt.After(event.AvailableAt) {
 		return errors.New("maintenance outbox lease must be after available time")
+	}
+	return nil
+}
+
+// validateEventPayload applies the event-kind contract after canonical JSON
+// validation.  Outbox payloads are an input boundary for an external worker,
+// so accepting an arbitrary object would make it possible to accidentally
+// persist prompts, provider responses, or credentials under a maintenance
+// event.  Delete-blob is currently the only event emitted by the production
+// retention paths; keep its payload deliberately narrow and tied to the
+// aggregate identity.  Other event kinds remain reserved until their typed
+// constructors are introduced.
+func validateEventPayload(event Event) error {
+	if event.Kind == EventDeleteProviderState || event.Kind == EventRefreshInventory {
+		return fmt.Errorf("%s maintenance event typed payload contract is not implemented", event.Kind)
+	}
+	if event.Kind != EventDeleteBlob {
+		return nil
+	}
+	if event.AggregateType != "blob" {
+		return errors.New("delete-blob maintenance event aggregate type must be blob")
+	}
+	var payload struct {
+		BlobID string `json:"blob_id"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(event.SafePayload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return fmt.Errorf("delete-blob maintenance payload: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("delete-blob maintenance payload has trailing data")
+		}
+		return fmt.Errorf("delete-blob maintenance payload trailing data: %w", err)
+	}
+	if payload.BlobID == "" {
+		return errors.New("delete-blob maintenance payload blob_id is required")
+	}
+	if payload.BlobID != event.AggregateID {
+		return errors.New("delete-blob maintenance payload blob_id must match aggregate ID")
 	}
 	return nil
 }
