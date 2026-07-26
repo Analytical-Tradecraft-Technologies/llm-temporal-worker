@@ -1149,19 +1149,7 @@ func defaultRedisFactory(_ context.Context, value config.RedisConfig, username, 
 }
 
 func defaultPostgresFactory(ctx context.Context, value config.PostgresConfig, namespace postgresstore.Namespace, username, password string) (DependencyProbe, io.Closer, error) {
-	pool, err := postgresstore.NewPool(ctx, postgresstore.PoolOptions{
-		Namespace:        namespace,
-		Addresses:        append([]string(nil), value.Addresses...),
-		Username:         username,
-		Password:         password,
-		TLS:              postgresstore.TLSOptions{Enabled: value.TLS.Enabled, ServerName: value.TLS.ServerName, CAFile: value.TLS.CAFile},
-		MaxConnections:   int32(value.MaxConnections),
-		DialTimeout:      time.Duration(value.DialTimeout),
-		StatementTimeout: time.Duration(value.StatementTimeout),
-		LockTimeout:      time.Duration(value.LockTimeout),
-		IdleTxTimeout:    time.Duration(value.StatementTimeout),
-		ApplicationName:  "llm-temporal-worker",
-	})
+	pool, err := postgresstore.NewPool(ctx, postgresPoolOptions(value, namespace, username, password))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1172,6 +1160,27 @@ func defaultPostgresFactory(ctx context.Context, value config.PostgresConfig, na
 		return nil, nil, err
 	}
 	return probe, postgresPoolCloser{pool: pool, namespace: namespace}, nil
+}
+
+// postgresPoolOptions is the one configuration-to-driver projection for the
+// durable PostgreSQL dependency. Keeping it separate makes it possible to
+// test that every bounded pool and session setting is carried through without
+// opening a live database.
+func postgresPoolOptions(value config.PostgresConfig, namespace postgresstore.Namespace, username, password string) postgresstore.PoolOptions {
+	return postgresstore.PoolOptions{
+		Namespace:        namespace,
+		Addresses:        append([]string(nil), value.Addresses...),
+		Username:         username,
+		Password:         password,
+		TLS:              postgresstore.TLSOptions{Enabled: value.TLS.Enabled, ServerName: value.TLS.ServerName, CAFile: value.TLS.CAFile},
+		MaxConnections:   int32(value.MaxConnections),
+		MinConnections:   int32(value.MinConnections),
+		DialTimeout:      time.Duration(value.DialTimeout),
+		StatementTimeout: time.Duration(value.StatementTimeout),
+		LockTimeout:      time.Duration(value.LockTimeout),
+		IdleTxTimeout:    time.Duration(value.IdleTransactionTimeout),
+		ApplicationName:  "llm-temporal-worker",
+	}
 }
 
 type postgresProbeClient struct{ pool *pgxpool.Pool }

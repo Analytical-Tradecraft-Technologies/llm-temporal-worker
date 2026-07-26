@@ -140,6 +140,12 @@ initial PostgreSQL composition independently reads **database**, **schema**, and
 [configuration contract](../reference/configuration.md#state-namespace-selection)
 for validation and defaults.
 
+Each worker also declares its PostgreSQL pool bounds and session timeouts.
+`min_connections` may be zero; readiness proves the transaction and schema
+contract independently of pool warming. `statement_timeout`, `lock_timeout`,
+and `idle_transaction_timeout` are applied by the pool's `AfterConnect` hook,
+so an idle transaction cannot survive merely because the database is reachable.
+
 Readiness verifies the resolved Redis prefix and PostgreSQL physical namespace;
 it never discovers another namespace by scanning. Reload rejects a namespace
 change and tells the operator a restart is required. Kubernetes and Compose

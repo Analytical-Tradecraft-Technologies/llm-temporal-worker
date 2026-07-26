@@ -470,10 +470,12 @@ state:
       enabled: true
       server_name: postgres.example.internal
       ca_file: /var/run/ca/postgres.pem
+    min_connections: 8
     max_connections: 64
     dial_timeout: 2s
     statement_timeout: 30s
     lock_timeout: 2s
+    idle_transaction_timeout: 30s
 ~~~
 
 The database, schema, and relation prefix are independent:
@@ -483,6 +485,15 @@ The database, schema, and relation prefix are independent:
 | **database** | **llm_worker** | **LLMTW_POSTGRES_DATABASE** | PostgreSQL database selected when opening the pool |
 | **schema** | **llm_worker** | **LLMTW_POSTGRES_SCHEMA** | Schema containing worker-owned objects |
 | **table_prefix** | empty | **LLMTW_POSTGRES_TABLE_PREFIX** | Prefix applied to every worker-owned schema object |
+
+`min_connections` and `max_connections` bound each worker replica's pgx pool;
+`min_connections` may be zero so startup does not wait for a warm pool. The
+worker still requires the PostgreSQL transaction/schema contract probe before
+it polls new work. `idle_transaction_timeout` is applied to every PostgreSQL
+session independently of `statement_timeout` and `lock_timeout`; it bounds
+sessions accidentally left inside a transaction and is never used as a
+readiness shortcut. All three timeout values must be positive and the minimum
+pool size cannot exceed the maximum.
 
 Environment overrides are read once before strict validation, appear in
 **print-effective-config**, and are included in **config_version**. They are

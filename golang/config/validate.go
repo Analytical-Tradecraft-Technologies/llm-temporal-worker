@@ -247,10 +247,14 @@ func (postgres PostgresConfig) validate(environment string, required bool) error
 	if postgres.MaxConnections <= 0 || postgres.MaxConnections > 100000 {
 		return fmt.Errorf("state.postgres.max_connections is outside safe bounds")
 	}
+	if postgres.MinConnections < 0 || postgres.MinConnections > postgres.MaxConnections {
+		return fmt.Errorf("state.postgres.min_connections must be between 0 and max_connections")
+	}
 	for name, value := range map[string]Duration{
-		"state.postgres.dial_timeout":      postgres.DialTimeout,
-		"state.postgres.statement_timeout": postgres.StatementTimeout,
-		"state.postgres.lock_timeout":      postgres.LockTimeout,
+		"state.postgres.dial_timeout":             postgres.DialTimeout,
+		"state.postgres.statement_timeout":        postgres.StatementTimeout,
+		"state.postgres.lock_timeout":             postgres.LockTimeout,
+		"state.postgres.idle_transaction_timeout": postgres.IdleTransactionTimeout,
 	} {
 		if err := validatePositiveDuration(value, name); err != nil {
 			return err

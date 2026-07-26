@@ -44,6 +44,13 @@ func TestLoadCompleteExample(t *testing.T) {
 	if got, want := time.Duration(loaded.Temporal.Worker.HeartbeatKeepaliveInterval), time.Second; got != want {
 		t.Fatalf("worker heartbeat keepalive interval = %s, want %s", got, want)
 	}
+	postgres := loaded.State.Postgres
+	if postgres.MinConnections != 8 || postgres.MaxConnections != 64 {
+		t.Fatalf("PostgreSQL pool bounds = min %d max %d, want min 8 max 64", postgres.MinConnections, postgres.MaxConnections)
+	}
+	if got, want := time.Duration(postgres.IdleTransactionTimeout), 30*time.Second; got != want {
+		t.Fatalf("PostgreSQL idle transaction timeout = %s, want %s", got, want)
+	}
 }
 
 func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
@@ -295,6 +302,17 @@ func TestLoadAppliesPostgresNamespaceEnvironmentOverrides(t *testing.T) {
 	}
 	if loaded.State.Postgres.Database != "worker_db" || loaded.State.Postgres.Schema != "worker_state" || loaded.State.Postgres.TablePrefix != "tenant_" {
 		t.Fatalf("unexpected PostgreSQL namespace: %#v", loaded.State.Postgres)
+	}
+}
+
+func TestLoadDefaultsPostgresIdleTransactionTimeout(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "    idle_transaction_timeout: 30s\n", "", 1)
+	loaded, err := config.Load([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := time.Duration(loaded.State.Postgres.IdleTransactionTimeout), 30*time.Second; got != want {
+		t.Fatalf("default PostgreSQL idle transaction timeout = %s, want %s", got, want)
 	}
 }
 

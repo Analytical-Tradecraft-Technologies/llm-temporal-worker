@@ -163,17 +163,22 @@ type RedisConfig struct {
 // schema, and table_prefix are deliberately independent so deployments can
 // isolate workers without relying on search_path.
 type PostgresConfig struct {
-	Addresses        []string  `yaml:"addresses" json:"addresses"`
-	Database         string    `yaml:"database" json:"database"`
-	Schema           string    `yaml:"schema" json:"schema"`
-	TablePrefix      string    `yaml:"table_prefix" json:"table_prefix"`
-	Username         SecretRef `yaml:"username" json:"username"`
-	Password         SecretRef `yaml:"password" json:"password"`
-	TLS              TLSConfig `yaml:"tls" json:"tls"`
-	MaxConnections   int       `yaml:"max_connections" json:"max_connections"`
-	DialTimeout      Duration  `yaml:"dial_timeout" json:"dial_timeout"`
-	StatementTimeout Duration  `yaml:"statement_timeout" json:"statement_timeout"`
-	LockTimeout      Duration  `yaml:"lock_timeout" json:"lock_timeout"`
+	Addresses   []string  `yaml:"addresses" json:"addresses"`
+	Database    string    `yaml:"database" json:"database"`
+	Schema      string    `yaml:"schema" json:"schema"`
+	TablePrefix string    `yaml:"table_prefix" json:"table_prefix"`
+	Username    SecretRef `yaml:"username" json:"username"`
+	Password    SecretRef `yaml:"password" json:"password"`
+	TLS         TLSConfig `yaml:"tls" json:"tls"`
+	// MinConnections keeps a bounded warm pool without making connection
+	// establishment part of the readiness contract. Zero is valid and lets
+	// pgx grow the pool on demand.
+	MinConnections         int      `yaml:"min_connections" json:"min_connections"`
+	MaxConnections         int      `yaml:"max_connections" json:"max_connections"`
+	DialTimeout            Duration `yaml:"dial_timeout" json:"dial_timeout"`
+	StatementTimeout       Duration `yaml:"statement_timeout" json:"statement_timeout"`
+	LockTimeout            Duration `yaml:"lock_timeout" json:"lock_timeout"`
+	IdleTransactionTimeout Duration `yaml:"idle_transaction_timeout" json:"idle_transaction_timeout"`
 }
 
 type BlobStoreConfig struct {

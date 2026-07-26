@@ -156,7 +156,7 @@
             "properties": {
               "postgres": {
                 "$ref": "#/$defs/postgres",
-                "required": ["addresses", "database", "schema", "table_prefix", "username", "password", "tls", "max_connections", "dial_timeout", "statement_timeout", "lock_timeout"]
+                "required": ["addresses", "database", "schema", "table_prefix", "username", "password", "tls", "min_connections", "max_connections", "dial_timeout", "statement_timeout", "lock_timeout", "idle_transaction_timeout"]
               }
             }
           }
@@ -189,10 +189,12 @@
         "table_prefix": { "type": "string", "pattern": "^$|^[a-z][a-z0-9_]{0,22}_$", "maxLength": 24 },
         "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" },
         "tls": { "$ref": "#/$defs/tls" },
+        "min_connections": { "type": "integer", "minimum": 0 },
         "max_connections": { "type": "integer", "minimum": 1 },
         "dial_timeout": { "$ref": "#/$defs/duration" },
         "statement_timeout": { "$ref": "#/$defs/duration" },
-        "lock_timeout": { "$ref": "#/$defs/duration" }
+        "lock_timeout": { "$ref": "#/$defs/duration" },
+        "idle_transaction_timeout": { "$ref": "#/$defs/duration" }
       }
     },
     "blob_store": {
