@@ -145,6 +145,16 @@ type CheckpointHandleVerifier interface {
 	VerifyCheckpointHandle(context.Context, string, string) (CheckpointID, error)
 }
 
+// CheckpointHandleMaterializer is the snapshot-safe capability required by
+// Activity composition. It combines graph materialization by internal
+// checkpoint ID with the opaque caller-handle operation used at the Activity
+// boundary. Keeping this as a state contract lets runtime adapters expose the
+// capability without leaking a repository, keyring, or blob locator.
+type CheckpointHandleMaterializer interface {
+	CheckpointMaterializer
+	MaterializeHandle(context.Context, string, string, MaterializeLimits) (MaterializedState, error)
+}
+
 // VerifyCheckpointHandle verifies the MAC against scope and requires that the
 // hidden identifier is a canonical non-nil UUID. The context is checked before
 // and after verification so callers can bound CPU spent on hostile tokens.

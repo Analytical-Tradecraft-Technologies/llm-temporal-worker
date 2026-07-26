@@ -51,18 +51,23 @@ causes production startup to fail before Temporal polling.
 
 The snapshot client set also exposes an optional typed
 `CheckpointCapabilities` bundle. It contains only the storage-neutral
-`state.CheckpointRepository` and `state.CheckpointBlobReader` interfaces; it
-does not expose a PostgreSQL pool, credentials, encryption keys, or raw object
-store locators. A builder receives it by type-asserting the exported
+`state.CheckpointRepository`, `state.CheckpointBlobReader`, and optional
+`state.CheckpointHandleMaterializer` interfaces; it does not expose a
+PostgreSQL pool, credentials, encryption keys, or raw object-store locators. A
+builder receives it by type-asserting the exported
 `runtime.CheckpointCapabilitiesSource` interface on `app.ClientSet`; it does
 not need to know the concrete client-set type. The PostgreSQL closer uses the
 separate `runtime.PostgresCheckpointCapabilitiesSource` contract to supply the
 repository from its own pool. A blob reader is present only when the
 deployment's closer has composed the scoped locator, object-store, and
 encryption-key boundary; the default factory leaves that capability nil and
-callers must fail closed. The bundle is copied into each immutable client set
-so a future builder cannot accidentally retain a dependency from a previous
-reload.
+callers must fail closed. A complete handle materializer is an additional
+optional `runtime.PostgresCheckpointMaterializerSource` capability. The
+runtime accepts it only when the same closer also supplies both repository and
+blob-reader capabilities, so a deployment cannot accidentally publish an
+unscoped or partially configured replay path. The bundle is copied into each
+immutable client set so a future builder cannot accidentally retain a
+dependency from a previous reload.
 
 The client set also exposes `runtime.V1RuntimeCapabilitiesSource`, whose
 snapshot-owned `V1RuntimeCapabilities` value groups only the preparatory

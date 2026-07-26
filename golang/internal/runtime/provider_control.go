@@ -47,11 +47,13 @@ type PostgresQueryRepositoriesSource interface {
 // CheckpointCapabilities is the storage-neutral checkpoint bundle owned by
 // one immutable runtime snapshot. The interfaces deliberately hide pgx pools,
 // encryption keys, and object-store locators from Activity composition.
-// Blobs may be nil when a deployment has not supplied a scoped blob reader;
-// callers must fail closed rather than substituting an in-memory reader.
+// Blobs and Materializer may be nil when a deployment has not supplied the
+// complete scoped replay binding; callers must fail closed rather than
+// substituting an in-memory reader or verifier.
 type CheckpointCapabilities struct {
-	Repository state.CheckpointRepository
-	Blobs      state.CheckpointBlobReader
+	Repository   state.CheckpointRepository
+	Blobs        state.CheckpointBlobReader
+	Materializer state.CheckpointHandleMaterializer
 }
 
 // PostgresCheckpointCapabilitiesSource is implemented by PostgreSQL client
@@ -61,6 +63,17 @@ type CheckpointCapabilities struct {
 type PostgresCheckpointCapabilitiesSource interface {
 	CheckpointRepository() state.CheckpointRepository
 	CheckpointBlobReader() state.CheckpointBlobReader
+}
+
+// PostgresCheckpointMaterializerSource is an optional deployment-owned
+// binding for the complete checkpoint replay capability. The default factory
+// deliberately does not implement it: constructing a materializer requires
+// the scoped blob locator, encryption/key binding, and opaque-handle verifier
+// owned by the deployment. A source must return nil until all of those
+// dependencies are present; the runtime never fabricates an in-memory or
+// unscoped substitute.
+type PostgresCheckpointMaterializerSource interface {
+	CheckpointMaterializer() state.CheckpointHandleMaterializer
 }
 
 // CheckpointCapabilitiesSource is the client-set capability exposed to a
@@ -161,6 +174,24 @@ func (repository snapshotCheckpointRepository) BeginCheckpoint(ctx context.Conte
 	return repository.delegate.BeginCheckpoint(ctx)
 }
 
+// snapshotCheckpointMaterializer erases deployment-specific repository,
+// blob-store, keyring, and locator types before the capability enters an
+// immutable snapshot client set. It preserves both the ID and opaque-handle
+// materialization contracts needed by future V1 composition.
+type snapshotCheckpointMaterializer struct {
+	delegate state.CheckpointHandleMaterializer
+}
+
+var _ state.CheckpointHandleMaterializer = snapshotCheckpointMaterializer{}
+
+func (materializer snapshotCheckpointMaterializer) Materialize(ctx context.Context, scopeID string, id state.CheckpointID, limits state.MaterializeLimits) (state.MaterializedState, error) {
+	return materializer.delegate.Materialize(ctx, scopeID, id, limits)
+}
+
+func (materializer snapshotCheckpointMaterializer) MaterializeHandle(ctx context.Context, scopeID, handle string, limits state.MaterializeLimits) (state.MaterializedState, error) {
+	return materializer.delegate.MaterializeHandle(ctx, scopeID, handle, limits)
+}
+
 // snapshotJournal erases the concrete PostgreSQL repository before it enters
 // the client set. It preserves the write-only durable.Journal contract while
 // preventing callers from reaching into a pgx pool through a type assertion.
@@ -198,11 +229,20 @@ func queryRepositoriesFromCloser(closer io.Closer) PostgresQueryRepositories {
 }
 
 func checkpointCapabilitiesFromCloser(closer io.Closer) CheckpointCapabilities {
+	if closer == nil {
+		return CheckpointCapabilities{}
+	}
 	if source, ok := closer.(PostgresCheckpointCapabilitiesSource); ok {
-		return CheckpointCapabilities{
+		capabilities := CheckpointCapabilities{
 			Repository: source.CheckpointRepository(),
 			Blobs:      source.CheckpointBlobReader(),
 		}
+		if materializerSource, ok := closer.(PostgresCheckpointMaterializerSource); ok {
+			if materializer := materializerSource.CheckpointMaterializer(); materializer != nil && capabilities.Repository != nil && capabilities.Blobs != nil {
+				capabilities.Materializer = snapshotCheckpointMaterializer{delegate: materializer}
+			}
+		}
+		return capabilities
 	}
 	return CheckpointCapabilities{}
 }
