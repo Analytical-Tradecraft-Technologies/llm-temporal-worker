@@ -170,6 +170,52 @@ func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 	}
 }
 
+func TestGenerateV1AcceptsToolResultDeltaAgainstReplayedFrontier(t *testing.T) {
+	request := testGenerateRequest()
+	parent := llm.CheckpointHandle("parent")
+	request.Parent = &parent
+	request.Append = []llm.Item{llm.ToolResult{CallID: "call-1", Name: "lookup"}}
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		events = append(events, "replay")
+		return GenerateReplay{State: state.MaterializedState{
+			Handle:           state.Handle(parent),
+			Items:            []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)}},
+			PendingToolCalls: []string{"call-1"},
+		}}, nil
+	}
+	if _, err := GenerateV1(context.Background(), request, ports); err != nil {
+		t.Fatalf("GenerateV1 error = %v, want tool-result delta to resolve replay frontier", err)
+	}
+	if got, want := events[0], "replay"; got != want {
+		t.Fatalf("first phase = %q, want %q", got, want)
+	}
+}
+
+func TestGenerateV1RejectsToolResultDeltaOutsideReplayedFrontier(t *testing.T) {
+	request := testGenerateRequest()
+	parent := llm.CheckpointHandle("parent")
+	request.Parent = &parent
+	request.Append = []llm.Item{llm.ToolResult{CallID: "unknown", Name: "lookup"}}
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		events = append(events, "replay")
+		return GenerateReplay{State: state.MaterializedState{
+			Handle:           state.Handle(parent),
+			Items:            []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)}},
+			PendingToolCalls: []string{"call-1"},
+		}}, nil
+	}
+	if _, err := GenerateV1(context.Background(), request, ports); err == nil || !errors.Is(err, ErrV1Stage) {
+		t.Fatalf("GenerateV1 error = %v, want replay frontier stage failure", err)
+	}
+	if got, want := events, []string{"replay"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phases after invalid delta = %v, want %v", got, want)
+	}
+}
+
 func TestGenerateV1FailsClosedBeforeDispatchWhenPreDispatchPhaseFails(t *testing.T) {
 	for _, failStage := range []string{"replay", "cache", "compaction", "route", "reserve", "journal"} {
 		t.Run(failStage, func(t *testing.T) {
