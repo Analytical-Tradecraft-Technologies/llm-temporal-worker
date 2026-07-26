@@ -172,7 +172,11 @@ func TestRedisBudgetEventPortAppendsAndReadsBroadcastCursor(t *testing.T) {
 		t.Fatalf("XADD payload = %#v", fake.appendArgs.Values)
 	}
 
-	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "42-7"}}
+	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "42-7"}, LastEntry: redisclient.XMessage{ID: "42-8"}}
+	current, err := port.CurrentCursor(context.Background())
+	if err != nil || current != "42-8" {
+		t.Fatalf("CurrentCursor = %q, %v", current, err)
+	}
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{{ID: "42-8", Values: map[string]interface{}{budgetStreamEventField: payload}}}}}
 	rows, err := port.Read(context.Background(), "42-7", 10)
 	if err != nil || len(rows) != 1 || rows[0].ID != "42-8" || rows[0].Event.GenerationID != "generation" {

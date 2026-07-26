@@ -243,6 +243,21 @@ func (port *MemoryBudgetEventPort) Append(ctx context.Context, event BudgetStrea
 	return id, nil
 }
 
+// CurrentCursor mirrors Redis XINFO STREAM's last-entry position for the
+// deterministic in-memory contract. An empty stream has no safe recovery
+// position and therefore fails closed.
+func (port *MemoryBudgetEventPort) CurrentCursor(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	port.mu.Lock()
+	defer port.mu.Unlock()
+	if len(port.records) == 0 {
+		return "", ErrBudgetStreamCursorUnavailable
+	}
+	return port.records[len(port.records)-1].ID, nil
+}
+
 func (port *MemoryBudgetEventPort) Read(ctx context.Context, cursor string, limit int) ([]BudgetStreamRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

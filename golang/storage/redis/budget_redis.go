@@ -213,6 +213,29 @@ func NewRedisBudgetEventPort(client BudgetEventRedisClient, keys BudgetKeySpace)
 	return &RedisBudgetEventPort{client: client, keys: keys}, nil
 }
 
+// CurrentCursor returns the latest retained Stream ID. Tailer recovery reads
+// this before reloading the manifest so records appended during the reload
+// remain visible to the next XREAD rather than being skipped.
+func (port *RedisBudgetEventPort) CurrentCursor(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	info, err := port.client.XInfoStream(ctx, port.keys.EventsKey()).Result()
+	if errors.Is(err, redisclient.Nil) {
+		return "", ErrBudgetStreamCursorUnavailable
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect budget stream cursor: %w", err)
+	}
+	if info == nil || info.LastEntry.ID == "" || len(info.LastEntry.ID) > MaxBudgetStreamIDBytes {
+		return "", ErrBudgetStreamCursorUnavailable
+	}
+	if _, _, err := parseRedisStreamID(info.LastEntry.ID); err != nil {
+		return "", fmt.Errorf("%w: invalid Redis Stream cursor", ErrBudgetStreamCursorUnavailable)
+	}
+	return info.LastEntry.ID, nil
+}
+
 func (port *RedisBudgetEventPort) Append(ctx context.Context, event BudgetStreamEvent) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
