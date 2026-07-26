@@ -64,7 +64,9 @@ Cleanup publishes a safe event in the same PostgreSQL transaction that marks a
 cache entry tombstoned. `Event` payloads are canonical JSON objects containing
 identifiers or encrypted locators only; duplicate keys and payloads larger than
 64 KiB are rejected. Prompt/response bytes and credentials are never accepted
-by the contract. The currently emitted `delete_blob` event has an exact typed
+by the contract. The PostgreSQL cache-retention path constructs its deletion
+intent through the shared typed constructor, so SQL publication cannot drift
+from this validator. The currently emitted `delete_blob` event has an exact typed
 payload of `{"blob_id":"..."}` and that identifier must match the event's
 `aggregate_id`; unknown fields (including prompt or credential fields) are
 rejected before SQL. Other event kinds are rejected until their typed

@@ -8,8 +8,6 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -55,6 +53,17 @@ func validateBatch(now time.Time, limit int) error {
 		return fmt.Errorf("maintenance batch limit must be between 1 and %d", maxMaintenanceBatch)
 	}
 	return nil
+}
+
+// newDeleteBlobOutboxEvent is the single constructor used by SQL retention
+// paths. Keeping the payload construction in the storage-neutral maintenance
+// contract prevents a cache retention change from silently drifting away
+// from the outbox validator.
+func newDeleteBlobOutboxEvent(eventID, blobID uuid.UUID, now time.Time) (maintenance.Event, error) {
+	if eventID == uuid.Nil || blobID == uuid.Nil {
+		return maintenance.Event{}, errors.New("cache deletion outbox IDs are required")
+	}
+	return maintenance.NewDeleteBlobEvent(eventID.String(), blobID.String(), now, now)
 }
 
 // PruneExpiredCache tombstones an unused cache entry and publishes a durable
@@ -141,17 +150,14 @@ func (repository MaintenanceRepository) PruneExpiredCache(ctx context.Context, n
 			if err != nil {
 				return fmt.Errorf("generate cache deletion outbox ID: %w", err)
 			}
-			dedupe := sha256.Sum256([]byte("llm-temporal-worker/delete-blob/v1\x00" + blobID.String()))
-			payload, err := json.Marshal(struct {
-				BlobID string `json:"blob_id"`
-			}{BlobID: blobID.String()})
+			event, err := newDeleteBlobOutboxEvent(eventID, *blobID, now)
 			if err != nil {
-				return fmt.Errorf("encode cache deletion outbox payload: %w", err)
+				return fmt.Errorf("build cache deletion outbox event: %w", err)
 			}
 			if _, err := tx.Exec(ctx, "INSERT INTO "+outboxTable+
 				" (outbox_id, event_kind, aggregate_type, aggregate_id, dedupe_key, safe_payload, state, attempt_count, available_at, created_at)"+
 				" VALUES ($1, 'delete_blob', 'blob', $2, $3, $4, 'pending', 0, $5, $5)"+
-				" ON CONFLICT (event_kind, dedupe_key) DO NOTHING", eventID, *blobID, dedupe[:], payload, now); err != nil {
+				" ON CONFLICT (event_kind, dedupe_key) DO NOTHING", eventID, *blobID, event.DedupeKey[:], event.SafePayload, now); err != nil {
 				return redactPostgresError(fmt.Errorf("publish cache deletion outbox: %w", err))
 			}
 			_ = cacheID // returned for deterministic row accounting and future metrics.
