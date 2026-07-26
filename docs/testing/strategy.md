@@ -264,6 +264,12 @@ not claim that PostgreSQL/blob backup restore, Temporal crash-boundary injection
 or Redis generation rebuild has been exercised. Those remain integration gates
 in the production implementation plan.
 
+`state.TestCheckpointGraphThreeWayForksRemainIsolated` adds the caller-side
+immutability contract: mutating one materialized branch's items or nested model
+settings cannot affect already materialized siblings or later graph replay. It
+is a bounded in-memory proof and does not replace the live crash, backup/restore,
+or concurrent durable-store gates above.
+
 `state.TestScopedBlobReaderRejectsCorruptedPayload` complements the checkpoint
 replay tests by simulating an object-store restore that returns bytes different
 from the immutable locator digest. The scoped reader rejects the payload before

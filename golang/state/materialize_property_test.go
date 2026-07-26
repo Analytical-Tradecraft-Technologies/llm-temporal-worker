@@ -75,6 +75,82 @@ func TestCheckpointGraphRootLinearAndSiblingMaterialization(t *testing.T) {
 	}
 }
 
+func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
+	graph := NewCheckpointGraph(MaterializeLimits{})
+	root := rootCheckpoint("root", "tenant-a", "op-root")
+	root.SettingsPatch.Tools = SetPatch([]llm.Tool{{
+		Name:        "lookup",
+		InputSchema: []byte(`{"type":"object"}`),
+	}})
+	if err := graph.PutRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	branches := []struct {
+		handle string
+		text   string
+	}{
+		{handle: "one", text: "one"},
+		{handle: "two", text: "two"},
+		{handle: "three", text: "three"},
+	}
+	for _, branch := range branches {
+		if err := graph.PutChild(childCheckpoint(branch.handle, "root", "tenant-a", "op-"+branch.handle, branch.text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	materialized := make(map[string]MaterializedState, len(branches))
+	for _, branch := range branches {
+		state, err := graph.Materialize("tenant-a", Handle(branch.handle))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(state.Items) != 2 || state.Items[0].(llm.Message).Content[0].(llm.TextPart).Text != "root" || state.Items[1].(llm.Message).Content[0].(llm.TextPart).Text != branch.text {
+			t.Fatalf("branch %s materialized unexpected items: %#v", branch.handle, state.Items)
+		}
+		if len(state.Settings.Tools) != 1 || string(state.Settings.Tools[0].InputSchema) != `{"type":"object"}` {
+			t.Fatalf("branch %s materialized unexpected settings: %#v", branch.handle, state.Settings)
+		}
+		materialized[branch.handle] = state
+	}
+
+	// Callers may mutate one materialized result without changing a sibling or
+	// the graph's immutable lineage.
+	mutated := materialized["one"]
+	rootMessage := mutated.Items[0].(llm.Message)
+	rootMessage.Content[0] = llm.TextPart{Text: "mutated"}
+	mutated.Items[0] = rootMessage
+	mutated.Settings.Model = "mutated-model"
+	mutated.Settings.Tools[0].InputSchema[0] = 'x'
+	materialized["one"] = mutated
+
+	if got := materialized["two"].Items[0].(llm.Message).Content[0].(llm.TextPart).Text; got != "root" {
+		t.Fatalf("mutating branch one changed branch two item to %q", got)
+	}
+	if got := materialized["two"].Settings.Model; got != "gpt-test" {
+		t.Fatalf("mutating branch one changed branch two model to %q", got)
+	}
+	if got := string(materialized["two"].Settings.Tools[0].InputSchema); got != `{"type":"object"}` {
+		t.Fatalf("mutating branch one changed branch two tool schema to %q", got)
+	}
+
+	for _, branch := range branches {
+		state, err := graph.Materialize("tenant-a", Handle(branch.handle))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := state.Items[0].(llm.Message).Content[0].(llm.TextPart).Text; got != "root" {
+			t.Fatalf("mutating branch one changed graph root for %s to %q", branch.handle, got)
+		}
+		if got := state.Settings.Model; got != "gpt-test" {
+			t.Fatalf("mutating branch one changed graph model for %s to %q", branch.handle, got)
+		}
+		if got := string(state.Settings.Tools[0].InputSchema); got != `{"type":"object"}` {
+			t.Fatalf("mutating branch one changed graph tool schema for %s to %q", branch.handle, got)
+		}
+	}
+}
+
 func TestSettingsPatchOmittedSetAndClearRemainDistinct(t *testing.T) {
 	base := RootModelState("gpt-test")
 	base.Tools = []llm.Tool{{Name: "lookup", InputSchema: []byte(`{"type":"object"}`)}}
