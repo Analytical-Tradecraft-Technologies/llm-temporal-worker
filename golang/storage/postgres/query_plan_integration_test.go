@@ -170,10 +170,7 @@ func TestProviderQueryPlansUseProjectionIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routePrimaryKey, err := namespace.PrefixName("c_pk_228")
-	if err != nil {
-		t.Fatal(err)
-	}
+	routePrimaryKey := primaryKeyIndexName(t, ctx, pool, namespace, "provider_route_status")
 	routeQuery := "SELECT config_digest, config_epoch, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, availability, credit_state, billing_state, circuit_state, consecutive_definite_failures, last_event_digest, observed_at, stale_after, credit_confirmed_at FROM " + routes + " WHERE config_digest = $1 AND ($2 = '' OR provider = $2) AND ($3 = '' OR endpoint_id = $3) AND ($4 = '' OR availability = $4) AND ($5 OR availability <> 'available' OR credit_state <> 'ok' OR billing_state <> 'ok' OR circuit_state <> 'closed') AND ($6::timestamptz IS NULL OR observed_at <= $6) AND ($7 = '' OR route_id > $7) ORDER BY route_id LIMIT $8"
 	routePlan := explainJSONPlan(t, ctx, pool, routeQuery, configDigest[:], "", "", "", false, nil, "route-5000", 101)
 	assertPlanUsesOneOfIndexNames(t, routePlan, routeIndex, routePrimaryKey)
@@ -274,6 +271,20 @@ func explainJSONPlan(t *testing.T, ctx context.Context, pool *pgxpool.Pool, quer
 func assertPlanUsesIndex(t *testing.T, plan any, wantIndex string) {
 	t.Helper()
 	assertPlanUsesOneOfIndexNames(t, plan, wantIndex)
+}
+
+func primaryKeyIndexName(t *testing.T, ctx context.Context, pool *pgxpool.Pool, namespace Namespace, logicalTable string) string {
+	t.Helper()
+	var indexName string
+	if err := pool.QueryRow(ctx, `SELECT index_class.relname
+FROM pg_index
+JOIN pg_class table_class ON table_class.oid = pg_index.indrelid
+JOIN pg_namespace table_namespace ON table_namespace.oid = table_class.relnamespace
+JOIN pg_class index_class ON index_class.oid = pg_index.indexrelid
+WHERE table_namespace.nspname = $1 AND table_class.relname = $2 AND pg_index.indisprimary`, namespace.Schema, namespace.TablePrefix+logicalTable).Scan(&indexName); err != nil {
+		t.Fatalf("lookup primary-key index for %s: %v", logicalTable, err)
+	}
+	return indexName
 }
 
 func assertPlanUsesOneOfIndexNames(t *testing.T, plan any, wantIndexes ...string) {
