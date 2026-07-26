@@ -24,7 +24,7 @@ const (
 	maxSourceFileBytes = 1 << 20
 	maxTestOutputBytes = 8 << 20
 	maxDecodeDepth     = 3
-	maxCandidates      = 256
+	maxCandidates      = 1024
 )
 
 var (
@@ -112,7 +112,7 @@ func verify(root, testOutput string) error {
 		}
 		found, err := scan(data)
 		if err != nil {
-			return err
+			return fmt.Errorf("source safety verification %s: %w", filepath.ToSlash(relative), err)
 		}
 		if found == nil {
 			return nil
@@ -217,10 +217,15 @@ func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, de
 	}
 	candidates := []candidate{{data: data, encoding: "raw"}}
 	seen := make(map[string]struct{}, maxCandidates)
+	queued := map[string]struct{}{string(data): {}}
 	for len(candidates) > 0 {
+		if len(seen)+len(queued) > maxCandidates {
+			return nil, fmt.Errorf("source safety verification decoded candidate limit of %d exceeded (seen=%d queued=%d)", maxCandidates, len(seen), len(queued))
+		}
 		current := candidates[0]
 		candidates = candidates[1:]
 		key := string(current.data)
+		delete(queued, key)
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -231,10 +236,44 @@ func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, de
 		if current.depth == maxDecodeDepth || len(seen) >= maxCandidates {
 			continue
 		}
-		for _, decoded := range decodedCandidates(current.data, current.depth+1) {
-			if len(decoded.data) <= limit {
-				candidates = append(candidates, decoded)
+		decoded := decodedCandidates(current.data, current.depth+1)
+		uniqueDecoded := make([]candidate, 0, len(decoded))
+		batch := make(map[string]struct{}, len(decoded))
+		for _, candidate := range decoded {
+			if len(candidate.data) > limit {
+				continue
 			}
+			key := string(candidate.data)
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			if _, exists := queued[key]; exists {
+				continue
+			}
+			if _, exists := batch[key]; exists {
+				continue
+			}
+			batch[key] = struct{}{}
+			if found := findCredentialLikeMaterial(candidate.data, candidate.encoding, fieldPattern, detectOutputLeaks); found != nil {
+				return found, nil
+			}
+			// Go's JSON test stream can contain tens of thousands of unique
+			// record, string, and escape candidates. They have all been inspected
+			// above; only base64 candidates need recursive queueing to cover a
+			// nested encoding. The raw test stream itself is URL/escape decoded
+			// before this queue is reached.
+			if detectOutputLeaks && candidate.encoding != "Base64-decoded" {
+				continue
+			}
+			uniqueDecoded = append(uniqueDecoded, candidate)
+		}
+		if len(seen)+len(queued)+len(uniqueDecoded) > maxCandidates {
+			return nil, fmt.Errorf("source safety verification decoded candidate limit of %d exceeded (seen=%d queued=%d decoded=%d)", maxCandidates, len(seen), len(queued), len(uniqueDecoded))
+		}
+		for _, candidate := range uniqueDecoded {
+			key := string(candidate.data)
+			queued[key] = struct{}{}
+			candidates = append(candidates, candidate)
 		}
 	}
 	return nil, nil
@@ -305,7 +344,6 @@ func decodedCandidates(data []byte, depth int) []candidate {
 			add(value, "escape-decoded")
 		}
 	}
-	appendJSONCandidates(data, depth, &decoded)
 	for _, token := range base64TokenPattern.FindAllString(text, -1) {
 		for _, encoding := range []*base64.Encoding{
 			base64.StdEncoding,
@@ -319,6 +357,7 @@ func decodedCandidates(data []byte, depth int) []candidate {
 			}
 		}
 	}
+	appendJSONCandidates(data, depth, &decoded)
 	return decoded
 }
 

@@ -80,6 +80,18 @@ its redacted report: component pass/fail state, direct-module identifiers/count,
 and finding identifiers. It deliberately excludes test output, source paths,
 scanner traces, provider data, and credential-like material.
 
+The source scanner decodes only bounded inputs: each source file is capped at
+1 MiB, test output at 8 MiB, recursion at three decode levels, and queued
+decoded candidates at 1,024 per input. Candidates are deduplicated by decoded
+bytes before the queue bound is applied, and each candidate is inspected before
+the bound is enforced. Go JSON test records and their URL/escape-decoded
+variants are inspected directly but are not recursively queued, which prevents
+a large test stream's unique bookkeeping values from consuming the recursive
+budget; base64 candidates remain recursive for nested encodings. Reaching any
+bound fails closed instead of silently skipping the remaining candidates. This
+keeps URL, escaped JSON, and base64 representations covered without allowing a
+large fixture or log to push an unscanned value past the safety gate.
+
 ### Active vulnerability exceptions
 
 The baseline currently records one approved exception:

@@ -80,6 +80,37 @@ func TestScanTestOutputDetectsRawAndDecodedDenyFieldLeaks(t *testing.T) {
 	}
 }
 
+func TestScanContentFailsClosedWhenDecodedCandidateLimitIsExceeded(t *testing.T) {
+	t.Parallel()
+
+	tokens := make([]string, 0, maxCandidates)
+	for index := 0; index < maxCandidates; index++ {
+		tokens = append(tokens, base64.StdEncoding.EncodeToString([]byte("safe-fixture-value-"+strconv.Itoa(index))))
+	}
+	content := strings.Join(tokens, " ") + " trailing-safe-value"
+
+	finding, err := scanContent([]byte(content))
+	if err == nil {
+		t.Fatal("scanContent accepted input whose decoded candidates exceeded the safety bound")
+	}
+	if finding != nil {
+		t.Fatalf("scanContent returned a finding with the candidate-limit error: %#v", finding)
+	}
+	if !strings.Contains(err.Error(), "decoded candidate limit") {
+		t.Fatalf("candidate-limit error = %q", err)
+	}
+}
+
+func TestScanContentDeduplicatesRepeatedDecodedCandidates(t *testing.T) {
+	t.Parallel()
+
+	safeToken := base64.StdEncoding.EncodeToString([]byte("safe-fixture-value-0123456789"))
+	content := strings.TrimSpace(strings.Repeat(safeToken+" ", maxCandidates*2))
+	if finding, err := scanContent([]byte(content)); err != nil || finding != nil {
+		t.Fatalf("scanContent rejected repeated safe candidates: finding=%#v err=%v", finding, err)
+	}
+}
+
 func TestVerifyScansSourceFixturesAndTestOutputWithoutLeakingPayload(t *testing.T) {
 	t.Parallel()
 
