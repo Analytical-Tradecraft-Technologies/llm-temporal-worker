@@ -354,8 +354,9 @@ restart evidence.
    without creating containers;
 2. use `LLMTW_COMPOSE_LIVE=1 make compose-live-integration` in an authorized
    local Docker environment to boot the worker, verify the exact live/ready
-   endpoints, and independently stop/restore its shared Redis and worker
-   PostgreSQL dependencies;
+   and metrics endpoints, and stop/restore its shared Redis dependency. The
+   current Compose lifecycle evidence is Redis-only; it does not yet stop and
+   restore the worker PostgreSQL dependency;
 3. exercise a real Temporal Activity through a content-free injected adapter
    in the Go test process rather than a Compose-network provider request.
 
@@ -399,19 +400,21 @@ make compose-smoke
 KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 ```
 
-The readiness integration target starts digest-pinned Redis and PostgreSQL
-instances and provisions the Redis Functions and initial worker schema. Its
-isolated Redis fixture enables AOF with `appendfsync always` plus an RDB save
-policy so the persistence-survives-restart gate has the same durability
-contract as the trusted Redis integration target. It stops and restores each
-dependency independently while a worker is running. It
-proves liveness remains `200`, readiness transitions `200` to `503` to `200`,
-polling resumes only after recovery, and no provider call is made. The Compose
-smoke check only validates the model and local
-fixture invariants; `compose-live-integration` is the separately authorized
-Docker gate. The Kubernetes check renders every overlay with `kubectl
-kustomize` and never contacts a cluster. Both checks use only checked-in
-fixtures and redacted configuration.
+The readiness integration target starts a digest-pinned Redis instance and
+provisions its Redis Functions. Its isolated Redis fixture enables AOF with
+`appendfsync always` plus an RDB save policy so the
+persistence-survives-restart gate has the same durability contract as the
+trusted Redis integration target. It stops and restores Redis while a worker
+is running. It proves liveness remains `200`, readiness transitions `200` to
+`503` to `200`, polling resumes only after recovery, and no provider call is
+made. PostgreSQL namespace/schema installation is covered by the separate
+`postgres-integration` target; neither this target nor the current Compose
+lifecycle stops and restores PostgreSQL. The Compose smoke check only
+validates the model and local fixture invariants;
+`compose-live-integration` is the separately authorized Docker gate. The
+Kubernetes check renders every overlay with `kubectl kustomize` and never
+contacts a cluster. Both checks use only checked-in fixtures and redacted
+configuration.
 
 ## GitHub Actions split
 

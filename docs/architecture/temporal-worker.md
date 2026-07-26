@@ -308,10 +308,13 @@ transient dependency recovery cannot create overlapping pollers.
 `LLMTW_COMPOSE_LIVE=1 make compose-live-integration` is the opt-in local
 operational proof. It starts a uniquely named Compose project with pinned
 Postgres-backed Temporal and Redis services, the development-only file blob
-store, and the same worker health endpoints used by Kubernetes. It checks
-liveness and readiness through the worker binary, stops Redis while the worker
-runs, and requires readiness to become unavailable while liveness remains
-available before polling can resume after Redis returns.
+store, and the same worker health and metrics endpoints used by Kubernetes. It
+checks liveness and readiness through the worker binary, scrapes the
+`llmtw_worker_polling` gauge, stops Redis while the worker runs, and requires
+readiness to become unavailable, liveness to remain available, and polling to
+transition from `1` to `0` before polling returns to `1` after Redis returns.
+This current Compose lifecycle evidence is Redis-only; it does not stop and
+restore worker PostgreSQL.
 
 The same gate runs a real Temporal SDK Activity with two worker replicas and a
 shared Redis admission store. Its adapter is content-free and in-process: it
@@ -342,9 +345,10 @@ The Temporal Go SDK Activity test environment covers:
 
 The opt-in Compose gate complements those deterministic tests with a real
 Temporal service, shared Redis admission ledger, worker-stop recovery, and
-the live readiness probe transition. It also proves a periodic
-`provider_wait` keepalive across a long successful one-shot provider call. It
-is intentionally excluded from normal offline tests and pull-request CI.
+the live readiness and `llmtw_worker_polling` transitions. It also proves a
+periodic `provider_wait` keepalive across a long successful one-shot provider
+call. It is intentionally excluded from normal offline tests and pull-request
+CI.
 
 Workflow-level tests live in an example package and demonstrate caller-owned
 tool execution, but the worker does not ship a general agent Workflow.
