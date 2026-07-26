@@ -71,6 +71,35 @@ func TestRandomFragmentIsDeterministicBoundedAndReconstructsInput(t *testing.T) 
 	}
 }
 
+func TestTwoPartFragmentsEnumeratesEverySplitAndEmptyReadsPreserveInput(t *testing.T) {
+	data := []byte("abcdef")
+	fragments := TwoPartFragments(data)
+	if len(fragments) != len(data)+1 {
+		t.Fatalf("split count = %d, want %d", len(fragments), len(data)+1)
+	}
+	for split, chunks := range fragments {
+		if got := join(chunks); !bytes.Equal(got, data) {
+			t.Fatalf("split %d reconstructed %q, want %q", split, got, data)
+		}
+		withEmpty := WithEmptyChunks(chunks)
+		if len(withEmpty) != len(chunks)*2+1 {
+			t.Fatalf("split %d empty chunk count = %d, want %d", split, len(withEmpty), len(chunks)*2+1)
+		}
+		if withEmpty[0] != nil || withEmpty[len(withEmpty)-1] != nil {
+			t.Fatalf("split %d missing boundary empty reads: %#v", split, withEmpty)
+		}
+		if got := join(withEmpty); !bytes.Equal(got, data) {
+			t.Fatalf("split %d with empty reads reconstructed %q, want %q", split, got, data)
+		}
+	}
+}
+
+func TestCRLFConvertsLineEndings(t *testing.T) {
+	if got := string(CRLF([]byte("a\nb\n"))); got != "a\r\nb\r\n" {
+		t.Fatalf("CRLF conversion = %q", got)
+	}
+}
+
 func chunks(values ...string) [][]byte {
 	result := make([][]byte, len(values))
 	for index, value := range values {

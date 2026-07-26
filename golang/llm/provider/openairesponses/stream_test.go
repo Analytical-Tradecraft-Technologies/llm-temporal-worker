@@ -37,6 +37,33 @@ func TestDecodeStreamIsFragmentationInvariant(t *testing.T) {
 	}
 }
 
+func TestDecodeStreamEnumeratesSplitPointsEmptyReadsAndCRLF(t *testing.T) {
+	wire := []byte("event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.output_item.added\ndata: {\"output_index\":0,\"item\":{\"type\":\"message\"}}\n\nevent: response.output_text.delta\ndata: {\"output_index\":0,\"delta\":\"hello\"}\n\nevent: response.output_item.done\ndata: {\"output_index\":0}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\"}\n\n")
+	for _, variant := range []struct {
+		name string
+		wire []byte
+	}{
+		{name: "lf", wire: wire},
+		{name: "crlf", wire: streamtest.CRLF(wire)},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			want, err := DecodeStream(bytes.NewReader(variant.wire))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for split, chunks := range streamtest.TwoPartFragments(variant.wire) {
+				got, err := DecodeStream(&responseChunkReader{chunks: streamtest.WithEmptyChunks(chunks)})
+				if err != nil {
+					t.Fatalf("split %d: %v", split, err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("split %d differs\n got: %#v\nwant: %#v", split, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodeStreamRejectsUnknownEvent(t *testing.T) {
 	if _, err := DecodeStream(strings.NewReader("event: response.unknown\ndata: {}\n\n")); err == nil {
 		t.Fatal("unknown event unexpectedly succeeded")
