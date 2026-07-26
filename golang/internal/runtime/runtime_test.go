@@ -544,6 +544,36 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	}
 }
 
+func TestStopDependencyMonitorSignalsCancellationBeforeReadinessHandoff(t *testing.T) {
+	runtime := &Runtime{}
+	runtime.readinessMu.Lock()
+	done := make(chan struct{})
+	canceled := make(chan struct{})
+	runtime.mu.Lock()
+	runtime.monitorCancel = func() { close(canceled) }
+	runtime.monitorDone = done
+	runtime.mu.Unlock()
+
+	stopped := make(chan struct{})
+	go func() {
+		runtime.stopDependencyMonitor(context.Background())
+		close(stopped)
+	}()
+
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("monitor cancellation was blocked by readiness handoff")
+	}
+	close(done)
+	runtime.readinessMu.Unlock()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stopDependencyMonitor did not finish after readiness handoff")
+	}
+}
+
 func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 	probe := &mutableRuntimeProbe{}
 	probe.healthy.Store(true)

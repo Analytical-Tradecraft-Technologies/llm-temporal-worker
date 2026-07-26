@@ -77,15 +77,26 @@ func CheckDependencyProbes(ctx context.Context, probes []DependencyProbe, timeou
 		return errRequiredDependencyUnavailable
 	}
 	for _, probe := range probes {
+		// A monitor cancellation must never be turned into a successful
+		// readiness result by a probe that returns after its context was
+		// canceled. Check before invoking each probe so shutdown does not start
+		// another dependency call, and check again below for implementations
+		// that do not observe cancellation themselves.
+		if ctx.Err() != nil {
+			return errRequiredDependencyUnavailable
+		}
 		if probe == nil {
 			return errRequiredDependencyUnavailable
 		}
 		probeContext, cancel := context.WithTimeout(ctx, timeout)
 		result := normalizeProbeResult(probe.Probe(probeContext))
 		cancel()
-		if result.Status != ProbeStatusReady {
+		if ctx.Err() != nil || result.Status != ProbeStatusReady {
 			return errRequiredDependencyUnavailable
 		}
+	}
+	if ctx.Err() != nil {
+		return errRequiredDependencyUnavailable
 	}
 	return nil
 }
