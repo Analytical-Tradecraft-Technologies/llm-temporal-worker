@@ -341,7 +341,7 @@ func (metrics *Metrics) RecordMaintenance(resource, outcome string, rows int, du
 	}
 	resources := map[string]struct{}{
 		"cache": {}, "status": {}, "inventory": {}, "query_execution": {},
-		"checkpoint": {}, "blob": {}, "outbox": {},
+		"checkpoint": {}, "blob": {}, "outbox": {}, "budget": {},
 	}
 	outcomes := map[string]struct{}{
 		"eligible": {}, "tombstoned": {}, "deleted": {}, "skipped": {},
@@ -365,7 +365,7 @@ func (metrics *Metrics) RecordMaintenanceFailure(resource string) {
 	}
 	resources := map[string]struct{}{
 		"cache": {}, "status": {}, "inventory": {}, "query_execution": {},
-		"checkpoint": {}, "blob": {}, "outbox": {},
+		"checkpoint": {}, "blob": {}, "outbox": {}, "budget": {},
 	}
 	metrics.mu.RLock()
 	defer metrics.mu.RUnlock()
