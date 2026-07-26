@@ -193,13 +193,28 @@ func (checkpointBlobReaderStub) Read(context.Context, string, state.CheckpointBl
 	return nil, nil
 }
 
+type checkpointMaterializerStub struct{}
+
+func (*checkpointMaterializerStub) Materialize(context.Context, string, state.CheckpointID, state.MaterializeLimits) (state.MaterializedState, error) {
+	return state.MaterializedState{}, nil
+}
+
+func (*checkpointMaterializerStub) MaterializeHandle(context.Context, string, string, state.MaterializeLimits) (state.MaterializedState, error) {
+	return state.MaterializedState{}, nil
+}
+
 type checkpointCompositionCloser struct {
 	postgresPoolCloser
-	blobs state.CheckpointBlobReader
+	blobs        state.CheckpointBlobReader
+	materializer state.CheckpointHandleMaterializer
 }
 
 func (closer checkpointCompositionCloser) CheckpointBlobReader() state.CheckpointBlobReader {
 	return closer.blobs
+}
+
+func (closer checkpointCompositionCloser) CheckpointMaterializer() state.CheckpointHandleMaterializer {
+	return closer.materializer
 }
 
 func TestCheckpointCapabilitiesCopyTypedBundleFromPostgresCloser(t *testing.T) {
@@ -217,6 +232,107 @@ func TestCheckpointCapabilitiesCopyTypedBundleFromPostgresCloser(t *testing.T) {
 	}
 	if got := (&productionClientSet{}).CheckpointCapabilities(); got.Repository != nil || got.Blobs != nil {
 		t.Fatalf("empty snapshot client set checkpoint capabilities = %#v", got)
+	}
+}
+
+type checkpointCapabilitiesSourceStub struct {
+	repository   state.CheckpointRepository
+	blobs        state.CheckpointBlobReader
+	materializer state.CheckpointHandleMaterializer
+}
+
+func (source checkpointCapabilitiesSourceStub) CheckpointRepository() state.CheckpointRepository {
+	return source.repository
+}
+
+func (source checkpointCapabilitiesSourceStub) CheckpointBlobReader() state.CheckpointBlobReader {
+	return source.blobs
+}
+
+func (source checkpointCapabilitiesSourceStub) CheckpointMaterializer() state.CheckpointHandleMaterializer {
+	return source.materializer
+}
+
+func (source checkpointCapabilitiesSourceStub) Close() error { return nil }
+
+func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing.T) {
+	reader := checkpointBlobReaderStub{}
+	materializer := &checkpointMaterializerStub{}
+	base := postgresPoolCloser{}
+	complete := checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader, materializer: materializer}
+	capabilities := checkpointCapabilitiesFromCloser(complete)
+	wrapped, ok := capabilities.Materializer.(snapshotCheckpointMaterializer)
+	if !ok {
+		t.Fatalf("checkpoint materializer = %T, want private snapshot wrapper", capabilities.Materializer)
+	}
+	if wrapped.delegate != materializer {
+		t.Fatalf("checkpoint materializer delegate = %T, want supplied materializer", wrapped.delegate)
+	}
+	if capabilities.Repository == nil || capabilities.Blobs != reader {
+		t.Fatalf("complete checkpoint capabilities = %#v, want repository and blob reader", capabilities)
+	}
+	if got := (&productionClientSet{checkpoints: capabilities, v1Capabilities: V1RuntimeCapabilities{Checkpoints: capabilities}}).CheckpointCapabilities().Materializer; got == nil {
+		t.Fatal("snapshot client set omitted complete checkpoint materializer")
+	}
+
+	missingBlobs := checkpointCompositionCloser{postgresPoolCloser: base, materializer: materializer}
+	if got := checkpointCapabilitiesFromCloser(missingBlobs).Materializer; got != nil {
+		t.Fatalf("materializer with missing blob reader = %T, want nil", got)
+	}
+	missingRepository := checkpointCapabilitiesSourceStub{blobs: reader, materializer: materializer}
+	if got := checkpointCapabilitiesFromCloser(missingRepository).Materializer; got != nil {
+		t.Fatalf("materializer with missing repository = %T, want nil", got)
+	}
+	missingMaterializer := checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader}
+	if got := checkpointCapabilitiesFromCloser(missingMaterializer).Materializer; got != nil {
+		t.Fatalf("nil supplied materializer = %T, want nil", got)
+	}
+	if got := checkpointCapabilitiesFromCloser(nil); got.Repository != nil || got.Blobs != nil || got.Materializer != nil {
+		t.Fatalf("nil closer capabilities = %#v, want zero value", got)
+	}
+}
+
+type checkpointMaterializerClosingCloser struct {
+	postgresPoolCloser
+	blobs        state.CheckpointBlobReader
+	materializer state.CheckpointHandleMaterializer
+	closed       bool
+}
+
+func (closer *checkpointMaterializerClosingCloser) CheckpointBlobReader() state.CheckpointBlobReader {
+	return closer.blobs
+}
+
+func (closer *checkpointMaterializerClosingCloser) CheckpointMaterializer() state.CheckpointHandleMaterializer {
+	return closer.materializer
+}
+
+func (closer *checkpointMaterializerClosingCloser) Close() error {
+	closer.closed = true
+	return nil
+}
+
+func TestCheckpointMaterializerCapabilityKeepsSnapshotOwnerLifecycle(t *testing.T) {
+	closer := &checkpointMaterializerClosingCloser{
+		blobs:        checkpointBlobReaderStub{},
+		materializer: &checkpointMaterializerStub{},
+	}
+	capabilities := checkpointCapabilitiesFromCloser(closer)
+	if capabilities.Materializer == nil {
+		t.Fatal("complete checkpoint materializer capability is nil")
+	}
+	set := &productionClientSet{
+		checkpoints: capabilities,
+		close:       func(context.Context) error { return closer.Close() },
+	}
+	if err := set.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !closer.closed {
+		t.Fatal("snapshot client close did not close checkpoint materializer owner")
+	}
+	if set.CheckpointCapabilities().Materializer == nil {
+		t.Fatal("snapshot checkpoint materializer capability changed after owner close")
 	}
 }
 
@@ -350,7 +466,7 @@ func TestProductionClientSetReturnsSnapshotOwnedV1CapabilitiesWithoutFallback(t 
 	if empty.Snapshot != nil || empty.Planner != nil || empty.Adapters != nil || empty.Journal != nil || empty.ProviderStatusRecorder != nil || empty.Clock != nil {
 		t.Fatalf("legacy runtime leaked into empty capability bundle: %#v", empty)
 	}
-	if empty.Checkpoints.Repository != nil || empty.Checkpoints.Blobs != nil {
+	if empty.Checkpoints.Repository != nil || empty.Checkpoints.Blobs != nil || empty.Checkpoints.Materializer != nil {
 		t.Fatalf("legacy runtime leaked checkpoint capabilities: %#v", empty.Checkpoints)
 	}
 }

@@ -24,6 +24,7 @@ type DurableCheckpointMaterializer struct {
 }
 
 var _ CheckpointMaterializer = (*DurableCheckpointMaterializer)(nil)
+var _ CheckpointHandleMaterializer = (*DurableCheckpointMaterializer)(nil)
 
 func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Context, scopeID string, checkpointID CheckpointID, limits MaterializeLimits) (MaterializedState, error) {
 	if materializer == nil || materializer.Repository == nil {

@@ -207,9 +207,9 @@ func (set *productionClientSet) QueryService() activity.QueryService {
 }
 
 // CheckpointCapabilities returns the typed durable checkpoint bundle owned by
-// this immutable snapshot. A nil repository or blob reader is an explicit
-// unconfigured capability; callers must not reach into PostgreSQL or invent a
-// process-local substitute.
+// this immutable snapshot. A nil repository, blob reader, or handle
+// materializer is an explicit unconfigured capability; callers must not reach
+// into PostgreSQL or invent a process-local substitute.
 func (set *productionClientSet) CheckpointCapabilities() CheckpointCapabilities {
 	if set == nil {
 		return CheckpointCapabilities{}
