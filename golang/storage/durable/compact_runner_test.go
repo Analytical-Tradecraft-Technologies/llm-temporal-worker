@@ -164,6 +164,38 @@ func TestCompactV1CacheHitCreatesZeroCostWorkerCacheChild(t *testing.T) {
 	}
 }
 
+func TestCompactV1CancellationAfterCacheFinalizationDoesNotReturnSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := []string{}
+	ports := testCompactPorts(&events, "")
+	template := testCompactFinalization(testCompactRequest()).Response
+	template.OperationKey = "origin-operation-key"
+	template.OperationID = "origin-operation-id"
+	template.Checkpoint.Handle = "origin-checkpoint"
+	ports.CacheLookup = func(context.Context, llm.CompactRequestV1, CompactReplay) (CompactCacheDecision, error) {
+		events = append(events, "cache")
+		return CompactCacheDecision{Disposition: CacheHit, Response: &template}, nil
+	}
+	ports.FinalizeCache = func(_ context.Context, request llm.CompactRequestV1, _ CompactReplay, _ CompactCacheDecision) (CompactFinalization, error) {
+		events = append(events, "cache-finalize")
+		result := testCompactFinalization(request)
+		result.Response.Checkpoint.Handle = "cache-replay-checkpoint"
+		result.Response.Cache = llm.CacheDispositionV1{Disposition: "hit", Variant: 0}
+		result.Response.Cost = llm.CostV1{Status: "exact", ActualCostUSD: stringPtr("0"), Method: "provider_reported"}
+		result.Response.Provenance = []byte(`{"source":"worker_cache","origin_operation_id":"origin-operation"}`)
+		cancel()
+		return result, nil
+	}
+	_, err := CompactV1(ctx, testCompactRequest(), ports)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CompactV1 error = %v, want context cancellation", err)
+	}
+	if contains(events, "dispatch") || contains(events, "reconcile") {
+		t.Fatalf("cache finalization cancellation reached later side effect: %v", events)
+	}
+}
+
 func TestCompactV1FailsClosedBeforeDispatch(t *testing.T) {
 	for _, failStage := range []string{"replay", "cache", "route", "reserve", "journal"} {
 		t.Run(failStage, func(t *testing.T) {
@@ -176,6 +208,66 @@ func TestCompactV1FailsClosedBeforeDispatch(t *testing.T) {
 				t.Fatalf("phase failure %q reached dispatch: %v", failStage, events)
 			}
 		})
+	}
+}
+
+func TestCompactV1CancellationStopsBeforeTheNextDurablePhase(t *testing.T) {
+	for _, test := range []struct {
+		phase  string
+		forbid string
+	}{
+		{phase: "replay", forbid: "cache"},
+		{phase: "cache", forbid: "route"},
+		{phase: "route", forbid: "reserve"},
+		{phase: "finalize", forbid: "reconcile"},
+	} {
+		t.Run(test.phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events := []string{}
+			ports := testCompactPorts(&events, "")
+			cancelAfterCompactPhase(&ports, test.phase, cancel)
+			_, err := CompactV1(ctx, testCompactRequest(), ports)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("CompactV1 error = %v, want context cancellation", err)
+			}
+			if contains(events, test.forbid) {
+				t.Fatalf("cancellation after %s reached %s: %v", test.phase, test.forbid, events)
+			}
+		})
+	}
+}
+
+func cancelAfterCompactPhase(ports *CompactPorts, phase string, cancel context.CancelFunc) {
+	switch phase {
+	case "replay":
+		original := ports.Replay
+		ports.Replay = func(ctx context.Context, request llm.CompactRequestV1) (CompactReplay, error) {
+			result, err := original(ctx, request)
+			cancel()
+			return result, err
+		}
+	case "cache":
+		original := ports.CacheLookup
+		ports.CacheLookup = func(ctx context.Context, request llm.CompactRequestV1, replay CompactReplay) (CompactCacheDecision, error) {
+			result, err := original(ctx, request, replay)
+			cancel()
+			return result, err
+		}
+	case "route":
+		original := ports.Route
+		ports.Route = func(ctx context.Context, request llm.CompactRequestV1, replay CompactReplay) (RoutePlan, error) {
+			result, err := original(ctx, request, replay)
+			cancel()
+			return result, err
+		}
+	case "finalize":
+		original := ports.Finalize
+		ports.Finalize = func(ctx context.Context, request llm.CompactRequestV1, replay CompactReplay, route RoutePlan, reservation ReserveResult, dispatch CompactDispatchResult) (CompactFinalization, error) {
+			result, err := original(ctx, request, replay, route, reservation, dispatch)
+			cancel()
+			return result, err
+		}
 	}
 }
 

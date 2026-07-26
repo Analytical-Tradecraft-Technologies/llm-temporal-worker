@@ -185,6 +185,128 @@ func TestGenerateV1FailsClosedBeforeDispatchWhenPreDispatchPhaseFails(t *testing
 	}
 }
 
+func TestGenerateV1CancellationStopsBeforeTheNextDurablePhase(t *testing.T) {
+	for _, test := range []struct {
+		phase  string
+		forbid string
+	}{
+		{phase: "replay", forbid: "cache"},
+		{phase: "cache", forbid: "compaction"},
+		{phase: "compaction", forbid: "route"},
+		{phase: "route", forbid: "reserve"},
+		{phase: "finalize", forbid: "reconcile"},
+	} {
+		t.Run(test.phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			events := []string{}
+			ports := testGeneratePorts(&events, "")
+			cancelAfterGeneratePhase(&ports, test.phase, cancel)
+			_, err := GenerateV1(ctx, testGenerateRequest(), ports)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("GenerateV1 error = %v, want context cancellation", err)
+			}
+			if contains(events, test.forbid) {
+				t.Fatalf("cancellation after %s reached %s: %v", test.phase, test.forbid, events)
+			}
+		})
+	}
+}
+
+func TestGenerateV1CancellationAfterCompactStopsBeforeGenerateAdmission(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.CompactionDecision = func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
+		events = append(events, "compaction")
+		return CompactionDecision{Required: true}, nil
+	}
+	ports.Compact = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error) {
+		events = append(events, "compact")
+		cancel()
+		return GenerateReplay{}, nil
+	}
+	_, err := GenerateV1(ctx, testGenerateRequest(), ports)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("GenerateV1 error = %v, want context cancellation", err)
+	}
+	if contains(events, "route") || contains(events, "reserve") {
+		t.Fatalf("canceled Compact entered Generate admission: %v", events)
+	}
+}
+
+func TestGenerateV1CancellationAfterCacheFinalizationDoesNotReturnSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.CacheLookup = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (CacheDecision, error) {
+		events = append(events, "cache")
+		origin := testFinalization(testGenerateRequest()).Response
+		origin.OperationKey = "origin-operation-key"
+		origin.OperationID = "origin-operation-id"
+		origin.Checkpoint.Handle = "origin-checkpoint"
+		return CacheDecision{Disposition: CacheHit, Response: &origin}, nil
+	}
+	ports.FinalizeCache = func(_ context.Context, request llm.GenerateRequestV1, _ GenerateReplay, _ CacheDecision) (GenerateFinalization, error) {
+		events = append(events, "cache-finalize")
+		result := testFinalization(request)
+		result.Response.Checkpoint.Kind = "cache_replay"
+		result.Response.Checkpoint.Handle = "cache-replay-checkpoint"
+		result.Response.Cache = llm.CacheDispositionV1{Disposition: "hit"}
+		cancel()
+		return result, nil
+	}
+	_, err := GenerateV1(ctx, testGenerateRequest(), ports)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("GenerateV1 error = %v, want context cancellation", err)
+	}
+	if contains(events, "dispatch") || contains(events, "reconcile") {
+		t.Fatalf("cache finalization cancellation reached later side effect: %v", events)
+	}
+}
+
+func cancelAfterGeneratePhase(ports *GeneratePorts, phase string, cancel context.CancelFunc) {
+	switch phase {
+	case "replay":
+		original := ports.Replay
+		ports.Replay = func(ctx context.Context, request llm.GenerateRequestV1) (GenerateReplay, error) {
+			result, err := original(ctx, request)
+			cancel()
+			return result, err
+		}
+	case "cache":
+		original := ports.CacheLookup
+		ports.CacheLookup = func(ctx context.Context, request llm.GenerateRequestV1, replay GenerateReplay) (CacheDecision, error) {
+			result, err := original(ctx, request, replay)
+			cancel()
+			return result, err
+		}
+	case "compaction":
+		original := ports.CompactionDecision
+		ports.CompactionDecision = func(ctx context.Context, request llm.GenerateRequestV1, replay GenerateReplay, cache CacheDecision) (CompactionDecision, error) {
+			result, err := original(ctx, request, replay, cache)
+			cancel()
+			return result, err
+		}
+	case "route":
+		original := ports.Route
+		ports.Route = func(ctx context.Context, request llm.GenerateRequestV1, replay GenerateReplay, decision CompactionDecision) (RoutePlan, error) {
+			result, err := original(ctx, request, replay, decision)
+			cancel()
+			return result, err
+		}
+	case "finalize":
+		original := ports.Finalize
+		ports.Finalize = func(ctx context.Context, request llm.GenerateRequestV1, replay GenerateReplay, route RoutePlan, reservation ReserveResult, dispatch DispatchResult) (GenerateFinalization, error) {
+			result, err := original(ctx, request, replay, route, reservation, dispatch)
+			cancel()
+			return result, err
+		}
+	}
+}
+
 func TestGenerateV1StopsWhenRedisReservationIsDenied(t *testing.T) {
 	events := []string{}
 	ports := testGeneratePorts(&events, "")
