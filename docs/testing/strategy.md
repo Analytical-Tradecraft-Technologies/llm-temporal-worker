@@ -96,9 +96,11 @@ The PostgreSQL integration suite includes representative-cardinality
   reads, plus `provider_inventory_latest_idx` for the endpoint-only horizon
   read.
 - `TestProviderQueryPlansUseProjectionIndexes` loads 10,000 route projections
-  and status events, then requires `provider_route_query_idx` for the bounded
-  route page and `provider_route_credit_query_idx` for the DISTINCT-ON credit
-  page.
+  and status events, then requires `provider_route_query_idx` (or the
+  equivalent generated route primary-key path) for the bounded route page and
+  `provider_route_credit_query_idx` for the DISTINCT-ON credit page. PostgreSQL
+  may choose the primary-key path because it has the same `(config_digest,
+  route_id)` leading keys; both are valid route-identity plans.
 - `TestSpendSummaryQueryPlanUsesLedgerIndexes` loads 10,000 completed
   operations and query executions and requires `operations_scope_spend_idx` and
   `query_executions_scope_time_idx` for the scoped spend-summary ledger scan.

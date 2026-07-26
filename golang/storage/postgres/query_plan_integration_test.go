@@ -170,9 +170,13 @@ func TestProviderQueryPlansUseProjectionIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	routePrimaryKey, err := namespace.PrefixName("c_pk_228")
+	if err != nil {
+		t.Fatal(err)
+	}
 	routeQuery := "SELECT config_digest, config_epoch, route_id, endpoint_id, endpoint_account_hmac, provider, endpoint_family, availability, credit_state, billing_state, circuit_state, consecutive_definite_failures, last_event_digest, observed_at, stale_after, credit_confirmed_at FROM " + routes + " WHERE config_digest = $1 AND ($2 = '' OR provider = $2) AND ($3 = '' OR endpoint_id = $3) AND ($4 = '' OR availability = $4) AND ($5 OR availability <> 'available' OR credit_state <> 'ok' OR billing_state <> 'ok' OR circuit_state <> 'closed') AND ($6::timestamptz IS NULL OR observed_at <= $6) AND ($7 = '' OR route_id > $7) ORDER BY route_id LIMIT $8"
 	routePlan := explainJSONPlan(t, ctx, pool, routeQuery, configDigest[:], "", "", "", false, nil, "route-5000", 101)
-	assertPlanUsesIndex(t, routePlan, routeIndex)
+	assertPlanUsesOneOfIndexNames(t, routePlan, routeIndex, routePrimaryKey)
 
 	creditIndex, err := namespace.PrefixName("provider_route_credit_query_idx")
 	if err != nil {
@@ -269,12 +273,23 @@ func explainJSONPlan(t *testing.T, ctx context.Context, pool *pgxpool.Pool, quer
 
 func assertPlanUsesIndex(t *testing.T, plan any, wantIndex string) {
 	t.Helper()
+	assertPlanUsesOneOfIndexNames(t, plan, wantIndex)
+}
+
+func assertPlanUsesOneOfIndexNames(t *testing.T, plan any, wantIndexes ...string) {
+	t.Helper()
+	wanted := make(map[string]struct{}, len(wantIndexes))
+	for _, index := range wantIndexes {
+		wanted[index] = struct{}{}
+	}
 	var walk func(any) bool
 	walk = func(value any) bool {
 		switch node := value.(type) {
 		case map[string]any:
-			if index, ok := node["Index Name"].(string); ok && index == wantIndex {
-				return true
+			if index, ok := node["Index Name"].(string); ok {
+				if _, wanted := wanted[index]; wanted {
+					return true
+				}
 			}
 			for _, child := range node {
 				if walk(child) {
@@ -292,6 +307,6 @@ func assertPlanUsesIndex(t *testing.T, plan any, wantIndex string) {
 	}
 	if !walk(plan) {
 		encoded, _ := json.Marshal(plan)
-		t.Fatalf("query plan did not use %q: %s", wantIndex, encoded)
+		t.Fatalf("query plan did not use one of %q: %s", wantIndexes, encoded)
 	}
 }
