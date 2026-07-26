@@ -15,8 +15,23 @@ type dispatcher =
   (request, response) Temporal.Activity.t ->
   request -> (response, Temporal.Error.t) result
 
+let operation_key_mismatch ~expected ~actual =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf
+                "generate response operation key mismatch: expected %s, got %s"
+                (Operation_key.to_string expected)
+                (Operation_key.to_string actual))
+
 let invoke_with ?task_queue ~dispatch request =
-  Llm_temporal_invocation.invoke_generate_once ?task_queue ~dispatch request
+  match Llm_temporal_invocation.invoke_generate_once ?task_queue ~dispatch request with
+  | Error error -> Error error
+  | Ok response when
+      not (String.equal
+             (Operation_key.to_string response.operation_key)
+             (Operation_key.to_string request.operation_key)) ->
+      Error (operation_key_mismatch ~expected:request.operation_key
+               ~actual:response.operation_key)
+  | Ok response -> Ok response
 
 let invoke_dispatch ?task_queue activity request =
   Temporal.Activity.execute

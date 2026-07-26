@@ -46,6 +46,17 @@ let () =
     failwith "Generate settings did not set service class";
   let actual = expect_ok (Generate.invoke_with ~dispatch request) in
   if actual.operation_key <> operation_key then failwith "Generate response operation key changed";
+  let mismatched_dispatch ?task_queue:_ activity request =
+    if Temporal.Activity.name activity <> "llm.generate.v1" then
+      failwith "Generate dispatched the wrong Activity";
+    Ok { (response request) with
+         operation_key = Operation_key.of_string "different-operation" }
+  in
+  (match Generate.invoke_with ~dispatch:mismatched_dispatch request with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "generate response operation key mismatch: expected generate-test, got different-operation" -> ()
+   | Error error -> failf "unexpected operation key mismatch: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "mismatched Generate operation key was accepted");
   let legacy = Request.make ~operation_key ~model ~service_class:Standard ~input () in
   if legacy.model <> model then failwith "legacy Request compatibility changed";
   print_endline "one-shot Generate facade passed"
