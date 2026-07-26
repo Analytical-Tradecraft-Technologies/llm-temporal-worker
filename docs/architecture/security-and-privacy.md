@@ -153,9 +153,13 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
   updated through reviewed PRs.
 - Official provider SDKs are preferred; raw HTTP requires an ADR, scoped package,
   wire fixtures, and a migration/removal condition.
-- `make security-verify` runs source/fixture/test-output redaction checks,
-  checks every direct `go.mod` requirement against the reviewed license/source
-  inventory, and runs the pinned `govulncheck` release with the reviewed Go
+- `make security-verify` runs bounded source/fixture/test-output redaction
+  checks from the repository root. This covers Go worker code, root workflows
+  and release files, and OCaml `.ml`/`.mli` package sources; Go `_test.go`
+  files remain excluded while checked-in fixtures remain included. It never prints
+  credential-like payloads. It also checks every direct `go.mod` requirement
+  against the reviewed license/source inventory, and runs the pinned
+  `govulncheck` release with the reviewed Go
   1.26.5 toolchain. It scans the reachable program, including transitive
   dependencies, rather than treating a dependency list as proof of safety.
 - Pull-request CI runs `make security-verify`. Trusted-master failures retain
