@@ -237,6 +237,16 @@ does not claim that PostgreSQL/blob backup restore, Temporal crash-boundary
 injection, or Redis generation rebuild has been exercised. Those remain
 integration gates in the production implementation plan.
 
+The storage-neutral Generate runner also has a deterministic crash-boundary
+contract in `TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit`. The
+harness treats finalization as the durable PostgreSQL commit, injects a worker
+failure before Redis reconciliation, then retries from the persisted pending
+identities. The retry performs reconciliation only, and a later replay returns
+the committed response; reservation, journal, provider dispatch, and
+finalization each occur exactly once. This proves the runner's no-resubmission
+boundary without claiming that a live Temporal worker, PostgreSQL backup, or
+provider has been exercised.
+
 ### Adapter contract tests
 
 Every adapter package runs the same suite:
