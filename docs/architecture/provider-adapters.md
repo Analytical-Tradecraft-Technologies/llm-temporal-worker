@@ -115,8 +115,9 @@ break both.
 - Strict structured output uses the provider's JSON Schema form after local
   subset validation.
 - The completed response is validated against the requested JSON object or
-  JSON Schema format before it enters the normalized response. A provider
-  acknowledgement alone is not sufficient evidence for the Temporal boundary.
+  JSON Schema format before it enters the normalized response. JSON-object mode
+  requires a valid top-level object; a provider acknowledgement alone is not
+  sufficient evidence for the Temporal boundary.
 - Reasoning encrypted content is retained as provider-state only when requested
   by capability/configuration.
 - `service_tier` is set from the resolved public class and the response tier is

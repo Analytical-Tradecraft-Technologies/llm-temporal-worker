@@ -150,6 +150,36 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 	}
 }
 
+func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
+	params, err := lowerRequest(llm.Request{
+		Model:  "gpt",
+		Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}},
+	}, llm.ServiceClassStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := provider.Call{
+		EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt",
+		OperationKey: "op-json-object", ServiceClass: llm.ServiceClassStandard, SDKParams: params,
+	}
+	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
+	response.Output = decodeOutputItems(t, `[{
+		"type":"message","id":"msg","role":"assistant","status":"completed",
+		"content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]
+	}]`)
+	if _, err := liftResponse(call, &response, "req"); err != nil {
+		t.Fatalf("valid JSON object response = %v", err)
+	}
+
+	response.ID = "array"
+	response.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"[1,2,3]","annotations":[]}]}]`)
+	_, err = liftResponse(call, &response, "req")
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
+		t.Fatalf("non-object JSON response error = %#v, want accepted provider invalid response", err)
+	}
+}
+
 func loadResponseFixture(t *testing.T, name string) responses.Response {
 	t.Helper()
 	data, err := os.ReadFile("testdata/contracts/openai-responses/" + name)
