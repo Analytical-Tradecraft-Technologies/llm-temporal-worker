@@ -12,6 +12,11 @@ state lookup. Additive fields may be introduced within v1 only when old readers
 ignore them safely; enum additions require a new version because generated Go
 clients must not silently accept unknown behavior.
 
+Every public JSON record is parsed with a recursive duplicate-key check before
+semantic decoding. This includes nested objects retained as extension,
+provider-state, tool-argument, or schema JSON; a repeated key is never resolved
+by taking the last value. Canonical request hashing applies the same rule.
+
 > This chapter describes the current pre-release v1 shape. The staged target,
 > unimplemented delta, cache, exact USD, Compact, and Query contracts replace
 > it in place before the first release and are defined in

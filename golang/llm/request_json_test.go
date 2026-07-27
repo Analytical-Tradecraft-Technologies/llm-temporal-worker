@@ -105,6 +105,38 @@ func TestRequestRejectsUnknownAndAmbiguousFields(t *testing.T) {
 	}
 }
 
+func TestPublicJSONRejectsNestedDuplicateKeys(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+	}{
+		{
+			name: "context tags",
+			json: `{"api_version":"llm.temporal/v1","operation_key":"x","model":"m","context":{"tags":{"team":"a","team":"b"}}}`,
+		},
+		{
+			name: "extension value",
+			json: `{"api_version":"llm.temporal/v1","operation_key":"x","model":"m","extensions":{"vendor":{"enabled":true,"enabled":false}}}`,
+		},
+		{
+			name: "tool schema",
+			json: `{"api_version":"llm.temporal/v1","operation_key":"x","model":"m","tools":[{"name":"lookup","input_schema":{"type":"object","properties":{"id":{"type":"string","type":"integer"}}}}]}`,
+		},
+		{
+			name: "tool arguments",
+			json: `{"api_version":"llm.temporal/v1","operation_key":"x","model":"m","input":[{"kind":"tool_call","id":"call-1","name":"lookup","arguments":{"id":1,"id":2}}]}`,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			var request llm.Request
+			if err := json.Unmarshal([]byte(test.json), &request); err == nil {
+				t.Fatalf("accepted nested duplicate key: %s", test.json)
+			}
+		})
+	}
+}
+
 func TestResponseJSONFixtures(t *testing.T) {
 	for _, name := range []string{"tool-calls.json", "completed.json"} {
 		data := readFixture(t, filepath.Join("response", name))

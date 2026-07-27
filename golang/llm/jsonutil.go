@@ -14,6 +14,13 @@ var errJSONTrailingData = errors.New("json value has trailing data")
 // nested values are retained as raw JSON so tagged unions can validate their
 // own closed fields.
 func decodeObject(data []byte) (map[string]json.RawMessage, error) {
+	// The standard encoding/json decoder keeps the last value when an object
+	// repeats a key. Public v1 records must not have that ambiguity at any
+	// nesting level, including opaque extension/schema/provider JSON that is
+	// retained as RawMessage.
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 
@@ -72,6 +79,9 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 }
 
 func decodeJSON(data []byte, dst any) error {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := decoder.Decode(dst); err != nil {
@@ -161,7 +171,81 @@ func copyBytes(value []byte) []byte {
 }
 
 func validRawJSON(value json.RawMessage) bool {
-	return len(value) > 0 && json.Valid(value)
+	return len(value) > 0 && rejectDuplicateJSONKeys(value) == nil
+}
+
+// rejectDuplicateJSONKeys validates one JSON value while checking every
+// object, rather than only the object decoded by a custom UnmarshalJSON
+// method. encoding/json intentionally accepts duplicate keys and keeps the
+// last value; accepting that behavior at a public boundary makes request
+// digests and semantic validation depend on parser details.
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	var visit func() error
+	visit = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delimiter, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("JSON object key is not a string")
+				}
+				if _, exists := seen[key]; exists {
+					return fmt.Errorf("duplicate JSON object key %q", key)
+				}
+				seen[key] = struct{}{}
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+			end, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if end != json.Delim('}') {
+				return fmt.Errorf("JSON object ended with %v", end)
+			}
+		case '[':
+			for decoder.More() {
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+			end, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			if end != json.Delim(']') {
+				return fmt.Errorf("JSON array ended with %v", end)
+			}
+		default:
+			return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+		}
+		return nil
+	}
+
+	if err := visit(); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return err
+	}
+	return nil
 }
 
 func marshalObject(fields map[string]any) ([]byte, error) {
