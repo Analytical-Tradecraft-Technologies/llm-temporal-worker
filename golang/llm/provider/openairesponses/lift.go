@@ -8,6 +8,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
 func liftResponse(call provider.Call, response *responses.Response, requestID string) (llm.Response, error) {
@@ -28,6 +29,11 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 	}
 	status, err := liftStatus(response.Status, response.IncompleteDetails.Reason, hasToolCalls, hasRefusal)
 	if err != nil {
+		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped.Provider.ResponseID = response.ID
+		return llm.Response{}, mapped
+	}
+	if err := validateFinalJSON(call, output, hasToolCalls, hasRefusal); err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
@@ -84,6 +90,80 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		Continuation: continuationForResponse(call, response),
 	}
 	return result, nil
+}
+
+// validateFinalJSON enforces the requested Responses text-format contract at
+// the semantic boundary. Provider-side structured-output promises are not a
+// substitute for validating the bytes that will enter Temporal history.
+func validateFinalJSON(call provider.Call, output []llm.Item, hasToolCalls, hasRefusal bool) error {
+	if hasToolCalls || hasRefusal || call.SDKParams == nil {
+		return nil
+	}
+	params, ok := call.SDKParams.(responses.ResponseNewParams)
+	if !ok {
+		if pointer, pointerOK := call.SDKParams.(*responses.ResponseNewParams); pointerOK && pointer != nil {
+			params = *pointer
+			ok = true
+		}
+	}
+	if !ok {
+		return nil
+	}
+	wire, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("response format validation parameters: %w", err)
+	}
+	var envelope struct {
+		Text struct {
+			Format json.RawMessage `json:"format"`
+		} `json:"text"`
+	}
+	if err := json.Unmarshal(wire, &envelope); err != nil || len(envelope.Text.Format) == 0 || string(envelope.Text.Format) == "null" {
+		return nil
+	}
+	var format struct {
+		Type   string          `json:"type"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	if err := json.Unmarshal(envelope.Text.Format, &format); err != nil {
+		return fmt.Errorf("response format validation: %w", err)
+	}
+	content, ok := firstModelText(output)
+	if !ok {
+		return fmt.Errorf("provider response did not contain JSON text content")
+	}
+	switch format.Type {
+	case "json_object":
+		if !json.Valid([]byte(content)) {
+			return fmt.Errorf("provider JSON response is invalid")
+		}
+	case "json_schema":
+		compiled, err := llmschema.Parse(format.Schema)
+		if err != nil {
+			return fmt.Errorf("response schema validation setup: %w", err)
+		}
+		if err := compiled.Validate([]byte(content)); err != nil {
+			return fmt.Errorf("provider JSON response does not satisfy schema: %w", err)
+		}
+	default:
+		return fmt.Errorf("provider returned unsupported response format %q", format.Type)
+	}
+	return nil
+}
+
+func firstModelText(output []llm.Item) (string, bool) {
+	for _, item := range output {
+		message, ok := item.(llm.Message)
+		if !ok || message.Actor != llm.ActorModel {
+			continue
+		}
+		for _, part := range message.Content {
+			if text, ok := part.(llm.TextPart); ok {
+				return text.Text, true
+			}
+		}
+	}
+	return "", false
 }
 
 func serviceClassForTier(tier responses.ResponseServiceTier) (*llm.ServiceClass, error) {
