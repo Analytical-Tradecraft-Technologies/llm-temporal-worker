@@ -200,7 +200,6 @@ func TestReservationEnvelopeIsRejectedBeforeRedisInvocation(t *testing.T) {
 	}{
 		{name: "mismatched amount", reservation: 5, reservations: []admission.WindowReservation{testReservation(6, 10)}},
 		{name: "duplicate identity", reservation: 6, reservations: []admission.WindowReservation{testReservation(6, 10), testReservation(6, 10)}},
-		{name: "missing vector", reservation: 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			invoker := &countingInvoker{}

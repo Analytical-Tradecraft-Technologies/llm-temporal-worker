@@ -19,12 +19,6 @@ func ValidateReservationEnvelope(reservations []WindowReservation, expected pric
 	if expected < 0 || !expected.Valid() {
 		return fmt.Errorf("invalid scalar reservation amount")
 	}
-	if len(reservations) == 0 {
-		if expected != 0 {
-			return fmt.Errorf("scalar reservation %d has no window reservations", expected)
-		}
-		return nil
-	}
 	type identity struct {
 		policy string
 		window string

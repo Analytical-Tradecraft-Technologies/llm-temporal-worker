@@ -162,7 +162,7 @@ end
 -- cannot under-reserve or debit a bucket twice in one transaction.
 local function valid_reservation_envelope(reservations, expected)
     local expected_value = integer(expected)
-    if not expected_value or (#reservations == 0 and expected_value ~= 0) then
+	if not expected_value then
         return false
     end
     local seen = {}

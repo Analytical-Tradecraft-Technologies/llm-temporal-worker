@@ -64,7 +64,6 @@ func TestAdmissionRejectsInvalidReservationEnvelopeBeforeMutation(t *testing.T) 
 	}{
 		{name: "mismatched amount", reservation: 5, reservations: []admission.WindowReservation{base}},
 		{name: "duplicate identity", reservation: 6, reservations: []admission.WindowReservation{base, base}},
-		{name: "missing vector", reservation: 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})

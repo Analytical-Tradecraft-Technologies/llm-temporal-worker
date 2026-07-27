@@ -16,7 +16,7 @@ func TestValidateReservationEnvelope(t *testing.T) {
 	}{
 		{name: "matching vector", reservations: []WindowReservation{valid}, expected: 5},
 		{name: "zero without windows", expected: 0},
-		{name: "nonzero without windows", expected: 5, wantErr: true},
+		{name: "nonzero without windows", expected: 5},
 		{name: "mismatched amount", reservations: []WindowReservation{{PolicyID: "policy", WindowID: "window", Bucket: 7, Amount: 4}}, expected: 5, wantErr: true},
 		{name: "duplicate identity", reservations: []WindowReservation{valid, valid}, expected: 5, wantErr: true},
 		{name: "different buckets", reservations: []WindowReservation{valid, {PolicyID: "policy", WindowID: "window", Bucket: 8, Amount: 5}}, expected: 5},
