@@ -117,6 +117,12 @@ a sequential scan instead of the checked-in index path. These are index
 eligibility checks at bounded representative cardinality, not latency or
 production-SLO measurements.
 
+Provider inventory unit contracts also exercise the shared cursor collector:
+the two-page happy path, explicit unsupported adapters, repeated cursors,
+cross-page model ordering regressions, and cancellation before a provider
+request. This keeps management refresh bounded and deterministic before any
+snapshot is handed to the PostgreSQL repository.
+
 Each fixture is isolated by a unique configuration digest and removes its
 provider rows, ledger rows, and configuration rows before closing the
 integration pool. It runs through `make postgres-integration`, so local runs

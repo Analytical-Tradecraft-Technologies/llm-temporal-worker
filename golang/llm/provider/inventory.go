@@ -32,9 +32,18 @@ func (lifecycle ModelLifecycle) Valid() bool {
 const (
 	// ModelListMaxPageSize matches the bounded persisted inventory query page.
 	ModelListMaxPageSize = 1000
+	// ModelListMaxModels bounds one refresh before persistence. A provider
+	// management API must not be able to make a refresh retain an unbounded
+	// in-memory inventory while it follows cursors.
+	ModelListMaxModels   = 10000
 	modelListMaxCursor   = 2048
 	modelListMaxMetadata = 32
 )
+
+// ErrModelInventoryUnsupported is returned when an adapter does not expose a
+// documented model-list management API. Configured routes remain authoritative
+// in this case; callers must not treat an empty page as an unsupported result.
+var ErrModelInventoryUnsupported = errors.New("provider model inventory is unsupported")
 
 // ModelListQuery is the provider-neutral input to an optional management API.
 // Cursor is opaque to the worker and must be returned by the same endpoint
@@ -148,4 +157,61 @@ func validateModelListText(name, value string, max int, required bool) error {
 type ModelLister interface {
 	Adapter
 	ListModels(context.Context, ModelListQuery) (ModelListPage, error)
+}
+
+// CollectModelInventory follows one provider listing from its initial page to
+// completion. The helper centralizes the safety rules that every management
+// caller needs: page validation, strictly increasing model IDs across pages,
+// cursor-loop detection, a total model bound, and cancellation checks. It
+// performs no inference calls and never turns configured routes into an
+// inventory. A missing lister is an explicit unsupported result.
+func CollectModelInventory(ctx context.Context, lister ModelLister, query ModelListQuery) ([]Model, error) {
+	if lister == nil {
+		return nil, ErrModelInventoryUnsupported
+	}
+	if err := query.Validate(); err != nil {
+		return nil, fmt.Errorf("model inventory query: %w", err)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	models := make([]Model, 0)
+	seenCursors := make(map[string]struct{})
+	previousID := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		page, err := lister.ListModels(ctx, query)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			// Provider errors can contain response bodies or request metadata. The
+			// caller receives only a stable boundary error; adapters may record a
+			// redacted provider.Error through their normal observer path.
+			return nil, errors.New("provider model inventory request failed")
+		}
+		if err := page.Validate(); err != nil {
+			return nil, fmt.Errorf("validate provider model page: %w", err)
+		}
+		for _, model := range page.Models {
+			if model.ProviderModelID <= previousID {
+				return nil, errors.New("provider model inventory is not strictly ordered across pages")
+			}
+			previousID = model.ProviderModelID
+		}
+		if len(models)+len(page.Models) > ModelListMaxModels {
+			return nil, fmt.Errorf("provider model inventory exceeds maximum of %d models", ModelListMaxModels)
+		}
+		models = append(models, page.Models...)
+		if page.Complete {
+			return models, nil
+		}
+		if _, exists := seenCursors[page.NextCursor]; exists {
+			return nil, errors.New("provider model inventory cursor repeated")
+		}
+		seenCursors[page.NextCursor] = struct{}{}
+		query.Cursor = page.NextCursor
+	}
 }
