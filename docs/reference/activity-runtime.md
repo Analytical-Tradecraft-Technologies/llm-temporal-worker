@@ -61,6 +61,13 @@ the effective page size on provider, model, and credit pages: it uses the
 caller-provided `page_size`, or the 100-row default when that field is omitted,
 and rejects a handler response containing more rows. Budget status and spend
 summary remain complete bounded snapshots without a page-size field.
+The typed query encoder also rejects unordered or duplicate result keys before
+the response can be signed or audited: route ID for provider status,
+provider/endpoint/model for inventory, provider/endpoint for credit status,
+policy/window for budget windows, and operation/provider/model dimensions for
+spend buckets (with NULL dimensions ordered first). This keeps keyset pages
+stable even when a deployment supplies a custom `TypedHandler`; PostgreSQL
+repositories still retain their own deterministic `ORDER BY` contracts.
 The production client set forwards a query service only when it is supplied by
 the same snapshot-scoped PostgreSQL closer as its repositories; the default
 composition does not invent authorization, cursor keys, or handlers. Query

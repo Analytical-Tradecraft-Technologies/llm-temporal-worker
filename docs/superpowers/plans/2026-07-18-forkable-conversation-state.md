@@ -673,6 +673,16 @@ directory unless a command explicitly says otherwise.
 
 ### Task 14: Implement typed Query service and Temporal Activity
 
+Status: the typed Activity boundary, five closed query models, scope/filter/
+horizon-bound cursors, persisted PostgreSQL read adapters, Redis budget reader
+seam, and query-execution audit adapter are implemented with offline and
+opt-in PostgreSQL plan coverage. The boundary now also rejects unordered or
+duplicate typed result keys before a continuation is signed or audit evidence
+is committed. Provider refresh management, live Redis window materialization,
+and deployment-owned authorization/key/audit wiring remain explicit
+composition and protected-evidence work; they are intentionally fail-closed
+and are not represented as complete by the checked-in tests.
+
 **Files:**
 
 - Create: **control/query.go**

@@ -142,6 +142,93 @@ func TestTypedQueryResponseRejectsNonPaginatedCursor(t *testing.T) {
 	}
 }
 
+func TestTypedQueryResponseRequiresStableResultOrdering(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
+	tests := []struct {
+		name   string
+		kind   llm.QueryKind
+		result QueryResult
+	}{
+		{
+			name: "provider status",
+			kind: llm.QueryProviderStatus,
+			result: ProviderStatusResult{Routes: []ProviderStatusRow{
+				{RouteID: "route-b", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
+				{RouteID: "route-a", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
+			}},
+		},
+		{
+			name: "model inventory",
+			kind: llm.QueryModelInventory,
+			result: ModelInventoryResult{Models: []ModelInventoryRow{
+				{Provider: "provider", Endpoint: "endpoint", ProviderModelID: "model-b", Lifecycle: QueryLifecycleAvailable, Capabilities: []string{}, CompleteSnapshot: true},
+				{Provider: "provider", Endpoint: "endpoint", ProviderModelID: "model-a", Lifecycle: QueryLifecycleAvailable, Capabilities: []string{}, CompleteSnapshot: true},
+			}},
+		},
+		{
+			name: "credit status",
+			kind: llm.QueryCreditStatus,
+			result: CreditStatusResult{Endpoints: []CreditStatusRow{
+				{Provider: "provider", Endpoint: "endpoint-b", Credit: QueryCreditOK, Billing: QueryBillingOK, EvidenceSource: QueryEvidenceUnknown},
+				{Provider: "provider", Endpoint: "endpoint-a", Credit: QueryCreditOK, Billing: QueryBillingOK, EvidenceSource: QueryEvidenceUnknown},
+			}},
+		},
+		{
+			name: "budget status",
+			kind: llm.QueryBudgetStatus,
+			result: BudgetStatusResult{ActiveAt: now, GenerationID: "generation", ManifestDigest: ManifestDigest(strings.Repeat("0", 64)), StreamHighWaterMark: "1-0", Windows: []BudgetWindow{
+				{PolicyKey: "policy", WindowKey: "window-b", CoverageStart: now, CoverageEnd: now.Add(time.Hour), LimitUSD: "10", ReservedCostUSD: "1", AccountedCostUSD: "2", AvailableUSD: "7"},
+				{PolicyKey: "policy", WindowKey: "window-a", CoverageStart: now, CoverageEnd: now.Add(time.Hour), LimitUSD: "10", ReservedCostUSD: "1", AccountedCostUSD: "2", AvailableUSD: "7"},
+			}},
+		},
+		{
+			name: "spend summary",
+			kind: llm.QuerySpendSummary,
+			result: SpendSummaryResult{StartTime: now, EndTime: now.Add(time.Hour), Buckets: []SpendBucket{
+				{Group: &SpendGroup{Provider: providerIDPointer("provider-b")}, KnownActualCostUSD: "1", ExactOperationCount: 1, Completeness: "complete"},
+				{Group: &SpendGroup{Provider: providerIDPointer("provider-a")}, KnownActualCostUSD: "1", ExactOperationCount: 1, Completeness: "complete"},
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := EncodeQueryResponse(QueryResponse{OperationKey: "op", ExecutionID: "execution", Kind: test.kind, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: test.result, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}})
+			if err == nil || !strings.Contains(err.Error(), "sorted and unique") {
+				t.Fatalf("unordered result error = %v, want stable-order rejection", err)
+			}
+		})
+	}
+}
+
+func TestTypedQueryResponseAcceptsStableSpendGroupingWithNilDimensions(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
+	provider := ProviderID("provider")
+	response := QueryResponse{OperationKey: "op", ExecutionID: "execution", Kind: llm.QuerySpendSummary, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: SpendSummaryResult{StartTime: now, EndTime: now.Add(time.Hour), Buckets: []SpendBucket{
+		{Group: nil, KnownActualCostUSD: "0", ExactOperationCount: 0, Completeness: "complete"},
+		{Group: &SpendGroup{Provider: &provider}, KnownActualCostUSD: "1", ExactOperationCount: 1, Completeness: "complete"},
+	}}, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}}
+	if _, err := EncodeQueryResponse(response); err != nil {
+		t.Fatalf("stable spend result with nil dimensions rejected: %v", err)
+	}
+}
+
+func TestTypedQueryResponseRejectsDuplicateResultKey(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
+	response := QueryResponse{
+		OperationKey: "op", ExecutionID: "execution", Kind: llm.QueryProviderStatus,
+		Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now},
+		Complete:   true,
+		Result: ProviderStatusResult{Routes: []ProviderStatusRow{
+			{RouteID: "route-a", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
+			{RouteID: "route-a", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
+		}},
+		Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero},
+	}
+	if _, err := EncodeQueryResponse(response); err == nil || !strings.Contains(err.Error(), "sorted and unique") {
+		t.Fatalf("duplicate result key error = %v, want stable-order rejection", err)
+	}
+}
+
 func TestBudgetWindowRetryDurationUsesWireSeconds(t *testing.T) {
 	window := BudgetWindow{PolicyKey: "daily", WindowKey: "hour", CoverageStart: time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), CoverageEnd: time.Date(2026, time.July, 21, 1, 0, 0, 0, time.UTC), LimitUSD: "10", ReservedCostUSD: "1", AccountedCostUSD: "2", AvailableUSD: "7", RetryAfter: durationPointer(30 * time.Second)}
 	data, err := json.Marshal(window)
@@ -162,6 +249,7 @@ func TestBudgetWindowRetryDurationUsesWireSeconds(t *testing.T) {
 
 func testScope() QueryScope                              { return QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"} }
 func boolPointer(value bool) *bool                       { return &value }
+func providerIDPointer(value string) *ProviderID         { typed := ProviderID(value); return &typed }
 func decimalPointer(value DecimalUSD) *DecimalUSD        { return &value }
 func durationPointer(value time.Duration) *time.Duration { return &value }
 func containsJSONNumber(data []byte, key string, want int64) bool {
