@@ -350,6 +350,110 @@ func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.
 	return result, nil
 }
 
+// PruneExpiredOperations removes a bounded set of terminal, inline-only
+// operations whose retention horizon has elapsed. This is deliberately a
+// conservative orphan pass: operations with an attempt/audit row, budget
+// journal or reservation, cache/checkpoint reference, child operation, parent
+// lineage, or blob-backed request/result remain retained. Unknown-cost
+// operations are also fenced until authoritative cost resolution is available
+// so retention cannot erase the evidence needed for reconciliation.
+//
+// Candidate references are rechecked while the operation row is locked with
+// FOR UPDATE SKIP LOCKED. PostgreSQL foreign-key key-share locking makes a
+// concurrent child/reference insert wait for this lock, keeping the predicates
+// authoritative for the delete transaction.
+func (repository MaintenanceRepository) PruneExpiredOperations(ctx context.Context, now, expiresBefore time.Time, limit int) (result maintenance.RetentionResult, returnErr error) {
+	started := time.Now()
+	defer func() { repository.observeMaintenance(ctx, "operation", started, result, returnErr) }()
+	if err := repository.validate(); err != nil {
+		return result, err
+	}
+	if err := validateBatch(now, limit); err != nil {
+		return result, err
+	}
+	if expiresBefore.IsZero() || expiresBefore.After(now) {
+		return result, errors.New("operation expiry cutoff must not be after maintenance time")
+	}
+	operationsTable, err := repository.Namespace.Render("operations")
+	if err != nil {
+		return result, err
+	}
+	attemptsTable, err := repository.Namespace.Render("operation_attempts")
+	if err != nil {
+		return result, err
+	}
+	checkpointsTable, err := repository.Namespace.Render("conversation_checkpoints")
+	if err != nil {
+		return result, err
+	}
+	cacheEntriesTable, err := repository.Namespace.Render("response_cache_entries")
+	if err != nil {
+		return result, err
+	}
+	cacheUsesTable, err := repository.Namespace.Render("response_cache_uses")
+	if err != nil {
+		return result, err
+	}
+	cacheFillsTable, err := repository.Namespace.Render("response_cache_fills")
+	if err != nil {
+		return result, err
+	}
+	journalTable, err := repository.Namespace.Render("budget_journal_events")
+	if err != nil {
+		return result, err
+	}
+	reservationsTable, err := repository.Namespace.Render("operation_budget_reservations")
+	if err != nil {
+		return result, err
+	}
+
+	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "WITH candidates AS ("+
+			" SELECT o.operation_id"+
+			" FROM "+operationsTable+" o"+
+			" WHERE o.state IN ('completed', 'definite_failed', 'canceled')"+
+			" AND o.retention_expires_at < $1"+
+			" AND o.cost_status <> 'unknown'"+
+			" AND o.request_blob_id IS NULL AND o.result_blob_id IS NULL"+
+			" AND o.cache_entry_id IS NULL"+
+			" AND o.parent_operation_id IS NULL AND o.parent_checkpoint_id IS NULL"+
+			" AND NOT EXISTS (SELECT 1 FROM "+operationsTable+" child WHERE child.parent_operation_id = o.operation_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+attemptsTable+" a WHERE a.operation_id = o.operation_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+checkpointsTable+" cp WHERE cp.origin_operation_id = o.operation_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+cacheEntriesTable+" e WHERE e.origin_operation_id = o.operation_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+cacheUsesTable+" u WHERE u.operation_id = o.operation_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+cacheFillsTable+" f WHERE f.owner_operation_id = o.operation_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+journalTable+" j WHERE j.operation_id = o.operation_id)"+
+			" AND NOT EXISTS (SELECT 1 FROM "+reservationsTable+" r WHERE r.operation_id = o.operation_id)"+
+			" ORDER BY o.retention_expires_at, o.operation_id LIMIT $2 FOR UPDATE OF o SKIP LOCKED"+
+			"), deleted AS ("+
+			" DELETE FROM "+operationsTable+" o USING candidates c"+
+			" WHERE o.operation_id = c.operation_id"+
+			" RETURNING o.operation_id"+
+			") SELECT operation_id FROM deleted", expiresBefore, limit)
+		if err != nil {
+			return redactPostgresError(fmt.Errorf("claim expired operations: %w", err))
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("scan expired operation: %w", err)
+			}
+			result.Examined++
+			result.Deleted++
+		}
+		if err := rows.Err(); err != nil {
+			return redactPostgresError(fmt.Errorf("iterate expired operations: %w", err))
+		}
+		return nil
+	})
+	if err != nil {
+		return maintenance.RetentionResult{}, err
+	}
+	return result, nil
+}
+
 // PruneExpiredBudgetBuckets removes a bounded set of empty historical budget
 // buckets. maxWindow is the largest configured budget window horizon; a cutoff
 // newer than now-maxWindow is rejected so callers cannot accidentally delete a

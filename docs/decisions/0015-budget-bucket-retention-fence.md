@@ -6,10 +6,12 @@
 
 ## Context
 
-Task 20 deliberately leaves operation and budget retention disabled until
-their foreign-key, journal, and cold-rebuild obligations are handled. Empty
-historical budget buckets are a smaller safe slice: they carry only a
-projection, while journal history remains the rebuild authority.
+Task 20 deliberately leaves full operation and budget retention disabled until
+their foreign-key, journal, and cold-rebuild obligations are handled. A
+separate terminal-operation orphan pass is limited to inline, unreferenced,
+non-unknown-cost rows; it does not remove audit-bearing or budget-linked
+operations. Empty historical budget buckets are a smaller safe slice: they
+carry only a projection, while journal history remains the rebuild authority.
 
 ## Decision
 
@@ -34,3 +36,6 @@ complete.
 - `golang/storage/postgres/budget_bucket_retention_integration_test.go` proves
   a remaining reservation row fences an empty bucket and that the bucket is
   deleted only after the fence is removed.
+- `golang/storage/postgres/maintenance_integration_test.go` proves the
+  terminal-operation orphan pass deletes only an unreferenced row and retains
+  active, attempt-bearing, fresh, and unknown-cost operations.
