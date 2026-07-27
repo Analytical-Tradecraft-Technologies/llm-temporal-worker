@@ -127,6 +127,48 @@ func TestSLOEvidenceRejectsUnsafeOrFailingCandidates(t *testing.T) {
 	}
 }
 
+func TestSLOEvidenceRejectsDuplicateJSONKeys(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, testCase := range []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "duplicate top-level measured timestamp",
+			raw:  `{"measured_at":"2026-07-24T00:00:00Z","measured_at":"2026-07-24T00:01:00Z"}`,
+		},
+		{
+			name: "duplicate nested sample count",
+			raw:  `{"measured_at":"2026-07-24T00:00:00Z","source_revision":"0123456789abcdef0123456789abcdef01234567","deployment_id_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","region":"ap-southeast-2","admission_compilation":{"memory":{"sample_count":10000,"sample_count":10000,"p99_microseconds":24999},"same_region_redis":{"sample_count":10000,"p99_microseconds":74999,"redis":{"major_version":7,"persistence":"aof+rdb","function_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}},"worker_error_rate":{"window_started_at":"2026-07-24T00:00:00Z","window_ended_at":"2026-07-24T00:05:00Z","completed_attempts":9999,"worker_failed_attempts":0}}`,
+		},
+		{
+			name: "non-finite number",
+			raw:  `NaN`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			inputPath := filepath.Join(directory, "candidate.json")
+			if err := os.WriteFile(inputPath, []byte(testCase.raw), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", filepath.Join(directory, "evidence.json"))
+			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+				t.Fatalf("record duplicate-key candidate = %v, %q; want safe rejection", err, output)
+			}
+		})
+	}
+
+	evidencePath := filepath.Join(t.TempDir(), "evidence.json")
+	if err := os.WriteFile(evidencePath, []byte(`{"schema_version":1,"schema_version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", strings.Repeat("a", 64))
+	if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+		t.Fatalf("verify duplicate-key evidence = %v, %q; want safe rejection", err, output)
+	}
+}
+
 func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *testing.T) {
 	root := repositoryRoot(t)
 	directory := t.TempDir()
