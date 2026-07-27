@@ -1659,6 +1659,23 @@ func (response QueryResponseV1) validate() error {
 	if response.NextCursor != nil && (response.Kind == QueryBudgetStatus || response.Kind == QuerySpendSummary) {
 		return fmt.Errorf("query %s response must not include next_cursor", response.Kind)
 	}
+	// Keyset pages must make their continuation state explicit. A complete page
+	// has no continuation, while an incomplete page must carry one so callers
+	// cannot silently stop or repeat pagination. Snapshot queries are always
+	// complete because they have no supported continuation cursor.
+	switch response.Kind {
+	case QueryProviderStatus, QueryModelInventory, QueryCreditStatus:
+		if response.Complete && response.NextCursor != nil {
+			return fmt.Errorf("query %s complete response must not include next_cursor", response.Kind)
+		}
+		if !response.Complete && response.NextCursor == nil {
+			return fmt.Errorf("query %s incomplete response requires next_cursor", response.Kind)
+		}
+	case QueryBudgetStatus, QuerySpendSummary:
+		if !response.Complete {
+			return fmt.Errorf("query %s response must be complete", response.Kind)
+		}
+	}
 	if response.Cost.Status == "exact" && response.Cost.Method != "control_query_zero" && response.Cost.Method != "provider_reported" && response.Cost.Method != "catalog_usage" {
 		return fmt.Errorf("query cost method %q is invalid", response.Cost.Method)
 	}

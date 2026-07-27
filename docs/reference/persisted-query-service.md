@@ -36,6 +36,13 @@ whose kind does not match the query kind. The Activity still performs the
 same validation at its wire boundary; the duplicate check is intentional so
 the reusable cursor seam remains fail-closed when called independently.
 
+Every query response also has an explicit completion contract. Provider-status,
+model-inventory, and credit-status pages are complete only when `next_cursor` is
+absent; an incomplete page must carry its signed continuation cursor. Budget and
+spend responses are bounded snapshots, so they must always be complete and never
+include a cursor. The v1 wire codec enforces these combinations before a custom
+query service can return a response or the Activity can record audit evidence.
+
 The production factory accepts these choices through
 `ProductionFactoryOptions.QueryServiceBuilder`. It does not invent keys,
 authorization, or an audit repository. A PostgreSQL closer may expose the
