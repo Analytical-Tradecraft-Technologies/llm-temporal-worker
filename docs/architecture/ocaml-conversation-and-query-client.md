@@ -353,15 +353,13 @@ type provider_route_status = {
 type provider_status_page = { routes : provider_route_status list }
 
 type model_inventory_entry = {
-  provider : Provider.t;
-  endpoint : Endpoint.t;
-  provider_model_id : string;
+  provider : Provider_id.t;
+  endpoint : Endpoint_id.t;
+  provider_model_id : Provider_model_id.t;
   display_name : string option;
   lifecycle : model_lifecycle;
   capabilities : model_capability list;
-  source : inventory_source;
   complete_snapshot : bool;
-  safe_metadata : Safe_metadata.t;
 }
 
 type model_inventory_page = { models : model_inventory_entry list }
@@ -432,8 +430,11 @@ the dedicated query audit ledger; it does not imply that Query uses the paid
 inference operation state machine. Accordingly, Query responses expose
 `Query_execution_id.t`, while Generate and Compact expose `Operation_id.t`.
 
-`Safe_metadata.t` is the package's bounded, redacted open-metadata wrapper; it
-is not a general escape hatch for the surrounding records. Page bounds and
+`Safe_metadata.t` is the package's bounded, redacted open-metadata wrapper for
+future deliberately open provider fields; it is not a general escape hatch
+for the surrounding records. The v1 model-inventory payload currently has no
+open metadata or inventory-source member: its closed wire fields are exactly
+the ones shown above, and unknown fields are rejected. Page bounds and
 half-open spend intervals are validated by both the OCaml constructor and Go
 worker. Empty `group_by` means one aggregate bucket. Duplicate dimensions and
 an end time not strictly after the start time fail before Activity scheduling.
@@ -456,7 +457,7 @@ Result records are closed and typed:
 - provider status has route ID, availability, credit/billing state, circuit
   state, observation/staleness timestamps, and safe code;
 - model inventory has provider model ID, display/lifecycle values, typed known
-  capabilities, safe open metadata, source, and completeness;
+  capabilities, and completeness;
 - credit status has confirmed state/time/source and safe evidence code;
 - budget status has policy/window IDs, exact USD limit/reserved/finalized/
   available values, retry-after, **Budget_generation_id.t**,
