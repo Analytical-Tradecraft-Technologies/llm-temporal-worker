@@ -1,6 +1,9 @@
 package state
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -29,6 +32,19 @@ func rootCheckpoint(handle, tenant, operation string) Checkpoint {
 func childCheckpoint(handle, parent, tenant, operation, text string) Checkpoint {
 	parentHandle := Handle(parent)
 	return Checkpoint{Handle: Handle(handle), Parent: &parentHandle, Tenant: tenant, OperationKey: operation, Delta: []llm.Item{message(text)}}
+}
+
+func canonicalItemsForTest(t *testing.T, items []llm.Item) []byte {
+	t.Helper()
+	raw, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := llm.CanonicalJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }
 
 func TestCheckpointGraphUsesInjectedClockForExpiry(t *testing.T) {
@@ -272,6 +288,83 @@ func TestSnapshotReplayEqualsFullReplay(t *testing.T) {
 	}
 	if !reflect.DeepEqual(full.Items, optimized.Items) || !reflect.DeepEqual(full.Settings, optimized.Settings) || full.Depth != optimized.Depth {
 		t.Fatalf("snapshot replay diverged: full=%#v optimized=%#v", full, optimized)
+	}
+	if got, want := canonicalItemsForTest(t, optimized.Items), canonicalItemsForTest(t, full.Items); !bytes.Equal(got, want) {
+		t.Fatalf("snapshot transcript bytes diverged: got=%s want=%s", got, want)
+	}
+}
+
+func TestMaterializationIsIndependentOfDeltaSegmentation(t *testing.T) {
+	const eventCount = 64
+
+	segmented := NewCheckpointGraph(MaterializeLimits{})
+	root := rootCheckpoint("segmented-root", "tenant-a", "segmented-root-operation")
+	root.Output = []llm.Item{message("root-output")}
+	if err := segmented.PutRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	parent := root.Handle
+	for index := 0; index < eventCount; index++ {
+		handle := Handle(fmt.Sprintf("segmented-%03d", index))
+		parentHandle := parent
+		checkpoint := Checkpoint{
+			Handle:       handle,
+			Parent:       &parentHandle,
+			Tenant:       "tenant-a",
+			OperationKey: fmt.Sprintf("segmented-operation-%03d", index),
+			Delta: []llm.Item{
+				message(fmt.Sprintf("delta-%03d", index)),
+				message(fmt.Sprintf("response-%03d", index)),
+			},
+		}
+		if err := segmented.PutChild(checkpoint); err != nil {
+			t.Fatal(err)
+		}
+		parent = handle
+	}
+	segmentedState, err := segmented.Materialize("tenant-a", parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	grouped := NewCheckpointGraph(MaterializeLimits{})
+	groupedRoot := rootCheckpoint("grouped-root", "tenant-a", "grouped-root-operation")
+	groupedRoot.Output = []llm.Item{message("root-output")}
+	if err := grouped.PutRoot(groupedRoot); err != nil {
+		t.Fatal(err)
+	}
+	allEvents := make([]llm.Item, 0, eventCount*2)
+	for index := 0; index < eventCount; index++ {
+		allEvents = append(allEvents,
+			message(fmt.Sprintf("delta-%03d", index)),
+			message(fmt.Sprintf("response-%03d", index)),
+		)
+	}
+	groupedParent := groupedRoot.Handle
+	groupedParentHandle := groupedParent
+	groupedLeaf := Checkpoint{
+		Handle:       "grouped-leaf",
+		Parent:       &groupedParentHandle,
+		Tenant:       "tenant-a",
+		OperationKey: "grouped-leaf-operation",
+		Delta:        allEvents,
+	}
+	if err := grouped.PutChild(groupedLeaf); err != nil {
+		t.Fatal(err)
+	}
+	groupedState, err := grouped.Materialize("tenant-a", groupedLeaf.Handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := canonicalItemsForTest(t, segmentedState.Items), canonicalItemsForTest(t, groupedState.Items); !bytes.Equal(got, want) {
+		t.Fatalf("segmented replay changed transcript bytes: got=%s want=%s", got, want)
+	}
+	if !reflect.DeepEqual(segmentedState.Settings, groupedState.Settings) {
+		t.Fatalf("segmented replay changed effective settings: segmented=%#v grouped=%#v", segmentedState.Settings, groupedState.Settings)
+	}
+	if len(segmentedState.Items) != 1+1+eventCount*2 {
+		t.Fatalf("segmented item count = %d, want %d", len(segmentedState.Items), 2+eventCount*2)
 	}
 }
 

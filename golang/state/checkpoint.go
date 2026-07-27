@@ -300,6 +300,26 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 	if start == len(path)-1 {
 		result.Settings = RootModelState("")
 	}
+	// Deltas are append-only, so the final transcript is the only state that
+	// can exceed an item/byte limit.  Compute the final item capacity before
+	// replaying instead of repeatedly copying and canonicalizing the growing
+	// prefix for every ancestor.  This keeps replay work proportional to the
+	// materialized transcript, independent of how that transcript was split
+	// across checkpoint deltas.
+	itemCapacity := len(result.Items)
+	for index := start; index >= 0; index-- {
+		checkpoint := path[index]
+		itemCount := len(checkpoint.Delta) + len(checkpoint.Output)
+		if itemCount > graph.limits.MaxItems-itemCapacity {
+			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds item limit")
+		}
+		itemCapacity += itemCount
+	}
+	if itemCapacity > len(result.Items) {
+		items := make([]llm.Item, len(result.Items), itemCapacity)
+		copy(items, result.Items)
+		result.Items = items
+	}
 	for index := start; index >= 0; index-- {
 		checkpoint := path[index]
 		var err error
@@ -307,12 +327,12 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		if err != nil {
 			return MaterializedState{}, fmt.Errorf("checkpoint %s settings: %w", checkpoint.Handle, err)
 		}
-		result.Items = appendItems(result.Items, checkpoint.Delta...)
-		result.Items = appendItems(result.Items, checkpoint.Output...)
+		result.Items = append(result.Items, checkpoint.Delta...)
+		result.Items = append(result.Items, checkpoint.Output...)
 		result.Depth = checkpoint.Depth
-		if err := graph.validateMaterializedLimits(result.Items); err != nil {
-			return MaterializedState{}, err
-		}
+	}
+	if err := graph.validateMaterializedLimits(result.Items); err != nil {
+		return MaterializedState{}, err
 	}
 	if result.Settings.Model == "" {
 		return MaterializedState{}, fmt.Errorf("materialized root model is required")
