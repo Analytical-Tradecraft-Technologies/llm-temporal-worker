@@ -13,6 +13,13 @@ import (
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
+	return lowerRequestWithStrict(request, profile, serviceTier, false)
+}
+
+func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier string, strict bool) (anthropic.MessageNewParams, error) {
+	if strict && hasMixedInstructionLevels(request.Instructions) {
+		return anthropic.MessageNewParams{}, fmt.Errorf("instruction hierarchy cannot be preserved by Anthropic Messages in strict portability mode")
+	}
 	messages := make([]any, 0, len(request.Input)+1)
 	if err := appendContinuationStates(&messages, request.Continuation, profile, ""); err != nil {
 		return anthropic.MessageNewParams{}, err
@@ -114,6 +121,19 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ant
 	// concrete typed fields above remain available to callers and tests.
 	param.SetJSON(encoded, &params)
 	return params, nil
+}
+
+func hasMixedInstructionLevels(instructions []llm.Instruction) bool {
+	application := false
+	policy := false
+	for _, instruction := range instructions {
+		if instruction.Level == llm.InstructionLevelPolicy {
+			policy = true
+		} else {
+			application = true
+		}
+	}
+	return application && policy
 }
 
 func lowerInstruction(instruction llm.Instruction) ([]any, error) {

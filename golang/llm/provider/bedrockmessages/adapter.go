@@ -125,7 +125,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
 		}
 	}
-	params, err := lowerRequest(normalized, adapter.profile, providerTier)
+	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}

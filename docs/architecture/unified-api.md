@@ -147,6 +147,15 @@ Instructions are a separate ordered part list because OpenAI Responses,
 Chat-style developer/system messages, and Anthropic's top-level system content
 have different lowering rules.
 
+When a request contains both `application` and `policy` instruction levels,
+Anthropic Messages and Bedrock Messages cannot preserve that hierarchy because
+their wire contract has one top-level instruction plane. Strict compilation
+therefore rejects the request before dispatch. Best-effort compilation keeps
+the existing deterministic high-to-low ordering and flattens the blocks; it
+must be chosen explicitly by the caller when that loss of hierarchy is
+acceptable. This guard applies only to the instruction-level distinction and
+does not add a live-streaming or provider-specific escape hatch.
+
 ### Actors
 
 The semantic actor enum is `human` or `model`. Provider labels such as `user`,

@@ -84,6 +84,30 @@ func TestCompileMapsOnlyTheThreePublicBedrockServiceClasses(t *testing.T) {
 	}
 }
 
+func TestCompileStrictRejectsMixedInstructionLevels(t *testing.T) {
+	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
+	_, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{
+			OperationKey: "bedrock-strict-instructions",
+			Model:        "claude-contract",
+			Portability:  llm.PortabilityStrict,
+			Instructions: []llm.Instruction{
+				{Level: llm.InstructionLevelPolicy, Text: "policy"},
+				{Level: llm.InstructionLevelApplication, Text: "application"},
+			},
+		},
+		Query:  provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
+		Strict: true,
+	})
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("compile error = %T %v, want provider error", err, err)
+	}
+	if mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(mapped.SafeMessage, "instruction hierarchy") {
+		t.Fatalf("compile error = %#v, want strict instruction hierarchy rejection", mapped)
+	}
+}
+
 func TestCompileRejectsPinnedAnthropicAWSContinuation(t *testing.T) {
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
 	_, err := adapter.Compile(context.Background(), provider.CompileInput{
