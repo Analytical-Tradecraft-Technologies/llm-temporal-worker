@@ -1,6 +1,7 @@
 package provider_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -31,6 +32,31 @@ func TestAssemblerBuildsTerminalResponseInOrder(t *testing.T) {
 	}
 	if len(response.Output) != 1 || response.Usage.InputTokens != 2 {
 		t.Fatalf("assembled response = %#v", response)
+	}
+}
+
+func TestAssemblerKeepsResponseOutputOrderWhenCompletionsAreInterleaved(t *testing.T) {
+	assembler := provider.NewAssembler("operation-interleaved")
+	first := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "first"}}}
+	second := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "second"}}}
+	for _, event := range []provider.Event{
+		provider.OutputStarted{Index: 0},
+		provider.OutputStarted{Index: 1},
+		// The provider may finish a later output before an earlier one.
+		provider.OutputFinished{Index: 1, Item: second},
+		provider.OutputFinished{Index: 0, Item: first},
+		provider.StreamCompleted{},
+	} {
+		if err := assembler.Add(event); err != nil {
+			t.Fatalf("add %T: %v", event, err)
+		}
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Output) != 2 || !reflect.DeepEqual(response.Output[0], first) || !reflect.DeepEqual(response.Output[1], second) {
+		t.Fatalf("response output order = %#v, want first then second", response.Output)
 	}
 }
 

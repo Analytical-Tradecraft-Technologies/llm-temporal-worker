@@ -150,9 +150,12 @@ usage/cost lifter.
 ## Response lifting
 
 The lifter produces a common ordered output sequence and never discards unknown
-provider blocks silently. In strict mode, an unknown block causes a conversion
-error. In best-effort mode, it becomes opaque provider state when safe; otherwise
-the response is marked incomplete with a diagnostic.
+provider blocks silently. Streaming completion markers can arrive out of order
+for indexed provider choices, so the provider-neutral assembler stores each
+finished item by its output index before constructing the response; completion
+arrival order must never reorder the public sequence. In strict mode, an unknown
+block causes a conversion error. In best-effort mode, it becomes opaque provider
+state when safe; otherwise the response is marked incomplete with a diagnostic.
 
 Usage distinguishes:
 
