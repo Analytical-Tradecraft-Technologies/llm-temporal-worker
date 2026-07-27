@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -82,6 +83,83 @@ func TestEstimateCandidateRejectsUnknownCatalogComponent(t *testing.T) {
 	}
 	if _, err := (Estimator{}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, entry); err == nil {
 		t.Fatal("EstimateCandidate accepted an omitted input price as known zero")
+	}
+}
+
+func TestEstimateCandidateUsesExactCandidateAwareTokenizer(t *testing.T) {
+	request := llm.Request{
+		OperationKey: "estimate-tokenizer",
+		Model:        "logical",
+		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "tokenizer"}}}},
+		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
+	}
+	candidate := routing.Candidate{ID: "provider-b", Provider: "provider-b", Model: "model-b"}
+	called := false
+	estimate, err := (Estimator{Tokenizer: func(got llm.Request, gotCandidate routing.Candidate) (int64, error) {
+		called = true
+		if got.OperationKey != request.OperationKey || gotCandidate.ID != candidate.ID {
+			t.Fatalf("tokenizer inputs = %q/%q, want request/candidate", got.OperationKey, gotCandidate.ID)
+		}
+		return 17, nil
+	}}).EstimateCandidate(request, candidate, pricing.Entry{
+		Version: "prices-tokenizer",
+		Prices: pricing.UnitPrices{
+			InputPerMillion:      pricing.MustDecimalUSD("1"),
+			CacheWritePerMillion: pricing.MustDecimalUSD("1"),
+			OutputPerMillion:     pricing.MustDecimalUSD("1"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || estimate.InputTokens != 17 || estimate.CacheWriteTokens != 17 || estimate.CandidateID != candidate.ID {
+		t.Fatalf("exact tokenizer estimate = %#v, called=%t", estimate, called)
+	}
+}
+
+func TestEstimateCandidateRejectsInvalidExactTokenizerResult(t *testing.T) {
+	request := llm.Request{OperationKey: "estimate-tokenizer-invalid", Model: "logical"}
+	entry := pricing.Entry{Prices: pricing.UnitPrices{OutputPerMillion: pricing.MustDecimalUSD("1")}}
+	for _, test := range []struct {
+		name string
+		fn   Tokenizer
+	}{
+		{name: "negative", fn: func(llm.Request, routing.Candidate) (int64, error) { return -1, nil }},
+		{name: "error", fn: func(llm.Request, routing.Candidate) (int64, error) { return 0, fmt.Errorf("tokenizer unavailable") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := (Estimator{Tokenizer: test.fn}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, entry); err == nil {
+				t.Fatal("invalid exact tokenizer result was accepted")
+			}
+		})
+	}
+}
+
+func TestEstimateCandidateRejectsMicroUSDCompatibilityOverflow(t *testing.T) {
+	request := llm.Request{OperationKey: "estimate-overflow", Model: "logical"}
+	candidate := routing.Candidate{ID: "overflow-candidate"}
+	for _, test := range []struct {
+		name      string
+		tokens    int64
+		cacheCost string
+	}{
+		{name: "component exceeds safe range", tokens: int64(^uint64(0) >> 1)},
+		{name: "checked total exceeds safe range", tokens: 8_000_000_000_000_000, cacheCost: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			estimator := Estimator{Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return test.tokens, nil }}
+			cachePrice := test.cacheCost
+			if cachePrice == "" {
+				cachePrice = "0"
+			}
+			entry := pricing.Entry{Prices: pricing.UnitPrices{
+				InputPerMillion:      pricing.MustDecimalUSD("1"),
+				CacheWritePerMillion: pricing.MustDecimalUSD(cachePrice),
+			}}
+			if _, err := estimator.EstimateCandidate(request, candidate, entry); err == nil {
+				t.Fatal("estimate silently dropped an overflowing microUSD compatibility value")
+			}
+		})
 	}
 }
 

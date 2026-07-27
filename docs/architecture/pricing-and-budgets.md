@@ -123,12 +123,16 @@ estimated input tokens at a conservative tokenizer ratio
 + fixed per-request charge
 ```
 
-Endpoint/model-specific tokenizers may tighten the estimate only after
-conformance tests. The fallback estimator uses UTF-8 byte length plus structural
-overhead and a configurable safety factor. It must never use the model's average
-completion length. The current catalog has no media-unit price, so media content
-does not create a separate estimate component until that pricing contract is
-added explicitly.
+The Go `budget.Estimator` accepts an optional candidate-aware exact tokenizer
+hook. A configured hook must be deterministic, return a non-negative count,
+and account for the provider's request structure (including tools and schema);
+the candidate argument allows provider-family/model-specific tokenization. A
+hook error or negative result fails closed. When no hook is configured, the
+fallback estimator uses UTF-8 byte length plus structural overhead and a
+configurable safety factor. It must never use the model's average completion
+length. The current catalog has no media-unit price, so media content does not
+create a separate estimate component until that pricing contract is added
+explicitly.
 
 The request reservation is the maximum single-attempt estimate across every
 candidate the router is authorized to attempt, including all explicit
@@ -144,6 +148,9 @@ the USD value for operation and budget journal rows; legacy Redis admission
 continues enforcing the independently validated microUSD projection. This
 prevents sub-micro-dollar estimates from being silently recorded as zero while
 preserving the conservative integer materialization required by Redis.
+If any component or the checked sum cannot be represented in Redis-safe
+microUSD, estimation fails closed rather than dropping that component from the
+compatibility reservation.
 
 After a definite uncharged failure the remaining-plan reservation is reused or
 reduced. After a definite charged failure, `Continue` atomically converts the
