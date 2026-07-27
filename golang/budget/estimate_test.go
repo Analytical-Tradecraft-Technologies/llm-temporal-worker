@@ -26,6 +26,31 @@ func TestEstimatePlanUsesMaximumAuthorizedCandidate(t *testing.T) {
 	}
 }
 
+func TestEstimatePlanIdentifiesAllFreeMaximumCandidate(t *testing.T) {
+	request := llm.Request{
+		OperationKey: "free-estimate",
+		Model:        "logical",
+		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
+	}
+	plan := routing.Plan{Candidates: []routing.Candidate{{ID: "free-first"}, {ID: "free-second"}}}
+	entries := map[string]pricing.Entry{
+		"free-first":  {Version: "free-v1", Prices: pricing.UnitPrices{}},
+		"free-second": {Version: "free-v2", Prices: pricing.UnitPrices{}},
+	}
+
+	got, err := (Estimator{}).EstimatePlan(request, plan, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CandidateID != "free-first" || got.CatalogVersion != "free-v1" {
+		t.Fatalf("all-free maximum = %#v, want first candidate identity", got)
+	}
+	if !got.CostUSD.IsZero() {
+		t.Fatalf("all-free maximum cost = %s, want zero", got.CostUSD.String())
+	}
+}
+
 func TestEstimateCandidateChargesPerRequestInUSD(t *testing.T) {
 	request := llm.Request{
 		OperationKey: "estimate",
