@@ -70,8 +70,7 @@ func TestEntryRowRejectsUnsupportedAndOutOfRangePrices(t *testing.T) {
 		t.Fatal("unsupported unknown component unexpectedly accepted")
 	}
 	entry.UnknownComponents = nil
-	entry.Prices.InputPerMillion = pricing.MustDecimalUSD("0.1234567890123456789")
-	if _, err := entryRow(entry, time.Now()); err == nil {
+	if _, err := pricing.ParseDecimalUSD("0.1234567890123456789"); err == nil {
 		t.Fatal("more than 18 fractional digits unexpectedly accepted")
 	}
 }
