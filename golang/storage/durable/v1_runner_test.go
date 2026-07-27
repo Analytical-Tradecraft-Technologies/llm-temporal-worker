@@ -87,9 +87,14 @@ func testGeneratePorts(events *[]string, failStage string) GeneratePorts {
 			*events = append(*events, "dispatch")
 			return DispatchResult{}, fail("dispatch")
 		},
-		Finalize: func(_ context.Context, request llm.GenerateRequestV1, _ GenerateReplay, _ RoutePlan, _ ReserveResult, _ DispatchResult) (GenerateFinalization, error) {
+		Finalize: func(_ context.Context, request llm.GenerateRequestV1, replay GenerateReplay, _ RoutePlan, _ ReserveResult, _ DispatchResult) (GenerateFinalization, error) {
 			*events = append(*events, "finalize")
-			return testFinalization(request), fail("finalize")
+			finalization := testFinalization(request)
+			if replay.State.Handle != "" {
+				parent := llm.CheckpointHandle(replay.State.Handle)
+				finalization.Response.Checkpoint.Parent = &parent
+			}
+			return finalization, fail("finalize")
 		},
 		FinalizeCache: func(_ context.Context, request llm.GenerateRequestV1, _ GenerateReplay, _ CacheDecision) (GenerateFinalization, error) {
 			*events = append(*events, "cache-finalize")
@@ -158,11 +163,15 @@ func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 		dispatchHandle = replay.State.Handle
 		return DispatchResult{}, nil
 	}
-	if _, err := GenerateV1(context.Background(), testGenerateRequest(), ports); err != nil {
+	response, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+	if err != nil {
 		t.Fatalf("GenerateV1 error = %v", err)
 	}
 	if routeHandle != "compacted" || dispatchHandle != "compacted" {
 		t.Fatalf("compacted state handles = route %q, dispatch %q", routeHandle, dispatchHandle)
+	}
+	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != "compacted" {
+		t.Fatalf("response checkpoint parent = %v, want compacted", response.Checkpoint.Parent)
 	}
 	if got, want := events, []string{"replay", "cache", "compaction", "compact", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
@@ -585,7 +594,7 @@ func TestGenerateV1RejectsFinalizationFromAnotherOperation(t *testing.T) {
 	}
 }
 
-func TestValidateGenerateResponseRequiresExactCheckpointParent(t *testing.T) {
+func TestValidateGenerateResponseParentRequiresExactEffectiveParent(t *testing.T) {
 	parent := llm.CheckpointHandle("checkpoint-parent")
 	otherParent := llm.CheckpointHandle("checkpoint-other")
 
@@ -609,18 +618,18 @@ func TestValidateGenerateResponseRequiresExactCheckpointParent(t *testing.T) {
 			response := testFinalization(request).Response
 			response.Checkpoint.Parent = test.responseParent
 
-			err := validateGenerateResponse(request, "", response)
+			err := validateGenerateResponseParent(test.requestParent, response)
 			if test.wantError && err == nil {
-				t.Fatal("validateGenerateResponse error = nil, want checkpoint parent mismatch")
+				t.Fatal("validateGenerateResponseParent error = nil, want checkpoint parent mismatch")
 			}
 			if !test.wantError && err != nil {
-				t.Fatalf("validateGenerateResponse error = %v", err)
+				t.Fatalf("validateGenerateResponseParent error = %v", err)
 			}
 		})
 	}
 }
 
-func TestGenerateV1CompletedReplayRejectsCheckpointFromAnotherBranch(t *testing.T) {
+func TestGenerateV1CompletedReplayAcceptsCommittedPostCompactionParent(t *testing.T) {
 	request := testGenerateRequest()
 	parent := llm.CheckpointHandle("checkpoint-parent")
 	request.Parent = &parent
@@ -628,19 +637,50 @@ func TestGenerateV1CompletedReplayRejectsCheckpointFromAnotherBranch(t *testing.
 	events := []string{}
 	ports := testGeneratePorts(&events, "")
 	completed := testFinalization(request).Response
-	otherParent := llm.CheckpointHandle("checkpoint-other")
-	completed.Checkpoint.Parent = &otherParent
+	compactedParent := llm.CheckpointHandle("checkpoint-compacted")
+	completed.Checkpoint.Parent = &compactedParent
 	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
 		events = append(events, "replay")
 		return GenerateReplay{Completed: &completed}, nil
 	}
 
-	_, err := GenerateV1(context.Background(), request, ports)
-	if err == nil || !errors.Is(err, ErrV1Stage) {
-		t.Fatalf("error = %v, want replay checkpoint parent failure", err)
+	response, err := GenerateV1(context.Background(), request, ports)
+	if err != nil {
+		t.Fatalf("GenerateV1 error = %v", err)
+	}
+	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != compactedParent {
+		t.Fatalf("response checkpoint parent = %v, want %q", response.Checkpoint.Parent, compactedParent)
 	}
 	if got, want := events, []string{"replay"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("completed replay phases = %v, want %v", got, want)
+	}
+}
+
+func TestGenerateV1RejectsFinalizationFromWrongEffectiveParent(t *testing.T) {
+	request := testGenerateRequest()
+	parent := llm.CheckpointHandle("checkpoint-parent")
+	request.Parent = &parent
+
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		events = append(events, "replay")
+		return GenerateReplay{State: state.MaterializedState{Handle: state.Handle(parent)}}, nil
+	}
+	ports.Finalize = func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) (GenerateFinalization, error) {
+		events = append(events, "finalize")
+		response := testFinalization(request)
+		otherParent := llm.CheckpointHandle("checkpoint-other")
+		response.Response.Checkpoint.Parent = &otherParent
+		return response, nil
+	}
+
+	_, err := GenerateV1(context.Background(), request, ports)
+	if err == nil || !errors.Is(err, ErrV1Stage) {
+		t.Fatalf("error = %v, want finalization checkpoint parent failure", err)
+	}
+	if contains(events, "reconcile") {
+		t.Fatalf("wrong-parent finalization reached reconciliation: %v", events)
 	}
 }
 
