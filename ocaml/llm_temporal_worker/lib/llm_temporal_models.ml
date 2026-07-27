@@ -324,7 +324,11 @@ type compaction_response = {
 }
 
 type availability = Available | Degraded | Unavailable
-type model_lifecycle = Active | Deprecated | Retired
+(* The legacy constructor names remain source-compatible, but their wire
+   spellings follow the Go query contract: [Active] means an available model
+   and [Retired] means an unavailable model. [Unknown] is an explicit
+   provider-reported lifecycle state, not an open-world fallback. *)
+type model_lifecycle = Active | Deprecated | Retired | Unknown
 type model_capability = string
 type inventory_source = Provider_api_inventory | Operator_inventory | Unknown_inventory_source
 type credit_state = Credit_ok | Credit_low | Credit_exhausted | Credit_unknown

@@ -410,8 +410,18 @@ let time_of_json context value =
 
 let availability_to_string = function Available -> "available" | Degraded -> "degraded" | Unavailable -> "unavailable"
 let availability_of_string context = function "available" -> Ok Available | "degraded" -> Ok Degraded | "unavailable" -> Ok Unavailable | _ -> Error (errorf "%s has invalid availability" context)
-let lifecycle_to_string = function Active -> "active" | Deprecated -> "deprecated" | Retired -> "retired"
-let lifecycle_of_string context = function "active" -> Ok Active | "deprecated" -> Ok Deprecated | "retired" -> Ok Retired | _ -> Error (errorf "%s has invalid lifecycle" context)
+let lifecycle_to_string = function
+  | Active -> "available"
+  | Deprecated -> "deprecated"
+  | Retired -> "unavailable"
+  | Unknown -> "unknown"
+
+let lifecycle_of_string context = function
+  | "available" -> Ok Active
+  | "deprecated" -> Ok Deprecated
+  | "unavailable" -> Ok Retired
+  | "unknown" -> Ok Unknown
+  | _ -> Error (errorf "%s has invalid lifecycle" context)
 let credit_to_string = function Credit_ok -> "ok" | Credit_low -> "low" | Credit_exhausted -> "exhausted" | Credit_unknown -> "unknown"
 let credit_of_string context = function "ok" -> Ok Credit_ok | "low" -> Ok Credit_low | "exhausted" -> Ok Credit_exhausted | "unknown" -> Ok Credit_unknown | _ -> Error (errorf "%s has invalid credit state" context)
 let billing_to_string = function Billing_ok -> "ok" | Billing_blocked -> "blocked" | Billing_unknown -> "unknown"

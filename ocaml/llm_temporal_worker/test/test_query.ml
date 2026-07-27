@@ -290,6 +290,46 @@ let () =
              | _ -> failwith "typed model prefix was not encoded as a string")
         | _ -> failwith "model inventory query payload is missing its query object")
    | _ -> failwith "query request payload is not an object");
+  (* Model inventory lifecycle values must use the exact Go wire vocabulary.
+     In particular, [available]/[unavailable]/[unknown] are not the route
+     availability or the legacy active/retired spellings. *)
+  let assert_lifecycle_wire lifecycle expected =
+    let filter =
+      filter_ok (Query.Filter.model_inventory ~lifecycle ())
+    in
+    let request = (Query.to_envelope ~operation_key ~context
+                     (Query.Model_inventory filter)).query
+    in
+    let payload = Yojson.Safe.from_string
+      (Bytes.to_string (ok (V1_codec.encode_query_request request)))
+    in
+    (match payload with
+     | `Assoc fields ->
+         (match List.assoc_opt "query" fields with
+          | Some (`Assoc query_fields) ->
+              (match List.assoc_opt "lifecycle" query_fields with
+               | Some (`String value) when String.equal value expected -> ()
+               | _ -> failwith ("unexpected lifecycle wire value for " ^ expected))
+          | _ -> failwith "model inventory lifecycle payload is missing its query object")
+     | _ -> failwith "model inventory lifecycle payload is not an object");
+    (match V1_codec.decode_query_request
+             (ok (V1_codec.encode_query_request request)) with
+     | Ok (Model_inventory_request { lifecycle = Some actual; _ })
+       when actual = lifecycle -> ()
+     | Ok _ -> failwith ("model inventory lifecycle did not round-trip: " ^ expected)
+     | Error error -> failf "model inventory lifecycle decode failed: %s"
+                       (Temporal.Error.message error))
+  in
+  assert_lifecycle_wire Active "available";
+  assert_lifecycle_wire Deprecated "deprecated";
+  assert_lifecycle_wire Retired "unavailable";
+  assert_lifecycle_wire Unknown "unknown";
+  let invalid_lifecycle = Bytes.of_string
+    {|{"api_version":"llm.temporal/query/v1","operation_key":"query-1","context":{"tenant":"tenant","project":"project","actor":"actor"},"kind":"model_inventory","query":{"lifecycle":"active"}}|}
+  in
+  (match V1_codec.decode_query_request invalid_lifecycle with
+   | Error _ -> ()
+   | Ok _ -> failwith "legacy active lifecycle spelling was accepted");
   (match (Query.to_envelope ~operation_key ~context
             (Query.Provider_status built_provider)).query with
    | Provider_status_request { page_size = 25; include_healthy = false;
