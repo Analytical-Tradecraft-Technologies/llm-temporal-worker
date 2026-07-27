@@ -53,6 +53,8 @@ state:
     dial_timeout: 2s
     operation_timeout: 3s
     required_persistence: aof_and_rdb
+    coordination_stream_enabled: true
+    stream_trim_safety: 10m
   postgres:
     addresses: [postgres.example.internal:5432]
     database: llm_worker

@@ -596,11 +596,10 @@ transient worker drain the monitor keeps checking dependencies, but it never
 starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
-`noeviction` policy, and configured budget code identity. It does not yet
-inspect the worker keyspace or verify the active-generation manifest,
-coverage, or enabled Stream's structural health; the storage validator and
-recovery runbook cover those records until an authoritative read-only readiness
-contract is added. It also checks a bounded PostgreSQL read-only transaction,
+`noeviction` policy, and configured budget code identity. Durable deployments
+also inspect the worker keyspace, active-generation manifest, and enabled
+coordination Stream with bounded read-only checks; malformed or mismatched
+records keep readiness closed. It also checks a bounded PostgreSQL read-only transaction,
 the configured physical namespace/schema contract, every relation and both
 explicit and constraint-backed indexes declared by that contract, and UTC
 session state. Runtime role grants remain
@@ -625,12 +624,16 @@ both AOF and a non-empty RDB save policy, while `aof` and `rdb` require only
 their named mechanism. Any mismatch fails readiness closed.
 
 `coordination_stream_enabled` defaults to `true` in durable deployments and
-keeps cross-replica invalidation/generation-switch wake-ups fast. It does not
-change authority: a Stream gap or an explicitly disabled tailer discards local
-hints and reloads the manifest/policy state directly from Redis. Readiness
-does not yet validate the Stream key/type/retention policy; an authoritative
-read-only readiness contract must add that check. A recoverable cursor gap does
-not invalidate an otherwise complete budget generation once the storage and
+`false` for memory or Redis-only fixtures. `stream_trim_safety` defaults to
+`10m` when the Stream check is enabled and must be between one second and 30
+days. Readiness resolves the namespaced events key and performs `TYPE` and
+`XINFO STREAM` checks: the key must be a Stream with valid monotonic IDs, no
+consumer groups, and a deletion high-water mark older than the trim-safety
+window. These checks are read-only and fail closed; disabling the coordination
+Stream is an explicit fixture choice and does not change budget authority. A
+Stream gap or an explicitly disabled tailer discards local hints and reloads the
+manifest/policy state directly from Redis. A recoverable cursor gap does not
+invalidate an otherwise complete budget generation once the storage and
 recovery validators have proved it.
 
 The active-generation manifest is a bounded `budget-manifest/v1` value. Its

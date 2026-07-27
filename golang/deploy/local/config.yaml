@@ -53,6 +53,7 @@ state:
     dial_timeout: 2s
     operation_timeout: 3s
     required_persistence: aof_and_rdb
+    coordination_stream_enabled: false
 
 blob_store:
   kind: file
