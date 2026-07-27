@@ -277,6 +277,9 @@ func settingsPatchFromModel(model ModelState) SettingsPatch {
 	if model.Temperature != nil {
 		patch.Temperature = SetPatch(*model.Temperature)
 	}
+	if model.TemperatureDecimal != nil {
+		patch.TemperatureDecimal = SetPatch(*model.TemperatureDecimal)
+	}
 	if model.CompactionPolicy != nil {
 		patch.CompactionPolicy = SetPatch(append(json.RawMessage(nil), model.CompactionPolicy...))
 	}
@@ -287,8 +290,11 @@ func settingsPatchFromModel(model ModelState) SettingsPatch {
 }
 
 func settingsPatchToWire(patch SettingsPatch) llm.SettingsPatchV1 {
-	temperature := llm.Patch[llm.DecimalV1]{Clear: patch.Temperature.Clear}
-	if patch.Temperature.Set != nil {
+	temperature := llm.Patch[llm.DecimalV1]{Clear: patch.Temperature.Clear || patch.TemperatureDecimal.Clear}
+	if patch.TemperatureDecimal.Set != nil {
+		value := *patch.TemperatureDecimal.Set
+		temperature.Set = &value
+	} else if patch.Temperature.Set != nil {
 		// Materialized state uses float64 for provider adapters. Convert only at
 		// this persistence boundary; the v1 wire record itself retains the
 		// canonical decimal string and never routes it through float64.
@@ -312,13 +318,15 @@ func settingsPatchFromWire(wire llm.SettingsPatchV1) (SettingsPatch, error) {
 		Instructions: patchFromWire(wire.Instructions), Tools: patchFromWire(wire.Tools), ToolPolicy: patchFromWire(wire.ToolPolicy), Output: patchFromWire(wire.Output),
 		ReasoningEffort: patchFromWire(wire.ReasoningEffort), ReasoningSummary: patchFromWire(wire.ReasoningSummary), CompactionPolicy: patchFromWire(wire.CompactionPolicy), Extensions: patchFromWire(wire.Extensions),
 	}
-	patch.Temperature.Clear = wire.Temperature.Clear
+	patch.TemperatureDecimal.Clear = wire.Temperature.Clear
 	if wire.Temperature.Set != nil {
 		value, err := wire.Temperature.Set.Float64()
 		if err != nil {
 			return SettingsPatch{}, fmt.Errorf("temperature cannot be represented by provider state: %w", err)
 		}
 		patch.Temperature.Set = &value
+		decimal := *wire.Temperature.Set
+		patch.TemperatureDecimal.Set = &decimal
 	}
 	if err := patch.Validate(); err != nil {
 		return SettingsPatch{}, err

@@ -414,6 +414,7 @@ func cloneSettingsPatch(patch SettingsPatch) SettingsPatch {
 	result.ToolPolicy.Set = clonePointer(patch.ToolPolicy.Set)
 	result.Output.Set = cloneOutput(patch.Output.Set)
 	result.Temperature.Set = clonePointer(patch.Temperature.Set)
+	result.TemperatureDecimal.Set = clonePointer(patch.TemperatureDecimal.Set)
 	result.ReasoningEffort.Set = clonePointer(patch.ReasoningEffort.Set)
 	result.ReasoningSummary.Set = clonePointer(patch.ReasoningSummary.Set)
 	if patch.CompactionPolicy.Set != nil {

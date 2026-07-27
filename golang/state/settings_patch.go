@@ -43,10 +43,14 @@ type SettingsPatch struct {
 	ToolPolicy            Patch[llm.ToolPolicy]
 	Output                Patch[llm.OutputSpec]
 	Temperature           Patch[float64]
-	ReasoningEffort       Patch[llm.ReasoningEffort]
-	ReasoningSummary      Patch[llm.ReasoningSummary]
-	CompactionPolicy      Patch[json.RawMessage]
-	Extensions            Patch[map[string]json.RawMessage]
+	// TemperatureDecimal retains the exact v1 wire value alongside the
+	// float64 provider projection. It is populated by the wire decoder and
+	// takes precedence when the patch is encoded again.
+	TemperatureDecimal Patch[llm.DecimalV1]
+	ReasoningEffort    Patch[llm.ReasoningEffort]
+	ReasoningSummary   Patch[llm.ReasoningSummary]
+	CompactionPolicy   Patch[json.RawMessage]
+	Extensions         Patch[map[string]json.RawMessage]
 }
 
 func (patch SettingsPatch) Validate() error {
@@ -58,6 +62,7 @@ func (patch SettingsPatch) Validate() error {
 		{"service_class_fallbacks", patch.ServiceClassFallbacks}, {"portability", patch.Portability},
 		{"instructions", patch.Instructions}, {"tools", patch.Tools}, {"tool_policy", patch.ToolPolicy},
 		{"output", patch.Output}, {"temperature", patch.Temperature},
+		{"temperature_decimal", patch.TemperatureDecimal},
 		{"reasoning_effort", patch.ReasoningEffort}, {"reasoning_summary", patch.ReasoningSummary},
 		{"compaction_policy", patch.CompactionPolicy}, {"extensions", patch.Extensions},
 	}
@@ -70,6 +75,15 @@ func (patch SettingsPatch) Validate() error {
 		value := *patch.Temperature.Set
 		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 			return fmt.Errorf("temperature must be finite and non-negative")
+		}
+	}
+	if patch.TemperatureDecimal.Set != nil {
+		canonical, err := llm.NewDecimalV1(patch.TemperatureDecimal.Set.String())
+		if err != nil {
+			return fmt.Errorf("temperature_decimal: %w", err)
+		}
+		if _, err := canonical.Float64(); err != nil {
+			return fmt.Errorf("temperature_decimal: %w", err)
 		}
 	}
 	if patch.ServiceClass.Set != nil {

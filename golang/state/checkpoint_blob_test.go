@@ -41,7 +41,14 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	gotPatch, err := codec.DecodeSettingsPatch(encodedPatch)
-	if err != nil || !reflect.DeepEqual(gotPatch, patch) {
+	if err != nil {
+		t.Fatalf("settings patch decode = %v", err)
+	}
+	// The wire contract now records the exact decimal alongside the legacy
+	// provider-facing float projection. A patch authored with a float gains
+	// that exact projection when decoded.
+	patch.TemperatureDecimal = gotPatch.TemperatureDecimal
+	if !reflect.DeepEqual(gotPatch, patch) {
 		t.Fatalf("settings patch round trip = %#v, %v; want %#v", gotPatch, err, patch)
 	}
 	snapshot := CheckpointSnapshot{Items: items, Settings: ModelState{Model: "gpt-test", ServiceClass: llm.ServiceClassStandard, Portability: llm.PortabilityStrict}, Depth: 1, Lineage: []Handle{"root", "child"}}
@@ -59,6 +66,40 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	}
 	if string(encodedSnapshot) != string(mustCanonical(t, encodedSnapshot)) {
 		t.Fatal("snapshot encoding is not canonical")
+	}
+}
+
+func TestCheckpointBlobCodecPreservesExactTemperatureDecimal(t *testing.T) {
+	codec := CheckpointBlobCodec{}
+	decimal, err := llm.NewDecimalV1("0.123456789012345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := SettingsPatch{TemperatureDecimal: SetPatch(decimal)}
+	encoded, err := codec.EncodeSettingsPatch(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"temperature":{"set":"0.123456789012345678"}`) {
+		t.Fatalf("encoded patch rounded exact decimal: %s", encoded)
+	}
+	decoded, err := codec.DecodeSettingsPatch(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TemperatureDecimal.Set == nil || decoded.TemperatureDecimal.Set.String() != decimal.String() {
+		t.Fatalf("decoded exact decimal = %#v", decoded.TemperatureDecimal.Set)
+	}
+	base := RootModelState("gpt-test")
+	materialized, err := ApplySettingsPatch(base, decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if materialized.TemperatureDecimal == nil || materialized.TemperatureDecimal.String() != decimal.String() {
+		t.Fatalf("materialized exact decimal = %#v", materialized.TemperatureDecimal)
+	}
+	if materialized.Temperature == nil {
+		t.Fatal("materialized provider temperature projection is missing")
 	}
 }
 

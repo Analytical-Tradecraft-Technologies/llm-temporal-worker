@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -21,10 +22,14 @@ type ModelState struct {
 	ToolPolicy            llm.ToolPolicy
 	Output                *llm.OutputSpec
 	Temperature           *float64
-	ReasoningEffort       llm.ReasoningEffort
-	ReasoningSummary      llm.ReasoningSummary
-	CompactionPolicy      json.RawMessage
-	Extensions            map[string]json.RawMessage
+	// TemperatureDecimal is the exact v1 wire value. Temperature is retained
+	// as the provider-facing projection, but durable checkpoint materialization
+	// must not use it as the source of truth for decimal re-encoding.
+	TemperatureDecimal *llm.DecimalV1
+	ReasoningEffort    llm.ReasoningEffort
+	ReasoningSummary   llm.ReasoningSummary
+	CompactionPolicy   json.RawMessage
+	Extensions         map[string]json.RawMessage
 }
 
 // RootModelState applies only public, deterministic defaults. Provider
@@ -52,6 +57,15 @@ func (state ModelState) Validate() error {
 	}
 	if state.Temperature != nil && (math.IsNaN(*state.Temperature) || math.IsInf(*state.Temperature, 0) || *state.Temperature < 0) {
 		return fmt.Errorf("temperature must be finite and non-negative")
+	}
+	if state.TemperatureDecimal != nil {
+		canonical, err := llm.NewDecimalV1(state.TemperatureDecimal.String())
+		if err != nil {
+			return fmt.Errorf("temperature decimal is invalid: %w", err)
+		}
+		if _, err := canonical.Float64(); err != nil {
+			return fmt.Errorf("temperature decimal cannot be represented by provider state: %w", err)
+		}
 	}
 	return nil
 }
@@ -103,11 +117,25 @@ func ApplySettingsPatch(base ModelState, patch SettingsPatch) (ModelState, error
 	} else if patch.Output.Clear {
 		result.Output = nil
 	}
-	if patch.Temperature.Set != nil {
+	if patch.TemperatureDecimal.Set != nil {
+		value, err := patch.TemperatureDecimal.Set.Float64()
+		if err != nil {
+			return ModelState{}, fmt.Errorf("temperature decimal cannot be represented by provider state: %w", err)
+		}
+		decimal := *patch.TemperatureDecimal.Set
+		result.Temperature = &value
+		result.TemperatureDecimal = &decimal
+	} else if patch.Temperature.Set != nil {
 		value := *patch.Temperature.Set
 		result.Temperature = &value
-	} else if patch.Temperature.Clear {
+		decimal, err := llm.NewDecimalV1(strconv.FormatFloat(value, 'f', -1, 64))
+		if err != nil {
+			return ModelState{}, fmt.Errorf("temperature cannot be represented as v1 decimal: %w", err)
+		}
+		result.TemperatureDecimal = &decimal
+	} else if patch.Temperature.Clear || patch.TemperatureDecimal.Clear {
 		result.Temperature = nil
+		result.TemperatureDecimal = nil
 	}
 	if patch.ReasoningEffort.Set != nil {
 		result.ReasoningEffort = *patch.ReasoningEffort.Set
@@ -150,6 +178,10 @@ func (state ModelState) Clone() ModelState {
 	if state.Temperature != nil {
 		value := *state.Temperature
 		result.Temperature = &value
+	}
+	if state.TemperatureDecimal != nil {
+		value := *state.TemperatureDecimal
+		result.TemperatureDecimal = &value
 	}
 	result.CompactionPolicy = append(json.RawMessage(nil), state.CompactionPolicy...)
 	result.Extensions = cloneRawMap(state.Extensions)
