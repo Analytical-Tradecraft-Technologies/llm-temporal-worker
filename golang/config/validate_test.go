@@ -5,10 +5,27 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
+
+func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.Server.ShutdownTimeout = config.Duration(time.Duration(loaded.Temporal.Worker.GracefulStopTimeout) + time.Duration(loaded.Server.FinalizationTimeout))
+	if err := loaded.Validate(); err == nil || !strings.Contains(err.Error(), "server.shutdown_timeout must exceed temporal.worker.graceful_stop_timeout + server.finalization_timeout") {
+		t.Fatalf("shutdown budget validation error = %v", err)
+	}
+
+	loaded.Server.ShutdownTimeout = config.Duration(time.Duration(loaded.Temporal.Worker.GracefulStopTimeout) + time.Duration(loaded.Server.FinalizationTimeout) + time.Second)
+	if err := loaded.Validate(); err != nil {
+		t.Fatalf("shutdown budget with one-second residual flush margin rejected: %v", err)
+	}
+}
 
 func TestConfigExampleMatchesJSONSchema(t *testing.T) {
 	configData := exampleYAML(t)

@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	yaml "go.yaml.in/yaml/v4"
 )
@@ -52,7 +53,11 @@ func verifyRendered(overlay string, rendered []byte) error {
 	if err != nil {
 		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
 	}
-	if err := verifyWorkload(overlay, deployment, serviceAccount); err != nil {
+	configMap, err := findResource(documents, "ConfigMap", "llmtw-config")
+	if err != nil {
+		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
+	if err := verifyWorkload(overlay, deployment, serviceAccount, configMap); err != nil {
 		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
 	}
 	return nil
@@ -93,7 +98,7 @@ func findResource(documents []map[string]any, kind, name string) (map[string]any
 	return nil, fmt.Errorf("rendered %s %q is missing", strings.ToLower(kind), name)
 }
 
-func verifyWorkload(overlay string, deployment, serviceAccount map[string]any) error {
+func verifyWorkload(overlay string, deployment, serviceAccount, configMap map[string]any) error {
 	podSpec, err := deploymentPodSpec(deployment)
 	if err != nil {
 		return err
@@ -121,6 +126,9 @@ func verifyWorkload(overlay string, deployment, serviceAccount map[string]any) e
 	if !positiveInteger(valueAt(podSpec, "terminationGracePeriodSeconds")) {
 		return errors.New("terminationGracePeriodSeconds must be a positive number")
 	}
+	if err := verifyShutdownGrace(podSpec, configMap); err != nil {
+		return err
+	}
 	if initContainers, exists := podSpec["initContainers"]; exists {
 		entries, ok := initContainers.([]any)
 		if !ok || len(entries) != 0 {
@@ -144,6 +152,44 @@ func verifyWorkload(overlay string, deployment, serviceAccount map[string]any) e
 	}
 	if err := verifyWritableMounts(container, podSpec); err != nil {
 		return err
+	}
+	return nil
+}
+
+// verifyShutdownGrace binds the rendered Kubernetes grace period to the
+// process shutdown budget mounted in the same ConfigMap. A positive grace
+// value by itself is insufficient: if it expires at the same time as the
+// worker's shutdown deadline, Kubernetes can send SIGKILL before clients and
+// telemetry finish closing. The strict inequality is the deployment-level
+// margin required by the runtime shutdown contract.
+func verifyShutdownGrace(podSpec, configMap map[string]any) error {
+	data, ok := mapAt(configMap, "data")
+	if !ok {
+		return errors.New("llmtw-config ConfigMap data is missing")
+	}
+	encoded := stringAt(data, "config.yaml")
+	if strings.TrimSpace(encoded) == "" {
+		return errors.New("llmtw-config ConfigMap must include config.yaml")
+	}
+	var document struct {
+		Server struct {
+			ShutdownTimeout string `yaml:"shutdown_timeout"`
+		} `yaml:"server"`
+	}
+	if err := yaml.Unmarshal([]byte(encoded), &document); err != nil {
+		return errors.New("llmtw-config shutdown budget is not valid YAML")
+	}
+	shutdown, err := time.ParseDuration(strings.TrimSpace(document.Server.ShutdownTimeout))
+	if err != nil || shutdown <= 0 {
+		return errors.New("llmtw-config server.shutdown_timeout must be a positive duration")
+	}
+	graceSeconds, ok := integerValue(valueAt(podSpec, "terminationGracePeriodSeconds"))
+	if !ok || graceSeconds <= 0 || graceSeconds > math.MaxInt64/int64(time.Second) {
+		return errors.New("terminationGracePeriodSeconds must be a bounded integer")
+	}
+	grace := time.Duration(graceSeconds) * time.Second
+	if grace <= shutdown {
+		return fmt.Errorf("terminationGracePeriodSeconds (%s) must exceed server.shutdown_timeout (%s)", grace, shutdown)
 	}
 	return nil
 }
@@ -476,6 +522,49 @@ func integerEqual(value any, expected int) bool {
 		return math.Trunc(number) == number && int(number) == expected
 	default:
 		return false
+	}
+}
+
+func integerValue(value any) (int64, bool) {
+	switch number := value.(type) {
+	case int:
+		return int64(number), true
+	case int8:
+		return int64(number), true
+	case int16:
+		return int64(number), true
+	case int32:
+		return int64(number), true
+	case int64:
+		return number, true
+	case uint:
+		if uint64(number) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(number), true
+	case uint8:
+		return int64(number), true
+	case uint16:
+		return int64(number), true
+	case uint32:
+		return int64(number), true
+	case uint64:
+		if number > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(number), true
+	case float32:
+		if math.Trunc(float64(number)) != float64(number) || float64(number) > math.MaxInt64 || float64(number) < math.MinInt64 {
+			return 0, false
+		}
+		return int64(number), true
+	case float64:
+		if math.Trunc(number) != number || number > math.MaxInt64 || number < math.MinInt64 {
+			return 0, false
+		}
+		return int64(number), true
+	default:
+		return 0, false
 	}
 }
 
