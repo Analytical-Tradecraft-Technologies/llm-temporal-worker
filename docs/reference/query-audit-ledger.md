@@ -56,6 +56,12 @@ client set may instead expose the service through `runtime.QueryServiceSource`.
 The Activity acquires a snapshot lease before dispatch, so reload closes the
 old query repository only after in-flight query work releases its lease.
 
+`runtime.NewPersistedQueryServiceBuilder` is the production composition seam:
+it requires deployment-owned authorization and cursor key material and binds
+`PostgresQueryRepositories.QueryAudit.RecordAudit` from the same immutable
+client set as the read repositories. A snapshot without that audit capability
+is rejected before worker polling.
+
 If neither seam is supplied, the worker remains fail-closed: `llm.query.v1`
 returns a configuration error and does not perform a provider or storage read.
 This is deliberate until a deployment composes the PostgreSQL query handlers,

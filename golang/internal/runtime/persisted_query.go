@@ -74,6 +74,48 @@ type PersistedQueryOptions struct {
 	BudgetStatus BudgetStatusReader
 }
 
+// PersistedQueryBuilderOptions contains the deployment-owned security and
+// state-read capabilities used by NewPersistedQueryServiceBuilder. Audit is
+// intentionally absent: the builder always binds the snapshot-owned
+// PostgresQueryRepositories.QueryAudit capability so a production query cannot
+// accidentally use an in-memory, newer-snapshot, or otherwise unrelated sink.
+type PersistedQueryBuilderOptions struct {
+	Authorize control.AuthorizeFunc
+	Cursor    *control.CursorCodec
+	Clock     func() time.Time
+}
+
+// NewPersistedQueryServiceBuilder returns a production-factory builder that
+// binds persisted reads and audit writes from the same immutable PostgreSQL
+// client set. Authorization and cursor key material remain explicit
+// deployment inputs. The returned builder fails closed when the snapshot does
+// not expose a durable audit repository.
+func NewPersistedQueryServiceBuilder(options PersistedQueryBuilderOptions) (QueryServiceBuilder, error) {
+	if options.Authorize == nil {
+		return nil, errors.New("persisted query builder authorization is required")
+	}
+	if options.Cursor == nil || len(options.Cursor.Key) == 0 {
+		return nil, errors.New("persisted query builder cursor codec is required")
+	}
+	cursor := *options.Cursor
+	cursor.Key = append([]byte(nil), options.Cursor.Key...)
+
+	return func(_ context.Context, snapshot *config.Snapshot, repositories PostgresQueryRepositories) (activity.QueryService, error) {
+		if isNilCapability(repositories.QueryAudit) {
+			return nil, errors.New("persisted query audit repository is required")
+		}
+		snapshotCursor := cursor
+		snapshotCursor.Key = append([]byte(nil), cursor.Key...)
+		return NewPersistedQueryService(snapshot, repositories, PersistedQueryOptions{
+			Authorize:    options.Authorize,
+			Cursor:       &snapshotCursor,
+			Audit:        repositories.QueryAudit.RecordAudit,
+			Clock:        options.Clock,
+			ResolveScope: repositories.ScopeResolver,
+		})
+	}, nil
+}
+
 // NewPersistedQueryService builds the persisted query families against
 // one snapshot digest. Missing repository capabilities remain fail-closed;
 // callers must not receive an empty answer that could be mistaken for state.
@@ -94,21 +136,34 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 	if clock == nil {
 		clock = time.Now
 	}
+	handler := &persistedQueryHandler{
+		configDigest: snapshot.Digest(),
+		resolveScope: options.ResolveScope,
+		cursor:       options.Cursor,
+		clock:        clock,
+	}
+	// Never assign nil concrete repository pointers to interface fields: that
+	// creates non-nil typed interfaces and turns an unsupported query family
+	// into a nil-receiver panic. Missing and typed-nil optional capabilities
+	// must retain the same fail-closed behavior.
+	if repositories.ProviderStatus != nil {
+		handler.provider = repositories.ProviderStatus
+	}
+	if repositories.Inventory != nil {
+		handler.inventory = repositories.Inventory
+	}
+	if repositories.SpendSummary != nil {
+		handler.spend = repositories.SpendSummary
+	}
+	if !isNilCapability(options.BudgetStatus) {
+		handler.budget = options.BudgetStatus
+	}
 	return &control.QueryService{
-		TypedHandler: &persistedQueryHandler{
-			configDigest: snapshot.Digest(),
-			provider:     repositories.ProviderStatus,
-			inventory:    repositories.Inventory,
-			spend:        repositories.SpendSummary,
-			budget:       options.BudgetStatus,
-			resolveScope: options.ResolveScope,
-			cursor:       options.Cursor,
-			clock:        clock,
-		},
-		Authorize:   options.Authorize,
-		Audit:       options.Audit,
-		CursorCodec: options.Cursor,
-		Clock:       clock,
+		TypedHandler: handler,
+		Authorize:    options.Authorize,
+		Audit:        options.Audit,
+		CursorCodec:  options.Cursor,
+		Clock:        clock,
 	}, nil
 }
 
