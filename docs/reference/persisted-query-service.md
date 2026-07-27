@@ -11,6 +11,12 @@ page keys before signing a continuation or committing query audit evidence.
 This protects the same keyset invariant for deployment-owned handlers as for
 the built-in PostgreSQL readers.
 
+Optional string filters (`provider`, `endpoint`, `model_prefix`, and
+`policy_key`) are omitted when unset; JSON `null` is not an alternate spelling
+for omission. The v1 decoder rejects `null` before authorization or storage
+access so a malformed request cannot silently become a broader unfiltered
+query.
+
 Deployments must supply the three security/observability seams below; a
 fourth budget-status seam is required only when that query kind is enabled:
 
