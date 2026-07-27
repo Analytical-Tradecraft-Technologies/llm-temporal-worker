@@ -87,6 +87,15 @@ func (health *PassiveHealth) View(snapshotID string) HealthView {
 	defer health.mu.RUnlock()
 	now := health.clock()
 	for routeID, entry := range health.entries {
+		// Authentication/configuration failures are scoped to the immutable
+		// snapshot that produced them. A replacement snapshot is the explicit
+		// operator signal that the route may be retried; do not carry the old
+		// open state into planning for that snapshot. Keep the entry when the
+		// caller has no snapshot identity so diagnostic consumers can still
+		// inspect process-local health.
+		if snapshotID != "" && entry.SnapshotID != "" && entry.SnapshotID != snapshotID {
+			continue
+		}
 		open := entry.Authentication || (!entry.OpenUntil.IsZero() && now.Before(entry.OpenUntil))
 		if !entry.OpenUntil.IsZero() && !now.Before(entry.OpenUntil) && !entry.Authentication {
 			open = false
