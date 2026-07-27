@@ -159,6 +159,12 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		}
 		return provider.Result{}, provider.WithEndpointID(mapError(err), adapter.endpointID)
 	}
+	// A custom transport or a future SDK implementation can return a nil
+	// response without an error. Treat that as an accepted malformed provider
+	// response instead of dereferencing it below and panicking the Activity.
+	if response == nil {
+		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
+	}
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.ServiceTier)}
 	if rawResponse != nil {
 		metadata.Status = rawResponse.StatusCode

@@ -70,6 +70,33 @@ func TestInvokeRunsOneRequestAndLiftsResponse(t *testing.T) {
 	}
 }
 
+func TestInvokeRejectsNullResponseWithoutPanicking(t *testing.T) {
+	var calls int
+	adapter := newFixtureAdapterWithTransport(t, []byte("null"), func() { calls++ })
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "op-empty", Model: "gpt-contract"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	observer := &recordingObserver{}
+	_, err = adapter.Invoke(context.Background(), call, observer)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
+	}
+	if mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
+		t.Fatalf("nil response error = %#v, want accepted lift invalid response", mapped)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want one", calls)
+	}
+	if observer.before != 1 || observer.headers != 0 || observer.progress != 0 {
+		t.Fatalf("observer = %#v, want pre-write only", observer)
+	}
+}
+
 func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
 	if err != nil {

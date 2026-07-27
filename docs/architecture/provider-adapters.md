@@ -12,6 +12,11 @@ retry. Its responsibilities are:
 4. lift a one-shot response into semantic output and typed usage;
 5. classify the provider result without deciding whether another route runs.
 
+An SDK response that is nil without an accompanying error is treated as an
+accepted malformed response and becomes a safe provider-invalid-response
+error. Adapters must never dereference a provider response before this guard;
+an Activity panic would bypass the operation ledger's terminal classification.
+
 Every SDK client is constructed with automatic retries disabled. This prevents
 an SDK retry from escaping the operation ledger, spending twice, or using a
 different provider tier without a second admission decision.
