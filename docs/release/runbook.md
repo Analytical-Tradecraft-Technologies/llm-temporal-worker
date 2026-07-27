@@ -81,6 +81,13 @@ residual raw OCI directories or archives, unreferenced files, digest or
 byte-count changes, incomplete fixture records, mismatched image subjects, and
 HIGH or CRITICAL image findings.
 
+Every retained JSON document and every OCI JSON metadata payload must also have
+exactly one member with a given name in each object. Duplicate members are
+rejected before schema or semantic decoding, including escaped spellings of the
+same member name, so evidence has one deterministic interpretation across the
+verifier, scanners, and review tooling. The same member name may still appear
+in separate objects.
+
 The `benchmark-summary.json` artifact records one exact
 `BenchmarkGenerateMemoryAdmissionAndCompile` measurement with its sample count,
 `ns/op`, and sampled `p99_ms/op`. Its `scope` is `memory` and its

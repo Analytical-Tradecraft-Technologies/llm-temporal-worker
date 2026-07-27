@@ -68,6 +68,38 @@ func TestRunRejectsUnknownOrIncompleteCommands(t *testing.T) {
 	}
 }
 
+func TestRejectAmbiguousJSONRequiresUniqueMembersAtEveryObjectDepth(t *testing.T) {
+	if err := rejectAmbiguousJSON("test document", []byte(`{"left":{"status":"ok"},"right":{"status":"ok"}}`)); err != nil {
+		t.Fatalf("same member name in separate objects rejected: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "top level duplicate", data: `{"status":"pass","status":"fail"}`},
+		{name: "nested duplicate", data: `{"finding":{"severity":"CRITICAL","severity":"LOW"}}`},
+		{name: "escaped equivalent duplicate", data: `{"severity":"CRITICAL","se\u0076erity":"LOW"}`},
+		{name: "trailing value", data: `{"status":"pass"}{"status":"pass"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := rejectAmbiguousJSON("test document", []byte(test.data))
+			if err == nil || !strings.Contains(err.Error(), "invalid or ambiguous JSON") {
+				t.Fatalf("rejectAmbiguousJSON() error = %v, want generic ambiguity rejection", err)
+			}
+			if strings.Contains(err.Error(), "severity") || strings.Contains(err.Error(), "status") {
+				t.Fatalf("ambiguity rejection disclosed an input member name: %v", err)
+			}
+		})
+	}
+
+	deep := strings.Repeat("[", maxJSONDepth+2) + "null" + strings.Repeat("]", maxJSONDepth+2)
+	if err := rejectAmbiguousJSON("test document", []byte(deep)); err == nil || !strings.Contains(err.Error(), "invalid or ambiguous JSON") {
+		t.Fatalf("rejectAmbiguousJSON() excessive-depth error = %v, want generic rejection", err)
+	}
+}
+
 func TestArtifactArgumentsMapForRequiredRejectsMalformedInput(t *testing.T) {
 	complete := make([]string, 0, len(requiredArtifacts))
 	for _, name := range requiredArtifacts {
@@ -244,6 +276,45 @@ func TestRunLayoutDigestSmoke(t *testing.T) {
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "sha256:"+manifestDigest {
 		t.Fatalf("layout-digest = %q, want %q", got, "sha256:"+manifestDigest)
+	}
+}
+
+func TestRunLayoutDigestRejectsDuplicateDescriptorMembers(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := []byte(`{"architecture":"arm64","os":"linux"}`)
+	layer := []byte("application layer")
+	configDigest := writeOCIBlob(t, root, config)
+	layerDigest := writeOCIBlob(t, root, layer)
+	manifestData, err := json.Marshal(ociManifestDocument{
+		SchemaVersion: 2,
+		Config:        ociDescriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + configDigest, Size: int64(len(config))},
+		Layers:        []ociDescriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + layerDigest, Size: int64(len(layer))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := writeOCIBlob(t, root, manifestData)
+	indexData := []byte(fmt.Sprintf(
+		`{"schemaVersion":2,"manifests":[{"mediaType":"%s","digest":"sha256:%s","digest":"sha256:%s","size":%d}]}`,
+		ociImageManifestMediaType,
+		strings.Repeat("b", 64),
+		manifestDigest,
+		len(manifestData),
+	))
+	if err := os.WriteFile(filepath.Join(root, "index.json"), indexData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	err = run([]string{"layout-digest", "-layout", root}, &stdout)
+	if err == nil || !strings.Contains(err.Error(), "invalid or ambiguous JSON") {
+		t.Fatalf("layout-digest duplicate descriptor error = %v, want ambiguity rejection", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("layout-digest wrote output after rejecting duplicate descriptor: %q", stdout.String())
 	}
 }
 
