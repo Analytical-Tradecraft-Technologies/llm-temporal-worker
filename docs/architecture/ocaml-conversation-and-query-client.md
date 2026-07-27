@@ -366,6 +366,17 @@ type model_inventory_entry = {
 
 type model_inventory_page = { models : model_inventory_entry list }
 
+The `source` and `safe_metadata` members are part of the target Task 14
+query-result contract, but they are not yet emitted or accepted by the
+pre-query wire scaffold. The current Go result rows remain deliberately
+opaque while the query mapper decides how `configured_only`/`unsupported`
+inventory provenance and capability digests map to public values (see
+[`provider-control.md`](../reference/provider-control.md#persisted-model-inventory-pages)).
+Until that mapper lands, the OCaml codec must not guess a source or fabricate
+capability names: omitted fields decode as `Unknown_inventory_source` and
+`Safe_metadata.empty`, and callers must treat those values as incomplete
+provenance rather than as a claim that the inventory is unsupported.
+
 type credit_status_entry = {
   provider : Provider.t;
   endpoint : Endpoint.t;

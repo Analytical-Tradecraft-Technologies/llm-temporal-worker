@@ -97,6 +97,27 @@ func TestActivityRuntimeReferencesCurrentQueryPlan(t *testing.T) {
 	}
 }
 
+func TestOCamlArchitectureDocumentsModelInventoryWireStatus(t *testing.T) {
+	root := repositoryRoot(t)
+	path := filepath.Join(root, "docs/architecture/ocaml-conversation-and-query-client.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(data)), " ")
+	for _, required := range []string{
+		"members are part of the target Task 14 query-result contract",
+		"not yet emitted or accepted by the pre-query wire scaffold",
+		"provider-control.md",
+		"Unknown_inventory_source",
+		"Safe_metadata.empty",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("%s must document model-inventory wire status with %q", path, required)
+		}
+	}
+}
+
 func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.T) {
 	root := repositoryRoot(t)
 	data, err := os.ReadFile(filepath.Join(root, "docs/testing/strategy.md"))
