@@ -636,10 +636,12 @@ is not propagated into the summary cache key.
 The one-shot convenience **`Generate.make`/`Generate.invoke`/`Generate.start`**
 constructs and schedules one v1 Generate directly. It does not maintain a loop,
 stream tokens, or hide a checkpoint. `Generate.invoke_with` accepts the same
-typed dispatcher used by deterministic tests. The older
-**`Request.make`/`execute`/`workflow`** names remain recognizable for existing
-callers; new code should prefer `Generate` or `Conversation` so it cannot
-accidentally construct the pre-checkpoint wire shape.
+typed dispatcher used by deterministic tests. The package-level
+**`execute`/`workflow`** helpers now accept the exact Generate v1 records and
+schedule that same v1 Activity. The pre-checkpoint **`Request.make`** and
+**`invoke_once`** names remain recognizable only as deprecated compatibility
+shims; new code should prefer `Generate`, `Conversation`, or the migrated
+package-level helpers so it cannot construct the pre-checkpoint wire shape.
 
 ## GADT-typed Query API
 
