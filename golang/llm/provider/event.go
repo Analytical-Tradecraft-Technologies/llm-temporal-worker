@@ -108,6 +108,7 @@ func (assembler *Assembler) Add(event Event) error {
 			return fmt.Errorf("output start index %d is out of order", event.Index)
 		}
 		assembler.active[event.Index] = &outputState{}
+		assembler.outputs = append(assembler.outputs, nil)
 		assembler.nextIndex++
 	case TextDelta:
 		state, err := assembler.state(event.Index)
@@ -176,7 +177,16 @@ func (assembler *Assembler) Add(event Event) error {
 			}
 		}
 		state.finished = true
-		assembler.outputs = append(assembler.outputs, item)
+		// Provider protocols may finish output items in a different order from
+		// the order in which they were started (for example, a later choice can
+		// receive its terminal marker before an earlier choice).  The public
+		// response is an indexed semantic sequence, however, and must match the
+		// non-streaming lifter's order.  Keep the completion event's index rather
+		// than appending in arrival order.
+		if event.Index >= len(assembler.outputs) {
+			return fmt.Errorf("output index %d has no response slot", event.Index)
+		}
+		assembler.outputs[event.Index] = item
 		assembler.finished[event.Index] = item
 		delete(assembler.active, event.Index)
 	case UsageUpdated:
