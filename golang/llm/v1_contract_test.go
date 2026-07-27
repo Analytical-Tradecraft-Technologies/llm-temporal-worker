@@ -341,6 +341,51 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	}
 }
 
+func TestV1TemperaturePreservesAllEighteenFractionalDigits(t *testing.T) {
+	const input = `{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":"0.123456789012345678"}}}`
+	var request llm.GenerateRequestV1
+	if err := json.Unmarshal([]byte(input), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.SettingsPatch.Temperature.Set == nil || request.SettingsPatch.Temperature.Set.String() != "0.123456789012345678" {
+		t.Fatalf("exact decimal was not retained: %#v", request.SettingsPatch.Temperature.Set)
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"temperature":{"set":"0.123456789012345678"}`)) {
+		t.Fatalf("exact decimal was rounded during re-encoding: %s", encoded)
+	}
+
+	trailingZeros := bytes.Replace([]byte(input), []byte("0.123456789012345678"), []byte("12.340000000000000000"), 1)
+	if err := json.Unmarshal(trailingZeros, &request); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err = json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(encoded, []byte(`"temperature":{"set":"12.34"}`)) {
+		t.Fatalf("decimal was not normalized on output: %s", encoded)
+	}
+}
+
+func TestV1TemperatureRejectsBeyondContractPrecision(t *testing.T) {
+	var request llm.GenerateRequestV1
+	for _, value := range []string{
+		"0.1234567890123456789",
+		"1e-3",
+		"01.2",
+		"-0.1",
+	} {
+		payload := fmt.Sprintf(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":%q}}}`, value)
+		if err := json.Unmarshal([]byte(payload), &request); err == nil {
+			t.Fatalf("invalid temperature %q was accepted", value)
+		}
+	}
+}
+
 func TestV1VariantBoundariesAndTemperature(t *testing.T) {
 	zero := 0.0
 	for _, variant := range []int32{0} {
@@ -441,7 +486,7 @@ func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
 	if positive.SettingsPatch.Temperature.Set == nil {
 		t.Fatal("positive-temperature fixture omitted the temperature patch")
 	}
-	if err := llm.ValidateVariantTemperature(positive.Cache.Variant, positive.SettingsPatch.Temperature.Set); err != nil {
+	if err := llm.ValidateVariantDecimalTemperature(positive.Cache.Variant, positive.SettingsPatch.Temperature.Set); err != nil {
 		t.Fatalf("positive temperature variant rejected: %v", err)
 	}
 
@@ -452,7 +497,7 @@ func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
 	if zero.SettingsPatch.Temperature.Set == nil {
 		t.Fatal("zero-temperature fixture omitted the temperature patch")
 	}
-	if err := llm.ValidateVariantTemperature(zero.Cache.Variant, zero.SettingsPatch.Temperature.Set); err == nil {
+	if err := llm.ValidateVariantDecimalTemperature(zero.Cache.Variant, zero.SettingsPatch.Temperature.Set); err == nil {
 		t.Fatal("positive variant with zero temperature accepted")
 	}
 }
