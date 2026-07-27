@@ -46,6 +46,7 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 		return Catalog{}, fmt.Errorf("pricing catalog version is required")
 	}
 	copyEntries := append([]Entry(nil), entries...)
+	seenIdentities := make(map[string]struct{}, len(copyEntries))
 	for index := range copyEntries {
 		entry := &copyEntries[index]
 		if entry.Provider == "" || entry.Family == "" || entry.EndpointID == "" || entry.Model == "" || entry.ProviderTier == "" {
@@ -75,6 +76,11 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 		if !entry.EffectiveFrom.IsZero() && !entry.EffectiveUntil.IsZero() && !entry.EffectiveUntil.After(entry.EffectiveFrom) {
 			return Catalog{}, fmt.Errorf("pricing entry %d effective interval is empty", index)
 		}
+		identity := entryKey(*entry)
+		if _, exists := seenIdentities[identity]; exists {
+			return Catalog{}, fmt.Errorf("pricing entry %d duplicates pricing identity", index)
+		}
+		seenIdentities[identity] = struct{}{}
 	}
 	sort.SliceStable(copyEntries, func(i, j int) bool { return entryKey(copyEntries[i]) < entryKey(copyEntries[j]) })
 	canonical, err := json.Marshal(struct {

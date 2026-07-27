@@ -92,3 +92,26 @@ func TestCompileUSDRejectsInvalidUnknownComponent(t *testing.T) {
 		t.Fatal("CompileUSD accepted an unknown price component")
 	}
 }
+
+func TestCompileUSDRejectsDuplicatePricingIdentity(t *testing.T) {
+	from := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
+	base := Entry{
+		Provider:       "openai",
+		Family:         "openai_responses",
+		EndpointID:     "openai-production",
+		Region:         "global",
+		Model:          "gpt-example",
+		ProviderTier:   "standard",
+		EffectiveFrom:  from,
+		EffectiveUntil: from.Add(time.Hour),
+		Prices:         UnitPrices{InputPerMillion: MustDecimalUSD("1")},
+	}
+	duplicate := base
+	// Different end times and prices must not make two entries with the same
+	// effective start look like distinct resolvable identities.
+	duplicate.EffectiveUntil = from.Add(2 * time.Hour)
+	duplicate.Prices.InputPerMillion = MustDecimalUSD("2")
+	if _, err := CompileUSD("prices-v1", []Entry{base, duplicate}); err == nil {
+		t.Fatal("CompileUSD accepted duplicate pricing identities")
+	}
+}

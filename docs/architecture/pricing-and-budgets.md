@@ -76,6 +76,11 @@ names and the strict `pricing.CompileUSD` boundary establish the denomination;
 there is no generic source `currency` field or caller-supplied FX rate. Logical
 aliases are resolved before pricing.
 
+The compiled boundary also rejects duplicate pricing identities (including two
+entries with the same effective start but different end times or prices). This
+keeps resolver selection deterministic and prevents an ambiguous catalog from
+silently choosing whichever duplicate happened to be listed first.
+
 Catalog precedence is explicit:
 
 1. endpoint-specific operator override;
