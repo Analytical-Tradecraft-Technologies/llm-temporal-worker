@@ -87,7 +87,7 @@
     },
     {
       "path": "github.com/prometheus/common",
-      "version": "v0.70.0",
+      "version": "v0.70.1",
       "license": "Apache-2.0",
       "source": "https://github.com/prometheus/common"
     },
