@@ -61,7 +61,6 @@
         "test_summary",
         "race_summary",
         "fuzz_summary",
-        "benchmark_summary",
         "fixture_manifest",
         "redis_summary",
         "temporal_summary",

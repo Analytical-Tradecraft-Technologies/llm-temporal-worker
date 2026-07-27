@@ -90,6 +90,11 @@ objective as release evidence. The Redis measurement remains an explicitly
 authorized operator run against a same-region deployment and is never replaced
 by this artifact.
 
+The verifier remains compatible with retained schema-v1 bundles recorded before
+this benchmark was added: those bundles may omit `benchmark-summary.json`. New
+recordings are stricter and the recorder requires the benchmark artifact, so all
+new evidence captures the measurement without invalidating historical bundles.
+
 ## Collect, record, and verify
 
 The trusted job first produces the compact summaries and a temporary OCI layout
