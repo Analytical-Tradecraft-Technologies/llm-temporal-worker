@@ -119,8 +119,9 @@ management adapter exists.
 
 ### Persisted status pages
 
-`ProviderStatusRepository.ListRouteStatuses` is the bounded read side for a
-provider-status query. It reads the current `provider_route_status` projection
+`ProviderStatusRepository.ListRouteStatuses` is the bounded query-side
+repository method for a provider-status query. It reads the current
+`provider_route_status` projection
 with one set-based SQL statement, applies provider/endpoint/availability
 filters, excludes healthy routes unless requested, and returns deterministic
 `route_id` keyset pages. The returned `NextRouteID` is an unsigned storage
@@ -135,8 +136,8 @@ provenance without changing the stored projection.
 
 ### Persisted model inventory pages
 
-`InventoryRepository.ListInventoryModels` is the bounded read side for a
-model-inventory query. It selects the newest immutable snapshot for each
+`InventoryRepository.ListInventoryModels` is the bounded query-side repository
+method for a model-inventory query. It selects the newest immutable snapshot for each
 matching provider/endpoint, then reads normalized model rows in deterministic
 `provider, endpoint, provider_model_id` order. Provider, endpoint, model-prefix,
 and lifecycle filters are applied in PostgreSQL; the page limit is bounded to
@@ -187,13 +188,15 @@ a storage-neutral callback after response and cursor validation. It receives
 canonical redacted envelopes and exact-or-unknown cost metadata and must commit
 the record before returning; failures are surfaced as retryable finalize state
 errors. The runtime now carries an optional, snapshot-scoped
-`PostgresQueryRepositories` bundle from the PostgreSQL closer into its
-`productionClientSet`. A custom closer may provide inventory, query-audit, and
-scope-resolution capabilities when their key material and schema are
-provisioned; the default closer exposes provider status and spend summary. A
-companion `QueryService` is forwarded only when the same closer supplies one,
-so an unconfigured query family stays fail-closed rather than falling back to
-an in-memory answer. The low-level persisted-query constructor accepts a
+`PostgresQueryRepositories` snapshot/query-side bundle from the PostgreSQL
+closer into its `productionClientSet`. A custom closer may provide inventory,
+query-audit, and scope-resolution capabilities when their key material and
+schema are provisioned; the default closer exposes provider status and spend
+summary. Persisted-query composition implements spend summary from PostgreSQL;
+budget status remains deployment-provided and fail-closed. A companion
+`QueryService` is forwarded only when the same closer supplies one, so an
+unconfigured query family stays fail-closed rather than falling back to an
+in-memory answer. The low-level persisted-query constructor accepts a
 snapshot-scoped Redis budget-status reader, but the production builder leaves
 that family unsupported until runtime composition owns such a reader.
 
