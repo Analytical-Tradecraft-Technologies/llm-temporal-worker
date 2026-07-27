@@ -22,6 +22,9 @@ and one of `control_query_zero`, `provider_reported`, or `catalog_usage`;
 `control_query_zero` can only be zero. Unknown rows carry no amount or method
 and must provide a bounded lower-snake-case reason code. The repository applies
 the configured retention interval when a caller omits the expiry timestamp.
+PostgreSQL also enforces `retention_expires_at > completed_at`, so a direct
+writer cannot create an already-expired audit row that bypasses the bounded
+retention horizon.
 
 `QueryExecutionRepository.RecordAudit` adapts the storage-neutral
 `control.QueryService.Audit` callback to this ledger. It canonicalizes and

@@ -128,3 +128,25 @@ func TestQueryExecutionExactUSDPrecisionIntegration(t *testing.T) {
 		t.Fatalf("precise query cost = %v", record.ActualCostUSD)
 	}
 }
+
+func TestQueryExecutionRetentionCannotPrecedeCompletionIntegration(t *testing.T) {
+	ctx, namespace, pool, cleanup := providerControlIntegrationPool(t)
+	defer cleanup()
+	keys := Keyring{Active: "query-v1", Keys: map[string][]byte{"query-v1": []byte("01234567890123456789012345678901")}}
+	scopeKeys := ScopeKeyring{ActiveVersion: "scope-v1", Keys: map[string][]byte{"scope-v1": []byte("abcdefghijklmnopqrstuvwxyz123456")}}
+	repository := DefaultQueryExecutionRepository(pool, namespace, keys, DefaultScopeRepository(pool, namespace, scopeKeys))
+	repository.Now = func() time.Time { return time.Date(2026, time.July, 20, 8, 0, 0, 0, time.UTC) }
+	request := validQueryExecutionRequest(repository.Now())
+	request.Tenant = "query-ledger-retention-" + time.Now().UTC().Format("150405.000000000")
+	record, err := repository.Record(ctx, request)
+	if err != nil {
+		t.Fatalf("record query execution: %v", err)
+	}
+	executions, err := namespace.Render("query_executions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE "+executions+" SET retention_expires_at = completed_at WHERE query_execution_id = $1", record.ID); err == nil {
+		t.Fatal("query execution retention was allowed to expire at completion")
+	}
+}

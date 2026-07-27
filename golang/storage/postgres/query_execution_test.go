@@ -61,6 +61,9 @@ func TestValidateQueryExecutionRequest(t *testing.T) {
 			request.ActualCostUSD = nil
 			request.CostMethod = ""
 		}, "unknown"},
+		{"retention at completion", func(request *QueryExecutionRequest) {
+			request.RetentionExpiresAt = request.CompletedAt
+		}, "timestamps"},
 		{"future completion", func(request *QueryExecutionRequest) { request.CompletedAt = now.Add(3 * time.Minute) }, "future"},
 	}
 	for _, test := range cases {

@@ -63,6 +63,7 @@ func TestMigrationTemplateContract(t *testing.T) {
 		"CREATE INDEX __PREFIX__operations_completed_brin_idx",
 		"fillfactor = 80",
 		"numeric(38,18)",
+		"CHECK (retention_expires_at > completed_at)",
 	} {
 		if !strings.Contains(sql, expected) {
 			t.Errorf("migration missing %q", expected)

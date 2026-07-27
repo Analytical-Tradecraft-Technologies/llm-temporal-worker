@@ -2159,6 +2159,7 @@ CREATE TABLE llm_worker.query_executions (
     retention_expires_at timestamptz NOT NULL,
     UNIQUE (scope_id, operation_key_hmac),
     CHECK (completed_at >= started_at),
+    CHECK (retention_expires_at > completed_at),
     CHECK (
         (cost_status = 'exact' AND actual_cost_usd IS NOT NULL AND
             cost_method IS NOT NULL AND cost_unknown_reason_code IS NULL) OR
