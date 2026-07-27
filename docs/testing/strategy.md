@@ -336,6 +336,16 @@ final response. Live raw token deltas never appear in heartbeat details or as
 separate return records; only bounded progress and the final semantic response
 cross the Temporal boundary.
 
+### Synthetic lineage payload proof
+
+`go test ./integration -run '^TestV1SyntheticLineageKeepsActivityPayloadBounded$'`
+executes a deterministic 10,000-turn v1 lineage. It periodically emits
+compaction requests and creates three siblings from the same checkpoint. Every
+wire record carries only a bounded append and checkpoint handle; the test
+rejects ancestor transcript data and records the largest Generate/Compact
+payload. This is an offline payload-boundary proof, not a substitute for the
+guarded Temporal/PostgreSQL crash, persistence, or backup/restore suites.
+
 ### Property and fuzz tests
 
 Fuzz targets include:
