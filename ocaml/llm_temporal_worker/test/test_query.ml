@@ -294,13 +294,14 @@ let () =
      Keep the nominal wrapper through the closed response codec so callers
      cannot accidentally interchange the two string-shaped values. *)
   let model_display_name = Model_display_name.of_string "GPT-4o" in
+  let model_capability = Model_capability.of_string "text_generation" in
   let inventory = {
     provider = Provider_id.of_string "openai";
     endpoint = Endpoint_id.of_string "responses";
     provider_model_id = Provider_model_id.of_string "gpt-4o";
     display_name = Some model_display_name;
     lifecycle = Active;
-    capabilities = [ "text_generation" ];
+    capabilities = [ model_capability ];
     source = Unknown_inventory_source;
     complete_snapshot = true;
     safe_metadata = Safe_metadata.empty;
@@ -310,10 +311,18 @@ let () =
     ok (V1_codec.decode_query_response (ok (V1_codec.encode_query_response inventory_response)))
   in
   (match inventory_round_trip.result with
-   | Model_inventory_result { models = [ { display_name = Some actual; provider_model_id; _ } ] }
+   | Model_inventory_result {
+       models = [ {
+         display_name = Some actual;
+         provider_model_id;
+         capabilities = [ capability ];
+         _;
+       } ];
+     }
      when String.equal (Model_display_name.to_string actual) "GPT-4o"
-       && String.equal (Provider_model_id.to_string provider_model_id) "gpt-4o" -> ()
-   | _ -> failwith "model inventory display name lost its nominal type through the codec");
+       && String.equal (Provider_model_id.to_string provider_model_id) "gpt-4o"
+       && String.equal (Model_capability.to_string capability) "text_generation" -> ()
+   | _ -> failwith "model inventory nominal values were lost through the codec");
   (* Safe diagnostic values are nominal query metadata, not arbitrary strings
      or Activity diagnostic codes.  Both query result positions use the same
      wrapper and retain it through the closed wire codec. *)

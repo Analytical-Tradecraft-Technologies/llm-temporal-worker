@@ -57,6 +57,10 @@ module Model_display_name = Make ()
    query contract treats an empty prefix as equivalent to omitting the
    filter; callers can still use [None] for the usual unfiltered case. *)
 module Model_prefix = Make ()
+(* Capability labels are an open control-plane vocabulary, but they are not
+   interchangeable with model IDs, diagnostic codes, or arbitrary text.
+   Keep the wire string unchanged while giving callers a nominal type. *)
+module Model_capability = Make ()
 module Window_key = Make_nonempty ()
 
 module Checkpoint = struct

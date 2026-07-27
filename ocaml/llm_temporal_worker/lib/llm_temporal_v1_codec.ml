@@ -576,7 +576,7 @@ let provider_page_of_json context value =
   Ok { routes }
 
 let inventory_to_json (value : model_inventory_entry) =
-  `Assoc (["provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "provider_model_id", `String (Provider_model_id.to_string value.provider_model_id); "lifecycle", `String (lifecycle_to_string value.lifecycle); "capabilities", `List (List.map (fun value -> `String value) value.capabilities); "complete_snapshot", `Bool value.complete_snapshot] @ string_option "display_name" (Option.map Model_display_name.to_string value.display_name))
+  `Assoc (["provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "provider_model_id", `String (Provider_model_id.to_string value.provider_model_id); "lifecycle", `String (lifecycle_to_string value.lifecycle); "capabilities", `List (List.map (fun value -> `String (Model_capability.to_string value)) value.capabilities); "complete_snapshot", `Bool value.complete_snapshot] @ string_option "display_name" (Option.map Model_display_name.to_string value.display_name))
 
 let inventory_of_json context value =
   let* fields = closed context ["provider"; "endpoint"; "provider_model_id"; "display_name"; "lifecycle"; "capabilities"; "complete_snapshot"] value in
@@ -585,7 +585,7 @@ let inventory_of_json context value =
   let* provider_model_id = required context "provider_model_id" fields >>= string (context ^ ".provider_model_id") >>= nonempty (context ^ ".provider_model_id") in
   let* display_name = match optional "display_name" fields with None | Some `Null -> Ok None | Some value -> string (context ^ ".display_name") value >>= fun value -> Ok (Some (Model_display_name.of_string value)) in
   let* lifecycle = required context "lifecycle" fields >>= string (context ^ ".lifecycle") >>= lifecycle_of_string context in
-  let* capabilities = required context "capabilities" fields >>= list (context ^ ".capabilities") >>= map_result (string (context ^ ".capability")) in
+  let* capabilities = required context "capabilities" fields >>= list (context ^ ".capabilities") >>= map_result (fun value -> string (context ^ ".capability") value >>= fun value -> Ok (Model_capability.of_string value)) in
   let* complete_snapshot = required context "complete_snapshot" fields >>= bool (context ^ ".complete_snapshot") in
   Ok { provider = Provider_id.of_string provider; endpoint = Endpoint_id.of_string endpoint; provider_model_id = Provider_model_id.of_string provider_model_id; display_name; lifecycle; capabilities; source = Unknown_inventory_source; complete_snapshot; safe_metadata = Safe_metadata.empty }
 
