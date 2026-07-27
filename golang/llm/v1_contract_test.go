@@ -181,6 +181,29 @@ func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 	}
 }
 
+func TestQueryContractRejectsNullOptionalStrings(t *testing.T) {
+	tests := []struct {
+		name  string
+		kind  string
+		query string
+	}{
+		{name: "provider status provider", kind: "provider_status", query: `{"provider":null}`},
+		{name: "provider status endpoint", kind: "provider_status", query: `{"endpoint":null}`},
+		{name: "model inventory prefix", kind: "model_inventory", query: `{"model_prefix":null}`},
+		{name: "credit status provider", kind: "credit_status", query: `{"provider":null}`},
+		{name: "budget policy", kind: "budget_status", query: `{"policy_key":null}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":%q,"query":%s}`, test.kind, test.query)
+			var request llm.QueryRequestV1
+			if err := json.Unmarshal([]byte(payload), &request); err == nil {
+				t.Fatalf("query with null optional string was accepted: %s", test.query)
+			}
+		})
+	}
+}
+
 func TestQueryResponseRequiresCursorForIncompletePages(t *testing.T) {
 	for _, kind := range []llm.QueryKind{llm.QueryProviderStatus, llm.QueryModelInventory, llm.QueryCreditStatus} {
 		t.Run(string(kind), func(t *testing.T) {

@@ -1384,6 +1384,20 @@ func validateQueryObject(kind QueryKind, raw json.RawMessage) error {
 			return fmt.Errorf("query cursor is invalid")
 		}
 	}
+	// The JSON schema permits these members only when they are omitted or a
+	// string.  encoding/json decodes JSON null into a string as an empty value,
+	// so validate the optional strings explicitly instead of allowing null to
+	// silently become an unfiltered query.
+	for _, name := range []string{"provider", "endpoint", "model_prefix", "policy_key"} {
+		if raw, ok := fields[name]; ok {
+			if string(raw) == "null" {
+				return fmt.Errorf("query %s must be a string", name)
+			}
+			if _, err := requiredString(map[string]json.RawMessage{name: raw}, name); err != nil {
+				return err
+			}
+		}
+	}
 	if raw, ok := fields["refresh_if_older_than_seconds"]; ok {
 		value, err := decodeInt64(raw)
 		if err != nil || value < 1 || value > 86400 {
