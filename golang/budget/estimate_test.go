@@ -135,6 +135,34 @@ func TestEstimateCandidateRejectsInvalidExactTokenizerResult(t *testing.T) {
 	}
 }
 
+func TestEstimateCandidateRejectsMicroUSDCompatibilityOverflow(t *testing.T) {
+	request := llm.Request{OperationKey: "estimate-overflow", Model: "logical"}
+	candidate := routing.Candidate{ID: "overflow-candidate"}
+	for _, test := range []struct {
+		name      string
+		tokens    int64
+		cacheCost string
+	}{
+		{name: "component exceeds safe range", tokens: int64(^uint64(0) >> 1)},
+		{name: "checked total exceeds safe range", tokens: 8_000_000_000_000_000, cacheCost: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			estimator := Estimator{Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return test.tokens, nil }}
+			cachePrice := test.cacheCost
+			if cachePrice == "" {
+				cachePrice = "0"
+			}
+			entry := pricing.Entry{Prices: pricing.UnitPrices{
+				InputPerMillion:      pricing.MustDecimalUSD("1"),
+				CacheWritePerMillion: pricing.MustDecimalUSD(cachePrice),
+			}}
+			if _, err := estimator.EstimateCandidate(request, candidate, entry); err == nil {
+				t.Fatal("estimate silently dropped an overflowing microUSD compatibility value")
+			}
+		})
+	}
+}
+
 func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 	request := llm.Request{Model: "logical", ServiceClass: llm.ServiceClassStandard}
 	context := ContextFor(request, routing.Candidate{EndpointID: "ep", AttemptedClass: llm.ServiceClassPriority}, "prod")

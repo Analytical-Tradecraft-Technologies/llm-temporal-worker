@@ -89,8 +89,16 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		if err != nil {
 			return Estimate{}, err
 		}
-		if legacy, legacyErr := pricing.CeilMicroUSD(component.price, component.units, component.unitsPerPrice); legacyErr == nil {
-			legacyTotal, _ = legacyTotal.Add(legacy)
+		legacy, legacyErr := pricing.CeilMicroUSD(component.price, component.units, component.unitsPerPrice)
+		if legacyErr != nil {
+			// USD is authoritative, but the estimator is also responsible for
+			// producing the bounded compatibility reservation consumed by Redis.
+			// Silently dropping an overflowing component would under-reserve.
+			return Estimate{}, fmt.Errorf("estimate %s microUSD compatibility conversion: %w", component.name, legacyErr)
+		}
+		legacyTotal, err = legacyTotal.Add(legacy)
+		if err != nil {
+			return Estimate{}, fmt.Errorf("estimate %s microUSD compatibility total: %w", component.name, err)
 		}
 	}
 	if estimator.SafetyRatio != nil {

@@ -148,6 +148,9 @@ the USD value for operation and budget journal rows; legacy Redis admission
 continues enforcing the independently validated microUSD projection. This
 prevents sub-micro-dollar estimates from being silently recorded as zero while
 preserving the conservative integer materialization required by Redis.
+If any component or the checked sum cannot be represented in Redis-safe
+microUSD, estimation fails closed rather than dropping that component from the
+compatibility reservation.
 
 After a definite uncharged failure the remaining-plan reservation is reused or
 reduced. After a definite charged failure, `Continue` atomically converts the
