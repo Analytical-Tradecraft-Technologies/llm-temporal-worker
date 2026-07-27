@@ -75,6 +75,28 @@ func TestCheckpointGraphRootLinearAndSiblingMaterialization(t *testing.T) {
 	}
 }
 
+func TestCheckpointGraphScopesOperationKeysByTenantAndProject(t *testing.T) {
+	graph := NewCheckpointGraph(MaterializeLimits{})
+	if err := graph.PutRoot(rootCheckpoint("tenant-a-root", "tenant-a", "same-operation")); err != nil {
+		t.Fatal(err)
+	}
+	// Operation keys are stable retry identities within a caller scope, not
+	// globally unique values. Independent tenants may safely reuse a key.
+	otherTenant := rootCheckpoint("tenant-b-root", "tenant-b", "same-operation")
+	if err := graph.PutRoot(otherTenant); err != nil {
+		t.Fatalf("same operation key in another tenant was rejected: %v", err)
+	}
+	otherProject := rootCheckpoint("project-b-root", "tenant-a", "same-operation")
+	otherProject.Project = "another-project"
+	if err := graph.PutRoot(otherProject); err != nil {
+		t.Fatalf("same operation key in another project was rejected: %v", err)
+	}
+	conflict := rootCheckpoint("conflict", "tenant-a", "same-operation")
+	if err := graph.PutRoot(conflict); err != ErrConflict {
+		t.Fatalf("same scoped operation key returned %v, want %v", err, ErrConflict)
+	}
+}
+
 func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{})
 	root := rootCheckpoint("root", "tenant-a", "op-root")
