@@ -6,6 +6,10 @@ credit-status, and spend-summary query families, plus an explicitly supplied
 Redis budget-status reader. It binds every page to the immutable
 configuration snapshot digest and uses the storage pages only after the
 control layer has authenticated the tenant scope and signed cursor.
+The typed response boundary additionally rejects duplicate or out-of-order
+page keys before signing a continuation or committing query audit evidence.
+This protects the same keyset invariant for deployment-owned handlers as for
+the built-in PostgreSQL readers.
 
 Deployments must supply the three security/observability seams below; a
 fourth budget-status seam is required only when that query kind is enabled:

@@ -578,6 +578,9 @@ func EncodeQueryResponse(response QueryResponse) (llm.QueryResponseV1, error) {
 	if !ok || kind != response.Kind || response.OperationKey == "" || response.ExecutionID == "" || response.Provenance.ObservedAt.IsZero() {
 		return llm.QueryResponseV1{}, fmt.Errorf("typed query response is incomplete")
 	}
+	if err := validateQueryResultOrdering(response.Kind, response.Result); err != nil {
+		return llm.QueryResponseV1{}, err
+	}
 	result, err := encodeResult(response.Kind, response.Result)
 	if err != nil {
 		return llm.QueryResponseV1{}, err
