@@ -965,10 +965,11 @@ made; no wire-shape replacement is implied by the additive facade.
 ### Task 20: Add retention, GC, outbox, and database operations
 
 Status: partially complete. Bounded maintenance, retention fences, outbox
-leases, checkpoint/cache safety, and observability are implemented. Budget and
-operation retention, authoritative unknown-cost resolution, and production
-autovacuum/fillfactor load evidence remain open and must not be inferred from
-the implemented maintenance primitives.
+leases, checkpoint/cache safety, observability, and a conservative terminal
+operation orphan pass are implemented. Full budget/operation retention,
+authoritative unknown-cost resolution, and production autovacuum/fillfactor
+load evidence remain open and must not be inferred from the implemented
+maintenance primitives.
 
 **Files:**
 
@@ -986,6 +987,9 @@ the implemented maintenance primitives.
 - [x] Publish external deletion in outbox and make missing object success.
 - [x] Add bounded status/inventory/query/checkpoint retention without deleting
   active retry/poll/audit state.
+- [x] Add a bounded terminal-operation orphan pass that deletes only inline,
+  unreferenced, non-unknown-cost rows while preserving active, audit,
+  budget, cache, checkpoint, lineage, and blob-backed operations.
 - [ ] Add budget/operation retention without deleting active retry/poll/audit
   state; the current adapter leaves those projections disabled pending their
   restrictive foreign-key, journal, and cold-rebuild obligations.

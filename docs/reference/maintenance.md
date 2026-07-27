@@ -41,10 +41,17 @@ snapshot has expired. Both passes use `FOR UPDATE SKIP LOCKED` and bounded
 expiry indexes (`provider_status_expiry_idx` and
 `provider_inventory_expiry_idx`); query cleanup uses
 `query_executions_retention_idx`; the inventory latest-row check uses the
-account-epoch ordering rather than an unlocked pre-scan. Full operation and
-journal/reservation retention remain disabled until their restrictive foreign
-keys and audit/rebuild obligations can be handled in their own transaction;
-the bounded empty-bucket fence is described below. Checkpoint retention is
+account-epoch ordering rather than an unlocked pre-scan. The PostgreSQL
+adapter also exposes `PruneExpiredOperations`, a deliberately conservative
+orphan pass for terminal operations: only inline request/result rows with no
+attempt/audit, budget, cache, checkpoint, parent/child, or blob references are
+eligible, and unknown-cost operations remain fenced until authoritative cost
+resolution is recorded. This pass is bounded by
+`operations_terminal_expiry_idx` and repeats every reference predicate while
+locking candidates with `FOR UPDATE SKIP LOCKED`. Full operation history and
+journal/reservation retention remain disabled until their broader restrictive
+foreign-key and audit/rebuild obligations can be handled in their own
+transaction; the bounded empty-bucket fence is described below. Checkpoint retention is
 available through `PruneExpiredCheckpoints`: it locks an
 expired candidate batch, protects active origin operations, graph descendants,
 compaction references, parent-operation references, and cache origins, then

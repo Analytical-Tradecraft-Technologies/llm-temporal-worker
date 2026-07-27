@@ -298,6 +298,83 @@ func TestMaintenanceRetentionPrunesQueryAuditInBoundedBatches(t *testing.T) {
 	}
 }
 
+func TestMaintenanceRetentionPrunesOnlyUnreferencedTerminalOperations(t *testing.T) {
+	operations, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := now.Add(-2 * time.Hour)
+
+	begin := func(id string) admission.BeginResult {
+		t.Helper()
+		started, err := operations.Begin(ctx, admission.BeginRequest{
+			ID: id, ScopeKey: "maintenance-operation-retention/project",
+			RequestDigest: admission.Digest([]byte(id)), ReservationUSD: pricing.MustUSD("0"),
+			ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"maintenance"}`),
+		})
+		if err != nil {
+			t.Fatalf("begin operation %q: %v", id, err)
+		}
+		return started
+	}
+
+	free := begin("maintenance-operation-free-" + uuid.NewString())
+	withAttempt := begin("maintenance-operation-attempt-" + uuid.NewString())
+	active := begin("maintenance-operation-active-" + uuid.NewString())
+	fresh := begin("maintenance-operation-fresh-" + uuid.NewString())
+	unknown := begin("maintenance-operation-unknown-" + uuid.NewString())
+	if err := operations.MarkDispatching(ctx, admission.DispatchRequest{OperationID: withAttempt.Operation.ID, DispatchToken: withAttempt.Operation.DispatchToken}); err != nil {
+		t.Fatalf("create operation attempt: %v", err)
+	}
+
+	operationsTable, err := operations.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{free.Operation.ID, withAttempt.Operation.ID} {
+		if _, err := operations.Pool.Exec(ctx, "UPDATE "+operationsTable+" SET state='canceled', retention_expires_at=$2, updated_at=$2, created_at=$2, completed_at=$2 WHERE operation_id=$1", operationUUID(id), old); err != nil {
+			t.Fatalf("expire terminal operation %q: %v", id, err)
+		}
+	}
+	if _, err := operations.Pool.Exec(ctx, "UPDATE "+operationsTable+" SET state='canceled', retention_expires_at=$2, updated_at=$2 WHERE operation_id=$1", operationUUID(fresh.Operation.ID), now.Add(time.Hour)); err != nil {
+		t.Fatalf("mark fresh operation: %v", err)
+	}
+	// Unknown-cost history is intentionally retained until an authoritative
+	// resolution can append its reconciliation journal event.
+	if _, err := operations.Pool.Exec(ctx, "UPDATE "+operationsTable+" SET state='completed', result_inline_ciphertext=decode('00','hex'), result_key_id='op-v1', result_digest=decode(repeat('00',32),'hex'), result_byte_length=1, result_media_type='application/json', actual_cost_usd=NULL, cost_status='unknown', cost_method=NULL, cost_unknown_reason_code='provider_timeout', retention_expires_at=$2, updated_at=$2, created_at=$2, completed_at=$2 WHERE operation_id=$1", operationUUID(unknown.Operation.ID), old); err != nil {
+		t.Fatalf("mark unknown-cost operation: %v", err)
+	}
+
+	maintenance := MaintenanceRepository{Pool: operations.Pool, Namespace: operations.Namespace}
+	result, err := maintenance.PruneExpiredOperations(ctx, now, now.Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("prune terminal operations: %v", err)
+	}
+	if result.Examined != 1 || result.Deleted != 1 {
+		t.Fatalf("operation retention result=%+v, want one deleted candidate", result)
+	}
+
+	var remaining int
+	if err := operations.Pool.QueryRow(ctx, "SELECT count(*) FROM "+operationsTable+" WHERE operation_id=$1", operationUUID(free.Operation.ID)).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("unreferenced terminal operation remains: %d", remaining)
+	}
+	for name, id := range map[string]string{
+		"attempt": withAttempt.Operation.ID,
+		"active":  active.Operation.ID,
+		"fresh":   fresh.Operation.ID,
+		"unknown": unknown.Operation.ID,
+	} {
+		if err := operations.Pool.QueryRow(ctx, "SELECT count(*) FROM "+operationsTable+" WHERE operation_id=$1", operationUUID(id)).Scan(&remaining); err != nil {
+			t.Fatal(err)
+		}
+		if remaining != 1 {
+			t.Fatalf("protected %s operation was deleted: %d", name, remaining)
+		}
+	}
+}
+
 func TestMaintenanceRetentionPreservesCacheUsedByActiveOperation(t *testing.T) {
 	fixture := newResponseCacheFixture(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
