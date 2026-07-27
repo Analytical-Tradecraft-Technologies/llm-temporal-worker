@@ -608,7 +608,7 @@ func RunWorkerFile(ctx context.Context, path string, data []byte, _ io.Writer) e
 	if err != nil {
 		return err
 	}
-	watcher, err := newConfigFileWatcher(path, defaultConfigWatchInterval)
+	watcher, err := newConfigFileWatcherWithBaseline(path, defaultConfigWatchInterval, data)
 	if err != nil {
 		_ = runtime.gracefulShutdown()
 		return errors.New("watch configuration file failed")

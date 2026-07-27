@@ -103,7 +103,9 @@ as deployment-sensitive material.
 `--config` path. It reads a complete replacement, validates it, resolves
 references, constructs and verifies replacement state clients, atomically
 publishes the new snapshot, then drains clients captured by in-flight
-Activities. Repeated notifications are coalesced.
+Activities. At startup the watcher also compares the path with the bytes that
+were already validated, covering a replacement that lands before the watcher
+is initialized. Repeated notifications are coalesced.
 
 An unreadable or invalid replacement leaves the active snapshot and readiness
 state unchanged. The worker records `llmtw_config_reload_total{outcome="failure"}`

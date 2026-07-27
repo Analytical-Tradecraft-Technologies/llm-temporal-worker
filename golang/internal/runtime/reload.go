@@ -1,8 +1,11 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -12,6 +15,12 @@ import (
 )
 
 const defaultConfigWatchInterval = time.Second
+
+// maxConfigWatchBaselineBytes matches the application reload limit. The
+// watcher reads this bounded amount once at startup to close the race between
+// validating startup bytes and beginning metadata polling; subsequent polls
+// remain metadata-only.
+const maxConfigWatchBaselineBytes = 4 << 20
 
 // ReloadFile compiles and verifies a complete file replacement before the app
 // publishes it. Reload failures are deliberately reduced to a safe process
@@ -84,6 +93,15 @@ type configFileState struct {
 }
 
 func newConfigFileWatcher(path string, interval time.Duration) (*configFileWatcher, error) {
+	return newConfigFileWatcherWithBaseline(path, interval, nil)
+}
+
+// newConfigFileWatcherWithBaseline compares the current file once with the
+// bytes already validated by the command boundary. A mismatch emits an
+// immediate notification, covering an atomic replacement that occurred after
+// startup validation but before watcher initialization. A nil baseline keeps
+// the metadata-only behavior for callers without validated startup bytes.
+func newConfigFileWatcherWithBaseline(path string, interval time.Duration, baseline []byte) (*configFileWatcher, error) {
 	if path == "" {
 		return nil, errors.New("configuration path is required")
 	}
@@ -98,8 +116,33 @@ func newConfigFileWatcher(path string, interval time.Duration) (*configFileWatch
 		path: path, interval: interval, state: configFileState{info: info},
 		changes: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}),
 	}
+	if baseline != nil {
+		current, readErr := readConfigFileBytes(path)
+		if readErr != nil || !bytes.Equal(current, baseline) {
+			// Comparison failure is conservative: the runtime attempts a bounded
+			// reload and retains the last valid snapshot if the replacement is
+			// incomplete or unreadable.
+			watcher.changes <- struct{}{}
+		}
+	}
 	go watcher.watch()
 	return watcher, nil
+}
+
+func readConfigFileBytes(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigWatchBaselineBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxConfigWatchBaselineBytes {
+		return nil, fmt.Errorf("configuration file exceeds safe size")
+	}
+	return data, nil
 }
 
 func (watcher *configFileWatcher) Changes() <-chan struct{} {
