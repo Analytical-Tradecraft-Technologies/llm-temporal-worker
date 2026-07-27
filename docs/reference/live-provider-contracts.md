@@ -22,21 +22,24 @@ selected profile flag, and injects only that profile's scoped credentials.
 Fork pull requests, ordinary pull requests, and scheduled workflows must not
 set any of these flags or receive these credentials.
 
-## Compile-only safety check
+## Offline contract safety check
 
-This command compiles the complete live harness without making a provider
-request:
+This command compiles and executes the deterministic contract checks without
+making a provider request:
 
 ```sh
-cd golang && go test -tags=live ./integration/live -run '^$'
+cd golang && make live-contract-verify
 ```
 
-Both checked-in CI workflows run that command without live environment values
-or provider credentials; on master this includes the daily scheduled run. A
-protected manual run selects one profile by adding its flag and the two suite
-gates; it runs `TestLiveProviderContracts` with scoped credentials. The
-harness does not read a provider's environment variables until those gates
-pass.
+The target forces every live gate to `0` before running the build-tagged suite.
+The credentialed `TestLiveProviderContracts` subtests therefore skip, while
+profile declarations, request bounds, authorization ordering, adapter
+preflights, and redacted-evidence validation still execute. Both checked-in CI
+workflows run this command without live environment values or provider
+credentials; on master this includes the daily scheduled run. A protected
+manual run selects one profile by adding its flag and the two suite gates; it
+runs `TestLiveProviderContracts` with scoped credentials. The harness does not
+read a provider's environment variables until those gates pass.
 
 ## Pinned profiles
 
