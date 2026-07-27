@@ -70,7 +70,7 @@ func (matcher Matcher) Matches(value MatchContext) bool {
 	if !matchExact(matcher.Tenant, value.Tenant) || !matchExact(matcher.Project, value.Project) || !matchExact(matcher.Environment, value.Environment) || !matchExact(matcher.LogicalModel, value.LogicalModel) || !matchExact(matcher.EndpointID, value.EndpointID) {
 		return false
 	}
-	if matcher.ActorPrefix != "" && !strings.HasPrefix(value.Actor, matcher.ActorPrefix) {
+	if matcher.ActorPrefix != "" && matcher.ActorPrefix != "*" && !strings.HasPrefix(value.Actor, matcher.ActorPrefix) {
 		return false
 	}
 	if matcher.ServiceClass != "" && matcher.ServiceClass != value.ServiceClass {

@@ -32,6 +32,13 @@ func (invoker fixedFunctionResultInvoker) Run(_ context.Context, _ string, _ []s
 	return append([]any(nil), invoker.result...), nil
 }
 
+type countingInvoker struct{ calls int }
+
+func (invoker *countingInvoker) Run(_ context.Context, _ string, _ []string, _ ...string) ([]any, error) {
+	invoker.calls++
+	return []any{"invalid_request", ""}, nil
+}
+
 func newAdmissionHarness(now time.Time) *admissionHarness {
 	return &admissionHarness{store: memory.NewAdmissionStore(memory.AdmissionOptions{Clock: func() time.Time { return now }}), records: make(map[string][]byte), indices: make(map[string]string)}
 }
@@ -179,6 +186,33 @@ func TestContinuationReservationEnvelopeIsBoundedBeforeInvocation(t *testing.T) 
 			err := validateContinuationReservationEnvelope(test.existing, test.next)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("validateContinuationReservationEnvelope(%d,%d) error = %v, wantErr %v", test.existing, test.next, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestReservationEnvelopeIsRejectedBeforeRedisInvocation(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	for _, test := range []struct {
+		name         string
+		reservation  pricing.MicroUSD
+		reservations []admission.WindowReservation
+	}{
+		{name: "mismatched amount", reservation: 5, reservations: []admission.WindowReservation{testReservation(6, 10)}},
+		{name: "duplicate identity", reservation: 6, reservations: []admission.WindowReservation{testReservation(6, 10), testReservation(6, 10)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invoker := &countingInvoker{}
+			store, err := NewAdmissionStore(AdmissionOptions{Invoker: invoker, Reader: newAdmissionHarness(now), Keys: testKeyOptions(), Clock: func() time.Time { return now }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = store.Begin(context.Background(), admission.BeginRequest{ID: "invalid", ScopeKey: "invalid", Reservation: test.reservation, Reservations: test.reservations, ExpiresAt: now.Add(time.Hour)})
+			if err == nil {
+				t.Fatal("invalid reservation envelope accepted")
+			}
+			if invoker.calls != 0 {
+				t.Fatalf("invalid reservation invoked Redis function %d times", invoker.calls)
 			}
 		})
 	}

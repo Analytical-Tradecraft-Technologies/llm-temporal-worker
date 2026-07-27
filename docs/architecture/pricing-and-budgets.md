@@ -288,6 +288,11 @@ that attempt, releases unused union-window shares, checks the remaining plan's
 union windows, and either creates the next `reserved` attempt or terminally
 records denial. Complete performs the same matching reconciliation for the
 successful final attempt and releases reservations held only for unused routes.
+Both admission transitions validate that every per-window amount equals the
+request-wide scalar amount and that each policy/window/bucket identity appears
+only once. Invalid envelopes fail before any bucket mutation; this keeps the
+legacy scalar compatibility field and the durable reservation vector
+conservative and unambiguous.
 
 ## Target throttle and monetary-budget split
 

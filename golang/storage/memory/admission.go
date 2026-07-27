@@ -113,6 +113,9 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 	if request.ID == "" || request.ScopeKey == "" || request.Reservation < 0 || !request.Reservation.Valid() {
 		return admission.BeginResult{}, fmt.Errorf("invalid admission begin request")
 	}
+	if err := admission.ValidateReservationEnvelope(request.Reservations, request.Reservation); err != nil {
+		return admission.BeginResult{}, fmt.Errorf("invalid admission begin request: %w", err)
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if operationID, ok := store.byScope[request.ScopeKey]; ok {
@@ -122,7 +125,7 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 		}
 		return admission.BeginResult{Operation: operation.Clone(), Existing: true}, nil
 	}
-	if denial := store.checkReservations(request.Reservations, request.Reservation, store.clock()); denial != nil {
+	if denial := store.checkReservations(request.Reservations, store.clock()); denial != nil {
 		return admission.BeginResult{Denied: denial}, nil
 	}
 	for _, reservation := range request.Reservations {
@@ -263,6 +266,9 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	if err := ctx.Err(); err != nil {
 		return admission.ContinueResult{}, err
 	}
+	if err := admission.ValidateReservationEnvelope(request.Reservations, request.Remaining); err != nil {
+		return admission.ContinueResult{}, fmt.Errorf("invalid continuation admission request: %w", err)
+	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	operation, err := store.loadToken(request.OperationID, request.DispatchToken)
@@ -278,7 +284,7 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	if err := store.reconcile(operation.Reservations, operation.ReservedMicroUSD, request.Outcome.Incurred); err != nil {
 		return admission.ContinueResult{}, err
 	}
-	if denial := store.checkReservations(request.Reservations, request.Remaining, store.clock()); denial != nil {
+	if denial := store.checkReservations(request.Reservations, store.clock()); denial != nil {
 		operation.State = admission.StateDefiniteFailed
 		operation.IncurredMicroUSD = request.Outcome.Incurred
 		operation.FinalMicroUSD = request.Outcome.Incurred
@@ -333,8 +339,9 @@ func (store *AdmissionStore) loadToken(id, token string) (admission.Operation, e
 	return operation, nil
 }
 
-func (store *AdmissionStore) checkReservations(reservations []admission.WindowReservation, amount pricing.MicroUSD, at time.Time) *admission.Denial {
+func (store *AdmissionStore) checkReservations(reservations []admission.WindowReservation, at time.Time) *admission.Denial {
 	for _, reservation := range reservations {
+		amount := reservation.Amount
 		if reservation.Limit <= 0 || reservation.BucketNanos <= 0 || reservation.DurationNanos <= 0 {
 			return &admission.Denial{PolicyID: reservation.PolicyID, WindowID: reservation.WindowID, Limit: reservation.Limit, Requested: amount}
 		}

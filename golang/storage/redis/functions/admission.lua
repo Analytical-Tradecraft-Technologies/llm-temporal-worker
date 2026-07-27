@@ -156,6 +156,30 @@ local function reservation_fields(reservation)
     return limit, amount_value, bucket, bucket_ns, duration_ns
 end
 
+-- The scalar amount is the request-wide reservation envelope. Every bucket
+-- mutation must carry that same amount, and a bucket identity may appear only
+-- once. Reject malformed vectors before any read or mutation so callers
+-- cannot under-reserve or debit a bucket twice in one transaction.
+local function valid_reservation_envelope(reservations, expected)
+    local expected_value = integer(expected)
+	if not expected_value then
+        return false
+    end
+    local seen = {}
+    for _, reservation in ipairs(reservations) do
+        local _, amount_value, bucket = reservation_fields(reservation)
+        if not amount_value or amount_value ~= expected_value then
+            return false
+        end
+        local identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. tostring(bucket)
+        if seen[identity] then
+            return false
+        end
+        seen[identity] = true
+    end
+    return true
+end
+
 local function active_for(reservation, budget_key, now)
     local limit, _, _, bucket_ns, duration_ns = reservation_fields(reservation)
     if not limit then
@@ -359,7 +383,7 @@ if ACTION == 'begin' then
         return {'invalid_request', ''}
     end
     local requested = integer(incoming.reserved_micro_usd)
-    if not requested or requested < 0 then
+    if not requested or requested < 0 or not valid_reservation_envelope(reservations, requested) then
         return {'invalid_request', ''}
     end
     local accepted, response = check_reservations(reservations, 4, requested, now_micros())
@@ -437,7 +461,7 @@ if ACTION == 'continue' then
         return {'invalid_request', ''}
     end
     local old = record.reservations
-    if type(old) ~= 'table' or #old > MAX_RESERVATIONS or #reservations > MAX_RESERVATIONS or #KEYS ~= 2 + #old + #reservations or not reconcile(old, 3, incurred, ARGV[8]) then
+    if type(old) ~= 'table' or #old > MAX_RESERVATIONS or #reservations > MAX_RESERVATIONS or #KEYS ~= 2 + #old + #reservations or not valid_reservation_envelope(old, record.reserved_micro_usd) or not valid_reservation_envelope(reservations, remaining) or not reconcile(old, 3, incurred, ARGV[8]) then
         return {'state_unavailable', ''}
     end
     local accepted, denial_response = check_reservations(reservations, 3 + #old, remaining, now_micros())

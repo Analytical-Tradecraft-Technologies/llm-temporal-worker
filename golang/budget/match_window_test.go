@@ -39,6 +39,8 @@ func TestMatcherCoversDimensionsWildcardsAndMissingContext(t *testing.T) {
 			value:   base,
 			want:    true,
 		},
+		{name: "actor wildcard matches populated actor", matcher: Matcher{ActorPrefix: "*"}, value: base, want: true},
+		{name: "actor wildcard matches empty actor", matcher: Matcher{ActorPrefix: "*"}, value: MatchContext{}, want: true},
 		{name: "tenant mismatch", matcher: Matcher{Tenant: "other"}, value: base},
 		{name: "missing value does not match exact rule", matcher: Matcher{Project: "chat"}, value: MatchContext{}},
 		{name: "actor prefix mismatch", matcher: Matcher{ActorPrefix: "user-"}, value: base},
