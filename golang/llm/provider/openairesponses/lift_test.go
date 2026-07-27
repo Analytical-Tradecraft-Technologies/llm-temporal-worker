@@ -54,6 +54,30 @@ func TestLiftCompletedResponsePreservesItemsUsageAndContinuation(t *testing.T) {
 	}
 }
 
+func TestLiftRejectsNilResponseWithoutPanicking(t *testing.T) {
+	call := provider.Call{
+		EndpointID:   "openai-prod",
+		Family:       provider.FamilyOpenAIResponses,
+		Model:        "gpt-contract",
+		OperationKey: "op-empty",
+	}
+
+	var panicked bool
+	func() {
+		defer func() {
+			panicked = recover() != nil
+		}()
+		_, err := liftResponse(call, nil, "req-empty")
+		var mapped *provider.Error
+		if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAccepted {
+			t.Fatalf("nil response error = %#v, want accepted provider invalid response", err)
+		}
+	}()
+	if panicked {
+		t.Fatal("liftResponse panicked for nil response")
+	}
+}
+
 func TestLiftMapsActualTiersAndRejectsUnknown(t *testing.T) {
 	for _, test := range []struct {
 		tier responses.ResponseServiceTier
