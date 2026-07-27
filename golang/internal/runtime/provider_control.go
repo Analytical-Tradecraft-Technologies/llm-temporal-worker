@@ -177,6 +177,47 @@ type V1RuntimeCapabilities struct {
 	Journal                durablestore.Journal
 	ProviderStatusRecorder engine.ProviderStatusRecorder
 	Clock                  func() time.Time
+	// GeneratePortsFactory is a per-snapshot constructor for the storage-
+	// neutral durable Generate phase. It must close over only the immutable
+	// adapters and stores represented by this capability bundle; a nil value is
+	// deliberately unconfigured and never falls back to the legacy engine.
+	GeneratePortsFactory GeneratePortsFactory
+}
+
+// GeneratePortsFactory constructs the complete durable Generate port set for
+// one immutable runtime snapshot. The capability bundle is passed by value so
+// the constructor cannot accidentally observe a later reload. Implementations
+// must return ports backed by the supplied snapshot-owned capabilities; they
+// must not create process-global clients or fabricate a missing phase.
+type GeneratePortsFactory func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error)
+
+// ValidateGenerate checks every capability needed before the Generate-only
+// runtime can be composed. It performs no I/O and intentionally treats a
+// typed-nil interface as missing. Compact and Query have separate contracts
+// and are not implied by this validation.
+func (capabilities V1RuntimeCapabilities) ValidateGenerate() error {
+	if isNilCapability(capabilities.Snapshot) {
+		return errors.New("v1 Generate snapshot source is not configured")
+	}
+	if isNilCapability(capabilities.Planner) {
+		return errors.New("v1 Generate planner is not configured")
+	}
+	if isNilCapability(capabilities.Adapters) {
+		return errors.New("v1 Generate adapter registry is not configured")
+	}
+	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
+		return fmt.Errorf("v1 Generate checkpoint capabilities: %w", err)
+	}
+	if isNilCapability(capabilities.Journal) {
+		return errors.New("v1 Generate PostgreSQL journal is not configured")
+	}
+	if capabilities.Clock == nil {
+		return errors.New("v1 Generate clock is not configured")
+	}
+	if capabilities.GeneratePortsFactory == nil {
+		return errors.New("v1 Generate ports factory is not configured")
+	}
+	return nil
 }
 
 // snapshotAdapterRegistry owns a private copy of the endpoint map for one

@@ -162,6 +162,13 @@ remain a deliberately sequenced Task 19 change. The Redis event port is
 coordination-only; every authorization still goes through the atomic Redis
 Function.
 
+The bounded v1 composition exposes `runtime.NewGenerateV1RuntimeBuilder` for
+one-shot Generate only. It accepts a complete snapshot-scoped capability
+bundle and a deployment-owned `GeneratePortsFactory`; it validates the
+resulting durable phase ports before attaching them to the snapshot. This
+does not supply the Task 19 Redis/PostgreSQL/provider implementations: the
+default factory remains unconfigured, and Compact/Query still fail closed.
+
 ## Configuration snapshots
 
 Configuration is parsed, defaulted, validated, and compiled into one immutable

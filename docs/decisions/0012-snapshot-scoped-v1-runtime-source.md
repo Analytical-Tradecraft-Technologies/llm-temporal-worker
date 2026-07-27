@@ -101,6 +101,17 @@ PostgreSQL journaling/finalization, Compact, Query, or the complete durable
 runtime. It therefore does not change the accepted fail-closed status of the
 production V1 seam.
 
+The first bounded composition step is Generate-only. The exported
+`runtime.NewGenerateV1RuntimeBuilder` requires `V1RuntimeCapabilitiesSource`,
+calls the bundle's per-snapshot `GeneratePortsFactory` only after validating
+all required capabilities, and validates the returned
+`durable.GeneratePorts` before attaching it to the snapshot. The factory
+callback is the deployment-owned adapter boundary: it must close over the
+same snapshot-owned checkpoint, journal, budget, cache, routing, and provider
+adapters represented by the bundle. It may not use the legacy engine or a
+process-global client. Compact and Query remain fail-closed, and a missing
+factory or incomplete port set rejects the snapshot before Temporal polling.
+
 ## Evidence
 
 - `golang/internal/runtime/factory.go` invokes the builder after complete
