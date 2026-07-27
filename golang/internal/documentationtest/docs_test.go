@@ -132,9 +132,11 @@ func TestReadinessDocumentationStatesRedisPrefixBoundary(t *testing.T) {
 				t.Fatalf("%s must state that durable readiness verifies the active budget generation and canonical manifest", relative)
 			}
 			if strings.Contains(text, "Redis probe performs its normal connectivity, clock, policy, function, prefix, and manifest checks") ||
-				strings.Contains(text, "expose the exact configured budget Function library/version/digest plus a complete active budget generation/manifest") ||
-				strings.Contains(text, "Readiness validates the Stream key/type/retention policy when enabled") {
+				strings.Contains(text, "expose the exact configured budget Function library/version/digest plus a complete active budget generation/manifest") {
 				t.Fatalf("%s still overstates Redis readiness coverage", relative)
+			}
+			if !strings.Contains(text, "enabled coordination Stream") || !strings.Contains(text, "valid monotonic IDs") {
+				t.Fatalf("%s must document the enabled coordination Stream readiness contract", relative)
 			}
 		})
 	}

@@ -51,6 +51,99 @@ func TestRedisDependencyProbeVerifiesActiveBudgetGenerationWhenConfigured(t *tes
 	}
 }
 
+func TestRedisDependencyProbeValidatesEnabledCoordinationStream(t *testing.T) {
+	value := testRedisProbeConfig()
+	enabled := true
+	value.CoordinationStreamEnabled = &enabled
+	value.StreamTrimSafety = config.Duration(time.Minute)
+	client := healthyRedisProbeClient()
+	client.streamType = "stream"
+	client.streamInfo = &redisclient.XInfoStream{
+		Length:            1,
+		EntriesAdded:      1,
+		LastGeneratedID:   "1-0",
+		MaxDeletedEntryID: "0-0",
+		FirstEntry:        redisclient.XMessage{ID: "1-0"},
+		LastEntry:         redisclient.XMessage{ID: "1-0"},
+	}
+	probe, err := NewRedisDependencyProbeWithStream(client, value, "llm:events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
+		t.Fatalf("coordination stream result = %#v", result)
+	}
+	if client.typeCalls != 1 || client.streamInfoCalls != 1 {
+		t.Fatalf("coordination stream calls type=%d xinfo=%d, want one each", client.typeCalls, client.streamInfoCalls)
+	}
+}
+
+func TestRedisDependencyProbeRejectsInvalidCoordinationStream(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		client func(*fakeRedisProbeClient)
+	}{
+		{name: "wrong type", client: func(client *fakeRedisProbeClient) { client.streamType = "hash" }},
+		{name: "missing stream", client: func(client *fakeRedisProbeClient) { client.streamInfoErr = redisclient.Nil }},
+		{name: "consumer groups", client: func(client *fakeRedisProbeClient) {
+			client.streamInfo.Groups = 1
+		}},
+		{name: "malformed id", client: func(client *fakeRedisProbeClient) {
+			client.streamInfo.LastEntry.ID = "invalid"
+		}},
+		{name: "recent trim", client: func(client *fakeRedisProbeClient) {
+			client.streamInfo.MaxDeletedEntryID = "9999999999999-0"
+			client.streamInfo.LastGeneratedID = "9999999999999-0"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := testRedisProbeConfig()
+			enabled := true
+			value.CoordinationStreamEnabled = &enabled
+			value.StreamTrimSafety = config.Duration(time.Minute)
+			client := healthyRedisProbeClient()
+			client.streamType = "stream"
+			client.streamInfo = &redisclient.XInfoStream{
+				Length:            1,
+				EntriesAdded:      1,
+				LastGeneratedID:   "1-0",
+				MaxDeletedEntryID: "0-0",
+				FirstEntry:        redisclient.XMessage{ID: "1-0"},
+				LastEntry:         redisclient.XMessage{ID: "1-0"},
+			}
+			test.client(client)
+			probe, err := NewRedisDependencyProbeWithStream(client, value, "llm:events")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := probe.Probe(context.Background())
+			if result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
+				t.Fatalf("invalid coordination stream result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestRedisDependencyProbeRequiresCoordinationStreamKey(t *testing.T) {
+	value := testRedisProbeConfig()
+	enabled := true
+	value.CoordinationStreamEnabled = &enabled
+	value.StreamTrimSafety = config.Duration(time.Minute)
+	if _, err := NewRedisDependencyProbeWithStream(healthyRedisProbeClient(), value, ""); err == nil {
+		t.Fatal("enabled coordination stream unexpectedly accepted an empty key")
+	}
+}
+
+func TestRedisDependencyProbeRequiresOneSecondTrimSafety(t *testing.T) {
+	value := testRedisProbeConfig()
+	enabled := true
+	value.CoordinationStreamEnabled = &enabled
+	value.StreamTrimSafety = config.Duration(time.Nanosecond)
+	if _, err := NewRedisDependencyProbeWithStream(healthyRedisProbeClient(), value, "llm:events"); err == nil {
+		t.Fatal("sub-second coordination stream trim safety unexpectedly accepted")
+	}
+}
+
 func TestRedisDependencyProbeFailsClosedForInvalidActiveBudgetGeneration(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -381,13 +474,19 @@ func (probe *fakeBucketProbe) ProbeBucket(context.Context) error {
 type fakeRedisProbeClient struct {
 	pingErr           error
 	timeErr           error
+	typeErr           error
+	streamInfoErr     error
 	functionListErr   error
 	scriptExistsErr   error
 	settings          map[string]string
+	streamType        string
+	streamInfo        *redisclient.XInfoStream
 	libraries         []redisclient.Library
 	scriptExists      []bool
 	pingCalls         int
 	timeCalls         int
+	typeCalls         int
+	streamInfoCalls   int
 	functionListCalls int
 	scriptExistsCalls int
 	configGetCalls    map[string]int
@@ -435,6 +534,22 @@ func (client *fakeRedisProbeClient) Time(ctx context.Context) *redisclient.TimeC
 	command := redisclient.NewTimeCmd(ctx)
 	command.SetVal(time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
 	command.SetErr(client.timeErr)
+	return command
+}
+
+func (client *fakeRedisProbeClient) Type(ctx context.Context, _ string) *redisclient.StatusCmd {
+	client.typeCalls++
+	command := redisclient.NewStatusCmd(ctx)
+	command.SetVal(client.streamType)
+	command.SetErr(client.typeErr)
+	return command
+}
+
+func (client *fakeRedisProbeClient) XInfoStream(ctx context.Context, _ string) *redisclient.XInfoStreamCmd {
+	client.streamInfoCalls++
+	command := redisclient.NewXInfoStreamCmd(ctx, "stream")
+	command.SetVal(client.streamInfo)
+	command.SetErr(client.streamInfoErr)
 	return command
 }
 

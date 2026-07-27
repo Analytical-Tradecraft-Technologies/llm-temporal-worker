@@ -115,6 +115,13 @@ func applyDefaults(config *Config) {
 	if config.State.Redis.KeyPrefix == "" {
 		config.State.Redis.KeyPrefix = "llmtw"
 	}
+	if config.State.Redis.CoordinationStreamEnabled == nil {
+		enabled := config.State.Kind == StateKindDurable
+		config.State.Redis.CoordinationStreamEnabled = &enabled
+	}
+	if config.State.Redis.StreamTrimSafety == 0 && config.State.Redis.CoordinationStreamEnabled != nil && *config.State.Redis.CoordinationStreamEnabled {
+		config.State.Redis.StreamTrimSafety = Duration(10 * time.Minute)
+	}
 	if config.BlobStore.Kind == "" {
 		if config.State.Kind == StateKindMemory {
 			config.BlobStore.Kind = "memory"

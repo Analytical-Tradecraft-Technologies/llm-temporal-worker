@@ -124,6 +124,10 @@ func readinessIntegrationConfig(t *testing.T, redisAddress string) ([]byte, conf
 		{"readiness_probe_interval: 5s", "readiness_probe_interval: 50ms"},
 		{"readiness_probe_timeout: 2s", "readiness_probe_timeout: 25ms"},
 		{"addresses: [redis.example.internal:6379]", fmt.Sprintf("addresses: [%q]", redisAddress)},
+		// This recovery fixture does not provision the namespaced coordination
+		// stream; stream readiness has dedicated unit coverage below the runtime
+		// boundary, so keep this integration test focused on Redis recovery.
+		{"coordination_stream_enabled: true", "coordination_stream_enabled: false"},
 	} {
 		if !strings.Contains(value, replacement.old) {
 			t.Fatalf("test configuration is missing %q", replacement.old)

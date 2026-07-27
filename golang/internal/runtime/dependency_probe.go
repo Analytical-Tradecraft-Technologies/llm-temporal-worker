@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,6 +189,8 @@ func postgresUnavailable(err error) ProbeResult {
 type redisProbeClient interface {
 	Ping(context.Context) *redisclient.StatusCmd
 	Time(context.Context) *redisclient.TimeCmd
+	Type(context.Context, string) *redisclient.StatusCmd
+	XInfoStream(context.Context, string) *redisclient.XInfoStreamCmd
 	ConfigGet(context.Context, string) *redisclient.MapStringStringCmd
 	FunctionList(context.Context, redisclient.FunctionListQuery) *redisclient.FunctionListCmd
 	ScriptExists(context.Context, ...string) *redisclient.BoolSliceCmd
@@ -197,13 +200,14 @@ type redisDependencyProbe struct {
 	client     redisProbeClient
 	config     config.RedisConfig
 	generation redisstore.BudgetGenerationPort
+	streamKey  string
 }
 
 // NewRedisDependencyProbe constructs a read-only Redis readiness probe. It
 // never exposes a loading/replacing command, so startup and monitoring cannot
 // silently mutate a shared Redis Function library or Lua script.
 func NewRedisDependencyProbe(client redisProbeClient, value config.RedisConfig) (DependencyProbe, error) {
-	return newRedisDependencyProbe(client, value, nil)
+	return newRedisDependencyProbe(client, value, nil, "")
 }
 
 // NewRedisDependencyProbeWithBudgetGeneration extends the immutable Redis
@@ -217,10 +221,26 @@ func NewRedisDependencyProbeWithBudgetGeneration(client redisProbeClient, value 
 	if generation == nil {
 		return nil, fmt.Errorf("Redis budget generation readiness port is required")
 	}
-	return newRedisDependencyProbe(client, value, generation)
+	return newRedisDependencyProbe(client, value, generation, "")
 }
 
-func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, generation redisstore.BudgetGenerationPort) (DependencyProbe, error) {
+// NewRedisDependencyProbeWithStream extends Redis readiness with the
+// read-only coordination-stream contract. The stream key must already be
+// fully namespaced by the caller; this probe never creates or mutates it.
+func NewRedisDependencyProbeWithStream(client redisProbeClient, value config.RedisConfig, streamKey string) (DependencyProbe, error) {
+	return newRedisDependencyProbe(client, value, nil, streamKey)
+}
+
+// NewRedisDependencyProbeWithBudgetGenerationAndStream combines the durable
+// budget-generation and coordination-stream readiness contracts.
+func NewRedisDependencyProbeWithBudgetGenerationAndStream(client redisProbeClient, value config.RedisConfig, generation redisstore.BudgetGenerationPort, streamKey string) (DependencyProbe, error) {
+	if generation == nil {
+		return nil, fmt.Errorf("Redis budget generation readiness port is required")
+	}
+	return newRedisDependencyProbe(client, value, generation, streamKey)
+}
+
+func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, generation redisstore.BudgetGenerationPort, streamKey string) (DependencyProbe, error) {
 	if client == nil {
 		return nil, fmt.Errorf("Redis readiness client is required")
 	}
@@ -230,7 +250,15 @@ func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, 
 	if value.RequiredPersistence != "aof_and_rdb" && value.RequiredPersistence != "aof" && value.RequiredPersistence != "rdb" {
 		return nil, fmt.Errorf("Redis readiness persistence policy is invalid")
 	}
-	return &redisDependencyProbe{client: client, config: value, generation: generation}, nil
+	if coordinationStreamEnabled(value) {
+		if strings.TrimSpace(streamKey) == "" {
+			return nil, fmt.Errorf("Redis coordination stream key is required when coordination stream readiness is enabled")
+		}
+		if value.StreamTrimSafety < config.Duration(time.Second) {
+			return nil, fmt.Errorf("Redis coordination stream trim safety must be at least 1s")
+		}
+	}
+	return &redisDependencyProbe{client: client, config: value, generation: generation, streamKey: streamKey}, nil
 }
 
 func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
@@ -283,10 +311,118 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 	default:
 		return redisPolicyMismatch()
 	}
-	if result.Status != ProbeStatusReady || probe.generation == nil {
+	if result.Status != ProbeStatusReady {
+		return result
+	}
+	if coordinationStreamEnabled(probe.config) {
+		result = probe.verifyCoordinationStream(ctx, serverTime)
+		if result.Status != ProbeStatusReady {
+			return result
+		}
+	}
+	if probe.generation == nil {
 		return result
 	}
 	return probe.verifyBudgetGeneration(ctx)
+}
+
+func coordinationStreamEnabled(value config.RedisConfig) bool {
+	return value.CoordinationStreamEnabled != nil && *value.CoordinationStreamEnabled
+}
+
+func (probe *redisDependencyProbe) verifyCoordinationStream(ctx context.Context, serverTime time.Time) ProbeResult {
+	streamType, err := probe.client.Type(ctx, probe.streamKey).Result()
+	if err != nil {
+		return redisProbeFailure(ctx, err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(streamType), "stream") {
+		return redisPolicyMismatch()
+	}
+	info, err := probe.client.XInfoStream(ctx, probe.streamKey).Result()
+	if err != nil {
+		return redisProbeFailure(ctx, err)
+	}
+	if info == nil || info.Length < 0 || info.EntriesAdded < 0 || info.EntriesAdded < info.Length || info.Groups != 0 {
+		return redisPolicyMismatch()
+	}
+	if info.Length == 0 {
+		if info.FirstEntry.ID != "" || info.LastEntry.ID != "" {
+			return redisPolicyMismatch()
+		}
+	} else {
+		first, ok := parseRedisStreamID(info.FirstEntry.ID)
+		if !ok {
+			return redisPolicyMismatch()
+		}
+		last, ok := parseRedisStreamID(info.LastEntry.ID)
+		if !ok || last.compare(first) < 0 {
+			return redisPolicyMismatch()
+		}
+		if info.LastGeneratedID != "" {
+			generated, valid := parseRedisStreamID(info.LastGeneratedID)
+			if !valid || generated.compare(last) < 0 {
+				return redisPolicyMismatch()
+			}
+		}
+	}
+	if info.MaxDeletedEntryID != "" {
+		deleted, ok := parseRedisStreamID(info.MaxDeletedEntryID)
+		if !ok {
+			return redisPolicyMismatch()
+		}
+		if info.LastGeneratedID != "" {
+			generated, valid := parseRedisStreamID(info.LastGeneratedID)
+			if !valid || deleted.compare(generated) > 0 {
+				return redisPolicyMismatch()
+			}
+		}
+		if deleted.compare(redisStreamID(serverTime.Add(-time.Duration(probe.config.StreamTrimSafety)).UnixMilli(), 0)) > 0 {
+			return redisPolicyMismatch()
+		}
+	}
+	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+}
+
+type redisStreamIDValue struct {
+	milliseconds uint64
+	sequence     uint64
+}
+
+func redisStreamID(milliseconds, sequence int64) redisStreamIDValue {
+	if milliseconds < 0 || sequence < 0 {
+		return redisStreamIDValue{}
+	}
+	return redisStreamIDValue{milliseconds: uint64(milliseconds), sequence: uint64(sequence)}
+}
+
+func parseRedisStreamID(value string) (redisStreamIDValue, bool) {
+	parts := strings.Split(value, "-")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return redisStreamIDValue{}, false
+	}
+	milliseconds, err := strconv.ParseUint(parts[0], 10, 63)
+	if err != nil {
+		return redisStreamIDValue{}, false
+	}
+	sequence, err := strconv.ParseUint(parts[1], 10, 63)
+	if err != nil {
+		return redisStreamIDValue{}, false
+	}
+	return redisStreamIDValue{milliseconds: milliseconds, sequence: sequence}, true
+}
+
+func (id redisStreamIDValue) less(other redisStreamIDValue) bool {
+	return id.milliseconds < other.milliseconds || (id.milliseconds == other.milliseconds && id.sequence < other.sequence)
+}
+
+func (id redisStreamIDValue) compare(other redisStreamIDValue) int {
+	if id.less(other) {
+		return -1
+	}
+	if other.less(id) {
+		return 1
+	}
+	return 0
 }
 
 func (probe *redisDependencyProbe) verifyBudgetGeneration(ctx context.Context) ProbeResult {
@@ -306,6 +442,16 @@ func redisGenerationFailure(ctx context.Context, err error) ProbeResult {
 	}
 	if errors.Is(err, redisstore.ErrBudgetManifestInvalid) {
 		return redisPolicyMismatch()
+	}
+	return redisUnavailable(err)
+}
+
+func redisProbeFailure(ctx context.Context, err error) ProbeResult {
+	if errors.Is(err, redisclient.Nil) {
+		return redisPolicyMismatch()
+	}
+	if (ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) || errors.Is(err, context.DeadlineExceeded) {
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusTimeout, Reason: ProbeReasonTimeout}
 	}
 	return redisUnavailable(err)
 }

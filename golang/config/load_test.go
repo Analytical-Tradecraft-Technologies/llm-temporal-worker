@@ -52,6 +52,12 @@ func TestLoadCompleteExample(t *testing.T) {
 	if got, want := time.Duration(postgres.IdleTransactionTimeout), 30*time.Second; got != want {
 		t.Fatalf("PostgreSQL idle transaction timeout = %s, want %s", got, want)
 	}
+	if loaded.State.Redis.CoordinationStreamEnabled == nil || !*loaded.State.Redis.CoordinationStreamEnabled {
+		t.Fatal("durable example must enable coordination stream readiness")
+	}
+	if got, want := time.Duration(loaded.State.Redis.StreamTrimSafety), 10*time.Minute; got != want {
+		t.Fatalf("coordination stream trim safety = %s, want %s", got, want)
+	}
 }
 
 func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
@@ -67,6 +73,39 @@ func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
 	invalid := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s", "    heartbeat_keepalive_interval: -1s", 1)
 	if _, err := config.Load([]byte(invalid)); err == nil || !strings.Contains(err.Error(), "heartbeat_keepalive_interval") {
 		t.Fatalf("invalid heartbeat keepalive interval error = %v", err)
+	}
+}
+
+func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
+	withoutStreamFields := strings.Replace(string(exampleYAML(t)), "    coordination_stream_enabled: true\n    stream_trim_safety: 10m\n", "", 1)
+	loaded, err := config.Load([]byte(withoutStreamFields))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Redis.CoordinationStreamEnabled == nil || !*loaded.State.Redis.CoordinationStreamEnabled {
+		t.Fatal("durable state must default coordination stream readiness on")
+	}
+	if got, want := time.Duration(loaded.State.Redis.StreamTrimSafety), 10*time.Minute; got != want {
+		t.Fatalf("default coordination stream trim safety = %s, want %s", got, want)
+	}
+
+	fixture := strings.Replace(withoutStreamFields, "kind: durable", "kind: redis", 1)
+	fixture = strings.Replace(fixture, "environment: production", "environment: development", 1)
+	loaded, err = config.Load([]byte(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Redis.CoordinationStreamEnabled == nil || *loaded.State.Redis.CoordinationStreamEnabled {
+		t.Fatal("Redis-only fixture must default coordination stream readiness off")
+	}
+
+	explicitFalse := strings.Replace(withoutStreamFields, "    required_persistence: aof_and_rdb\n", "    required_persistence: aof_and_rdb\n    coordination_stream_enabled: false\n", 1)
+	loaded, err = config.Load([]byte(explicitFalse))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State.Redis.CoordinationStreamEnabled == nil || *loaded.State.Redis.CoordinationStreamEnabled {
+		t.Fatal("explicitly disabled coordination stream unexpectedly enabled")
 	}
 }
 
@@ -418,6 +457,8 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
 		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: dab817724c63806723b209f4ab6cbc907519133fac495d995733ffa428e6b18b", "admission_digest: invalid", 1),
+		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
+		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
 		"reference":                  strings.Replace(string(exampleYAML(t)), "endpoint: openai-prod", "endpoint: missing-endpoint", 1),
 		"literal secret":             strings.Replace(string(exampleYAML(t)), "password:\n      kind: file\n      path: /var/run/secrets/redis-password", "password: plaintext-secret", 1),

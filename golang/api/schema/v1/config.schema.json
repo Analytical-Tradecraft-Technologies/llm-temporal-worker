@@ -176,7 +176,9 @@
         "admission_digest": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
         "max_connections": { "type": "integer", "minimum": 1 },
         "dial_timeout": { "$ref": "#/$defs/duration" }, "operation_timeout": { "$ref": "#/$defs/duration" },
-        "required_persistence": { "enum": ["aof_and_rdb", "aof", "rdb"] }
+        "required_persistence": { "enum": ["aof_and_rdb", "aof", "rdb"] },
+        "coordination_stream_enabled": { "type": "boolean" },
+        "stream_trim_safety": { "$ref": "#/$defs/duration" }
       }
     },
     "postgres": {

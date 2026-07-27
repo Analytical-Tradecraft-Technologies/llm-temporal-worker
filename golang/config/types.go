@@ -157,6 +157,14 @@ type RedisConfig struct {
 	DialTimeout         Duration  `yaml:"dial_timeout" json:"dial_timeout"`
 	OperationTimeout    Duration  `yaml:"operation_timeout" json:"operation_timeout"`
 	RequiredPersistence string    `yaml:"required_persistence" json:"required_persistence"`
+	// CoordinationStreamEnabled controls the optional cross-replica wake-up
+	// stream. A nil value is normalized by config.Load: durable deployments
+	// default to enabled while memory/Redis fixtures remain unchanged.
+	CoordinationStreamEnabled *bool `yaml:"coordination_stream_enabled" json:"coordination_stream_enabled"`
+	// StreamTrimSafety is the minimum age that a deleted Stream entry must
+	// have before readiness accepts the stream's retention state. It is only
+	// used when CoordinationStreamEnabled is true.
+	StreamTrimSafety Duration `yaml:"stream_trim_safety" json:"stream_trim_safety"`
 }
 
 // PostgresConfig selects the authoritative durable-state namespace. Database,

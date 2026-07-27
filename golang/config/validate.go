@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -314,6 +315,20 @@ func (redis RedisConfig) validate(environment string) error {
 	}
 	switch redis.RequiredPersistence {
 	case "aof_and_rdb", "aof", "rdb":
+		// A disabled coordination stream is a supported Redis-only fixture
+		// mode. Enabled streams require a bounded trim-safety margin so the
+		// readiness probe can reject recent destructive trimming.
+		if redis.CoordinationStreamEnabled != nil && *redis.CoordinationStreamEnabled {
+			if err := validatePositiveDuration(redis.StreamTrimSafety, "state.redis.stream_trim_safety"); err != nil {
+				return err
+			}
+			if redis.StreamTrimSafety < Duration(time.Second) {
+				return fmt.Errorf("state.redis.stream_trim_safety must be at least 1s")
+			}
+			if redis.StreamTrimSafety > Duration(30*24*time.Hour) {
+				return fmt.Errorf("state.redis.stream_trim_safety exceeds 30d")
+			}
+		}
 		return nil
 	default:
 		return fmt.Errorf("state.redis.required_persistence %q is unsupported", redis.RequiredPersistence)

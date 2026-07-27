@@ -356,15 +356,24 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, fmt.Errorf("construct Redis admission store: %w", err)
 	}
 	var generationPort redisstore.BudgetGenerationPort
-	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
-		budgetKeys, keyErr := redisstore.NewBudgetKeySpace(keyOptions)
-		if keyErr != nil {
+	streamEnabled := value.State.Redis.CoordinationStreamEnabled != nil && *value.State.Redis.CoordinationStreamEnabled
+	needBudgetKeys := streamEnabled || (value.Environment == "production" && value.State.Kind == config.StateKindDurable)
+	var budgetKeys redisstore.BudgetKeySpace
+	if needBudgetKeys {
+		budgetKeys, err = redisstore.NewBudgetKeySpace(keyOptions)
+		if err != nil {
 			if postgresCloser != nil {
 				_ = postgresCloser.Close()
 			}
 			closeOwned()
-			return nil, nil, fmt.Errorf("construct Redis budget key namespace: %w", keyErr)
+			return nil, nil, fmt.Errorf("construct Redis budget key namespace: %w", err)
 		}
+	}
+	var streamKey string
+	if streamEnabled {
+		streamKey = budgetKeys.EventsKey()
+	}
+	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
 			if postgresCloser != nil {
@@ -375,9 +384,14 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		}
 	}
 	var redisProbe DependencyProbe
-	if generationPort != nil {
+	switch {
+	case generationPort != nil && streamEnabled:
+		redisProbe, err = NewRedisDependencyProbeWithBudgetGenerationAndStream(redisClient, value.State.Redis, generationPort, streamKey)
+	case generationPort != nil:
 		redisProbe, err = NewRedisDependencyProbeWithBudgetGeneration(redisClient, value.State.Redis, generationPort)
-	} else {
+	case streamEnabled:
+		redisProbe, err = NewRedisDependencyProbeWithStream(redisClient, value.State.Redis, streamKey)
+	default:
 		redisProbe, err = NewRedisDependencyProbe(redisClient, value.State.Redis)
 	}
 	if err != nil {
