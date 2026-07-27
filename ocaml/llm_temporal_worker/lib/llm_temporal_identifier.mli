@@ -42,6 +42,7 @@ module Budget_generation_id : S
 module Provider_model_id : S
 module Model_display_name : S
 module Model_prefix : S
+module Model_capability : S
 module Window_key : S
 
 module Checkpoint : sig

@@ -116,6 +116,7 @@ module Budget_generation_id : Opaque_identifier
 module Provider_model_id : Opaque_identifier
 module Model_display_name : Opaque_identifier
 module Model_prefix : Opaque_identifier
+module Model_capability : Opaque_identifier
 module Window_key : Opaque_identifier
 module Checkpoint : sig
   type t = private string
@@ -228,7 +229,7 @@ type compaction_response = {
 
 type availability = Available | Degraded | Unavailable
 type model_lifecycle = Active | Deprecated | Retired | Unknown
-type model_capability = string
+type model_capability = Model_capability.t
 type inventory_source = Provider_api_inventory | Operator_inventory | Unknown_inventory_source
 type credit_state = Credit_ok | Credit_low | Credit_exhausted | Credit_unknown
 type billing_state = Billing_ok | Billing_blocked | Billing_unknown

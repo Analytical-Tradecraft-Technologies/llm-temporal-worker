@@ -273,6 +273,12 @@ Model inventory results expose `display_name` as the nominal
 JSON strings at the Activity boundary, but the wrappers prevent accidental
 identifier interchange in OCaml code.
 
+Inventory capability labels use `Model_capability.t`. The Go control plane
+intentionally permits its capability vocabulary to grow, so this is a nominal
+string wrapper rather than a hard-coded OCaml enum: callers can retain an
+unknown future label while the type system prevents passing it as a model ID,
+diagnostic code, or arbitrary string.
+
 Provider and credit query results expose safe diagnostic values as
 `Safe_code.t option`, matching the Go control-plane `SafeCode` type. The wrapper
 is distinct from `Diagnostic_code.t` and from arbitrary strings; it is still

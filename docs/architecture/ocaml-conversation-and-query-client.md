@@ -107,12 +107,21 @@ module Safe_code : sig
   val of_string : string -> t
   val to_string : t -> string
 end
+
+module Model_capability : sig
+  type t
+  val of_string : string -> t
+  val to_string : t -> string
+end
 ~~~
 
 `Budget_stream_id` validates Redis's unsigned `milliseconds-sequence` spelling;
 it is not forced through a generic identifier grammar. `Sha256_digest` accepts
 exactly 64 lowercase hexadecimal characters and cannot be confused with an
-operation or checkpoint handle.
+operation or checkpoint handle. `Model_capability.t` preserves the
+control-plane's open capability-label vocabulary while preventing a label
+from being passed accidentally as a model ID, diagnostic code, or ordinary
+string.
 
 Money has an explicitly USD-denominated arbitrary-precision decimal type:
 
@@ -364,7 +373,7 @@ type model_inventory_entry = {
   provider_model_id : Provider_model_id.t;
   display_name : Model_display_name.t option;
   lifecycle : model_lifecycle;
-  capabilities : model_capability list;
+  capabilities : Model_capability.t list;
   complete_snapshot : bool;
 }
 
@@ -462,8 +471,8 @@ Result records are closed and typed:
 
 - provider status has route ID, availability, credit/billing state, circuit
   state, observation/staleness timestamps, and safe code;
-- model inventory has provider model ID, display/lifecycle values, typed known
-  capabilities, and completeness;
+- model inventory has provider model ID, display/lifecycle values, nominal
+  capability labels, and completeness;
 - credit status has confirmed state/time/source and safe evidence code;
 - budget status has policy/window IDs, exact USD limit/reserved/finalized/
   available values, retry-after, **Budget_generation_id.t**,
@@ -472,9 +481,12 @@ Result records are closed and typed:
 - spend summary has a half-open interval, closed grouping keys, exact USD total,
   and completed-operation count.
 
-Unknown future enum values are decoding errors until the OCaml library is
-updated. This is intentional for Workflow decisions: silently treating a new
-credit state as healthy would be unsafe.
+Unknown future values in closed enum types are decoding errors until the OCaml
+library is updated. This is intentional for Workflow decisions: silently
+treating a new credit state as healthy would be unsafe. Model capability
+labels are deliberately not a closed enum; `Model_capability.t` retains a new
+wire label without allowing it to be confused with another string-shaped
+domain.
 
 The `Budget_status` result source is a closed `Redis_budget_generation`
 constructor rather than a generic persisted-state string. It proves the Go

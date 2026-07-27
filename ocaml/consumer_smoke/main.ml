@@ -16,6 +16,7 @@ let expect_valid = function
 
 let context = { tenant = None; project = None; actor = None; tags = [] }
 let model = Model_selector.of_string "consumer-smoke-model"
+let model_capability = Model_capability.of_string "text_generation"
 let operation suffix = Operation_key.of_string ("consumer-smoke-" ^ suffix)
 
 let message text = Message { actor = Human; content = [ Text text ] }
@@ -135,6 +136,9 @@ let future_fanout (conversation : Conversation.t) =
 let () =
   (* Top-level names from the documented facade are usable by a downstream
      package while the namespaced Conversation modules remain available. *)
+  assert (String.equal
+            (Model_capability.to_string model_capability)
+            "text_generation");
   let temperature = expect_valid (Decimal.of_string "0.5") in
   let tool : tool = {
     kind = Function;

@@ -35,6 +35,7 @@ module Budget_generation_id = Identifier.Budget_generation_id
 module Provider_model_id = Identifier.Provider_model_id
 module Model_display_name = Identifier.Model_display_name
 module Model_prefix = Identifier.Model_prefix
+module Model_capability = Identifier.Model_capability
 module Window_key = Identifier.Window_key
 module Checkpoint = Identifier.Checkpoint
 module Query_cursor = Identifier.Query_cursor
@@ -331,7 +332,7 @@ type availability = Available | Degraded | Unavailable
    and [Retired] means an unavailable model. [Unknown] is an explicit
    provider-reported lifecycle state, not an open-world fallback. *)
 type model_lifecycle = Active | Deprecated | Retired | Unknown
-type model_capability = string
+type model_capability = Model_capability.t
 type inventory_source = Provider_api_inventory | Operator_inventory | Unknown_inventory_source
 type credit_state = Credit_ok | Credit_low | Credit_exhausted | Credit_unknown
 type billing_state = Billing_ok | Billing_blocked | Billing_unknown
