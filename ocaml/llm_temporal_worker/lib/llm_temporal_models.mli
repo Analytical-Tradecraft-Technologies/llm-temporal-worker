@@ -29,6 +29,7 @@ module Actor_id : Opaque_identifier
 module Blob_digest : Opaque_identifier
 module Diagnostic_code : Opaque_identifier
 module Cost_catalog_version : Opaque_identifier
+module Safe_code : Opaque_identifier
 module Temporal_task_queue : Opaque_identifier
 
 type service_class = Economy | Standard | Priority
@@ -251,11 +252,11 @@ type model_inventory_filter = { provider : Provider_id.t option; endpoint : Endp
 type credit_status_filter = { provider : Provider_id.t option; endpoint : Endpoint_id.t option; include_ok : bool; refresh_if_older_than_seconds : int64 option; page_size : int; cursor : Query_cursor.t option }
 type budget_status_filter = { policy_key : Budget_policy_key.t option; active_at : Ptime.t option; include_windows : bool }
 type spend_summary_filter = { start_time : Ptime.t; end_time : Ptime.t; group_by : spend_group_by list; operation_kinds : operation_kind list }
-type provider_route_status = { route_id : Route_id.t; provider : Provider_id.t; endpoint : Endpoint_id.t; availability : availability; credit_state : credit_state; billing_state : billing_state; circuit_state : circuit_state; observed_at : Ptime.t; stale_after : Ptime.t; safe_code : string option }
+type provider_route_status = { route_id : Route_id.t; provider : Provider_id.t; endpoint : Endpoint_id.t; availability : availability; credit_state : credit_state; billing_state : billing_state; circuit_state : circuit_state; observed_at : Ptime.t; stale_after : Ptime.t; safe_code : Safe_code.t option }
 type provider_status_page = { routes : provider_route_status list }
 type model_inventory_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; provider_model_id : Provider_model_id.t; display_name : Model_display_name.t option; lifecycle : model_lifecycle; capabilities : model_capability list; source : inventory_source; complete_snapshot : bool; safe_metadata : Safe_metadata.t }
 type model_inventory_page = { models : model_inventory_entry list }
-type credit_status_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; credit_state : credit_state; billing_state : billing_state; confirmed_at : Ptime.t option; evidence_source : credit_evidence_source; safe_evidence_code : string option }
+type credit_status_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; credit_state : credit_state; billing_state : billing_state; confirmed_at : Ptime.t option; evidence_source : credit_evidence_source; safe_evidence_code : Safe_code.t option }
 type credit_status_page = { endpoints : credit_status_entry list }
 type budget_window_status = { policy_key : Budget_policy_key.t; window_key : Window_key.t; coverage_start : Ptime.t; coverage_end : Ptime.t; limit_usd : Usd_decimal.t; reserved_cost_usd : Usd_decimal.t; accounted_cost_usd : Usd_decimal.t; available_usd : Usd_decimal.t; retry_after_seconds : int64 option }
 type budget_status = { active_at : Ptime.t; generation_id : Budget_generation_id.t; manifest_digest : Sha256_digest.t; stream_high_water_mark : Budget_stream_id.t; windows : budget_window_status list }

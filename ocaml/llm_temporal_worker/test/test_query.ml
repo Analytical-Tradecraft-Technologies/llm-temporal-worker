@@ -314,6 +314,48 @@ let () =
      when String.equal (Model_display_name.to_string actual) "GPT-4o"
        && String.equal (Provider_model_id.to_string provider_model_id) "gpt-4o" -> ()
    | _ -> failwith "model inventory display name lost its nominal type through the codec");
+  (* Safe diagnostic values are nominal query metadata, not arbitrary strings
+     or Activity diagnostic codes.  Both query result positions use the same
+     wrapper and retain it through the closed wire codec. *)
+  let provider_status = {
+    route_id = Route_id.of_string "route-1";
+    provider = Provider_id.of_string "openai";
+    endpoint = Endpoint_id.of_string "responses";
+    availability = Degraded;
+    credit_state = Credit_low;
+    billing_state = Billing_ok;
+    circuit_state = Circuit_closed;
+    observed_at = time "2026-01-01T00:00:00Z";
+    stale_after = time "2026-01-01T01:00:00Z";
+    safe_code = Some (Safe_code.of_string "provider-degraded");
+  } in
+  let provider_status_round_trip =
+    ok (V1_codec.decode_query_response
+          (ok (V1_codec.encode_query_response
+                 (response (Provider_status_result { routes = [ provider_status ] })))))
+  in
+  (match provider_status_round_trip.result with
+   | Provider_status_result { routes = [ { safe_code = Some value; _ } ] }
+     when String.equal (Safe_code.to_string value) "provider-degraded" -> ()
+   | _ -> failwith "provider safe code lost its nominal type through the codec");
+  let credit_status = {
+    provider = Provider_id.of_string "openai";
+    endpoint = Endpoint_id.of_string "responses";
+    credit_state = Credit_unknown;
+    billing_state = Billing_unknown;
+    confirmed_at = None;
+    evidence_source = Unknown_evidence;
+    safe_evidence_code = Some (Safe_code.of_string "credit-unknown");
+  } in
+  let credit_status_round_trip =
+    ok (V1_codec.decode_query_response
+          (ok (V1_codec.encode_query_response
+                 (response (Credit_status_result { endpoints = [ credit_status ] })))))
+  in
+  (match credit_status_round_trip.result with
+   | Credit_status_result { endpoints = [ { safe_evidence_code = Some value; _ } ] }
+     when String.equal (Safe_code.to_string value) "credit-unknown" -> ()
+   | _ -> failwith "credit safe evidence code lost its nominal type through the codec");
   (* Model inventory lifecycle values must use the exact Go wire vocabulary.
      In particular, [available]/[unavailable]/[unknown] are not the route
      availability or the legacy active/retired spellings. *)

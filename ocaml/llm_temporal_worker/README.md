@@ -273,6 +273,11 @@ Model inventory results expose `display_name` as the nominal
 JSON strings at the Activity boundary, but the wrappers prevent accidental
 identifier interchange in OCaml code.
 
+Provider and credit query results expose safe diagnostic values as
+`Safe_code.t option`, matching the Go control-plane `SafeCode` type. The wrapper
+is distinct from `Diagnostic_code.t` and from arbitrary strings; it is still
+encoded as the unchanged JSON string at the Activity boundary.
+
 Model inventory lifecycle filters use the Go wire values `available`,
 `deprecated`, `unavailable`, and `unknown`. For source compatibility the
 OCaml constructors are `Active`, `Deprecated`, `Retired`, and `Unknown`; the
