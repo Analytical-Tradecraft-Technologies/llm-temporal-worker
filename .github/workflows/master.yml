@@ -268,6 +268,11 @@ jobs:
         working-directory: golang
         run: go test -tags=live ./integration/live -run '^$'
 
+      - name: Verify guarded live-provider harness offline
+        if: steps.go.outputs.present == 'true'
+        working-directory: golang
+        run: make live-contract-verify
+
       - name: Compile guarded Redis benchmark
         if: steps.go.outputs.present == 'true'
         working-directory: golang

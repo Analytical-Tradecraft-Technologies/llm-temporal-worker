@@ -20,7 +20,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -42,6 +42,23 @@ vet:
 
 test:
 	$(GO) test ./...
+
+# Executes the build-tagged live-provider contract unit suite without making a
+# provider request. Force all live gates off so this deterministic target cannot
+# become a credentialed run through inherited environment values.
+live-contract-verify:
+	env \
+		LLMTW_LIVE_TESTS=0 \
+		LLMTW_LIVE_AUTHORIZED=0 \
+		LLMTW_LIVE_OPENAI_RESPONSES=0 \
+		LLMTW_LIVE_AZURE_RESPONSES=0 \
+		LLMTW_LIVE_OPENAI_CHAT=0 \
+		LLMTW_LIVE_OPENROUTER_CHAT=0 \
+		LLMTW_LIVE_EXA_CHAT=0 \
+		LLMTW_LIVE_ANTHROPIC_DIRECT=0 \
+		LLMTW_LIVE_ANTHROPIC_AWS=0 \
+		LLMTW_LIVE_BEDROCK_ANTHROPIC=0 \
+		$(GO) test -tags=live ./integration/live -count=1
 
 build:
 	$(GO) build ./...

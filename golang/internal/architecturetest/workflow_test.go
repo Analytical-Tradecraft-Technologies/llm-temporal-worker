@@ -292,7 +292,7 @@ func replaceReleaseEvidenceJobSection(t *testing.T, raw, old, new string) string
 	return raw[:start] + updated
 }
 
-func TestWorkflowCompileOnlyLiveHarnessIsUncredentialed(t *testing.T) {
+func TestWorkflowLiveHarnessVerificationIsUncredentialed(t *testing.T) {
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),
 		readWorkflow(t, "master.yml"),
@@ -300,10 +300,13 @@ func TestWorkflowCompileOnlyLiveHarnessIsUncredentialed(t *testing.T) {
 		if !hasRunCommand(workflow, "go test -tags=live ./integration/live -run '^$'") {
 			t.Fatalf("%s does not compile the guarded live-provider harness", workflow.name)
 		}
+		if !hasRunCommand(workflow, "make live-contract-verify") {
+			t.Fatalf("%s does not execute the deterministic live-provider contract checks", workflow.name)
+		}
 		lower := strings.ToLower(workflow.raw)
 		for _, forbidden := range []string{"llmtw_live_", "secrets."} {
 			if strings.Contains(lower, forbidden) {
-				t.Fatalf("%s combines the compile-only live harness with %q", workflow.name, forbidden)
+				t.Fatalf("%s combines offline live-harness verification with %q", workflow.name, forbidden)
 			}
 		}
 	}
