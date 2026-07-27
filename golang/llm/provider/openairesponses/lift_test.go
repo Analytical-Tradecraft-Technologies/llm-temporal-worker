@@ -120,6 +120,36 @@ func TestLiftMapsIncompleteAndRefusal(t *testing.T) {
 	}
 }
 
+func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
+	params, err := lowerRequest(llm.Request{
+		Model: "gpt",
+		Output: &llm.OutputSpec{Format: llm.OutputFormat{
+			Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema,
+		}},
+	}, llm.ServiceClassStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := provider.Call{
+		EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt",
+		OperationKey: "op-json", ServiceClass: llm.ServiceClassStandard, SDKParams: params,
+	}
+	valid := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
+	valid.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}]`)
+	if _, err := liftResponse(call, &valid, "req"); err != nil {
+		t.Fatalf("valid JSON response = %v", err)
+	}
+	invalid := valid
+	invalid.ID = "invalid"
+	invalid.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":3}","annotations":[]}]}]`)
+	_, err = liftResponse(call, &invalid, "req")
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
+		t.Fatalf("invalid JSON response error = %#v", err)
+	}
+}
+
 func loadResponseFixture(t *testing.T, name string) responses.Response {
 	t.Helper()
 	data, err := os.ReadFile("testdata/contracts/openai-responses/" + name)
