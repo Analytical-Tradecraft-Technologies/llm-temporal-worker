@@ -178,6 +178,17 @@ directory unless a command explicitly says otherwise.
   dual-write, or fall back to the old prefix.
 - [ ] Commit: **feat(config): make redis key namespace explicit**.
 
+**Implementation status (2026-07-27):** The Redis namespace contract is already
+implemented on `master` by PR #127 (`7c4b224c`). The implementation uses the
+validated `state.redis.key_prefix` value throughout the worker-owned Redis
+stores, applies `LLMTW_REDIS_KEY_PREFIX` before validation, and rejects reload
+changes for the lifetime of a process. Follow-up coverage includes two-prefix
+integration conformance and hash-tag isolation in
+`storage/redis/shared_state_conformance_integration_test.go` and
+`storage/redis/prefix_isolation_test.go`. The unchecked boxes above are kept as
+the original implementation checklist; release evidence for live conformance
+remains tracked separately in `docs/release/v1-requirements.json`.
+
 ### Task 1: Freeze the initial v1 JSON contracts and canonical fixtures
 
 **Files:**
