@@ -11,6 +11,13 @@ func TestVerifyRenderedAcceptsBaseWorkloadPolicy(t *testing.T) {
 	}
 }
 
+func TestVerifyRenderedRejectsInsufficientShutdownGrace(t *testing.T) {
+	workload := strings.Replace(validRenderedWorkload, "terminationGracePeriodSeconds: 120", "terminationGracePeriodSeconds: 90", 1)
+	if err := verifyRendered("base", []byte(workload)); err == nil || !strings.Contains(err.Error(), "must exceed server.shutdown_timeout") {
+		t.Fatalf("verify rendered shutdown grace error = %v, want insufficient shutdown grace error", err)
+	}
+}
+
 func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -196,7 +203,7 @@ spec:
     spec:
       serviceAccountName: llmtw-worker
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 90
+      terminationGracePeriodSeconds: 120
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -250,4 +257,14 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llmtw-config
+data:
+  config.yaml: |
+    server:
+      shutdown_timeout: 90s
+    service_classes: [economy, standard, priority]
 `

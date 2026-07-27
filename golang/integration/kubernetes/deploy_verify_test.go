@@ -79,7 +79,7 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      terminationGracePeriodSeconds: 90
+      terminationGracePeriodSeconds: 120
       containers:
         - name: worker
           image: ghcr.io/mfow/llm-temporal-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
@@ -132,5 +132,8 @@ kind: ConfigMap
 metadata:
   name: llmtw-config
 data:
+  config.yaml: |
+    server:
+      shutdown_timeout: 90s
   service_classes: [economy, standard, priority]
 `

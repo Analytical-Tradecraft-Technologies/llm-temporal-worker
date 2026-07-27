@@ -25,7 +25,7 @@ spec:
     spec:
       serviceAccountName: llmtw-worker
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 90
+      terminationGracePeriodSeconds: 120
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

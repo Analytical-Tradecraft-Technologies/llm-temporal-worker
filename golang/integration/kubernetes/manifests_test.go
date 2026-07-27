@@ -49,7 +49,7 @@ func TestBaseManifestSecurityContract(t *testing.T) {
 		"readOnlyRootFilesystem: true",
 		"drop: [ALL]",
 		"type: RuntimeDefault",
-		"terminationGracePeriodSeconds: 90",
+		"terminationGracePeriodSeconds: 120",
 		"path: /health/live",
 		"path: /health/ready",
 		"@sha256:",

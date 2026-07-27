@@ -372,6 +372,14 @@ heartbeat emitted while a one-shot provider call is in flight. It defaults to
 workflow Activity policy using this worker must use the same cadence and a
 `heartbeat_timeout` of at least three times that cadence.
 
+`server.shutdown_timeout` is the process-wide shutdown budget. It must be
+strictly greater than `temporal.worker.graceful_stop_timeout` plus
+`server.finalization_timeout`; equality is rejected so shutdown still has
+bounded time to close clients and flush telemetry after in-flight Activities
+drain. Kubernetes `terminationGracePeriodSeconds` must then exceed the same
+shutdown budget (with deployment-specific margin), as described in the
+[deployment shutdown contract](../architecture/deployment-and-operations.md#probes-and-shutdown).
+
 When `telemetry.tracing.enabled` is true, `otlp_endpoint` names the OTLP/gRPC
 collector and `sample_ratio` is a decimal from `0` through `1`. Runtime uses
 the secure OTLP transport default; deploy a collector endpoint with TLS. The

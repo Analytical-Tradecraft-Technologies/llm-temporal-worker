@@ -44,6 +44,9 @@ func (config Config) Validate() error {
 	if err := config.Temporal.validate(); err != nil {
 		return err
 	}
+	if err := validateShutdownBudget(config.Server, config.Temporal.Worker); err != nil {
+		return err
+	}
 	if err := config.State.validate(config.Environment); err != nil {
 		return err
 	}
@@ -89,6 +92,27 @@ func (config Config) Validate() error {
 	}
 	if err := config.Telemetry.validate(config.Environment); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateShutdownBudget keeps the process shutdown deadline longer than the
+// two bounded phases that can still need to run after polling stops. Temporal's
+// worker stop waits for in-flight Activities up to graceful_stop_timeout;
+// finalization_timeout bounds the short state/result reconciliation writes that
+// protect an accepted provider call. Equality is rejected because it leaves no
+// budget for closing clients and flushing telemetry.
+func validateShutdownBudget(server ServerConfig, worker TemporalWorkerConfig) error {
+	shutdown := time.Duration(server.ShutdownTimeout)
+	gracefulStop := time.Duration(worker.GracefulStopTimeout)
+	finalization := time.Duration(server.FinalizationTimeout)
+	if shutdown <= 0 || gracefulStop <= 0 || finalization <= 0 {
+		// The individual validators produce the more specific configuration
+		// errors. Avoid reporting a misleading ordering error before they run.
+		return nil
+	}
+	if shutdown <= gracefulStop || shutdown-gracefulStop <= finalization {
+		return fmt.Errorf("server.shutdown_timeout must exceed temporal.worker.graceful_stop_timeout + server.finalization_timeout")
 	}
 	return nil
 }
