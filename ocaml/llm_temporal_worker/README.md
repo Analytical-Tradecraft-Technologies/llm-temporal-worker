@@ -125,7 +125,10 @@ builds and runs the smoke executable against the installed public interface.
 `Conversation.to_request` is available when a workflow needs to inspect or
 inject the exact low-level v1 request. `respond_with` accepts an injectable
 typed dispatcher for deterministic tests; production code normally uses
-`respond` or `start_respond`. Settings changes are explicit persistent
+`respond` or `start_respond`. The asynchronous helper returns a future whose
+successful value is a `(turn, Temporal.Error.t) result`; protocol validation,
+including the response operation-key binding, stays in that value channel so
+workflow callbacks never raise for a mismatched response. Settings changes are explicit persistent
 builders, for example:
 
 ```ocaml

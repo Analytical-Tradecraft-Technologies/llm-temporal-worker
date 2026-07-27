@@ -7,7 +7,8 @@ architecture's one-shot, non-streaming workflow shape:
 - all five typed `Query` constructors;
 - validated `Query.Filter` builders for each query kind;
 - a cached immutable root and three sibling `Conversation.start_respond`
-  futures composed with `Temporal.Future.all`;
+  futures composed with `Temporal.Future.all`, including explicit handling of
+  each future's `(turn, Temporal.Error.t) result` value channel;
 - explicit `Conversation.compact`; and
 - a post-compaction `Conversation.respond` that restores application settings;
 - the documented low-level `generate_v1_activity`, `compact_v1_activity`, and

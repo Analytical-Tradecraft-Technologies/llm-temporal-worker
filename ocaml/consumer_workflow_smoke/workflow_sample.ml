@@ -56,8 +56,13 @@ let cache_2 = cache_constant (Int32.of_int 2)
 
 let message text = Message { actor = Human; content = [ Text text ] }
 
-let exactly_three_results (branches : Conversation.turn list) = match branches with
-  | [ branch_0; branch_1; branch_2 ] -> Ok (branch_0, branch_1, branch_2)
+let exactly_three_results
+    (branches : (Conversation.turn, Temporal.Error.t) result list) = match branches with
+  | [ branch_0; branch_1; branch_2 ] ->
+      let* branch_0 = branch_0 in
+      let* branch_1 = branch_1 in
+      let* branch_2 = branch_2 in
+      Ok (branch_0, branch_1, branch_2)
   | _ -> invalid_arg "Temporal.Future.all changed result cardinality"
 
 (* Keep the exact low-level descriptor examples type-checked as well as the

@@ -91,9 +91,14 @@ val respond_with :
 val respond :
   ?task_queue:Temporal_task_queue.t -> ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> append:item list -> t -> (turn, Temporal.Error.t) result
+
+(** The future's successful value is a [result] so protocol mismatches found
+    after Activity completion (including an unexpected operation key) remain
+    composable workflow data rather than being raised from a callback. *)
 val start_respond :
   ?task_queue:Temporal_task_queue.t -> ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
-  operation_key:Operation_key.t -> append:item list -> t -> (turn, Temporal.Error.t) Temporal.Future.t
+  operation_key:Operation_key.t -> append:item list -> t ->
+  ((turn, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
 type compact_dispatcher =
   ?task_queue:Temporal_task_queue.t ->

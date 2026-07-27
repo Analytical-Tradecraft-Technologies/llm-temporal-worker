@@ -187,5 +187,17 @@ let () =
   (match after.parent, after.settings_patch.tools, after.settings_patch.output with
    | Some _, Set [], Clear -> ()
    | _ -> failwith "post-compaction Generate did not restore settings");
+  (* Async compaction keeps local protocol validation in the successful
+     value channel, just like the query facade does, so an invalid root does
+     not schedule an Activity or raise from a workflow callback. *)
+  let invalid_compact = Conversation.start_compact
+      ~operation_key:(operation_key "compact-without-checkpoint") parent in
+  (match Temporal.Future.peek invalid_compact with
+   | Some (Ok (Error error)) when String.equal (Temporal.Error.message error)
+                                      "cannot compact a conversation without a checkpoint" -> ()
+   | Some (Ok (Error error)) -> failf "unexpected async compact error: %s" (Temporal.Error.message error)
+   | Some (Ok (Ok _)) -> failwith "async compact accepted a root without a checkpoint"
+   | Some (Error error) -> failf "async compact returned a Temporal error: %s" (Temporal.Error.message error)
+   | None -> failwith "invalid async compact did not produce a ready validation result");
   (match Conversation.Cache_policy.variant cache with 1l -> () | _ -> failwith "cache variant lost");
   print_endline "immutable v1 conversation tests passed"

@@ -115,3 +115,8 @@ val start :
   context:request_context ->
   'a t ->
   (('a response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
+
+(** [start] keeps response validation in the successful value channel.  In
+    addition to result-tag and cursor checks, the returned operation key must
+    equal the requested key; a mismatch is returned as [Error] without
+    raising in a workflow callback. *)
