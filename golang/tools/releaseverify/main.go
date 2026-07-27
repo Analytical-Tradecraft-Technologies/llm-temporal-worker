@@ -32,6 +32,7 @@ const (
 	maxArtifactBytes      = 32 * 1024 * 1024
 	maxOCIExpandedBytes   = 1024 * 1024 * 1024
 	maxOCIMetadataBytes   = 1024 * 1024
+	maxJSONDepth          = 128
 )
 
 var (
@@ -319,6 +320,9 @@ func runRecord(args []string, stdout io.Writer) error {
 		if err := rejectSecretLikeContent(filepath.Base(artifactPath), data); err != nil {
 			return err
 		}
+		if err := rejectAmbiguousJSON(fmt.Sprintf("artifact %q", name), data); err != nil {
+			return err
+		}
 		paths[name] = artifactPath
 		evidenceArtifacts[name] = evidenceArtifact{
 			Path:     filepath.ToSlash(filepath.Clean(relativePath)),
@@ -435,6 +439,9 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 	if err := rejectSecretLikeContent(filepath.Base(safeEvidencePath), evidenceData); err != nil {
 		return err
 	}
+	if err := rejectAmbiguousJSON("evidence record", evidenceData); err != nil {
+		return err
+	}
 	if err := validateEvidenceProvenanceURL(evidenceData); err != nil {
 		return err
 	}
@@ -488,6 +495,9 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 			return fmt.Errorf("artifact %q byte length does not match evidence", name)
 		}
 		if err := rejectSecretLikeContent(filepath.Base(path), data); err != nil {
+			return err
+		}
+		if err := rejectAmbiguousJSON(fmt.Sprintf("artifact %q", name), data); err != nil {
 			return err
 		}
 		paths[name] = path
@@ -897,6 +907,9 @@ func inspectOCILayout(path string) (string, error) {
 	if !ok || layoutEntry.data == nil {
 		return "", errors.New("OCI layout is missing oci-layout metadata")
 	}
+	if err := rejectAmbiguousJSON("OCI layout metadata", layoutEntry.data); err != nil {
+		return "", err
+	}
 	var layout ociLayoutDocument
 	if err := json.Unmarshal(layoutEntry.data, &layout); err != nil || layout.ImageLayoutVersion != "1.0.0" {
 		return "", errors.New("OCI layout has invalid oci-layout metadata")
@@ -904,6 +917,9 @@ func inspectOCILayout(path string) (string, error) {
 	indexEntry, ok := entries["index.json"]
 	if !ok || indexEntry.data == nil {
 		return "", errors.New("OCI layout is missing index.json")
+	}
+	if err := rejectAmbiguousJSON("OCI layout index", indexEntry.data); err != nil {
+		return "", err
 	}
 	var index ociIndexDocument
 	if err := json.Unmarshal(indexEntry.data, &index); err != nil || index.SchemaVersion != 2 || len(index.Manifests) != 1 {
@@ -924,6 +940,9 @@ func inspectOCILayout(path string) (string, error) {
 	if manifestEntry.data == nil {
 		return "", errors.New("OCI manifest payload is too large")
 	}
+	if err := rejectAmbiguousJSON("OCI manifest payload", manifestEntry.data); err != nil {
+		return "", err
+	}
 	var manifest ociManifestDocument
 	if err := json.Unmarshal(manifestEntry.data, &manifest); err != nil || manifest.SchemaVersion != 2 || len(manifest.Layers) == 0 {
 		return "", errors.New("OCI manifest payload is invalid")
@@ -939,6 +958,9 @@ func inspectOCILayout(path string) (string, error) {
 		return "", errors.New("OCI image config payload is too large")
 	}
 	if err := rejectSecretLikeContent("OCI image config", configEntry.data); err != nil {
+		return "", err
+	}
+	if err := rejectAmbiguousJSON("OCI image config", configEntry.data); err != nil {
 		return "", err
 	}
 	requiredEntries[manifestPath] = struct{}{}
@@ -989,6 +1011,9 @@ func resolveOCIManifestDescriptor(entries map[string]ociLayoutEntry, descriptor 
 			if nestedIndexEntry.data == nil {
 				return ociDescriptor{}, errors.New("OCI image index payload is too large")
 			}
+			if err := rejectAmbiguousJSON("OCI image index payload", nestedIndexEntry.data); err != nil {
+				return ociDescriptor{}, err
+			}
 			var nestedIndex ociIndexDocument
 			if err := json.Unmarshal(nestedIndexEntry.data, &nestedIndex); err != nil || nestedIndex.SchemaVersion != 2 || len(nestedIndex.Manifests) != 1 {
 				return ociDescriptor{}, errors.New("OCI image index must contain exactly one manifest descriptor")
@@ -1018,6 +1043,9 @@ func validateOptionalOCILayoutMetadata(entries map[string]ociLayoutEntry, requir
 		return errors.New("OCI layout compatibility metadata is too large")
 	}
 	if err := rejectSecretLikeContent("OCI layout compatibility metadata", entry.data); err != nil {
+		return err
+	}
+	if err := rejectAmbiguousJSON("OCI layout compatibility metadata", entry.data); err != nil {
 		return err
 	}
 	var document any
@@ -1386,6 +1414,70 @@ func validateCanonicalArtifactPaths(paths map[string]string) error {
 	return nil
 }
 
+func rejectAmbiguousJSON(name string, data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := scanUniqueJSONValue(decoder, 0); err != nil {
+		return fmt.Errorf("%s contains invalid or ambiguous JSON", name)
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%s contains invalid or ambiguous JSON", name)
+	}
+	return nil
+}
+
+func scanUniqueJSONValue(decoder *json.Decoder, depth int) error {
+	if depth > maxJSONDepth {
+		return errors.New("JSON nesting exceeds limit")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			rawKey, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := rawKey.(string)
+			if !ok {
+				return errors.New("JSON object key is not a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return errors.New("JSON object member is duplicated")
+			}
+			seen[key] = struct{}{}
+			if err := scanUniqueJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim('}') {
+			return errors.New("JSON object is not closed")
+		}
+	case '[':
+		for decoder.More() {
+			if err := scanUniqueJSONValue(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim(']') {
+			return errors.New("JSON array is not closed")
+		}
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
+	return nil
+}
+
 func rejectSecretLikeContent(name string, data []byte) error {
 	if containsSecretLikeBytes(data) || (json.Valid(data) && decodedJSONContainsSecretLikeValue(data)) {
 		return fmt.Errorf("release evidence artifact %q contains an unredacted secret-like value", name)
@@ -1424,7 +1516,7 @@ func decodedJSONContainsSecretLikeValue(data []byte) bool {
 func scanDecodedJSONValue(decoder *json.Decoder, depth int) (bool, any, error) {
 	// JSON evidence has shallow, fixed schemas. Treat excessive nesting as
 	// suspicious rather than allowing a crafted artifact to exhaust recursion.
-	if depth > 128 {
+	if depth > maxJSONDepth {
 		return true, nil, nil
 	}
 	token, err := decoder.Token()

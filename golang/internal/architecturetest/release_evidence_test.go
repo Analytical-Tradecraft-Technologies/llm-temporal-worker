@@ -1189,6 +1189,78 @@ func TestReleaseEvidenceVerifierRejectsJSONEscapedSecretKeys(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceVerifierRejectsDuplicateJSONMembers(t *testing.T) {
+	root := repositoryRoot(t)
+
+	t.Run("evidence record", func(t *testing.T) {
+		bundle := writeReleaseEvidenceBundle(t, false)
+		path := filepath.Join(bundle.directory, "evidence.json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ambiguous := append([]byte(`{"schema_version":1,`), bytes.TrimPrefix(data, []byte{'{'})...)
+		writeReleaseArtifact(t, path, ambiguous)
+
+		output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
+		if err == nil {
+			t.Fatalf("release evidence verifier accepted a duplicate evidence member:\n%s", output)
+		}
+		if !strings.Contains(string(output), "invalid or ambiguous JSON") {
+			t.Fatalf("duplicate evidence-member failure = %q", output)
+		}
+	})
+
+	for _, test := range []struct {
+		name     string
+		artifact string
+		contents func(bundle releaseEvidenceBundle) string
+	}{
+		{
+			name:     "Trivy severity",
+			artifact: "image_scan",
+			contents: func(bundle releaseEvidenceBundle) string {
+				return strings.Replace(
+					releaseEvidenceScan(bundle.imageReference, bundle.imageDigest, true),
+					`"Severity":"CRITICAL"`,
+					`"Severity":"CRITICAL","Severity":"LOW"`,
+					1,
+				)
+			},
+		},
+		{
+			name:     "SBOM component type",
+			artifact: "sbom",
+			contents: func(bundle releaseEvidenceBundle) string {
+				return strings.Replace(
+					releaseEvidenceSBOM(bundle.imageReference, bundle.imageDigest),
+					`"type":"container"`,
+					`"type":"library","type":"container"`,
+					1,
+				)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			bundle := writeReleaseEvidenceBundle(t, false)
+			evidence := readReleaseEvidence(t, bundle.directory)
+			replaceReleaseEvidenceArtifact(t, bundle, evidence, test.artifact, []byte(test.contents(bundle)))
+			writeReleaseEvidence(t, bundle.directory, evidence)
+
+			output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
+			if err == nil {
+				t.Fatalf("release evidence verifier accepted duplicate JSON members in %s:\n%s", test.name, output)
+			}
+			if !strings.Contains(string(output), "invalid or ambiguous JSON") {
+				t.Fatalf("duplicate %s-member failure = %q", test.name, output)
+			}
+			if strings.Contains(string(output), "Severity") || strings.Contains(string(output), "component type") {
+				t.Fatalf("duplicate-member failure disclosed an input member name: %q", output)
+			}
+		})
+	}
+}
+
 func TestReleaseEvidenceVerifierRejectsEscapingAndSymlinkedArtifacts(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, mutate := range []struct {
