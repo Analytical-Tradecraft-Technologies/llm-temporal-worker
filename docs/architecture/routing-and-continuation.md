@@ -244,6 +244,12 @@ V1 health is operator-configured plus passive:
   until configuration changes;
 - ambiguous calls do not count as safe transient failures.
 
+Authentication and configuration state is scoped to the immutable configuration
+snapshot that recorded the failure. Publishing a replacement snapshot clears
+that open state for planning even before the route receives a new outcome;
+health observations without a snapshot identity remain process-local diagnostic
+views only.
+
 Health state influences eligibility but never changes class, bypasses residency,
 or weakens capabilities. Memory health is per process; optional Redis health is
 an optimization and is not required for correctness.
