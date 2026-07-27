@@ -354,9 +354,10 @@ func (repository MaintenanceRepository) PruneExpiredQueryExecutions(ctx context.
 // operations whose retention horizon has elapsed. This is deliberately a
 // conservative orphan pass: operations with an attempt/audit row, budget
 // journal or reservation, cache/checkpoint reference, child operation, parent
-// lineage, or blob-backed request/result remain retained. Unknown-cost
-// operations are also fenced until authoritative cost resolution is available
-// so retention cannot erase the evidence needed for reconciliation.
+// lineage, or blob-backed request/result remain retained. Operations without
+// an exact settled cost (including unknown and still-pending cost states) are
+// also fenced until authoritative cost resolution is available, so retention
+// cannot erase the evidence needed for reconciliation.
 //
 // Candidate references are rechecked while the operation row is locked with
 // FOR UPDATE SKIP LOCKED. PostgreSQL foreign-key key-share locking makes a
@@ -413,7 +414,7 @@ func (repository MaintenanceRepository) PruneExpiredOperations(ctx context.Conte
 			" FROM "+operationsTable+" o"+
 			" WHERE o.state IN ('completed', 'definite_failed', 'canceled')"+
 			" AND o.retention_expires_at < $1"+
-			" AND o.cost_status <> 'unknown'"+
+			" AND o.cost_status = 'exact'"+
 			" AND o.request_blob_id IS NULL AND o.result_blob_id IS NULL"+
 			" AND o.cache_entry_id IS NULL"+
 			" AND o.parent_operation_id IS NULL AND o.parent_checkpoint_id IS NULL"+

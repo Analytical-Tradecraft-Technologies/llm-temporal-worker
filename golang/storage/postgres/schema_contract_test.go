@@ -127,8 +127,8 @@ func TestMigrationObjectNamesCoverTablesAndIndexes(t *testing.T) {
 	if len(tables) != 26 {
 		t.Fatalf("migration table count = %d, want 26: %v", len(tables), tables)
 	}
-	if len(indexes) != 71 {
-		t.Fatalf("migration index count = %d, want 71", len(indexes))
+	if len(indexes) != 72 {
+		t.Fatalf("migration index count = %d, want 72", len(indexes))
 	}
 	if got := migrationConstraintIndexCount(migration); got != 46 {
 		t.Fatalf("constraint-backed index count = %d, want 46", got)

@@ -322,6 +322,7 @@ func TestMaintenanceRetentionPrunesOnlyUnreferencedTerminalOperations(t *testing
 	active := begin("maintenance-operation-active-" + uuid.NewString())
 	fresh := begin("maintenance-operation-fresh-" + uuid.NewString())
 	unknown := begin("maintenance-operation-unknown-" + uuid.NewString())
+	pending := begin("maintenance-operation-pending-" + uuid.NewString())
 	if err := operations.MarkDispatching(ctx, admission.DispatchRequest{OperationID: withAttempt.Operation.ID, DispatchToken: withAttempt.Operation.DispatchToken}); err != nil {
 		t.Fatalf("create operation attempt: %v", err)
 	}
@@ -330,8 +331,11 @@ func TestMaintenanceRetentionPrunesOnlyUnreferencedTerminalOperations(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{free.Operation.ID, withAttempt.Operation.ID} {
-		if _, err := operations.Pool.Exec(ctx, "UPDATE "+operationsTable+" SET state='canceled', retention_expires_at=$2, updated_at=$2, created_at=$2, completed_at=$2 WHERE operation_id=$1", operationUUID(id), old); err != nil {
+	if _, err := operations.Pool.Exec(ctx, "UPDATE "+operationsTable+" SET state='canceled', actual_cost_usd=0, cost_status='exact', cost_method='worker_cache_zero', retention_expires_at=$2, updated_at=$2, created_at=$2, completed_at=$2 WHERE operation_id=$1", operationUUID(free.Operation.ID), old); err != nil {
+		t.Fatalf("expire exact free operation: %v", err)
+	}
+	for _, id := range []string{withAttempt.Operation.ID, pending.Operation.ID} {
+		if _, err := operations.Pool.Exec(ctx, "UPDATE "+operationsTable+" SET state='canceled', retention_expires_at=$2, updated_at=$2, created_at=$2 WHERE operation_id=$1", operationUUID(id), old); err != nil {
 			t.Fatalf("expire terminal operation %q: %v", id, err)
 		}
 	}
@@ -365,6 +369,7 @@ func TestMaintenanceRetentionPrunesOnlyUnreferencedTerminalOperations(t *testing
 		"active":  active.Operation.ID,
 		"fresh":   fresh.Operation.ID,
 		"unknown": unknown.Operation.ID,
+		"pending": pending.Operation.ID,
 	} {
 		if err := operations.Pool.QueryRow(ctx, "SELECT count(*) FROM "+operationsTable+" WHERE operation_id=$1", operationUUID(id)).Scan(&remaining); err != nil {
 			t.Fatal(err)
