@@ -239,6 +239,9 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	// Completed/reconciliation replays do not need the transcript because their
 	// response is already authoritative and is validated below.
 	if replay.Completed == nil && replay.ReconciliationPending == nil {
+		if err := validateGenerateReplayBinding(request, replay); err != nil {
+			return llm.GenerateResponseV1{}, stageError("replay", err)
+		}
 		if err := validateGenerateReplayFrontier(request, replay, request.Parent != nil); err != nil {
 			return llm.GenerateResponseV1{}, stageError("replay", err)
 		}
@@ -452,6 +455,30 @@ func validateGeneratePendingReconciliation(request llm.GenerateRequestV1, pendin
 	return validateGenerateResponse(request, pending.Route.OperationID, pending.Finalization.Response)
 }
 
+// validateGenerateReplayBinding verifies that the replay state belongs to the
+// request's effective checkpoint. A root Generate has no ancestor state to
+// replay, while a child must replay exactly the checkpoint named by Parent.
+// This check happens before cache lookup and routing; those ports must never
+// observe a state from another branch or scope.
+func validateGenerateReplayBinding(request llm.GenerateRequestV1, replay GenerateReplay) error {
+	if request.Parent == nil {
+		if replay.State.Handle != "" {
+			return errors.New("root replay must not include a materialized checkpoint handle")
+		}
+		if replay.State.Tenant != "" || replay.State.Project != "" {
+			return errors.New("root replay must not include materialized scope")
+		}
+		return nil
+	}
+	if replay.State.Handle == "" {
+		return errors.New("child replay must include the request parent checkpoint handle")
+	}
+	if replay.State.Handle != state.Handle(*request.Parent) {
+		return fmt.Errorf("replay checkpoint handle %q does not match request parent %q", replay.State.Handle, *request.Parent)
+	}
+	return nil
+}
+
 // validateGenerateReplayFrontier verifies the storage-neutral transcript
 // boundary before a replay can reach routing or provider dispatch. The
 // durable materializer validates the full graph and blob digests; this check
@@ -466,6 +493,14 @@ func validateGenerateReplayFrontier(request llm.GenerateRequestV1, replay Genera
 	}
 	if replay.State.Handle == "" && (len(replay.State.Items) != 0 || len(replay.State.PendingToolCalls) != 0) {
 		return errors.New("replay transcript requires a materialized checkpoint handle")
+	}
+	if replay.State.Handle != "" {
+		if replay.State.Tenant != request.Context.Tenant {
+			return fmt.Errorf("replay tenant %q does not match request tenant %q", replay.State.Tenant, request.Context.Tenant)
+		}
+		if replay.State.Project != request.Context.Project {
+			return fmt.Errorf("replay project %q does not match request project %q", replay.State.Project, request.Context.Project)
+		}
 	}
 	basePending, err := state.ValidateTranscript(replay.State.Items)
 	if err != nil {

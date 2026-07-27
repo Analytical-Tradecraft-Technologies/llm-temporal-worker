@@ -76,7 +76,13 @@ call, or new turn inserted before outstanding tool results therefore fails
 closed before admission or provider dispatch. The same frontier check guards
 Compact replay. This validation does not copy ancestor state into the
 Temporal payload and does not replace the durable materializer's graph/blob
-integrity checks.
+integrity checks. The replay state is also bound to the request scope at this
+boundary: a root request must not carry a materialized handle or scope, a
+child replay must name the exact requested parent handle, and every
+materialized handle must carry the request's tenant and project. Automatic
+Compact may replace the parent with its newly materialized child, but it may
+not change that tenant/project scope. These checks fail before cache lookup,
+routing, Redis reservation, PostgreSQL journaling, or provider dispatch.
 
 This slice intentionally does not construct clients or claim that V1 is
 production-complete. Concrete Redis/PostgreSQL/provider ports, snapshot
@@ -100,5 +106,7 @@ remain pending.
   boundaries, prove cancellation after Compact stops before parent admission,
   and cover the post-finalization reconciliation handoff. The suite also
   proves that a tool-result delta resolves the replay frontier and that an
-  unmatched result is rejected before cache or admission.
+  unmatched result is rejected before cache or admission. Replay binding tests
+  cover root-state rejection, wrong-parent rejection, cross-tenant/project
+  rejection, and valid scope-preserving post-compaction replacement.
 - `make -C golang test` passes with the runner included.

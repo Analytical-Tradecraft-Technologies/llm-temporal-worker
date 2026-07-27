@@ -150,7 +150,7 @@ func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 	}
 	ports.Compact = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error) {
 		events = append(events, "compact")
-		return GenerateReplay{State: state.MaterializedState{Handle: "compacted"}}, nil
+		return GenerateReplay{State: state.MaterializedState{Handle: "compacted", Tenant: "tenant", Project: "project"}}, nil
 	}
 	var routeHandle, dispatchHandle state.Handle
 	ports.Route = func(_ context.Context, _ llm.GenerateRequestV1, replay GenerateReplay, _ CompactionDecision) (RoutePlan, error) {
@@ -178,6 +178,115 @@ func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 	}
 }
 
+func TestGenerateV1RejectsReplayStateOutsideRequestBinding(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*llm.GenerateRequestV1, *state.MaterializedState)
+	}{
+		{
+			name: "root state",
+			mutate: func(_ *llm.GenerateRequestV1, replay *state.MaterializedState) {
+				replay.Handle = "root-state"
+				replay.Tenant = "tenant"
+				replay.Project = "project"
+			},
+		},
+		{
+			name: "wrong parent",
+			mutate: func(request *llm.GenerateRequestV1, replay *state.MaterializedState) {
+				parent := llm.CheckpointHandle("request-parent")
+				request.Parent = &parent
+				replay.Handle = "other-parent"
+				replay.Tenant = request.Context.Tenant
+				replay.Project = request.Context.Project
+			},
+		},
+		{
+			name: "wrong tenant",
+			mutate: func(request *llm.GenerateRequestV1, replay *state.MaterializedState) {
+				parent := llm.CheckpointHandle("request-parent")
+				request.Parent = &parent
+				replay.Handle = state.Handle(parent)
+				replay.Tenant = "other-tenant"
+				replay.Project = request.Context.Project
+			},
+		},
+		{
+			name: "wrong project",
+			mutate: func(request *llm.GenerateRequestV1, replay *state.MaterializedState) {
+				parent := llm.CheckpointHandle("request-parent")
+				request.Parent = &parent
+				replay.Handle = state.Handle(parent)
+				replay.Tenant = request.Context.Tenant
+				replay.Project = "other-project"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := testGenerateRequest()
+			replayState := state.MaterializedState{}
+			test.mutate(&request, &replayState)
+			events := []string{}
+			ports := testGeneratePorts(&events, "")
+			ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+				events = append(events, "replay")
+				return GenerateReplay{State: replayState}, nil
+			}
+
+			_, err := GenerateV1(context.Background(), request, ports)
+			if err == nil || !errors.Is(err, ErrV1Stage) {
+				t.Fatalf("GenerateV1 error = %v, want replay binding stage failure", err)
+			}
+			if got, want := events, []string{"replay"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("invalid replay reached later phases: %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestGenerateV1AllowsScopedPostCompactionParentReplacement(t *testing.T) {
+	request := testGenerateRequest()
+	parent := llm.CheckpointHandle("request-parent")
+	request.Parent = &parent
+	compacted := state.Handle("compacted-child")
+
+	events := []string{}
+	ports := testGeneratePorts(&events, "")
+	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
+		events = append(events, "replay")
+		return GenerateReplay{State: state.MaterializedState{
+			Handle:  state.Handle(parent),
+			Tenant:  request.Context.Tenant,
+			Project: request.Context.Project,
+		}}, nil
+	}
+	ports.CompactionDecision = func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
+		events = append(events, "compaction")
+		return CompactionDecision{Required: true}, nil
+	}
+	ports.Compact = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error) {
+		events = append(events, "compact")
+		return GenerateReplay{State: state.MaterializedState{
+			Handle:  compacted,
+			Tenant:  request.Context.Tenant,
+			Project: request.Context.Project,
+		}}, nil
+	}
+
+	response, err := GenerateV1(context.Background(), request, ports)
+	if err != nil {
+		t.Fatalf("GenerateV1 error = %v", err)
+	}
+	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != llm.CheckpointHandle(compacted) {
+		t.Fatalf("response checkpoint parent = %v, want %q", response.Checkpoint.Parent, compacted)
+	}
+	if got, want := events, []string{"replay", "cache", "compaction", "compact", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase order = %v, want %v", got, want)
+	}
+}
+
 func TestGenerateV1AcceptsToolResultDeltaAgainstReplayedFrontier(t *testing.T) {
 	request := testGenerateRequest()
 	parent := llm.CheckpointHandle("parent")
@@ -189,6 +298,8 @@ func TestGenerateV1AcceptsToolResultDeltaAgainstReplayedFrontier(t *testing.T) {
 		events = append(events, "replay")
 		return GenerateReplay{State: state.MaterializedState{
 			Handle:           state.Handle(parent),
+			Tenant:           request.Context.Tenant,
+			Project:          request.Context.Project,
 			Items:            []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)}},
 			PendingToolCalls: []string{"call-1"},
 		}}, nil
@@ -212,6 +323,8 @@ func TestGenerateV1RejectsToolResultDeltaOutsideReplayedFrontier(t *testing.T) {
 		events = append(events, "replay")
 		return GenerateReplay{State: state.MaterializedState{
 			Handle:           state.Handle(parent),
+			Tenant:           request.Context.Tenant,
+			Project:          request.Context.Project,
 			Items:            []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)}},
 			PendingToolCalls: []string{"call-1"},
 		}}, nil
@@ -665,7 +778,7 @@ func TestGenerateV1RejectsFinalizationFromWrongEffectiveParent(t *testing.T) {
 	ports := testGeneratePorts(&events, "")
 	ports.Replay = func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error) {
 		events = append(events, "replay")
-		return GenerateReplay{State: state.MaterializedState{Handle: state.Handle(parent)}}, nil
+		return GenerateReplay{State: state.MaterializedState{Handle: state.Handle(parent), Tenant: request.Context.Tenant, Project: request.Context.Project}}, nil
 	}
 	ports.Finalize = func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) (GenerateFinalization, error) {
 		events = append(events, "finalize")
