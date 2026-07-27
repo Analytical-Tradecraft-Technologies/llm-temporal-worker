@@ -105,7 +105,7 @@ func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, 
 		return Estimate{}, fmt.Errorf("cannot estimate an empty route plan")
 	}
 	var maximum Estimate
-	for _, candidate := range plan.Candidates {
+	for index, candidate := range plan.Candidates {
 		entry, ok := entries[candidate.ID]
 		if !ok {
 			return Estimate{}, fmt.Errorf("price missing for candidate %s", candidate.ID)
@@ -114,7 +114,10 @@ func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, 
 		if err != nil {
 			return Estimate{}, err
 		}
-		if estimate.CostUSD.Cmp(maximum.CostUSD) > 0 {
+		// Select the first candidate even when its estimate is exactly zero.
+		// Otherwise an all-free plan would return an empty candidate identity,
+		// losing the route that established the maximum.
+		if index == 0 || estimate.CostUSD.Cmp(maximum.CostUSD) > 0 {
 			maximum = estimate
 		}
 	}

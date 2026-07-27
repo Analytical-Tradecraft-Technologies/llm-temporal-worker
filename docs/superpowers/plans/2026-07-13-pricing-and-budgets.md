@@ -105,6 +105,8 @@ got, err := pricing.CeilMicroUSD(decimalUSD, units, unitsPerPrice)
 - [ ] Run `go test ./budget -run TestEstimate`. Expected: FAIL.
 - [ ] Implement `Estimator.EstimateCandidate` returning component facts and
   `EstimatePlan` returning the maximum with the candidate ID that determined it.
+  The first canonical candidate wins equal-cost ties, including an all-free
+  plan, so the reservation always retains an auditable candidate identity.
   The safety ratio is an exact decimal/rational, not float.
 - [ ] Reject candidates whose maximum context/output or media size cannot fit.
   Do not estimate from average completion length.
