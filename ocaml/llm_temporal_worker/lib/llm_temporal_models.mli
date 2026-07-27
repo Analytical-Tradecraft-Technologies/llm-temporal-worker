@@ -225,7 +225,7 @@ type compaction_response = {
 }
 
 type availability = Available | Degraded | Unavailable
-type model_lifecycle = Active | Deprecated | Retired
+type model_lifecycle = Active | Deprecated | Retired | Unknown
 type model_capability = string
 type inventory_source = Provider_api_inventory | Operator_inventory | Unknown_inventory_source
 type credit_state = Credit_ok | Credit_low | Credit_exhausted | Credit_unknown

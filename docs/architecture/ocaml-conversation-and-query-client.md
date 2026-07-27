@@ -419,6 +419,14 @@ type spend_summary = {
 }
 ~~~
 
+Model-inventory lifecycle values use the Go query vocabulary exactly:
+`available`, `deprecated`, `unavailable`, and `unknown`. The OCaml protocol
+keeps the existing `Active` and `Retired` constructor names for source
+compatibility, mapping them to `available` and `unavailable` respectively;
+they must not be encoded as the legacy `active` or `retired` spellings. Route
+health remains a separate `availability` type, so a model lifecycle cannot be
+mistaken for provider route availability.
+
 The `Query` member of `operation_kind` is a spend-reporting dimension across
 the dedicated query audit ledger; it does not imply that Query uses the paid
 inference operation state machine. Accordingly, Query responses expose

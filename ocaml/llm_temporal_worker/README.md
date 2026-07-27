@@ -268,6 +268,12 @@ The wrapper preserves arbitrary provider model naming and is encoded as the
 same JSON string expected by the Go query Activity.  Use `None` when no prefix
 filter is desired.
 
+Model inventory lifecycle filters use the Go wire values `available`,
+`deprecated`, `unavailable`, and `unknown`. For source compatibility the
+OCaml constructors are `Active`, `Deprecated`, `Retired`, and `Unknown`; the
+first and third encode as `available` and `unavailable` (never `active` or
+`retired`). This lifecycle is distinct from route `availability`.
+
 Validation failures are ordinary `validation_error` strings and happen before
 an Activity is scheduled, which makes malformed query construction explicit in
 deterministic Workflow code.
