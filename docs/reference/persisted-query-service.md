@@ -17,8 +17,9 @@ for omission. The v1 decoder rejects `null` before authorization or storage
 access so a malformed request cannot silently become a broader unfiltered
 query.
 
-Deployments must supply the three security/observability seams below; a
-fourth budget-status seam is required only when that query kind is enabled:
+The low-level `NewPersistedQueryService` constructor requires the three
+security/observability seams below; a fourth budget-status seam is required
+only when that query kind is enabled:
 
 - `control.AuthorizeFunc` for tenant/project/actor authorization;
 - a keyed `control.CursorCodec` for scope/filter/horizon-bound cursors; and
@@ -50,11 +51,23 @@ include a cursor. The v1 wire codec enforces these combinations before a custom
 query service can return a response or the Activity can record audit evidence.
 
 The production factory accepts these choices through
-`ProductionFactoryOptions.QueryServiceBuilder`. It does not invent keys,
-authorization, or an audit repository. A PostgreSQL closer may expose the
-read repositories through `PostgresQueryRepositoriesSource`; missing
-repositories remain a permanent unsupported-capability response rather than
-an empty result.
+`ProductionFactoryOptions.QueryServiceBuilder`. Use
+`runtime.NewPersistedQueryServiceBuilder` for the production persisted-query
+contract. It requires deployment-owned authorization and cursor key material,
+then binds `PostgresQueryRepositories.QueryAudit.RecordAudit` from the same
+immutable client set as the read repositories. It fails snapshot construction
+when that PostgreSQL audit repository is absent, rather than accepting a
+separate callback at this production composition boundary. A PostgreSQL
+closer may expose the query capabilities through
+`PostgresQueryRepositoriesSource`; missing read repositories remain a
+permanent unsupported-capability response rather than an empty result.
+Budget status remains unavailable through this helper: a process-lifetime
+builder must not capture a Redis reader across reloads. An embedding may use
+the low-level constructor only when it can supply a reader owned by that exact
+snapshot; the default production factory does not yet expose that capability.
+For the same reload-safety reason, spend summary obtains its scope resolver
+from `PostgresQueryRepositories.ScopeResolver`, not from process-lifetime
+builder options.
 
 The PostgreSQL composition is persisted-only. Refresh requests are rejected
 until an explicit management refresh adapter is supplied. Budget status
@@ -83,20 +96,18 @@ these Temporal query Activities.
 Example deployment wiring:
 
 ```go
+queryBuilder, _ := runtime.NewPersistedQueryServiceBuilder(runtime.PersistedQueryBuilderOptions{
+    Authorize: authorizeTenant,
+    Cursor:    &control.CursorCodec{Key: cursorKey, TTL: 15 * time.Minute},
+})
 factory, _ := runtime.NewProductionEngineFactory(runtime.ProductionFactoryOptions{
-    QueryServiceBuilder: func(ctx context.Context, snapshot *config.Snapshot, repos runtime.PostgresQueryRepositories) (activity.QueryService, error) {
-        return runtime.NewPersistedQueryService(snapshot, repos, runtime.PersistedQueryOptions{
-            Authorize: authorizeTenant,
-            Cursor:    &control.CursorCodec{Key: cursorKey, TTL: 15 * time.Minute},
-            Audit:     auditQuery,
-            BudgetStatus: redisBudgetReader,
-            ResolveScope: func(ctx context.Context, scope control.QueryScope) (uuid.UUID, error) {
-                return authenticatedScopeIDs.Lookup(ctx, string(scope.Tenant), string(scope.Project))
-            },
-        })
-    },
+    QueryServiceBuilder: queryBuilder,
 })
 ```
 
 The builder receives the same immutable snapshot used to construct the worker;
-it must not resolve credentials or mutate that snapshot.
+it must not resolve credentials or mutate that snapshot. The deployment's
+`PostgresQueryRepositoriesSource` must provide `QueryAudit`; the default
+PostgreSQL closer deliberately does not invent the HMAC keyrings and scope
+repository required to construct that ledger. A deployment that enables spend
+summary must also expose a same-snapshot `ScopeResolver` in that bundle.

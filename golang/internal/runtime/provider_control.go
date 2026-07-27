@@ -26,22 +26,24 @@ type providerStatusRepositorySource interface {
 	ProviderStatusRepository() postgresstore.ProviderStatusRepository
 }
 
-// PostgresQueryRepositories is the optional read-side bundle owned by one
-// durable PostgreSQL pool. Repositories are pointers because deployments may
-// roll out only the query slices whose key material and schema are available;
-// a missing repository must remain an explicit fail-closed capability rather
-// than being replaced with an in-memory answer.
+// PostgresQueryRepositories is the optional query bundle owned by one durable
+// PostgreSQL pool. Repositories are pointers because deployments may roll out
+// only the query slices whose key material and schema are available. A missing
+// repository must remain an explicit fail-closed result rather than being
+// replaced with an in-memory answer.
 type PostgresQueryRepositories struct {
 	ProviderStatus *postgresstore.ProviderStatusRepository
 	Inventory      *postgresstore.InventoryRepository
 	SpendSummary   *postgresstore.SpendSummaryRepository
 	QueryAudit     *postgresstore.QueryExecutionRepository
+	ScopeResolver  QueryScopeResolver
 }
 
 // PostgresQueryRepositoriesSource is implemented by PostgreSQL closers that
-// construct read-side repositories alongside their pool. The runtime copies
-// this bundle into the immutable production client set so a reload cannot
-// accidentally point a query Activity at a closed or newer pool.
+// construct snapshot-owned query repositories and supporting capabilities
+// alongside their pool. The runtime copies this bundle into the immutable
+// production client set so a reload cannot accidentally point a query Activity
+// at a closed or newer pool.
 type PostgresQueryRepositoriesSource interface {
 	QueryRepositories() PostgresQueryRepositories
 }

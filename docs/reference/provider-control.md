@@ -188,12 +188,14 @@ canonical redacted envelopes and exact-or-unknown cost metadata and must commit
 the record before returning; failures are surfaced as retryable finalize state
 errors. The runtime now carries an optional, snapshot-scoped
 `PostgresQueryRepositories` bundle from the PostgreSQL closer into its
-`productionClientSet`. A custom closer may provide inventory and query-audit
-repositories when their key material and schema are provisioned; the default
-closer exposes only provider status. A companion `QueryService` is forwarded
-only when the same closer supplies one, so an unconfigured query family stays
-fail-closed rather than falling back to an in-memory answer. Budget and spend
-handlers are not implemented by this composition and remain follow-up work.
+`productionClientSet`. A custom closer may provide inventory, query-audit, and
+scope-resolution capabilities when their key material and schema are
+provisioned; the default closer exposes provider status and spend summary. A
+companion `QueryService` is forwarded only when the same closer supplies one,
+so an unconfigured query family stays fail-closed rather than falling back to
+an in-memory answer. The low-level persisted-query constructor accepts a
+snapshot-scoped Redis budget-status reader, but the production builder leaves
+that family unsupported until runtime composition owns such a reader.
 
 `CursorCodec` signs a bounded opaque position with HMAC-SHA256. Its claims bind
 the query kind, full tenant/project/actor scope (including tags), canonical

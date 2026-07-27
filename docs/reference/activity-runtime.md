@@ -94,8 +94,14 @@ receives canonical redacted request/response envelopes, SHA-256 request and
 response digests, and exact-or-unknown cost metadata after all response and
 cursor checks. A configured sink must persist the record before `Execute`
 returns; a sink error becomes retryable state-unavailable/finalize failure.
-The production Activity factory still has to connect this hook to the
-repository-only [query execution audit ledger](query-audit-ledger.md).
+`NewPersistedQueryServiceBuilder` connects this hook to the snapshot-owned
+`PostgresQueryRepositories.QueryAudit` capability and rejects snapshot
+construction when the durable audit repository is absent. Authorization,
+cursor key material, and construction of the keyed audit repository remain
+deployment-owned. The helper deliberately leaves budget status fail-closed
+until production composition exposes a snapshot-owned Redis reader; it never
+captures a reader across reloads. See the repository-only
+[query execution audit ledger](query-audit-ledger.md).
 
 ### Query failure classification
 

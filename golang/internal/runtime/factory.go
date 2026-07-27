@@ -186,9 +186,10 @@ func (set *productionClientSet) ProviderStatusRecorder() engine.ProviderStatusRe
 	return set.providerControl
 }
 
-// QueryRepositories returns the immutable read-side repositories constructed
-// for this configuration snapshot. Nil entries are intentional capabilities:
-// callers must fail closed when a query family has not been provisioned.
+// QueryRepositories returns the immutable query repositories and supporting
+// capabilities constructed for this configuration snapshot. Nil entries are
+// intentional capabilities: callers must fail closed when a query family has
+// not been provisioned.
 func (set *productionClientSet) QueryRepositories() PostgresQueryRepositories {
 	if set == nil {
 		return PostgresQueryRepositories{}

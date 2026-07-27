@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -287,5 +288,110 @@ func budgetOrSpendFilter(kind llm.QueryKind) control.QueryFilter {
 func TestNewPersistedQueryServiceRequiresSecuritySeams(t *testing.T) {
 	if _, err := NewPersistedQueryService(nil, PostgresQueryRepositories{}, PersistedQueryOptions{}); err == nil {
 		t.Fatal("nil snapshot unexpectedly accepted")
+	}
+}
+
+func TestNewPersistedQueryServiceNormalizesMissingOptionalCapabilities(t *testing.T) {
+	var budget *fakeBudgetStatus
+	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour}
+	service, err := NewPersistedQueryService(&config.Snapshot{}, PostgresQueryRepositories{}, PersistedQueryOptions{
+		Authorize:    func(context.Context, control.Authorization) error { return nil },
+		Cursor:       codec,
+		Audit:        func(context.Context, control.QueryAuditRecord) error { return nil },
+		BudgetStatus: budget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := service.(*control.QueryService).TypedHandler.(*persistedQueryHandler)
+	if handler.provider != nil || handler.inventory != nil || handler.spend != nil || handler.budget != nil {
+		t.Fatalf("missing optional capabilities were not normalized: %#v", handler)
+	}
+	request, err := control.EncodeQueryRequest(control.QueryRequest{
+		OperationKey: "budget-op",
+		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
+		Kind:         llm.QueryBudgetStatus,
+		Filter:       control.BudgetStatusQuery{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Execute(context.Background(), request)
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+		t.Fatalf("typed-nil budget reader error = %v, want non-retryable unsupported capability", err)
+	}
+}
+
+func TestNewPersistedQueryServiceBuilderRequiresDeploymentSecurityInputs(t *testing.T) {
+	authorize := func(context.Context, control.Authorization) error { return nil }
+	codec := &control.CursorCodec{Key: []byte("query-builder-key"), TTL: time.Hour}
+	for _, test := range []struct {
+		name    string
+		options PersistedQueryBuilderOptions
+	}{
+		{name: "authorization", options: PersistedQueryBuilderOptions{Cursor: codec}},
+		{name: "cursor", options: PersistedQueryBuilderOptions{Authorize: authorize}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewPersistedQueryServiceBuilder(test.options); err == nil || !strings.Contains(err.Error(), test.name) {
+				t.Fatalf("NewPersistedQueryServiceBuilder() error = %v, want missing %s", err, test.name)
+			}
+		})
+	}
+}
+
+func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *testing.T) {
+	authorize := func(context.Context, control.Authorization) error { return nil }
+	cursorKey := []byte("query-builder-key")
+	builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
+		Authorize: authorize,
+		Cursor:    &control.CursorCodec{Key: cursorKey, TTL: time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursorKey[0] = 'X'
+
+	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{}); err == nil || !strings.Contains(err.Error(), "audit repository") {
+		t.Fatalf("builder without audit repository error = %v", err)
+	}
+	var nilAudit *postgresstore.QueryExecutionRepository
+	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{QueryAudit: nilAudit}); err == nil || !strings.Contains(err.Error(), "audit repository") {
+		t.Fatalf("builder with typed-nil audit repository error = %v", err)
+	}
+
+	audit := &postgresstore.QueryExecutionRepository{}
+	scopeID := uuid.MustParse("019c9aaf-77f7-7d7f-92c0-b53eb2ed3c47")
+	service, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{
+		QueryAudit: audit,
+		ScopeResolver: func(context.Context, control.QueryScope) (uuid.UUID, error) {
+			return scopeID, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryService, ok := service.(*control.QueryService)
+	if !ok {
+		t.Fatalf("query service = %T, want *control.QueryService", service)
+	}
+	if err := queryService.Audit(context.Background(), control.QueryAuditRecord{}); err == nil || !strings.Contains(err.Error(), "query audit request JSON") {
+		t.Fatalf("bound PostgreSQL audit adapter error = %v, want request validation", err)
+	}
+	handler := queryService.TypedHandler.(*persistedQueryHandler)
+	if got, err := handler.resolveScope(context.Background(), control.QueryScope{Tenant: "tenant", Project: "project"}); err != nil || got != scopeID {
+		t.Fatalf("snapshot scope resolver = %s, %v; want %s", got, err, scopeID)
+	}
+	if got := string(queryService.CursorCodec.Key); got != "query-builder-key" {
+		t.Fatalf("snapshot cursor key = %q, want immutable builder copy", got)
+	}
+	queryService.CursorCodec.Key[0] = 'Y'
+	nextService, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{QueryAudit: audit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(nextService.(*control.QueryService).CursorCodec.Key); got != "query-builder-key" {
+		t.Fatalf("reloaded snapshot cursor key = %q, want independent builder copy", got)
 	}
 }
