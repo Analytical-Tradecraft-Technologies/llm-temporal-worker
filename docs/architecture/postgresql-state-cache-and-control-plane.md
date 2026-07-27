@@ -802,6 +802,11 @@ CREATE INDEX operations_terminal_expiry_idx
     ON llm_worker.operations (retention_expires_at, operation_id)
     WHERE state IN ('completed', 'definite_failed', 'canceled');
 
+CREATE INDEX operations_exact_terminal_expiry_idx
+    ON llm_worker.operations (retention_expires_at, operation_id)
+    WHERE state IN ('completed', 'definite_failed', 'canceled')
+      AND cost_status = 'exact';
+
 CREATE INDEX operations_completed_brin_idx
     ON llm_worker.operations USING brin (completed_at)
     WITH (pages_per_range = 64)

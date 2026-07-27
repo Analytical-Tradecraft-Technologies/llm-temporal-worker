@@ -13,6 +13,7 @@ func TestMigrationIndexesRemainExplicit(t *testing.T) {
 	sql := string(data)
 	for _, index := range []string{
 		"operations_completed_brin_idx",
+		"operations_exact_terminal_expiry_idx",
 		"operations_scope_spend_idx",
 		"budget_journal_time_brin_idx",
 		"provider_status_event_brin_idx",

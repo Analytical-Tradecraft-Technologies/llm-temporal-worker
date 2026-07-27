@@ -418,6 +418,13 @@ CREATE INDEX __PREFIX__operations_terminal_expiry_idx
     ON __SCHEMA__.__PREFIX__operations (retention_expires_at, operation_id)
     WHERE state IN ('completed', 'definite_failed', 'canceled');
 
+-- Operation orphan retention only deletes exact settled-cost rows. Keep its
+-- candidate scan bounded when unresolved terminal history accumulates.
+CREATE INDEX __PREFIX__operations_exact_terminal_expiry_idx
+    ON __SCHEMA__.__PREFIX__operations (retention_expires_at, operation_id)
+    WHERE state IN ('completed', 'definite_failed', 'canceled')
+      AND cost_status = 'exact';
+
 CREATE INDEX __PREFIX__operations_completed_brin_idx
     ON __SCHEMA__.__PREFIX__operations USING brin (completed_at)
     WITH (pages_per_range = 64)

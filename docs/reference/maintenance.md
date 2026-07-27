@@ -48,7 +48,7 @@ request/result data, no attempt/audit, budget, cache, checkpoint, parent/child,
 or blob references, and an exact settled cost. Unknown-cost and still-pending
 cost states remain fenced until authoritative cost resolution is recorded. This
 pass is bounded by
-`operations_terminal_expiry_idx` and repeats every reference predicate while
+`operations_exact_terminal_expiry_idx` and repeats every reference predicate while
 locking candidates with `FOR UPDATE SKIP LOCKED`. Full operation history and
 journal/reservation retention remain disabled until their broader restrictive
 foreign-key and audit/rebuild obligations can be handled in their own
