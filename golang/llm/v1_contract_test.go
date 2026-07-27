@@ -181,6 +181,62 @@ func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 	}
 }
 
+func TestQueryResponseRequiresCursorForIncompletePages(t *testing.T) {
+	for _, kind := range []llm.QueryKind{llm.QueryProviderStatus, llm.QueryModelInventory, llm.QueryCreditStatus} {
+		t.Run(string(kind), func(t *testing.T) {
+			completeWithCursor := validQueryResponse(kind)
+			completeWithCursor.NextCursor = stringPointer("page-2")
+			if _, err := json.Marshal(completeWithCursor); err == nil {
+				t.Fatal("complete response with a cursor was accepted")
+			}
+
+			incompleteWithoutCursor := validQueryResponse(kind)
+			incompleteWithoutCursor.Complete = false
+			if _, err := json.Marshal(incompleteWithoutCursor); err == nil {
+				t.Fatal("incomplete response without a cursor was accepted")
+			}
+
+			incompleteWithCursor := validQueryResponse(kind)
+			incompleteWithCursor.Complete = false
+			incompleteWithCursor.NextCursor = stringPointer("page-2")
+			if _, err := json.Marshal(incompleteWithCursor); err != nil {
+				t.Fatalf("incomplete response with a cursor was rejected: %v", err)
+			}
+		})
+	}
+
+	for _, kind := range []llm.QueryKind{llm.QueryBudgetStatus, llm.QuerySpendSummary} {
+		t.Run(string(kind)+"_snapshot", func(t *testing.T) {
+			response := validQueryResponse(kind)
+			response.Complete = false
+			if _, err := json.Marshal(response); err == nil {
+				t.Fatal("incomplete snapshot response was accepted")
+			}
+		})
+	}
+}
+
+func validQueryResponse(kind llm.QueryKind) llm.QueryResponseV1 {
+	response := llm.QueryResponseV1{
+		OperationKey: "query-operation", QueryExecutionID: "query-execution", Kind: kind,
+		ObservedAt: "2026-07-19T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true,
+		Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"},
+	}
+	switch kind {
+	case llm.QueryProviderStatus:
+		response.Result = llm.ProviderStatusPage{Routes: []json.RawMessage{}}
+	case llm.QueryModelInventory:
+		response.Result = llm.ModelInventoryPage{Models: []json.RawMessage{}}
+	case llm.QueryCreditStatus:
+		response.Result = llm.CreditStatusPage{Endpoints: []json.RawMessage{}}
+	case llm.QueryBudgetStatus:
+		response.Result = llm.BudgetStatus{ActiveAt: "2026-07-19T00:00:00Z", GenerationID: "generation-1", ManifestDigest: strings.Repeat("a", 64), StreamHighWaterMark: "stream-1", Windows: []json.RawMessage{}}
+	case llm.QuerySpendSummary:
+		response.Result = llm.SpendSummary{StartTime: "2026-07-18T00:00:00Z", EndTime: "2026-07-19T00:00:00Z", Buckets: []json.RawMessage{}}
+	}
+	return response
+}
+
 func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
 	base := `{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":%s,"cost_status":"exact","actual_cost_usd":"0","cost_method":"control_query_zero"}`
 	for _, test := range []struct {

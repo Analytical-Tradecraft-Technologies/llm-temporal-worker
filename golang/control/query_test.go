@@ -153,7 +153,7 @@ func typedProviderResponse(request QueryRequest, next *QueryCursor) QueryRespons
 	return QueryResponse{
 		OperationKey: request.OperationKey, ExecutionID: "query-execution-typed", Kind: request.Kind,
 		Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC)},
-		Complete:   true, NextCursor: next,
+		Complete:   next == nil, NextCursor: next,
 		Result: ProviderStatusResult{Routes: []ProviderStatusRow{}},
 		Cost:   QueryCost{Status: QueryCostExact, ActualUSD: decimalUSDPointer("0"), Method: QueryCostControlZero},
 	}
@@ -183,6 +183,52 @@ func TestQueryServiceAuthorizesAndValidatesResponse(t *testing.T) {
 	}
 	if response.QueryExecutionID == "" || seen.Tenant != "tenant" || seen.Project != "project" || seen.Actor != "workflow" || seen.Kind != llm.QueryProviderStatus {
 		t.Fatalf("response/authorization = %#v / %#v", response, seen)
+	}
+}
+
+func TestQueryServiceRejectsInconsistentPaginationCompletion(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*llm.QueryResponseV1)
+	}{
+		{name: "complete page with cursor", mutate: func(response *llm.QueryResponseV1) {
+			response.NextCursor = stringPointer("page-2")
+		}},
+		{name: "incomplete page without cursor", mutate: func(response *llm.QueryResponseV1) {
+			response.Complete = false
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := queryRequest()
+			service := testQueryService(queryHandlerFunc(func(_ context.Context, got llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+				response := queryResponse(got)
+				test.mutate(&response)
+				return response, nil
+			}), func(context.Context, Authorization) error { return nil })
+			if _, err := service.Execute(context.Background(), request); err == nil {
+				t.Fatal("inconsistent pagination response was accepted")
+			}
+		})
+	}
+
+	for _, kind := range []llm.QueryKind{llm.QueryBudgetStatus, llm.QuerySpendSummary} {
+		t.Run(string(kind)+" incomplete", func(t *testing.T) {
+			request := queryRequest()
+			request.Kind = kind
+			if kind == llm.QueryBudgetStatus {
+				request.Query = json.RawMessage(`{"active_at":"2026-07-20T00:00:00Z"}`)
+			} else {
+				request.Query = json.RawMessage(`{"start_time":"2026-07-19T00:00:00Z","end_time":"2026-07-20T00:00:00Z"}`)
+			}
+			service := testQueryService(queryHandlerFunc(func(_ context.Context, got llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+				response := queryResponseForKind(got)
+				response.Complete = false
+				return response, nil
+			}), func(context.Context, Authorization) error { return nil })
+			if _, err := service.Execute(context.Background(), request); err == nil {
+				t.Fatal("incomplete snapshot response was accepted")
+			}
+		})
 	}
 }
 
@@ -451,6 +497,7 @@ func TestQueryServiceValidatesOutgoingCursorAgainstFreshTime(t *testing.T) {
 				return llm.QueryResponseV1{}, err
 			}
 			response := queryResponse(request)
+			response.Complete = false
 			response.NextCursor = &cursor
 			return response, nil
 		}),

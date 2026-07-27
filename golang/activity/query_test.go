@@ -18,6 +18,14 @@ type queryServiceStub struct {
 	err    error
 }
 
+type queryResponseServiceStub struct {
+	response llm.QueryResponseV1
+}
+
+func (stub queryResponseServiceStub) Execute(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return stub.response, nil
+}
+
 type queryBackendHandler struct {
 	err error
 }
@@ -51,6 +59,21 @@ func TestQueryV1UsesIndependentQueryService(t *testing.T) {
 	}
 	if _, err := activities.GenerateV1(context.Background(), validGenerateV1Request()); err == nil {
 		t.Fatal("GenerateV1 unexpectedly succeeded without a durable V1 runtime")
+	}
+}
+
+func TestQueryV1RejectsInconsistentPaginationCompletion(t *testing.T) {
+	request := validQueryV1Request()
+	cursor := "page-2"
+	response := llm.QueryResponseV1{
+		APIVersion: llm.QueryAPIVersion, OperationKey: request.OperationKey, QueryExecutionID: "query-execution-1", Kind: request.Kind,
+		ObservedAt: "2026-07-20T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true, NextCursor: &cursor,
+		Result: llm.ProviderStatusPage{Routes: []json.RawMessage{}},
+		Cost:   llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"},
+	}
+	activities := &Activities{QueryService: queryResponseServiceStub{response: response}}
+	if result, err := activities.QueryV1(context.Background(), request); result != nil || err == nil {
+		t.Fatalf("QueryV1 result = %#v, error = %v; want contract rejection", result, err)
 	}
 }
 
