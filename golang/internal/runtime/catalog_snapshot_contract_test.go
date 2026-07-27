@@ -419,7 +419,7 @@ func TestCompileBudgetPoliciesMapsAndValidatesWindows(t *testing.T) {
 
 func TestCompileBudgetPoliciesMaterializesExactLimitForLegacyAdmission(t *testing.T) {
 	value := config.Config{Limits: config.LimitsConfig{MaxBudgetBucketsPerWindow: 64}, Budgets: config.BudgetsConfig{Policies: []config.BudgetPolicy{{
-		ID: "exact-policy", Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitUSD: pricing.MustUSD("2.000000000000000001")}},
+		ID: "exact-policy", Match: config.BudgetMatch{Tenant: "tenant-a"}, Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitUSD: pricing.MustUSD("2.000000000000000001")}},
 	}}}}
 	policies, err := compileBudgetPolicies(value)
 	if err != nil {

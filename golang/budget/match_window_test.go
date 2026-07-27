@@ -87,7 +87,7 @@ func TestMatchPlanPreservesPolicyOrderAndUsesAttemptedClass(t *testing.T) {
 
 func TestPolicyAndWindowValidationRejectsUnsafeBounds(t *testing.T) {
 	valid := Window{ID: "hour", Duration: time.Hour, Bucket: time.Minute, Limit: 100}
-	if err := (Policy{ID: "acme", Windows: []Window{valid}}).Validate(64); err != nil {
+	if err := (Policy{ID: "acme", Match: Matcher{Tenant: "acme"}, Windows: []Window{valid}}).Validate(64); err != nil {
 		t.Fatalf("valid policy rejected: %v", err)
 	}
 
@@ -98,6 +98,9 @@ func TestPolicyAndWindowValidationRejectsUnsafeBounds(t *testing.T) {
 	}{
 		{name: "missing id", policy: Policy{Windows: []Window{valid}}, max: 64},
 		{name: "missing windows", policy: Policy{ID: "acme"}, max: 64},
+		{name: "missing matcher restriction", policy: Policy{ID: "acme", Windows: []Window{valid}}, max: 64},
+		{name: "wildcard-only matcher", policy: Policy{ID: "acme", Match: Matcher{Tenant: "*", ActorPrefix: "*"}, Windows: []Window{valid}}, max: 64},
+		{name: "unknown service class", policy: Policy{ID: "acme", Match: Matcher{ServiceClass: "provider-default"}, Windows: []Window{valid}}, max: 64},
 		{name: "zero duration", policy: Policy{ID: "acme", Windows: []Window{{Bucket: time.Minute, Limit: 1}}}, max: 64},
 		{name: "bucket exceeds duration", policy: Policy{ID: "acme", Windows: []Window{{Duration: time.Minute, Bucket: time.Hour, Limit: 1}}}, max: 64},
 		{name: "too many buckets", policy: Policy{ID: "acme", Windows: []Window{{Duration: time.Hour, Bucket: time.Minute, Limit: 1}}}, max: 10},
