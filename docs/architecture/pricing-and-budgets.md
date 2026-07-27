@@ -123,12 +123,16 @@ estimated input tokens at a conservative tokenizer ratio
 + fixed per-request charge
 ```
 
-Endpoint/model-specific tokenizers may tighten the estimate only after
-conformance tests. The fallback estimator uses UTF-8 byte length plus structural
-overhead and a configurable safety factor. It must never use the model's average
-completion length. The current catalog has no media-unit price, so media content
-does not create a separate estimate component until that pricing contract is
-added explicitly.
+The Go `budget.Estimator` accepts an optional candidate-aware exact tokenizer
+hook. A configured hook must be deterministic, return a non-negative count,
+and account for the provider's request structure (including tools and schema);
+the candidate argument allows provider-family/model-specific tokenization. A
+hook error or negative result fails closed. When no hook is configured, the
+fallback estimator uses UTF-8 byte length plus structural overhead and a
+configurable safety factor. It must never use the model's average completion
+length. The current catalog has no media-unit price, so media content does not
+create a separate estimate component until that pricing contract is added
+explicitly.
 
 The request reservation is the maximum single-attempt estimate across every
 candidate the router is authorized to attempt, including all explicit

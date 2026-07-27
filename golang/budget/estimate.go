@@ -14,7 +14,16 @@ type Estimator struct {
 	SafetyRatio  *big.Rat
 	MaxOutput    int64
 	MaxReasoning int64
+	// Tokenizer, when configured, is the provider-specific exact token
+	// counter. It receives the candidate because tokenization can vary by
+	// provider family/model. A nil tokenizer uses the conservative UTF-8
+	// fallback below.
+	Tokenizer Tokenizer
 }
+
+// Tokenizer returns the exact input token count for one authorized candidate.
+// Implementations must be deterministic and must not perform provider I/O.
+type Tokenizer func(llm.Request, routing.Candidate) (int64, error)
 
 type Estimate struct {
 	CandidateID      string
@@ -29,7 +38,7 @@ type Estimate struct {
 }
 
 func (estimator Estimator) EstimateCandidate(request llm.Request, candidate routing.Candidate, entry pricing.Entry) (Estimate, error) {
-	inputTokens, err := estimator.estimateInput(request)
+	inputTokens, err := estimator.estimateInput(request, candidate)
 	if err != nil {
 		return Estimate{}, err
 	}
@@ -124,7 +133,17 @@ func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, 
 	return maximum, nil
 }
 
-func (estimator Estimator) estimateInput(request llm.Request) (int64, error) {
+func (estimator Estimator) estimateInput(request llm.Request, candidate routing.Candidate) (int64, error) {
+	if estimator.Tokenizer != nil {
+		inputTokens, err := estimator.Tokenizer(request, candidate)
+		if err != nil {
+			return 0, fmt.Errorf("exact provider tokenization failed: %w", err)
+		}
+		if inputTokens < 0 {
+			return 0, fmt.Errorf("exact provider tokenization returned a negative count")
+		}
+		return inputTokens, nil
+	}
 	data, err := llm.CanonicalJSON(mustRequestJSON(request))
 	if err != nil {
 		return 0, err
