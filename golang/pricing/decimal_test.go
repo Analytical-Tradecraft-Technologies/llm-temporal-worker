@@ -37,6 +37,39 @@ func TestParseDecimalRejectsFloatLikeValues(t *testing.T) {
 	}
 }
 
+func TestParseDecimalEnforcesNumericBoundsAndCanonicalizesOutput(t *testing.T) {
+	for _, value := range []string{
+		"99999999999999999999.999999999999999999",
+		"99999999999999999999.000000000000000000",
+		"0.000000000000000001",
+	} {
+		if _, err := ParseDecimalUSD(value); err != nil {
+			t.Fatalf("ParseDecimalUSD(%q) rejected an in-range value: %v", value, err)
+		}
+	}
+	for _, value := range []string{
+		"100000000000000000000",
+		"100000000000000000000.000000000000000000",
+		"99999999999999999999.9999999999999999991",
+	} {
+		if _, err := ParseDecimalUSD(value); err == nil {
+			t.Fatalf("ParseDecimalUSD(%q) accepted a value outside NUMERIC(38,18)", value)
+		}
+	}
+
+	price := MustDecimalUSD("001.2300")
+	if got, want := price.String(), "001.2300"; got != want {
+		t.Fatalf("DecimalUSD.String() = %q, want source spelling %q", got, want)
+	}
+	if got, want := price.CanonicalString(), "1.23"; got != want {
+		t.Fatalf("DecimalUSD.CanonicalString() = %q, want %q", got, want)
+	}
+	encoded, err := price.MarshalJSON()
+	if err != nil || string(encoded) != `"1.23"` {
+		t.Fatalf("DecimalUSD.MarshalJSON() = %s, %v; want %q", encoded, err, `"1.23"`)
+	}
+}
+
 func TestMicroUSDCheckedArithmetic(t *testing.T) {
 	if got, err := MicroUSD(4).Add(5); err != nil || got != 9 {
 		t.Fatalf("add = %d %v", got, err)

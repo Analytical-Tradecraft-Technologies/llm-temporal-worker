@@ -19,6 +19,14 @@ const (
 
 var usdScaleFactor = new(big.Int).Exp(big.NewInt(10), big.NewInt(USDScale), nil)
 
+func maxUSDUnits() *big.Int {
+	// NUMERIC(38,18) has at most 38 significant decimal digits in its
+	// unscaled integer representation. Return a fresh value because callers
+	// may safely use the result in mutable big.Int operations.
+	max := new(big.Int).Exp(big.NewInt(10), big.NewInt(38), nil)
+	return max.Sub(max, big.NewInt(1))
+}
+
 // USD is an exact, non-negative fixed-scale US-dollar amount. The value is
 // stored as an integer number of 10^-18 dollars; no float or machine-sized
 // integer conversion is involved. A zero value is known free, while an
@@ -96,9 +104,7 @@ func ParseUSD(value string) (USD, error) {
 		}
 		units.Set(quotient)
 	}
-	max := new(big.Int).Exp(big.NewInt(10), big.NewInt(38), nil)
-	max.Sub(max, big.NewInt(1))
-	if units.Cmp(max) > 0 {
+	if units.Cmp(maxUSDUnits()) > 0 {
 		return USD{}, fmt.Errorf("USD %q exceeds NUMERIC(38,18)", value)
 	}
 	return USD{units: units}, nil
@@ -323,7 +329,11 @@ func ParseDecimalUSD(value string) (DecimalUSD, error) {
 	if _, ok := numerator.SetString(whole+fraction, 10); !ok {
 		return DecimalUSD{}, fmt.Errorf("decimal price %q cannot be parsed", value)
 	}
-	return DecimalUSD{numerator: *numerator, scale: len(fraction), raw: value}, nil
+	parsed := DecimalUSD{numerator: *numerator, scale: len(fraction), raw: value}
+	if err := parsed.valid(); err != nil {
+		return DecimalUSD{}, err
+	}
+	return parsed, nil
 }
 
 func MustDecimalUSD(value string) DecimalUSD {
@@ -338,6 +348,13 @@ func (decimal DecimalUSD) String() string {
 	if decimal.raw != "" {
 		return decimal.raw
 	}
+	return decimal.CanonicalString()
+}
+
+// CanonicalString returns the normalized decimal representation used for
+// JSON/canonical catalog identity. Source-facing String retains the original
+// spelling for diagnostics and operator-facing catalog provenance.
+func (decimal DecimalUSD) CanonicalString() string {
 	digits := decimal.numerator.String()
 	if decimal.scale == 0 {
 		return digits
@@ -346,19 +363,28 @@ func (decimal DecimalUSD) String() string {
 		digits = strings.Repeat("0", decimal.scale-len(digits)+1) + digits
 	}
 	position := len(digits) - decimal.scale
-	return digits[:position] + "." + digits[position:]
+	result := digits[:position] + "." + digits[position:]
+	result = strings.TrimRight(result, "0")
+	return strings.TrimRight(result, ".")
 }
 
 func (decimal DecimalUSD) MarshalJSON() ([]byte, error) {
 	if err := decimal.valid(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(decimal.String())
+	return json.Marshal(decimal.CanonicalString())
 }
 
 func (decimal DecimalUSD) valid() error {
 	if decimal.scale < 0 || decimal.scale > 18 || decimal.numerator.Sign() < 0 {
 		return fmt.Errorf("decimal price is invalid")
+	}
+	fixedUnits := new(big.Int).Set(&decimal.numerator)
+	if decimal.scale < USDScale {
+		fixedUnits.Mul(fixedUnits, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(USDScale-decimal.scale)), nil))
+	}
+	if fixedUnits.Cmp(maxUSDUnits()) > 0 {
+		return fmt.Errorf("decimal price exceeds NUMERIC(38,18)")
 	}
 	return nil
 }

@@ -65,6 +65,11 @@ floating-point values are not accepted. The local fixture's `endpoint` and
 accepted, but `service_class` is still exactly one of `economy`, `standard`, or
 `priority`. There is no `provider_default` class.
 
+Compilation normalizes insignificant leading and trailing zeroes in each
+decimal price before JSON canonicalization. Equivalent values such as `1.23`
+and `001.2300` therefore produce the same catalog digest; values outside the
+`NUMERIC(38,18)` range or with more than 18 fractional digits are rejected.
+
 ```yaml
 version: llmtw-prices/v1
 id: catalog-2026-07-13
