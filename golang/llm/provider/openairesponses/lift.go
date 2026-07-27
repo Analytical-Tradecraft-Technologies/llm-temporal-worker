@@ -137,6 +137,10 @@ func validateFinalJSON(call provider.Call, output []llm.Item, hasToolCalls, hasR
 		if !json.Valid([]byte(content)) {
 			return fmt.Errorf("provider JSON response is invalid")
 		}
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(content), &object); err != nil || object == nil {
+			return fmt.Errorf("provider JSON response must be a JSON object")
+		}
 	case "json_schema":
 		compiled, err := llmschema.Parse(format.Schema)
 		if err != nil {
