@@ -59,6 +59,9 @@ func (config Config) Validate() error {
 		return fmt.Errorf("endpoints must not be empty")
 	}
 	for _, name := range sortedKeys(config.Endpoints) {
+		if len(name) > maxAdmissionFieldBytes {
+			return fmt.Errorf("endpoints.%s exceeds the %d-byte admission field limit", name, maxAdmissionFieldBytes)
+		}
 		if err := config.Endpoints[name].validate("endpoints."+name, config.Limits.ProviderTimeout); err != nil {
 			return err
 		}

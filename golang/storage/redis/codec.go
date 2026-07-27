@@ -16,11 +16,18 @@ import (
 )
 
 const (
-	operationSchema      = "admission/v1"
-	continuationSchema   = "continuation/v1"
-	maxRedisInteger      = int64(1<<53 - 1)
-	maxAttemptFieldBytes = 256
-	maxRedisReservations = 253
+	operationSchema             = "admission/v1"
+	continuationSchema          = "continuation/v1"
+	maxRedisInteger             = int64(1<<53 - 1)
+	maxAttemptRouteBytes        = 256
+	maxAttemptEndpointBytes     = 256
+	maxAttemptProviderBytes     = 128
+	maxAttemptModelBytes        = 256
+	maxAttemptRequestIDBytes    = 512
+	maxAttemptServiceClassBytes = 64
+	maxAttemptNumber            = 1_000_000
+	maxRedisFunctionKeys        = 512
+	maxRedisReservations        = 253
 )
 
 // operationWire deliberately uses hex digests and decimal monetary strings.
@@ -220,19 +227,23 @@ func encodeAttempt(attempt admission.AttemptFacts) ([]byte, error) {
 }
 
 func validateAttempt(attempt admission.AttemptFacts) error {
-	for name, value := range map[string]string{
-		"route_id":            attempt.RouteID,
-		"endpoint_id":         attempt.EndpointID,
-		"provider":            attempt.Provider,
-		"resolved_model":      attempt.ResolvedModel,
-		"provider_request_id": attempt.ProviderRequestID,
-		"service_class":       attempt.ServiceClass,
+	for _, field := range []struct {
+		name  string
+		value string
+		limit int
+	}{
+		{"route_id", attempt.RouteID, maxAttemptRouteBytes},
+		{"endpoint_id", attempt.EndpointID, maxAttemptEndpointBytes},
+		{"provider", attempt.Provider, maxAttemptProviderBytes},
+		{"resolved_model", attempt.ResolvedModel, maxAttemptModelBytes},
+		{"provider_request_id", attempt.ProviderRequestID, maxAttemptRequestIDBytes},
+		{"service_class", attempt.ServiceClass, maxAttemptServiceClassBytes},
 	} {
-		if len(value) > maxAttemptFieldBytes {
-			return fmt.Errorf("attempt %s exceeds Redis field limit", name)
+		if len(field.value) > field.limit {
+			return fmt.Errorf("attempt %s exceeds Redis field limit", field.name)
 		}
 	}
-	if attempt.AttemptNumber < 0 || int64(attempt.AttemptNumber) > 1_000_000 {
+	if attempt.AttemptNumber < 0 || attempt.AttemptNumber > maxAttemptNumber {
 		return fmt.Errorf("invalid attempt number")
 	}
 	return nil

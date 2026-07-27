@@ -163,6 +163,43 @@ func testReservation(amount, limit pricing.MicroUSD) admission.WindowReservation
 	return admission.WindowReservation{PolicyID: "policy", WindowID: "window", Bucket: 10, Amount: amount, Limit: limit, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour)}
 }
 
+func TestContinuationReservationEnvelopeIsBoundedBeforeInvocation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		existing int
+		next     int
+		wantErr  bool
+	}{
+		{name: "maximum supported vectors", existing: maxRedisReservations, next: maxRedisReservations, wantErr: false},
+		{name: "existing vector too large", existing: maxRedisReservations + 1, next: 1, wantErr: true},
+		{name: "next vector too large", existing: 1, next: maxRedisReservations + 1, wantErr: true},
+		{name: "negative existing", existing: -1, next: 1, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateContinuationReservationEnvelope(test.existing, test.next)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateContinuationReservationEnvelope(%d,%d) error = %v, wantErr %v", test.existing, test.next, err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestMarkDispatchingReservesAttemptIncrementHeadroom(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	harness := newAdmissionHarness(now)
+	store, err := NewAdmissionStore(AdmissionOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.MarkDispatching(context.Background(), admission.DispatchRequest{
+		OperationID: "op", DispatchToken: "token",
+		Attempt: admission.AttemptFacts{AttemptNumber: maxAttemptNumber},
+	})
+	if err == nil {
+		t.Fatal("dispatch accepted an attempt number that would overflow the Function increment")
+	}
+}
+
 func TestAdmissionKeysUseOneHashSlotAndOpaqueDigests(t *testing.T) {
 	space, err := newKeySpace(testKeyOptions())
 	if err != nil {

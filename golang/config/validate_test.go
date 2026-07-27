@@ -240,6 +240,24 @@ func TestConfigValidationBoundsAdmissionRouteFields(t *testing.T) {
 	if err := loaded.Validate(); err == nil {
 		t.Fatal("config accepted an oversized route model")
 	}
+
+	loaded, err = config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints := loaded.Endpoints
+	endpoint := endpoints["openai-prod"]
+	delete(endpoints, "openai-prod")
+	endpoints[strings.Repeat("e", 257)] = endpoint
+	for index := range loaded.Models["invoice-summarizer"].Routes {
+		model := loaded.Models["invoice-summarizer"]
+		model.Routes[index].Endpoint = strings.Repeat("e", 257)
+		loaded.Models["invoice-summarizer"] = model
+		break
+	}
+	if err := loaded.Validate(); err == nil {
+		t.Fatal("config accepted an oversized endpoint identifier")
+	}
 }
 
 func TestConfigSchemaRejectsUnsafeFileBlobRoots(t *testing.T) {

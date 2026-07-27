@@ -44,8 +44,10 @@ Operation and attempt fields are length-bounded as well. This keeps malformed
 direct `FCALL`/preloaded-Lua invocations fail-closed instead of allowing a
 missing key or oversized value to become a Redis runtime error after a partial
 mutation. The supported envelope is at most 253 reservation windows per
-operation (the remaining Redis key slots carry the operation indexes) and
-256-byte route/endpoint/provider/model fields.
+operation, with at most 510 old-plus-new windows in one continuation (the
+remaining Redis key slots carry operation indexes). Route/endpoint/model
+fields are 256 bytes, provider fields 128 bytes, and provider request IDs
+512 bytes.
 
 Production fails closed on Redis errors. Require TLS/auth, `noeviction`, explicit
 AOF durability choice plus RDB, persistence monitoring, backups, and restore
