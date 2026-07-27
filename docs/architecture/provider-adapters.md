@@ -161,6 +161,19 @@ Usage distinguishes:
 An unrecognized actual provider tier maps to no public class and returns a
 diagnostic. It must not be mislabeled as `standard`.
 
+## Model inventory pagination
+
+Model management APIs are optional adapter capabilities. A profile that does
+not implement `ModelLister` is explicitly unsupported for refresh; configured
+routes remain authoritative. Profiles that do implement it should be consumed
+through the shared `provider.CollectModelInventory` helper. The helper validates
+every bounded page, follows only the returned opaque cursor, rejects repeated
+cursors and model-ID regressions across pages, caps a refresh at 10,000 models,
+and checks cancellation before each provider request. The resulting normalized
+models can then be persisted as one immutable inventory snapshot with explicit
+current, stale, or unsupported provenance. No inference request is used as a
+model-list substitute.
+
 ## Legacy decoder regression coverage
 
 Some provider packages retain decoders for fragmented provider event payloads.
