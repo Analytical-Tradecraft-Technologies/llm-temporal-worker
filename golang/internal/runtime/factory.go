@@ -130,6 +130,11 @@ type ProductionFactoryOptions struct {
 	// When supplied, it is invoked independently for every immutable config
 	// snapshot, including reloads.
 	V1RuntimeBuilder V1RuntimeBuilder
+	// GeneratePortsFactory supplies the complete snapshot-owned durable
+	// Generate phase to NewGenerateV1RuntimeBuilder. Nil intentionally leaves
+	// the Generate-only runtime unconfigured and causes that builder to fail
+	// closed before Temporal polling.
+	GeneratePortsFactory GeneratePortsFactory
 	// QueryServiceBuilder is optional by design. A deployment must provide
 	// authorization, cursor-key, and audit composition explicitly before the
 	// production factory exposes persisted control-plane queries.
@@ -515,6 +520,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			Journal:                journal,
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
+			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
 		},
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
@@ -604,10 +610,11 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	}
 	return engineValue, &productionClientSet{
 		v1Capabilities: V1RuntimeCapabilities{
-			Snapshot: snapshotSource,
-			Planner:  planner,
-			Adapters: capabilityAdapterRegistry,
-			Clock:    clock,
+			Snapshot:             snapshotSource,
+			Planner:              planner,
+			Adapters:             capabilityAdapterRegistry,
+			Clock:                clock,
+			GeneratePortsFactory: factory.options.GeneratePortsFactory,
 		},
 		close: func(context.Context) error { return nil },
 	}, nil

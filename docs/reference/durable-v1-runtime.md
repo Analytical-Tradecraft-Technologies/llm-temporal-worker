@@ -6,6 +6,20 @@ storage-neutral durable phase ports. It requires complete `GeneratePorts` and
 callback is missing. Query remains optional because deployments may bind the
 independent control-plane implementation through `Activities.QueryService`.
 
+The bounded production composition currently exposes a Generate-only builder:
+`runtime.NewGenerateV1RuntimeBuilder`. It requires the client set to expose
+`V1RuntimeCapabilitiesSource`, and then requires a complete snapshot-owned
+source, planner, adapter registry, checkpoint materializer, write-only
+PostgreSQL journal, clock, and `GeneratePortsFactory`. The factory callback
+receives the copied capability bundle and must construct every
+`durable.GeneratePorts` callback from those same immutable adapters and stores.
+No missing callback is synthesized, and the legacy `llm.Engine` is never
+adapted. A successful composition returns `activity.GenerateOnlyV1Runtime`;
+Compact and Query remain explicit configuration errors until their own real
+ports are available. The default production factory leaves
+`GeneratePortsFactory` unset, so installing this builder fails closed before
+Temporal polling.
+
 The constructor performs only local validation. It does not construct clients,
 read PostgreSQL or Redis, resolve provider credentials, or dispatch an
 Activity. A deployment should call it from its per-snapshot runtime builder
