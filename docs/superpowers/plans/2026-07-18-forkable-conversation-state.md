@@ -865,9 +865,10 @@ protected release evidence is not inferred from these checks.
 ### Task 18: Add natural OCaml Conversation and Query GADT APIs
 
 Status: partially complete. The immutable conversation/query facade and
-downstream compile fixture are implemented. Rebuilding the pre-v1 one-shot
-helpers is deliberately deferred until the compatibility decision below is
-made; no wire-shape replacement is implied by the additive facade.
+downstream compile fixture are implemented. The package-level `execute` and
+`workflow` helpers now use Generate v1 directly; the pre-v1 `Request` and
+`invoke_once` compatibility shims remain explicitly outside the production
+Activity boundary until the final breaking-compatibility decision.
 
 **Files:**
 
@@ -889,10 +890,11 @@ made; no wire-shape replacement is implied by the additive facade.
 - [x] Keep cursor/result type associated across pagination.
 - [x] Add the additive typed `Llm_temporal.Generate` facade for direct,
   non-streaming one-shot v1 calls while preserving legacy `Request` names.
-- [ ] Rebuild existing one-shot helpers on a Generate v1 root in the same
-  package/facade, replacing the current unreleased wire shape in place.
-  **Deferred pending an explicit compatibility decision; retain the existing
-  legacy helper wire shape until that decision is recorded.**
+- [ ] Rebuild the remaining pre-v1 `Request`/`invoke_once` helpers on a
+  Generate v1 root in the same package/facade, replacing their unreleased
+  wire shape in place. **The package-level `execute` and `workflow` helpers
+  are already migrated; the compatibility-only shims remain deferred pending
+  the explicit breaking-compatibility decision.**
 - [x] Test three siblings from one parent, no inherited fields on wire, decimal
   exactness, compaction tool/output isolation, query type inference/mismatch,
   and unchanged Temporal errors. The focused Conversation and Query suites are

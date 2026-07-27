@@ -14,7 +14,11 @@ let response_codec =
     ~encode:Llm_temporal_codec.encode_response
     ~decode:Llm_temporal_codec.decode_response
 
-let generate_activity =
+(* Keep the pre-checkpoint descriptor private to the compatibility helper
+   below.  The public [generate_activity] descriptor is defined after the v1
+   codecs and therefore cannot accidentally pair the production activity name
+   with the legacy payload codec. *)
+let legacy_generate_activity =
   Temporal.Activity.remote ~name:activity_name ~input:request_codec ~output:response_codec
 
 type dispatcher =
@@ -24,7 +28,7 @@ type dispatcher =
   (response, Temporal.Error.t) result
 
 let invoke_once ?task_queue ~(dispatch : dispatcher) input =
-  dispatch ?task_queue generate_activity input
+  dispatch ?task_queue legacy_generate_activity input
 
 let activity_retry_policy =
   match Temporal.Activity.Retry_policy.make ~initial_interval:(Temporal.Duration.of_ms 1L)
@@ -32,16 +36,6 @@ let activity_retry_policy =
           ~maximum_attempts:1 () with
   | Ok policy -> policy
   | Error error -> invalid_arg (Temporal.Error.message error)
-
-let activity_dispatch ?task_queue activity input =
-  Temporal.Activity.execute
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:activity_retry_policy activity input
-
-let execute ?task_queue input = invoke_once ?task_queue ~dispatch:activity_dispatch input
-let workflow ?task_queue () =
-  Temporal.Workflow.define ~name:workflow_name ~input:request_codec ~output:response_codec
-    (fun input -> execute ?task_queue input)
 
 let generate_v1_request_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_generate_request ~decode:Llm_temporal_v1_codec.decode_generate_request
@@ -56,9 +50,24 @@ let query_v1_request_codec =
 let query_v1_response_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_query_response ~decode:Llm_temporal_v1_codec.decode_query_response
 
-let generate_v1_activity = Temporal.Activity.remote ~name:"llm.generate.v1" ~input:generate_v1_request_codec ~output:generate_v1_response_codec
+let generate_v1_activity = Temporal.Activity.remote ~name:activity_name ~input:generate_v1_request_codec ~output:generate_v1_response_codec
 let compact_v1_activity = Temporal.Activity.remote ~name:"llm.compact.v1" ~input:compact_v1_request_codec ~output:compact_v1_response_codec
 let query_v1_activity = Temporal.Activity.remote ~name:"llm.query.v1" ~input:query_v1_request_codec ~output:query_v1_response_codec
+
+(* The facade's canonical one-shot descriptor is v1.  Keep the old
+   [invoke_once] function available for source compatibility, but make it
+   impossible for [execute] or [workflow] to dispatch the legacy wire shape. *)
+let generate_activity = generate_v1_activity
+
+let execute ?task_queue input =
+  Temporal.Activity.execute
+    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
+    ~retry_policy:activity_retry_policy generate_v1_activity input
+
+let workflow ?task_queue () =
+  Temporal.Workflow.define ~name:workflow_name ~input:generate_v1_request_codec
+    ~output:generate_v1_response_codec
+    (fun input -> execute ?task_queue input)
 
 (* The low-level v1 helpers intentionally keep the wire records visible.  A
    caller that needs the Conversation or Query invariants should use those

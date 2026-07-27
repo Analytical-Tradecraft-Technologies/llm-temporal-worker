@@ -12,9 +12,10 @@ The package currently models one **llm.generate.v1** invocation. The v1
 checkpoint/delta/cache contract removes generic currency and adopts decimal
 USD types. The additive `Llm_temporal.Generate` facade now constructs and
 invokes that exact v1 request directly; it avoids a synthetic conversation
-branch for one-shot callers. The older `Request`, `execute`, and `workflow`
-names remain available as a compatibility surface until a separately approved
-breaking release, but they do not add a second wire protocol or Activity.
+branch for one-shot callers. The package-level `execute` and `workflow`
+helpers now use the same v1 request/response codecs and Activity descriptor.
+The older pre-checkpoint `Request` and `invoke_once` names remain only as
+deprecated compatibility shims and are not a production Activity boundary.
 
 Implementation starts from the landed OCaml validation baseline, including PR
 109. Preserve those validation improvements and regenerate fixtures from the

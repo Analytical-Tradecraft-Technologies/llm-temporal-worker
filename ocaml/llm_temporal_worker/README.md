@@ -176,11 +176,12 @@ match Llm_temporal.Generate.invoke request with
 `Generate.make` returns the exact `generate_request` record used by the
 `llm.generate.v1` Activity. `Generate.invoke_with` accepts the same typed
 dispatcher used by deterministic tests, and `Generate.start` returns a
-workflow-owned Temporal future. The legacy `Request`, `execute`, and
-`workflow` names remain available only as source-compatibility shims for the
-unreleased pre-checkpoint API. Their records and codecs are deliberately
-outside the v1 boundary and must not be used to call the production Go
-`llm.generate.v1` Activity. New code must use `Generate` or `Conversation`,
+workflow-owned Temporal future. The package-level `execute` and `workflow`
+helpers now accept and schedule the same Generate v1 records and codecs. The
+pre-checkpoint `Request` and `invoke_once` names remain only as deprecated
+source-compatibility shims; their legacy records/codecs must not be used to
+call the production Go `llm.generate.v1` Activity. New code should use
+`Generate`, `Conversation`, or the migrated package-level helpers, all of
 which emit the exact v1 wire shape.
 
 The synchronous `Generate.invoke_with` and `Generate.invoke` helpers also
