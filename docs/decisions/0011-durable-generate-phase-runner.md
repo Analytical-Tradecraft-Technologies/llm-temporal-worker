@@ -30,9 +30,14 @@ replay/materialize
 ```
 
 The runner validates operation, generation, reservation, journal, and bounded
-response identities at every phase boundary. A replayed completed operation
-returns its durable response before cache lookup or admission. It fails closed
-before provider dispatch when any pre-dispatch phase fails. A required
+response identities at every phase boundary. Every returned checkpoint is
+also bound to the request branch: a root response omits its parent, while a
+non-root response must name the request's exact parent checkpoint. This check
+applies uniformly to completed replay, cache finalization, pending
+reconciliation, and ordinary finalization, preventing a storage or cache port
+from returning a valid response from another branch. A replayed completed
+operation returns its durable response before cache lookup or admission. It
+fails closed before provider dispatch when any pre-dispatch phase fails. A required
 compaction invokes the distinct Compact child and replaces the replay with its
 newly materialized state before routing. A cache hit finalizes without
 dispatching inference and must publish a distinct `cache_replay` child with
@@ -83,11 +88,12 @@ remain pending.
   ordering.
 - `golang/storage/durable/v1_runner_test.go` covers normal ordering, cache-hit
   short-circuiting and replay-child invariants, pre-dispatch fail-closed
-  behavior, identity mismatches, and retryable reconciliation failure, including
-replay of a finalized response with pending Redis reconciliation without a
-second provider dispatch. Its cancellation tests cover the pre-dispatch
-phase boundaries, prove cancellation after Compact stops before parent
-admission, and cover the post-finalization reconciliation handoff. It also
-proves that a tool-result delta resolves the replay frontier and that an
-unmatched result is rejected before cache or admission.
+  behavior, operation and exact checkpoint-parent identity mismatches, and
+  retryable reconciliation failure, including replay of a finalized response
+  with pending Redis reconciliation without a second provider dispatch. Its
+  cancellation tests cover the pre-dispatch phase boundaries, prove
+  cancellation after Compact stops before parent admission, and cover the
+  post-finalization reconciliation handoff. It also proves that a tool-result
+  delta resolves the replay frontier and that an unmatched result is rejected
+  before cache or admission.
 - `make -C golang test` passes with the runner included.

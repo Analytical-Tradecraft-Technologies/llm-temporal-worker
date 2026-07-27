@@ -534,6 +534,13 @@ func validateGenerateResponse(request llm.GenerateRequestV1, expectedOperationID
 	if expectedOperationID != "" && response.OperationID != string(expectedOperationID) {
 		return errors.New("finalized response operation ID does not match reserved operation")
 	}
+	if request.Parent == nil {
+		if response.Checkpoint.Parent != nil {
+			return errors.New("root response checkpoint must not have a parent")
+		}
+	} else if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != *request.Parent {
+		return errors.New("response checkpoint parent does not match request")
+	}
 	if _, err := json.Marshal(response); err != nil {
 		return err
 	}
