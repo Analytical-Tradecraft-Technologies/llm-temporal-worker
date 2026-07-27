@@ -322,6 +322,9 @@ func (redis RedisConfig) validate(environment string) error {
 			if err := validatePositiveDuration(redis.StreamTrimSafety, "state.redis.stream_trim_safety"); err != nil {
 				return err
 			}
+			if redis.StreamTrimSafety < Duration(time.Second) {
+				return fmt.Errorf("state.redis.stream_trim_safety must be at least 1s")
+			}
 			if redis.StreamTrimSafety > Duration(30*24*time.Hour) {
 				return fmt.Errorf("state.redis.stream_trim_safety exceeds 30d")
 			}

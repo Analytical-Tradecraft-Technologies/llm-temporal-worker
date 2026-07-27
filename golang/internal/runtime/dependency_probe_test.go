@@ -134,6 +134,16 @@ func TestRedisDependencyProbeRequiresCoordinationStreamKey(t *testing.T) {
 	}
 }
 
+func TestRedisDependencyProbeRequiresOneSecondTrimSafety(t *testing.T) {
+	value := testRedisProbeConfig()
+	enabled := true
+	value.CoordinationStreamEnabled = &enabled
+	value.StreamTrimSafety = config.Duration(time.Nanosecond)
+	if _, err := NewRedisDependencyProbeWithStream(healthyRedisProbeClient(), value, "llm:events"); err == nil {
+		t.Fatal("sub-second coordination stream trim safety unexpectedly accepted")
+	}
+}
+
 func TestRedisDependencyProbeFailsClosedForInvalidActiveBudgetGeneration(t *testing.T) {
 	for _, test := range []struct {
 		name string

@@ -201,7 +201,6 @@ type redisDependencyProbe struct {
 	config     config.RedisConfig
 	generation redisstore.BudgetGenerationPort
 	streamKey  string
-	now        func() time.Time
 }
 
 // NewRedisDependencyProbe constructs a read-only Redis readiness probe. It
@@ -255,11 +254,11 @@ func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, 
 		if strings.TrimSpace(streamKey) == "" {
 			return nil, fmt.Errorf("Redis coordination stream key is required when coordination stream readiness is enabled")
 		}
-		if value.StreamTrimSafety <= 0 {
-			return nil, fmt.Errorf("Redis coordination stream trim safety must be positive")
+		if value.StreamTrimSafety < config.Duration(time.Second) {
+			return nil, fmt.Errorf("Redis coordination stream trim safety must be at least 1s")
 		}
 	}
-	return &redisDependencyProbe{client: client, config: value, generation: generation, streamKey: streamKey, now: time.Now}, nil
+	return &redisDependencyProbe{client: client, config: value, generation: generation, streamKey: streamKey}, nil
 }
 
 func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
@@ -316,7 +315,7 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 		return result
 	}
 	if coordinationStreamEnabled(probe.config) {
-		result = probe.verifyCoordinationStream(ctx)
+		result = probe.verifyCoordinationStream(ctx, serverTime)
 		if result.Status != ProbeStatusReady {
 			return result
 		}
@@ -331,7 +330,7 @@ func coordinationStreamEnabled(value config.RedisConfig) bool {
 	return value.CoordinationStreamEnabled != nil && *value.CoordinationStreamEnabled
 }
 
-func (probe *redisDependencyProbe) verifyCoordinationStream(ctx context.Context) ProbeResult {
+func (probe *redisDependencyProbe) verifyCoordinationStream(ctx context.Context, serverTime time.Time) ProbeResult {
 	streamType, err := probe.client.Type(ctx, probe.streamKey).Result()
 	if err != nil {
 		return redisProbeFailure(ctx, err)
@@ -377,11 +376,7 @@ func (probe *redisDependencyProbe) verifyCoordinationStream(ctx context.Context)
 				return redisPolicyMismatch()
 			}
 		}
-		now := time.Now()
-		if probe.now != nil {
-			now = probe.now()
-		}
-		if deleted.compare(redisStreamID(now.Add(-time.Duration(probe.config.StreamTrimSafety)).UnixMilli(), 0)) > 0 {
+		if deleted.compare(redisStreamID(serverTime.Add(-time.Duration(probe.config.StreamTrimSafety)).UnixMilli(), 0)) > 0 {
 			return redisPolicyMismatch()
 		}
 	}
