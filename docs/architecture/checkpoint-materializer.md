@@ -18,6 +18,14 @@ ancestor still has unmatched tool calls. Optional self-contained snapshots
 carry the same digest as a full replay; their use does not change handles or
 the logical graph.
 
+Replay uses the append-only property of checkpoint deltas to pre-size the
+materialized item buffer and perform the aggregate item/byte bound check once
+after replay. Splitting one logical transcript across many deltas therefore
+does not cause repeated full-prefix copies or validations, and produces the
+same canonical transcript bytes as a single grouped delta. The segmentation
+choice remains a storage concern; it cannot change the materialized semantic
+value.
+
 The tool-call frontier is a set belonging to one model turn, not a stack. A
 turn may append multiple `ToolCall` items before any result. Once the first
 `ToolResult` arrives, only results matching the remaining outstanding call IDs
