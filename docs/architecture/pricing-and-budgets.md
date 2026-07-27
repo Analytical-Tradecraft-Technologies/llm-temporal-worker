@@ -209,6 +209,11 @@ matches remains eligible even if the requested service class does not. If no
 authorized candidate matches, the request terminates as `no_route` without an
 admission operation or provider request.
 
+The compiled Go `budget.Policy` boundary repeats this validation for policies
+loaded from an immutable snapshot, so direct callers cannot bypass it. Empty
+matchers and matcher fields containing only `*` are rejected; an
+`actor_prefix: "*"` is treated as a wildcard as well.
+
 Limits must be positive. Bucket size must divide into bounded operational
 resolution and produce no more than the configured maximum buckets per window.
 Policy IDs and window definitions are immutable across a catalog version;

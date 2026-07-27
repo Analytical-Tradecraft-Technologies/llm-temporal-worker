@@ -620,7 +620,7 @@ func (budgets BudgetsConfig) validate() error {
 func hasBudgetMatchRestriction(match BudgetMatch) bool {
 	return (match.Tenant != "" && match.Tenant != "*") ||
 		(match.Project != "" && match.Project != "*") ||
-		match.ActorPrefix != "" ||
+		(match.ActorPrefix != "" && match.ActorPrefix != "*") ||
 		(match.Environment != "" && match.Environment != "*") ||
 		(match.LogicalModel != "" && match.LogicalModel != "*") ||
 		(match.EndpointID != "" && match.EndpointID != "*") ||

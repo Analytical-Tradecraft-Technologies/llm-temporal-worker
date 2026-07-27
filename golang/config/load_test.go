@@ -214,6 +214,7 @@ func TestLoadRejectsWildcardOnlyBudgetMatchers(t *testing.T) {
 	for _, matcher := range []string{
 		"tenant: \"*\"",
 		"project: \"*\"",
+		"actor_prefix: \"*\"",
 		"environment: \"*\"",
 		"logical_model: \"*\"",
 		"endpoint: \"*\"",
