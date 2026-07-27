@@ -43,12 +43,32 @@ def read_regular_bytes(path):
 
 def parse_json_bytes(data):
     try:
-        value = json.loads(data.decode("utf-8"))
+        # Python's default decoder silently keeps the last value for a
+        # duplicate object key.  That is unsafe for release evidence: an
+        # attacker could place a benign value first (for review tooling) and
+        # rely on a later value being used by the recorder or verifier.  Keep
+        # the input contract deterministic by rejecting duplicates at every
+        # object depth.  Reject non-finite constants as well; they are outside
+        # the JSON data model and can otherwise be accepted by json.loads.
+        value = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_object_keys,
+            parse_constant=lambda _constant: reject(),
+        )
     except (UnicodeDecodeError, json.JSONDecodeError):
         reject()
     if not isinstance(value, dict):
         reject()
     return value
+
+
+def reject_duplicate_object_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            reject()
+        result[key] = value
+    return result
 
 
 def exact_object(value, keys):

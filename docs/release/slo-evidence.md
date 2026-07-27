@@ -25,6 +25,11 @@ python3 scripts/release/slo-evidence.py verify \
 
 The verifier checks the exact schema-shaped object, canonical serialization, content digest, expected source revision, and all pass invariants. It rejects tampering, non-regular files, oversized inputs, unknown fields, and unsafe value shapes.
 
+The recorder and verifier also reject duplicate JSON object keys (including
+nested measurement fields) and non-finite JSON constants. This prevents a
+different parser from observing a different value than the release-evidence
+tool before the content digest is bound.
+
 The evidence has two admission-and-compilation samples: `memory` and `same_region_redis`. Their p99 values must be strictly below 25,000 and 75,000 microseconds respectively. The Redis sample records only its major version, persistence mode, and function digest; it intentionally omits its address and credentials.
 
 The worker measurement records a closed UTC window plus completed and worker-failed attempt counts. It passes only when:
