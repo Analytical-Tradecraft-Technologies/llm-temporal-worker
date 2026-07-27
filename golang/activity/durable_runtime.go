@@ -31,6 +31,37 @@ type DurableV1Runtime struct {
 
 var _ V1Runtime = (*DurableV1Runtime)(nil)
 
+// NewDurableV1Runtime validates and constructs the Activity-facing durable
+// runtime. Generate and Compact are required because a configured v1 worker
+// must not advertise a partially implemented one-shot boundary. Query is
+// intentionally optional: deployments may bind it through Activities.QueryService
+// while composing the Generate/Compact runtime.
+func NewDurableV1Runtime(generate durable.GeneratePorts, compact durable.CompactPorts, query QueryV1Func) (*DurableV1Runtime, error) {
+	if err := generate.Validate(); err != nil {
+		return nil, fmt.Errorf("generate runtime ports: %w", err)
+	}
+	if err := compact.Validate(); err != nil {
+		return nil, fmt.Errorf("compact runtime ports: %w", err)
+	}
+	return &DurableV1Runtime{Generate: generate, Compact: compact, Query: query}, nil
+}
+
+// Validate checks the complete Generate/Compact callback set carried by this
+// runtime. It is safe to call during snapshot composition and never performs
+// provider or storage work.
+func (runtime *DurableV1Runtime) Validate() error {
+	if runtime == nil {
+		return fmt.Errorf("durable v1 runtime is nil")
+	}
+	if err := runtime.Generate.Validate(); err != nil {
+		return fmt.Errorf("generate runtime ports: %w", err)
+	}
+	if err := runtime.Compact.Validate(); err != nil {
+		return fmt.Errorf("compact runtime ports: %w", err)
+	}
+	return nil
+}
+
 func (runtime *DurableV1Runtime) GenerateV1(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
 	if runtime == nil {
 		return llm.GenerateResponseV1{}, durable.ErrV1PortsInvalid

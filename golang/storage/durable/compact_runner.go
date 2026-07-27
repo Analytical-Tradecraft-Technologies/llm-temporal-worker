@@ -110,11 +110,18 @@ func (ports CompactPorts) validate() error {
 		{"reconcile", ports.Reconcile},
 	}
 	for _, field := range fields {
-		if field.fn == nil {
-			return fmt.Errorf("%w: %s port is required", ErrV1PortsInvalid, field.name)
+		if err := requiredPort(field.name, field.fn); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// Validate checks that every Compact phase callback is callable. A
+// deployment should run this during snapshot composition so an incomplete
+// durable runtime fails before Temporal starts polling.
+func (ports CompactPorts) Validate() error {
+	return ports.validate()
 }
 
 // CompactV1 executes one complete durable Compact composition. A cache hit

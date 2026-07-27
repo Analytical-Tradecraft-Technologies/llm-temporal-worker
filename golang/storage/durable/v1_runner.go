@@ -193,11 +193,18 @@ func (ports GeneratePorts) validate() error {
 		{"finalize cache", ports.FinalizeCache}, {"reconcile", ports.Reconcile},
 	}
 	for _, field := range fields {
-		if field.fn == nil {
-			return fmt.Errorf("%w: %s port is required", ErrV1PortsInvalid, field.name)
+		if err := requiredPort(field.name, field.fn); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// Validate checks that every Generate phase callback is callable. A
+// deployment should run this during snapshot composition so an incomplete
+// durable runtime fails before Temporal starts polling.
+func (ports GeneratePorts) Validate() error {
+	return ports.validate()
 }
 
 // GenerateV1 executes one complete durable Generate composition.  It performs
