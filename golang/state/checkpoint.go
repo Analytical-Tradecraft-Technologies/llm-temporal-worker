@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -83,8 +84,11 @@ type MaterializedState struct {
 type CheckpointGraph struct {
 	mu          sync.RWMutex
 	checkpoints map[Handle]Checkpoint
-	operations  map[string]Handle
-	limits      MaterializeLimits
+	// Operations are idempotency identities within one tenant/project scope.
+	// Operation keys are caller supplied and are therefore not globally unique
+	// across independent scopes.
+	operations map[string]Handle
+	limits     MaterializeLimits
 	// Now supplies the clock used for expiry checks. Keeping the clock on the
 	// graph makes durable materialization deterministic and lets callers share
 	// the same time boundary across repository validation and graph replay.
@@ -166,7 +170,8 @@ func (graph *CheckpointGraph) put(checkpoint Checkpoint) error {
 		}
 		return ErrConflict
 	}
-	if previous, exists := graph.operations[value.OperationKey]; exists {
+	operationKey := scopedOperationKey(value.Tenant, value.Project, value.OperationKey)
+	if previous, exists := graph.operations[operationKey]; exists {
 		existing := graph.checkpoints[previous]
 		if !existing.ExpiresAt.IsZero() && !graph.clock().Before(existing.ExpiresAt) {
 			return ErrExpired
@@ -177,8 +182,19 @@ func (graph *CheckpointGraph) put(checkpoint Checkpoint) error {
 		return ErrConflict
 	}
 	graph.checkpoints[value.Handle] = value
-	graph.operations[value.OperationKey] = value.Handle
+	graph.operations[operationKey] = value.Handle
 	return nil
+}
+
+// scopedOperationKey uses length prefixes so arbitrary caller strings cannot
+// collide when forming the in-memory scope key. The durable operation ledger
+// applies the same tenant/project scope boundary through its scope_id.
+func scopedOperationKey(tenant, project, operation string) string {
+	var key string
+	for _, value := range []string{tenant, project, operation} {
+		key += strconv.Itoa(len(value)) + ":" + value
+	}
+	return key
 }
 
 func checkpointRequestDigest(checkpoint Checkpoint) [32]byte {
