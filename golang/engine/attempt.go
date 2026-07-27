@@ -86,6 +86,9 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 	if operation.State == admission.StateProviderPending {
 		return engine.resumeProviderPending(ctx, request, providerRequest, snapshot, quoted, operation, parent)
 	}
+	if operation.State == admission.StateDispatching {
+		return engine.resumeDispatching(ctx, request, providerRequest, snapshot, quoted, operation, parent)
+	}
 	for index, candidate := range quoted.candidates {
 		if index >= engine.dependencies.MaxAttempts {
 			break

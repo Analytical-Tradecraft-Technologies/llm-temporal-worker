@@ -237,6 +237,15 @@ not-found or other terminal poll outcome is classified through the existing
 ambiguous/definite-failure ledger transitions. Adapters without this optional
 port retain the existing one-shot `Invoke` path.
 
+If a worker stops after the durable `dispatching` transition but before it can
+store a provider operation ID, a retry pins the recorded endpoint and invokes
+only the adapter's documented `RecoverByIdempotencyKey` lookup. A recovered
+pending ID enters the same encrypted `provider_pending` path before polling; a
+completed result is finalized directly. If the adapter has no lookup contract,
+or the lookup fails or returns not-found, the operation remains fail-closed and
+is recorded as ambiguous. The retry path never falls back to `Submit` or
+`Invoke`, so a missing poll ID cannot cause a duplicate provider submission.
+
 ## Error mapping
 
 The Activity converts common errors to Temporal Application Errors:

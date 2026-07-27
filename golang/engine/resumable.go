@@ -24,6 +24,35 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 		result, err := adapter.Invoke(ctx, call, observer)
 		return result, err, false
 	}
+	// A worker can disappear after the dispatching transition but before the
+	// provider response (and therefore before a provider operation ID) is
+	// durable. A retry sees the dispatching state and must use the provider's
+	// documented idempotency lookup when one exists; it must never submit a
+	// second operation. Adapters without that lookup remain ambiguous.
+	if operation.State == admission.StateDispatching {
+		recovery, recoverable := adapter.(provider.IdempotencyRecovery)
+		if !recoverable {
+			return provider.Result{}, engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "resumable operation has no idempotency recovery", nil), false
+		}
+		if observer != nil {
+			// The durable dispatching row is already authoritative on a retry;
+			// marking the observer avoids a second transition while allowing a
+			// recovered pending result to be persisted.
+			observer.marked = true
+		}
+		recovered, recoveryErr := recovery.RecoverByIdempotencyKey(ctx, call, observer)
+		if recoveryErr != nil {
+			mapped := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider idempotency recovery failed")
+			mapped.Cause = recoveryErr
+			return provider.Result{}, mapped, false
+		}
+		if validationErr := recovered.ValidateForCall(call); validationErr != nil {
+			invalid := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider idempotency recovery response is invalid")
+			invalid.Cause = validationErr
+			return provider.Result{}, invalid, false
+		}
+		return engine.handleResumableOutcome(ctx, operation, candidate, call, observer, resumable, recovered)
+	}
 	outcome, err := resumable.Submit(ctx, call, observer)
 	if err != nil {
 		// A Submit failure after the possible-write boundary may still have
@@ -108,6 +137,71 @@ func providerPollAfter(now func() time.Time, delay time.Duration) time.Time {
 		return time.Time{}
 	}
 	return now().Add(delay)
+}
+
+// resumeDispatching closes the acceptance/persistence crash window for
+// resumable adapters. A dispatching row means a previous worker crossed the
+// durable possible-write boundary but did not record a provider operation ID.
+// The route is pinned by the durable attempt facts and invokeAttempt performs
+// only RecoverByIdempotencyKey; adapters without that extension fail closed.
+func (engine *Engine) resumeDispatching(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation) (llm.Response, error) {
+	index := -1
+	for i, candidate := range quoted.candidates {
+		if candidate.candidate.EndpointID == operation.Attempt.EndpointID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, "dispatching endpoint is not in the current route plan", nil)
+	}
+	candidate := quoted.candidates[index]
+	adapter, err := engine.dependencies.Adapters.Adapter(ctx, candidate.candidate)
+	if err != nil {
+		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching adapter is unavailable", err)
+	}
+	resumable, ok := adapter.(provider.ResumableAdapter)
+	if !ok {
+		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "dispatching operation cannot be safely replayed", nil), 0)
+	}
+	if _, ok := adapter.(provider.IdempotencyRecovery); !ok {
+		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "dispatching resumable operation has no idempotency recovery", nil), 0)
+	}
+	query := provider.CapabilityQuery{EndpointID: candidate.candidate.EndpointID, Family: provider.Family(candidate.candidate.Family), Model: candidate.candidate.Model, ServiceClass: candidate.candidate.AttemptedClass}
+	capability, err := adapter.Capabilities(ctx, query)
+	if err != nil {
+		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching capabilities are unavailable", err)
+	}
+	call, err := adapter.Compile(ctx, provider.CompileInput{
+		Request: providerRequest, Query: query, Capability: capability,
+		Strict:   request.Portability != llm.PortabilityBestEffort,
+		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
+	})
+	if err != nil {
+		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching call could not be compiled", err)
+	}
+	lease := snapshot.ReservationLease
+	if lease <= 0 {
+		lease = defaultLease
+	}
+	attempt := operation.Attempt.AttemptNumber
+	if attempt <= 0 {
+		attempt = index + 1
+	}
+	observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: attempt, leaseUntil: engine.dependencies.Clock().Add(lease), marked: true}
+	result, invokeErr, providerPending := engine.invokeAttempt(ctx, operation, candidate.candidate, resumable, call, observer)
+	if invokeErr != nil {
+		if providerPending {
+			mapped := pendingPollError(invokeErr)
+			mapped.OperationID = operation.ID
+			return llm.Response{}, mapped
+		}
+		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, classifyProviderError(invokeErr, true), 0)
+	}
+	if observer.heartbeatErr != nil {
+		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "progress heartbeat failed", observer.heartbeatErr), 0)
+	}
+	return engine.finalizeSuccess(ctx, request, snapshot, quoted, index, operation, parent, call, result.Response)
 }
 
 func (engine *Engine) resumeProviderPending(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation) (llm.Response, error) {

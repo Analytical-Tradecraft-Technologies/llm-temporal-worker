@@ -314,6 +314,103 @@ func TestGenerateAcceptedSubmitFailureWithoutRecoveryRemainsAmbiguous(t *testing
 	}
 }
 
+func TestGenerateRecoversDispatchingOperationWithoutResubmitting(t *testing.T) {
+	request := baseRequest("resumable-dispatching-restart")
+	recoveredResponse := successfulResponse()
+	recoveredResponse.OperationKey = request.OperationKey
+	adapter := &idempotencyRecoveryAdapter{resumableEngineAdapter: &resumableEngineAdapter{}, recovered: provider.ResumableResult{
+		State:               provider.ResumableCompleted,
+		ProviderOperationID: "recovered-after-restart",
+		Dispatch:            provider.DispatchAccepted,
+		Result:              provider.Result{Response: recoveredResponse},
+	}}
+	harness := newHarness(t, adapter)
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := llm.RequestDigest(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, scopeKey := operationIdentity(normalized, digest)
+	started, err := harness.admission.Begin(context.Background(), admission.BeginRequest{
+		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest,
+		ExpiresAt: harness.clock.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("seed operation: %v", err)
+	}
+	if err := harness.admission.MarkDispatching(context.Background(), admission.DispatchRequest{
+		OperationID: started.Operation.ID, DispatchToken: started.Operation.DispatchToken,
+		Attempt:    admission.AttemptFacts{RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1", ServiceClass: "standard", Dispatch: admission.Accepted},
+		LeaseUntil: harness.clock.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("seed dispatching operation: %v", err)
+	}
+	response, err := harness.engine.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatalf("dispatching recovery failed: %v", err)
+	}
+	if response.Status != llm.ResponseStatusCompleted {
+		t.Fatalf("response status = %q, want completed", response.Status)
+	}
+	adapter.mu.Lock()
+	submits, recoveries := adapter.submits, adapter.recoveries
+	adapter.mu.Unlock()
+	if submits != 0 {
+		t.Fatalf("Submit calls after dispatching restart = %d, want zero", submits)
+	}
+	if recoveries != 1 {
+		t.Fatalf("idempotency recovery calls = %d, want one", recoveries)
+	}
+}
+
+func TestGenerateFailsClosedForDispatchingAdapterWithoutRecovery(t *testing.T) {
+	request := baseRequest("resumable-dispatching-no-recovery")
+	adapter := &resumableEngineAdapter{}
+	harness := newHarness(t, adapter)
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := llm.RequestDigest(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID, scopeKey := operationIdentity(normalized, digest)
+	started, err := harness.admission.Begin(context.Background(), admission.BeginRequest{
+		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest,
+		ExpiresAt: harness.clock.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("seed operation: %v", err)
+	}
+	if err := harness.admission.MarkDispatching(context.Background(), admission.DispatchRequest{
+		OperationID: started.Operation.ID, DispatchToken: started.Operation.DispatchToken,
+		Attempt:    admission.AttemptFacts{RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1", ServiceClass: "standard", Dispatch: admission.Accepted},
+		LeaseUntil: harness.clock.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("seed dispatching operation: %v", err)
+	}
+	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
+		t.Fatal("dispatching operation without recovery unexpectedly completed")
+	}
+	operation, err := harness.admission.Get(context.Background(), operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.State != admission.StateAmbiguous {
+		t.Fatalf("operation state = %q, want ambiguous", operation.State)
+	}
+	adapter.mu.Lock()
+	submits := adapter.submits
+	adapter.mu.Unlock()
+	if submits != 0 {
+		t.Fatalf("Submit calls without recovery = %d, want zero", submits)
+	}
+}
+
 // operationIDForTest mirrors the engine's public operation identity inputs
 // without exposing the internal hash helper to the fixture package.
 func operationIDForTest(t *testing.T, request llm.Request) string {
