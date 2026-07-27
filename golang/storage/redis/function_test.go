@@ -68,7 +68,7 @@ func TestAdmissionFunctionMetadataIsStableAndVersioned(t *testing.T) {
 func TestAdmissionFunctionValidatesInvocationShapeAndFieldBounds(t *testing.T) {
 	source := AdmissionFunctionSource()
 	for _, fragment := range []string{
-		"local MAX_KEYS = 256",
+		"local MAX_KEYS = 512",
 		"local MAX_KEY_BYTES = 1024",
 		"local MAX_ARGUMENT_BYTES = 2 * 1024 * 1024",
 		"local function valid_invocation",
@@ -78,6 +78,7 @@ func TestAdmissionFunctionValidatesInvocationShapeAndFieldBounds(t *testing.T) {
 		"local function valid_attempt",
 		"not valid_attempt(record.attempt)",
 		"not valid_attempt(attempt)",
+		"attempt.attempt_number >= MAX_ATTEMPT_NUMBER",
 	} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("admission Function omits invocation/field bound %q", fragment)
@@ -86,11 +87,20 @@ func TestAdmissionFunctionValidatesInvocationShapeAndFieldBounds(t *testing.T) {
 }
 
 func TestEncodeAttemptEnforcesFunctionFieldBounds(t *testing.T) {
-	tooLong := strings.Repeat("x", maxAttemptFieldBytes+1)
+	tooLong := strings.Repeat("x", maxAttemptRouteBytes+1)
 	if _, err := encodeAttempt(admission.AttemptFacts{RouteID: tooLong}); err == nil {
 		t.Fatal("oversized route identifier accepted")
 	}
-	if _, err := encodeAttempt(admission.AttemptFacts{AttemptNumber: 1_000_001}); err == nil {
+	if _, err := encodeAttempt(admission.AttemptFacts{ProviderRequestID: strings.Repeat("x", maxAttemptRequestIDBytes+1)}); err == nil {
+		t.Fatal("oversized provider request ID accepted")
+	}
+	if _, err := encodeAttempt(admission.AttemptFacts{ProviderRequestID: strings.Repeat("x", maxAttemptRequestIDBytes)}); err != nil {
+		t.Fatalf("maximum provider request ID rejected: %v", err)
+	}
+	if _, err := encodeAttempt(admission.AttemptFacts{AttemptNumber: maxAttemptNumber}); err != nil {
+		t.Fatalf("maximum persisted attempt number rejected: %v", err)
+	}
+	if _, err := encodeAttempt(admission.AttemptFacts{AttemptNumber: maxAttemptNumber + 1}); err == nil {
 		t.Fatal("oversized attempt number accepted")
 	}
 }

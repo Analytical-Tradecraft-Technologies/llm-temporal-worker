@@ -283,15 +283,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: 5c4914dd4173739fc3a5494f8cd21f6de6132eb83ef7fb6cb2f0063d51d91f98",
-		"admission_digest: 5C4914DD4173739FC3A5494F8CD21F6DE6132EB83EF7FB6CB2F0063D51D91F98",
+		"admission_digest: dab817724c63806723b209f4ab6cbc907519133fac495d995733ffa428e6b18b",
+		"admission_digest: DAB817724C63806723B209F4AB6CBC907519133FAC495D995733FFA428E6B18B",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "5c4914dd4173739fc3a5494f8cd21f6de6132eb83ef7fb6cb2f0063d51d91f98"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "dab817724c63806723b209f4ab6cbc907519133fac495d995733ffa428e6b18b"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -416,7 +416,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 5c4914dd4173739fc3a5494f8cd21f6de6132eb83ef7fb6cb2f0063d51d91f98", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: dab817724c63806723b209f4ab6cbc907519133fac495d995733ffa428e6b18b", "admission_digest: invalid", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
 		"reference":                  strings.Replace(string(exampleYAML(t)), "endpoint: openai-prod", "endpoint: missing-endpoint", 1),
 		"literal secret":             strings.Replace(string(exampleYAML(t)), "password:\n      kind: file\n      path: /var/run/secrets/redis-password", "password: plaintext-secret", 1),

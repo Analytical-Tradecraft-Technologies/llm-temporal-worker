@@ -10,7 +10,7 @@ local MAX_SAFE = 9007199254740991
 -- read or mutation. Production callers already enforce smaller record limits,
 -- but the Function is a public shared-state boundary and must not rely on the
 -- Go caller to supply a safe key/argument shape.
-local MAX_KEYS = 256
+local MAX_KEYS = 512
 local MAX_KEY_BYTES = 1024
 local MAX_ARGUMENTS = 16
 local MAX_ARGUMENT_BYTES = 2 * 1024 * 1024
@@ -19,6 +19,7 @@ local MAX_ARGUMENT_BYTES = 2 * 1024 * 1024
 -- within Redis' declared-key ceiling, and reject larger requests before any
 -- read or mutation.
 local MAX_RESERVATIONS = 253
+local MAX_ATTEMPT_NUMBER = 1000000
 
 local function valid_invocation(min_keys, max_keys, argument_count)
     if #KEYS < min_keys or (max_keys and #KEYS > max_keys) or #KEYS > MAX_KEYS then
@@ -84,7 +85,7 @@ local function valid_attempt(value)
         attempt_number = 0
     end
     attempt_number = integer(attempt_number)
-    return attempt_number ~= nil and attempt_number <= 1000000
+    return attempt_number ~= nil and attempt_number <= MAX_ATTEMPT_NUMBER
 end
 
 local function now_micros()
@@ -399,6 +400,9 @@ if ACTION == 'mark_dispatching' then
         return {'invalid_request', ''}
     end
     attempt.attempt_number = integer(attempt.attempt_number) or 0
+    if attempt.attempt_number >= MAX_ATTEMPT_NUMBER then
+        return {'invalid_request', ''}
+    end
     attempt.attempt_number = attempt.attempt_number + 1
     record.state = 'dispatching'
     record.attempt = attempt

@@ -148,6 +148,9 @@ func (store *AdmissionStore) MarkDispatching(ctx context.Context, request admiss
 	if request.OperationID == "" || request.DispatchToken == "" {
 		return fmt.Errorf("invalid dispatch request")
 	}
+	if request.Attempt.AttemptNumber >= maxAttemptNumber {
+		return fmt.Errorf("attempt number exceeds dispatch increment limit")
+	}
 	attempt, err := encodeAttempt(request.Attempt)
 	if err != nil {
 		return err
@@ -199,6 +202,9 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	if err != nil {
 		return admission.ContinueResult{}, err
 	}
+	if err := validateContinuationReservationEnvelope(len(operation.Reservations), len(request.Reservations)); err != nil {
+		return admission.ContinueResult{}, err
+	}
 	keys := make([]string, 2+len(operation.Reservations)+len(request.Reservations))
 	keys[0] = store.space.operationIndexKey(request.OperationID)
 	keys[1] = operationKey
@@ -237,6 +243,13 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 		return admission.ContinueResult{}, err
 	}
 	return admission.ContinueResult{Operation: operation}, nil
+}
+
+func validateContinuationReservationEnvelope(existing, next int) error {
+	if existing < 0 || next < 0 || existing > maxRedisReservations || next > maxRedisReservations || existing+next+2 > maxRedisFunctionKeys {
+		return fmt.Errorf("continuation reservation envelope exceeds Redis key limit")
+	}
+	return nil
 }
 
 func (store *AdmissionStore) Complete(ctx context.Context, request admission.CompleteRequest) error {
