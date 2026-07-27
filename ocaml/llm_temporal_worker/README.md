@@ -268,6 +268,11 @@ The wrapper preserves arbitrary provider model naming and is encoded as the
 same JSON string expected by the Go query Activity.  Use `None` when no prefix
 filter is desired.
 
+Model inventory results expose `display_name` as the nominal
+`Model_display_name.t option`, distinct from `Provider_model_id.t`. Both remain
+JSON strings at the Activity boundary, but the wrappers prevent accidental
+identifier interchange in OCaml code.
+
 Model inventory lifecycle filters use the Go wire values `available`,
 `deprecated`, `unavailable`, and `unknown`. For source compatibility the
 OCaml constructors are `Active`, `Deprecated`, `Retired`, and `Unknown`; the

@@ -113,6 +113,7 @@ module Query_execution_id : Opaque_identifier
 module Budget_policy_key : Opaque_identifier
 module Budget_generation_id : Opaque_identifier
 module Provider_model_id : Opaque_identifier
+module Model_display_name : Opaque_identifier
 module Model_prefix : Opaque_identifier
 module Window_key : Opaque_identifier
 module Checkpoint : sig
@@ -252,7 +253,7 @@ type budget_status_filter = { policy_key : Budget_policy_key.t option; active_at
 type spend_summary_filter = { start_time : Ptime.t; end_time : Ptime.t; group_by : spend_group_by list; operation_kinds : operation_kind list }
 type provider_route_status = { route_id : Route_id.t; provider : Provider_id.t; endpoint : Endpoint_id.t; availability : availability; credit_state : credit_state; billing_state : billing_state; circuit_state : circuit_state; observed_at : Ptime.t; stale_after : Ptime.t; safe_code : string option }
 type provider_status_page = { routes : provider_route_status list }
-type model_inventory_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; provider_model_id : Provider_model_id.t; display_name : string option; lifecycle : model_lifecycle; capabilities : model_capability list; source : inventory_source; complete_snapshot : bool; safe_metadata : Safe_metadata.t }
+type model_inventory_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; provider_model_id : Provider_model_id.t; display_name : Model_display_name.t option; lifecycle : model_lifecycle; capabilities : model_capability list; source : inventory_source; complete_snapshot : bool; safe_metadata : Safe_metadata.t }
 type model_inventory_page = { models : model_inventory_entry list }
 type credit_status_entry = { provider : Provider_id.t; endpoint : Endpoint_id.t; credit_state : credit_state; billing_state : billing_state; confirmed_at : Ptime.t option; evidence_source : credit_evidence_source; safe_evidence_code : string option }
 type credit_status_page = { endpoints : credit_status_entry list }
