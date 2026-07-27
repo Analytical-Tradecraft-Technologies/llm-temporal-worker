@@ -3,6 +3,7 @@ package anthropicmessages
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 		OperationKey: "anthropic-lower",
 		Model:        "claude-contract",
 		ServiceClass: llm.ServiceClassPriority,
+		Portability:  llm.PortabilityBestEffort,
 		Instructions: []llm.Instruction{
 			{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"},
 			{Level: llm.InstructionLevelApplication, Kind: llm.InstructionKindParts, Content: []llm.Part{
@@ -46,7 +48,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: request,
 		Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
+		Strict:  false,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +97,30 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	}
 	if wire["container"] != "container-1" {
 		t.Fatalf("extension = %#v", wire["container"])
+	}
+}
+
+func TestCompileStrictRejectsMixedInstructionLevels(t *testing.T) {
+	adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, testProfile())}
+	_, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{
+			OperationKey: "anthropic-strict-instructions",
+			Model:        "claude-contract",
+			Portability:  llm.PortabilityStrict,
+			Instructions: []llm.Instruction{
+				{Level: llm.InstructionLevelPolicy, Text: "policy"},
+				{Level: llm.InstructionLevelApplication, Text: "application"},
+			},
+		},
+		Query:  provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
+		Strict: true,
+	})
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("compile error = %T %v, want provider error", err, err)
+	}
+	if mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(mapped.SafeMessage, "instruction hierarchy") {
+		t.Fatalf("compile error = %#v, want strict instruction hierarchy rejection", mapped)
 	}
 }
 
