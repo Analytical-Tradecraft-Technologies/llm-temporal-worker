@@ -29,8 +29,20 @@ These adapters do not materialize window keys or execute the Redis admission
 Function; runtime composition and the fenced recovery coordinator remain
 subject to the procedures below. The event adapter and tailer intentionally
 never trim the Stream: a separate retention coordinator must use the minimum
-non-expired worker cursor plus a configured safety margin, and remains a
-pending Task 6 slice.
+non-expired worker cursor plus a configured safety margin.
+
+`BudgetWorkerLeaseStore` now provides the worker-side lease/roster boundary.
+Each process constructs one store, which generates a random session ID once
+and reuses it across Redis reconnects. `Register` writes the generation and
+cursor into the namespaced `budget:workers` hash, `Renew` advances the cursor
+only monotonically, and `Release` removes only the liveness field while
+retaining the persistent roster entry. A session may renew after its liveness
+TTL has elapsed when its roster still proves the same generation/session; a
+new process has a new random session and cannot claim that lease. `Live` is a
+read-only view for recovery classification and `PruneExpired` removes only a
+bounded number of expired lease fields, never roster entries. The tailer's
+returned cursor should be passed to `Renew` after each successful poll; these
+records remain coordination hints and never authorize paid work.
 
 ## Purpose and safety invariant
 
