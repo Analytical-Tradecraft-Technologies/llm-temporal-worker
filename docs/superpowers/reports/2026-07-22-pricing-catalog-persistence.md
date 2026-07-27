@@ -17,6 +17,9 @@ the in-memory catalog loader.
 - Stores omitted components as NULL with explicit partial/unknown status.
 - Makes identical version/digest replay idempotent and rejects conflicts.
 - Retires the prior active snapshot atomically and loads the effective snapshot.
+- Serializes all catalog publications within a worker namespace with a
+  transaction-scoped advisory lock, including first publication of a new
+  version where no row exists to lock yet.
 - Canonicalizes decimal formatting before persistence because PostgreSQL
   `NUMERIC` does not preserve source lexical formatting, then verifies the
   canonical digest on load.
@@ -37,7 +40,10 @@ the in-memory catalog loader.
 
 All passed in this worktree, including the live future-dated replacement
 assertion (the predecessor remains active until the replacement takes effect)
-and tampered entry source-digest rejection.
+and tampered entry source-digest rejection. The integration suite also holds
+one publisher after it acquires the namespace lock and proves a concurrent
+publisher cannot enter the publication transaction until the predecessor
+commits; the effective timeline contains exactly one active snapshot afterward.
 
 ## Self-review and concerns
 

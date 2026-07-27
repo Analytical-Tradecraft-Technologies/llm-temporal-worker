@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,144 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
+
+func TestPricingCatalogRepositorySerializesConcurrentPublication(t *testing.T) {
+	addr := os.Getenv("LLMTW_POSTGRES_ADDR")
+	if addr == "" {
+		t.Skip("LLMTW_POSTGRES_ADDR is not configured; set it for PostgreSQL integration tests")
+	}
+	ns, err := NewNamespace(valueOr("LLMTW_POSTGRES_DATABASE", "llm_worker"), valueOr("LLMTW_POSTGRES_SCHEMA", "llm_worker"), os.Getenv("LLMTW_POSTGRES_TABLE_PREFIX"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dsn := "postgres://" + valueOr("LLMTW_POSTGRES_USER", "llmtw") + ":" + valueOr("LLMTW_POSTGRES_PASSWORD", "llmtw") + "@" + addr + "/" + ns.Database + "?sslmode=disable"
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 4
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := Install(ctx, pool, ns); err != nil {
+		t.Fatal(err)
+	}
+
+	effectiveAt := time.Unix(1_900_000_000, 0).UTC()
+	makeCatalog := func(version, endpoint, price string) pricing.Catalog {
+		t.Helper()
+		entry := pricing.Entry{
+			Provider: "openai", Family: "openai_responses", EndpointID: endpoint, Region: "global", Model: "gpt-test", ProviderTier: "standard",
+			Prices: pricing.UnitPrices{
+				InputPerMillion: pricing.MustDecimalUSD(price), OutputPerMillion: pricing.MustDecimalUSD("10"),
+				CacheReadPerMillion: pricing.MustDecimalUSD("0"), CacheWritePerMillion: pricing.MustDecimalUSD("0"),
+				ReasoningPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0"),
+			},
+			Version: version, EffectiveFrom: effectiveAt,
+		}
+		catalog, compileErr := pricing.CompileUSD(version, []pricing.Entry{entry})
+		if compileErr != nil {
+			t.Fatal(compileErr)
+		}
+		return catalog
+	}
+	firstCatalog := makeCatalog("pricing-concurrent-v1", "pricing-concurrent-v1", "1")
+	secondCatalog := makeCatalog("pricing-concurrent-v2", "pricing-concurrent-v2", "2")
+	firstLocked := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseFirst:
+		default:
+			close(releaseFirst)
+		}
+	}()
+	secondAttempting := make(chan struct{})
+	secondLocked := make(chan struct{})
+	var onceFirst, onceAttempting, onceSecond sync.Once
+	hooks := pricingCatalogTestHooks{
+		beforePublicationLock: func(catalog pricing.Catalog) {
+			if catalog.Version == secondCatalog.Version {
+				onceAttempting.Do(func() { close(secondAttempting) })
+			}
+		},
+		afterPublicationLock: func(catalog pricing.Catalog) {
+			switch catalog.Version {
+			case firstCatalog.Version:
+				onceFirst.Do(func() { close(firstLocked) })
+				<-releaseFirst
+			case secondCatalog.Version:
+				onceSecond.Do(func() { close(secondLocked) })
+			}
+		},
+	}
+	repository := PricingCatalogRepository{Pool: pool, Namespace: ns, Now: func() time.Time { return effectiveAt }}
+	var firstDigest, secondDigest [32]byte
+	firstDigest[0], secondDigest[0] = 1, 2
+	type storeResult struct {
+		snapshot PriceCatalogSnapshot
+		err      error
+	}
+	firstResult := make(chan storeResult, 1)
+	secondResult := make(chan storeResult, 1)
+	go func() {
+		snapshot, storeErr := repository.store(ctx, firstCatalog, firstDigest, effectiveAt, hooks)
+		firstResult <- storeResult{snapshot: snapshot, err: storeErr}
+	}()
+	select {
+	case <-firstLocked:
+	case <-ctx.Done():
+		t.Fatal("first catalog did not acquire the publication lock")
+	}
+	go func() {
+		snapshot, storeErr := repository.store(ctx, secondCatalog, secondDigest, effectiveAt, hooks)
+		secondResult <- storeResult{snapshot: snapshot, err: storeErr}
+	}()
+	select {
+	case <-secondAttempting:
+	case <-ctx.Done():
+		t.Fatal("second catalog did not attempt publication")
+	}
+	select {
+	case <-secondLocked:
+		t.Fatal("second catalog acquired the publication lock before the first transaction completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	first := <-firstResult
+	if first.err != nil {
+		t.Fatal(first.err)
+	}
+	second := <-secondResult
+	if second.err != nil {
+		t.Fatal(second.err)
+	}
+	if first.snapshot.ID == second.snapshot.ID {
+		t.Fatal("concurrent catalog publications reused a snapshot ID")
+	}
+	active, err := repository.LoadActive(ctx, effectiveAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Catalog.Version != secondCatalog.Version {
+		t.Fatalf("active catalog = %q, want serialized successor %q", active.Catalog.Version, secondCatalog.Version)
+	}
+	relation, err := ns.Render("price_catalogs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlapping int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+relation+" WHERE status='active' AND effective_from <= $1 AND (retired_at IS NULL OR $1 < retired_at)", effectiveAt).Scan(&overlapping); err != nil {
+		t.Fatal(err)
+	}
+	if overlapping != 1 {
+		t.Fatalf("active catalogs at publication boundary = %d, want 1", overlapping)
+	}
+}
 
 func TestPricingCatalogRepositoryIntegration(t *testing.T) {
 	addr := os.Getenv("LLMTW_POSTGRES_ADDR")
