@@ -25,7 +25,7 @@ the `llm` package.
 | `github.com/openai/openai-go/v3` | `v3.44.0` | Official OpenAI Responses and Chat Completions clients | Apache-2.0; [official repository](https://github.com/openai/openai-go) |
 | `github.com/Azure/azure-sdk-for-go/sdk/azcore` | `v1.17.0` | Official Azure OpenAI endpoint/auth middleware used by the Chat profile | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
 | `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | `v1.7.0` | Azure workload/default credential resolution | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
-| `github.com/anthropics/anthropic-sdk-go` | `v1.57.0` | Official Anthropic Messages client | MIT; [official repository](https://github.com/anthropics/anthropic-sdk-go) |
+| `github.com/anthropics/anthropic-sdk-go` | `v1.61.0` | Official Anthropic Messages client | MIT; [official repository](https://github.com/anthropics/anthropic-sdk-go) |
 | `github.com/aws/aws-sdk-go-v2` | `v1.42.1` | AWS SDK base types and request configuration | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/aws/aws-sdk-go-v2/config` | `v1.27.27` | AWS region and default credential-chain loading | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/aws/aws-sdk-go-v2/credentials` | `v1.17.27` | Explicit AWS credential providers used by runtime composition | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
