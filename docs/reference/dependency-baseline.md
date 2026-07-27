@@ -35,9 +35,9 @@ the `llm` package.
 | `github.com/aws/aws-sdk-go-v2/service/s3` | `v1.105.1` | Official AWS S3 client for production content-addressed blobs | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/aws/smithy-go` | `v1.27.4` | AWS SDK transport and protocol support | Apache-2.0; [official repository](https://github.com/aws/smithy-go) |
 | `github.com/google/uuid` | `v1.6.0` | UUIDv7 identifiers for durable repository records | BSD-3-Clause; [official repository](https://github.com/google/uuid) |
-| `github.com/prometheus/client_golang` | `v1.24.0` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |
+| `github.com/prometheus/client_golang` | `v1.24.1` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |
 | `github.com/prometheus/client_model` | `v0.6.2` | Prometheus metric model types used by tests and exposition boundaries | Apache-2.0; [official repository](https://github.com/prometheus/client_model) |
-| `github.com/prometheus/common` | `v0.70.0` | Prometheus exposition and helper types | Apache-2.0; [official repository](https://github.com/prometheus/common) |
+| `github.com/prometheus/common` | `v0.70.1` | Prometheus exposition and helper types | Apache-2.0; [official repository](https://github.com/prometheus/common) |
 | `go.opentelemetry.io/otel`, `/sdk`, and `/trace` | `v1.43.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | `v1.43.0` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
 | `github.com/redis/go-redis/v9` | `v9.21.0` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
