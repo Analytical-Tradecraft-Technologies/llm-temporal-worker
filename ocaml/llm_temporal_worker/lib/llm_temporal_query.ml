@@ -301,4 +301,12 @@ let start ?task_queue ~operation_key ~context query =
       (* [Temporal.Future.map] preserves the Activity's error channel and
          keeps protocol-kind mismatches in the successful value channel
          rather than raising from a workflow callback. *)
-      Temporal.Future.map (fun response -> of_response query response) future
+      Temporal.Future.map
+        (fun response ->
+          if String.equal
+               (Operation_key.to_string response.operation_key)
+               (Operation_key.to_string operation_key)
+          then of_response query response
+          else Error (operation_key_mismatch ~expected:operation_key
+                        ~actual:response.operation_key))
+        future

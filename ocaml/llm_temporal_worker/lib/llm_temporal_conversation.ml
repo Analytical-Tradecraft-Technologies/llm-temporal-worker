@@ -253,7 +253,13 @@ let start_respond ?task_queue ?settings_patch ?cache ~operation_key ~append conv
       Llm_temporal_invocation.generate_v1_activity request
   in
   Temporal.Future.map
-    (fun response -> { response; conversation = child conversation request.settings_patch response.checkpoint.handle })
+    (fun (response : generate_response) ->
+      if String.equal
+           (Operation_key.to_string response.operation_key)
+           (Operation_key.to_string request.operation_key)
+      then Ok { response; conversation = child conversation request.settings_patch response.checkpoint.handle }
+      else Error (operation_key_mismatch ~expected:request.operation_key
+                    ~actual:response.operation_key))
     future
 
 type compact_dispatcher =
@@ -309,6 +315,12 @@ let start_compact ?task_queue ?policy ?cache ~operation_key conversation =
       in
       Temporal.Future.map
         (fun (response : compaction_response) ->
-          let conversation = { conversation with checkpoint = Some response.checkpoint.handle; restore_after_compact = true } in
-          Ok (response, conversation))
+          if String.equal
+               (Operation_key.to_string response.operation_key)
+               (Operation_key.to_string request.operation_key)
+          then
+            let conversation = { conversation with checkpoint = Some response.checkpoint.handle; restore_after_compact = true } in
+            Ok (response, conversation)
+          else Error (operation_key_mismatch ~expected:request.operation_key
+                        ~actual:response.operation_key))
         future

@@ -518,7 +518,7 @@ module Conversation : sig
     ?cache:Cache_policy.t ->
     append:item list ->
     t ->
-    (turn, Temporal.Error.t) Temporal.Future.t
+    ((turn, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
   val compact :
     ?task_queue:Temporal_task_queue.t ->
@@ -845,6 +845,9 @@ let message text =
 
 let exactly_three_results = function
   | [ branch_0; branch_1; branch_2 ] ->
+      let* branch_0 = branch_0 in
+      let* branch_1 = branch_1 in
+      let* branch_2 = branch_2 in
       Ok (branch_0, branch_1, branch_2)
   | _ ->
       invalid_arg "Temporal.Future.all changed result cardinality"
