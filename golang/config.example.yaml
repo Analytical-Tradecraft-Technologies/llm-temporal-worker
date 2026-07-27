@@ -48,7 +48,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b
+    admission_digest: 5c4914dd4173739fc3a5494f8cd21f6de6132eb83ef7fb6cb2f0063d51d91f98
     max_connections: 96
     dial_timeout: 2s
     operation_timeout: 3s

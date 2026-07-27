@@ -26,6 +26,8 @@ var postgresNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 var postgresPrefixPattern = regexp.MustCompile(`^(|[a-z][a-z0-9_]{0,22}_)$`)
 var redisKeyPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
+const maxAdmissionFieldBytes = 256
+
 // Validate checks references, closed enums, safety bounds, and retention
 // inequalities. It never resolves secret values or performs network I/O.
 func (config Config) Validate() error {
@@ -499,6 +501,9 @@ func (model ModelConfig) validate(path string, endpoints map[string]EndpointConf
 		if err := validateIdentifier(route.ID, routePath+".id"); err != nil {
 			return err
 		}
+		if len(route.ID) > maxAdmissionFieldBytes {
+			return fmt.Errorf("%s.id exceeds the %d-byte admission field limit", routePath, maxAdmissionFieldBytes)
+		}
 		if _, exists := seen[route.ID]; exists {
 			return fmt.Errorf("%s duplicate route ID %q", path, route.ID)
 		}
@@ -509,6 +514,9 @@ func (model ModelConfig) validate(path string, endpoints map[string]EndpointConf
 		}
 		if route.Model == "" {
 			return fmt.Errorf("%s.model is required", routePath)
+		}
+		if len(route.Model) > maxAdmissionFieldBytes {
+			return fmt.Errorf("%s.model exceeds the %d-byte admission field limit", routePath, maxAdmissionFieldBytes)
 		}
 		if len(route.Classes) == 0 {
 			return fmt.Errorf("%s.classes must not be empty", routePath)

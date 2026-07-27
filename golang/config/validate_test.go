@@ -218,6 +218,30 @@ func TestConfigValidationRejectsMixedBlobStoreBranches(t *testing.T) {
 	}
 }
 
+func TestConfigValidationBoundsAdmissionRouteFields(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := loaded.Models["invoice-summarizer"]
+	model.Routes[0].ID = strings.Repeat("r", 257)
+	loaded.Models["invoice-summarizer"] = model
+	if err := loaded.Validate(); err == nil {
+		t.Fatal("config accepted an oversized route identifier")
+	}
+
+	loaded, err = config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = loaded.Models["invoice-summarizer"]
+	model.Routes[0].Model = strings.Repeat("m", 257)
+	loaded.Models["invoice-summarizer"] = model
+	if err := loaded.Validate(); err == nil {
+		t.Fatal("config accepted an oversized route model")
+	}
+}
+
 func TestConfigSchemaRejectsUnsafeFileBlobRoots(t *testing.T) {
 	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
 	if err != nil {

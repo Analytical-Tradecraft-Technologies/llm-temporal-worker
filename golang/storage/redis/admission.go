@@ -376,6 +376,9 @@ func validateBegin(request admission.BeginRequest) error {
 }
 
 func validateReservations(reservations []admission.WindowReservation) error {
+	if len(reservations) > maxRedisReservations {
+		return fmt.Errorf("admission reservation count exceeds Redis key limit")
+	}
 	for _, reservation := range reservations {
 		if reservation.PolicyID == "" || reservation.WindowID == "" || reservation.Limit <= 0 || reservation.BucketNanos <= 0 || reservation.DurationNanos <= 0 || reservation.Amount < 0 || !reservation.Amount.Valid() || !reservation.Limit.Valid() {
 			return fmt.Errorf("invalid admission reservation")

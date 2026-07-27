@@ -10,6 +10,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
 func exampleYAML(t *testing.T) []byte {
@@ -274,20 +275,23 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 	if len(digest) != 64 {
 		t.Fatalf("state.redis.admission_digest = %q, want a SHA-256 hex digest", digest)
 	}
+	if got, want := digest, redisstore.AdmissionFunctionDigest(); got != want {
+		t.Fatalf("state.redis.admission_digest = %q, want embedded Function digest %q", got, want)
+	}
 }
 
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b",
-		"admission_digest: C09E24D73750BEBEE4AAD8CD9B1F05ABAA22001528CEF0FF6842F2241BB8C20B",
+		"admission_digest: 5c4914dd4173739fc3a5494f8cd21f6de6132eb83ef7fb6cb2f0063d51d91f98",
+		"admission_digest: 5C4914DD4173739FC3A5494F8CD21F6DE6132EB83EF7FB6CB2F0063D51D91F98",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "5c4914dd4173739fc3a5494f8cd21f6de6132eb83ef7fb6cb2f0063d51d91f98"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -412,7 +416,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 5c4914dd4173739fc3a5494f8cd21f6de6132eb83ef7fb6cb2f0063d51d91f98", "admission_digest: invalid", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
 		"reference":                  strings.Replace(string(exampleYAML(t)), "endpoint: openai-prod", "endpoint: missing-endpoint", 1),
 		"literal secret":             strings.Replace(string(exampleYAML(t)), "password:\n      kind: file\n      path: /var/run/secrets/redis-password", "password: plaintext-secret", 1),

@@ -16,9 +16,11 @@ import (
 )
 
 const (
-	operationSchema    = "admission/v1"
-	continuationSchema = "continuation/v1"
-	maxRedisInteger    = int64(1<<53 - 1)
+	operationSchema      = "admission/v1"
+	continuationSchema   = "continuation/v1"
+	maxRedisInteger      = int64(1<<53 - 1)
+	maxAttemptFieldBytes = 256
+	maxRedisReservations = 253
 )
 
 // operationWire deliberately uses hex digests and decimal monetary strings.
@@ -211,7 +213,29 @@ func decodeAttemptWire(wire attemptWire) admission.AttemptFacts {
 }
 
 func encodeAttempt(attempt admission.AttemptFacts) ([]byte, error) {
+	if err := validateAttempt(attempt); err != nil {
+		return nil, err
+	}
 	return json.Marshal(encodeAttemptWire(attempt))
+}
+
+func validateAttempt(attempt admission.AttemptFacts) error {
+	for name, value := range map[string]string{
+		"route_id":            attempt.RouteID,
+		"endpoint_id":         attempt.EndpointID,
+		"provider":            attempt.Provider,
+		"resolved_model":      attempt.ResolvedModel,
+		"provider_request_id": attempt.ProviderRequestID,
+		"service_class":       attempt.ServiceClass,
+	} {
+		if len(value) > maxAttemptFieldBytes {
+			return fmt.Errorf("attempt %s exceeds Redis field limit", name)
+		}
+	}
+	if attempt.AttemptNumber < 0 || int64(attempt.AttemptNumber) > 1_000_000 {
+		return fmt.Errorf("invalid attempt number")
+	}
+	return nil
 }
 
 func decodeAttempt(data []byte) (admission.AttemptFacts, error) {
@@ -226,6 +250,9 @@ func decodeAttempt(data []byte) (admission.AttemptFacts, error) {
 }
 
 func encodeOutcome(outcome admission.AttemptOutcome) ([]byte, error) {
+	if err := validateAttempt(outcome.Attempt); err != nil {
+		return nil, err
+	}
 	return json.Marshal(outcomeWire{
 		Certainty:         outcome.Certainty,
 		Incurred:          strconv.FormatInt(int64(outcome.Incurred), 10),
