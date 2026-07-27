@@ -37,6 +37,16 @@ but normal budget decisions and status queries read Redis only. PostgreSQL
 budget-read/adoption/rebuild rules are specified only in the
 [control-plane design](../architecture/postgresql-state-cache-and-control-plane.md#the-only-postgresql-budget-read-conditions).
 
+The embedded admission Function is also a defensive boundary: every action
+checks its exact argument arity, key count, key/value byte bounds, reservation
+count, and Redis-safe integer range before reading or mutating shared state.
+Operation and attempt fields are length-bounded as well. This keeps malformed
+direct `FCALL`/preloaded-Lua invocations fail-closed instead of allowing a
+missing key or oversized value to become a Redis runtime error after a partial
+mutation. The supported envelope is at most 253 reservation windows per
+operation (the remaining Redis key slots carry the operation indexes) and
+256-byte route/endpoint/provider/model fields.
+
 Production fails closed on Redis errors. Require TLS/auth, `noeviction`, explicit
 AOF durability choice plus RDB, persistence monitoring, backups, and restore
 tests.

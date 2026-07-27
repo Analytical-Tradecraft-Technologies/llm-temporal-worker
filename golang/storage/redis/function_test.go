@@ -65,6 +65,36 @@ func TestAdmissionFunctionMetadataIsStableAndVersioned(t *testing.T) {
 	}
 }
 
+func TestAdmissionFunctionValidatesInvocationShapeAndFieldBounds(t *testing.T) {
+	source := AdmissionFunctionSource()
+	for _, fragment := range []string{
+		"local MAX_KEYS = 256",
+		"local MAX_KEY_BYTES = 1024",
+		"local MAX_ARGUMENT_BYTES = 2 * 1024 * 1024",
+		"local function valid_invocation",
+		"#KEYS ~= 3 + #reservations",
+		"#KEYS ~= 2 + #old + #reservations",
+		"#record.reservations > MAX_RESERVATIONS",
+		"local function valid_attempt",
+		"not valid_attempt(record.attempt)",
+		"not valid_attempt(attempt)",
+	} {
+		if !strings.Contains(source, fragment) {
+			t.Fatalf("admission Function omits invocation/field bound %q", fragment)
+		}
+	}
+}
+
+func TestEncodeAttemptEnforcesFunctionFieldBounds(t *testing.T) {
+	tooLong := strings.Repeat("x", maxAttemptFieldBytes+1)
+	if _, err := encodeAttempt(admission.AttemptFacts{RouteID: tooLong}); err == nil {
+		t.Fatal("oversized route identifier accepted")
+	}
+	if _, err := encodeAttempt(admission.AttemptFacts{AttemptNumber: 1_000_001}); err == nil {
+		t.Fatal("oversized attempt number accepted")
+	}
+}
+
 func TestAdmissionFunctionLibraryAndLuaFallbackHaveExplicitDigests(t *testing.T) {
 	library := AdmissionFunctionSource()
 	if !strings.HasPrefix(library, "#!lua name="+AdmissionFunctionLibrary+"\n") {

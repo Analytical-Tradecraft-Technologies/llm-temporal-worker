@@ -3,6 +3,7 @@ package redis
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,28 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
+
+func TestParseMicroEnforcesRedisSafeIntegerWire(t *testing.T) {
+	for _, value := range []string{"0", "1", strconv.FormatInt(maxRedisInteger, 10)} {
+		got, err := parseMicro(value)
+		if err != nil || int64(got) != mustParseInt64(value) {
+			t.Fatalf("parseMicro(%q) = %d, %v; want exact safe integer", value, got, err)
+		}
+	}
+	for _, value := range []string{"", "-1", strconv.FormatInt(maxRedisInteger+1, 10), "1.0", "1e3", " 1"} {
+		if _, err := parseMicro(value); err == nil {
+			t.Fatalf("parseMicro(%q) accepted an unsafe/non-integer wire value", value)
+		}
+	}
+}
+
+func mustParseInt64(value string) int64 {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
 
 func TestFormatRedisTimeDistinguishesLegacyZeroFromUnixEpoch(t *testing.T) {
 	tests := []struct {
