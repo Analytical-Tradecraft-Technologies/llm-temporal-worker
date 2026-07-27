@@ -59,6 +59,23 @@ compaction references, parent-operation references, and cache origins, then
 deletes provider-state children and checkpoints in one transaction. Referenced
 blobs are deliberately left for the independent blob-retention fence.
 
+## Unknown-cost reconciliation queue
+
+`postgres.UnknownCostRepository.List` is a read-only, scope-bound,
+cursor-paginated queue of completed operations whose actual cost is still
+unknown. It returns only an opaque operation UUID, completion time, and the
+safe unknown-reason code; request/result data, provider identifiers, and
+credentials are not exposed. The cursor is `(completed_at, operation_id)` in
+descending order and is bounded to 10,000 rows, matching the scoped
+`operations_unknown_cost_idx` contract.
+
+This queue does not resolve a cost and does not call a provider, Redis, or an
+external billing system. A future authorized billing adapter must validate its
+own evidence and perform the operation update, journal revision,
+reservation/bucket projection update, and Redis reconciliation through a
+single fenced protocol. Until that capability exists, unknown-cost rows remain
+conservatively retained and must never be changed to zero.
+
 The PostgreSQL adapter also exposes `PruneExpiredBudgetBuckets`. This is a
 narrow budget-retention fence, not full budget or operation retention: callers
 must provide a cutoff no newer than the maximum configured window horizon, and
