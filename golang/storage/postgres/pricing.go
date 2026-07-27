@@ -7,7 +7,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
@@ -50,6 +52,14 @@ type PricingCatalogRepository struct {
 	NewID     func() uuid.UUID
 }
 
+// pricingCatalogTestHooks coordinate the deterministic concurrent-publication
+// integration test without exposing synchronization controls in the production
+// repository API.
+type pricingCatalogTestHooks struct {
+	beforePublicationLock func(pricing.Catalog)
+	afterPublicationLock  func(pricing.Catalog)
+}
+
 func (r PricingCatalogRepository) validate() error {
 	if r.Pool == nil {
 		return errors.New("pricing catalog repository pool is nil")
@@ -71,11 +81,25 @@ func (r PricingCatalogRepository) id() uuid.UUID {
 	return uuid.New()
 }
 
+// pricingCatalogPublicationLockKey identifies the one catalog publication
+// stream in a worker namespace. Catalog versions cannot use independent row
+// locks because a version does not exist before its first publication; without
+// this shared transaction lock, concurrent writers could both retire the same
+// predecessor and publish overlapping active intervals.
+func pricingCatalogPublicationLockKey(namespace Namespace) int64 {
+	digest := sha256.Sum256([]byte(namespace.String() + "\x00price_catalog_publication"))
+	return int64(binary.BigEndian.Uint64(digest[:8]))
+}
+
 // Store publishes catalog as one atomic snapshot. Repeating an identical
 // catalog version is idempotent; reusing a version or compiled digest for
 // different content is rejected. Existing snapshots become retired only in
 // the same transaction as the new active snapshot.
 func (r PricingCatalogRepository) Store(ctx context.Context, catalog pricing.Catalog, sourceDigest [32]byte, effectiveFrom time.Time) (PriceCatalogSnapshot, error) {
+	return r.store(ctx, catalog, sourceDigest, effectiveFrom, pricingCatalogTestHooks{})
+}
+
+func (r PricingCatalogRepository) store(ctx context.Context, catalog pricing.Catalog, sourceDigest [32]byte, effectiveFrom time.Time, hooks pricingCatalogTestHooks) (PriceCatalogSnapshot, error) {
 	var result PriceCatalogSnapshot
 	if err := r.validate(); err != nil {
 		return result, err
@@ -111,6 +135,15 @@ func (r PricingCatalogRepository) Store(ctx context.Context, catalog pricing.Cat
 	loadedAt := r.clock()
 	result = PriceCatalogSnapshot{ID: r.id(), Catalog: catalog, SourceDigest: sourceDigest, LoadedAt: loadedAt, EffectiveFrom: effectiveFrom.UTC(), Status: priceCatalogStatusActive}
 	err = WithTransaction(ctx, r.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		if hooks.beforePublicationLock != nil {
+			hooks.beforePublicationLock(catalog)
+		}
+		if _, lockErr := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", pricingCatalogPublicationLockKey(r.Namespace)); lockErr != nil {
+			return redactPostgresError(fmt.Errorf("lock pricing catalog publication: %w", lockErr))
+		}
+		if hooks.afterPublicationLock != nil {
+			hooks.afterPublicationLock(catalog)
+		}
 		var existingID uuid.UUID
 		var existingSource, existingCompiled []byte
 		lookup := "SELECT price_catalog_id, source_digest, compiled_digest, status, loaded_at, effective_from, retired_at FROM " + catalogRelation + " WHERE catalog_version=$1 FOR UPDATE"

@@ -7,6 +7,31 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
+func TestPricingCatalogPublicationLockKeyIsStableAndNamespaceScoped(t *testing.T) {
+	namespace, err := NewNamespace("llm_worker", "llm_worker", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := pricingCatalogPublicationLockKey(namespace)
+	if key != pricingCatalogPublicationLockKey(namespace) {
+		t.Fatal("pricing catalog publication lock key is not stable")
+	}
+	otherNamespace, err := NewNamespace("llm_worker", "other_worker", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key == pricingCatalogPublicationLockKey(otherNamespace) {
+		t.Fatal("different namespaces share a pricing catalog publication lock key")
+	}
+	otherPrefix, err := NewNamespace("llm_worker", "llm_worker", "tenant_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key == pricingCatalogPublicationLockKey(otherPrefix) {
+		t.Fatal("different table prefixes share a pricing catalog publication lock key")
+	}
+}
+
 func TestEntryRowPreservesExactUSDAndZero(t *testing.T) {
 	entry := pricing.Entry{
 		Provider: "openai", Family: "openai_responses", EndpointID: "prod", Region: "global", Model: "gpt", ProviderTier: "standard",
