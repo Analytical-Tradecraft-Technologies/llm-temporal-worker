@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
 func TestAdmissionBeginIdempotencyAndAmbiguity(t *testing.T) {
@@ -50,5 +51,33 @@ func TestAdmissionDeniesOverlappingWindow(t *testing.T) {
 	result, err := store.Begin(context.Background(), admission.BeginRequest{ID: "two", ScopeKey: "two", RequestDigest: admission.Digest([]byte("two")), Reservation: 5, Reservations: []admission.WindowReservation{reservation}, LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)})
 	if err != nil || result.Denied == nil {
 		t.Fatalf("second begin = %#v %v", result, err)
+	}
+}
+
+func TestAdmissionRejectsInvalidReservationEnvelopeBeforeMutation(t *testing.T) {
+	now := time.Unix(100, 0)
+	base := admission.WindowReservation{PolicyID: "p", WindowID: "w", Bucket: 100, Amount: 6, Limit: 10, BucketNanos: int64(time.Second), DurationNanos: int64(10 * time.Second)}
+	for _, test := range []struct {
+		name         string
+		reservation  pricing.MicroUSD
+		reservations []admission.WindowReservation
+	}{
+		{name: "mismatched amount", reservation: 5, reservations: []admission.WindowReservation{base}},
+		{name: "duplicate identity", reservation: 6, reservations: []admission.WindowReservation{base, base}},
+		{name: "missing vector", reservation: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
+			_, err := store.Begin(context.Background(), admission.BeginRequest{ID: "invalid", ScopeKey: "invalid", Reservation: test.reservation, Reservations: test.reservations, ExpiresAt: now.Add(time.Hour)})
+			if err == nil {
+				t.Fatal("invalid reservation envelope accepted")
+			}
+			valid := base
+			valid.Amount = 5
+			result, err := store.Begin(context.Background(), admission.BeginRequest{ID: "valid", ScopeKey: "valid", Reservation: 5, Reservations: []admission.WindowReservation{valid}, ExpiresAt: now.Add(time.Hour)})
+			if err != nil || result.Denied != nil {
+				t.Fatalf("valid reservation after rejected envelope = %#v, %v", result, err)
+			}
+		})
 	}
 }
