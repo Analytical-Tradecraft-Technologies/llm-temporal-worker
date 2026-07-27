@@ -132,7 +132,12 @@ to be USD.
 For `settings_patch.temperature`, the v1 wire spelling is the same canonical
 decimal string in both clients. The Go decoder retains a bounded compatibility
 window for older numeric producers, but Go re-encoding always emits the string
-form; new producers must never emit a JSON number.
+form; new producers must never emit a JSON number. In the Go contract model the
+field uses the nominal `llm.DecimalV1` type rather than `float64`, so values
+with all 18 fractional digits survive decode, canonicalization, and re-encode
+without rounding. Provider adapters may convert at their boundary when an SDK
+only accepts a floating-point sampling value; that conversion never changes
+the persisted or Temporal wire representation.
 
 The repository still contains the pre-Task-17 `request`/`response` compatibility
 records because the unreleased legacy wrapper and Conversation tests use them.

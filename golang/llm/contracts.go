@@ -6,6 +6,7 @@ package llm
 // boundary and deliberately do not expose transcript or provider payloads.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -52,6 +53,96 @@ func (handle CheckpointHandle) valid() bool { return len(handle) > 0 && len(hand
 type CachePolicyV1 struct {
 	MaxAgeSeconds int64 `json:"max_age_seconds"`
 	Variant       int32 `json:"variant,omitempty"`
+}
+
+// DecimalV1 is the exact decimal spelling used by the v1 wire contract for
+// temperature.  Keeping the value as its validated canonical string avoids
+// routing a 38,18-compatible value through float64 and silently changing the
+// cache fingerprint or provider request.  It is intentionally a distinct
+// type: callers must not confuse a wire decimal with a provider sampling
+// float.
+type DecimalV1 string
+
+// NewDecimalV1 validates and canonicalizes a non-negative decimal string.
+// The accepted range is the v1 NUMERIC(38,18) subset: up to 20 integer digits
+// and up to 18 fractional digits.
+func NewDecimalV1(value string) (DecimalV1, error) {
+	canonical, err := normalizeDecimalV1(value)
+	if err != nil {
+		return "", err
+	}
+	return DecimalV1(canonical), nil
+}
+
+func (value DecimalV1) String() string { return string(value) }
+
+// Float64 converts a validated decimal for provider adapters that expose a
+// floating-point temperature.  The v1 wire representation remains exact even
+// when a downstream provider API cannot represent all 18 fractional digits.
+func (value DecimalV1) Float64() (float64, error) {
+	canonical, err := normalizeDecimalV1(string(value))
+	if err != nil {
+		return 0, err
+	}
+	parsed, err := strconv.ParseFloat(canonical, 64)
+	if err != nil || math.IsInf(parsed, 0) || math.IsNaN(parsed) {
+		return 0, fmt.Errorf("decimal cannot be represented as float64")
+	}
+	return parsed, nil
+}
+
+func (value DecimalV1) MarshalJSON() ([]byte, error) {
+	canonical, err := normalizeDecimalV1(string(value))
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(canonical)
+}
+
+func (value *DecimalV1) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decimal must be a JSON string: %w", err)
+	}
+	canonical, err := normalizeDecimalV1(raw)
+	if err != nil {
+		return err
+	}
+	*value = DecimalV1(canonical)
+	return nil
+}
+
+func normalizeDecimalV1(value string) (string, error) {
+	if value == "" || strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
+		return "", fmt.Errorf("decimal must be non-negative")
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || parts[0] == "" || len(parts[0]) > 20 ||
+		(len(parts[0]) > 1 && parts[0][0] == '0') {
+		return "", fmt.Errorf("decimal must be within NUMERIC(38,18)")
+	}
+	for _, character := range parts[0] {
+		if character < '0' || character > '9' {
+			return "", fmt.Errorf("decimal must contain only decimal digits")
+		}
+	}
+	fraction := ""
+	if len(parts) == 2 {
+		fraction = parts[1]
+		if len(fraction) == 0 || len(fraction) > 18 {
+			return "", fmt.Errorf("decimal must have between 1 and 18 fractional digits")
+		}
+		for _, character := range fraction {
+			if character < '0' || character > '9' {
+				return "", fmt.Errorf("decimal must contain only decimal digits")
+			}
+		}
+		fraction = strings.TrimRight(fraction, "0")
+	}
+	if fraction == "" {
+		return parts[0], nil
+	}
+	return parts[0] + "." + fraction, nil
 }
 
 func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
@@ -118,7 +209,7 @@ type SettingsPatchV1 struct {
 	Tools                 Patch[[]Tool]
 	ToolPolicy            Patch[ToolPolicy]
 	Output                Patch[OutputSpec]
-	Temperature           Patch[float64]
+	Temperature           Patch[DecimalV1]
 	ReasoningEffort       Patch[ReasoningEffort]
 	ReasoningSummary      Patch[ReasoningSummary]
 	CompactionPolicy      Patch[json.RawMessage]
@@ -204,7 +295,7 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 		if err := patch.Temperature.validate(); err != nil {
 			return nil, fmt.Errorf("temperature: %w", err)
 		}
-		value, err := canonicalTemperature(*patch.Temperature.Set)
+		value, err := NewDecimalV1(patch.Temperature.Set.String())
 		if err != nil {
 			return nil, fmt.Errorf("temperature: %w", err)
 		}
@@ -429,80 +520,48 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 // Numeric input remains accepted for one compatibility window so older Go
 // producers can be upgraded independently; MarshalJSON always emits the
 // canonical string form.
-func decodeTemperaturePatch(raw json.RawMessage) (Patch[float64], error) {
+func decodeTemperaturePatch(raw json.RawMessage) (Patch[DecimalV1], error) {
 	fields, err := decodeObject(raw)
 	if err != nil {
-		return Patch[float64]{}, fmt.Errorf("temperature: %w", err)
+		return Patch[DecimalV1]{}, fmt.Errorf("temperature: %w", err)
 	}
 	if err := checkUnknownFields(fields, "set", "clear"); err != nil {
-		return Patch[float64]{}, fmt.Errorf("temperature: %w", err)
+		return Patch[DecimalV1]{}, fmt.Errorf("temperature: %w", err)
 	}
 	set, hasSet := fields["set"]
 	clear, hasClear := fields["clear"]
 	if hasSet == hasClear {
-		return Patch[float64]{}, fmt.Errorf("temperature must contain exactly one of set or clear")
+		return Patch[DecimalV1]{}, fmt.Errorf("temperature must contain exactly one of set or clear")
 	}
 	if hasClear {
 		var value bool
 		if err := json.Unmarshal(clear, &value); err != nil || !value {
-			return Patch[float64]{}, fmt.Errorf("temperature.clear must be true")
+			return Patch[DecimalV1]{}, fmt.Errorf("temperature.clear must be true")
 		}
-		return Patch[float64]{Clear: true}, nil
+		return Patch[DecimalV1]{Clear: true}, nil
 	}
 	var value string
 	if len(set) > 0 && set[0] == '"' {
 		if err := json.Unmarshal(set, &value); err != nil {
-			return Patch[float64]{}, fmt.Errorf("temperature.set must be a decimal string")
+			return Patch[DecimalV1]{}, fmt.Errorf("temperature.set must be a decimal string")
 		}
 	} else {
-		// Compatibility with the pre-Task-17 numeric wire representation.
-		var numeric float64
-		if err := json.Unmarshal(set, &numeric); err != nil {
-			return Patch[float64]{}, fmt.Errorf("temperature.set must be a decimal string or number")
+		// Compatibility with the pre-Task-17 numeric wire representation. Decode
+		// into json.Number so the compatibility path does not lose digits before
+		// canonicalization.
+		var numeric json.Number
+		decoder := json.NewDecoder(bytes.NewReader(set))
+		decoder.UseNumber()
+		if err := decoder.Decode(&numeric); err != nil {
+			return Patch[DecimalV1]{}, fmt.Errorf("temperature.set must be a decimal string or number")
 		}
-		value = strconv.FormatFloat(numeric, 'f', -1, 64)
+		value = numeric.String()
 	}
-	numeric, err := parseTemperatureDecimal(value)
+	canonical, err := NewDecimalV1(value)
 	if err != nil {
-		return Patch[float64]{}, fmt.Errorf("temperature.set: %w", err)
+		return Patch[DecimalV1]{}, fmt.Errorf("temperature.set: %w", err)
 	}
-	return Patch[float64]{Set: &numeric}, nil
-}
-
-func parseTemperatureDecimal(value string) (float64, error) {
-	if value == "" || strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
-		return 0, fmt.Errorf("must be a non-negative decimal")
-	}
-	parts := strings.Split(value, ".")
-	if len(parts) > 2 || parts[0] == "" || (len(parts[0]) > 1 && parts[0][0] == '0') || len(parts[0]) > 20 {
-		return 0, fmt.Errorf("must be a canonical decimal within NUMERIC(38,18)")
-	}
-	if len(parts) == 2 && (len(parts[1]) == 0 || len(parts[1]) > 18) {
-		return 0, fmt.Errorf("must have between 1 and 18 fractional digits")
-	}
-	for _, part := range parts {
-		for _, character := range part {
-			if character < '0' || character > '9' {
-				return 0, fmt.Errorf("must contain only decimal digits")
-			}
-		}
-	}
-	numeric, err := strconv.ParseFloat(value, 64)
-	if err != nil || math.IsNaN(numeric) || math.IsInf(numeric, 0) || numeric < 0 {
-		return 0, fmt.Errorf("must be finite and non-negative")
-	}
-	return numeric, nil
-}
-
-func canonicalTemperature(value float64) (string, error) {
-	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
-		return "", fmt.Errorf("must be finite and non-negative")
-	}
-	canonical := strconv.FormatFloat(value, 'f', -1, 64)
-	if _, err := parseTemperatureDecimal(canonical); err != nil {
-		return "", err
-	}
-	return canonical, nil
+	return Patch[DecimalV1]{Set: &canonical}, nil
 }
 
 type GenerateRequestV1 struct {
@@ -1718,6 +1777,27 @@ func ValidateVariantTemperature(variant int32, temperature *float64) error {
 		return fmt.Errorf("temperature is invalid")
 	}
 	if temperature != nil && *temperature == 0 && variant != 0 {
+		return fmt.Errorf("temperature zero requires variant zero")
+	}
+	return nil
+}
+
+// ValidateVariantDecimalTemperature applies the cache variant rule directly
+// to the exact v1 wire decimal. This keeps validation independent of a
+// float64 conversion (which may round an 18-digit value or overflow for a
+// syntactically valid NUMERIC(38,18) value).
+func ValidateVariantDecimalTemperature(variant int32, temperature *DecimalV1) error {
+	if variant < 0 {
+		return fmt.Errorf("variant must not be negative")
+	}
+	if temperature == nil {
+		return nil
+	}
+	canonical, err := NewDecimalV1(temperature.String())
+	if err != nil {
+		return fmt.Errorf("temperature is invalid: %w", err)
+	}
+	if canonical == "0" && variant != 0 {
 		return fmt.Errorf("temperature zero requires variant zero")
 	}
 	return nil

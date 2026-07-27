@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -286,9 +287,17 @@ func settingsPatchFromModel(model ModelState) SettingsPatch {
 }
 
 func settingsPatchToWire(patch SettingsPatch) llm.SettingsPatchV1 {
+	temperature := llm.Patch[llm.DecimalV1]{Clear: patch.Temperature.Clear}
+	if patch.Temperature.Set != nil {
+		// Materialized state uses float64 for provider adapters. Convert only at
+		// this persistence boundary; the v1 wire record itself retains the
+		// canonical decimal string and never routes it through float64.
+		value := llm.DecimalV1(strconv.FormatFloat(*patch.Temperature.Set, 'f', -1, 64))
+		temperature.Set = &value
+	}
 	return llm.SettingsPatchV1{
 		Model: patchToWire(patch.Model), ServiceClass: patchToWire(patch.ServiceClass), ServiceClassFallbacks: patchToWire(patch.ServiceClassFallbacks), Portability: patchToWire(patch.Portability),
-		Instructions: patchToWire(patch.Instructions), Tools: patchToWire(patch.Tools), ToolPolicy: patchToWire(patch.ToolPolicy), Output: patchToWire(patch.Output), Temperature: patchToWire(patch.Temperature),
+		Instructions: patchToWire(patch.Instructions), Tools: patchToWire(patch.Tools), ToolPolicy: patchToWire(patch.ToolPolicy), Output: patchToWire(patch.Output), Temperature: temperature,
 		ReasoningEffort: patchToWire(patch.ReasoningEffort), ReasoningSummary: patchToWire(patch.ReasoningSummary), CompactionPolicy: patchToWire(patch.CompactionPolicy), Extensions: patchToWire(patch.Extensions),
 	}
 }
@@ -300,8 +309,16 @@ func patchToWire[T any](patch Patch[T]) llm.Patch[T] {
 func settingsPatchFromWire(wire llm.SettingsPatchV1) (SettingsPatch, error) {
 	patch := SettingsPatch{
 		Model: patchFromWire(wire.Model), ServiceClass: patchFromWire(wire.ServiceClass), ServiceClassFallbacks: patchFromWire(wire.ServiceClassFallbacks), Portability: patchFromWire(wire.Portability),
-		Instructions: patchFromWire(wire.Instructions), Tools: patchFromWire(wire.Tools), ToolPolicy: patchFromWire(wire.ToolPolicy), Output: patchFromWire(wire.Output), Temperature: patchFromWire(wire.Temperature),
+		Instructions: patchFromWire(wire.Instructions), Tools: patchFromWire(wire.Tools), ToolPolicy: patchFromWire(wire.ToolPolicy), Output: patchFromWire(wire.Output),
 		ReasoningEffort: patchFromWire(wire.ReasoningEffort), ReasoningSummary: patchFromWire(wire.ReasoningSummary), CompactionPolicy: patchFromWire(wire.CompactionPolicy), Extensions: patchFromWire(wire.Extensions),
+	}
+	patch.Temperature.Clear = wire.Temperature.Clear
+	if wire.Temperature.Set != nil {
+		value, err := wire.Temperature.Set.Float64()
+		if err != nil {
+			return SettingsPatch{}, fmt.Errorf("temperature cannot be represented by provider state: %w", err)
+		}
+		patch.Temperature.Set = &value
 	}
 	if err := patch.Validate(); err != nil {
 		return SettingsPatch{}, err
