@@ -33,6 +33,10 @@ module Actor_id = Make ()
 module Blob_digest = Make ()
 module Diagnostic_code = Make ()
 module Cost_catalog_version = Make ()
+(* Safe codes are public, bounded diagnostic values in the query contract.
+   Keep them distinct from arbitrary strings and from [Diagnostic_code],
+   whose domain belongs to Activity diagnostics. *)
+module Safe_code = Make ()
 module Temporal_task_queue = Make ()
 module Make_nonempty () : S = struct
   type t = string

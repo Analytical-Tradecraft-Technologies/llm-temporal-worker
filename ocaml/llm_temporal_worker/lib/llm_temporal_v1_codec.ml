@@ -553,7 +553,7 @@ let string_option name = function None -> [name, `Null] | Some value -> [name, `
 let id_option name f = function None -> [name, `Null] | Some value -> [name, `String (f value)]
 
 let route_status_to_json (value : provider_route_status) =
-  `Assoc (["route_id", `String (Route_id.to_string value.route_id); "provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "availability", `String (availability_to_string value.availability); "credit_state", `String (credit_to_string value.credit_state); "billing_state", `String (billing_to_string value.billing_state); "circuit_state", `String (circuit_to_string value.circuit_state); "observed_at", time_to_json value.observed_at; "stale_after", time_to_json value.stale_after] @ string_option "safe_code" value.safe_code)
+  `Assoc (["route_id", `String (Route_id.to_string value.route_id); "provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "availability", `String (availability_to_string value.availability); "credit_state", `String (credit_to_string value.credit_state); "billing_state", `String (billing_to_string value.billing_state); "circuit_state", `String (circuit_to_string value.circuit_state); "observed_at", time_to_json value.observed_at; "stale_after", time_to_json value.stale_after] @ string_option "safe_code" (Option.map Safe_code.to_string value.safe_code))
 
 let route_status_of_json context value =
   let* fields = closed context ["route_id"; "provider"; "endpoint"; "availability"; "credit_state"; "billing_state"; "circuit_state"; "observed_at"; "stale_after"; "safe_code"] value in
@@ -566,7 +566,7 @@ let route_status_of_json context value =
   let* circuit_state = match optional "circuit_state" fields with None -> Ok Circuit_closed | Some value -> string (context ^ ".circuit_state") value >>= circuit_of_string context in
   let* observed_at = required context "observed_at" fields >>= time_of_json (context ^ ".observed_at") in
   let* stale_after = required context "stale_after" fields >>= time_of_json (context ^ ".stale_after") in
-  let* safe_code = match optional "safe_code" fields with None | Some `Null -> Ok None | Some value -> string (context ^ ".safe_code") value >>= fun value -> Ok (Some value) in
+  let* safe_code = match optional "safe_code" fields with None | Some `Null -> Ok None | Some value -> string (context ^ ".safe_code") value >>= fun value -> Ok (Some (Safe_code.of_string value)) in
   Ok { route_id = Route_id.of_string route_id; provider = Provider_id.of_string provider; endpoint = Endpoint_id.of_string endpoint; availability; credit_state; billing_state; circuit_state; observed_at; stale_after; safe_code }
 
 let provider_page_to_json (value : provider_status_page) = `Assoc ["routes", `List (List.map route_status_to_json value.routes)]
@@ -593,7 +593,7 @@ let model_page_to_json (value : model_inventory_page) = `Assoc ["models", `List 
 let model_page_of_json context value = let* fields = closed context ["models"] value in let* models = required context "models" fields >>= list (context ^ ".models") >>= map_result (inventory_of_json (context ^ ".model")) in Ok { models }
 
 let credit_entry_to_json (value : credit_status_entry) =
-  `Assoc (["provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "credit_state", `String (credit_to_string value.credit_state); "billing_state", `String (billing_to_string value.billing_state); "confirmed_at", (match value.confirmed_at with None -> `Null | Some value -> time_to_json value); "evidence_source", `String (evidence_to_string value.evidence_source)] @ string_option "safe_evidence_code" value.safe_evidence_code)
+  `Assoc (["provider", `String (Provider_id.to_string value.provider); "endpoint", `String (Endpoint_id.to_string value.endpoint); "credit_state", `String (credit_to_string value.credit_state); "billing_state", `String (billing_to_string value.billing_state); "confirmed_at", (match value.confirmed_at with None -> `Null | Some value -> time_to_json value); "evidence_source", `String (evidence_to_string value.evidence_source)] @ string_option "safe_evidence_code" (Option.map Safe_code.to_string value.safe_evidence_code))
 
 let credit_entry_of_json context value =
   let* fields = closed context ["provider"; "endpoint"; "credit_state"; "billing_state"; "confirmed_at"; "evidence_source"; "safe_evidence_code"] value in
@@ -603,7 +603,7 @@ let credit_entry_of_json context value =
   let* billing_state = required context "billing_state" fields >>= string (context ^ ".billing_state") >>= billing_of_string context in
   let* confirmed_at = match optional "confirmed_at" fields with None | Some `Null -> Ok None | Some value -> time_of_json (context ^ ".confirmed_at") value >>= fun value -> Ok (Some value) in
   let* evidence_source = required context "evidence_source" fields >>= string (context ^ ".evidence_source") >>= evidence_of_string context in
-  let* safe_evidence_code = match optional "safe_evidence_code" fields with None | Some `Null -> Ok None | Some value -> string (context ^ ".safe_evidence_code") value >>= fun value -> Ok (Some value) in
+  let* safe_evidence_code = match optional "safe_evidence_code" fields with None | Some `Null -> Ok None | Some value -> string (context ^ ".safe_evidence_code") value >>= fun value -> Ok (Some (Safe_code.of_string value)) in
   Ok { provider = Provider_id.of_string provider; endpoint = Endpoint_id.of_string endpoint; credit_state; billing_state; confirmed_at; evidence_source; safe_evidence_code }
 
 let credit_page_to_json (value : credit_status_page) = `Assoc ["endpoints", `List (List.map credit_entry_to_json value.endpoints)]

@@ -27,6 +27,7 @@ module Actor_id = Identifier.Actor_id
 module Blob_digest = Identifier.Blob_digest
 module Diagnostic_code = Identifier.Diagnostic_code
 module Cost_catalog_version = Identifier.Cost_catalog_version
+module Safe_code = Identifier.Safe_code
 module Temporal_task_queue = Identifier.Temporal_task_queue
 module Query_execution_id = Identifier.Query_execution_id
 module Budget_policy_key = Identifier.Budget_policy_key
@@ -401,7 +402,7 @@ type provider_route_status = {
   circuit_state : circuit_state;
   observed_at : Ptime.t;
   stale_after : Ptime.t;
-  safe_code : string option;
+  safe_code : Safe_code.t option;
 }
 
 type provider_status_page = { routes : provider_route_status list }
@@ -427,7 +428,7 @@ type credit_status_entry = {
   billing_state : billing_state;
   confirmed_at : Ptime.t option;
   evidence_source : credit_evidence_source;
-  safe_evidence_code : string option;
+  safe_evidence_code : Safe_code.t option;
 }
 
 type credit_status_page = { endpoints : credit_status_entry list }

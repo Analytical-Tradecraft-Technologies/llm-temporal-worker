@@ -30,6 +30,7 @@ module Actor_id : S
 module Blob_digest : S
 module Diagnostic_code : S
 module Cost_catalog_version : S
+module Safe_code : S
 module Temporal_task_queue : S
 
 (** Identifiers introduced by the checkpoint and query protocols.  These are
