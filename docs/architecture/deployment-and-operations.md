@@ -191,8 +191,11 @@ The internal application package supports an atomic reload API:
 A bad reload leaves the old snapshot serving. The production `worker` wires
 both `SIGHUP` and a bounded metadata watcher for its `--config` path into this
 same path; an atomic file replacement is therefore read as one complete
-candidate before validation. Repeated notifications are coalesced. Environment
-variables are not hot-reloaded.
+candidate before validation. At startup the watcher also compares the current
+file once with the already validated bytes, so a replacement that wins the
+race between startup validation and watcher initialization cannot leave a
+stale snapshot serving silently. Repeated notifications are coalesced.
+Environment variables are not hot-reloaded.
 
 Reload updates the request snapshot and its provider/state clients only.
 The environment, listener addresses, shutdown and monitor settings, inline

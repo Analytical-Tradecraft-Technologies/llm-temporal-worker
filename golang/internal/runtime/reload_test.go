@@ -224,6 +224,45 @@ func TestConfigFileWatcherDetectsAtomicReplacement(t *testing.T) {
 	}
 }
 
+func TestConfigFileWatcherDetectsReplacementBeforeWatcherInitialization(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	initial := []byte("version: initial\n")
+	replacement := []byte("version: replacement\n")
+	if err := os.WriteFile(path, replacement, 0600); err != nil {
+		t.Fatal(err)
+	}
+	watcher, err := newConfigFileWatcherWithBaseline(path, time.Hour, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = watcher.Close() })
+	select {
+	case <-watcher.Changes():
+		// A metadata-only watcher would have incorrectly treated the
+		// replacement as its initial state and emitted nothing.
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not emit startup replacement notification")
+	}
+}
+
+func TestConfigFileWatcherDoesNotEmitForMatchingStartupBaseline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	initial := []byte("version: initial\n")
+	if err := os.WriteFile(path, initial, 0600); err != nil {
+		t.Fatal(err)
+	}
+	watcher, err := newConfigFileWatcherWithBaseline(path, time.Millisecond, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = watcher.Close() })
+	select {
+	case <-watcher.Changes():
+		t.Fatal("watcher emitted a false startup replacement notification")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func reloadOutcome(t *testing.T, metrics *observability.Metrics, outcome string) float64 {
 	t.Helper()
 	if metrics == nil {
