@@ -338,7 +338,11 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 		if !errors.Is(err, ErrResultNotFound) {
 			return nil, false, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "in-flight result lookup failed", err)
 		}
-		return nil, false, engineError(provider.CodeAmbiguousDispatch, provider.PhaseAdmission, provider.DispatchAmbiguous, provider.RetryNever, "operation may have reached the provider", nil)
+		// A resumable adapter may recover the accepted operation by the
+		// deterministic idempotency key. dispatchPlan pins the recorded route
+		// and invokes that lookup; one-shot adapters fail closed there without
+		// issuing a second provider request.
+		return nil, true, nil
 	case admission.StateAmbiguous:
 		return nil, false, engineError(provider.CodeAmbiguousDispatch, provider.PhaseAdmission, provider.DispatchAmbiguous, provider.RetryNever, "operation may have reached the provider", nil)
 	case admission.StateProviderPending:

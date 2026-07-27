@@ -98,6 +98,35 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 	}
 }
 
+func TestDispatchingGetHydratesEndpointForRestartRecovery(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+	id := "operation-dispatching-restart-" + uuid.NewString()
+	started, err := repository.Begin(ctx, admission.BeginRequest{
+		ID: id, ScopeKey: "dispatching-restart/project", RequestDigest: admission.Digest([]byte(id)),
+		ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{
+		OperationID: id, DispatchToken: started.Operation.DispatchToken,
+		Attempt: admission.AttemptFacts{RouteID: "restart-route", EndpointID: "restart-endpoint", Provider: "restart-provider"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := repository.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State != admission.StateDispatching {
+		t.Fatalf("state = %q, want dispatching", recovered.State)
+	}
+	if recovered.Attempt.EndpointID != "restart-endpoint" || recovered.Attempt.Provider != "restart-provider" {
+		t.Fatalf("hydrated attempt = %#v, want endpoint/provider from dispatching row", recovered.Attempt)
+	}
+}
+
 // TestProviderOperationTamperingFailsClosed proves the recovery boundary for
 // persisted provider poll IDs.  The ID is envelope-encrypted and authenticated
 // in PostgreSQL; the reconciliation loader must refuse to resume when an

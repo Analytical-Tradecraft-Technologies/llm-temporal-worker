@@ -355,9 +355,6 @@ func (r OperationRepository) transitionDispatch(ctx context.Context, request adm
 		if !hmac.Equal([]byte(request.DispatchToken), []byte(hex.EncodeToString(expected[:]))) {
 			return admission.ErrInvalidToken
 		}
-		if _, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='dispatching', lease_expires_at=$2, updated_at=clock_timestamp() WHERE operation_id=$1 AND state='reserved'", opID, lease); err != nil {
-			return redactPostgresError(err)
-		}
 		facts := request.Attempt
 		if facts.RouteID == "" {
 			facts.RouteID = "unknown"
@@ -381,6 +378,12 @@ func (r OperationRepository) transitionDispatch(ctx context.Context, request adm
 		resolvedModel := facts.ResolvedModel
 		if resolvedModel == "" {
 			resolvedModel = "unknown"
+		}
+		// Keep the operation's latest route facts in sync with the attempt row.
+		// Get uses this projection during a dispatching restart, before a
+		// provider operation ID exists to hydrate the endpoint from.
+		if _, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='dispatching', lease_expires_at=$2, route_id=$3, endpoint_id=$4, provider=$5, resolved_model=$6, attempted_service_class=$7, updated_at=clock_timestamp() WHERE operation_id=$1 AND state='reserved'", opID, lease, facts.RouteID, facts.EndpointID, facts.Provider, resolvedModel, facts.ServiceClass); err != nil {
+			return redactPostgresError(err)
 		}
 		_, err = tx.Exec(ctx, "INSERT INTO "+attempts+" (attempt_id,operation_id,attempt_number,route_index,fallback_index,route_id,endpoint_id,provider,endpoint_family,resolved_model,route_model_revision,state,dispatch_disposition,reserved_cost_usd,cost_status,safe_diagnostics) VALUES ($1,$2,$3,0,0,$4,$5,$6,'unknown',$7,'unknown','submitted',$8,0,'pending','{}'::jsonb) ON CONFLICT (operation_id,attempt_number) DO NOTHING", uuid.New(), opID, facts.AttemptNumber, facts.RouteID, facts.EndpointID, facts.Provider, resolvedModel, disposition)
 		return err
@@ -668,10 +671,12 @@ func (r OperationRepository) Get(ctx context.Context, id string) (admission.Oper
 	}
 	operation.ID = id
 	operation.State = admission.OperationState(stateValue)
-	if operation.State == admission.StateProviderPending {
+	if operation.State == admission.StateDispatching || operation.State == admission.StateProviderPending {
 		operation.Attempt.EndpointID = endpointID
 		operation.Attempt.Provider = providerName
-		operation.Attempt.Dispatch = admission.Accepted
+		if operation.State == admission.StateProviderPending {
+			operation.Attempt.Dispatch = admission.Accepted
+		}
 	}
 	operationUUIDValue := operationUUID(id)
 	tokenDigest := operationHMAC(mustKey(r.Keys), "dispatch-token", operationUUIDValue[:])
