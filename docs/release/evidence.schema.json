@@ -78,6 +78,7 @@
         "test_summary": { "$ref": "#/$defs/artifact" },
         "race_summary": { "$ref": "#/$defs/artifact" },
         "fuzz_summary": { "$ref": "#/$defs/artifact" },
+        "benchmark_summary": { "$ref": "#/$defs/artifact" },
         "fixture_manifest": { "$ref": "#/$defs/artifact" },
         "redis_summary": { "$ref": "#/$defs/artifact" },
         "temporal_summary": { "$ref": "#/$defs/artifact" },

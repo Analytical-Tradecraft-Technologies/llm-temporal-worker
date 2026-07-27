@@ -87,6 +87,14 @@ run_gate test_summary bash -c "cd \"$module_root\" && go test ./..."
 run_gate race_summary bash -c "cd \"$module_root\" && go test -race ./..."
 run_gate fuzz_summary bash -c "cd \"$module_root\" && bash \"$module_root/scripts/run-fuzz.sh\" smoke"
 
+if ! bash -c "cd \"$module_root\" && go test ./engine -run '^$' -bench '^BenchmarkGenerateMemoryAdmissionAndCompile$' -benchmem -count=1" >"$temporary/benchmark.output" 2>&1; then
+  fail "memory admission benchmark failed; inspect the trusted CI step output"
+fi
+python3 "$collector" benchmark-summary \
+  --kind benchmark_summary \
+  --input "$temporary/benchmark.output" \
+  --output "$artifact_dir/benchmark-summary.json"
+
 python3 "$collector" fixture-manifest \
   --root "$module_root" \
   --output "$artifact_dir/fixture-manifest.json"

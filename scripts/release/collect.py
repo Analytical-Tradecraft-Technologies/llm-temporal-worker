@@ -33,6 +33,11 @@ SAFE_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 NUMERIC_DOTTED_HOST = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
 SAFE_HTTPS_PATH = re.compile(r"^[A-Za-z0-9._~!$&'()*+,;=:@/-]*$")
 GATE_KINDS = {"test_summary", "race_summary", "fuzz_summary"}
+BENCHMARK_NAME = "BenchmarkGenerateMemoryAdmissionAndCompile"
+BENCHMARK_LINE = re.compile(
+    rf"^{BENCHMARK_NAME}-[0-9]+\s+([0-9]+)\s+([0-9]+(?:\.[0-9]+)?)\s+ns/op\s+"
+    r"([0-9]+(?:\.[0-9]+)?)\s+p99_ms/op(?:\s.*)?$"
+)
 LOG_SERVICES = {
     "redis_log": "redis",
     "temporal_log": "temporal",
@@ -255,6 +260,58 @@ def command_fixture_manifest(args: argparse.Namespace) -> None:
             "status": "pass",
             "version": 1,
             "fixtures": fixtures,
+            "redacted": True,
+        },
+    )
+
+
+def command_benchmark_summary(args: argparse.Namespace) -> None:
+    """Retain only the bounded, in-memory benchmark measurement.
+
+    The summary is deliberately a measurement artifact rather than an SLO
+    assertion.  It proves that the release workflow ran the memory benchmark
+    and preserves its p99 sample, while Redis and provider latency remain
+    separate protected measurements.
+    """
+
+    if args.kind != "benchmark_summary":
+        fail(f"unsupported benchmark summary kind: {args.kind}")
+    data = Path(args.input).read_bytes()
+    if not data or len(data) > MAX_LOG_INPUT_BYTES:
+        fail("benchmark output has an invalid byte length")
+    matches: list[tuple[int, float, float]] = []
+    for raw_line in data.splitlines():
+        try:
+            line = raw_line.decode("ascii").strip()
+        except UnicodeDecodeError:
+            continue
+        match = BENCHMARK_LINE.fullmatch(line)
+        if match is None:
+            continue
+        samples = int(match.group(1))
+        ns_per_op = float(match.group(2))
+        p99_ms_per_op = float(match.group(3))
+        if samples < 1 or ns_per_op < 0 or p99_ms_per_op < 0:
+            fail("benchmark output contains an invalid non-negative measurement")
+        matches.append((samples, ns_per_op, p99_ms_per_op))
+    if len(matches) != 1:
+        fail("benchmark output must contain exactly one memory benchmark measurement")
+    samples, ns_per_op, p99_ms_per_op = matches[0]
+    write_json(
+        Path(args.output),
+        {
+            "schema_version": 1,
+            "kind": "benchmark_summary",
+            "status": "pass",
+            "benchmark": BENCHMARK_NAME,
+            "scope": "memory",
+            "samples": samples,
+            "ns_per_op": ns_per_op,
+            "p99_ms_per_op": p99_ms_per_op,
+            "target_ms": 25,
+            "objective_status": "measurement_only",
+            "output_sha256": sha256_bytes(data),
+            "output_bytes": len(data),
             "redacted": True,
         },
     )
@@ -528,6 +585,12 @@ def parser() -> argparse.ArgumentParser:
     fixture.add_argument("--root", required=True)
     fixture.add_argument("--output", required=True)
     fixture.set_defaults(handler=command_fixture_manifest)
+
+    benchmark = commands.add_parser("benchmark-summary")
+    benchmark.add_argument("--kind", required=True)
+    benchmark.add_argument("--input", required=True)
+    benchmark.add_argument("--output", required=True)
+    benchmark.set_defaults(handler=command_benchmark_summary)
 
     service = commands.add_parser("service-summary")
     service.add_argument("--kind", required=True)

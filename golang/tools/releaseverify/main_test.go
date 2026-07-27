@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -319,6 +320,71 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactDir = resolvedArtifactDir
+	digest := strings.Repeat("a", 64)
+	image := "registry.example/project@sha256:" + digest
+	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	schemaPath := releaseEvidenceSchemaPath(t)
+
+	recordArgs := []string{
+		"record",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-output", filepath.Join(artifactDir, "evidence.json"),
+		"-repository", "https://github.com/example/project",
+		"-revision", strings.Repeat("b", 40),
+		"-image-reference", image,
+		"-image-digest", "sha256:" + digest,
+	}
+	for _, name := range requiredArtifacts {
+		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
+	}
+	if err := run(recordArgs, io.Discard); err != nil {
+		t.Fatalf("record smoke test failed: %v", err)
+	}
+
+	// Simulate a retained v1 bundle from before benchmark_summary existed.
+	evidencePath := filepath.Join(artifactDir, "evidence.json")
+	evidenceData, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(evidenceData, &record); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, ok := record["artifacts"].(map[string]any)
+	if !ok {
+		t.Fatal("evidence artifacts are not an object")
+	}
+	delete(artifacts, "benchmark_summary")
+	if err := os.Remove(filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(evidencePath, append(mustJSON(t, record), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run([]string{
+		"verify",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-evidence", evidencePath,
+	}, io.Discard); err != nil {
+		t.Fatalf("pre-benchmark v1 bundle was rejected: %v", err)
+	}
+}
+
 func releaseEvidenceSchemaPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -335,6 +401,13 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory, imageReference, imag
 		"test_summary": gateSummary("test_summary"),
 		"race_summary": gateSummary("race_summary"),
 		"fuzz_summary": gateSummary("fuzz_summary"),
+		"benchmark_summary": map[string]any{
+			"schema_version": 1, "kind": "benchmark_summary", "status": "pass",
+			"benchmark": "BenchmarkGenerateMemoryAdmissionAndCompile", "scope": "memory",
+			"samples": 4267, "ns_per_op": 255245, "p99_ms_per_op": 0.7286,
+			"target_ms": 25, "objective_status": "measurement_only",
+			"output_sha256": digest, "output_bytes": 256, "redacted": true,
+		},
 		"fixture_manifest": map[string]any{
 			"schema_version": 1, "kind": "fixture_manifest", "status": "pass", "version": 1,
 			"fixtures": []any{map[string]any{

@@ -174,13 +174,17 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 			},
 			ImplementationPaths: []string{
 				"Makefile",
+				"docs/release/artifact.schema.json",
 				"docs/testing/strategy.md",
 				"golang/engine/benchmark_redis_test.go",
 				"golang/engine/benchmark_test.go",
+				"scripts/release/collect.py",
+				"scripts/release/collect.sh",
 			},
 			Verification: v1TraceabilityVerification{
-				MakeTargets: []string{"benchmark", "redis-benchmark", "redis-benchmark-compile"},
+				MakeTargets: []string{"benchmark", "redis-benchmark", "redis-benchmark-compile", "release-verify"},
 				WorkflowJobs: []v1TraceabilityWorkflowJob{
+					{Path: ".github/workflows/master.yml", Job: "release-evidence"},
 					{Path: ".github/workflows/master.yml", Job: "verify"},
 					{Path: ".github/workflows/pull-request.yml", Job: "verify"},
 				},

@@ -46,7 +46,8 @@ The record follows [the evidence schema](evidence.schema.json). It binds every
 retained artifact to a byte count and SHA-256 digest, and requires a redaction
 assertion for:
 
-- compact test, race, and deterministic fuzz summaries;
+- compact test, race, deterministic fuzz, and in-memory admission/compilation
+  benchmark summaries;
 - fixture manifest records with upstream source dates;
 - compact Redis, Temporal, and Compose health summaries from the local test
   stack;
@@ -80,6 +81,20 @@ residual raw OCI directories or archives, unreferenced files, digest or
 byte-count changes, incomplete fixture records, mismatched image subjects, and
 HIGH or CRITICAL image findings.
 
+The `benchmark-summary.json` artifact records one exact
+`BenchmarkGenerateMemoryAdmissionAndCompile` measurement with its sample count,
+`ns/op`, and sampled `p99_ms/op`. Its `scope` is `memory` and its
+`objective_status` is `measurement_only`: the record proves that the offline
+proxy ran, but does not claim the 25 ms memory objective or the 75 ms Redis
+objective as release evidence. The Redis measurement remains an explicitly
+authorized operator run against a same-region deployment and is never replaced
+by this artifact.
+
+The verifier remains compatible with retained schema-v1 bundles recorded before
+this benchmark was added: those bundles may omit `benchmark-summary.json`. New
+recordings are stricter and the recorder requires the benchmark artifact, so all
+new evidence captures the measurement without invalidating historical bundles.
+
 ## Collect, record, and verify
 
 The trusted job first produces the compact summaries and a temporary OCI layout
@@ -112,6 +127,7 @@ bash scripts/release/record.sh \
   -artifact test_summary=test-summary.json \
   -artifact race_summary=race-summary.json \
   -artifact fuzz_summary=fuzz-summary.json \
+  -artifact benchmark_summary=benchmark-summary.json \
   -artifact fixture_manifest=fixture-manifest.json \
   -artifact redis_summary=redis-summary.json \
   -artifact temporal_summary=temporal-summary.json \

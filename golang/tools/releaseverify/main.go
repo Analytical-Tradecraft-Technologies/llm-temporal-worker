@@ -56,6 +56,28 @@ var requiredArtifacts = []string{
 	"test_summary",
 	"race_summary",
 	"fuzz_summary",
+	"benchmark_summary",
+	"fixture_manifest",
+	"redis_summary",
+	"temporal_summary",
+	"compose_summary",
+	"redis_log",
+	"temporal_log",
+	"compose_log",
+	"rendered_manifests",
+	"dependency_license",
+	"vulnerability_results",
+	"sbom",
+	"image_scan",
+}
+
+// Legacy v1 bundles were recorded before benchmark_summary was introduced.
+// Keep them verifiable while requiring the benchmark for every newly recorded
+// bundle through requiredArtifacts and artifactArguments.mapForRequired.
+var legacyRequiredArtifacts = []string{
+	"test_summary",
+	"race_summary",
+	"fuzz_summary",
 	"fixture_manifest",
 	"redis_summary",
 	"temporal_summary",
@@ -74,6 +96,7 @@ var canonicalArtifactPaths = map[string]string{
 	"test_summary":          "test-summary.json",
 	"race_summary":          "race-summary.json",
 	"fuzz_summary":          "fuzz-summary.json",
+	"benchmark_summary":     "benchmark-summary.json",
 	"fixture_manifest":      "fixture-manifest.json",
 	"redis_summary":         "redis-summary.json",
 	"temporal_summary":      "temporal-summary.json",
@@ -92,6 +115,7 @@ var summaryArtifacts = map[string]struct{}{
 	"test_summary":          {},
 	"race_summary":          {},
 	"fuzz_summary":          {},
+	"benchmark_summary":     {},
 	"fixture_manifest":      {},
 	"redis_summary":         {},
 	"temporal_summary":      {},
@@ -333,7 +357,7 @@ func runRecord(args []string, stdout io.Writer) error {
 	if err := validateEvidenceMetadata(record); err != nil {
 		return err
 	}
-	if err := validateSummaryArtifacts(*schemaPath, paths); err != nil {
+	if err := validateSummaryArtifacts(*schemaPath, paths, requiredArtifacts); err != nil {
 		return err
 	}
 	if err := validateFixtureManifest(paths["fixture_manifest"]); err != nil {
@@ -424,10 +448,11 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 	if err := validateEvidenceMetadata(record); err != nil {
 		return err
 	}
+	artifactNames := requiredArtifactsForRecord(record)
 
-	paths := make(map[string]string, len(requiredArtifacts))
-	seenPaths := make(map[string]string, len(requiredArtifacts))
-	for _, name := range requiredArtifacts {
+	paths := make(map[string]string, len(artifactNames))
+	seenPaths := make(map[string]string, len(artifactNames))
+	for _, name := range artifactNames {
 		artifact, ok := record.Artifacts[name]
 		if !ok {
 			return fmt.Errorf("evidence record is missing required artifact %q", name)
@@ -467,7 +492,7 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 		}
 		paths[name] = path
 	}
-	if len(record.Artifacts) != len(requiredArtifacts) {
+	if len(record.Artifacts) != len(artifactNames) {
 		return errors.New("evidence record has an unexpected artifact entry")
 	}
 	expectedPaths := make([]string, 0, len(paths)+1)
@@ -478,7 +503,7 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 	if err := validateArtifactDirectoryContents(artifactDirectory, expectedPaths...); err != nil {
 		return err
 	}
-	if err := validateSummaryArtifacts(schemaPath, paths); err != nil {
+	if err := validateSummaryArtifacts(schemaPath, paths, artifactNames); err != nil {
 		return err
 	}
 	if err := validateFixtureManifest(paths["fixture_manifest"]); err != nil {
@@ -558,12 +583,12 @@ func validateSummaryArtifact(schema *jsonschema.Schema, name string, data []byte
 	return nil
 }
 
-func validateSummaryArtifacts(schemaPath string, paths map[string]string) error {
+func validateSummaryArtifacts(schemaPath string, paths map[string]string, artifactNames []string) error {
 	schema, err := compileArtifactSchema(schemaPath)
 	if err != nil {
 		return err
 	}
-	for _, name := range requiredArtifacts {
+	for _, name := range artifactNames {
 		if _, ok := summaryArtifacts[name]; !ok {
 			continue
 		}
@@ -745,6 +770,13 @@ func validateEvidenceMetadata(record evidence) error {
 		return errors.New("evidence image reference must not include a mutable tag")
 	}
 	return nil
+}
+
+func requiredArtifactsForRecord(record evidence) []string {
+	if _, present := record.Artifacts["benchmark_summary"]; present {
+		return requiredArtifacts
+	}
+	return legacyRequiredArtifacts
 }
 
 func validateFixtureManifest(path string) error {
