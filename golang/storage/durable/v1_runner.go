@@ -358,7 +358,12 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
 	}
-	if err := validateGenerateFinalization(request, route.OperationID, finalization); err != nil {
+	expectedParent := request.Parent
+	if compaction.Required {
+		compactedParent := llm.CheckpointHandle(replay.State.Handle)
+		expectedParent = &compactedParent
+	}
+	if err := validateGenerateFinalization(request, route.OperationID, expectedParent, finalization); err != nil {
 		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
 	}
 	if err := contextErr(ctx); err != nil {
@@ -423,8 +428,11 @@ func validateJournalForRequest(_ llm.GenerateRequestV1, reservation ReserveResul
 	return nil
 }
 
-func validateGenerateFinalization(request llm.GenerateRequestV1, expectedOperationID OperationID, finalization GenerateFinalization) error {
-	return validateGenerateResponse(request, expectedOperationID, finalization.Response)
+func validateGenerateFinalization(request llm.GenerateRequestV1, expectedOperationID OperationID, expectedParent *llm.CheckpointHandle, finalization GenerateFinalization) error {
+	if err := validateGenerateResponse(request, expectedOperationID, finalization.Response); err != nil {
+		return err
+	}
+	return validateGenerateResponseParent(expectedParent, finalization.Response)
 }
 
 func validateGeneratePendingReconciliation(request llm.GenerateRequestV1, pending GenerateReconciliation) error {
@@ -434,7 +442,7 @@ func validateGeneratePendingReconciliation(request llm.GenerateRequestV1, pendin
 	if err := validateReservationForRequest(request, pending.Route, pending.Reservation); err != nil {
 		return err
 	}
-	return validateGenerateFinalization(request, pending.Route.OperationID, pending.Finalization)
+	return validateGenerateResponse(request, pending.Route.OperationID, pending.Finalization.Response)
 }
 
 // validateGenerateReplayFrontier verifies the storage-neutral transcript
@@ -488,7 +496,7 @@ func validateGenerateCacheFinalization(request llm.GenerateRequestV1, decision C
 	if decision.Response == nil {
 		return errors.New("cache hit has no origin response")
 	}
-	if err := validateGenerateFinalization(request, "", finalization); err != nil {
+	if err := validateGenerateFinalization(request, "", request.Parent, finalization); err != nil {
 		return err
 	}
 	if finalization.Response.OperationID == decision.Response.OperationID {
@@ -536,6 +544,19 @@ func validateGenerateResponse(request llm.GenerateRequestV1, expectedOperationID
 	}
 	if _, err := json.Marshal(response); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateGenerateResponseParent(expectedParent *llm.CheckpointHandle, response llm.GenerateResponseV1) error {
+	if expectedParent == nil {
+		if response.Checkpoint.Parent != nil {
+			return errors.New("root response checkpoint must not have a parent")
+		}
+		return nil
+	}
+	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != *expectedParent {
+		return errors.New("response checkpoint parent does not match effective parent")
 	}
 	return nil
 }
