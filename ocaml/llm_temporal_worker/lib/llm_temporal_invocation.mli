@@ -5,7 +5,7 @@ val activity_name : string
 val workflow_name : string
 val request_codec : request Temporal.Codec.t
 val response_codec : response Temporal.Codec.t
-val generate_activity : (request, response) Temporal.Activity.t
+val generate_activity : (generate_request, generate_response) Temporal.Activity.t
 
 (** The fixed Temporal retry policy used by [execute].  It permits exactly one
     attempt; Temporal does not retry a failed provider activity. *)
@@ -17,8 +17,8 @@ val invoke_once :
   request ->
   (response, Temporal.Error.t) result
 
-val execute : ?task_queue:Temporal_task_queue.t -> request -> (response, Temporal.Error.t) result
-val workflow : ?task_queue:Temporal_task_queue.t -> unit -> (request, response) Temporal.Workflow.t
+val execute : ?task_queue:Temporal_task_queue.t -> generate_request -> (generate_response, Temporal.Error.t) result
+val workflow : ?task_queue:Temporal_task_queue.t -> unit -> (generate_request, generate_response) Temporal.Workflow.t
 
 val generate_v1_request_codec : generate_request Temporal.Codec.t
 val generate_v1_response_codec : generate_response Temporal.Codec.t

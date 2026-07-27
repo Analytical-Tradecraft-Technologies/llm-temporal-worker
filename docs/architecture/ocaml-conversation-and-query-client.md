@@ -12,9 +12,10 @@ The package currently models one **llm.generate.v1** invocation. The v1
 checkpoint/delta/cache contract removes generic currency and adopts decimal
 USD types. The additive `Llm_temporal.Generate` facade now constructs and
 invokes that exact v1 request directly; it avoids a synthetic conversation
-branch for one-shot callers. The older `Request`, `execute`, and `workflow`
-names remain available as a compatibility surface until a separately approved
-breaking release, but they do not add a second wire protocol or Activity.
+branch for one-shot callers. The package-level `execute` and `workflow`
+helpers now use the same v1 request/response codecs and Activity descriptor.
+The older pre-checkpoint `Request` and `invoke_once` names remain only as
+deprecated compatibility shims and are not a production Activity boundary.
 
 Implementation starts from the landed OCaml validation baseline, including PR
 109. Preserve those validation improvements and regenerate fixtures from the
@@ -641,10 +642,12 @@ is not propagated into the summary cache key.
 The one-shot convenience **`Generate.make`/`Generate.invoke`/`Generate.start`**
 constructs and schedules one v1 Generate directly. It does not maintain a loop,
 stream tokens, or hide a checkpoint. `Generate.invoke_with` accepts the same
-typed dispatcher used by deterministic tests. The older
-**`Request.make`/`execute`/`workflow`** names remain recognizable for existing
-callers; new code should prefer `Generate` or `Conversation` so it cannot
-accidentally construct the pre-checkpoint wire shape.
+typed dispatcher used by deterministic tests. The package-level
+**`execute`/`workflow`** helpers now accept the exact Generate v1 records and
+schedule that same v1 Activity. The pre-checkpoint **`Request.make`** and
+**`invoke_once`** names remain recognizable only as deprecated compatibility
+shims; new code should prefer `Generate`, `Conversation`, or the migrated
+package-level helpers so it cannot construct the pre-checkpoint wire shape.
 
 ## GADT-typed Query API
 

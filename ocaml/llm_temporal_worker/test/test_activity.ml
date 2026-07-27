@@ -43,6 +43,20 @@ let _invoke_query :
     query_envelope -> (query_response, Temporal.Error.t) result =
   Llm_temporal.invoke_query_v1
 
+(* The package-level one-shot names must use the exact Generate v1 payload
+   types. Keeping these annotations in a downstream-facing test prevents a
+   future refactor from silently routing the production Activity through the
+   pre-checkpoint compatibility codec again. *)
+let _execute_v1 :
+    ?task_queue:Temporal_task_queue.t ->
+    generate_request -> (generate_response, Temporal.Error.t) result =
+  Llm_temporal.execute
+
+let _workflow_v1 :
+    ?task_queue:Temporal_task_queue.t -> unit ->
+    (generate_request, generate_response) Temporal.Workflow.t =
+  Llm_temporal.workflow
+
 let () =
   assert_equal "llm.generate.v1"
     (Temporal.Activity.name Llm_temporal.generate_v1_activity);
