@@ -39,6 +39,7 @@ module Query_execution_id : S
 module Budget_policy_key : S
 module Budget_generation_id : S
 module Provider_model_id : S
+module Model_display_name : S
 module Model_prefix : S
 module Window_key : S
 

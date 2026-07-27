@@ -290,6 +290,30 @@ let () =
              | _ -> failwith "typed model prefix was not encoded as a string")
         | _ -> failwith "model inventory query payload is missing its query object")
    | _ -> failwith "query request payload is not an object");
+  (* Model display names are presentation metadata, not provider model IDs.
+     Keep the nominal wrapper through the closed response codec so callers
+     cannot accidentally interchange the two string-shaped values. *)
+  let model_display_name = Model_display_name.of_string "GPT-4o" in
+  let inventory = {
+    provider = Provider_id.of_string "openai";
+    endpoint = Endpoint_id.of_string "responses";
+    provider_model_id = Provider_model_id.of_string "gpt-4o";
+    display_name = Some model_display_name;
+    lifecycle = Active;
+    capabilities = [ "text_generation" ];
+    source = Unknown_inventory_source;
+    complete_snapshot = true;
+    safe_metadata = Safe_metadata.empty;
+  } in
+  let inventory_response = response (Model_inventory_result { models = [ inventory ] }) in
+  let inventory_round_trip =
+    ok (V1_codec.decode_query_response (ok (V1_codec.encode_query_response inventory_response)))
+  in
+  (match inventory_round_trip.result with
+   | Model_inventory_result { models = [ { display_name = Some actual; provider_model_id; _ } ] }
+     when String.equal (Model_display_name.to_string actual) "GPT-4o"
+       && String.equal (Provider_model_id.to_string provider_model_id) "gpt-4o" -> ()
+   | _ -> failwith "model inventory display name lost its nominal type through the codec");
   (* Model inventory lifecycle values must use the exact Go wire vocabulary.
      In particular, [available]/[unavailable]/[unknown] are not the route
      availability or the legacy active/retired spellings. *)

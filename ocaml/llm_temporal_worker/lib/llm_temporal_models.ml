@@ -32,6 +32,7 @@ module Query_execution_id = Identifier.Query_execution_id
 module Budget_policy_key = Identifier.Budget_policy_key
 module Budget_generation_id = Identifier.Budget_generation_id
 module Provider_model_id = Identifier.Provider_model_id
+module Model_display_name = Identifier.Model_display_name
 module Model_prefix = Identifier.Model_prefix
 module Window_key = Identifier.Window_key
 module Checkpoint = Identifier.Checkpoint
@@ -409,7 +410,7 @@ type model_inventory_entry = {
   provider : Provider_id.t;
   endpoint : Endpoint_id.t;
   provider_model_id : Provider_model_id.t;
-  display_name : string option;
+  display_name : Model_display_name.t option;
   lifecycle : model_lifecycle;
   capabilities : model_capability list;
   source : inventory_source;

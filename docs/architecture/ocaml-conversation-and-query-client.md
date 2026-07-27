@@ -356,7 +356,7 @@ type model_inventory_entry = {
   provider : Provider_id.t;
   endpoint : Endpoint_id.t;
   provider_model_id : Provider_model_id.t;
-  display_name : string option;
+  display_name : Model_display_name.t option;
   lifecycle : model_lifecycle;
   capabilities : model_capability list;
   complete_snapshot : bool;

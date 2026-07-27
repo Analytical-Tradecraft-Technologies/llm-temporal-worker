@@ -44,6 +44,10 @@ module Query_execution_id = Make_nonempty ()
 module Budget_policy_key = Make_nonempty ()
 module Budget_generation_id = Make_nonempty ()
 module Provider_model_id = Make_nonempty ()
+(* A display name is distinct from the provider's model identifier.  It is
+   still an opaque wire string, so keep it nominal to prevent accidentally
+   passing an identifier where presentation metadata is expected. *)
+module Model_display_name = Make ()
 (* A model-inventory prefix is a distinct wire value from a complete model
    identifier.  It intentionally permits the empty string because the Go
    query contract treats an empty prefix as equivalent to omitting the
