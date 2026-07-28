@@ -1,10 +1,12 @@
 package contracttest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -57,6 +59,103 @@ func TestFixtureManifestComplete(t *testing.T) {
 	}
 	if len(report.Enforced) == 0 {
 		t.Fatal("fixture repository has no enforced profiles")
+	}
+}
+
+// TestFixtureMetadataUsesDirectSDKVersions keeps the checked-in fixture
+// provenance tied to the versions that the worker actually builds against.
+// A fixture recorded against an older SDK can otherwise look reviewed while
+// silently exercising a different request/response surface than production.
+func TestFixtureMetadataUsesDirectSDKVersions(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate contracttest package")
+	}
+	providerRoot := filepath.Dir(filepath.Dir(source))
+	repositoryRoot := filepath.Join(providerRoot, "..", "..")
+	report, err := ValidateRepository(repositoryRoot)
+	if err != nil {
+		t.Fatalf("validate adapter fixture repository: %v", err)
+	}
+	versions, err := directModuleVersions(filepath.Join(repositoryRoot, "go.mod"))
+	if err != nil {
+		t.Fatalf("read direct Go module versions: %v", err)
+	}
+	profiles := append(append([]Profile(nil), report.Bootstrap...), report.Enforced...)
+	for _, profile := range profiles {
+		metadataPath := filepath.Join(repositoryRoot, filepath.FromSlash(profile.Path), "metadata.yaml")
+		metadata, err := loadMetadata(metadataPath)
+		if err != nil {
+			t.Fatalf("load metadata for profile %q: %v", profile.ID, err)
+		}
+		module, version, ok := strings.Cut(metadata.SDKVersion, "@")
+		if !ok || strings.TrimSpace(module) == "" || strings.TrimSpace(version) == "" {
+			t.Fatalf("profile %q has invalid sdk_version %q", profile.ID, metadata.SDKVersion)
+		}
+		want, ok := versions[module]
+		if !ok {
+			t.Fatalf("profile %q records SDK module %q, which is not a direct go.mod requirement", profile.ID, module)
+		}
+		if version != want {
+			t.Fatalf("profile %q records SDK %s@%s, want direct go.mod version %s", profile.ID, module, version, want)
+		}
+	}
+}
+
+func directModuleVersions(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	versions := make(map[string]string)
+	inBlock := false
+	seenBlock := false
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "require (" {
+			if seenBlock {
+				break
+			}
+			seenBlock = true
+			inBlock = true
+			continue
+		}
+		if !inBlock {
+			continue
+		}
+		if line == ")" {
+			break
+		}
+		if strings.Contains(line, "// indirect") {
+			continue
+		}
+		line = strings.TrimSpace(strings.SplitN(line, "//", 2)[0])
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			versions[fields[0]] = fields[1]
+		}
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("go.mod has no direct require block")
+	}
+	return versions, nil
+}
+
+func TestDirectModuleVersionsIgnoresIndirectRequirements(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go.mod")
+	data := []byte("module example.test/worker\n\nrequire (\n\texample.test/direct v1.2.3\n\texample.test/indirect v4.5.6 // indirect\n)\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	versions, err := directModuleVersions(path)
+	if err != nil {
+		t.Fatalf("parse fixture go.mod: %v", err)
+	}
+	if got := versions["example.test/direct"]; got != "v1.2.3" {
+		t.Fatalf("direct module version = %q, want v1.2.3", got)
+	}
+	if _, ok := versions["example.test/indirect"]; ok {
+		t.Fatal("indirect module was included in direct version map")
 	}
 }
 
