@@ -121,6 +121,12 @@ type ProductionFactoryOptions struct {
 	BlobStore       blob.Store
 	BlobFactory     BlobFactory
 	BlobRefResolver BlobRefResolver
+	// CheckpointBlobLocator resolves a PostgreSQL checkpoint blob ID to the
+	// object-store reference recorded for that immutable blob. It is separate
+	// from BlobRefResolver because checkpoint rows carry a UUID blob ID while
+	// result rows carry only a content digest/size/media reference. A missing
+	// locator deliberately leaves checkpoint replay fail-closed.
+	CheckpointBlobLocator state.BlobLocator
 
 	AWSConfigFactory          AWSConfigFactory
 	AzureCredentialFactory    AzureCredentialFactory
@@ -507,7 +513,16 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if postgresProbe != nil {
 		probes = append(probes, postgresProbe)
 	}
-	checkpointCapabilities := checkpointCapabilitiesFromCloser(postgresCloser)
+	var checkpointBlobReader state.CheckpointBlobReader
+	if factory.options.CheckpointBlobLocator != nil {
+		checkpointBlobReader = state.ScopedBlobReader{
+			Store:    blobStore,
+			Resolve:  factory.options.CheckpointBlobLocator,
+			MaxBytes: int64(value.Limits.RequestBytes),
+			Now:      clock,
+		}
+	}
+	checkpointCapabilities := checkpointCapabilitiesFromCloserWithBindings(postgresCloser, checkpointBlobReader, keyring, clock)
 	journal := journalFromCloser(postgresCloser)
 	clients := &productionClientSet{
 		probes:          probes,
