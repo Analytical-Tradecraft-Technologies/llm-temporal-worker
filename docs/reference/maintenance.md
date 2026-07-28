@@ -83,6 +83,16 @@ credentials and raw billing payloads are outside this contract. Until an
 authorized adapter supplies evidence, unknown-cost rows remain conservatively
 retained and must never be changed to zero.
 
+The storage-neutral `durable.UnknownCostBoundary` is the handoff contract for
+that caller. It validates one operation/generation/incarnation identity and a
+set of exact `resolve_unknown_exact` events, commits them through the
+PostgreSQL journal port, and only then invokes `BudgetMaterializer.Reconcile`.
+PostgreSQL errors never call Redis. A Redis error returns the committed journal
+receipt with `ErrReconcilePending`; retrying the same event set is safe because
+the PostgreSQL transaction and Redis materialization are both idempotent. The
+boundary does not claim a cross-store transaction and never lowers the
+conservative Redis bound before reconciliation succeeds.
+
 The PostgreSQL adapter also exposes `PruneExpiredBudgetBuckets`. This is a
 narrow budget-retention fence, not full budget or operation retention: callers
 must provide a cutoff no newer than the maximum configured window horizon, and

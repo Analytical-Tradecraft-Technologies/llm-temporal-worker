@@ -1010,11 +1010,15 @@ maintenance primitives.
   loads the active budget working set into a running worker. It must preserve
   every row required by the maximum window, open reservation, and allowed cold
   rebuild.
-- [ ] When authoritative billing later resolves an unknown operation cost,
-  append **resolve_unknown_exact** rather than editing history. In one
-  PostgreSQL transaction update operation cost, reservation, bucket projection,
-  and journal revision; then idempotently reconcile Redis. Retain the prior
-  conservative bound on any failure.
+- [ ] Execute an authorized billing caller that resolves an unknown operation
+  with **resolve_unknown_exact**, binds protected evidence, and demonstrates
+  the production Redis retry path. The PostgreSQL transaction and the
+  storage-neutral Redis handoff are implemented; the conservative bound must
+  remain in force until reconciliation succeeds.
+- [x] Define the storage-neutral unknown-cost handoff contract: PostgreSQL
+  commits first, Redis reconciliation is fenced and retryable, and a Redis
+  failure returns the authoritative PostgreSQL receipt without weakening the
+  conservative bound.
 - [x] Add metrics for eligible/deleted/skipped/failure, dead tuples, pool and
   maintenance/query latency, cache hit/use/fill, pending polls, and
   exact/unknown cost.
