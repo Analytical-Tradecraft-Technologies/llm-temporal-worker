@@ -84,6 +84,92 @@ lookup, and aggregates exact NUMERIC(38,18) amounts without treating unknown
 costs as zero. Its interval is half-open (`start_time <= completed_at <
 end_time`) and groups are ordered by their typed dimensions with NULLs first.
 
+## Versioned budget-status reader contract
+
+The existing durable Redis v1 hashes are not a `BudgetStatus` source. Their
+aggregate fields do not distinguish reserved from accounted amounts, their
+keys are not bound to the generation named by the active pointer, and the v1
+manifest does not provide a complete member-to-window mapping with a limit for
+each member. The operation records also have no bounded operation index that a
+materializer can use to apply expiry, release, or reconciliation without an
+unbounded scan. Reading those hashes as if they were a current snapshot could
+therefore mix generations, omit a window, or report an amount that cannot be
+explained by an idempotent operation transition. A v1 or legacy key is
+unsupported for `budget_status`, even when it happens to contain plausible
+numbers.
+
+Before a production `BudgetStatusReader` or materializer is enabled, the
+deployment must publish a versioned v2 generation with the following minimum
+contract:
+
+1. **Generation-scoped window records.** Every window member is stored under
+   the immutable generation selected by the active pointer. The member key is
+   derived from the manifest's canonical member identifier and the configured
+   Redis namespace/hash tag; it is never a process-local or non-generation-
+   scoped hash. A window record carries the schema version and generation
+   identity needed to reject a key from another generation.
+2. **Separate accounting fields.** Each member has distinct non-negative
+   integer fields for `limit_nano_usd`, `reserved_nano_usd`, and
+   `accounted_nano_usd` (plus the bounded bucket fields required by the
+   admission policy). The reader computes available capacity from these fields
+   and validates the safe-integer bound, non-negative values, and the policy
+   invariant before constructing decimal USD output. It never reconstructs one
+   field from an aggregate total or treats an absent field as zero.
+3. **Atomic, idempotent transitions.** The versioned Redis Function/Lua
+   implementation must perform reserve, reconcile, release, and expiry updates
+   atomically for the complete operation member set. Each operation records its
+   generation, member deltas, state, expiry, and transition fingerprint in a
+   bounded generation-scoped operation index. Retries with the same fingerprint
+   are no-ops; a conflicting operation, generation, or fingerprint fails
+   closed. Expired index entries and their reservation deltas are removed by the
+   same atomic path, not by a reader-side scan.
+4. **Complete manifest catalog.** The immutable v2 manifest must enumerate the
+   exact member identifiers, policy/window identity, coverage interval, and
+   per-member limit (or a digest of a separately immutable limit catalog whose
+   contents are validated with the manifest). The catalog count and digest are
+   checked before adoption. A manifest that cannot derive every expected
+   member key and limit is incomplete, even if all observed hashes are valid.
+5. **Bounded, coherent read.** A reader first validates the active pointer and
+   immutable manifest, then rejects an instant outside the manifest coverage.
+   One server-side Redis Function/Lua invocation must perform the bounded
+   expiry drain, read every catalog member's fixed field set (using bounded
+   `HMGET` operations), and capture the Stream high-water mark. A version-
+   fenced read/retry is an equivalent alternative only when it proves that
+   every member and the high-water mark came from one generation; independent
+   client-side `HMGET` commands are not sufficient. The invocation must not
+   use `HSCAN`, `HGETALL`, or an unbounded operation lookup on the query path.
+   Missing members/fields, duplicate catalog entries, wrong schema or
+   generation, malformed integers, digest/provenance mismatches, and
+   `reserved + accounted > limit` all fail closed. The response cites the
+   generation, manifest digest, and captured Stream high-water mark and is
+   never completed from PostgreSQL budget rows.
+
+   Expiry must be current before those values are returned. The same
+   invocation performs a bounded atomic expiry drain, or a freshness-verified
+   sweeper performs that drain immediately before the read. If the sweeper is
+   behind its freshness bound, cannot prove the drain completed, or encounters
+   an ambiguous expiry record, the reader fails closed rather than reporting a
+   stale reservation.
+
+   The query is current-only. A requested `active_at` older than the current
+   snapshot instant (or any historical instant that is merely inside the
+   coverage interval) returns the typed `budget_history_not_available` error;
+   coverage membership is not a time-travel guarantee. The current snapshot
+   instant, generation, manifest digest, and Stream high-water mark must all
+   be captured and validated by the same coherent read.
+
+Migration is an explicit, fenced operation. A v1/legacy active pointer keeps
+`budget_status` unavailable; there is no in-place reinterpretation, automatic
+dual-read, or PostgreSQL fallback. The deployment must build a complete v2
+generation from the durable journal under the documented Redis replacement or
+cold-bootstrap fence, validate every member and operation index entry, and
+atomically switch the active pointer to v2. During a mixed rollout the reader
+accepts only a complete v2 generation, while v1 keys remain admission-owned
+until their bounded expiry/retention window has elapsed. Old generations are
+garbage-collected only after no lease, reservation, cursor, or audit reference
+can reach them. Any missing or ambiguous migration evidence leaves paid work
+and `budget_status` fail-closed.
+
 Spend composition also requires `PersistedQueryOptions.ResolveScope`. This
 explicit resolver maps the already-authorized tenant/project pair to the
 opaque PostgreSQL scope UUID using the deployment's existing keyed scope
