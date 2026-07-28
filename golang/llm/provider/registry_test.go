@@ -141,10 +141,14 @@ func TestRegistryResolvesOptionalModelListerWithoutMakingItMandatory(t *testing.
 	if err := page.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.NewRegistry(registryFixtureRegistration()); err != nil {
+	oneShotRegistry, err := provider.NewRegistry(registryFixtureRegistration())
+	if err != nil {
 		// A one-shot adapter remains a valid registration even without the
 		// optional model-management capability.
 		t.Fatal(err)
+	}
+	if _, err := oneShotRegistry.ModelLister(provider.FamilyOpenAIChat, "fixture-chat"); !errors.Is(err, provider.ErrModelInventoryUnsupported) {
+		t.Fatalf("one-shot model-lister error = %v, want ErrModelInventoryUnsupported", err)
 	}
 	if _, err := registry.ModelLister(provider.FamilyOpenAIChat, "missing"); err == nil {
 		t.Fatal("missing model-lister profile resolved successfully")

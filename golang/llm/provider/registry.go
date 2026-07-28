@@ -127,7 +127,7 @@ func (registry *Registry) ModelLister(family Family, profileID string) (ModelLis
 	}
 	lister, ok := adapter.(ModelLister)
 	if !ok {
-		return nil, fmt.Errorf("provider adapter profile %q for family %q does not support model inventory", profileID, family)
+		return nil, fmt.Errorf("%w: provider adapter profile %q for family %q does not support model inventory", ErrModelInventoryUnsupported, profileID, family)
 	}
 	return lister, nil
 }
