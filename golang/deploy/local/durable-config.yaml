@@ -1,0 +1,145 @@
+# Durable local composition fixture. It intentionally uses a separate
+# worker-postgres database/role from Temporal's postgres service. Schema
+# installation remains an explicit deployment step.
+version: llm-temporal-worker/v1
+environment: development
+
+server:
+  health_address: 0.0.0.0:8080
+  metrics_address: 0.0.0.0:9090
+
+temporal:
+  target: temporal:7233
+  namespace: default
+  task_queue: llmtw-local
+  identity_prefix: llmtw-local
+  worker:
+    max_concurrent_activities: 4
+    max_concurrent_activity_task_polls: 2
+
+state:
+  kind: durable
+  redis:
+    addresses: ["redis:6379"]
+    key_prefix: llmtw
+    username:
+      kind: env
+      name: REDIS_USERNAME
+    password:
+      kind: env
+      name: REDIS_PASSWORD
+    admission_hash_tag: admission
+    admission_mode: function
+    function_library: llmtw_admission_v1
+    admission_version: admission_v1
+    admission_digest: 01ade05ddc77732b3822d573ce585ca078867cda6565fa27c5b7812ef501c71f
+    required_persistence: aof_and_rdb
+    coordination_stream_enabled: false
+  postgres:
+    addresses: ["worker-postgres:5432"]
+    database: llmtw_worker
+    schema: llmtw_state
+    table_prefix: llmtw_
+    username:
+      kind: env
+      name: WORKER_POSTGRES_USERNAME
+    password:
+      kind: env
+      name: WORKER_POSTGRES_PASSWORD
+
+blob_store:
+  kind: file
+  inline_bytes: 262144
+  file:
+    root: /var/lib/llmtw/blobs
+
+limits:
+  request_bytes: 1048576
+  items: 128
+  parts_per_item: 32
+  tools: 32
+  schema_bytes: 131072
+  json_depth: 32
+  continuation_depth: 64
+  route_attempts: 3
+  provider_timeout: 30s
+  max_output_tokens: 4096
+  token_estimate_safety_ratio: "1.35"
+
+endpoints:
+  provider-mock:
+    family: openai_chat
+    base_url: https://provider-mock:8081/v1
+    outbound_hosts: [provider-mock]
+    auth:
+      kind: bearer_env
+      name: MOCK_API_KEY
+    account_region: local
+    timeout: 25s
+    service_classes:
+      economy:
+        provider_value: flex
+      standard:
+        provider_value: standard
+      priority:
+        provider_value: priority
+    capability_profile: local-mock-v1
+    price_catalog: local-v1
+    provider_storage:
+      permitted: false
+
+models:
+  demo-model:
+    allowed_tenants: [local]
+    data_regions: [local]
+    routes:
+      - id: local-mock
+        endpoint: provider-mock
+        model: demo-model
+        classes: [economy, standard, priority]
+
+capabilities:
+  catalogs:
+    - file: /etc/llmtw/capabilities.yaml
+      sha256: 244ccc3e30f27354c639bbcf7fe621d7b9898753c6a294749b2658811cf70271
+  unknown_in_strict_mode: reject
+
+pricing:
+  catalogs:
+    - file: /etc/llmtw/prices.yaml
+      sha256: aff38b31219810e9acc50d6b790a7b570e74fd84b2716a72c75435a7f9faecda
+  require_price_when_budgeted: true
+
+budgets:
+  require_match: true
+  policies:
+    - id: local-development
+      match:
+        tenant: local
+        environment: development
+      windows:
+        - duration: 1h
+          bucket: 1m
+          limit_micro_usd: 1000000
+
+continuation:
+  handle_keys:
+    - id: local-2026-07
+      primary: true
+      secret:
+        kind: env
+        name: CONTINUATION_HMAC
+  retain_canonical_transcript: true
+  allow_provider_hosted_state: false
+
+telemetry:
+  logs:
+    format: json
+    level: info
+  metrics:
+    enabled: true
+  tracing:
+    enabled: false
+    otlp_endpoint: ""
+    sample_ratio: "0"
+  content_logging: disabled

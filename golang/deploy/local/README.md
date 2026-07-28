@@ -37,6 +37,20 @@ zero-cost catalog; production deployments must use external secret delivery,
 real catalog digests, and the release image digest. The worker exposes the
 same probes as Kubernetes: `/health/live`, `/health/ready`, and `/metrics`.
 
+For a storage-composition check, the opt-in `durable` profile adds a separate
+digest-pinned `worker-postgres` service with its own named volume, database,
+and role. `durable-worker` validates `durable-config.yaml` and waits for both
+that database and Redis (Redis remains the active budget/throttle dependency):
+
+```sh
+docker compose --profile durable run --rm durable-worker
+```
+
+This profile deliberately does not install the worker schema or start Temporal
+polling. Schema installation is an explicit deployment operation, and the
+existing `worker` profile remains the offline Redis-only parser/readiness
+fixture.
+
 The checked-in worker profile remains a
 parser/configuration/readiness fixture, not an end-to-end provider invocation
 path. Provider egress is deliberately fail-closed in every environment, so

@@ -410,6 +410,12 @@ are closed during a failed build, configuration replacement, or worker
 shutdown. Schema installation remains a deployment concern (`postgres.Install`)
 and is never performed by a worker during readiness probing.
 
+The local durable composition is documented separately from the offline Redis
+fixture: `docker compose --profile durable run --rm durable-worker` validates
+`deploy/local/durable-config.yaml` against an isolated worker PostgreSQL
+database/role while retaining Redis for active budgets and throttles. It does
+not install the schema or start Temporal polling.
+
 `state.kind: redis` is retained only as a development/test fixture for the
 legacy Redis-only composition and is rejected in production. `state.kind:
 memory` is an explicitly non-durable, single-process development composition.

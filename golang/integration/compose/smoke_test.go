@@ -176,6 +176,65 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 	}
 }
 
+func TestComposeDurableProfileIsolatedFromTemporalStorage(t *testing.T) {
+	document, raw := readCompose(t)
+	workerPostgres, ok := document.Services["worker-postgres"]
+	if !ok {
+		t.Fatal("Compose fixture is missing the isolated worker PostgreSQL service")
+	}
+	if len(workerPostgres.Profiles) != 1 || workerPostgres.Profiles[0] != "durable" {
+		t.Fatalf("worker-postgres profiles = %#v, want [durable]", workerPostgres.Profiles)
+	}
+	if !strings.Contains(workerPostgres.Image, "@sha256:") {
+		t.Errorf("worker-postgres image must be digest pinned, got %q", workerPostgres.Image)
+	}
+	if workerPostgres.Healthcheck == nil {
+		t.Error("worker-postgres must expose a healthcheck")
+	}
+	durableWorker, ok := document.Services["durable-worker"]
+	if !ok {
+		t.Fatal("Compose fixture is missing the durable worker profile")
+	}
+	if len(durableWorker.Profiles) != 1 || durableWorker.Profiles[0] != "durable" {
+		t.Fatalf("durable-worker profiles = %#v, want [durable]", durableWorker.Profiles)
+	}
+	for _, dependency := range []string{"worker-postgres", "redis"} {
+		if _, ok := durableWorker.DependsOn[dependency]; !ok {
+			t.Errorf("durable-worker does not wait for %s", dependency)
+		}
+	}
+	for _, required := range []string{
+		"worker-postgres-data:/var/lib/postgresql/data",
+		"POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}",
+		"POSTGRES_DB: ${LLMTW_WORKER_POSTGRES_DATABASE:-llmtw_worker}",
+		"./deploy/local/durable-config.yaml",
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("durable Compose profile is missing %q", required)
+		}
+	}
+	if strings.Contains(string(raw), "durable-worker:\n    profiles: [worker]") {
+		t.Error("durable worker must not share the offline Redis-only worker profile")
+	}
+	durableConfig, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "local", "durable-config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"kind: durable",
+		"addresses: [\"worker-postgres:5432\"]",
+		"database: llmtw_worker",
+		"schema: llmtw_state",
+		"table_prefix: llmtw_",
+		"name: WORKER_POSTGRES_USERNAME",
+		"name: WORKER_POSTGRES_PASSWORD",
+	} {
+		if !strings.Contains(string(durableConfig), required) {
+			t.Errorf("durable config is missing %q", required)
+		}
+	}
+}
+
 func TestComposeTemporalHealthcheckUsesEntrypointBoundSemanticReadiness(t *testing.T) {
 	document, _ := readCompose(t)
 	temporal, ok := document.Services["temporal"]
