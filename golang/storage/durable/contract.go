@@ -273,7 +273,18 @@ func (phase Phase) String() string {
 
 // Lifecycle records the durable side-effect order. It is intentionally small
 // enough to use in runtime tests and metrics without persisting another ledger.
-type Lifecycle struct{ phases []Phase }
+type Lifecycle struct {
+	phases []Phase
+	// Reservation identity is bound when Redis first accepts. It prevents a
+	// reload/retry from journaling a result from another incarnation.
+	reservationOperation     OperationID
+	reservationGeneration    GenerationID
+	reservationIncarnation   IncarnationID
+	reservationIdentityBound bool
+	completionDigest         [32]byte
+	completionDigestBound    bool
+	reservationAborted       bool
+}
 
 func (l *Lifecycle) Advance(next Phase) error {
 	if l == nil {
@@ -316,4 +327,39 @@ func (l Lifecycle) ReconcileFailure(err error) error {
 		return fmt.Errorf("%w: reconciliation is only valid after PostgreSQL finalization", ErrInvalidPhase)
 	}
 	return fmt.Errorf("%w: %v", ErrReconcilePending, err)
+}
+
+func (l *Lifecycle) bindReservationIdentity(result ReserveResult) error {
+	if l == nil {
+		return ErrInvalidPhase
+	}
+	if l.reservationIdentityBound {
+		if l.reservationOperation != result.OperationID || l.reservationGeneration != result.GenerationID || l.reservationIncarnation != result.IncarnationID {
+			return fmt.Errorf("%w: Redis reservation identity changed during retry", ErrInvalidIdentity)
+		}
+		return nil
+	}
+	l.reservationOperation = result.OperationID
+	l.reservationGeneration = result.GenerationID
+	l.reservationIncarnation = result.IncarnationID
+	l.reservationIdentityBound = true
+	return nil
+}
+
+func (l *Lifecycle) markReservationAborted() {
+	if l != nil {
+		l.reservationAborted = true
+	}
+}
+
+func (l *Lifecycle) bindCompletionDigest(digest [32]byte) error {
+	if l == nil {
+		return ErrInvalidPhase
+	}
+	if l.completionDigestBound && l.completionDigest != digest {
+		return fmt.Errorf("%w: completion batch changed during reconciliation retry", ErrInvalidIdentity)
+	}
+	l.completionDigest = digest
+	l.completionDigestBound = true
+	return nil
 }
