@@ -46,6 +46,15 @@ not retrigger by itself. Deadline and clock interpretation remain engine
 responsibilities, so the trigger API accepts the durable
 `ContinuationExpired` result rather than reading wall-clock time.
 
+`compaction.SelectPrefix` supplies the deterministic boundary for that
+selection. It retains at least `Policy.RecentTurns` logical turns and returns
+the earlier complete prefix separately. A turn starts whenever the tool
+frontier is empty; a tool call and all matching results remain one atomic turn.
+An unresolved final tool frontier is retained in full even when the requested
+window is zero, so a summary can never split a tool exchange. Provider-state
+items are also retained as whole semantic items. An empty prefix means there is
+no safe work to compact yet and must not be passed to `PrepareRequest`.
+
 The trigger contract is covered by property-style tests: every projected
 counter boundary is checked, zero provider limits remain disabled, and raising
 tokens, items, lineage, bytes, reserved reasoning, or continuation age cannot
