@@ -20,6 +20,8 @@ type TableMaintenanceSettings struct {
 	AutovacuumVacuumScaleFactor  *float64
 	AutovacuumAnalyzeThreshold   *int64
 	AutovacuumAnalyzeScaleFactor *float64
+	AutovacuumEnabled            *bool
+	ToastAutovacuumEnabled       *bool
 	LiveTuples                   int64
 	DeadTuples                   int64
 	LastAutovacuum               *time.Time
@@ -33,6 +35,15 @@ var maintenanceSettingsResources = map[string]string{
 	"response_cache_fills":   "cache_fill",
 	"provider_route_status":  "status",
 	"maintenance_outbox":     "outbox",
+}
+
+var expectedMaintenanceSettingsRelations = []string{
+	"operations",
+	"budget_buckets",
+	"response_cache_entries",
+	"response_cache_fills",
+	"provider_route_status",
+	"maintenance_outbox",
 }
 
 // maintenanceSettingsQuery reads only PostgreSQL catalogs/statistics. The
@@ -67,6 +78,7 @@ func (repository MaintenanceRepository) InspectTableSettings(ctx context.Context
 	}
 	defer rows.Close()
 	settings := make([]TableMaintenanceSettings, 0, len(maintenanceSettingsResources))
+	found := make(map[string]struct{}, len(maintenanceSettingsResources))
 	for rows.Next() {
 		var relation string
 		var options []string
@@ -80,6 +92,7 @@ func (repository MaintenanceRepository) InspectTableSettings(ctx context.Context
 			continue
 		}
 		item.Resource = resource
+		found[logical] = struct{}{}
 		if err := decodeMaintenanceReloptions(options, &item); err != nil {
 			return nil, fmt.Errorf("decode maintenance settings for %s: %w", resource, err)
 		}
@@ -87,6 +100,11 @@ func (repository MaintenanceRepository) InspectTableSettings(ctx context.Context
 	}
 	if err := rows.Err(); err != nil {
 		return nil, redactPostgresError(fmt.Errorf("iterate maintenance table settings: %w", err))
+	}
+	for _, logical := range expectedMaintenanceSettingsRelations {
+		if _, ok := found[logical]; !ok {
+			return nil, fmt.Errorf("maintenance table settings are incomplete: relation %q is unavailable", logical)
+		}
 	}
 	return settings, nil
 }
@@ -136,6 +154,18 @@ func decodeMaintenanceReloptions(options []string, settings *TableMaintenanceSet
 				return fmt.Errorf("autovacuum analyze scale factor %q is invalid", value)
 			}
 			settings.AutovacuumAnalyzeScaleFactor = &parsed
+		case "autovacuum_enabled":
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("autovacuum enabled value %q is invalid", value)
+			}
+			settings.AutovacuumEnabled = &parsed
+		case "toast.autovacuum_enabled":
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("toast autovacuum enabled value %q is invalid", value)
+			}
+			settings.ToastAutovacuumEnabled = &parsed
 		}
 	}
 	return nil

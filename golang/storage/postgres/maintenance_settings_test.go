@@ -31,6 +31,17 @@ func TestMaintenanceSettingsQueryIsReadOnlyAndNamespaceBound(t *testing.T) {
 	}
 }
 
+func TestMaintenanceSettingsExpectedRelationsAreExplicit(t *testing.T) {
+	if len(expectedMaintenanceSettingsRelations) != len(maintenanceSettingsResources) {
+		t.Fatalf("expected relation fence has %d entries for %d resources", len(expectedMaintenanceSettingsRelations), len(maintenanceSettingsResources))
+	}
+	for _, relation := range expectedMaintenanceSettingsRelations {
+		if _, ok := maintenanceSettingsResources[relation]; !ok {
+			t.Fatalf("expected relation %q is not represented by a logical resource", relation)
+		}
+	}
+}
+
 func TestDecodeMaintenanceReloptionsReportsActualValuesWithoutDefaults(t *testing.T) {
 	var settings TableMaintenanceSettings
 	if err := decodeMaintenanceReloptions([]string{
@@ -39,6 +50,8 @@ func TestDecodeMaintenanceReloptionsReportsActualValuesWithoutDefaults(t *testin
 		"autovacuum_vacuum_scale_factor=0.05",
 		"autovacuum_analyze_threshold=500",
 		"autovacuum_analyze_scale_factor=0.02",
+		"autovacuum_enabled=false",
+		"toast.autovacuum_enabled=true",
 	}, &settings); err != nil {
 		t.Fatal(err)
 	}
@@ -57,18 +70,24 @@ func TestDecodeMaintenanceReloptionsReportsActualValuesWithoutDefaults(t *testin
 	if settings.AutovacuumAnalyzeScaleFactor == nil || *settings.AutovacuumAnalyzeScaleFactor != 0.02 {
 		t.Fatalf("analyze scale factor=%v, want actual reloption 0.02", settings.AutovacuumAnalyzeScaleFactor)
 	}
+	if settings.AutovacuumEnabled == nil || *settings.AutovacuumEnabled {
+		t.Fatalf("autovacuum enabled=%v, want explicit false reloption", settings.AutovacuumEnabled)
+	}
+	if settings.ToastAutovacuumEnabled == nil || !*settings.ToastAutovacuumEnabled {
+		t.Fatalf("toast autovacuum enabled=%v, want explicit true reloption", settings.ToastAutovacuumEnabled)
+	}
 
 	var defaults TableMaintenanceSettings
 	if err := decodeMaintenanceReloptions(nil, &defaults); err != nil {
 		t.Fatal(err)
 	}
-	if defaults.Fillfactor != nil || defaults.AutovacuumVacuumScaleFactor != nil {
+	if defaults.Fillfactor != nil || defaults.AutovacuumVacuumScaleFactor != nil || defaults.AutovacuumEnabled != nil {
 		t.Fatalf("missing reloptions were converted into guessed defaults: %+v", defaults)
 	}
 }
 
 func TestDecodeMaintenanceReloptionsFailsClosed(t *testing.T) {
-	for _, option := range []string{"fillfactor", "fillfactor=9", "fillfactor=101", "autovacuum_vacuum_threshold=-1", "autovacuum_vacuum_scale_factor=-0.1", "autovacuum_analyze_threshold=nope", "autovacuum_analyze_scale_factor=nope"} {
+	for _, option := range []string{"fillfactor", "fillfactor=9", "fillfactor=101", "autovacuum_vacuum_threshold=-1", "autovacuum_vacuum_scale_factor=-0.1", "autovacuum_analyze_threshold=nope", "autovacuum_analyze_scale_factor=nope", "autovacuum_enabled=maybe", "toast.autovacuum_enabled=maybe"} {
 		t.Run(option, func(t *testing.T) {
 			if err := decodeMaintenanceReloptions([]string{option}, &TableMaintenanceSettings{}); err == nil {
 				t.Fatalf("invalid reloption %q was accepted", option)
