@@ -542,6 +542,19 @@ let () =
    | Error error -> failwith ("unexpected legacy conversion error: " ^ Temporal.Error.message error)
    | Ok _ -> failwith "legacy compatibility dispatched an incomplete context");
   if !rejected_calls <> 0 then failwith "legacy conversion failure dispatched an Activity";
+  let unsupported_context_tags =
+    { legacy_v1_request with
+      context = Some { tenant = Some (tenant_id "tenant");
+                       project = Some (project_id "project");
+                       actor = Some (Actor_id.of_string "actor");
+                       tags = [ ("region", "au") ] } }
+  in
+  (match invoke_once ~dispatch:rejected_dispatch unsupported_context_tags with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "legacy Request.context.tags is not representable by Generate v1" -> ()
+   | Error error -> failwith ("unexpected legacy context-tag error: " ^ Temporal.Error.message error)
+   | Ok _ -> failwith "legacy compatibility silently dropped context tags");
+  if !rejected_calls <> 0 then failwith "legacy context-tag rejection dispatched an Activity";
   let unsupported_sampling =
     { legacy_v1_request with
       sampling = Some { temperature = None; top_p = Some 0.5; top_k = None;
@@ -582,6 +595,17 @@ let () =
     | Ok _ -> failwith "legacy compatibility silently changed an unsupported reasoning mode"
   ) [ Adaptive; Reasoning_enabled ];
   if !rejected_calls <> 0 then failwith "unsupported legacy reasoning dispatched an Activity";
+  let unsupported_reasoning_disabled =
+    { legacy_v1_request with
+      reasoning = Some { mode = Reasoning_disabled; effort = High;
+                         token_budget = None; summary = Concise } }
+  in
+  (match invoke_once ~dispatch:rejected_dispatch unsupported_reasoning_disabled with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "legacy Request.reasoning.mode=Reasoning_disabled is not representable by Generate v1" -> ()
+   | Error error -> failwith ("unexpected disabled-reasoning error: " ^ Temporal.Error.message error)
+   | Ok _ -> failwith "legacy compatibility silently changed disabled reasoning");
+  if !rejected_calls <> 0 then failwith "disabled-reasoning rejection dispatched an Activity";
   let mismatched_dispatch ?task_queue:_ activity request =
     if Temporal.Activity.name activity <> activity_name then
       failwith "legacy compatibility dispatched the wrong Activity for mismatch test";
