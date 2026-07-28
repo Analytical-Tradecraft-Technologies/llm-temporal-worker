@@ -19,12 +19,38 @@ runner stops at the first pass error or context cancellation; it never reports
 later passes as successful. The repository's existing `MaintenanceObserver`
 hooks emit the per-pass progress, failure, and latency metrics.
 
-The worker CLI intentionally does not open a maintenance-role connection. A
-deployment-owned `llmtw-maintenance retention-once` wrapper should parse the
-UTC `--now`, `--limit`, seven cutoff flags, and `--max-budget-window`, build a
-maintenance-role pool, call this method once, emit the returned pass result,
-and exit non-zero when it returns an error. Keeping that adapter outside the
-worker prevents a runtime credential from acquiring cleanup privileges.
+The worker CLI intentionally does not open a maintenance-role connection. The
+repository ships the separately operated
+[`llmtw-maintenance`](../../golang/cmd/llmtw-maintenance/main.go) binary for
+this adapter. Build it with `go build ./cmd/llmtw-maintenance` from `golang/`.
+It requires the dedicated `LLMTW_MAINTENANCE_POSTGRES_USERNAME` and
+`LLMTW_MAINTENANCE_POSTGRES_PASSWORD` environment variables; worker runtime
+credential variables are not used. The command reads namespace, TLS, and pool
+settings from `--config`, never installs schema, performs one bounded pass,
+emits the pass result as JSON, and exits non-zero on a failed pass.
+
+For example, an operator-owned scheduled job can invoke:
+
+```sh
+LLMTW_MAINTENANCE_POSTGRES_USERNAME=llmtw_maintenance \
+LLMTW_MAINTENANCE_POSTGRES_PASSWORD='(injected by the job secret store)' \
+  ./llmtw-maintenance retention-once \
+  --config /etc/llmtw/config.yaml \
+  --now 2026-07-29T00:00:00Z \
+  --limit 1000 \
+  --cache-before 2026-07-01T00:00:00Z \
+  --provider-status-before 2026-07-01T00:00:00Z \
+  --inventory-before 2026-07-01T00:00:00Z \
+  --query-executions-before 2026-07-01T00:00:00Z \
+  --operations-before 2026-07-01T00:00:00Z \
+  --budget-buckets-before 2026-07-01T00:00:00Z \
+  --checkpoints-before 2026-07-01T00:00:00Z \
+  --max-budget-window 30d
+```
+
+The schedule, secret injection, and role grants remain deployment-owned;
+keeping them outside the worker prevents a runtime credential from acquiring
+cleanup privileges.
 
 ## Retention passes
 
