@@ -6,6 +6,26 @@ run the maintenance adapter with `llmtw_maintenance`, which is granted the
 destructive privileges needed for cleanup while runtime remains append-only
 for checkpoints, provider state, and control history.
 
+## One-shot retention run
+
+`postgres.MaintenanceRepository.RunRetentionBatch` is the bounded one-shot
+orchestration entry point for a maintenance-role adapter. The caller supplies
+one explicit UTC `Now`, a positive `Limit` no greater than 10,000, every
+resource cutoff, and the largest configured budget window. It runs the passes
+in this order: cache, provider status, inventory, query executions, terminal
+operations, budget buckets, then checkpoints. Each pass is represented in the
+returned result with its resource name, bounded row counts, and error. The
+runner stops at the first pass error or context cancellation; it never reports
+later passes as successful. The repository's existing `MaintenanceObserver`
+hooks emit the per-pass progress, failure, and latency metrics.
+
+The worker CLI intentionally does not open a maintenance-role connection. A
+deployment-owned `llmtw-maintenance retention-once` wrapper should parse the
+UTC `--now`, `--limit`, seven cutoff flags, and `--max-budget-window`, build a
+maintenance-role pool, call this method once, emit the returned pass result,
+and exit non-zero when it returns an error. Keeping that adapter outside the
+worker prevents a runtime credential from acquiring cleanup privileges.
+
 ## Retention passes
 
 `golang/maintenance` exposes a storage-neutral `RetentionPolicy` and
