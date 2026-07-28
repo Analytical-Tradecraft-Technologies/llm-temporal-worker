@@ -176,6 +176,27 @@ func TestProductionFactoryV1RuntimeBuilderFailureClosesSnapshotClients(t *testin
 	}
 }
 
+func TestProductionFactoryRejectsTypedNilV1RuntimeAndClosesSnapshotClients(t *testing.T) {
+	closed := false
+	var runtime *testV1Runtime
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
+			return runtime, nil
+		},
+	}}
+	clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
+	_, _, err := factory.attachV1Runtime(context.Background(), &config.Snapshot{}, testEngine{}, clients)
+	if err == nil || !strings.Contains(err.Error(), "nil runtime") {
+		t.Fatalf("attachV1Runtime() error = %v, want typed-nil runtime rejection", err)
+	}
+	if !closed {
+		t.Fatal("typed-nil runtime rejection did not close snapshot clients")
+	}
+	if clients.v1Runtime != nil {
+		t.Fatalf("typed-nil runtime was attached: %T", clients.v1Runtime)
+	}
+}
+
 func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
 	namespace, err := postgresstore.NewNamespace("worker", "state", "tenant_")
 	if err != nil {

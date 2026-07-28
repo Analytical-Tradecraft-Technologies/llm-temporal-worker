@@ -42,6 +42,11 @@ unknown environments fail closed before Temporal polling when the seam is
 absent. The development Compose profile may omit the v1 registrations because
 it is a configuration/readiness fixture only.
 
+The factory also rejects a builder result that is a typed-nil `V1Runtime`
+interface. Snapshot-owned clients are drained before returning the composition
+error, so an incomplete custom builder cannot register Activities that would
+panic when invoked.
+
 The future durable implementation may be supplied in either of two equivalent
 ways:
 
@@ -86,4 +91,3 @@ unconfigured v1 operation is non-dispatched and redacted.
   pre-release tests.
 - The remaining work is implementation and protected integration evidence for
   the durable v1 runtime; this ADR does not authorize provider dispatch.
-
