@@ -24,6 +24,11 @@ import (
 
 const defaultConfigPath = "/etc/llmtw/config.yaml"
 
+// Keep the command's file read bounded independently of config.Load so an
+// operator-controlled path cannot cause an unbounded allocation before the
+// configuration validator sees the input.
+const maxConfigBytes = 4 << 20
+
 type commandOptions struct {
 	ConfigPath  string
 	Now         time.Time
@@ -63,7 +68,7 @@ func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup l
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(options.ConfigPath)
+	data, err := readConfig(options.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("read configuration: %w", err)
 	}
@@ -117,6 +122,22 @@ func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup l
 		return err
 	}
 	return nil
+}
+
+func readConfig(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxConfigBytes {
+		return nil, fmt.Errorf("configuration exceeds %d bytes", maxConfigBytes)
+	}
+	return data, nil
 }
 
 func requiredSecret(lookup lookupEnv, name string) (string, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,22 @@ func TestRequiredSecret(t *testing.T) {
 		if _, err := requiredSecret(lookup, name); err == nil {
 			t.Fatalf("requiredSecret(%q) unexpectedly succeeded", name)
 		}
+	}
+}
+
+func TestReadConfigRejectsOversizedInput(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	if _, err := file.WriteString(strings.Repeat("x", maxConfigBytes+1)); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := readConfig(file.Name()); err == nil {
+		t.Fatal("readConfig() unexpectedly accepted oversized input")
 	}
 }
 
