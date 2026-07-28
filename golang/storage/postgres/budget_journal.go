@@ -97,8 +97,7 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 	if err := repository.validate(); err != nil {
 		return result, err
 	}
-	eventID, generationID, operationID, windowID, err := parseJournalUUIDs(input)
-	if err != nil {
+	if _, _, _, _, err := parseJournalUUIDs(input); err != nil {
 		return result, err
 	}
 	journalTable, err := repository.Namespace.Render("budget_journal_events")
@@ -110,6 +109,34 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 		return result, err
 	}
 	reservationTable, err := repository.Namespace.Render("operation_budget_reservations")
+	if err != nil {
+		return result, err
+	}
+	now := input.occurredAt
+	if repository.Now != nil {
+		now = repository.Now()
+	}
+	relations := journalRelations{journal: journalTable, buckets: bucketTable, reservations: reservationTable}
+	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		result, err = repository.appendTx(ctx, tx, input, relations, now)
+		return err
+	})
+	if err != nil {
+		return JournalRecord{}, err
+	}
+	return result, nil
+}
+
+type journalRelations struct {
+	journal, buckets, reservations string
+}
+
+// appendTx appends one journal event and updates its projections. The caller
+// owns the transaction so a higher-level operation (such as exact unknown-cost
+// reconciliation) can update its operation row atomically with all events.
+func (repository *BudgetJournalRepository) appendTx(ctx context.Context, tx pgx.Tx, input journalInput, relations journalRelations, now time.Time) (result JournalRecord, err error) {
+	eventID, generationID, operationID, windowID, err := parseJournalUUIDs(input)
 	if err != nil {
 		return result, err
 	}
@@ -137,60 +164,46 @@ func (repository *BudgetJournalRepository) append(ctx context.Context, input jou
 		}
 	}
 	unknownReason := nullableReason(input.unknownReason)
-	now := input.occurredAt
-	if repository.Now != nil {
-		now = repository.Now()
+	var inserted bool
+	insertErr := tx.QueryRow(ctx, journalAppendSQL(relations.journal),
+		eventID, generationID, operationID, windowID, input.bucketStart.UTC(), input.revision, string(input.kind),
+		reservedIncrease, reservedDecrease, accountedIncrease, accountedDecrease, actual, string(input.costStatus), unknownReason, input.occurredAt.UTC()).Scan(&result.JournalID, &result.EventID, &inserted)
+	if errors.Is(insertErr, pgx.ErrNoRows) {
+		return result, ErrBudgetJournalConflict
 	}
-	err = WithTransaction(ctx, repository.Pool, func(ctx context.Context, tx pgx.Tx) error {
-		var inserted bool
-		insertErr := tx.QueryRow(ctx, journalAppendSQL(journalTable),
-			eventID, generationID, operationID, windowID, input.bucketStart.UTC(), input.revision, string(input.kind),
-			reservedIncrease, reservedDecrease, accountedIncrease, accountedDecrease, actual, string(input.costStatus), unknownReason, input.occurredAt.UTC()).Scan(&result.JournalID, &result.EventID, &inserted)
-		if errors.Is(insertErr, pgx.ErrNoRows) {
-			return ErrBudgetJournalConflict
-		}
-		// The event identity is also independently unique. A retry that reuses
-		// an event ID with a different operation/window/revision therefore hits
-		// that constraint before the composite idempotency target. Normalize both
-		// unique-constraint paths to the same safe conflict sentinel.
-		if isPostgresUniqueViolation(insertErr) {
-			return ErrBudgetJournalConflict
-		}
-		if insertErr != nil {
-			return redactPostgresError(fmt.Errorf("append budget journal event: %w", insertErr))
-		}
-		result.Existing = !inserted
-		if result.Existing {
-			return nil
-		}
-		if _, err := tx.Exec(ctx, budgetBucketUpsertSQL(bucketTable),
-			windowID, input.bucketStart.UTC(), reservedIncrease, accountedIncrease, result.JournalID, reservedDecrease, accountedDecrease); err != nil {
-			return redactPostgresError(fmt.Errorf("update budget bucket projection: %w", err))
-		}
-		if input.reserve {
-			tag, err := tx.Exec(ctx, reservationAppendSQL(reservationTable),
-				operationID, windowID, input.bucketStart.UTC(), reservedIncrease, input.revision, result.JournalID, now.UTC())
-			if err != nil {
-				return redactPostgresError(fmt.Errorf("insert budget reservation projection: %w", err))
-			}
-			if tag.RowsAffected() != 1 {
-				return ErrBudgetJournalConflict
-			}
-			return nil
-		}
-		state, basis, finalizedAt := completionProjection(input)
-		tag, err := tx.Exec(ctx, reservationCompletionSQL(reservationTable, input.kind),
-			operationID, windowID, state, actual, string(input.costStatus), unknownReason, journalCharge(input), basis, input.revision, result.JournalID, finalizedAt)
+	if isPostgresUniqueViolation(insertErr) {
+		return result, ErrBudgetJournalConflict
+	}
+	if insertErr != nil {
+		return result, redactPostgresError(fmt.Errorf("append budget journal event: %w", insertErr))
+	}
+	result.Existing = !inserted
+	if result.Existing {
+		return result, nil
+	}
+	if _, err := tx.Exec(ctx, budgetBucketUpsertSQL(relations.buckets),
+		windowID, input.bucketStart.UTC(), reservedIncrease, accountedIncrease, result.JournalID, reservedDecrease, accountedDecrease); err != nil {
+		return result, redactPostgresError(fmt.Errorf("update budget bucket projection: %w", err))
+	}
+	if input.reserve {
+		tag, err := tx.Exec(ctx, reservationAppendSQL(relations.reservations),
+			operationID, windowID, input.bucketStart.UTC(), reservedIncrease, input.revision, result.JournalID, now.UTC())
 		if err != nil {
-			return redactPostgresError(fmt.Errorf("update budget reservation projection: %w", err))
+			return result, redactPostgresError(fmt.Errorf("insert budget reservation projection: %w", err))
 		}
 		if tag.RowsAffected() != 1 {
-			return ErrBudgetJournalMissingReservation
+			return result, ErrBudgetJournalConflict
 		}
-		return nil
-	})
+		return result, nil
+	}
+	state, basis, finalizedAt := completionProjection(input)
+	tag, err := tx.Exec(ctx, reservationCompletionSQL(relations.reservations, input.kind),
+		operationID, windowID, state, actual, string(input.costStatus), unknownReason, journalCharge(input), basis, input.revision, result.JournalID, finalizedAt)
 	if err != nil {
-		return JournalRecord{}, err
+		return result, redactPostgresError(fmt.Errorf("update budget reservation projection: %w", err))
+	}
+	if tag.RowsAffected() != 1 {
+		return result, ErrBudgetJournalMissingReservation
 	}
 	return result, nil
 }

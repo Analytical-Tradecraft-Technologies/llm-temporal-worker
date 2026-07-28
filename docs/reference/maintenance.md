@@ -69,12 +69,19 @@ credentials are not exposed. The cursor is `(completed_at, operation_id)` in
 descending order and is bounded to 10,000 rows, matching the scoped
 `operations_unknown_cost_idx` contract.
 
-This queue does not resolve a cost and does not call a provider, Redis, or an
-external billing system. A future authorized billing adapter must validate its
-own evidence and perform the operation update, journal revision,
-reservation/bucket projection update, and Redis reconciliation through a
-single fenced protocol. Until that capability exists, unknown-cost rows remain
-conservatively retained and must never be changed to zero.
+This queue does not call a provider, Redis, or an external billing system. An
+authorized billing adapter can pass validated exact USD events to
+`postgres.BudgetJournalRepository.ResolveUnknownExact`. That bounded
+transaction locks the terminal operation, appends every supplied
+`resolve_unknown_exact` revision, updates the reservation and bucket
+projections, and changes the operation from unknown to exact together. A
+retry with the same event payload is idempotent; a changed amount, operation,
+or event identity fails closed. The method does not reconcile Redis: callers
+must do that only after commit through the fenced Redis-generation protocol,
+and must retain the conservative bound if reconciliation fails. Provider
+credentials and raw billing payloads are outside this contract. Until an
+authorized adapter supplies evidence, unknown-cost rows remain conservatively
+retained and must never be changed to zero.
 
 The PostgreSQL adapter also exposes `PruneExpiredBudgetBuckets`. This is a
 narrow budget-retention fence, not full budget or operation retention: callers
