@@ -8,7 +8,13 @@ module Cache_policy = Llm_temporal_conversation.Cache_policy
 
 let make ~operation_key ~context ~model ?(settings = Settings.default) ?cache ~input () =
   let conversation = Llm_temporal_conversation.root ~context ~model ~settings () in
-  Llm_temporal_conversation.to_request ?cache ~operation_key ~append:input conversation
+  let request =
+    Llm_temporal_conversation.to_request ?cache ~operation_key ~append:input conversation
+  in
+  match Llm_temporal_conversation.validate_cache_temperature
+          request.cache request.settings_patch with
+  | Ok () -> request
+  | Error message -> invalid_arg message
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
@@ -22,16 +28,20 @@ let operation_key_mismatch ~expected ~actual =
                 (Operation_key.to_string expected)
                 (Operation_key.to_string actual))
 
-let invoke_with ?task_queue ~dispatch request =
-  match Llm_temporal_invocation.invoke_generate_once ?task_queue ~dispatch request with
-  | Error error -> Error error
-  | Ok response when
-      not (String.equal
-             (Operation_key.to_string response.operation_key)
-             (Operation_key.to_string request.operation_key)) ->
-      Error (operation_key_mismatch ~expected:request.operation_key
-               ~actual:response.operation_key)
-  | Ok response -> Ok response
+let invoke_with ?task_queue ~dispatch (request : request) =
+  match Llm_temporal_conversation.validate_cache_temperature
+          request.cache request.settings_patch with
+  | Error message -> Error (Temporal.Error.codec ~message)
+  | Ok () ->
+      match Llm_temporal_invocation.invoke_generate_once ?task_queue ~dispatch request with
+      | Error error -> Error error
+      | Ok response when
+          not (String.equal
+                 (Operation_key.to_string response.operation_key)
+                 (Operation_key.to_string request.operation_key)) ->
+          Error (operation_key_mismatch ~expected:request.operation_key
+                   ~actual:response.operation_key)
+      | Ok response -> Ok response
 
 let invoke_dispatch ?task_queue activity request =
   Temporal.Activity.execute

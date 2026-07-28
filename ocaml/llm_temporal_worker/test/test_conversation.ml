@@ -66,6 +66,19 @@ let () =
     let handle = checkpoint (Operation_key.to_string request.operation_key ^ "-checkpoint") in
     Ok (response request ~kind:Generation_checkpoint ~handle)
   in
+  let zero_root = Conversation.root ~context ~model
+      ~settings:(Conversation.Settings.make
+        ~temperature:(expect_valid (Usd_decimal.of_string "0")) ()) ()
+  in
+  let calls_before_zero = List.length !calls in
+  (match Conversation.respond_with ~dispatch ~cache
+      ~operation_key:(operation_key "zero-variant") ~append:[] zero_root with
+   | Error error when String.equal (Temporal.Error.message error)
+       "positive cache variant requires an explicitly positive temperature" -> ()
+   | Error error -> failf "unexpected zero-temperature cache error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "positive cache variant accepted explicit zero temperature");
+  if List.length !calls <> calls_before_zero then
+    failwith "zero-temperature cache validation dispatched an Activity";
   let branch_a = expect_ok (Conversation.respond_with
       ~task_queue:(Temporal_task_queue.of_string "conversation-queue") ~dispatch
       ~cache ~operation_key:(operation_key "a") ~append:[ message "A" ] parent) in
