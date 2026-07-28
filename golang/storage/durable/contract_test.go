@@ -39,6 +39,140 @@ func TestStateIdentityRejectsUnboundSnapshot(t *testing.T) {
 	}
 }
 
+func TestCompositionValidateRejectsTypedNilCapabilities(t *testing.T) {
+	cases := []struct {
+		name string
+		set  func(*Composition)
+	}{
+		{
+			name: "operations",
+			set: func(composition *Composition) {
+				var value *typedNilAdmissionStore
+				composition.Operations = value
+			},
+		},
+		{
+			name: "continuations",
+			set: func(composition *Composition) {
+				var value *typedNilContinuationStore
+				composition.Continuations = value
+			},
+		},
+		{
+			name: "results",
+			set: func(composition *Composition) {
+				var value *typedNilResultStore
+				composition.Results = value
+			},
+		},
+		{
+			name: "journal",
+			set: func(composition *Composition) {
+				var value *typedNilJournal
+				composition.Journal = value
+			},
+		},
+		{
+			name: "materializer",
+			set: func(composition *Composition) {
+				var value *typedNilMaterializer
+				composition.Materializer = value
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			composition := validComposition()
+			tc.set(&composition)
+			if err := composition.Validate(); err == nil {
+				t.Fatal("typed-nil capability passed composition validation")
+			}
+		})
+	}
+}
+
+func TestCompositionValidateAcceptsCompleteCapabilities(t *testing.T) {
+	if err := validComposition().Validate(); err != nil {
+		t.Fatalf("complete composition rejected: %v", err)
+	}
+}
+
+func validComposition() Composition {
+	return Composition{
+		Identity:      validIdentity(),
+		Operations:    compositionAdmissionStub{},
+		Continuations: compositionContinuationStub{},
+		Results:       compositionResultStub{},
+		Journal:       compositionJournalStub{},
+		Materializer:  compositionMaterializerStub{},
+	}
+}
+
+// Embedding the interface in these pointer types gives the test a typed nil
+// implementation without needing to invoke any of its methods.
+type typedNilAdmissionStore struct{ admission.AdmissionStore }
+type typedNilContinuationStore struct{ state.ContinuationStore }
+type typedNilResultStore struct{ ResultStore }
+type typedNilJournal struct{ Journal }
+type typedNilMaterializer struct{ BudgetMaterializer }
+
+type compositionAdmissionStub struct{}
+
+func (compositionAdmissionStub) Begin(context.Context, admission.BeginRequest) (admission.BeginResult, error) {
+	return admission.BeginResult{}, nil
+}
+func (compositionAdmissionStub) MarkDispatching(context.Context, admission.DispatchRequest) error {
+	return nil
+}
+func (compositionAdmissionStub) Continue(context.Context, admission.ContinueRequest) (admission.ContinueResult, error) {
+	return admission.ContinueResult{}, nil
+}
+func (compositionAdmissionStub) Complete(context.Context, admission.CompleteRequest) error {
+	return nil
+}
+func (compositionAdmissionStub) Fail(context.Context, admission.FailRequest) error { return nil }
+func (compositionAdmissionStub) Get(context.Context, string) (admission.Operation, error) {
+	return admission.Operation{}, nil
+}
+
+type compositionContinuationStub struct{}
+
+func (compositionContinuationStub) Get(context.Context, state.Handle) (state.Continuation, error) {
+	return state.Continuation{}, nil
+}
+func (compositionContinuationStub) GetForTenant(context.Context, string, state.Handle) (state.Continuation, error) {
+	return state.Continuation{}, nil
+}
+func (compositionContinuationStub) PutChild(context.Context, state.PutChildRequest) (state.Handle, error) {
+	return "", nil
+}
+
+type compositionResultStub struct{}
+
+func (compositionResultStub) Get(context.Context, string) (llm.Response, error) {
+	return llm.Response{}, nil
+}
+func (compositionResultStub) Put(context.Context, string, llm.Response) (state.BlobRef, error) {
+	return state.BlobRef{}, nil
+}
+
+type compositionJournalStub struct{}
+
+func (compositionJournalStub) AppendReservation(context.Context, budget.ReservationEvent) (postgresstore.JournalRecord, error) {
+	return postgresstore.JournalRecord{}, nil
+}
+func (compositionJournalStub) AppendCompletion(context.Context, budget.CompletionEvent) (postgresstore.JournalRecord, error) {
+	return postgresstore.JournalRecord{}, nil
+}
+
+type compositionMaterializerStub struct{}
+
+func (compositionMaterializerStub) Accept(context.Context, ReserveRequest) (ReserveResult, error) {
+	return ReserveResult{}, nil
+}
+func (compositionMaterializerStub) Reconcile(context.Context, ReconcileRequest) error { return nil }
+
 func TestReserveResultRequiresJournalEventsAfterAcceptance(t *testing.T) {
 	request := ReserveRequest{
 		OperationID:  OperationID("op-1"),

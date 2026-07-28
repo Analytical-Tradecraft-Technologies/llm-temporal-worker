@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -44,26 +43,13 @@ func (boundary BudgetBoundary) Validate() error {
 	if err := boundary.Identity.Validate(); err != nil {
 		return fmt.Errorf("%w: identity: %v", ErrBudgetBoundaryInvalid, err)
 	}
-	if isNilBudgetPort(boundary.Materializer) {
+	if isNilPort(boundary.Materializer) {
 		return fmt.Errorf("%w: Redis budget materializer is required", ErrBudgetBoundaryInvalid)
 	}
-	if isNilBudgetPort(boundary.Journal) {
+	if isNilPort(boundary.Journal) {
 		return fmt.Errorf("%w: PostgreSQL budget journal is required", ErrBudgetBoundaryInvalid)
 	}
 	return nil
-}
-
-func isNilBudgetPort(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }
 
 // BudgetReservation contains the Redis decision and the PostgreSQL records

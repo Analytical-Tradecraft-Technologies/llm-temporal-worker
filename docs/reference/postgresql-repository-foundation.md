@@ -25,6 +25,10 @@ Task 19 still has to sequence Redis acceptance, the PostgreSQL journal write,
 and provider dispatch in the runtime, and must implement the guarded
 dependency/readiness, generation recovery, and cross-store crash-boundary
 proofs before this composition can be enabled for paid production work.
+When a `durable.Composition` is assembled, validation is fail-closed: missing
+capabilities and interfaces containing typed-nil pointers are rejected before
+any Redis or PostgreSQL side effect. This guard does not itself enable the
+runtime composition; the sequencing and recovery work above remains required.
 
 ## Connection and transaction boundary
 
