@@ -99,8 +99,14 @@ func TestBudgetCompletionProjectionGuardsStateAndRevision(t *testing.T) {
 		}
 	}
 	resolve := reservationCompletionSQL(`"llm_worker"."operation_budget_reservations"`, budget.JournalResolveUnknownExact)
-	if !strings.Contains(resolve, "'retained_ambiguous'") {
-		t.Fatalf("unknown-cost resolution does not allow retained ambiguous state: %s", resolve)
+	for _, required := range []string{
+		"'retained_ambiguous'",
+		"'finalized'",
+		"state <> 'finalized' OR actual_cost_status = 'unknown'",
+	} {
+		if !strings.Contains(resolve, required) {
+			t.Fatalf("unknown-cost resolution missing state fence %q: %s", required, resolve)
+		}
 	}
 }
 

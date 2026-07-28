@@ -261,12 +261,21 @@ func reservationAppendSQL(reservationTable string) string {
 func reservationCompletionSQL(reservationTable string, kind budget.JournalEventKind) string {
 	allowedStates := "'reserved'"
 	if kind == budget.JournalResolveUnknownExact {
-		allowedStates = "'reserved', 'retained_ambiguous'"
+		// JournalFinalizeUnknown leaves a reservation finalized while retaining
+		// its conservative bound.  It is still eligible for one authoritative
+		// exact-cost resolution.  Keep finalized exact rows fenced so a new
+		// resolve revision cannot rewrite an already-settled reservation; an
+		// idempotent replay returns before this projection update is reached.
+		allowedStates = "'reserved', 'retained_ambiguous', 'finalized'"
+	}
+	stateFence := "state IN (" + allowedStates + ")"
+	if kind == budget.JournalResolveUnknownExact {
+		stateFence += " AND (state <> 'finalized' OR actual_cost_status = 'unknown')"
 	}
 	return "UPDATE " + reservationTable + " SET state=$3, actual_cost_usd=$4, actual_cost_status=$5," +
 		" actual_cost_unknown_reason_code=$6, budget_charge_usd=CASE WHEN $7::numeric IS NULL THEN reserved_cost_usd ELSE $7::numeric END, budget_charge_basis=$8," +
 		" reservation_revision=$9, last_journal_id=$10, finalized_at=$11" +
-		" WHERE operation_id=$1 AND window_id=$2 AND reservation_revision < $9 AND state IN (" + allowedStates + ")"
+		" WHERE operation_id=$1 AND window_id=$2 AND reservation_revision < $9 AND " + stateFence
 }
 
 func parseJournalUUIDs(input journalInput) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, error) {
