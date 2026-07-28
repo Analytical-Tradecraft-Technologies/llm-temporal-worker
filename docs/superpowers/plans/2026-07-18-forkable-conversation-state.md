@@ -744,9 +744,12 @@ status/inventory projections have offline and opt-in database coverage. This
 does not complete Task 13. No production provider profile currently
 implements `provider.ModelLister`; management refresh therefore remains an
 explicit deployment-owned adapter, and `configured_only` or `unsupported`
-inventory is the honest state until one is supplied. Runtime status recording,
-protected provider credentials, and durable composition that binds those
-adapters to a live query Activity remain follow-up work. Keep the original
+inventory is the honest state until one is supplied. Runtime status recording
+is now wired through the snapshot-scoped `ProviderStatusRecorder` and same-pool
+PostgreSQL repository. The complete durable v1 builder is also landed, but its
+per-snapshot phase factories remain deployment-owned. Provider management
+adapters, protected provider credentials/evidence, and query Activity
+authorization/key/audit composition remain follow-up work. Keep the original
 checklist below unchecked until those deployment and protected-evidence gates
 are proven.
 
@@ -842,8 +845,10 @@ see [ADR 0010](../../decisions/0010-durable-v1-runtime-composition.md) and
 [ADR 0012](../../decisions/0012-snapshot-scoped-v1-runtime-source.md). The
 Storage-neutral Generate and Compact phase runners are recorded in [ADR
 0011](../../decisions/0011-durable-generate-phase-runner.md) and [ADR
-0013](../../decisions/0013-durable-compact-phase-runner.md). The concrete
-durable implementation and protected integration evidence remain pending.
+0013](../../decisions/0013-durable-compact-phase-runner.md). The complete
+`NewDurableV1RuntimeBuilder` now validates and composes both phase runners from
+one snapshot, while the deployment-owned per-snapshot phase factories and
+protected integration evidence remain pending.
 
 **Files:**
 
