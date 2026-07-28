@@ -170,7 +170,7 @@ func (port *MemoryBudgetGenerationPort) ActiveGeneration(ctx context.Context) (A
 	port.mu.RLock()
 	defer port.mu.RUnlock()
 	if port.active.GenerationID == "" {
-		return ActiveBudgetGeneration{}, ErrBudgetManifestInvalid
+		return ActiveBudgetGeneration{}, fmt.Errorf("%w: %w", ErrBudgetManifestInvalid, ErrBudgetActiveGenerationMissing)
 	}
 	return port.active, nil
 }

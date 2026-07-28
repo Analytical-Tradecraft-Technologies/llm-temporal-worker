@@ -11,6 +11,14 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 )
 
+// ErrBudgetActiveGenerationMissing distinguishes an intentionally empty
+// dataset from a malformed pointer while preserving ErrBudgetManifestInvalid
+// for callers that only need the fail-closed umbrella error.
+var (
+	ErrBudgetActiveGenerationMissing   = errors.New("active budget generation is missing")
+	ErrBudgetActiveGenerationMalformed = errors.New("active budget generation is malformed")
+)
+
 // ErrBudgetStreamInvalid indicates that Redis returned a malformed or
 // unverifiable coordination record. Stream hints are never authorization
 // state, but accepting a malformed record could poison local readiness hints.
@@ -79,7 +87,7 @@ func (port *RedisBudgetGenerationPort) ActiveGeneration(ctx context.Context) (Ac
 	}
 	raw, err := port.client.Get(ctx, port.keys.ActiveGenerationKey()).Result()
 	if errors.Is(err, redisclient.Nil) {
-		return ActiveBudgetGeneration{}, fmt.Errorf("%w: active generation is missing", ErrBudgetManifestInvalid)
+		return ActiveBudgetGeneration{}, fmt.Errorf("%w: %w", ErrBudgetManifestInvalid, ErrBudgetActiveGenerationMissing)
 	}
 	if err != nil {
 		return ActiveBudgetGeneration{}, fmt.Errorf("read active budget generation: %w", err)
@@ -172,14 +180,14 @@ func validateActiveBudgetGeneration(pointer ActiveBudgetGeneration) error {
 
 func decodeActiveBudgetGeneration(raw string) (ActiveBudgetGeneration, error) {
 	if len(raw) == 0 || len(raw) > maxActiveBudgetGenerationBytes {
-		return ActiveBudgetGeneration{}, fmt.Errorf("%w: active pointer is oversized or empty", ErrBudgetManifestInvalid)
+		return ActiveBudgetGeneration{}, fmt.Errorf("%w: %w: active pointer is oversized or empty", ErrBudgetManifestInvalid, ErrBudgetActiveGenerationMalformed)
 	}
 	var pointer ActiveBudgetGeneration
 	if err := json.Unmarshal([]byte(raw), &pointer); err != nil {
-		return ActiveBudgetGeneration{}, fmt.Errorf("%w: decode active pointer: %v", ErrBudgetManifestInvalid, err)
+		return ActiveBudgetGeneration{}, fmt.Errorf("%w: %w: decode active pointer: %v", ErrBudgetManifestInvalid, ErrBudgetActiveGenerationMalformed, err)
 	}
 	if err := validateActiveBudgetGeneration(pointer); err != nil {
-		return ActiveBudgetGeneration{}, err
+		return ActiveBudgetGeneration{}, fmt.Errorf("%w: %w", err, ErrBudgetActiveGenerationMalformed)
 	}
 	return pointer, nil
 }

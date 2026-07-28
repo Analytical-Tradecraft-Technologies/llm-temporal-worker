@@ -31,6 +31,15 @@ subject to the procedures below. The event adapter and tailer intentionally
 never trim the Stream: a separate retention coordinator must use the minimum
 non-expired worker cursor plus a configured safety margin.
 
+The package now also contains a storage-neutral
+`BudgetBootstrapCoordinator`. It attempts Redis-only adoption first, requires a
+complete working-set proof, blocks same-incarnation loss, and permits a
+PostgreSQL-backed candidate only after an explicit cold-start or verified-new-
+incarnation fleet proof and a non-empty bootstrap fence. Its
+`PublishAndSwitch` boundary is intentionally deployment-owned: until a Redis
+Function atomically commits the candidate, pointer, and generation-switch
+event, the coordinator is not wired into paid-work readiness.
+
 `BudgetWorkerLeaseStore` now provides the worker-side lease/roster boundary.
 Each process constructs one store, which generates a random session ID once
 and reuses it across Redis reconnects. `Register` writes the generation and
