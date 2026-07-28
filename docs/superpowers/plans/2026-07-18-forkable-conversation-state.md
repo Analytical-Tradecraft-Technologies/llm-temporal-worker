@@ -795,6 +795,9 @@ manifest member/limit catalog, and have no bounded operation index. The
 versioned Redis window/operation schema and bounded reader required before
 this query can be enabled are defined in the
 [persisted-query budget-status contract](../../reference/persisted-query-service.md#versioned-budget-status-reader-contract).
+That contract also requires a coherent server-side member/Stream read with a
+bounded expiry drain and preserves current-only `budget_history_not_available`
+semantics for historical instants.
 
 **Files:**
 

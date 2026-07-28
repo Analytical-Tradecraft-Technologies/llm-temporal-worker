@@ -129,15 +129,34 @@ contract:
    contents are validated with the manifest). The catalog count and digest are
    checked before adoption. A manifest that cannot derive every expected
    member key and limit is incomplete, even if all observed hashes are valid.
-5. **Bounded HMGET read.** A reader first validates the active pointer and
+5. **Bounded, coherent read.** A reader first validates the active pointer and
    immutable manifest, then rejects an instant outside the manifest coverage.
-   It derives the bounded member list from that manifest and performs bounded
-   `HMGET` reads for the fixed field set; it must not use `HSCAN`, `HGETALL`, or
-   an unbounded operation lookup on the query path. Missing members/fields,
-   duplicate catalog entries, wrong schema or generation, malformed integers,
-   digest/provenance mismatches, and `reserved + accounted > limit` all fail
-   closed. The response cites the generation, manifest digest, and Redis
-   Stream high-water mark and is never completed from PostgreSQL budget rows.
+   One server-side Redis Function/Lua invocation must perform the bounded
+   expiry drain, read every catalog member's fixed field set (using bounded
+   `HMGET` operations), and capture the Stream high-water mark. A version-
+   fenced read/retry is an equivalent alternative only when it proves that
+   every member and the high-water mark came from one generation; independent
+   client-side `HMGET` commands are not sufficient. The invocation must not
+   use `HSCAN`, `HGETALL`, or an unbounded operation lookup on the query path.
+   Missing members/fields, duplicate catalog entries, wrong schema or
+   generation, malformed integers, digest/provenance mismatches, and
+   `reserved + accounted > limit` all fail closed. The response cites the
+   generation, manifest digest, and captured Stream high-water mark and is
+   never completed from PostgreSQL budget rows.
+
+   Expiry must be current before those values are returned. The same
+   invocation performs a bounded atomic expiry drain, or a freshness-verified
+   sweeper performs that drain immediately before the read. If the sweeper is
+   behind its freshness bound, cannot prove the drain completed, or encounters
+   an ambiguous expiry record, the reader fails closed rather than reporting a
+   stale reservation.
+
+   The query is current-only. A requested `active_at` older than the current
+   snapshot instant (or any historical instant that is merely inside the
+   coverage interval) returns the typed `budget_history_not_available` error;
+   coverage membership is not a time-travel guarantee. The current snapshot
+   instant, generation, manifest digest, and Stream high-water mark must all
+   be captured and validated by the same coherent read.
 
 Migration is an explicit, fenced operation. A v1/legacy active pointer keeps
 `budget_status` unavailable; there is no in-place reinterpretation, automatic
