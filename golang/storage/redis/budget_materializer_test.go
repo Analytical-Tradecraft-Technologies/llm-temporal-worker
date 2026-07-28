@@ -174,6 +174,13 @@ func TestRedisBudgetMaterializerReconcileDuplicateEventIsIdempotent(t *testing.T
 	if invoker.calls != 2 || invoker.args[0][0] != "durable_reconcile" {
 		t.Fatalf("reconcile invocations = %#v", invoker.args)
 	}
+	var materializedEvents []durableEvent
+	if err := json.Unmarshal([]byte(invoker.args[0][4]), &materializedEvents); err != nil {
+		t.Fatalf("materialized completion payload = %v", err)
+	}
+	if len(materializedEvents) != 1 || materializedEvents[0].ReservationRevision != 2 {
+		t.Fatalf("materialized completion revision = %#v, want 2", materializedEvents)
+	}
 }
 
 func TestRedisBudgetMaterializerTimeoutAfterMutationFailsClosed(t *testing.T) {

@@ -72,7 +72,7 @@ func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
 	completion := budget.CompletionEvent{
 		EventID: "durable-completion-1", GenerationID: string(request.GenerationID),
 		OperationID: string(request.OperationID), WindowID: reservationEvent.WindowID,
-		BucketStart: reservationEvent.BucketStart, ReservationRevision: reservationEvent.ReservationRevision,
+		BucketStart: reservationEvent.BucketStart, ReservationRevision: reservationEvent.ReservationRevision + 1,
 		Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: reservationEvent.AmountUSD,
 		AccountedIncreaseUSD: reservationEvent.AmountUSD, ActualCostUSD: ptrUSD(reservationEvent.AmountUSD),
 		CostStatus: budget.CostExact, OccurredAt: now,
