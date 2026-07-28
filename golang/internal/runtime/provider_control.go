@@ -182,6 +182,11 @@ type V1RuntimeCapabilities struct {
 	// adapters and stores represented by this capability bundle; a nil value is
 	// deliberately unconfigured and never falls back to the legacy engine.
 	GeneratePortsFactory GeneratePortsFactory
+	// CompactPortsFactory is the corresponding constructor for the durable
+	// one-shot Compact phase. It is a contract-only capability for now: the
+	// production builder must not expose Compact until a deployment supplies
+	// every callback behind this factory.
+	CompactPortsFactory CompactPortsFactory
 }
 
 // GeneratePortsFactory constructs the complete durable Generate port set for
@@ -190,6 +195,12 @@ type V1RuntimeCapabilities struct {
 // must return ports backed by the supplied snapshot-owned capabilities; they
 // must not create process-global clients or fabricate a missing phase.
 type GeneratePortsFactory func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error)
+
+// CompactPortsFactory constructs the complete durable Compact port set for
+// one immutable runtime snapshot. The factory must use only the capabilities
+// passed by value and must not create process-global clients or fabricate a
+// missing phase. A nil value keeps Compact fail-closed.
+type CompactPortsFactory func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error)
 
 // ValidateGenerate checks every capability needed before the Generate-only
 // runtime can be composed. It performs no I/O and intentionally treats a
@@ -216,6 +227,35 @@ func (capabilities V1RuntimeCapabilities) ValidateGenerate() error {
 	}
 	if capabilities.GeneratePortsFactory == nil {
 		return errors.New("v1 Generate ports factory is not configured")
+	}
+	return nil
+}
+
+// ValidateCompact checks every capability needed before a Compact-only
+// runtime can be composed. Compact has a distinct runner and accounting path;
+// this method intentionally does not imply that Generate or Query is ready,
+// and no builder calls the factory until all callback ports are implemented.
+func (capabilities V1RuntimeCapabilities) ValidateCompact() error {
+	if isNilCapability(capabilities.Snapshot) {
+		return errors.New("v1 Compact snapshot source is not configured")
+	}
+	if isNilCapability(capabilities.Planner) {
+		return errors.New("v1 Compact planner is not configured")
+	}
+	if isNilCapability(capabilities.Adapters) {
+		return errors.New("v1 Compact adapter registry is not configured")
+	}
+	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
+		return fmt.Errorf("v1 Compact checkpoint capabilities: %w", err)
+	}
+	if isNilCapability(capabilities.Journal) {
+		return errors.New("v1 Compact PostgreSQL journal is not configured")
+	}
+	if capabilities.Clock == nil {
+		return errors.New("v1 Compact clock is not configured")
+	}
+	if capabilities.CompactPortsFactory == nil {
+		return errors.New("v1 Compact ports factory is not configured")
 	}
 	return nil
 }
