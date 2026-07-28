@@ -90,7 +90,7 @@ func TestPersistedQueryProviderStatusIsAuditedAndCursorBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first query: %v", err)
 	}
-	if first.NextCursor != nil || !first.Complete || audited.Kind != llm.QueryProviderStatus || audited.ActualCostUSD == nil || *audited.ActualCostUSD != "0" {
+	if first.NextCursor != nil || !first.Complete || audited.Kind != llm.QueryProviderStatus || audited.Source != string(control.QuerySourcePersisted) || audited.ActualCostUSD == nil || *audited.ActualCostUSD != "0" {
 		t.Fatalf("unexpected first response/audit: response=%+v audit=%+v", first, audited)
 	}
 	if providerReader.lastOpts.SnapshotHorizon.IsZero() || providerReader.lastOpts.ConfigDigest == ([32]byte{}) {
@@ -135,7 +135,8 @@ func TestPersistedQueryBudgetStatusUsesRedisReaderContract(t *testing.T) {
 	}}
 	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
 	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
-	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
+	var audited control.QueryAuditRecord
+	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, Audit: func(_ context.Context, record control.QueryAuditRecord) error { audited = record; return nil }, CursorCodec: codec, Clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
 	request, err := control.EncodeQueryRequest(control.QueryRequest{
 		OperationKey: "budget-op",
 		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
@@ -156,6 +157,12 @@ func TestPersistedQueryBudgetStatusUsesRedisReaderContract(t *testing.T) {
 	result, ok := decoded.Result.(control.BudgetStatusResult)
 	if !ok || result.GenerationID != "generation-1" || len(result.Windows) != 1 || result.Windows[0].AvailableUSD != "7" {
 		t.Fatalf("unexpected budget status result: %#v", decoded.Result)
+	}
+	if decoded.Provenance.Source != control.QuerySourceRedisBudget {
+		t.Fatalf("budget status provenance source = %q, want %q", decoded.Provenance.Source, control.QuerySourceRedisBudget)
+	}
+	if audited.Source != string(control.QuerySourceRedisBudget) {
+		t.Fatalf("budget status audit source = %q, want %q", audited.Source, control.QuerySourceRedisBudget)
 	}
 	if reader.calls != 1 || !reader.activeAt.Equal(activeAt) || reader.query.PolicyKey == nil || *reader.query.PolicyKey != policy || reader.query.IncludeWindows == nil || !*reader.query.IncludeWindows {
 		t.Fatalf("reader was not bound to query/instant: calls=%d active_at=%s query=%#v", reader.calls, reader.activeAt, reader.query)
