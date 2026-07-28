@@ -49,6 +49,18 @@ with `CGO_ENABLED=0`, and runs as uid `65532` with no shell. Kubernetes mounts
 read-only root filesystem. `golang/deploy/verify.sh` renders every Kustomize example
 offline and checks these invariants before a manifest is reviewed.
 
+## Local durable composition
+
+The default local Compose model keeps Temporal's PostgreSQL service separate
+from worker state. The opt-in `durable` profile starts a digest-pinned
+`worker-postgres` service with its own named volume, database, and role, then
+validates `deploy/local/durable-config.yaml` while waiting for both that
+database and Redis. Redis remains the active budget/throttle dependency; the
+worker PostgreSQL namespace is reserved for authoritative operation,
+continuation, result, and control-plane state. The profile is a composition
+fixture only: schema installation is still an explicit deployment step and it
+does not start Temporal polling.
+
 ## Kubernetes base
 
 `golang/deploy/kubernetes/base` contains:
