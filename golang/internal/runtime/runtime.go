@@ -351,7 +351,11 @@ func composeRuntimeActivities(configuration config.Config, engine llm.Engine, me
 
 func isV1RuntimeConfigured(runtime activity.V1Runtime) bool {
 	switch runtime.(type) {
-	case nil, activity.UnconfiguredV1Runtime, *activity.UnconfiguredV1Runtime:
+	case nil, activity.UnconfiguredV1Runtime, *activity.UnconfiguredV1Runtime,
+		*activity.GenerateOnlyV1Runtime, *activity.CompactOnlyV1Runtime:
+		// Phase-only builders are useful for contract tests and incremental
+		// composition, but neither implements the complete production v1
+		// boundary. Do not let one advertise readiness or start polling.
 		return false
 	default:
 		return true
