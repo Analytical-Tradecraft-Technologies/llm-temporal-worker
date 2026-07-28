@@ -126,6 +126,9 @@ func directModuleVersions(path string) (map[string]string, error) {
 		if line == ")" {
 			break
 		}
+		if strings.Contains(line, "// indirect") {
+			continue
+		}
 		line = strings.TrimSpace(strings.SplitN(line, "//", 2)[0])
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
@@ -136,6 +139,24 @@ func directModuleVersions(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("go.mod has no direct require block")
 	}
 	return versions, nil
+}
+
+func TestDirectModuleVersionsIgnoresIndirectRequirements(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go.mod")
+	data := []byte("module example.test/worker\n\nrequire (\n\texample.test/direct v1.2.3\n\texample.test/indirect v4.5.6 // indirect\n)\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	versions, err := directModuleVersions(path)
+	if err != nil {
+		t.Fatalf("parse fixture go.mod: %v", err)
+	}
+	if got := versions["example.test/direct"]; got != "v1.2.3" {
+		t.Fatalf("direct module version = %q, want v1.2.3", got)
+	}
+	if _, ok := versions["example.test/indirect"]; ok {
+		t.Fatal("indirect module was included in direct version map")
+	}
 }
 
 func assertCapabilityFacts(t *testing.T, got []string) {
