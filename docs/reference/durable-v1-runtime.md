@@ -6,19 +6,26 @@ storage-neutral durable phase ports. It requires complete `GeneratePorts` and
 callback is missing. Query remains optional because deployments may bind the
 independent control-plane implementation through `Activities.QueryService`.
 
-The bounded production composition currently exposes a Generate-only builder:
-`runtime.NewGenerateV1RuntimeBuilder`. It requires the client set to expose
+The bounded production composition exposes a complete builder:
+`runtime.NewDurableV1RuntimeBuilder`. It requires the client set to expose
 `V1RuntimeCapabilitiesSource`, and then requires a complete snapshot-owned
 source, planner, adapter registry, checkpoint materializer, write-only
-PostgreSQL journal, clock, and `GeneratePortsFactory`. The factory callback
-receives the copied capability bundle and must construct every
-`durable.GeneratePorts` callback from those same immutable adapters and stores.
-No missing callback is synthesized, and the legacy `llm.Engine` is never
-adapted. A successful composition returns `activity.GenerateOnlyV1Runtime`;
-Compact and Query remain explicit configuration errors until their own real
-ports are available. The default production factory leaves
-`GeneratePortsFactory` unset, so installing this builder fails closed before
-Temporal polling.
+PostgreSQL journal, clock, and both `GeneratePortsFactory` and
+`CompactPortsFactory` callbacks. Each callback receives the same copied
+capability bundle and must construct every durable phase callback from those
+immutable adapters and stores. No missing callback is synthesized, and the
+legacy `llm.Engine` is never adapted. A successful composition returns
+`activity.DurableV1Runtime`; Query remains an independent authorization
+contract on `Activities.QueryService`.
+
+`runtime.NewGenerateV1RuntimeBuilder` and
+`runtime.NewCompactV1RuntimeBuilder` remain available for contract tests and
+phase-specific deployment assembly. They return phase-only values that the
+production readiness guard treats as unconfigured. When both phase factories
+are supplied and no explicit `V1RuntimeBuilder` is set,
+`NewProductionEngineFactory` installs `NewDurableV1RuntimeBuilder`
+automatically. A missing or partial factory set remains unconfigured and
+fails closed before Temporal polling.
 
 `runtime.NewCompactV1RuntimeBuilder` provides the corresponding contract-only
 Compact composition. It requires the same snapshot-owned capabilities plus a

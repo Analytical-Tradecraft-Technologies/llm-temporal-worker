@@ -134,7 +134,9 @@ type ProductionFactoryOptions struct {
 	AzureAPIVersions          map[string]string
 	// V1RuntimeBuilder is optional until the durable phase ports are composed.
 	// When supplied, it is invoked independently for every immutable config
-	// snapshot, including reloads.
+	// snapshot, including reloads. If both phase factories below are supplied,
+	// NewProductionEngineFactory installs the complete durable builder when
+	// this field is omitted.
 	V1RuntimeBuilder V1RuntimeBuilder
 	// GeneratePortsFactory supplies the complete snapshot-owned durable
 	// Generate phase to NewGenerateV1RuntimeBuilder. Nil intentionally leaves
@@ -293,6 +295,13 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 	}
 	if options.AnthropicAWSClientFactory == nil {
 		options.AnthropicAWSClientFactory = anthropicmessages.NewAWSGatewayClient
+	}
+	// When both durable phase factories are supplied, compose the complete
+	// Activity runtime by default. A partial or absent factory set remains
+	// unconfigured and is rejected by the production readiness guard; callers
+	// can still provide an explicit builder for an equivalent implementation.
+	if options.V1RuntimeBuilder == nil && options.GeneratePortsFactory != nil && options.CompactPortsFactory != nil {
+		options.V1RuntimeBuilder = NewDurableV1RuntimeBuilder()
 	}
 	return &ProductionEngineFactory{options: options}, nil
 }
