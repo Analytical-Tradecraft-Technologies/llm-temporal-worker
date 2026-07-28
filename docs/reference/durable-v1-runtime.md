@@ -20,6 +20,19 @@ ports are available. The default production factory leaves
 `GeneratePortsFactory` unset, so installing this builder fails closed before
 Temporal polling.
 
+`runtime.NewCompactV1RuntimeBuilder` provides the corresponding contract-only
+Compact composition. It requires the same snapshot-owned capabilities plus a
+`CompactPortsFactory` and returns `activity.CompactOnlyV1Runtime`; Generate and
+Query remain unavailable by design. This helper makes Compact validation and
+testing independent without pretending that a partial runtime is safe to
+register in production. A complete worker must compose both phase ports before
+starting Temporal polling.
+
+The runtime readiness guard treats both phase-only runtime values as
+unconfigured, so accidentally installing either builder cannot mark a
+production worker ready or start polling. Only a complete durable runtime (or
+an explicitly supplied equivalent implementation) may cross that boundary.
+
 The constructor performs only local validation. It does not construct clients,
 read PostgreSQL or Redis, resolve provider credentials, or dispatch an
 Activity. A deployment should call it from its per-snapshot runtime builder
