@@ -549,6 +549,13 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 		_ = clients.Close(context.Background())
 		return nil, nil, fmt.Errorf("construct durable v1 runtime: %w", err)
 	}
+	// An interface can hold a typed nil pointer. Treat that value as an
+	// incomplete composition and drain the snapshot-owned clients before the
+	// worker can register Activities and panic on the first invocation.
+	if isNilCapability(v1Runtime) {
+		_ = clients.Close(context.Background())
+		return nil, nil, fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid)
+	}
 	clients.v1Runtime = v1Runtime
 	return engineValue, clients, nil
 }
