@@ -3,7 +3,12 @@ open Llm_temporal_models
 val api_version : string
 val activity_name : string
 val workflow_name : string
+(* Deprecated pre-checkpoint codec. It remains exported only for source
+   compatibility and must not be paired with the production Generate
+   Activity; [invoke_once] converts its request to the canonical v1 codec. *)
 val request_codec : request Temporal.Codec.t
+(* Deprecated pre-checkpoint response codec retained for source compatibility.
+   Production callers should use [generate_v1_response_codec]. *)
 val response_codec : response Temporal.Codec.t
 val generate_activity : (generate_request, generate_response) Temporal.Activity.t
 
@@ -11,11 +16,15 @@ val generate_activity : (generate_request, generate_response) Temporal.Activity.
     attempt; Temporal does not retry a failed provider activity. *)
 val activity_retry_policy : Temporal.Activity.Retry_policy.t
 
+(** Deprecated compatibility helper.  It accepts the old [Request.make]
+    record, rejects fields which have no v1 representation, and dispatches the
+    canonical [llm.generate.v1] Activity.  The returned response is the typed
+    v1 response; use [Generate.invoke] for new code. *)
 val invoke_once :
   ?task_queue:Temporal_task_queue.t ->
-  dispatch:(?task_queue:Temporal_task_queue.t -> (request, response) Temporal.Activity.t -> request -> (response, Temporal.Error.t) result) ->
+  dispatch:(?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Activity.t -> generate_request -> (generate_response, Temporal.Error.t) result) ->
   request ->
-  (response, Temporal.Error.t) result
+  (generate_response, Temporal.Error.t) result
 
 val execute : ?task_queue:Temporal_task_queue.t -> generate_request -> (generate_response, Temporal.Error.t) result
 val workflow : ?task_queue:Temporal_task_queue.t -> unit -> (generate_request, generate_response) Temporal.Workflow.t

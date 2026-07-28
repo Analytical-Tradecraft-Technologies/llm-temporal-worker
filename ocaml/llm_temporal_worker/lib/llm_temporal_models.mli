@@ -74,6 +74,9 @@ type continuation = { handle : Continuation_handle.t; endpoint_id : Endpoint_id.
    contract. *)
 type request = { operation_key : Operation_key.t; context : request_context option; model : Model_selector.t; service_class : service_class; service_class_fallbacks : service_class list; portability : portability; instructions : instruction list; input : item list; tools : function_tool list; tool_policy : tool_policy; output : output_spec option; sampling : sampling option; reasoning : reasoning option; continuation : continuation option; extensions : (string * Yojson.Safe.t) list }
 module Request : sig
+  (** Deprecated pre-checkpoint constructor retained for source compatibility.
+      Values are accepted by [Llm_temporal.invoke_once], which validates and
+      converts them to the canonical Generate v1 envelope before dispatch. *)
   type t = request
 
   val make :
@@ -93,6 +96,7 @@ module Request : sig
     ?continuation:continuation ->
     ?extensions:(string * Yojson.Safe.t) list ->
     unit -> t
+
 end
 type route = { route_id : Route_id.t option; endpoint_id : Endpoint_id.t option; api_family : Api_family.t option; requested_model : Model_selector.t option; resolved_model : Resolved_model_id.t option }
 type service = { requested : service_class; attempted : service_class; actual : service_class option; provider_value : string option; fallback_index : int }
