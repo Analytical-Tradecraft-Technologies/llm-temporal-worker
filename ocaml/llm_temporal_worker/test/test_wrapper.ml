@@ -110,6 +110,36 @@ let response_value = {
   metadata = { operation_id = Some (operation_id "operation-42") };
 }
 
+(* The deprecated [Request]/[invoke_once] compatibility path still accepts
+   the old constructor shape, but it now dispatches this canonical v1
+   envelope.  Keep this fixture separate from [request_value], which exercises
+   the legacy codec's validation rules. *)
+let legacy_v1_request =
+  Request.make
+    ~operation_key:(operation_key "legacy-v1")
+    ~context:{ tenant = Some (tenant_id "tenant");
+               project = Some (project_id "project");
+               actor = Some (Actor_id.of_string "actor"); tags = [] }
+    ~model:(model_selector "gpt-test")
+    ~service_class:Priority
+    ~input:[ Message { actor = Human; content = [ Text "legacy v1" ] } ]
+    ()
+
+let generate_response_value (request : generate_request) = {
+  api_version = V1_codec.generate_api_version;
+  operation_key = request.operation_key;
+  operation_id = operation_id "legacy-v1-operation";
+  status = Completed;
+  output = [];
+  checkpoint = { handle = Checkpoint.of_string_exn "legacy-v1-checkpoint";
+                 parent = request.parent; kind = Generation_checkpoint; depth = 0l };
+  cache = { disposition = Cache_disabled; variant = 0l; entry_age_seconds = None };
+  route = None; usage = None;
+  cost = Exact_cost { actual_cost_usd = Decimal.zero;
+                       method_ = Control_query_zero; catalog_version = None };
+  diagnostics = [];
+}
+
 let () =
   if make_value.context <> None then failwith "Request.make context default";
   if make_value.service_class_fallbacks <> [] then failwith "Request.make fallback default";
@@ -461,32 +491,87 @@ let () =
    | Some Cost_unknown -> ()
    | _ -> failwith "unknown cost_status did not round trip");
   let calls = ref 0 in
-  let dispatch ?task_queue activity (request : request) =
+  let dispatch ?task_queue activity (request : generate_request) =
     incr calls;
     assert_equal "go-activities" (Temporal_task_queue.to_string (Option.get task_queue));
     assert_equal activity_name (Temporal.Activity.name activity);
-    assert_equal "order-42" (Operation_key.to_string request.operation_key);
-    Ok response_value
+    assert_equal "legacy-v1" (Operation_key.to_string request.operation_key);
+    if request.parent <> None then failwith "legacy compatibility request unexpectedly has a parent";
+    let payload = expect_ok (Temporal.Codec.encode generate_v1_request_codec request) in
+    let json = Yojson.Safe.from_string (Bytes.to_string payload.data) in
+    (match json with
+     | `Assoc fields ->
+         if List.mem_assoc "request" fields then
+           failwith "legacy compatibility encoded the pre-v1 nested request envelope";
+         (match List.assoc "api_version" fields with
+          | `String value -> assert_equal "llm.temporal/v1" value
+          | _ -> failwith "legacy compatibility v1 api_version")
+     | _ -> failwith "legacy compatibility v1 payload is not an object");
+    if [ "legacy v1" ] <>
+       (List.filter_map (function
+          | Message { content = [ Text value ]; _ } -> Some value
+          | _ -> None) request.append)
+    then failwith "legacy compatibility changed the Generate append payload";
+    Ok (generate_response_value request)
   in
-  ignore (expect_ok (invoke_once ~task_queue:(task_queue "go-activities") ~dispatch request_value));
+  ignore (expect_ok (invoke_once ~task_queue:(task_queue "go-activities") ~dispatch legacy_v1_request));
   if !calls <> 1 then failwith "wrapper dispatched more than once";
   let default_queue_calls = ref 0 in
-  let default_queue_dispatch ?task_queue activity (request : request) =
+  let default_queue_dispatch ?task_queue activity (request : generate_request) =
     incr default_queue_calls;
     if task_queue <> None then failwith "omitted task queue must remain omitted";
     assert_equal activity_name (Temporal.Activity.name activity);
-    assert_equal "order-42" (Operation_key.to_string request.operation_key);
-    Ok response_value
+    assert_equal "legacy-v1" (Operation_key.to_string request.operation_key);
+    Ok (generate_response_value request)
   in
-  ignore (expect_ok (invoke_once ~dispatch:default_queue_dispatch request_value));
+  ignore (expect_ok (invoke_once ~dispatch:default_queue_dispatch legacy_v1_request));
   if !default_queue_calls <> 1 then failwith "default queue dispatch count";
+  let rejected_calls = ref 0 in
+  let rejected_dispatch ?task_queue:_ _activity _request =
+    incr rejected_calls;
+    Error (Temporal.Error.codec ~message:"unexpected dispatch")
+  in
+  let incomplete_context =
+    { legacy_v1_request with
+      context = Some { tenant = Some (tenant_id "tenant"); project = None;
+                       actor = Some (Actor_id.of_string "actor"); tags = [] } }
+  in
+  (match invoke_once ~dispatch:rejected_dispatch incomplete_context with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "legacy Request.context must include tenant, project, and actor for Generate v1" -> ()
+   | Error error -> failwith ("unexpected legacy conversion error: " ^ Temporal.Error.message error)
+   | Ok _ -> failwith "legacy compatibility dispatched an incomplete context");
+  if !rejected_calls <> 0 then failwith "legacy conversion failure dispatched an Activity";
+  let unsupported_sampling =
+    { legacy_v1_request with
+      sampling = Some { temperature = None; top_p = Some 0.5; top_k = None;
+                        seed = None; presence_penalty = None;
+                        frequency_penalty = None; stop_sequences = None } }
+  in
+  (match invoke_once ~dispatch:rejected_dispatch unsupported_sampling with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "legacy Request.sampling contains controls not representable by Generate v1" -> ()
+   | Error error -> failwith ("unexpected legacy sampling error: " ^ Temporal.Error.message error)
+   | Ok _ -> failwith "legacy compatibility silently dropped unsupported sampling");
+  if !rejected_calls <> 0 then failwith "unsupported legacy sampling dispatched an Activity";
+  let mismatched_dispatch ?task_queue:_ activity request =
+    if Temporal.Activity.name activity <> activity_name then
+      failwith "legacy compatibility dispatched the wrong Activity for mismatch test";
+    Ok { (generate_response_value request) with
+         operation_key = operation_key "different-operation" }
+  in
+  (match invoke_once ~dispatch:mismatched_dispatch legacy_v1_request with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "generate response operation key mismatch: expected legacy-v1, got different-operation" -> ()
+   | Error error -> failwith ("unexpected legacy mismatch error: " ^ Temporal.Error.message error)
+   | Ok _ -> failwith "legacy compatibility accepted a mismatched operation key");
   let failure = Temporal.Error.make ~category:`Activity ~message:"provider failed" () in
   let failed_calls = ref 0 in
   let failing_dispatch ?task_queue:_ _activity _request =
     incr failed_calls;
     Error failure
   in
-  (match invoke_once ~dispatch:failing_dispatch request_value with
+  (match invoke_once ~dispatch:failing_dispatch legacy_v1_request with
    | Error error when Temporal.Error.message error = "provider failed" -> ()
    | Error _ -> failwith "wrapper changed activity failure"
    | Ok _ -> failwith "wrapper swallowed activity failure");

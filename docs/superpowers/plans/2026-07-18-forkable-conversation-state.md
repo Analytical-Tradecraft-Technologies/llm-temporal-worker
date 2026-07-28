@@ -864,11 +864,12 @@ protected release evidence is not inferred from these checks.
 
 ### Task 18: Add natural OCaml Conversation and Query GADT APIs
 
-Status: partially complete. The immutable conversation/query facade and
-downstream compile fixture are implemented. The package-level `execute` and
-`workflow` helpers now use Generate v1 directly; the pre-v1 `Request` and
-`invoke_once` compatibility shims remain explicitly outside the production
-Activity boundary until the final breaking-compatibility decision.
+Status: complete for the immutable facade, typed query surface, and
+compatibility boundary. The package-level `execute` and `workflow` helpers,
+as well as the deprecated pre-v1 `Request`/`invoke_once` names, now dispatch
+only the canonical Generate v1 envelope. The compatibility path rejects
+legacy controls which have no v1 representation rather than dropping them.
+Protected release evidence is not inferred from these offline checks.
 
 **Files:**
 
@@ -890,11 +891,11 @@ Activity boundary until the final breaking-compatibility decision.
 - [x] Keep cursor/result type associated across pagination.
 - [x] Add the additive typed `Llm_temporal.Generate` facade for direct,
   non-streaming one-shot v1 calls while preserving legacy `Request` names.
-- [ ] Rebuild the remaining pre-v1 `Request`/`invoke_once` helpers on a
+- [x] Rebuild the remaining pre-v1 `Request`/`invoke_once` helpers on a
   Generate v1 root in the same package/facade, replacing their unreleased
-  wire shape in place. **The package-level `execute` and `workflow` helpers
-  are already migrated; the compatibility-only shims remain deferred pending
-  the explicit breaking-compatibility decision.**
+  wire shape in place. The deprecated compatibility path validates and
+  converts the old constructor shape before dispatching the canonical
+  `llm.generate.v1` descriptor; unsupported legacy controls fail closed.
 - [x] Test three siblings from one parent, no inherited fields on wire, decimal
   exactness, compaction tool/output isolation, query type inference/mismatch,
   and unchanged Temporal errors. The focused Conversation and Query suites are
@@ -914,8 +915,8 @@ Activity boundary until the final breaking-compatibility decision.
   `generate_v1_activity`, `compact_v1_activity`, and `query_v1_activity` with
   the exported one-attempt retry policy, while also asserting the facade's
   `Temporal.Future.all` fan-out has no hidden mutable conversation head.
-- [ ] Commit: **feat(ocaml): expose immutable conversations and typed queries**
-  (Task 18 remains open while legacy helper migration is deferred).
+- [x] Commit: **feat(ocaml): expose immutable conversations and typed queries**
+  (including the deprecated compatibility-helper migration).
 
 ### Task 19: Compose Redis budgets with PostgreSQL durable state
 

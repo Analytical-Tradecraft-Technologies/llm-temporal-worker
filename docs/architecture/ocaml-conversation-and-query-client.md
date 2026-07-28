@@ -679,8 +679,11 @@ typed dispatcher used by deterministic tests. The package-level
 **`execute`/`workflow`** helpers now accept the exact Generate v1 records and
 schedule that same v1 Activity. The pre-checkpoint **`Request.make`** and
 **`invoke_once`** names remain recognizable only as deprecated compatibility
-shims; new code should prefer `Generate`, `Conversation`, or the migrated
-package-level helpers so it cannot construct the pre-checkpoint wire shape.
+shims. `invoke_once` validates the old record and converts it to the flat
+Generate v1 envelope before dispatching `llm.generate.v1`; controls which have
+no v1 representation are rejected rather than silently dropped. New code
+should prefer `Generate`, `Conversation`, or the migrated package-level
+helpers.
 
 ## GADT-typed Query API
 

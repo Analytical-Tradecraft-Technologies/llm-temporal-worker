@@ -188,10 +188,12 @@ dispatcher used by deterministic tests, and `Generate.start` returns a
 workflow-owned Temporal future. The package-level `execute` and `workflow`
 helpers now accept and schedule the same Generate v1 records and codecs. The
 pre-checkpoint `Request` and `invoke_once` names remain only as deprecated
-source-compatibility shims; their legacy records/codecs must not be used to
-call the production Go `llm.generate.v1` Activity. New code should use
-`Generate`, `Conversation`, or the migrated package-level helpers, all of
-which emit the exact v1 wire shape.
+source-compatibility shims. `invoke_once` validates the old record, rejects
+context or controls which cannot be represented by v1, then converts it to
+the flat Generate v1 envelope before dispatching `llm.generate.v1`; it never
+sends the old nested `request` wire shape. New code should use `Generate`,
+`Conversation`, or the migrated package-level helpers, all of which emit the
+exact v1 wire shape.
 
 The synchronous `Generate.invoke_with` and `Generate.invoke` helpers also
 require the response `operation_key` to match the request key. A mismatched
