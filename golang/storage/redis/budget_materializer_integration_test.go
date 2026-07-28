@@ -4,6 +4,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -86,5 +87,45 @@ func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
 	}
 	if err := materializer.Reconcile(ctx, reconcile); err != nil {
 		t.Fatalf("duplicate completion reconciliation = %v", err)
+	}
+}
+
+func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
+	client := openLiveRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	keys := liveKeyOptions("durable-materializer-batch")
+	cleanupLivePrefix(t, client, keys.Prefix)
+	now := time.Now().UTC().Truncate(time.Second)
+	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
+		Client: client, Mode: AdmissionModeFunction, Keys: keys,
+		GenerationID: durable.GenerationID("generation-batch"), IncarnationID: durable.IncarnationID("incarnation-batch"),
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation := admission.WindowReservation{
+		PolicyID: "batch-policy", WindowID: "hour", Bucket: now.Unix() / 3600,
+		AmountUSD: pricing.MustUSD("0.01"), LimitUSD: pricing.MustUSD("0.02"),
+		BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour),
+	}
+	request := durable.ReserveRequest{OperationID: "batch-operation", GenerationID: "generation-batch", ExpiresAt: now.Add(time.Hour), Reservations: []admission.WindowReservation{reservation}}
+	accepted, err := materializer.Accept(ctx, request)
+	if err != nil {
+		t.Fatalf("accepted reservation = %v", err)
+	}
+	base := accepted.Events[0]
+	completion := func(id string) budget.CompletionEvent {
+		return budget.CompletionEvent{EventID: id, GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
+			BucketStart: base.BucketStart, ReservationRevision: base.ReservationRevision + 1, Kind: budget.JournalFinalizeExact,
+			ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now}
+	}
+	first, second := completion("batch-first"), completion("batch-second")
+	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first, second}}); !errors.Is(err, ErrRedisBudgetConflict) {
+		t.Fatalf("mixed completion batch = %v, want conflict", err)
+	}
+	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first}}); err != nil {
+		t.Fatalf("first completion after rejected batch = %v", err)
 	}
 }

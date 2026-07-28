@@ -192,4 +192,20 @@ func TestRedisBudgetMaterializerTimeoutAfterMutationFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRedisBudgetMaterializerRoundsSubsecondExpiryUp(t *testing.T) {
+	now := time.Unix(1_700_000_000, 100_000_000).UTC()
+	request := durableTestRequest(now)
+	request.ExpiresAt = now.Add(500 * time.Millisecond)
+	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := reservations[0].ExpiresMillis, request.ExpiresAt.UnixMilli(); got != want {
+		t.Fatalf("expiry milliseconds = %d, want %d", got, want)
+	}
+	if got := durableTTLSeconds(request.ExpiresAt, now, reservations); got != 1 {
+		t.Fatalf("subsecond TTL = %d, want one second", got)
+	}
+}
+
 func ptrUSD(value pricing.USD) *pricing.USD { return &value }

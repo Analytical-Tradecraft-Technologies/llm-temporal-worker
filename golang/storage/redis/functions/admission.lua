@@ -619,7 +619,10 @@ local function durable_cleanup(bucket_key, expiry_key, now)
         if not current or current < value then
             return false
         end
-        redis.call('HINCRBY', bucket_key, field, tostring(-value))
+        local next_value = redis.call('HINCRBY', bucket_key, field, tostring(-value))
+        if durable_int(next_value) == 0 then
+            redis.call('HDEL', bucket_key, field, durable_limit_field(bucket))
+        end
         redis.call('ZREM', expiry_key, member)
     end
     return true
@@ -675,7 +678,9 @@ if ACTION == 'durable_reserve' then
     end
     local now = redis.call('TIME')
     local now_seconds = durable_int(now[1])
-    if not now_seconds then return {'state_unavailable', ''} end
+    local now_micros = durable_int(now[2])
+    if not now_seconds or not now_micros then return {'state_unavailable', ''} end
+    local now_millis = now_seconds * 1000 + math.floor(now_micros / 1000)
     local seen = {}
     for index, reservation in ipairs(reservations) do
         if type(reservation) ~= 'table' or not bounded_string(reservation.policy_id, 128, true) or
@@ -687,8 +692,8 @@ if ACTION == 'durable_reserve' then
         local bucket = durable_int(reservation.bucket)
         local amount = durable_int(reservation.amount_nano)
         local limit = durable_int(reservation.limit_nano)
-        local expires = durable_int(reservation.expires_unix)
-        if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or limit <= 0 or amount > limit or expires <= now_seconds then
+        local expires = durable_int(reservation.expires_millis)
+        if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or limit <= 0 or amount > limit or expires <= now_millis then
             return {'invalid_request', ''}
         end
         local identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. reservation.bucket
@@ -696,7 +701,7 @@ if ACTION == 'durable_reserve' then
         seen[identity] = true
         local bucket_key = KEYS[1 + (index - 1) * 2 + 1]
         local expiry_key = KEYS[1 + (index - 1) * 2 + 2]
-        if not durable_cleanup(bucket_key, expiry_key, now_seconds) then return {'state_unavailable', ''} end
+        if not durable_cleanup(bucket_key, expiry_key, now_millis) then return {'state_unavailable', ''} end
         local limit_field = durable_limit_field(reservation.bucket)
         local prior_limit = redis.call('HGET', bucket_key, limit_field)
         if prior_limit and prior_limit ~= reservation.limit_nano then return {'conflict', ''} end
@@ -726,7 +731,7 @@ if ACTION == 'durable_reserve' then
         local expiry_key = KEYS[1 + (index - 1) * 2 + 2]
         local bucket = reservation.bucket
         local amount = durable_int(reservation.amount_nano)
-        local expires = durable_int(reservation.expires_unix)
+        local expires = durable_int(reservation.expires_millis)
         redis.call('HSET', bucket_key, durable_limit_field(bucket), reservation.limit_nano)
         redis.call('HINCRBY', bucket_key, durable_bucket_field(bucket), tostring(amount))
         redis.call('ZADD', expiry_key, tostring(expires), durable_expiry_member(fingerprint, bucket, tostring(amount)))
@@ -760,72 +765,99 @@ if ACTION == 'durable_reconcile' then
     if record.generation_id ~= generation then return {'generation_mismatch', ''} end
     if record.incarnation_id ~= incarnation then return {'incarnation_mismatch', ''} end
     if record.operation_id ~= operation_id or record.status ~= 'accepted' then return {'not_found', ''} end
+    if type(record.reservations) ~= 'table' or #record.reservations == 0 or #record.reservations > MAX_DURABLE_RESERVATIONS then
+        return {'state_unavailable', ''}
+    end
     if type(record.events) ~= 'table' then record.events = {} end
+    -- Validate and stage the complete batch before mutating any aggregate. A
+    -- later conflict must not leave earlier events in the batch applied.
+    local staged = {}
+    local staged_reservations = {}
+    local staged_event_ids = {}
     for _, event in ipairs(events) do
         if type(event) ~= 'table' or not bounded_string(event.event_id, 128, true) or
             not bounded_string(event.window_id, 128, true) or not bounded_string(event.bucket_start_nanos, 64, true) or
             not bounded_string(event.reserved_decrease_nano, 64, true) or not bounded_string(event.accounted_increase_nano, 64, true) or
             not bounded_string(event.accounted_decrease_nano, 64, true) or not bounded_string(event.fingerprint, 64, true) or
             #event.fingerprint ~= 64 then return {'invalid_request', ''} end
-        local prior_fingerprint = record.events[event.event_id]
-        if prior_fingerprint then
-            if prior_fingerprint ~= event.fingerprint then return {'conflict', ''} end
+        local batch_fingerprint = staged_event_ids[event.event_id]
+        if batch_fingerprint then
+            if batch_fingerprint ~= event.fingerprint then return {'conflict', ''} end
         else
-            local reservation_index = nil
-            for index, reservation in ipairs(record.reservations) do
-                if reservation.window_id == event.window_id and reservation.bucket_start_nanos == event.bucket_start_nanos then
-                    if reservation_index then return {'not_found', ''} end
-                    reservation_index = index
-                end
-            end
-            if not reservation_index then return {'not_found', ''} end
-            local reservation = record.reservations[reservation_index]
-            local revision = durable_int(event.reservation_revision)
-            local reserved_decrease = durable_int(event.reserved_decrease_nano)
-            local accounted_increase = durable_int(event.accounted_increase_nano)
-            local accounted_decrease = durable_int(event.accounted_decrease_nano)
-            local old_reserved = durable_int(reservation.reserved_nano or '0')
-            local old_accounted = durable_int(reservation.accounted_nano or '0')
-            if not revision or not reserved_decrease or not accounted_increase or not accounted_decrease or
-                not old_reserved or not old_accounted or revision <= (durable_int(reservation.reservation_revision or '0') or 0) or
-                reserved_decrease > old_reserved or accounted_decrease > old_accounted then
-                return {'conflict', ''}
-            end
-            local status = reservation.status or 'reserved'
-            if status == 'finalized' then return {'finalized', ''} end
-            if event.kind == 'retain_ambiguous' then
-                if status ~= 'reserved' or reserved_decrease ~= 0 or accounted_increase ~= 0 or accounted_decrease ~= 0 then return {'conflict', ''} end
-            elseif event.kind == 'resolve_unknown_exact' then
-                if status ~= 'ambiguous' then return {'conflict', ''} end
-            elseif event.kind == 'finalize_exact' or event.kind == 'finalize_unknown' or event.kind == 'release' then
-                if status ~= 'reserved' then return {'conflict', ''} end
+            staged_event_ids[event.event_id] = event.fingerprint
+            local prior_fingerprint = record.events[event.event_id]
+            if prior_fingerprint then
+                if prior_fingerprint ~= event.fingerprint then return {'conflict', ''} end
             else
-                return {'invalid_request', ''}
+                local reservation_index = nil
+                for index, reservation in ipairs(record.reservations) do
+                    if reservation.window_id == event.window_id and reservation.bucket_start_nanos == event.bucket_start_nanos then
+                        if reservation_index then return {'not_found', ''} end
+                        reservation_index = index
+                    end
+                end
+                if not reservation_index or staged_reservations[reservation_index] then return {'conflict', ''} end
+                local reservation = record.reservations[reservation_index]
+                local revision = durable_int(event.reservation_revision)
+                local reserved_decrease = durable_int(event.reserved_decrease_nano)
+                local accounted_increase = durable_int(event.accounted_increase_nano)
+                local accounted_decrease = durable_int(event.accounted_decrease_nano)
+                local old_reserved = durable_int(reservation.reserved_nano or '0')
+                local old_accounted = durable_int(reservation.accounted_nano or '0')
+                if not revision or not reserved_decrease or not accounted_increase or not accounted_decrease or
+                    not old_reserved or not old_accounted or revision <= (durable_int(reservation.reservation_revision or '0') or 0) or
+                    reserved_decrease > old_reserved or accounted_decrease > old_accounted then
+                    return {'conflict', ''}
+                end
+                local status = reservation.status or 'reserved'
+                if status == 'finalized' then return {'finalized', ''} end
+                if event.kind == 'retain_ambiguous' then
+                    if status ~= 'reserved' or reserved_decrease ~= 0 or accounted_increase ~= 0 or accounted_decrease ~= 0 then return {'conflict', ''} end
+                elseif event.kind == 'resolve_unknown_exact' then
+                    if status ~= 'ambiguous' then return {'conflict', ''} end
+                elseif event.kind == 'finalize_exact' or event.kind == 'finalize_unknown' or event.kind == 'release' then
+                    if status ~= 'reserved' then return {'conflict', ''} end
+                else
+                    return {'invalid_request', ''}
+                end
+                local old_total = old_reserved + old_accounted
+                local new_reserved = old_reserved - reserved_decrease
+                local new_accounted = old_accounted + accounted_increase - accounted_decrease
+                if new_accounted < 0 then return {'conflict', ''} end
+                local new_total = new_reserved + new_accounted
+                local bucket_key = KEYS[1 + (reservation_index - 1) * 2 + 1]
+                local expiry_key = KEYS[1 + (reservation_index - 1) * 2 + 2]
+                local bucket = reservation.bucket
+                local current = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(bucket)) or '0')
+                if not current or current < old_total then return {'not_found', ''} end
+                staged_reservations[reservation_index] = true
+                staged[#staged + 1] = {
+                    event = event, reservation_index = reservation_index, old_total = old_total,
+                    new_reserved = new_reserved, new_accounted = new_accounted, new_total = new_total,
+                    bucket_key = bucket_key, expiry_key = expiry_key, bucket = bucket,
+                }
             end
-            local old_total = old_reserved + old_accounted
-            local new_reserved = old_reserved - reserved_decrease
-            local new_accounted = old_accounted + accounted_increase - accounted_decrease
-            if new_accounted < 0 then return {'conflict', ''} end
-            local new_total = new_reserved + new_accounted
-            local bucket_key = KEYS[1 + (reservation_index - 1) * 2 + 1]
-            local expiry_key = KEYS[1 + (reservation_index - 1) * 2 + 2]
-            local bucket = reservation.bucket
-            local current = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(bucket)) or '0')
-            if not current or current < old_total then return {'not_found', ''} end
-            if old_total > 0 then
-                redis.call('HINCRBY', bucket_key, durable_bucket_field(bucket), tostring(-old_total))
-                redis.call('ZREM', expiry_key, durable_expiry_member(record.fingerprint, bucket, tostring(old_total)))
-            end
-            if new_total > 0 then
-                redis.call('HINCRBY', bucket_key, durable_bucket_field(bucket), tostring(new_total))
-                redis.call('ZADD', expiry_key, tostring(reservation.expires_unix), durable_expiry_member(record.fingerprint, bucket, tostring(new_total)))
-            end
-            reservation.reserved_nano = tostring(new_reserved)
-            reservation.accounted_nano = tostring(new_accounted)
-            reservation.reservation_revision = revision
-            if event.kind == 'retain_ambiguous' then reservation.status = 'ambiguous' else reservation.status = 'finalized' end
-            record.events[event.event_id] = event.fingerprint
         end
+    end
+    for _, item in ipairs(staged) do
+        local event = item.event
+        local reservation = record.reservations[item.reservation_index]
+        if item.old_total > 0 then
+            local decreased = redis.call('HINCRBY', item.bucket_key, durable_bucket_field(item.bucket), tostring(-item.old_total))
+            if durable_int(decreased) == 0 then
+                redis.call('HDEL', item.bucket_key, durable_bucket_field(item.bucket), durable_limit_field(item.bucket))
+            end
+            redis.call('ZREM', item.expiry_key, durable_expiry_member(record.fingerprint, item.bucket, tostring(item.old_total)))
+        end
+        if item.new_total > 0 then
+            redis.call('HINCRBY', item.bucket_key, durable_bucket_field(item.bucket), tostring(item.new_total))
+            redis.call('ZADD', item.expiry_key, tostring(reservation.expires_millis), durable_expiry_member(record.fingerprint, item.bucket, tostring(item.new_total)))
+        end
+        reservation.reserved_nano = tostring(item.new_reserved)
+        reservation.accounted_nano = tostring(item.new_accounted)
+        reservation.reservation_revision = durable_int(event.reservation_revision)
+        if event.kind == 'retain_ambiguous' then reservation.status = 'ambiguous' else reservation.status = 'finalized' end
+        record.events[event.event_id] = event.fingerprint
     end
     local encoded = durable_encode(record)
     durable_restore_record(KEYS[1], encoded, 0)

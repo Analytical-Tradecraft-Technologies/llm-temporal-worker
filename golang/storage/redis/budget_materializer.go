@@ -111,7 +111,7 @@ type durableReservation struct {
 	BucketNanos   string `json:"bucket_nanos"`
 	DurationNanos string `json:"duration_nanos"`
 	BucketStart   string `json:"bucket_start_nanos"`
-	ExpiresUnix   int64  `json:"expires_unix"`
+	ExpiresMillis int64  `json:"expires_millis"`
 	EventID       string `json:"event_id"`
 	AmountUSD     string `json:"amount_usd"`
 	LimitUSD      string `json:"limit_usd"`
@@ -424,7 +424,7 @@ func canonicalDurableReservations(operation durable.OperationID, generation dura
 			PolicyID: value.PolicyID, WindowID: value.WindowID,
 			Bucket: strconv.FormatInt(value.Bucket, 10), AmountNano: amountNano.String(), LimitNano: limitNano.String(),
 			BucketNanos: strconv.FormatInt(value.BucketNanos, 10), DurationNanos: strconv.FormatInt(value.DurationNanos, 10),
-			BucketStart: strconv.FormatInt(bucketStart, 10), ExpiresUnix: reservationExpiry.Unix(),
+			BucketStart: strconv.FormatInt(bucketStart, 10), ExpiresMillis: reservationExpiry.UnixMilli(),
 			EventID:   durableReservationEventID(string(operation), string(generation), value.PolicyID, value.WindowID, bucketStart),
 			AmountUSD: amount.String(), LimitUSD: limit.String(),
 		})
@@ -449,16 +449,21 @@ func durableUSD(exact pricing.USD, legacy pricing.MicroUSD) (pricing.USD, error)
 }
 
 func durableTTLSeconds(expiresAt, now time.Time, reservations []durableReservation) int64 {
-	if expiresAt.IsZero() {
-		max := int64(1)
-		for _, reservation := range reservations {
-			if reservation.ExpiresUnix-now.Unix() > max {
-				max = reservation.ExpiresUnix - now.Unix()
-			}
+	if !expiresAt.IsZero() {
+		delta := expiresAt.Sub(now)
+		if delta <= 0 {
+			return 0
 		}
-		return max
+		return int64((delta + time.Second - 1) / time.Second)
 	}
-	return expiresAt.Unix() - now.Unix()
+	max := int64(1)
+	for _, reservation := range reservations {
+		seconds := (reservation.ExpiresMillis - now.UnixMilli() + 999) / 1000
+		if seconds > max {
+			max = seconds
+		}
+	}
+	return max
 }
 
 func durableRequestFingerprint(request durable.ReserveRequest, reservations []durableReservation) (string, error) {
