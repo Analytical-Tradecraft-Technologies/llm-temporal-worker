@@ -229,7 +229,7 @@ func (handler *persistedQueryHandler) budgetStatus(ctx context.Context, request 
 	if result.ActiveAt.IsZero() || !result.ActiveAt.UTC().Equal(activeAt) {
 		return control.QueryResponse{}, fmt.Errorf("budget status reader returned a mismatched active_at")
 	}
-	return handler.response(request, result, control.QueryFreshCurrent, activeAt, nil), nil
+	return handler.response(request, result, control.QueryFreshCurrent, control.QuerySourceRedisBudget, activeAt, nil), nil
 }
 
 func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request control.QueryRequest, now time.Time) (control.QueryResponse, error) {
@@ -258,7 +258,7 @@ func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request 
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
-	return handler.response(request, result, control.QueryFreshCurrent, now, nil), nil
+	return handler.response(request, result, control.QueryFreshCurrent, control.QuerySourcePersisted, now, nil), nil
 }
 
 func (handler *persistedQueryHandler) providerStatus(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
@@ -307,7 +307,7 @@ func (handler *persistedQueryHandler) providerStatus(ctx context.Context, reques
 		}
 		cursor = &signed
 	}
-	return handler.response(request, control.ProviderStatusResult{Routes: rows}, freshness, horizon, cursor), nil
+	return handler.response(request, control.ProviderStatusResult{Routes: rows}, freshness, control.QuerySourcePersisted, horizon, cursor), nil
 }
 
 func (handler *persistedQueryHandler) modelInventory(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
@@ -367,7 +367,7 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 		}
 		cursor = &signed
 	}
-	return handler.response(request, control.ModelInventoryResult{Models: rows}, freshness, page.SnapshotHorizon, cursor), nil
+	return handler.response(request, control.ModelInventoryResult{Models: rows}, freshness, control.QuerySourcePersisted, page.SnapshotHorizon, cursor), nil
 }
 
 func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
@@ -415,12 +415,12 @@ func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request 
 		}
 		cursor = &signed
 	}
-	return handler.response(request, control.CreditStatusResult{Endpoints: rows}, freshness, horizon, cursor), nil
+	return handler.response(request, control.CreditStatusResult{Endpoints: rows}, freshness, control.QuerySourcePersisted, horizon, cursor), nil
 }
 
-func (handler *persistedQueryHandler) response(request control.QueryRequest, result control.QueryResult, freshness control.QueryFreshness, observed time.Time, cursor *control.QueryCursor) control.QueryResponse {
+func (handler *persistedQueryHandler) response(request control.QueryRequest, result control.QueryResult, freshness control.QueryFreshness, source control.QuerySource, observed time.Time, cursor *control.QueryCursor) control.QueryResponse {
 	zero := control.DecimalUSD("0")
-	return control.QueryResponse{OperationKey: request.OperationKey, ExecutionID: executionID(request), Kind: request.Kind, Provenance: control.QueryProvenance{Source: control.QuerySourcePersisted, Freshness: freshness, ObservedAt: observed.UTC()}, Complete: cursor == nil, NextCursor: cursor, Result: result, Cost: control.QueryCost{Status: control.QueryCostExact, ActualUSD: &zero, Method: control.QueryCostControlZero}}
+	return control.QueryResponse{OperationKey: request.OperationKey, ExecutionID: executionID(request), Kind: request.Kind, Provenance: control.QueryProvenance{Source: source, Freshness: freshness, ObservedAt: observed.UTC()}, Complete: cursor == nil, NextCursor: cursor, Result: result, Cost: control.QueryCost{Status: control.QueryCostExact, ActualUSD: &zero, Method: control.QueryCostControlZero}}
 }
 
 func (handler *persistedQueryHandler) sign(request control.QueryRequest, position string, horizon, issuedAt time.Time) (control.QueryCursor, error) {
