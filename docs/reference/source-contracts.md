@@ -41,6 +41,13 @@ it has no supported streaming or token-event API. Retained decoders are legacy
 parser-regression coverage, not a v1 client dispatch path, and must not be
 wired into the Temporal runtime.
 
+Before lowering a request, an adapter must reject every required feature whose
+capability state is `unsupported` or `unknown`, regardless of whether the
+caller selected strict or best-effort mode. Only `native` and `emulated`
+capabilities may reach SDK parameter lowering; rejected requests remain in the
+compile phase and are never dispatched. This guard is part of the provider
+contract and does not add a streaming or token-event dispatch path.
+
 ### Responses fixture boundary
 
 The direct `openai-responses` and `azure-responses` profiles each have an
