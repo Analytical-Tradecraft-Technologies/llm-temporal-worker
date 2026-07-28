@@ -223,6 +223,16 @@ remains tracked separately in `docs/release/v1-requirements.json`.
 - [ ] Run **make schema-verify** and canonical JSON tests. Expected: pass.
 - [ ] Commit: **feat(contract): define checkpoint cache compact and query APIs**.
 
+**Implementation status (2026-07-28):** The Task 1 contract slice is already
+implemented on `master` across commits `48fd9031`, `50652b5f`, `f34a5888`, and
+`49e6be23`. It includes the closed v1 JSON schemas, canonical valid and negative
+fixtures, schema verification, and focused payload-codec/round-trip tests for
+Generate, Compact, and Query. As described in the Global constraints, the paths
+listed above are relative to `golang/` in the current worker layout. The
+unchecked boxes above remain the original implementation checklist; protected
+release evidence for the contract and its production conformance is tracked
+separately in `docs/release/v1-requirements.json`.
+
 ### Task 2: Replace generic currency/microUSD authority with exact USD decimal
 
 **Files:**
