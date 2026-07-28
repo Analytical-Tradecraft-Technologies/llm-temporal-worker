@@ -15,7 +15,9 @@ Kubernetes manifests live under `kubernetes/base` and include:
 - ConfigMap-mounted non-secret configuration/catalogs and externally provisioned
   Secret volumes for Redis/TLS/continuation material;
 - an ingress/egress NetworkPolicy that permits only probe/metrics traffic and
-  DNS, Redis, Temporal, and TLS egress;
+  DNS, Redis, worker PostgreSQL, Temporal, and TLS egress. PostgreSQL is
+  explicitly allowed on TCP 5432 because the durable worker configuration
+  uses it as the authoritative state store;
 - AWS and Azure workload-identity examples that opt into service-account token
   mounting only in the selected overlay.
 

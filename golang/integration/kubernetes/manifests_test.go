@@ -104,3 +104,15 @@ func TestEveryOverlayReferencesBaseAndUsesAReviewablePatch(t *testing.T) {
 		}
 	}
 }
+
+func TestBaseNetworkPolicyAllowsWorkerPostgres(t *testing.T) {
+	policy := readRepositoryFile(t, "deploy", "kubernetes", "base", "networkpolicy.yaml")
+	config := readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")
+
+	if !strings.Contains(config, "addresses: [postgres.example.internal:5432]") {
+		t.Fatal("base configuration must use the worker PostgreSQL endpoint on port 5432")
+	}
+	if !strings.Contains(policy, "- port: 5432\n          protocol: TCP") {
+		t.Fatal("base NetworkPolicy must allow worker PostgreSQL TCP traffic")
+	}
+}

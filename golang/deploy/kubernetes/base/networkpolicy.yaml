@@ -36,6 +36,8 @@ spec:
     - ports:
         - port: 6379
           protocol: TCP
+        - port: 5432
+          protocol: TCP
         - port: 7233
           protocol: TCP
         - port: 443
