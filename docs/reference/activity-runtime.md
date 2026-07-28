@@ -156,6 +156,17 @@ lease. A zero or partial port set remains fail-closed; this adapter is a bridge
 to the durable composition, not evidence that deployment wiring has been
 completed.
 
+The runtime capability bundle also exposes a separate
+`CompactPortsFactory` contract and `ValidateCompact` readiness check. The
+check requires the same snapshot-owned planner, adapters, checkpoint
+materializer, PostgreSQL journal, and clock needed by the Compact runner, plus
+an explicit constructor for all Compact callbacks. Defining this interface
+does not register Compact or synthesize a response: until a deployment
+supplies the complete callback set, the production builder must leave Compact
+fail-closed. Generate and Compact readiness are independent checks, so a
+partial Generate rollout cannot accidentally advertise the compaction
+Activity.
+
 The Activity integration tests compose this wrapper with in-process phase
 ports and assert the complete one-shot order for both Generate and Compact,
 including replay, cache, route, Redis reservation, PostgreSQL journal,

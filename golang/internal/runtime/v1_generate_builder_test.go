@@ -97,6 +97,49 @@ func TestV1RuntimeCapabilitiesValidateGenerateRequiresEveryCapability(t *testing
 	}
 }
 
+func TestV1RuntimeCapabilitiesValidateCompactRequiresEveryCapability(t *testing.T) {
+	validFactory := func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+		return durable.CompactPorts{}, nil
+	}
+	base := completeGenerateCapabilities(nil)
+	base.CompactPortsFactory = validFactory
+	tests := []struct {
+		name   string
+		mutate func(*V1RuntimeCapabilities)
+	}{
+		{name: "snapshot", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Snapshot = nil }},
+		{name: "planner", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Planner = nil }},
+		{name: "adapters", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Adapters = nil }},
+		{name: "checkpoints", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Checkpoints = CheckpointCapabilities{} }},
+		{name: "journal", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Journal = nil }},
+		{name: "clock", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Clock = nil }},
+		{name: "ports factory", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.CompactPortsFactory = nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capabilities := base
+			test.mutate(&capabilities)
+			if err := capabilities.ValidateCompact(); err == nil {
+				t.Fatal("ValidateCompact unexpectedly accepted incomplete capabilities")
+			}
+		})
+	}
+}
+
+func TestV1RuntimeCapabilitiesValidateCompactDoesNotImplyGenerate(t *testing.T) {
+	capabilities := completeGenerateCapabilities(nil)
+	capabilities.GeneratePortsFactory = nil
+	capabilities.CompactPortsFactory = func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+		return durable.CompactPorts{}, nil
+	}
+	if err := capabilities.ValidateCompact(); err != nil {
+		t.Fatalf("ValidateCompact error = %v", err)
+	}
+	if err := capabilities.ValidateGenerate(); err == nil {
+		t.Fatal("ValidateGenerate accepted missing Generate factory")
+	}
+}
+
 func TestGenerateV1RuntimeBuilderRejectsIncompletePorts(t *testing.T) {
 	builder := NewGenerateV1RuntimeBuilder()
 	clients := &generateBuilderClientSet{capabilities: completeGenerateCapabilities(func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
