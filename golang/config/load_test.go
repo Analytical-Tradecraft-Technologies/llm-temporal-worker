@@ -331,7 +331,7 @@ func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-		if got, want := loaded.State.Redis.AdmissionDigest, "307c1ad8848723ea78efe2a277a8b145e0bef0fc04154c7b3d57dc7232002a22"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "307c1ad8848723ea78efe2a277a8b145e0bef0fc04154c7b3d57dc7232002a22"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
