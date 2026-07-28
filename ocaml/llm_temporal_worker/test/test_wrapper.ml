@@ -554,6 +554,34 @@ let () =
    | Error error -> failwith ("unexpected legacy sampling error: " ^ Temporal.Error.message error)
    | Ok _ -> failwith "legacy compatibility silently dropped unsupported sampling");
   if !rejected_calls <> 0 then failwith "unsupported legacy sampling dispatched an Activity";
+  let small_temperature_request =
+    { legacy_v1_request with
+      sampling = Some { temperature = Some 1e-10; top_p = None; top_k = None;
+                        seed = None; presence_penalty = None;
+                        frequency_penalty = None; stop_sequences = None } }
+  in
+  let decimal_dispatch ?task_queue:_ activity request =
+    if Temporal.Activity.name activity <> activity_name then
+      failwith "legacy temperature dispatched the wrong Activity";
+    (match request.settings_patch.temperature with
+     | Set value when String.equal (Decimal.to_string value) "0.0000000001" -> ()
+     | Set value -> failwith ("legacy temperature was not canonicalized: " ^ Decimal.to_string value)
+     | _ -> failwith "legacy temperature was not carried into the v1 patch");
+    Ok (generate_response_value request)
+  in
+  ignore (expect_ok (invoke_once ~dispatch:decimal_dispatch small_temperature_request));
+  List.iter (fun mode ->
+    let unsupported_reasoning =
+      { legacy_v1_request with
+        reasoning = Some { mode; effort = High; token_budget = None; summary = Concise } }
+    in
+    match invoke_once ~dispatch:rejected_dispatch unsupported_reasoning with
+    | Error error when String.equal (Temporal.Error.message error)
+                           "legacy Request.reasoning.mode is not representable by Generate v1" -> ()
+    | Error error -> failwith ("unexpected legacy reasoning error: " ^ Temporal.Error.message error)
+    | Ok _ -> failwith "legacy compatibility silently changed an unsupported reasoning mode"
+  ) [ Adaptive; Reasoning_enabled ];
+  if !rejected_calls <> 0 then failwith "unsupported legacy reasoning dispatched an Activity";
   let mismatched_dispatch ?task_queue:_ activity request =
     if Temporal.Activity.name activity <> activity_name then
       failwith "legacy compatibility dispatched the wrong Activity for mismatch test";

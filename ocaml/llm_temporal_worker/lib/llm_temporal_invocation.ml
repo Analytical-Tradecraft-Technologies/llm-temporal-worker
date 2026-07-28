@@ -67,6 +67,65 @@ let legacy_context_to_v1 = function
   | Some _ -> conversion_error
       "legacy Request.context must include tenant, project, and actor for Generate v1"
 
+let fixed_decimal_of_float value =
+  (* [Float.to_string] is the shortest round-tripping representation, but it
+     may use an exponent (for example [1e-10]).  Expand that representation
+     before feeding it to the exact fixed-point USD decimal parser. *)
+  if value = 0.0 then Ok "0"
+  else
+    let repr = Float.to_string value in
+    let negative = repr.[0] = '-' in
+    let unsigned = if negative then String.sub repr 1 (String.length repr - 1) else repr in
+    let exponent_index =
+      match String.index_opt unsigned 'e', String.index_opt unsigned 'E' with
+      | Some index, None | None, Some index -> Some index
+      | Some left, Some right -> Some (min left right)
+      | None, None -> None
+    in
+    let mantissa, exponent =
+      match exponent_index with
+      | None -> unsigned, 0
+      | Some index ->
+          (String.sub unsigned 0 index,
+           int_of_string (String.sub unsigned (index + 1)
+             (String.length unsigned - index - 1)))
+    in
+    let decimal_index = String.index_opt mantissa '.' in
+    let whole_length = Option.value ~default:(String.length mantissa)
+      (Option.map Fun.id decimal_index) in
+    let digits =
+      match decimal_index with
+      | None -> mantissa
+      | Some index -> String.sub mantissa 0 index ^
+                      String.sub mantissa (index + 1)
+                        (String.length mantissa - index - 1)
+    in
+    let point = whole_length + exponent in
+    let integer, fraction =
+      if point <= 0 then "0", (String.make (-point) '0' ^ digits)
+      else if point >= String.length digits then
+        digits ^ String.make (point - String.length digits) '0', ""
+      else String.sub digits 0 point,
+           String.sub digits point (String.length digits - point)
+    in
+    let integer =
+      let rec first_nonzero index =
+        if index + 1 < String.length integer && integer.[index] = '0' then
+          first_nonzero (index + 1)
+        else index
+      in
+      String.sub integer (first_nonzero 0)
+        (String.length integer - first_nonzero 0)
+    in
+    let rec trim_fraction_end value =
+      if String.length value > 0 && value.[String.length value - 1] = '0' then
+        trim_fraction_end (String.sub value 0 (String.length value - 1))
+      else value
+    in
+    let fraction = trim_fraction_end fraction in
+    let result = if fraction = "" then integer else integer ^ "." ^ fraction in
+    Ok (if negative then "-" ^ result else result)
+
 let legacy_sampling_temperature = function
   | None -> Ok Keep
   | Some { temperature; top_p; top_k; seed; presence_penalty; frequency_penalty; stop_sequences } ->
@@ -81,7 +140,11 @@ let legacy_sampling_temperature = function
         | Some value when not (Float.is_finite value) ->
             conversion_error "legacy Request.sampling.temperature must be finite"
         | Some value ->
-            (match Usd_decimal.of_string (Float.to_string value) with
+            (match fixed_decimal_of_float value with
+             | Error message -> conversion_error
+                 ("legacy Request.sampling.temperature: " ^ message)
+             | Ok value ->
+               match Usd_decimal.of_string value with
              | Ok value -> Ok (Set value)
              | Error message -> conversion_error
                  ("legacy Request.sampling.temperature: " ^ message))
@@ -92,7 +155,9 @@ let legacy_reasoning_patch = function
       (match mode with
        | Reasoning_disabled -> conversion_error
            "legacy Request.reasoning.mode=Reasoning_disabled is not representable by Generate v1"
-       | Provider_default | Adaptive | Reasoning_enabled ->
+       | Adaptive | Reasoning_enabled -> conversion_error
+           "legacy Request.reasoning.mode is not representable by Generate v1"
+       | Provider_default ->
            match token_budget with
            | Some _ -> conversion_error
                "legacy Request.reasoning.token_budget is not representable by Generate v1"
