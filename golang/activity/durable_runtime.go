@@ -79,6 +79,52 @@ func (runtime *GenerateOnlyV1Runtime) QueryV1(context.Context, llm.QueryRequestV
 	return llm.QueryResponseV1{}, UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad)
 }
 
+// CompactOnlyV1Runtime adapts the storage-neutral Compact phase while
+// keeping Generate and Query explicitly unavailable. It is a composition
+// contract used while the two durable phase ports are wired independently;
+// production registration must still require a complete runtime before
+// polling a task queue.
+type CompactOnlyV1Runtime struct {
+	Compact durable.CompactPorts
+}
+
+var _ V1Runtime = (*CompactOnlyV1Runtime)(nil)
+
+// NewCompactOnlyV1Runtime validates the complete Compact port set before
+// exposing it to callers. No storage or provider work occurs during
+// construction.
+func NewCompactOnlyV1Runtime(compact durable.CompactPorts) (*CompactOnlyV1Runtime, error) {
+	if err := compact.Validate(); err != nil {
+		return nil, fmt.Errorf("compact runtime ports: %w", err)
+	}
+	return &CompactOnlyV1Runtime{Compact: compact}, nil
+}
+
+func (runtime *CompactOnlyV1Runtime) Validate() error {
+	if runtime == nil {
+		return fmt.Errorf("compact-only v1 runtime is nil")
+	}
+	if err := runtime.Compact.Validate(); err != nil {
+		return fmt.Errorf("compact runtime ports: %w", err)
+	}
+	return nil
+}
+
+func (runtime *CompactOnlyV1Runtime) GenerateV1(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
+	return llm.GenerateResponseV1{}, UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad)
+}
+
+func (runtime *CompactOnlyV1Runtime) CompactV1(ctx context.Context, request llm.CompactRequestV1) (llm.CompactResponseV1, error) {
+	if runtime == nil {
+		return llm.CompactResponseV1{}, durable.ErrV1PortsInvalid
+	}
+	return durable.CompactV1(ctx, request, runtime.Compact)
+}
+
+func (runtime *CompactOnlyV1Runtime) QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return llm.QueryResponseV1{}, UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad)
+}
+
 // NewDurableV1Runtime validates and constructs the Activity-facing durable
 // runtime. Generate and Compact are required because a configured v1 worker
 // must not advertise a partially implemented one-shot boundary. Query is
