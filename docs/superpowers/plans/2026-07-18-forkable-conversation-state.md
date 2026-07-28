@@ -62,6 +62,75 @@ At each exit, update release traceability only for that phase and leave later
 requirements explicitly pending. The phase owner may split commits further;
 task numbering is dependency guidance, not a mandate to publish one giant PR.
 
+## Current implementation and evidence status (2026-07-29)
+
+This plan remains the implementation contract; its task checkboxes are the
+original work breakdown and are not a release-evidence ledger. The following
+summary records what is present on `master` and what still requires a protected
+deployment run.
+
+Implemented repository slices include:
+
+- **Task 0, Redis namespace isolation.** The validated prefix and direct
+  environment override are wired through the runtime and Redis stores in
+  [`config/types.go`](../../../golang/config/types.go),
+  [`config/load.go`](../../../golang/config/load.go), and
+  [`internal/runtime/factory.go`](../../../golang/internal/runtime/factory.go).
+  Prefix validation and two-prefix isolation are covered by
+  [`config/redis_prefix_test.go`](../../../golang/config/redis_prefix_test.go),
+  [`storage/redis/prefix_isolation_test.go`](../../../golang/storage/redis/prefix_isolation_test.go),
+  and the opt-in shared-state conformance fixture
+  [`storage/redis/shared_state_conformance_integration_test.go`](../../../golang/storage/redis/shared_state_conformance_integration_test.go).
+- **Tasks 17-18, OCaml protocol and typed facade.** The nominal identifiers,
+  exact decimal models, Activity descriptors, immutable conversation facade,
+  and typed Query GADT are split across the
+  [`ocaml/llm_temporal_worker/lib`](../../../ocaml/llm_temporal_worker/lib)
+  modules. Checked-in offline coverage is provided by
+  [`test_activity.ml`](../../../ocaml/llm_temporal_worker/test/test_activity.ml),
+  [`test_conversation.ml`](../../../ocaml/llm_temporal_worker/test/test_conversation.ml),
+  [`test_query.ml`](../../../ocaml/llm_temporal_worker/test/test_query.ml),
+  and the downstream
+  [`consumer_workflow_smoke`](../../../ocaml/consumer_workflow_smoke) fixture.
+  These checks do not stand in for protected production-provider or release
+  evidence.
+- **Task 20, PostgreSQL maintenance primitives.** Bounded retention, blob GC,
+  outbox fencing, and conservative operation/checkpoint/cache safety are
+  implemented in [`storage/postgres/maintenance.go`](../../../golang/storage/postgres/maintenance.go),
+  [`storage/postgres/blob_gc.go`](../../../golang/storage/postgres/blob_gc.go),
+  and [`storage/postgres/retention_batch.go`](../../../golang/storage/postgres/retention_batch.go),
+  with integration coverage in
+  [`maintenance_integration_test.go`](../../../golang/storage/postgres/maintenance_integration_test.go)
+  and [`blob_gc_integration_test.go`](../../../golang/storage/postgres/blob_gc_integration_test.go).
+  Query-plan and budget-read classifier fixtures are present in
+  [`query_plan_integration_test.go`](../../../golang/storage/postgres/query_plan_integration_test.go)
+  and [`sql_classifier_integration_test.go`](../../../golang/storage/postgres/sql_classifier_integration_test.go).
+
+The following blockers are intentionally still open:
+
+1. **Task 19 production composition.** The production factory exposes optional
+   `V1RuntimeBuilder`, `GeneratePortsFactory`, and `CompactPortsFactory` seams,
+   but does not construct the Redis/PostgreSQL/provider/checkpoint/materializer
+   composition or its cross-store recovery state machine. The fail-closed
+   boundary is documented in
+   [`postgresql-repository-foundation.md`](../../reference/postgresql-repository-foundation.md)
+   and [`internal/runtime/factory.go`](../../../golang/internal/runtime/factory.go).
+   Enabling it requires deployment-owned blob locators, key bindings,
+   authorization, and protected Redis/PostgreSQL failure tests.
+2. **Task 20 operations.** There is no worker maintenance command: the
+   documented `llmtw-maintenance retention-once` adapter must be owned by the
+   deployment so runtime credentials cannot acquire the maintenance role.
+   Full operation/journal/reservation retention and autovacuum/fillfactor load
+   evidence remain deliberately disabled until their foreign-key and rebuild
+   obligations are proven; see [`maintenance.md`](../../reference/maintenance.md).
+3. **Task 21 protected recovery evidence.** The repository still needs the
+   authorized 10,000-turn/100-way crash and concurrency runs, SQL zero-budget-
+   read assertions across the composed runtime, and PostgreSQL/blob/Redis
+   backup-restore and fenced-generation-rebuild evidence. Offline unit tests,
+   opt-in integration fixtures, and CI compilation do not prove those gates.
+
+Do not mark these deployment or protected-evidence items complete merely
+because the corresponding ports, repositories, or deterministic tests exist.
+
 ## Global constraints
 
 All Go source/test paths below are relative to the repository's current
