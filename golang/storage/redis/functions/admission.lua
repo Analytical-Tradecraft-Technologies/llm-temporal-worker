@@ -701,7 +701,8 @@ if ACTION == 'durable_reserve' then
         local prior_limit = redis.call('HGET', bucket_key, limit_field)
         if prior_limit and prior_limit ~= reservation.limit_nano then return {'conflict', ''} end
         local active = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(reservation.bucket)) or '0')
-        if not active or active > limit or amount > limit - active then
+        if not active then return {'state_unavailable', ''} end
+        if active > limit or amount > limit - active then
             local denial = {
                 schema = DURABLE_SCHEMA, operation_id = operation_id, generation_id = generation,
                 incarnation_id = incarnation, fingerprint = fingerprint, status = 'denied',
