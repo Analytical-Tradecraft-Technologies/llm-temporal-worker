@@ -135,6 +135,10 @@ type ProductionFactoryOptions struct {
 	// the Generate-only runtime unconfigured and causes that builder to fail
 	// closed before Temporal polling.
 	GeneratePortsFactory GeneratePortsFactory
+	// CompactPortsFactory supplies the complete snapshot-owned durable
+	// Compact phase to a compact-only composition builder. Nil intentionally
+	// leaves Compact unconfigured and never falls back to the legacy engine.
+	CompactPortsFactory CompactPortsFactory
 	// QueryServiceBuilder is optional by design. A deployment must provide
 	// authorization, cursor-key, and audit composition explicitly before the
 	// production factory exposes persisted control-plane queries.
@@ -521,6 +525,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
 			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
+			CompactPortsFactory:    factory.options.CompactPortsFactory,
 		},
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
@@ -622,6 +627,7 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 			Adapters:             capabilityAdapterRegistry,
 			Clock:                clock,
 			GeneratePortsFactory: factory.options.GeneratePortsFactory,
+			CompactPortsFactory:  factory.options.CompactPortsFactory,
 		},
 		close: func(context.Context) error { return nil },
 	}, nil

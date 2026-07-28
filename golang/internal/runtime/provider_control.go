@@ -182,8 +182,10 @@ type V1RuntimeCapabilities struct {
 	// adapters and stores represented by this capability bundle; a nil value is
 	// deliberately unconfigured and never falls back to the legacy engine.
 	GeneratePortsFactory GeneratePortsFactory
-	// CompactPortsFactory is the corresponding constructor for the durable
-	// one-shot Compact phase. It is a contract-only capability for now: the
+	// CompactPortsFactory is the per-snapshot constructor for the storage-
+	// neutral durable Compact phase. It is intentionally independent from
+	// GeneratePortsFactory so composition can validate each phase without
+	// adapting the legacy engine or fabricating the other phase. The
 	// production builder must not expose Compact until a deployment supplies
 	// every callback behind this factory.
 	CompactPortsFactory CompactPortsFactory
@@ -197,9 +199,9 @@ type V1RuntimeCapabilities struct {
 type GeneratePortsFactory func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error)
 
 // CompactPortsFactory constructs the complete durable Compact port set for
-// one immutable runtime snapshot. The factory must use only the capabilities
-// passed by value and must not create process-global clients or fabricate a
-// missing phase. A nil value keeps Compact fail-closed.
+// one immutable runtime snapshot. Implementations must use only the supplied
+// snapshot-owned capabilities and must fail closed when a required dependency
+// is absent. A nil value keeps Compact fail-closed.
 type CompactPortsFactory func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error)
 
 // ValidateGenerate checks every capability needed before the Generate-only
@@ -232,9 +234,10 @@ func (capabilities V1RuntimeCapabilities) ValidateGenerate() error {
 }
 
 // ValidateCompact checks every capability needed before a Compact-only
-// runtime can be composed. Compact has a distinct runner and accounting path;
-// this method intentionally does not imply that Generate or Query is ready,
-// and no builder calls the factory until all callback ports are implemented.
+// runtime can be composed. It performs no I/O and does not imply that Generate
+// or Query is configured; the two phase contracts remain independently
+// validated, and no builder calls the factory until all callback ports are
+// implemented.
 func (capabilities V1RuntimeCapabilities) ValidateCompact() error {
 	if isNilCapability(capabilities.Snapshot) {
 		return errors.New("v1 Compact snapshot source is not configured")
