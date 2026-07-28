@@ -104,6 +104,14 @@ Implemented repository slices include:
   Query-plan and budget-read classifier fixtures are present in
   [`query_plan_integration_test.go`](../../../golang/storage/postgres/query_plan_integration_test.go)
   and [`sql_classifier_integration_test.go`](../../../golang/storage/postgres/sql_classifier_integration_test.go).
+- **Task 6, Redis recovery contract.** The storage-neutral
+  [`budget_bootstrap.go`](../../../golang/storage/redis/budget_bootstrap.go)
+  coordinator and deterministic tests now encode Redis-only adoption,
+  complete working-set proofs, same-incarnation fail-closed behavior, explicit
+  fleet/incarnation eligibility, fencing, candidate identity validation, and
+  an atomic publish-and-switch boundary. This is a contract slice only; no
+  production factory wires it, and protected cross-store recovery evidence is
+  still required.
 
 The following blockers are intentionally still open:
 
