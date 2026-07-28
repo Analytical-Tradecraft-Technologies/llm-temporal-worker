@@ -415,6 +415,32 @@ func checkpointCapabilitiesFromCloser(closer io.Closer) CheckpointCapabilities {
 	return CheckpointCapabilities{}
 }
 
+// checkpointCapabilitiesFromCloserWithBindings completes the optional
+// PostgreSQL repository bundle with snapshot-owned blob and handle bindings.
+// The bindings are passed in by the production factory only after it has
+// constructed the immutable blob store and continuation keyring for the same
+// configuration snapshot. Missing bindings preserve an explicitly partial
+// bundle; they never result in an unscoped reader or an unsigned handle
+// materializer.
+func checkpointCapabilitiesFromCloserWithBindings(closer io.Closer, reader state.CheckpointBlobReader, verifier state.CheckpointHandleVerifier, now func() time.Time) CheckpointCapabilities {
+	capabilities := checkpointCapabilitiesFromCloser(closer)
+	if isNilCapability(capabilities.Blobs) && !isNilCapability(reader) {
+		capabilities.Blobs = snapshotCheckpointBlobReader{delegate: reader}
+	}
+	if isNilCapability(capabilities.Materializer) && !isNilCapability(capabilities.Repository) && !isNilCapability(capabilities.Blobs) && !isNilCapability(verifier) {
+		capabilities.Materializer = snapshotCheckpointMaterializer{delegate: &state.DurableCheckpointMaterializer{
+			Repository:     capabilities.Repository,
+			Blobs:          capabilities.Blobs,
+			HandleVerifier: verifier,
+			Now:            now,
+		}}
+	}
+	if err := capabilities.Validate(); err != nil {
+		return CheckpointCapabilities{}
+	}
+	return capabilities
+}
+
 func journalFromCloser(closer io.Closer) durablestore.Journal {
 	if source, ok := closer.(PostgresJournalSource); ok {
 		journal := source.Journal()

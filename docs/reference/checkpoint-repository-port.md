@@ -77,7 +77,12 @@ The runtime's `CheckpointCapabilities` bundle carries these ports with the
 same immutable configuration snapshot as the worker clients. Its `Validate`
 method permits an explicitly partial rollout, but `RequireMaterializer` is a
 fail-closed gate for any builder that needs replay: repository, scoped blob
-reader, and handle materializer must all be present. Runtime-owned private
-adapters erase concrete PostgreSQL/blob-reader implementations before the
-bundle is published, so the storage-neutral interface cannot be bypassed by a
-type assertion to a pool, locator, or key binding.
+reader, and handle materializer must all be present. The production factory
+can complete this bundle only when deployment supplies a checkpoint blob-ID
+locator and the snapshot's continuation keyring; the locator is deliberately
+separate from the result `BlobRefResolver` because checkpoint rows contain
+UUID blob IDs. Runtime-owned private adapters erase concrete
+PostgreSQL/blob-reader implementations before the bundle is published, so the
+storage-neutral interface cannot be bypassed by a type assertion to a pool,
+locator, or key binding. Without either binding, checkpoint replay remains
+fail-closed.

@@ -424,6 +424,48 @@ func TestCheckpointMaterializerCapabilityKeepsSnapshotOwnerLifecycle(t *testing.
 	}
 }
 
+func TestCheckpointCapabilitiesBindSnapshotBlobReaderAndHandleKeyring(t *testing.T) {
+	keyring, err := state.NewKeyring([]state.Key{{ID: "checkpoint-v1", Secret: []byte("01234567890123456789012345678901"), Primary: true}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := checkpointBlobReaderStub{}
+	capabilities := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, reader, keyring, nowFunc(time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)))
+	if err := capabilities.RequireMaterializer(); err != nil {
+		t.Fatalf("bound checkpoint capabilities failed validation: %v", err)
+	}
+	wrappedReader, ok := capabilities.Blobs.(snapshotCheckpointBlobReader)
+	if !ok || wrappedReader.delegate != reader {
+		t.Fatalf("bound blob reader = %#v, want private snapshot wrapper around supplied reader", capabilities.Blobs)
+	}
+	wrappedMaterializer, ok := capabilities.Materializer.(snapshotCheckpointMaterializer)
+	if !ok {
+		t.Fatalf("bound materializer = %T, want private snapshot wrapper", capabilities.Materializer)
+	}
+	durable, ok := wrappedMaterializer.delegate.(*state.DurableCheckpointMaterializer)
+	if !ok {
+		t.Fatalf("bound materializer delegate = %T, want state.DurableCheckpointMaterializer", wrappedMaterializer.delegate)
+	}
+	if _, ok := durable.Repository.(snapshotCheckpointRepository); !ok {
+		t.Fatalf("durable materializer repository = %T, want snapshot repository wrapper", durable.Repository)
+	}
+	if _, ok := durable.Blobs.(snapshotCheckpointBlobReader); !ok {
+		t.Fatalf("durable materializer blob reader = %T, want snapshot blob-reader wrapper", durable.Blobs)
+	}
+	if durable.HandleVerifier != keyring {
+		t.Fatalf("durable materializer verifier = %T, want snapshot keyring", durable.HandleVerifier)
+	}
+
+	missingReader := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, nil, keyring, nil)
+	if missingReader.Materializer != nil {
+		t.Fatal("checkpoint materializer published without a blob reader")
+	}
+	missingVerifier := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, reader, nil, nil)
+	if missingVerifier.Materializer != nil {
+		t.Fatal("checkpoint materializer published without an opaque-handle verifier")
+	}
+}
+
 func TestPostgresCloserExposesPrivateWriteOnlyJournal(t *testing.T) {
 	namespace, err := postgresstore.NewNamespace("worker", "state", "tenant_")
 	if err != nil {
