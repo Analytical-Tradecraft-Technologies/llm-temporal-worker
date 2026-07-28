@@ -57,6 +57,22 @@ let () =
                           "generate response operation key mismatch: expected generate-test, got different-operation" -> ()
    | Error error -> failf "unexpected operation key mismatch: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "mismatched Generate operation key was accepted");
+  let zero_settings = Generate.Settings.make
+      ~temperature:(match Decimal.of_string "0" with
+        | Ok value -> value
+        | Error message -> failwith message) ()
+  in
+  let zero_cache = match Generate.Cache_policy.accept_up_to ~max_age_seconds:60L ~variant:1l () with
+    | Ok value -> value
+    | Error message -> failwith message
+  in
+  (try
+     ignore (Generate.make ~operation_key ~context ~model
+       ~settings:zero_settings ~cache:zero_cache ~input ());
+     failwith "Generate.make accepted explicit zero temperature with positive cache variant"
+   with
+   | Invalid_argument message
+     when String.equal message "positive cache variant requires an explicitly positive temperature" -> ());
   let legacy = Request.make ~operation_key ~model ~service_class:Standard ~input () in
   if legacy.model <> model then failwith "legacy Request compatibility changed";
   print_endline "one-shot Generate facade passed"

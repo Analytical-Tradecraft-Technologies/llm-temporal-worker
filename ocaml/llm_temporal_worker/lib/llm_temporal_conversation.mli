@@ -79,6 +79,13 @@ val to_request :
   ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> append:item list -> t -> generate_request
 
+(** A positive cache variant is only valid when the request explicitly sets a
+    strictly positive temperature. The worker remains authoritative when the
+    inherited temperature is unknown; this helper rejects only the case the
+    facade can prove invalid locally. *)
+val validate_cache_temperature :
+  cache_policy option -> settings_patch -> (unit, validation_error) result
+
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
   (generate_request, generate_response) Temporal.Activity.t ->

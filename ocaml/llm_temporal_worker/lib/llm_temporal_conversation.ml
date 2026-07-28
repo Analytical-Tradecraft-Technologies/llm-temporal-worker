@@ -211,6 +211,14 @@ let to_request ?settings_patch ?cache ~operation_key ~append conversation =
     operation_key; context = conversation.context; parent = conversation.checkpoint;
     append; settings_patch = request_patch conversation settings_patch; cache }
 
+let validate_cache_temperature (cache : cache_policy option) settings_patch =
+  match cache, settings_patch.temperature with
+  | Some { variant; _ }, Set temperature
+    when Int32.compare variant 0l > 0
+         && Usd_decimal.compare temperature Usd_decimal.zero <= 0 ->
+      Error "positive cache variant requires an explicitly positive temperature"
+  | _ -> Ok ()
+
 let child conversation (patch : settings_patch) checkpoint =
   { conversation with
     model = (match patch.model with Keep -> conversation.model | Set value -> Some value | Clear -> None);
@@ -226,15 +234,18 @@ type dispatcher =
 
 let respond_with ?task_queue ~dispatch ?settings_patch ?cache ~operation_key ~append conversation =
   let request = to_request ?settings_patch ?cache ~operation_key ~append conversation in
-  match Llm_temporal_invocation.invoke_generate_once ?task_queue ~dispatch request with
-  | Error error -> Error error
-  | Ok response when
-      not (String.equal
-             (Operation_key.to_string response.operation_key)
-             (Operation_key.to_string request.operation_key)) ->
-      Error (operation_key_mismatch ~expected:request.operation_key
-               ~actual:response.operation_key)
-  | Ok response -> Ok { response; conversation = child conversation request.settings_patch response.checkpoint.handle }
+  match validate_cache_temperature request.cache request.settings_patch with
+  | Error message -> Error (Temporal.Error.codec ~message)
+  | Ok () ->
+      match Llm_temporal_invocation.invoke_generate_once ?task_queue ~dispatch request with
+      | Error error -> Error error
+      | Ok response when
+          not (String.equal
+                 (Operation_key.to_string response.operation_key)
+                 (Operation_key.to_string request.operation_key)) ->
+          Error (operation_key_mismatch ~expected:request.operation_key
+                   ~actual:response.operation_key)
+      | Ok response -> Ok { response; conversation = child conversation request.settings_patch response.checkpoint.handle }
 
 let activity_dispatch ?task_queue activity input =
   Temporal.Activity.execute
@@ -246,21 +257,26 @@ let respond ?task_queue ?settings_patch ?cache ~operation_key ~append conversati
 
 let start_respond ?task_queue ?settings_patch ?cache ~operation_key ~append conversation =
   let request = to_request ?settings_patch ?cache ~operation_key ~append conversation in
-  let future =
-    Temporal.Activity.start
-      ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-      ~retry_policy:Llm_temporal_invocation.activity_retry_policy
-      Llm_temporal_invocation.generate_v1_activity request
-  in
-  Temporal.Future.map
-    (fun (response : generate_response) ->
-      if String.equal
-           (Operation_key.to_string response.operation_key)
-           (Operation_key.to_string request.operation_key)
-      then Ok { response; conversation = child conversation request.settings_patch response.checkpoint.handle }
-      else Error (operation_key_mismatch ~expected:request.operation_key
-                    ~actual:response.operation_key))
-    future
+  match validate_cache_temperature request.cache request.settings_patch with
+  | Error message ->
+      let error = Temporal.Error.codec ~message in
+      Temporal.Future.map (fun _ -> Error error) (Temporal.Future.all [])
+  | Ok () ->
+      let future =
+        Temporal.Activity.start
+          ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
+          ~retry_policy:Llm_temporal_invocation.activity_retry_policy
+          Llm_temporal_invocation.generate_v1_activity request
+      in
+      Temporal.Future.map
+        (fun (response : generate_response) ->
+          if String.equal
+               (Operation_key.to_string response.operation_key)
+               (Operation_key.to_string request.operation_key)
+          then Ok { response; conversation = child conversation request.settings_patch response.checkpoint.handle }
+          else Error (operation_key_mismatch ~expected:request.operation_key
+                        ~actual:response.operation_key))
+        future
 
 type compact_dispatcher =
   ?task_queue:Temporal_task_queue.t ->

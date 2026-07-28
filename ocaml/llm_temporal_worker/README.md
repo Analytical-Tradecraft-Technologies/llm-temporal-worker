@@ -148,6 +148,15 @@ let branch =
 in
 ```
 
+The facade enforces the cache-variant temperature rule before scheduling
+Generate: a positive `Cache_policy.variant` is rejected when the request
+explicitly sets `temperature` to zero. Inherited or otherwise unknown
+temperature remains server-authoritative, so a positive variant is allowed
+when the client cannot prove the effective value. `Generate.make` raises
+`Invalid_argument` for this construction-time error; `Conversation.respond`
+and `respond_with` return a typed `Temporal.Error.t` without dispatching an
+Activity.
+
 The synchronous `respond_with`, `compact_with`, and `Query.execute_with`
 helpers also bind an injected response to the request's `operation_key` before
 exposing it to the caller. A dispatcher that returns a response for another
