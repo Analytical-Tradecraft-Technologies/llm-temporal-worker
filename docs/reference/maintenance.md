@@ -155,3 +155,23 @@ become metric labels. Cache lookup/fill boundaries report hit, use, miss, and
 fill outcomes, while provider-owned polls report started, completed, retry,
 or failed outcomes. Cost status telemetry records exact versus unknown
 without exporting the amount or unknown reason.
+
+### Table-settings evidence
+
+`MaintenanceRepository.InspectTableSettings` is a read-only diagnostic for
+release and operations evidence. It reads `pg_class.reloptions` together with
+`pg_stat_user_tables` for the maintenance tables in the configured namespace,
+and returns logical resource labels, configured `fillfactor` and autovacuum
+options (including explicit `autovacuum_enabled=false`) when they are
+present, approximate live/dead tuple counts, and the last autovacuum/analyze
+timestamps. Missing options remain unset:
+the adapter never substitutes PostgreSQL defaults or a guessed production
+threshold. The report also requires every expected maintenance relation; a
+missing or unreadable relation, catalog, scan, or option-decoding failure
+returns an error rather than producing a partial or inferred report.
+
+This report demonstrates what is configured and what PostgreSQL currently
+observes; it does not demonstrate the p99/error-rate objectives or prove that
+the values are suitable for production load. Those values remain a separate,
+load-tested release-evidence requirement. In particular, this method does not
+mutate reloptions or install table-specific autovacuum settings.
