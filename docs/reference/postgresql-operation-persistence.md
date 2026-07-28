@@ -1,10 +1,20 @@
 # PostgreSQL operation persistence
 
-Task 5 adds the durable one-shot operation boundary used by the Temporal
-worker. `storage/postgres.OperationRepository` implements the existing
-`admission.AdmissionStore` lifecycle while storing the normalized request
-manifest, request-fingerprint HMAC, result digest, exact-or-unknown USD cost,
-and every route attempt in the worker schema.
+Task 5 adds the durable one-shot operation repository. The repository is
+implemented and integration-tested, but it is not yet wired into the
+production Temporal factory. `storage/postgres.OperationRepository`
+implements the existing `admission.AdmissionStore` lifecycle while storing the
+normalized request manifest, request-fingerprint HMAC, result digest,
+exact-or-unknown USD cost, and every route attempt in the worker schema.
+
+The current production composition does not yet bind this repository to the
+engine's operation and continuation ports; that path still uses the Redis
+operation and continuation stores. PostgreSQL readiness and its other durable
+repositories are separate capabilities. Generate, Compact, and Query
+Activities therefore retain the explicit fail-closed boundary described in the
+[v1 Activity runtime reference](activity-runtime.md): they do not dispatch a
+provider until snapshot-scoped PostgreSQL checkpoint/cache/control
+dependencies and a concrete `activity.V1Runtime` have been composed.
 
 ## Replay and transitions
 
