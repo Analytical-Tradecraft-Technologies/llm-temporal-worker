@@ -83,8 +83,12 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		set.Version = adapter.capabilityVersion
 	}
 	for _, feature := range requiredFeatures(normalized) {
-		if _, err := set.Resolve(feature, input.Strict); err != nil {
+		capability, err := set.Resolve(feature, input.Strict)
+		if err != nil {
 			return provider.Call{}, unsupportedError(feature, err.Error())
+		}
+		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
+			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability is %s", capability.State))
 		}
 	}
 	params, err := lowerRequest(normalized, serviceClass)

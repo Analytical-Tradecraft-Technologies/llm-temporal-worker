@@ -43,6 +43,51 @@ func TestCompileUsesAdapterCapabilitiesAndMetadata(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsUnusableCapabilitiesBeforeDispatch(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		state  provider.CapabilityState
+		strict bool
+	}{
+		{name: "unsupported strict", state: provider.CapabilityUnsupported, strict: true},
+		{name: "unsupported best effort", state: provider.CapabilityUnsupported, strict: false},
+		{name: "unknown strict", state: provider.CapabilityUnknown, strict: true},
+		{name: "unknown best effort", state: provider.CapabilityUnknown, strict: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls int
+			adapter := newFixtureAdapterWithTransport(t, []byte(`{"id":"unused"}`), func() { calls++ })
+			capabilitySet := capabilities("cap-test")
+			capabilitySet.Features[provider.FeatureText] = provider.Capability{State: test.state, Reason: "test capability state"}
+			_, err := adapter.Compile(context.Background(), provider.CompileInput{
+				Request: llm.Request{OperationKey: "op-capability", Model: "gpt-contract", Input: []llm.Item{
+					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}},
+				}},
+				Query: provider.CapabilityQuery{
+					EndpointID: "openai-prod",
+					Family:     provider.FamilyOpenAIResponses,
+					Model:      "gpt-contract",
+				},
+				Capability: capabilitySet,
+				Strict:     test.strict,
+			})
+			var providerErr *provider.Error
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("Compile() error = %T %v, want *provider.Error", err, err)
+			}
+			if providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Phase != provider.PhaseCompile || providerErr.Dispatch != provider.DispatchNotDispatched {
+				t.Fatalf("Compile() error = %#v, want unsupported compile rejection", providerErr)
+			}
+			if !strings.Contains(providerErr.SafeMessage, "text") || !strings.Contains(providerErr.SafeMessage, string(test.state)) {
+				t.Fatalf("Compile() safe message = %q, want feature and state", providerErr.SafeMessage)
+			}
+			if calls != 0 {
+				t.Fatalf("HTTP calls = %d, want zero after capability rejection", calls)
+			}
+		})
+	}
+}
+
 func TestInvokeRunsOneRequestAndLiftsResponse(t *testing.T) {
 	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
 	if err != nil {
