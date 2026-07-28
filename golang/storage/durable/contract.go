@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -220,22 +221,38 @@ func (composition Composition) Validate() error {
 	if err := composition.Identity.Validate(); err != nil {
 		return err
 	}
-	if composition.Operations == nil {
+	if isNilPort(composition.Operations) {
 		return errors.New("durable operation store is required")
 	}
-	if composition.Continuations == nil {
+	if isNilPort(composition.Continuations) {
 		return errors.New("durable continuation store is required")
 	}
-	if composition.Results == nil {
+	if isNilPort(composition.Results) {
 		return errors.New("durable result store is required")
 	}
-	if composition.Journal == nil {
+	if isNilPort(composition.Journal) {
 		return errors.New("durable PostgreSQL journal is required")
 	}
-	if composition.Materializer == nil {
+	if isNilPort(composition.Materializer) {
 		return errors.New("durable Redis budget materializer is required")
 	}
 	return nil
+}
+
+// isNilPort treats an interface containing a typed nil pointer as nil. Ports
+// are validated before any side effects, so an invalid composition fails
+// closed instead of panicking when a method is invoked later.
+func isNilPort(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 // Phase is the only legal new-operation order. A journal failure must stop
