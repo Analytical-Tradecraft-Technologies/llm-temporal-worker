@@ -237,9 +237,9 @@ func TestProductionCompositionDoesNotAdaptLegacyEngineToV1(t *testing.T) {
 }
 
 func TestPhaseOnlyV1RuntimesNeverAdvertiseProductionReadiness(t *testing.T) {
-	for _, runtime := range []activity.V1Runtime{
-		&activity.GenerateOnlyV1Runtime{},
-		&activity.CompactOnlyV1Runtime{},
+	for _, runtime := range []appactivity.V1Runtime{
+		&appactivity.GenerateOnlyV1Runtime{},
+		&appactivity.CompactOnlyV1Runtime{},
 	} {
 		if isV1RuntimeConfigured(runtime) {
 			t.Fatalf("phase-only runtime %T was treated as production configured", runtime)
