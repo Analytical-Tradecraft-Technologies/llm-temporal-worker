@@ -54,6 +54,12 @@ func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
 
 	deniedRequest := request
 	deniedRequest.OperationID = "durable-operation-denied"
+	// The first reservation consumes exactly half of the two-cent limit. Keep
+	// the denial assertion meaningful by requesting the full limit on the same
+	// window; an exact-boundary request is valid and must remain accepted.
+	deniedReservation := reservation
+	deniedReservation.AmountUSD = pricing.MustUSD("0.02")
+	deniedRequest.Reservations = []admission.WindowReservation{deniedReservation}
 	denied, err := materializer.Accept(ctx, deniedRequest)
 	if err != nil {
 		t.Fatalf("denied reservation = %v", err)

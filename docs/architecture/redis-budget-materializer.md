@@ -43,4 +43,7 @@ Redis integration setup:
 make redis-integration
 ```
 
+The conformance denial case requests more than the remaining window capacity;
+requests exactly equal to the remaining limit are valid and must be accepted.
+
 That command is required before enabling this port in a production runtime.
