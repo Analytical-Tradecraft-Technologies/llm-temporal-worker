@@ -737,6 +737,19 @@ separately in `docs/release/v1-requirements.json`.
 
 ### Task 13: Persist provider health, credit incidents, and model inventory
 
+Status: the provider-control normalization and persistence slices are
+implemented: closed status and credit observations, sticky incident and
+replay rules, bounded inventory snapshots, refresh collapse, and PostgreSQL
+status/inventory projections have offline and opt-in database coverage. This
+does not complete Task 13. No production provider profile currently
+implements `provider.ModelLister`; management refresh therefore remains an
+explicit deployment-owned adapter, and `configured_only` or `unsupported`
+inventory is the honest state until one is supplied. Runtime status recording,
+protected provider credentials, and durable composition that binds those
+adapters to a live query Activity remain follow-up work. Keep the original
+checklist below unchecked until those deployment and protected-evidence gates
+are proven.
+
 **Files:**
 
 - Create: **control/status.go**
