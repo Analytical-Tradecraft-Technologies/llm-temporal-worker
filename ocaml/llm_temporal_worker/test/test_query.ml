@@ -109,6 +109,22 @@ let () =
    | Ok (Some (Query.Provider_status { cursor = Some next; _ })) when next = provider_cursor -> ()
    | Ok _ -> failwith "complete page dropped its worker-provided cursor"
    | Error error -> failf "unexpected complete-page pagination error: %s" (Temporal.Error.message error));
+  (* Pagination keeps the GADT result type for every paginated query, not only
+     provider status.  These branches intentionally bind the returned filters
+     to their constructor so a future implementation cannot accidentally
+     return a query of a different result type. *)
+  let model_cursor = tagged_cursor Query_cursor.Model_inventory "model:page-2" in
+  let model_first_page = { (run model) with complete = false; next_cursor = Some model_cursor } in
+  (match Query.next model model_first_page with
+   | Ok (Some (Query.Model_inventory { cursor = Some next; _ })) when next = model_cursor -> ()
+   | Ok _ -> failwith "typed pagination changed the model inventory result type"
+   | Error error -> failf "unexpected model pagination error: %s" (Temporal.Error.message error));
+  let credit_cursor = tagged_cursor Query_cursor.Credit_status "credit:page-2" in
+  let credit_first_page = { (run credit) with complete = false; next_cursor = Some credit_cursor } in
+  (match Query.next credit credit_first_page with
+   | Ok (Some (Query.Credit_status { cursor = Some next; _ })) when next = credit_cursor -> ()
+   | Ok _ -> failwith "typed pagination changed the credit status result type"
+   | Error error -> failf "unexpected credit pagination error: %s" (Temporal.Error.message error));
   (match Query.next budget { (run budget) with complete = false; next_cursor = Some provider_cursor } with
    | Error error when String.equal (Temporal.Error.message error)
                          "query response.budget_status must not include next_cursor" -> ()

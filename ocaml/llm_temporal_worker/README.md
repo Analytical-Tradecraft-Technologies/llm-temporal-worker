@@ -327,6 +327,13 @@ match Query.next query response with
 | Error error -> handle_temporal_error error
 ```
 
+The result association is preserved for each paginated constructor:
+`Provider_status` returns a `provider_status_page`, `Model_inventory` returns
+a `model_inventory_page`, and `Credit_status` returns a `credit_status_page`.
+This remains true when a response is marked complete but still supplies a
+cursor; the worker-provided cursor is authoritative for whether another page
+is available.
+
 Response cursors retain the query kind that produced them. Reusing a cursor
 returned by one paginated query with a different query kind is rejected by the
 OCaml facade before an Activity is dispatched. `Query_cursor.of_string` remains
