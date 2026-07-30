@@ -13,6 +13,36 @@ import (
 )
 
 const sloEvidenceSourceRevision = "0123456789abcdef0123456789abcdef01234567"
+const sloBindingReleaseRevision = sloEvidenceSourceRevision
+const sloBindingImageReference = "registry.example:5000/llm-temporal-worker"
+const sloBindingImageDigest = "sha256:" + "d" + "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+const sloBindingArtifactName = "release-evidence"
+const sloBindingArtifactDigest = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+func TestSLOEvidenceMakeTargetIsOfflineAndFocused(t *testing.T) {
+	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := makeTarget(t, string(makefile), "slo-evidence-verify:\n", "\n\nintegration:")
+	for _, required := range []string{
+		"$(GO) test ./internal/architecturetest -run '^TestSLOEvidence' -count=1",
+	} {
+		if !strings.Contains(target, required) {
+			t.Errorf("slo-evidence-verify is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"LLMTW_LIVE_",
+		"LLMTW_REDIS_ADDR",
+		"docker",
+		"release-verify",
+	} {
+		if strings.Contains(target, forbidden) {
+			t.Errorf("slo-evidence-verify must not require protected or external state via %q", forbidden)
+		}
+	}
+}
 
 func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testing.T) {
 	root := repositoryRoot(t)
@@ -77,6 +107,170 @@ func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testin
 	if got := metadata.Mode().Perm(); got != 0o600 {
 		t.Fatalf("evidence mode = %o, want 600", got)
 	}
+}
+
+func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T) {
+	root := repositoryRoot(t)
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "candidate.json")
+	evidencePath := filepath.Join(directory, "slo-measurement.json")
+	bindingPath := filepath.Join(directory, "slo-binding.json")
+	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
+
+	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
+	if err != nil {
+		t.Fatalf("record SLO evidence: %v\n%s", err, output)
+	}
+	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), "slo evidence recorded sha256=")
+	args := sloBindingArguments(evidencePath, bindingPath, digest)
+	output, err = runSLOEvidence(root, append([]string{"bind"}, args...)...)
+	if err != nil {
+		t.Fatalf("bind SLO evidence: %v\n%s", err, output)
+	}
+	const prefix = "slo evidence binding recorded sha256="
+	bindingDigest := strings.TrimPrefix(strings.TrimSpace(string(output)), prefix)
+	if bindingDigest == strings.TrimSpace(string(output)) || len(bindingDigest) != 64 {
+		t.Fatalf("bind output = %q, want binding digest", output)
+	}
+
+	raw, err := os.ReadFile(bindingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding map[string]any
+	if err := json.Unmarshal(raw, &binding); err != nil {
+		t.Fatalf("decode SLO binding: %v", err)
+	}
+	wantKeys := map[string]bool{"schema_version": true, "kind": true, "status": true, "evidence": true, "release": true, "redacted": true, "content_sha256": true}
+	if len(binding) != len(wantKeys) {
+		t.Fatalf("binding keys = %#v, want only %#v", binding, wantKeys)
+	}
+	for key := range wantKeys {
+		if _, ok := binding[key]; !ok {
+			t.Fatalf("binding does not contain %q: %#v", key, binding)
+		}
+	}
+	if got, want := binding["kind"], "slo_release_binding"; got != want {
+		t.Fatalf("binding kind = %#v, want %q", got, want)
+	}
+	if got, want := binding["status"], "bound"; got != want {
+		t.Fatalf("binding status = %#v, want %q", got, want)
+	}
+	evidence, ok := binding["evidence"].(map[string]any)
+	if !ok || evidence["source_revision"] != sloEvidenceSourceRevision || evidence["content_sha256"] != digest {
+		t.Fatalf("binding evidence = %#v, want source and digest", binding["evidence"])
+	}
+	release, ok := binding["release"].(map[string]any)
+	if !ok {
+		t.Fatalf("binding release = %#v, want object", binding["release"])
+	}
+	for key, want := range map[string]any{
+		"source_revision": sloBindingReleaseRevision, "image_reference": sloBindingImageReference,
+		"image_digest": sloBindingImageDigest, "workflow_run_id": float64(30535408998),
+		"artifact_name": sloBindingArtifactName, "artifact_digest": sloBindingArtifactDigest,
+	} {
+		if got := release[key]; got != want {
+			t.Fatalf("binding release[%q] = %#v, want %#v", key, got, want)
+		}
+	}
+	if got := binding["content_sha256"]; got != bindingDigest {
+		t.Fatalf("binding content_sha256 = %#v, want %q", got, bindingDigest)
+	}
+	bindingSchema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-binding.schema.json", "urn:llmtw:slo-evidence-binding:v1")
+	if err := validateSLOEvidenceJSONSchema(bindingSchema, binding); err != nil {
+		t.Fatalf("binding schema rejects recorded binding: %v", err)
+	}
+	binding["api_key"] = "must-not-be-accepted"
+	if err := validateSLOEvidenceJSONSchema(bindingSchema, binding); err == nil {
+		t.Fatal("binding schema accepts unsafe unknown field")
+	}
+	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
+		t.Fatalf("binding is not canonical JSON: %q", raw)
+	}
+
+	if _, err := runSLOEvidence(root, append([]string{"verify-binding"}, args...)...); err != nil {
+		t.Fatalf("verify SLO binding: %v", err)
+	}
+	before := append([]byte(nil), raw...)
+	if output, err := runSLOEvidence(root, append([]string{"bind"}, args...)...); err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+		t.Fatalf("bind unexpectedly overwrote immutable binding: %v, %q", err, output)
+	}
+	after, err := os.ReadFile(bindingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("failed bind changed immutable binding")
+	}
+	metadata, err := os.Stat(bindingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metadata.Mode().Perm(); got != 0o600 {
+		t.Fatalf("binding mode = %o, want 600", got)
+	}
+}
+
+func TestSLOEvidenceBindingRejectsCrossRevisionAndUnsafeReleaseMetadata(t *testing.T) {
+	root := repositoryRoot(t)
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "candidate.json")
+	evidencePath := filepath.Join(directory, "slo-measurement.json")
+	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
+	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
+	if err != nil {
+		t.Fatalf("record SLO evidence: %v\n%s", err, output)
+	}
+	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), "slo evidence recorded sha256=")
+	testCases := []struct {
+		name   string
+		mutate func([]string)
+	}{
+		{name: "source revision mismatch", mutate: func(args []string) { setSLOBindingFlag(args, "--source-revision", strings.Repeat("f", 40)) }},
+		{name: "content digest mismatch", mutate: func(args []string) { setSLOBindingFlag(args, "--content-sha256", strings.Repeat("f", 64)) }},
+		{name: "release revision mismatch", mutate: func(args []string) { setSLOBindingFlag(args, "--release-revision", strings.Repeat("f", 40)) }},
+		{name: "image reference contains credentials", mutate: func(args []string) {
+			setSLOBindingFlag(args, "--image-reference", "ghcr.io/user:password@registry.example/worker")
+		}},
+		{name: "image digest malformed", mutate: func(args []string) { setSLOBindingFlag(args, "--image-digest", "sha256:bad") }},
+		{name: "workflow run id not positive", mutate: func(args []string) { setSLOBindingFlag(args, "--workflow-run-id", "0") }},
+		{name: "artifact name is not release evidence", mutate: func(args []string) { setSLOBindingFlag(args, "--artifact-name", "other-artifact") }},
+		{name: "artifact digest malformed", mutate: func(args []string) { setSLOBindingFlag(args, "--artifact-digest", "bad") }},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			bindingPath := filepath.Join(directory, testCase.name+".json")
+			args := sloBindingArguments(evidencePath, bindingPath, digest)
+			testCase.mutate(args)
+			output, err := runSLOEvidence(root, append([]string{"bind"}, args...)...)
+			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+				t.Fatalf("bind result = %v, %q; want safe rejection", err, output)
+			}
+			if _, statErr := os.Stat(bindingPath); !os.IsNotExist(statErr) {
+				t.Fatalf("rejected bind left output path: %v", statErr)
+			}
+		})
+	}
+}
+
+func sloBindingArguments(evidencePath, bindingPath, digest string) []string {
+	return []string{
+		"--evidence", evidencePath, "--binding", bindingPath,
+		"--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest,
+		"--release-revision", sloBindingReleaseRevision, "--image-reference", sloBindingImageReference,
+		"--image-digest", sloBindingImageDigest, "--workflow-run-id", "30535408998",
+		"--artifact-name", sloBindingArtifactName, "--artifact-digest", sloBindingArtifactDigest,
+	}
+}
+
+func setSLOBindingFlag(arguments []string, flag, value string) {
+	for index := range arguments {
+		if arguments[index] == flag {
+			arguments[index+1] = value
+			return
+		}
+	}
+	panic("missing SLO binding flag " + flag)
 }
 
 func TestSLOEvidenceRejectsUnsafeOrFailingCandidates(t *testing.T) {

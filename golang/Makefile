@@ -20,7 +20,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -82,6 +82,14 @@ redis-benchmark:
 	@test -n "$${LLMTW_REDIS_BENCHMARK_ADDR:-}" || { echo "redis-benchmark requires LLMTW_REDIS_BENCHMARK_ADDR" >&2; exit 2; }
 	@test -z "$${CI:-}" || { echo "redis-benchmark refuses CI" >&2; exit 2; }
 	LLMTW_REDIS_BENCHMARK=1 LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1 LLMTW_REDIS_BENCHMARK_ADDR="$${LLMTW_REDIS_BENCHMARK_ADDR}" $(GO) test -tags=redisbenchmark ./engine -run '^$$' -bench '^BenchmarkGenerateRedisAdmissionAndCompile$$' -benchmem -count=1 -benchtime=10s
+
+# Runs the offline SLO evidence recorder/verifier contract tests without
+# requiring a protected measurement, provider credentials, Redis, or Docker.
+# This target is intentionally separate from release-verify: it validates the
+# standalone SLO evidence binding contract, while release-verify validates a
+# complete retained release bundle.
+slo-evidence-verify:
+	$(GO) test ./internal/architecturetest -run '^TestSLOEvidence' -count=1
 
 integration:
 	$(GO) test -race ./integration/...
