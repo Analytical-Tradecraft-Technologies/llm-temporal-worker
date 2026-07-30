@@ -13,7 +13,7 @@ import sys
 MAX_BYTES = 64 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
-IMAGE_REFERENCE_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._/-]{0,253}[a-z0-9])?$")
+IMAGE_REFERENCE_RE = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$")
 IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REGION_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
@@ -233,7 +233,8 @@ def positive_workflow_run_id(value):
 def release_from_arguments(arguments):
     release_revision = exact_string(arguments.release_revision, REVISION_RE)
     image_reference = exact_string(arguments.image_reference, IMAGE_REFERENCE_RE)
-    if "/" not in image_reference or ":" in image_reference or "@" in image_reference:
+    image_host = image_reference.split("/", 1)[0]
+    if "." not in image_host and ":" not in image_host:
         reject()
     image_digest = exact_string(arguments.image_digest, IMAGE_DIGEST_RE)
     workflow_run_id = positive_workflow_run_id(arguments.workflow_run_id)
@@ -293,7 +294,8 @@ def payload_from_binding_record(record):
         },
         "redacted": True,
     }
-    if "/" not in payload["release"]["image_reference"] or ":" in payload["release"]["image_reference"] or "@" in payload["release"]["image_reference"]:
+    image_host = payload["release"]["image_reference"].split("/", 1)[0]
+    if "." not in image_host and ":" not in image_host:
         reject()
     if payload["release"]["artifact_name"] != RELEASE_EVIDENCE_ARTIFACT:
         reject()

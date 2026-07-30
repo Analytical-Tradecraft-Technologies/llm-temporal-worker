@@ -14,7 +14,7 @@ import (
 
 const sloEvidenceSourceRevision = "0123456789abcdef0123456789abcdef01234567"
 const sloBindingReleaseRevision = sloEvidenceSourceRevision
-const sloBindingImageReference = "ghcr.io/mfow/llm-temporal-worker"
+const sloBindingImageReference = "registry.example:5000/llm-temporal-worker"
 const sloBindingImageDigest = "sha256:" + "d" + "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 const sloBindingArtifactName = "release-evidence"
 const sloBindingArtifactDigest = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
