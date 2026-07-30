@@ -333,7 +333,11 @@ jobs:
       - name: Scheduled test repetition
         if: github.event_name == 'schedule' && steps.go.outputs.present == 'true'
         working-directory: golang
-        run: go test -race -count=5 ./...
+        # The normal race pass above already exercises the production-shaped
+        # 10,000-turn lineage stress proof once. Repeating that test five times
+        # makes the scheduled suite exceed Go's default 10-minute package
+        # timeout, so repeat the remainder without weakening the primary gate.
+        run: go test -race -count=5 -skip '^TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks$' ./...
 
   # This produces a retained, redacted evidence bundle only after the normal
   # master verification job. It is intentionally excluded from manual,

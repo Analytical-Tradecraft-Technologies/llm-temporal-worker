@@ -277,6 +277,12 @@ not claim that PostgreSQL/blob backup restore, Temporal crash-boundary injection
 or Redis generation rebuild has been exercised. Those remain integration gates
 in the production implementation plan.
 
+The master workflow's scheduled repetition runs the race suite five times for
+flakiness detection, while excluding this scale regression from the repeated
+pass because the ordinary race gate already runs it once. This keeps the
+scheduled job within the Go package timeout without reducing coverage of the
+10,000-turn proof.
+
 `state.TestCheckpointGraphThreeWayForksRemainIsolated` adds the caller-side
 immutability contract: mutating one materialized branch's items or nested model
 settings cannot affect already materialized siblings or later graph replay. It
