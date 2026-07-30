@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -151,6 +152,49 @@ func TestMigrationObjectNamesCoverTablesAndIndexes(t *testing.T) {
 	} {
 		if !containsString(indexes, name) {
 			t.Fatalf("required index %q was not derived from migration", name)
+		}
+	}
+}
+
+func TestNamespaceRelationCollisionsAreDeterministic(t *testing.T) {
+	existing := []string{"tenant_operations", "temporal_workflow", "tenant_operations", "tenant_budget_buckets", "worker_budget_journal_events_journal_id_seq", "worker_scopes_pkey"}
+	expected := []string{"tenant_budget_buckets", "tenant_operations", "tenant_query_executions", "worker_budget_journal_events_journal_id_seq", "worker_scopes_pkey"}
+	got := namespaceRelationCollisions(existing, expected)
+	want := []string{"tenant_budget_buckets", "tenant_operations", "worker_budget_journal_events_journal_id_seq", "worker_scopes_pkey"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("namespace relation collisions = %#v, want %#v", got, want)
+	}
+}
+
+func TestMigrationConstraintAndIdentityRelationsAreReserved(t *testing.T) {
+	ns, err := NewNamespace("llm_worker", "private", "worker_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migration, err := RenderMigration(ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := migrationConstraintIndexNames(migration, ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"worker_schema_contract_pkey",
+		"worker_scopes_tenant_hmac_project_hmac_key",
+		"worker_budget_journal_events_pkey",
+		"worker_provider_status_events_pkey",
+	} {
+		if !containsString(names, want) {
+			t.Fatalf("constraint-backed relation %q was not reserved; names=%v", want, names)
+		}
+	}
+	if !containsString(workerSequences, "budget_journal_events_journal_id_seq") {
+		t.Fatal("budget journal identity sequence is not reserved")
+	}
+	for _, name := range names {
+		if len(name) > MaxIdentifierBytes {
+			t.Fatalf("constraint-backed relation %q exceeds PostgreSQL identifier limit", name)
 		}
 	}
 }
