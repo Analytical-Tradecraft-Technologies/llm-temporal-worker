@@ -44,31 +44,6 @@ func TestSLOEvidenceMakeTargetIsOfflineAndFocused(t *testing.T) {
 	}
 }
 
-func TestSLOEvidenceMakeTargetIsOfflineAndFocused(t *testing.T) {
-	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := makeTarget(t, string(makefile), "slo-evidence-verify:\n", "\n\nintegration:")
-	for _, required := range []string{
-		"$(GO) test ./internal/architecturetest -run '^TestSLOEvidence' -count=1",
-	} {
-		if !strings.Contains(target, required) {
-			t.Errorf("slo-evidence-verify is missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{
-		"LLMTW_LIVE_",
-		"LLMTW_REDIS_ADDR",
-		"docker",
-		"release-verify",
-	} {
-		if strings.Contains(target, forbidden) {
-			t.Errorf("slo-evidence-verify must not require protected or external state via %q", forbidden)
-		}
-	}
-}
-
 func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testing.T) {
 	root := repositoryRoot(t)
 	directory := t.TempDir()
