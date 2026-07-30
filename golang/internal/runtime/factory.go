@@ -362,6 +362,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, err
 	}
+	postgresProbe = identifyDependencyProbe(DependencyPostgres, postgresProbe)
 	var providerControl engine.ProviderStatusRecorder
 	if source, ok := postgresCloser.(providerStatusRepositorySource); ok {
 		providerControl = newPostgresProviderStatusRecorder(source)
@@ -426,6 +427,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis readiness probe: %w", err)
 	}
+	redisProbe = identifyDependencyProbe(DependencyRedis, redisProbe)
 	keyring, err := factory.continuationKeyring(ctx, value)
 	if err != nil {
 		if postgresCloser != nil {
@@ -478,6 +480,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeAll()
 		return nil, nil, fmt.Errorf("construct blob readiness probe: %w", err)
 	}
+	blobProbe = identifyDependencyProbe(DependencyBlobStore, blobProbe)
 	refResolver := factory.options.BlobRefResolver
 	if refResolver == nil {
 		switch value.BlobStore.Kind {
@@ -521,6 +524,10 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	probes := []DependencyProbe{redisProbe, blobProbe}
 	if postgresProbe != nil {
 		probes = append(probes, postgresProbe)
+	}
+	if err := validateRequiredDependencyProbeSet(value.State.Kind, probes); err != nil {
+		closeAll()
+		return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
 	}
 	var checkpointBlobReader state.CheckpointBlobReader
 	if factory.options.CheckpointBlobLocator != nil {

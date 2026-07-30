@@ -66,6 +66,78 @@ type DependencyProbeFunc func(context.Context) ProbeResult
 
 func (function DependencyProbeFunc) Probe(ctx context.Context) ProbeResult { return function(ctx) }
 
+// dependencyIdentitySource is attached by the production factory to each
+// state-store probe. DependencyProbe intentionally remains a tiny interface
+// so embedders can supply their own probes, but the factory still needs a
+// non-I/O way to prove that a durable snapshot contains Redis, PostgreSQL,
+// and blob-store gates before it can be published.
+type dependencyIdentitySource interface {
+	DependencyID() DependencyID
+}
+
+type identifiedDependencyProbe struct {
+	id       DependencyID
+	delegate DependencyProbe
+}
+
+func (probe identifiedDependencyProbe) DependencyID() DependencyID { return probe.id }
+
+func (probe identifiedDependencyProbe) Probe(ctx context.Context) ProbeResult {
+	if probe.delegate == nil {
+		return ProbeResult{Dependency: probe.id, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
+	}
+	result := normalizeProbeResult(probe.delegate.Probe(ctx))
+	// A custom factory must not be able to report a ready probe under another
+	// dependency's identity. Treat that mismatch as unavailable while keeping
+	// the result operator-safe.
+	if result.Dependency != probe.id {
+		return ProbeResult{Dependency: probe.id, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
+	}
+	return result
+}
+
+func identifyDependencyProbe(id DependencyID, probe DependencyProbe) DependencyProbe {
+	if probe == nil {
+		return nil
+	}
+	if identified, ok := probe.(dependencyIdentitySource); ok && identified.DependencyID() == id {
+		return probe
+	}
+	return identifiedDependencyProbe{id: id, delegate: probe}
+}
+
+// validateRequiredDependencyProbeSet verifies the immutable composition
+// contract without invoking any external service. Durable snapshots must
+// carry exactly one identified probe for each required state dependency;
+// readiness still performs the bounded I/O check later.
+func validateRequiredDependencyProbeSet(stateKind string, probes []DependencyProbe) error {
+	if stateKind != config.StateKindDurable {
+		return nil
+	}
+	required := []DependencyID{DependencyRedis, DependencyPostgres, DependencyBlobStore}
+	seen := make(map[DependencyID]struct{}, len(probes))
+	for _, probe := range probes {
+		identity, ok := probe.(dependencyIdentitySource)
+		if !ok {
+			return fmt.Errorf("durable dependency probe has no identity")
+		}
+		id := identity.DependencyID()
+		if _, duplicate := seen[id]; duplicate {
+			return fmt.Errorf("duplicate durable dependency probe %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	for _, id := range required {
+		if _, ok := seen[id]; !ok {
+			return fmt.Errorf("durable dependency probe %q is missing", id)
+		}
+	}
+	if len(seen) != len(required) {
+		return fmt.Errorf("durable dependency probe set contains an unsupported dependency")
+	}
+	return nil
+}
+
 // CheckDependencyProbes runs each required dependency with an individual,
 // bounded context. It deliberately returns a generic error: the status is
 // available to internal callers, but raw SDK errors never cross the runtime

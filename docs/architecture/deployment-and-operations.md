@@ -125,6 +125,11 @@ never falls back to loading or replacing code. PostgreSQL must complete a
 bounded read-only transaction, match the configured database/schema/prefix and
 schema-contract marker, expose all required relations plus explicit and
 constraint-backed indexes, and use UTC.
+The production factory also binds one immutable readiness gate to each of
+Redis, PostgreSQL, and the blob store before publishing a durable snapshot;
+missing, duplicate, or unidentified gates fail closed before Temporal polling
+can begin. This is an in-memory composition check only; the normal bounded
+network probes still have to pass at startup and during monitoring.
 Runtime role grants remain deployment-owned and are exercised by normal
 least-privilege operations. S3 readiness uses `HeadBucket`
 against the configured bucket only, never a tenant key. A failed state check
