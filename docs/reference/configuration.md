@@ -623,6 +623,13 @@ the configured S3 bucket with bucket metadata only; it never reads or writes a
 tenant object. Provider endpoints are intentionally excluded because one route
 can be unavailable while another eligible route remains.
 
+The explicit schema-install step also inventories the complete worker relation
+set before the first DDL statement. If a computed worker table or index already
+exists without the worker contract marker (for example, a Temporal-owned
+relation in a shared schema), installation fails closed with the colliding names;
+it never renames or adopts that relation. A safely isolated schema in the same
+database remains valid.
+
 `state.redis.budget_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned
 Function library and set `function_library`, `budget_version`, and

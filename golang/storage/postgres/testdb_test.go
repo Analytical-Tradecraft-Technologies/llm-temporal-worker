@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,44 @@ func TestPostgresSharedSchemaLeavesSchemaAclAndForeignConstraintsUntouched(t *te
 	}
 	if gotSentinelConstraint != sentinelConstraint {
 		t.Fatalf("foreign schema constraint was renamed from %q to %q", sentinelConstraint, gotSentinelConstraint)
+	}
+}
+
+func TestPostgresInstallRejectsWorkerRelationCollision(t *testing.T) {
+	addr := os.Getenv("LLMTW_POSTGRES_ADDR")
+	if addr == "" {
+		t.Skip("LLMTW_POSTGRES_ADDR is not configured; set it for PostgreSQL integration tests")
+	}
+	ns, err := NewNamespace(
+		valueOr("LLMTW_POSTGRES_DATABASE", "llm_worker"),
+		fmt.Sprintf("collision_worker_%d", time.Now().UnixNano()),
+		"worker_",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(context.Background(), PoolOptions{
+		Namespace: ns, Addresses: []string{addr},
+		Username: valueOr("LLMTW_POSTGRES_USER", "llmtw"), Password: valueOr("LLMTW_POSTGRES_PASSWORD", "llmtw"),
+		MaxConnections: 4, MinConnections: 1, DialTimeout: 5 * time.Second,
+		StatementTimeout: 5 * time.Second, LockTimeout: time.Second, IdleTxTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	schema := ns.SchemaIdentifier().Sanitize()
+	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	if _, err := pool.Exec(ctx, "CREATE TABLE "+schema+".worker_operations (id integer)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(ctx, pool, ns); err == nil || !strings.Contains(err.Error(), "worker_operations") {
+		t.Fatalf("Install collision error = %v, want worker_operations collision", err)
 	}
 }
 

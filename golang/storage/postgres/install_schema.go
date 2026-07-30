@@ -294,7 +294,16 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 	if err := tx.QueryRow(ctx, "SELECT to_regclass($1)::text", relation).Scan(&existing); err != nil {
 		return fmt.Errorf("check PostgreSQL schema contract: %w", err)
 	}
-	if existing != nil && *existing != "" {
+	if existing == nil || *existing == "" {
+		// A clean install must never claim a relation already owned by Temporal
+		// (or another application) in a shared schema. PostgreSQL would reject
+		// most such collisions later during DDL, but that failure is too late and
+		// can obscure the namespace mistake. Check the complete relation catalog
+		// before applying any worker DDL and fail closed with the exact names.
+		if err := rejectExistingWorkerRelations(ctx, tx, namespace, sql); err != nil {
+			return err
+		}
+	} else {
 		var version string
 		var stored []byte
 		err := tx.QueryRow(ctx, "SELECT contract_version, migration_digest FROM "+relation+" WHERE contract_name = $1", ContractVersion).Scan(&version, &stored)
@@ -328,6 +337,166 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 		return fmt.Errorf("record PostgreSQL schema contract: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// rejectExistingWorkerRelations prevents a first install from accidentally
+// taking over a Temporal-owned relation in a shared schema. Once the worker
+// contract marker exists, Install is intentionally idempotent and Verify owns
+// compatibility checks instead.
+func rejectExistingWorkerRelations(ctx context.Context, tx pgx.Tx, namespace Namespace, migration string) error {
+	tables, indexes := migrationObjectNames(migration, namespace)
+	expected := append(append([]string{}, tables...), indexes...)
+	for _, sequence := range workerSequences {
+		name, err := namespace.PrefixName(sequence)
+		if err != nil {
+			return err
+		}
+		expected = append(expected, name)
+	}
+	constraintIndexes, err := migrationConstraintIndexNames(migration, namespace)
+	if err != nil {
+		return err
+	}
+	expected = append(expected, constraintIndexes...)
+	if len(expected) == 0 {
+		return fmt.Errorf("PostgreSQL migration has no worker relations")
+	}
+	rows, err := tx.Query(ctx, `SELECT c.relname
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1 AND c.relname = ANY($2::text[])
+ORDER BY c.relname`, namespace.Schema, expected)
+	if err != nil {
+		return fmt.Errorf("inspect PostgreSQL namespace relations: %w", err)
+	}
+	defer rows.Close()
+	var found []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("scan PostgreSQL namespace relation: %w", err)
+		}
+		found = append(found, name)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate PostgreSQL namespace relations: %w", err)
+	}
+	if collisions := namespaceRelationCollisions(found, expected); len(collisions) > 0 {
+		return fmt.Errorf("PostgreSQL worker namespace collides with existing relations: %s", strings.Join(collisions, ", "))
+	}
+	return nil
+}
+
+// migrationConstraintIndexNames returns PostgreSQL's deterministic names for
+// the indexes implicitly created by PRIMARY KEY and UNIQUE constraints. They
+// are relations in pg_class too, so a shared-schema preflight must reserve
+// them alongside explicit CREATE INDEX objects.
+func migrationConstraintIndexNames(migration string, namespace Namespace) ([]string, error) {
+	var table string
+	var inTable bool
+	seen := make(map[string]struct{})
+	var names []string
+	for _, line := range strings.Split(migration, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[0] == "CREATE" && fields[1] == "TABLE" {
+			physical := strings.TrimSuffix(fields[2], "(")
+			physical = strings.TrimPrefix(physical, "__SCHEMA__.__PREFIX__")
+			physical = strings.TrimPrefix(physical, namespace.Schema+"."+namespace.TablePrefix)
+			if physical != "" {
+				table, inTable = physical, true
+			}
+			continue
+		}
+		if !inTable {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, ")") {
+			inTable = false
+			continue
+		}
+		for _, kind := range []struct {
+			keyword string
+			suffix  string
+		}{
+			{keyword: "PRIMARY KEY", suffix: "pkey"},
+			{keyword: "UNIQUE", suffix: "key"},
+		} {
+			if !strings.Contains(trimmed, kind.keyword) {
+				continue
+			}
+			columns := constraintIndexColumns(trimmed, kind.keyword)
+			if len(columns) == 0 {
+				continue
+			}
+			logical := table + "_" + strings.Join(columns, "_")
+			if kind.suffix == "pkey" {
+				logical = table + "_pkey"
+			} else {
+				logical += "_key"
+			}
+			name := namespace.TablePrefix + logical
+			// PostgreSQL applies NAMEDATALEN truncation to implicit constraint
+			// indexes. Mirror that catalog name for the preflight inventory; the
+			// explicit worker relations remain strictly bounded by PrefixName.
+			if len(name) > MaxIdentifierBytes {
+				name = name[:MaxIdentifierBytes]
+			}
+			if _, ok := seen[name]; !ok {
+				seen[name] = struct{}{}
+				names = append(names, name)
+			} else {
+				return nil, fmt.Errorf("generated PostgreSQL constraint index name %q collides after identifier truncation", name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func constraintIndexColumns(line, keyword string) []string {
+	if start := strings.Index(line, keyword+" ("); start >= 0 {
+		value := line[start+len(keyword)+2:]
+		if end := strings.IndexByte(value, ')'); end >= 0 {
+			value = value[:end]
+			parts := strings.Split(value, ",")
+			columns := make([]string, 0, len(parts))
+			for _, part := range parts {
+				if column := strings.TrimSpace(part); column != "" {
+					columns = append(columns, column)
+				}
+			}
+			return columns
+		}
+	}
+	// Inline constraints use the column name as PostgreSQL's input to its
+	// generated relation name, e.g. `event_id uuid PRIMARY KEY`.
+	fields := strings.Fields(line)
+	if len(fields) > 0 && fields[0] != "PRIMARY" && fields[0] != "UNIQUE" {
+		return []string{strings.TrimSuffix(fields[0], ",")}
+	}
+	return nil
+}
+
+func namespaceRelationCollisions(existing, expected []string) []string {
+	known := make(map[string]struct{}, len(expected))
+	for _, name := range expected {
+		known[name] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	collisions := make([]string, 0)
+	for _, name := range existing {
+		if _, ok := known[name]; !ok {
+			continue
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		collisions = append(collisions, name)
+	}
+	sort.Strings(collisions)
+	return collisions
 }
 
 // ensureSchema creates and locks down a worker-owned schema only when the
