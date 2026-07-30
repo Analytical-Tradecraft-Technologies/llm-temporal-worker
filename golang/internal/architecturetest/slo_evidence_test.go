@@ -176,6 +176,14 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 	if got := binding["content_sha256"]; got != bindingDigest {
 		t.Fatalf("binding content_sha256 = %#v, want %q", got, bindingDigest)
 	}
+	bindingSchema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-binding.schema.json", "urn:llmtw:slo-evidence-binding:v1")
+	if err := validateSLOEvidenceJSONSchema(bindingSchema, binding); err != nil {
+		t.Fatalf("binding schema rejects recorded binding: %v", err)
+	}
+	binding["api_key"] = "must-not-be-accepted"
+	if err := validateSLOEvidenceJSONSchema(bindingSchema, binding); err == nil {
+		t.Fatal("binding schema accepts unsafe unknown field")
+	}
 	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
 		t.Fatalf("binding is not canonical JSON: %q", raw)
 	}
