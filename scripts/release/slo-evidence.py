@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record and verify redacted, immutable SLO measurement evidence."""
+"""Record, verify, and bind redacted immutable SLO measurement evidence."""
 
 import argparse
 import datetime as datetime_module
@@ -13,10 +13,14 @@ import sys
 MAX_BYTES = 64 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+IMAGE_REFERENCE_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._/-]{0,253}[a-z0-9])?$")
+IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REGION_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 MAX_COUNT = 1_000_000_000
 MAX_P99_MICROSECONDS = 3_600_000_000
+MAX_WORKFLOW_RUN_ID = 9_223_372_036_854_775_807
+RELEASE_EVIDENCE_ARTIFACT = "release-evidence"
 
 
 class EvidenceError(Exception):
@@ -201,16 +205,134 @@ def command_record(arguments):
 
 
 def command_verify(arguments):
-    expected_revision = exact_string(arguments.source_revision, REVISION_RE)
-    expected_digest = exact_string(arguments.content_sha256, SHA256_RE)
-    raw = read_regular_bytes(arguments.evidence)
+    verify_slo_record(arguments.evidence, arguments.source_revision, arguments.content_sha256)
+    print("slo evidence verified")
+
+
+def verify_slo_record(path, expected_revision, expected_digest):
+    expected_revision = exact_string(expected_revision, REVISION_RE)
+    expected_digest = exact_string(expected_digest, SHA256_RE)
+    raw = read_regular_bytes(path)
     record = parse_json_bytes(raw)
     payload = payload_from_record(record)
     if record["source_revision"] != expected_revision or record["content_sha256"] != expected_digest:
         reject()
     if raw != canonical_json(record_from_payload(payload)):
         reject()
-    print("slo evidence verified")
+    return payload
+
+
+def positive_workflow_run_id(value):
+    try:
+        parsed = int(value, 10)
+    except (TypeError, ValueError):
+        reject()
+    return exact_int(parsed, 1, MAX_WORKFLOW_RUN_ID)
+
+
+def release_from_arguments(arguments):
+    release_revision = exact_string(arguments.release_revision, REVISION_RE)
+    image_reference = exact_string(arguments.image_reference, IMAGE_REFERENCE_RE)
+    if "/" not in image_reference or ":" in image_reference or "@" in image_reference:
+        reject()
+    image_digest = exact_string(arguments.image_digest, IMAGE_DIGEST_RE)
+    workflow_run_id = positive_workflow_run_id(arguments.workflow_run_id)
+    artifact_name = arguments.artifact_name
+    if artifact_name != RELEASE_EVIDENCE_ARTIFACT:
+        reject()
+    artifact_digest = exact_string(arguments.artifact_digest, SHA256_RE)
+    return {
+        "source_revision": release_revision,
+        "image_reference": image_reference,
+        "image_digest": image_digest,
+        "workflow_run_id": workflow_run_id,
+        "artifact_name": RELEASE_EVIDENCE_ARTIFACT,
+        "artifact_digest": artifact_digest,
+    }
+
+
+def binding_payload_from_arguments(evidence_payload, expected_digest, release):
+    if evidence_payload["source_revision"] != release["source_revision"]:
+        reject()
+    return {
+        "schema_version": 1,
+        "kind": "slo_release_binding",
+        "status": "bound",
+        "evidence": {
+            "source_revision": evidence_payload["source_revision"],
+            "content_sha256": expected_digest,
+        },
+        "release": release,
+        "redacted": True,
+    }
+
+
+def payload_from_binding_record(record):
+    exact_object(record, ("schema_version", "kind", "status", "evidence", "release", "redacted", "content_sha256"))
+    if record["schema_version"] != 1 or record["kind"] != "slo_release_binding" or record["status"] != "bound" or record["redacted"] is not True:
+        reject()
+    evidence = record["evidence"]
+    exact_object(evidence, ("source_revision", "content_sha256"))
+    release = record["release"]
+    exact_object(release, ("source_revision", "image_reference", "image_digest", "workflow_run_id", "artifact_name", "artifact_digest"))
+    payload = {
+        "schema_version": 1,
+        "kind": "slo_release_binding",
+        "status": "bound",
+        "evidence": {
+            "source_revision": exact_string(evidence["source_revision"], REVISION_RE),
+            "content_sha256": exact_string(evidence["content_sha256"], SHA256_RE),
+        },
+        "release": {
+            "source_revision": exact_string(release["source_revision"], REVISION_RE),
+            "image_reference": exact_string(release["image_reference"], IMAGE_REFERENCE_RE),
+            "image_digest": exact_string(release["image_digest"], IMAGE_DIGEST_RE),
+            "workflow_run_id": exact_int(release["workflow_run_id"], 1, MAX_WORKFLOW_RUN_ID),
+            "artifact_name": release["artifact_name"],
+            "artifact_digest": exact_string(release["artifact_digest"], SHA256_RE),
+        },
+        "redacted": True,
+    }
+    if "/" not in payload["release"]["image_reference"] or ":" in payload["release"]["image_reference"] or "@" in payload["release"]["image_reference"]:
+        reject()
+    if payload["release"]["artifact_name"] != RELEASE_EVIDENCE_ARTIFACT:
+        reject()
+    if payload["evidence"]["source_revision"] != payload["release"]["source_revision"]:
+        reject()
+    if exact_string(record["content_sha256"], SHA256_RE) != content_digest(payload):
+        reject()
+    return payload
+
+
+def binding_record_from_payload(payload):
+    record = dict(payload)
+    record["content_sha256"] = content_digest(payload)
+    return record
+
+
+def command_bind(arguments):
+    expected_revision = exact_string(arguments.source_revision, REVISION_RE)
+    expected_digest = exact_string(arguments.content_sha256, SHA256_RE)
+    evidence_payload = verify_slo_record(arguments.evidence, expected_revision, expected_digest)
+    release = release_from_arguments(arguments)
+    payload = binding_payload_from_arguments(evidence_payload, expected_digest, release)
+    write_new(arguments.binding, canonical_json(binding_record_from_payload(payload)))
+    print("slo evidence binding recorded sha256=" + content_digest(payload))
+
+
+def command_verify_binding(arguments):
+    expected_revision = exact_string(arguments.source_revision, REVISION_RE)
+    expected_digest = exact_string(arguments.content_sha256, SHA256_RE)
+    evidence_payload = verify_slo_record(arguments.evidence, expected_revision, expected_digest)
+    expected_release = release_from_arguments(arguments)
+    raw = read_regular_bytes(arguments.binding)
+    record = parse_json_bytes(raw)
+    payload = payload_from_binding_record(record)
+    if payload["evidence"]["source_revision"] != evidence_payload["source_revision"] or payload["evidence"]["content_sha256"] != expected_digest:
+        reject()
+    if payload["release"] != expected_release or raw != canonical_json(binding_record_from_payload(payload)):
+        reject()
+    print("slo evidence binding verified")
 
 
 def main():
@@ -223,12 +345,32 @@ def main():
     verify.add_argument("--evidence", required=True)
     verify.add_argument("--source-revision", required=True)
     verify.add_argument("--content-sha256", required=True)
+    def add_binding_arguments(command):
+        command.add_argument("--evidence", required=True)
+        command.add_argument("--binding", required=True)
+        command.add_argument("--source-revision", required=True)
+        command.add_argument("--content-sha256", required=True)
+        command.add_argument("--release-revision", required=True)
+        command.add_argument("--image-reference", required=True)
+        command.add_argument("--image-digest", required=True)
+        command.add_argument("--workflow-run-id", required=True)
+        command.add_argument("--artifact-name", required=True)
+        command.add_argument("--artifact-digest", required=True)
+
+    bind = subcommands.add_parser("bind")
+    add_binding_arguments(bind)
+    verify_binding = subcommands.add_parser("verify-binding")
+    add_binding_arguments(verify_binding)
     arguments = parser.parse_args()
     try:
         if arguments.command == "record":
             command_record(arguments)
-        else:
+        elif arguments.command == "verify":
             command_verify(arguments)
+        elif arguments.command == "bind":
+            command_bind(arguments)
+        else:
+            command_verify_binding(arguments)
     except EvidenceError as error:
         print(str(error), file=sys.stderr)
         return 1
