@@ -2,18 +2,21 @@ package kubernetes_test
 
 import (
 	"bytes"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"go.yaml.in/yaml/v4"
 )
 
 const (
-	liveHealthPath  = "/health/live"
-	readyHealthPath = "/health/ready"
-	healthPortName  = "health"
-	healthPort      = 8080
+	liveHealthPath     = "/health/live"
+	readyHealthPath    = "/health/ready"
+	healthPortName     = "health"
+	expectedHealthPort = 8080
 )
 
 type composeHealthDocument struct {
@@ -50,7 +53,14 @@ type healthProbe struct {
 	} `yaml:"httpGet"`
 }
 
+type serverConfigDocument struct {
+	Server struct {
+		HealthAddress string `yaml:"health_address"`
+	} `yaml:"server"`
+}
+
 func TestComposeAndKubernetesShareWorkerHealthContract(t *testing.T) {
+	healthPort := configuredHealthPort(t)
 	compose := readHealthFixture(t, "compose.yaml")
 	var composeDocument composeHealthDocument
 	if err := yaml.NewDecoder(bytes.NewReader(compose)).Decode(&composeDocument); err != nil {
@@ -65,9 +75,9 @@ func TestComposeAndKubernetesShareWorkerHealthContract(t *testing.T) {
 		"/usr/local/bin/llm-temporal-worker",
 		"healthcheck",
 		"--url",
-		"http://127.0.0.1:8080/health/live",
+		fmt.Sprintf("http://127.0.0.1:%d%s", healthPort, liveHealthPath),
 		"--url",
-		"http://127.0.0.1:8080/health/ready",
+		fmt.Sprintf("http://127.0.0.1:%d%s", healthPort, readyHealthPath),
 	}
 	if got := worker.Healthcheck.Test; len(got) != len(wantCommand) {
 		t.Fatalf("Compose worker healthcheck arguments = %#v, want %#v", got, wantCommand)
@@ -109,24 +119,76 @@ func TestComposeAndKubernetesShareWorkerHealthContract(t *testing.T) {
 }
 
 func TestKubernetesOverlaysInheritTheBaseHealthContract(t *testing.T) {
-	for _, overlay := range []string{
-		"aws-workload-identity",
-		"azure-workload-identity",
-		"redis-tls",
-	} {
+	examplesDirectory := filepath.Join(moduleRoot(t), "deploy", "kubernetes", "examples")
+	entries, err := os.ReadDir(examplesDirectory)
+	if err != nil {
+		t.Fatalf("read Kubernetes examples directory: %v", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		overlay := entry.Name()
 		t.Run(overlay, func(t *testing.T) {
-			data := readHealthFixture(t, filepath.Join("deploy", "kubernetes", "examples", overlay, "deployment-patch.yaml"))
-			var document yaml.Node
-			if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&document); err != nil {
-				t.Fatalf("decode Kubernetes %s overlay: %v", overlay, err)
-			}
-			for _, key := range []string{"livenessProbe", "readinessProbe", "startupProbe"} {
-				if yamlMappingContainsKey(&document, key) {
-					t.Fatalf("overlay must inherit %s from the base deployment", key)
+			overlayDirectory := filepath.Join(examplesDirectory, overlay)
+			err := filepath.WalkDir(overlayDirectory, func(path string, directoryEntry os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
 				}
+				if directoryEntry.IsDir() || (filepath.Ext(path) != ".yaml" && filepath.Ext(path) != ".yml") {
+					return nil
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				var document yaml.Node
+				if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&document); err != nil {
+					return fmt.Errorf("decode %s: %w", filepath.Base(path), err)
+				}
+				for _, key := range []string{"livenessProbe", "readinessProbe", "startupProbe"} {
+					if yamlMappingContainsKey(&document, key) {
+						return fmt.Errorf("overlay must inherit %s from the base deployment (found in %s)", key, filepath.Base(path))
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}
+}
+
+func configuredHealthPort(t *testing.T) int {
+	t.Helper()
+	ports := make([]int, 0, 2)
+	for _, path := range []string{
+		filepath.Join("deploy", "local", "config.yaml"),
+		filepath.Join("deploy", "kubernetes", "base", "config.yaml"),
+	} {
+		data := readHealthFixture(t, path)
+		var document serverConfigDocument
+		if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&document); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		_, portText, err := net.SplitHostPort(document.Server.HealthAddress)
+		if err != nil {
+			t.Fatalf("parse %s server.health_address %q: %v", path, document.Server.HealthAddress, err)
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil || port < 1 || port > 65535 {
+			t.Fatalf("parse %s server.health_address port %q: %v", path, portText, err)
+		}
+		ports = append(ports, port)
+	}
+	if ports[0] != ports[1] {
+		t.Fatalf("configured health listener ports differ: local=%d Kubernetes=%d", ports[0], ports[1])
+	}
+	if ports[0] != expectedHealthPort {
+		t.Fatalf("configured health listener port = %d, want %d", ports[0], expectedHealthPort)
+	}
+	return ports[0]
 }
 
 func yamlMappingContainsKey(node *yaml.Node, want string) bool {
