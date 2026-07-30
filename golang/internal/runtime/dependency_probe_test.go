@@ -339,6 +339,50 @@ func TestDependencyProbeReportsOnlySafeFailureReasons(t *testing.T) {
 	}
 }
 
+func TestIdentifiedDependencyProbeRejectsMismatchedReadyIdentity(t *testing.T) {
+	probe := identifyDependencyProbe(DependencyPostgres, DependencyProbeFunc(func(context.Context) ProbeResult {
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	}))
+	identity, ok := probe.(dependencyIdentitySource)
+	if !ok || identity.DependencyID() != DependencyPostgres {
+		t.Fatalf("identified probe identity = %#v/%T, want postgres", probe, probe)
+	}
+	result := probe.Probe(context.Background())
+	if result != (ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}) {
+		t.Fatalf("mismatched probe result = %#v", result)
+	}
+}
+
+func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *testing.T) {
+	ready := func(id DependencyID) DependencyProbe {
+		return identifyDependencyProbe(id, DependencyProbeFunc(func(context.Context) ProbeResult {
+			return ProbeResult{Dependency: id, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+		}))
+	}
+	complete := []DependencyProbe{ready(DependencyRedis), ready(DependencyPostgres), ready(DependencyBlobStore)}
+	if err := validateRequiredDependencyProbeSet(config.StateKindDurable, complete); err != nil {
+		t.Fatalf("complete durable probe set rejected: %v", err)
+	}
+	tests := []struct {
+		name   string
+		probes []DependencyProbe
+	}{
+		{name: "missing postgres", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyBlobStore)}},
+		{name: "duplicate redis", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyRedis), ready(DependencyPostgres), ready(DependencyBlobStore)}},
+		{name: "unidentified", probes: []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult { return ProbeResult{} })}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateRequiredDependencyProbeSet(config.StateKindDurable, test.probes); err == nil {
+				t.Fatal("incomplete durable probe set unexpectedly accepted")
+			}
+		})
+	}
+	if err := validateRequiredDependencyProbeSet(config.StateKindMemory, nil); err != nil {
+		t.Fatalf("memory probe set rejected: %v", err)
+	}
+}
+
 func TestDependencyProbesAcceptNilContext(t *testing.T) {
 	redisProbe, err := NewRedisDependencyProbe(healthyRedisProbeClient(), testRedisProbeConfig())
 	if err != nil {
