@@ -437,6 +437,15 @@ Kubernetes check renders every overlay with `kubectl kustomize` and never
 contacts a cluster. Both checks use only checked-in fixtures and redacted
 configuration.
 
+The worker health contract is shared across deployment modes: Compose invokes
+the binary healthcheck against `/health/live` and `/health/ready` on the
+configured port (8080 in the checked-in local and Kubernetes configurations),
+while the Kubernetes base deployment uses the named `health` port for
+liveness/readiness and a startup probe on `/health/live`. The offline Kubernetes
+integration test parses both configured listener ports, the base manifest, and
+every overlay YAML file, failing if those paths, the named port, or its numeric
+port drift apart; overlays inherit the base probes rather than redefining them.
+
 ## GitHub Actions split
 
 `pull-request.yml` validates documentation and, once Go exists, formatting,
