@@ -1,0 +1,60 @@
+{
+  "$id": "urn:llmtw:slo-evidence-binding:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "llm-temporal-worker redacted SLO release binding",
+  "description": "An operator-created, immutable reference that binds a verified redacted SLO measurement to one release-evidence artifact. It is not protected provider evidence and does not authorize publication.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "evidence",
+    "release",
+    "redacted",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "slo_release_binding" },
+    "status": { "const": "bound" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_revision", "content_sha256"],
+      "properties": {
+        "source_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_revision",
+        "workflow_run_id",
+        "artifact_name",
+        "artifact_digest",
+        "image_reference",
+        "image_digest"
+      ],
+      "properties": {
+        "source_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "workflow_run_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "artifact_name": { "const": "release-evidence" },
+        "artifact_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "image_reference": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9._/-]{0,253}[a-z0-9])?$"
+        },
+        "image_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "redacted": { "const": true },
+    "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}
