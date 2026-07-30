@@ -42,7 +42,7 @@ the `llm` package.
 | `go.opentelemetry.io/otel`, `/sdk`, and `/trace` | `v1.44.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
 | `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | `v1.44.0` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
 | `github.com/redis/go-redis/v9` | `v9.21.0` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
-| `google.golang.org/grpc` | `v1.82.1` | OTLP transport and Temporal SDK gRPC connectivity | Apache-2.0; [official repository](https://github.com/grpc/grpc-go) |
+| `google.golang.org/grpc` | `v1.83.0` | OTLP transport and Temporal SDK gRPC connectivity | Apache-2.0; [official repository](https://github.com/grpc/grpc-go) |
 
 The versions in this table match the direct requirements in `go.mod` on the
 recorded date. The table intentionally does not enumerate indirect requirements;
