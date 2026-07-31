@@ -828,7 +828,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		return openairesponses.NewAdapter(openaiClient, endpointID, capabilities.Version)
+		return openairesponses.NewOpenAIAdapter(openaiClient, endpointID, capabilities.Version)
 	case "azure_openai_responses":
 		apiVersion := factory.azureAPIVersion(endpointID, endpoint)
 		if apiVersion == "" {
@@ -911,7 +911,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openaichat.NewAdapter(chatClient, endpointID, *chatProfile)
+			return openaichat.NewOpenAIAdapter(chatClient, endpointID, *chatProfile)
 		}
 	case "anthropic_messages":
 		anthropicProfile, err := factory.anthropicProfile(endpointID, endpoint, capabilities, profile)
@@ -1028,6 +1028,13 @@ var allProviderFeatures = []provider.Feature{provider.FeatureText, provider.Feat
 func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile) (*openaichat.Profile, error) {
 	if supplied.Chat != nil {
 		copy := *supplied.Chat
+		if supplied.ChatDialect == "" || supplied.ChatDialect == ChatDialectGeneric {
+			value, err := openaichat.NewOpenAIProfile(copy)
+			if err != nil {
+				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			}
+			return &value, nil
+		}
 		return &copy, nil
 	}
 	tiers, actual := endpointTiers(endpoint)
@@ -1068,7 +1075,7 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 		}
 		return &value, nil
 	case ChatDialectGeneric:
-		value, err := openaichat.NewProfile(openaichat.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: allowed, ExpectedBaseURL: endpoint.BaseURL})
+		value, err := openaichat.NewOpenAIProfile(openaichat.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: allowed, ExpectedBaseURL: endpoint.BaseURL})
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}

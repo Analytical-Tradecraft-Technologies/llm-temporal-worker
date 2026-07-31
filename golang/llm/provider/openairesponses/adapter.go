@@ -21,6 +21,25 @@ type Adapter struct {
 	capabilityVersion string
 }
 
+// ModelListerAdapter is the direct OpenAI Responses adapter with its optional
+// management capability. Azure adapters use Adapter directly and do not
+// satisfy provider.ModelLister.
+type ModelListerAdapter struct{ *Adapter }
+
+// NewOpenAIAdapter constructs an adapter for the direct OpenAI Responses API.
+// The separate constructor keeps the management capability explicit; generic
+// New remains a one-shot adapter for compatible endpoints.
+func NewOpenAIAdapter(client *Client, endpointID, capabilityVersion string) (*ModelListerAdapter, error) {
+	if client == nil || !client.directOpenAI {
+		return nil, fmt.Errorf("openai responses: client is not verified for direct OpenAI management")
+	}
+	base, err := New(client, endpointID, capabilityVersion)
+	if err != nil {
+		return nil, err
+	}
+	return &ModelListerAdapter{Adapter: base}, nil
+}
+
 func New(client *Client, endpointID, capabilityVersion string) (*Adapter, error) {
 	if client == nil {
 		return nil, fmt.Errorf("openai responses: client is required")

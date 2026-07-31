@@ -21,6 +21,22 @@ type Adapter struct {
 	profile    Profile
 }
 
+// ModelListerAdapter is the direct OpenAI adapter with its optional
+// management capability. Compatible adapters use Adapter directly and do not
+// satisfy provider.ModelLister.
+type ModelListerAdapter struct{ *Adapter }
+
+func NewOpenAIAdapter(client *Client, endpointID string, profile Profile) (*ModelListerAdapter, error) {
+	if !profile.directOpenAI {
+		return nil, fmt.Errorf("openai chat: profile is not verified for direct OpenAI management")
+	}
+	base, err := New(client, endpointID, profile)
+	if err != nil {
+		return nil, err
+	}
+	return &ModelListerAdapter{Adapter: base}, nil
+}
+
 func New(client *Client, endpointID string, profile Profile) (*Adapter, error) {
 	if client == nil {
 		return nil, fmt.Errorf("openai chat: client is required")
