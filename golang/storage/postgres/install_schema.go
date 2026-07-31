@@ -41,6 +41,9 @@ func RenderMigration(namespace Namespace) (string, error) {
 
 // Verify checks the immutable schema contract without mutating PostgreSQL.
 func Verify(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error {
+	if ctx == nil {
+		return fmt.Errorf("PostgreSQL verification context is nil")
+	}
 	if pool == nil {
 		return fmt.Errorf("postgres pool is nil")
 	}
@@ -262,6 +265,9 @@ WHERE n.nspname = $1 AND t.relname = ANY($2::text[])
 // Verify; this mutating function belongs only to an explicit provisioning or
 // migration step.
 func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error {
+	if ctx == nil {
+		return fmt.Errorf("PostgreSQL install context is nil")
+	}
 	if pool == nil {
 		return fmt.Errorf("postgres pool is nil")
 	}
