@@ -18,10 +18,9 @@ type ClientConfig struct {
 
 // Client owns the official OpenAI SDK client for a profiled Chat endpoint.
 type Client struct {
-	sdk                   openai.Client
-	baseURL               string
-	requestOptions        []option.RequestOption
-	modelListingSupported bool
+	sdk            openai.Client
+	baseURL        string
+	requestOptions []option.RequestOption
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -40,7 +39,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
-	), baseURL: baseURL, modelListingSupported: true}, nil
+	), baseURL: baseURL}, nil
 }
 
 func (client *Client) options() []option.RequestOption {

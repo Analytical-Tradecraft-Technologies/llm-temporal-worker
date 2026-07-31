@@ -2,10 +2,12 @@ package openairesponses
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -15,12 +17,15 @@ import (
 // direct OpenAI Responses endpoint. Azure Responses uses a different
 // management surface and remains explicitly unsupported until it has a
 // capability-specific contract.
-func (adapter *Adapter) ListModels(ctx context.Context, query provider.ModelListQuery) (provider.ModelListPage, error) {
-	if adapter == nil || adapter.client == nil || !adapter.client.modelListingSupported {
+func (adapter *ModelListerAdapter) ListModels(ctx context.Context, query provider.ModelListQuery) (provider.ModelListPage, error) {
+	if adapter == nil || adapter.Adapter == nil || adapter.client == nil {
 		return provider.ModelListPage{}, provider.ErrModelInventoryUnsupported
 	}
 	if err := query.Validate(); err != nil {
 		return provider.ModelListPage{}, err
+	}
+	if query.EndpointID != adapter.endpointID {
+		return provider.ModelListPage{}, fmt.Errorf("provider model inventory endpoint does not match adapter")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -60,9 +65,17 @@ func (adapter *Adapter) ListModels(ctx context.Context, query provider.ModelList
 }
 
 func pageModels(models []provider.Model, cursor string, limit int) (provider.ModelListPage, error) {
+	digest := modelDigest(models)
 	offset := 0
 	if cursor != "" {
-		parsed, err := strconv.Atoi(cursor)
+		parts := strings.Split(cursor, ":")
+		if len(parts) != 2 || parts[0] != digest {
+			if len(parts) == 2 && parts[0] != digest {
+				return provider.ModelListPage{}, errors.New("provider model inventory snapshot changed during pagination")
+			}
+			return provider.ModelListPage{}, fmt.Errorf("provider model inventory cursor is invalid")
+		}
+		parsed, err := strconv.Atoi(parts[1])
 		if err != nil || parsed < 0 {
 			return provider.ModelListPage{}, fmt.Errorf("provider model inventory cursor is invalid")
 		}
@@ -79,9 +92,25 @@ func pageModels(models []provider.Model, cursor string, limit int) (provider.Mod
 	if end == len(models) {
 		result.Complete = true
 	} else {
-		result.NextCursor = strconv.Itoa(end)
+		result.NextCursor = digest + ":" + strconv.Itoa(end)
 	}
 	return result, result.Validate()
 }
 
-var _ provider.ModelLister = (*Adapter)(nil)
+func modelDigest(models []provider.Model) string {
+	hash := sha256.New()
+	for _, model := range models {
+		fmt.Fprintf(hash, "%s\x00%s\x00%s\x00%d\x00%s\x00", model.ProviderModelID, model.DisplayName, model.OwnedBy, model.CreatedAt.UnixNano(), model.Lifecycle)
+		keys := make([]string, 0, len(model.SafeMetadata))
+		for key := range model.SafeMetadata {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(hash, "%s\x00%s\x00", key, model.SafeMetadata[key])
+		}
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+var _ provider.ModelLister = (*ModelListerAdapter)(nil)

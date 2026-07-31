@@ -2,7 +2,6 @@ package openaichat
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +28,11 @@ func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "openai-direct", testProfile())
+	profile, err := NewOpenAIProfile(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewOpenAIAdapter(client, "openai-direct", profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +40,7 @@ func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Complete || first.NextCursor != "2" || modelIDs(first.Models) != "alpha,beta" {
+	if first.Complete || !strings.HasSuffix(first.NextCursor, ":2") || modelIDs(first.Models) != "alpha,beta" {
 		t.Fatalf("first page = %#v, want alpha,beta with cursor 2", first)
 	}
 	second, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Cursor: first.NextCursor, Limit: 2})
@@ -62,7 +65,11 @@ func TestListModelsRedactsProviderErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "openai-direct", testProfile())
+	profile, err := NewOpenAIProfile(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewOpenAIAdapter(client, "openai-direct", profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,10 +80,57 @@ func TestListModelsRedactsProviderErrors(t *testing.T) {
 }
 
 func TestListModelsUnsupportedWithoutDirectCapability(t *testing.T) {
-	adapter := &Adapter{client: &Client{}}
-	_, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "compatible", Limit: 1})
-	if !errors.Is(err, provider.ErrModelInventoryUnsupported) {
-		t.Fatalf("error = %v, want unsupported", err)
+	if _, ok := any(&Adapter{}).(provider.ModelLister); ok {
+		t.Fatal("compatible adapter unexpectedly satisfies provider.ModelLister")
+	}
+}
+
+func TestListModelsRejectsEndpointMismatch(t *testing.T) {
+	profile, err := NewOpenAIProfile(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewOpenAIAdapter(&Client{}, "openai-direct", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "other", Limit: 1})
+	if err == nil || !strings.Contains(err.Error(), "endpoint does not match") {
+		t.Fatalf("mismatched endpoint error = %v", err)
+	}
+}
+
+func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			io.WriteString(w, `{"object":"list","data":[{"id":"alpha","created":1,"owned_by":"openai"},{"id":"beta","created":2,"owned_by":"openai"}]}`)
+			return
+		}
+		io.WriteString(w, `{"object":"list","data":[{"id":"alpha","created":1,"owned_by":"openai"},{"id":"changed","created":2,"owned_by":"openai"}]}`)
+	}))
+	defer server.Close()
+	client, err := NewClient(ClientConfig{BaseURL: server.URL + "/v1", APIKey: "key", HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewOpenAIProfile(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewOpenAIAdapter(client, "openai-direct", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Cursor: first.NextCursor, Limit: 1})
+	if err == nil || !strings.Contains(err.Error(), "snapshot changed") {
+		t.Fatalf("changed snapshot error = %v", err)
 	}
 }
 

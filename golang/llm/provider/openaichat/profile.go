@@ -60,6 +60,19 @@ type Profile struct {
 	// provider-reported cost) after the common Chat response has been lifted.
 	ResponseAugment           func(provider.Call, *openai.ChatCompletion, *llm.Response) error
 	StructuredOutputTransform string
+	directOpenAI              bool
+}
+
+// NewOpenAIProfile verifies and marks a profile for the direct OpenAI API.
+// Generic and compatible profiles intentionally cannot opt into direct
+// management APIs merely because their base URL happens to look OpenAI-like.
+func NewOpenAIProfile(profile Profile) (Profile, error) {
+	validated, err := NewProfile(profile)
+	if err != nil {
+		return Profile{}, err
+	}
+	validated.directOpenAI = true
+	return validated, nil
 }
 
 // NewProfile validates and defensively copies a profile. The returned value is

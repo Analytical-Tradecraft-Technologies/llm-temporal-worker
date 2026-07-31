@@ -87,8 +87,10 @@ never become configured routes automatically.
 
 The production OpenAI Chat and Responses adapters implement this extension for
 the direct OpenAI API. They fetch the documented `/models` management endpoint,
-normalize and sort the bounded result, and expose an opaque local continuation
-cursor. Compatible OpenAI endpoints (including Azure) remain explicitly
+normalize and sort the bounded result, and expose an opaque continuation cursor
+bound to a digest of the fetched snapshot; if the provider changes the listing
+during pagination, the worker fails closed instead of skipping or duplicating
+models. Compatible OpenAI endpoints (including Azure) remain explicitly
 unsupported until they have a provider-specific management contract; a
 deployment must not infer inventory from inference responses. A deployment
 still owns refresh scheduling and must persist each page through

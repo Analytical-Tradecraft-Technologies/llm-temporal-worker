@@ -2,7 +2,6 @@ package openairesponses
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +24,7 @@ func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "openai-responses", "responses-contract/v1")
+	adapter, err := NewOpenAIAdapter(client, "openai-responses", "responses-contract/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +32,7 @@ func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Complete || first.NextCursor != "2" || modelIDs(first.Models) != "alpha,beta" {
+	if first.Complete || !strings.HasSuffix(first.NextCursor, ":2") || modelIDs(first.Models) != "alpha,beta" {
 		t.Fatalf("first page = %#v, want alpha,beta with cursor 2", first)
 	}
 	second, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-responses", Cursor: first.NextCursor, Limit: 2})
@@ -55,7 +54,7 @@ func TestListModelsRedactsProviderErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "openai-responses", "responses-contract/v1")
+	adapter, err := NewOpenAIAdapter(client, "openai-responses", "responses-contract/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,10 +65,19 @@ func TestListModelsRedactsProviderErrors(t *testing.T) {
 }
 
 func TestListModelsUnsupportedWithoutDirectCapability(t *testing.T) {
-	adapter := &Adapter{client: &Client{}}
-	_, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "compatible", Limit: 1})
-	if !errors.Is(err, provider.ErrModelInventoryUnsupported) {
-		t.Fatalf("error = %v, want unsupported", err)
+	if _, ok := any(&Adapter{}).(provider.ModelLister); ok {
+		t.Fatal("compatible adapter unexpectedly satisfies provider.ModelLister")
+	}
+}
+
+func TestListModelsRejectsEndpointMismatch(t *testing.T) {
+	adapter, err := NewOpenAIAdapter(&Client{}, "openai-responses", "responses-contract/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "other", Limit: 1})
+	if err == nil || !strings.Contains(err.Error(), "endpoint does not match") {
+		t.Fatalf("mismatched endpoint error = %v", err)
 	}
 }
 

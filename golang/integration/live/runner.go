@@ -62,7 +62,7 @@ func chatProfileFor(liveProfile Profile) (openaichat.Profile, error) {
 	capabilities := liveChatCapabilities("live-" + liveProfile.ID + "/v1")
 	switch liveProfile.ID {
 	case "openai-chat":
-		return openaichat.NewProfile(openaichat.Profile{
+		return openaichat.NewOpenAIProfile(openaichat.Profile{
 			ID:                liveProfile.ID,
 			CapabilityVersion: capabilities.Version,
 			Capabilities:      capabilities,
@@ -281,7 +281,7 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
-		adapter, err := openairesponses.NewAdapter(client, profile.ID, "live-openai-responses/v1")
+		adapter, err := openairesponses.NewOpenAIAdapter(client, profile.ID, "live-openai-responses/v1")
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
@@ -328,7 +328,7 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
-		adapter, err := openaichat.NewAdapter(client, profile.ID, chatProfile)
+		adapter, err := openaichat.NewOpenAIAdapter(client, profile.ID, chatProfile)
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}

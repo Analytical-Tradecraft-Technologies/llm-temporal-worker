@@ -22,8 +22,7 @@ type ClientConfig struct {
 // Client owns the official OpenAI SDK client for the Responses endpoint.
 // SDK types stay private to this adapter package.
 type Client struct {
-	sdk                   openai.Client
-	modelListingSupported bool
+	sdk openai.Client
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -42,5 +41,5 @@ func NewClient(config ClientConfig) (*Client, error) {
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
-	), modelListingSupported: true}, nil
+	)}, nil
 }
