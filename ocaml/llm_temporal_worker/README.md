@@ -31,9 +31,10 @@ Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
 
 The repository also contains a separate [downstream Dune consumer smoke
 project](../consumer_smoke). CI installs this package from the Git subpath,
-then builds that project against the installed public library. This catches
-packaging and public-name regressions that a build from the source directory
-cannot detect.
+builds that project against the installed public library, and runs its
+deterministic smoke test. This catches packaging, public-name, and basic
+runtime-dispatch regressions that a build from the source directory cannot
+detect; it never contacts Temporal or an LLM provider.
 
 ## Use
 
