@@ -748,11 +748,14 @@ separately in `docs/release/v1-requirements.json`.
 Status: the provider-control normalization and persistence slices are
 implemented: closed status and credit observations, sticky incident and
 replay rules, bounded inventory snapshots, refresh collapse, and PostgreSQL
-status/inventory projections have offline and opt-in database coverage. This
-does not complete Task 13. No production provider profile currently
-implements `provider.ModelLister`; management refresh therefore remains an
-explicit deployment-owned adapter, and `configured_only` or `unsupported`
-inventory is the honest state until one is supplied. Runtime status recording
+status/inventory projections have offline and opt-in database coverage. Direct
+OpenAI Chat and Responses adapters now implement the optional
+`provider.ModelLister` contract with bounded, locally paged normalized model
+snapshots. Azure and other OpenAI-compatible profiles remain explicitly
+unsupported until they have provider-specific management contracts. This does
+not complete Task 13: management refresh is still deployment-owned, and
+`configured_only` or `unsupported` inventory remains the honest state when no
+supported lister is configured. Runtime status recording
 is now wired through the snapshot-scoped `ProviderStatusRecorder` and same-pool
 PostgreSQL repository. The complete durable v1 builder is also landed, but its
 per-snapshot phase factories remain deployment-owned. Provider management

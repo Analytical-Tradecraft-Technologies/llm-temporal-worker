@@ -85,9 +85,14 @@ is explicitly unsupported for management refresh. The registry does not probe
 providers or infer an inventory from inference calls, and discovered models
 never become configured routes automatically.
 
-This is an integration seam, not a claim that every provider supports model
-listing. A deployment must supply a provider-specific management implementation
-and persist its page through `InventoryRepository`; until then the existing
+The production OpenAI Chat and Responses adapters implement this extension for
+the direct OpenAI API. They fetch the documented `/models` management endpoint,
+normalize and sort the bounded result, and expose an opaque local continuation
+cursor. Compatible OpenAI endpoints (including Azure) remain explicitly
+unsupported until they have a provider-specific management contract; a
+deployment must not infer inventory from inference responses. A deployment
+still owns refresh scheduling and must persist each page through
+`InventoryRepository`; when no supported lister is configured, the existing
 `configured_only` or `unsupported` inventory sources remain the honest result.
 
 ## Persistence hand-off
@@ -112,10 +117,11 @@ loaded rows and `OpenCursor` authenticates the cursor before returning it.
 
 The repositories do not register provider management adapters or a query
 Activity. Runtime composition supplies the inference/status recorder
-separately; query integration and provider management/list adapters remain
-explicit follow-up work. Discovered models remain informational rather than
-routable, and configured-only/unsupported inventory is valid until a provider
-management adapter exists.
+separately; direct OpenAI adapters can provide normalized management pages,
+while refresh scheduling, query integration, and unsupported provider profiles
+remain explicit deployment work. Discovered models remain informational rather
+than routable, and configured-only/unsupported inventory is valid when no
+supported management adapter exists.
 
 ### Persisted status pages
 
