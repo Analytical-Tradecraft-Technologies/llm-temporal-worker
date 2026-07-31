@@ -71,7 +71,7 @@ func TestListModelsUnsupportedWithoutDirectCapability(t *testing.T) {
 }
 
 func TestListModelsRejectsEndpointMismatch(t *testing.T) {
-	adapter, err := NewOpenAIAdapter(&Client{}, "openai-responses", "responses-contract/v1")
+	adapter, err := NewOpenAIAdapter(&Client{directOpenAI: true}, "openai-responses", "responses-contract/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
