@@ -21,8 +21,11 @@ all three descriptors in Generate/Compact/Query order; the checked-in
 development fixture may retain only the legacy Generate helper while the
 durable runtime is intentionally absent.
 
-The Activity adapter validates the closed JSON record and the configured
-application payload limit before calling the injected `activity.V1Runtime`.
+The Activity adapter rejects payload bytes over the configured application
+limit before JSON decoding, then validates the closed JSON record before
+calling the injected `activity.V1Runtime`. This ordering keeps malformed or
+adversarial oversized history entries from making the decoder allocate before
+the boundary has failed closed.
 Responses are validated against the same limit before Temporal serialization;
 errors are converted to bounded `SafeErrorDetails` and never include prompts,
 outputs, provider bodies, or identifiers from a runtime error message.

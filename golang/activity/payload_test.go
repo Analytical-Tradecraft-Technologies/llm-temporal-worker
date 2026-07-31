@@ -55,6 +55,33 @@ func TestRequestPayloadRejectsOversizeAndMalformedBlob(t *testing.T) {
 	}
 }
 
+func TestPayloadUnmarshalRejectsOversizeBeforeJSONDecode(t *testing.T) {
+	// This is intentionally malformed as JSON. The size gate must run first so
+	// malformed or adversarial payloads cannot force an unbounded decode before
+	// the Activity boundary rejects them.
+	oversize := bytes.Repeat([]byte{'{'}, 128)
+	for _, decode := range []struct {
+		name string
+		call func() error
+	}{
+		{name: "request", call: func() error {
+			_, err := UnmarshalRequest(oversize, PayloadLimits{MaxInlineBytes: 64})
+			return err
+		}},
+		{name: "response", call: func() error {
+			_, err := UnmarshalResponse(oversize, PayloadLimits{MaxInlineBytes: 64})
+			return err
+		}},
+	} {
+		t.Run(decode.name, func(t *testing.T) {
+			err := decode.call()
+			if err == nil || !strings.Contains(err.Error(), "payload is 128 bytes; limit is 64") {
+				t.Fatalf("oversize malformed payload error = %v, want size rejection", err)
+			}
+		})
+	}
+}
+
 func TestBlobRefValidationAndResponseRoundTrip(t *testing.T) {
 	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	ref := BlobRef{Store: "s3", Locator: "tenant-1/abc", Digest: strings.Repeat("a", 64), ByteLength: 12, MediaType: "application/json", ExpiresAt: &expires}
