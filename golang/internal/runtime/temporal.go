@@ -80,7 +80,7 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 		// The client converter is used by the SDK before a registered Activity
 		// handler runs. Install the bounded wrapper here, at the normal decode
 		// path, rather than relying on standalone payload helpers.
-		DataConverter: activity.BoundedDataConverter(activity.PayloadLimits{}),
+		DataConverter: activity.BoundedDataConverter(activity.PayloadLimits{MaxInlineBytes: value.Server.InlinePayloadBytes}),
 	}
 	if value.Temporal.TLS.Enabled {
 		readFile := factory.ReadFile
