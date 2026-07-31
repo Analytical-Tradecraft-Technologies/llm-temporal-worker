@@ -6,6 +6,7 @@
     { "$ref": "#/$defs/gate_summary" },
     { "$ref": "#/$defs/benchmark_summary" },
     { "$ref": "#/$defs/benchmark_summary_legacy" },
+    { "$ref": "#/$defs/worker_error_summary" },
     { "$ref": "#/$defs/fixture_manifest" },
     { "$ref": "#/$defs/redis_summary" },
     { "$ref": "#/$defs/temporal_summary" },
@@ -135,6 +136,31 @@
         "objective_status": { "const": "measurement_only" },
         "output_sha256": { "$ref": "#/$defs/sha256" },
         "output_bytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "redacted": { "$ref": "#/$defs/redacted" }
+      }
+    },
+    "worker_error_summary": {
+      "description": "A redacted worker-origin error-rate measurement prepared from a bounded Prometheus snapshot. It is measurement-only and does not assert production SLO evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "status",
+        "scope",
+        "completed_attempts",
+        "worker_failed_attempts",
+        "objective_status",
+        "redacted"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "worker_error_summary" },
+        "status": { "const": "pass" },
+        "scope": { "const": "prometheus_snapshot_measurement_only" },
+        "completed_attempts": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+        "worker_failed_attempts": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "objective_status": { "const": "measurement_only" },
         "redacted": { "$ref": "#/$defs/redacted" }
       }
     },

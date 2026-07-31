@@ -1965,6 +1965,11 @@ func TestReleaseEvidenceCollectorRetainsMemoryBenchmarkMeasurement(t *testing.T)
 			t.Fatalf("benchmark collector is missing %q", required)
 		}
 	}
+	for _, required := range []string{"--worker-error-metrics", "slo-evidence.py", "worker-error-summary.json"} {
+		if !strings.Contains(collector, required) {
+			t.Fatalf("release evidence collector is missing optional worker SLO input %q", required)
+		}
+	}
 }
 
 func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {

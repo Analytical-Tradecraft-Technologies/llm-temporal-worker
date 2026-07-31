@@ -10,6 +10,7 @@ module_root="$root/golang"
 collector="$root/scripts/release/collect.py"
 artifact_dir=""
 image_oci_layout=""
+worker_error_metrics=""
 
 fail() {
   printf 'release evidence collection failed: %s\n' "$1" >&2
@@ -26,6 +27,11 @@ while [[ $# -gt 0 ]]; do
     --image-oci-layout)
       [[ $# -ge 2 ]] || fail "--image-oci-layout requires a path"
       image_oci_layout="$2"
+      shift 2
+      ;;
+    --worker-error-metrics)
+      [[ $# -ge 2 ]] || fail "--worker-error-metrics requires a Prometheus text snapshot"
+      worker_error_metrics="$2"
       shift 2
       ;;
     *)
@@ -94,6 +100,15 @@ python3 "$collector" benchmark-summary \
   --kind benchmark_summary \
   --input "$temporary/benchmark.output" \
   --output "$artifact_dir/benchmark-summary.json"
+
+# Production worker metrics are never available to the trusted release job by
+# default. A protected operator may supply a bounded Prometheus text snapshot
+# explicitly; only its redacted count summary is retained in the bundle.
+if [[ -n "$worker_error_metrics" ]]; then
+  python3 "$root/scripts/release/slo-evidence.py" worker-error-summary \
+    --input "$worker_error_metrics" \
+    --output "$artifact_dir/worker-error-summary.json"
+fi
 
 python3 "$collector" fixture-manifest \
   --root "$module_root" \
