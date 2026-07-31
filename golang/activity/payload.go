@@ -23,10 +23,13 @@ func MarshalRequest(request GenerateRequest, limits PayloadLimits) ([]byte, erro
 	if _, err := request.Validate(limits.inlineBytes()); err != nil {
 		return nil, err
 	}
-	return json.Marshal(request)
+	return marshalBoundedEnvelope(request, limits)
 }
 
 func UnmarshalRequest(data []byte, limits PayloadLimits) (GenerateRequest, error) {
+	if err := rejectOversizedPayload(data, limits); err != nil {
+		return GenerateRequest{}, err
+	}
 	var request GenerateRequest
 	if err := json.Unmarshal(data, &request); err != nil {
 		return GenerateRequest{}, err
@@ -41,10 +44,13 @@ func MarshalResponse(response GenerateResponse, limits PayloadLimits) ([]byte, e
 	if err := response.Validate(limits.inlineBytes()); err != nil {
 		return nil, err
 	}
-	return json.Marshal(response)
+	return marshalBoundedEnvelope(response, limits)
 }
 
 func UnmarshalResponse(data []byte, limits PayloadLimits) (GenerateResponse, error) {
+	if err := rejectOversizedPayload(data, limits); err != nil {
+		return GenerateResponse{}, err
+	}
 	var response GenerateResponse
 	if err := json.Unmarshal(data, &response); err != nil {
 		return GenerateResponse{}, err
@@ -53,6 +59,29 @@ func UnmarshalResponse(data []byte, limits PayloadLimits) (GenerateResponse, err
 		return GenerateResponse{}, err
 	}
 	return response, nil
+}
+
+// rejectOversizedPayload runs before JSON decoding so an untrusted Temporal
+// payload cannot allocate or traverse an arbitrarily large object before the
+// application-level limit is enforced. Marshal paths and v1 codecs use the
+// same limit, keeping every Activity boundary fail-closed and bounded.
+func rejectOversizedPayload(data []byte, limits PayloadLimits) error {
+	max := limits.inlineBytes()
+	if len(data) > max {
+		return fmt.Errorf("payload is %d bytes; limit is %d", len(data), max)
+	}
+	return nil
+}
+
+func marshalBoundedEnvelope(value any, limits PayloadLimits) ([]byte, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectOversizedPayload(data, limits); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func ValidateBlobRef(ref BlobRef, nowUnixNano int64) error {

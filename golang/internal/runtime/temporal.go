@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
@@ -76,6 +77,10 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 		HostPort:  value.Temporal.Target,
 		Namespace: value.Temporal.Namespace,
 		Identity:  factory.identity(value.Temporal.IdentityPrefix),
+		// The client converter is used by the SDK before a registered Activity
+		// handler runs. Install the bounded wrapper here, at the normal decode
+		// path, rather than relying on standalone payload helpers.
+		DataConverter: activity.BoundedDataConverter(activity.PayloadLimits{MaxInlineBytes: value.Server.InlinePayloadBytes}),
 	}
 	if value.Temporal.TLS.Enabled {
 		readFile := factory.ReadFile

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,6 +119,11 @@ func TestDefaultTemporalClientFactoryUsesBoundedDialRetry(t *testing.T) {
 			if got := options.Namespace; got != "test" {
 				t.Errorf("Temporal namespace = %q, want test", got)
 			}
+			if options.DataConverter == nil {
+				t.Error("Temporal client did not receive the bounded Activity payload converter")
+			} else if _, err := options.DataConverter.ToPayload(strings.Repeat("x", 128)); err == nil {
+				t.Error("Temporal client converter accepted payload above configured inline limit")
+			}
 			if attempts.Add(1) < 2 {
 				return nil, status.Error(codes.Unavailable, "frontend is still starting")
 			}
@@ -128,7 +134,7 @@ func TestDefaultTemporalClientFactoryUsesBoundedDialRetry(t *testing.T) {
 	got, err := factory.New(context.Background(), config.Config{Temporal: config.TemporalConfig{
 		Target:    "temporal.example.test:7233",
 		Namespace: "test",
-	}})
+	}, Server: config.ServerConfig{InlinePayloadBytes: 64}})
 	if err != nil {
 		t.Fatalf("factory Temporal dial: %v", err)
 	}
