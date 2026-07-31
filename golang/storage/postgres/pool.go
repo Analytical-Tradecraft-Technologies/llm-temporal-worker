@@ -119,6 +119,9 @@ func NewPool(ctx context.Context, options PoolOptions) (*pgxpool.Pool, error) {
 // Health verifies the configured physical database and UTC session. It is a
 // read-only readiness check; schema creation belongs exclusively to Install.
 func Health(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error {
+	if ctx == nil {
+		return fmt.Errorf("PostgreSQL health context is nil")
+	}
 	if pool == nil {
 		return fmt.Errorf("PostgreSQL pool is nil")
 	}
