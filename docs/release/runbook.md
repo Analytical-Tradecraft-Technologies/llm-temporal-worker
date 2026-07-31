@@ -181,12 +181,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30340904127`](https://github.com/mfow/llm-temporal-worker/actions/runs/30340904127) at revision
-`bb0da434d657bcc22749e390fb16c9c36c690fe3`. The artifact is named
-`release-evidence` (artifact `8682371430`) and has SHA-256 digest
-`000a3f1f5dc704bb81e62acd0587283a7d49e2d12bcbed837bc89eb36ab811b7`.
+artifact: [workflow run `30607616413`](https://github.com/mfow/llm-temporal-worker/actions/runs/30607616413) at revision
+`b4cbc7e59b5e4dc9c2a1a7b2e40d0ace4eba3d9f`. The artifact is named
+`release-evidence` (artifact `8784822342`) and has SHA-256 digest
+`ed8a399fb797b060fddc21044a860ceaaafd07ffc792162ccc4cc75da30d2a14`.
 The retained bundle binds the immutable image descriptor
-`sha256:83d18a0a96567b31bcc69cd1aed0ba603e6cc13ba8a6eff41a2ffdac41153da8`.
+`sha256:d27a9a7d28130f5bb2baa2b0a3477a62324cc864ffe25f68b55d3fa52fe7478a`.
 The catalog refresh binds the thirteen already-recorded offline requirements
 to this successful master run. Pending protected-provider and publication
 requirements, plus the two unrecorded SLO measurements, remain unchanged.
