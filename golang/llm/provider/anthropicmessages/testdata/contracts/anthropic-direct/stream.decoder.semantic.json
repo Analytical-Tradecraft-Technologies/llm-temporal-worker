@@ -1,0 +1,12 @@
+{
+  "api_version": "llm.temporal/v1",
+  "cost": {"actual_cost_usd": null, "catalog_version": "", "method": "", "reserved_cost_usd": null},
+  "diagnostics": [],
+  "operation_key": "fixture-anthropic-direct-stream",
+  "output": [{"actor": "model", "content": [{"kind": "text", "text": "fixture direct"}], "kind": "message"}],
+  "provider": {},
+  "route": {},
+  "service": {"attempted": "standard", "fallback_index": 0, "requested": "standard"},
+  "status": "completed",
+  "usage": {"cache_read_tokens": 0, "cache_write_tokens": 0, "input_tokens": 2, "output_tokens": 1, "reasoning_tokens": 0}
+}

@@ -191,6 +191,7 @@ func TestAnthropicAWSContractFixturesCoverUsageClassesLossErrorsAndContinuation(
 
 func TestAnthropicAWSContractFixtureDecoderIsFragmentationInvariant(t *testing.T) {
 	wire := readAnthropicAWSFixture(t, "stream.decoder.events")
+	metadata := loadAnthropicAWSFixtureMetadata(t)
 	want, err := DecodeStream(bytes.NewReader(wire))
 	if err != nil {
 		t.Fatal(err)
@@ -232,6 +233,11 @@ func TestAnthropicAWSContractFixtureDecoderIsFragmentationInvariant(t *testing.T
 		}
 	}
 	if _, err := assembler.Result(); err != nil {
+		t.Fatal(err)
+	}
+	if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readAnthropicAWSFixture(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+		return assembleAnthropicFixtureStream(events, "fixture-anthropic-aws-stream")
+	}, metadata.GeneratedFieldExemptions); err != nil {
 		t.Fatal(err)
 	}
 }

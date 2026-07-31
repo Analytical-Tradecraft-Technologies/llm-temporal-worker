@@ -168,6 +168,7 @@ func TestAnthropicDirectContractFixturesCoverUsageClassesLossErrorsAndContinuati
 
 func TestAnthropicDirectContractFixtureDecoderIsFragmentationInvariant(t *testing.T) {
 	wire := readAnthropicDirectFixture(t, "stream.decoder.events")
+	metadata := loadAnthropicDirectFixtureMetadata(t)
 	want, err := DecodeStream(bytes.NewReader(wire))
 	if err != nil {
 		t.Fatal(err)
@@ -202,6 +203,29 @@ func TestAnthropicDirectContractFixtureDecoderIsFragmentationInvariant(t *testin
 	if _, err := assembler.Result(); err != nil {
 		t.Fatal(err)
 	}
+	if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readAnthropicDirectFixture(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+		return assembleAnthropicFixtureStream(events, "fixture-anthropic-direct-stream")
+	}, metadata.GeneratedFieldExemptions); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assembleAnthropicFixtureStream(wire []byte, operationKey string) ([]byte, error) {
+	events, err := DecodeStream(bytes.NewReader(wire))
+	if err != nil {
+		return nil, err
+	}
+	assembler := provider.NewAssembler(operationKey)
+	for _, event := range events {
+		if err := assembler.Add(event); err != nil {
+			return nil, err
+		}
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(response)
 }
 
 func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testing.T) {

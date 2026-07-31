@@ -81,6 +81,13 @@ a future semantic field or capability cannot silently escape an enforced
 profile's fixture matrix; runtime registration and fixture profile binding
 remain an explicit startup composition responsibility.
 
+Profiles using the shared `stream.decoder.events` corpus also record a
+`stream.decoder.semantic.json` artifact. The shared contract test assembles the
+captured events and compares that normalized response with the artifact,
+including deterministic fragmentation. This is a parser/assembly regression
+check only; it does not enable live token streaming or establish a Temporal
+streaming dispatch API.
+
 ### Responses profile boundary
 
 The direct `openai-responses` and `azure-responses` profiles have separate

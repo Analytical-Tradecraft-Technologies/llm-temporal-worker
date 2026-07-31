@@ -193,6 +193,7 @@ func TestChatContractFixturesKeepDecoderOutputFragmentationInvariant(t *testing.
 	for _, profile := range chatFixtureProfiles(t) {
 		t.Run(profile.id, func(t *testing.T) {
 			wire := readChatFixture(t, profile, "stream.decoder.events")
+			metadata := loadChatFixtureMetadata(t, profile)
 			want, err := DecodeStream(bytes.NewReader(wire))
 			if err != nil {
 				t.Fatal(err)
@@ -227,8 +228,31 @@ func TestChatContractFixturesKeepDecoderOutputFragmentationInvariant(t *testing.
 			if _, err := assembler.Result(); err != nil {
 				t.Fatal(err)
 			}
+			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readChatFixture(t, profile, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+				return assembleChatFixtureStream(events, "fixture-"+profile.id+"-stream")
+			}, metadata.GeneratedFieldExemptions); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
+}
+
+func assembleChatFixtureStream(wire []byte, operationKey string) ([]byte, error) {
+	events, err := DecodeStream(bytes.NewReader(wire))
+	if err != nil {
+		return nil, err
+	}
+	assembler := provider.NewAssembler(operationKey)
+	for _, event := range events {
+		if err := assembler.Add(event); err != nil {
+			return nil, err
+		}
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(response)
 }
 
 func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {

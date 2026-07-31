@@ -260,6 +260,7 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 	for _, profile := range responsesFixtureProfiles {
 		t.Run(profile.id, func(t *testing.T) {
 			wire := readContractFixture(t, profile.id, "stream.decoder.events")
+			metadata := loadContractFixtureMetadata(t, profile.id)
 			want, err := DecodeStream(bytes.NewReader(wire))
 			if err != nil {
 				t.Fatal(err)
@@ -297,8 +298,31 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "stream.decoder.semantic.json")
+			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readContractFixture(t, profile.id, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+				return assembleResponsesFixtureStream(events, "fixture-stream")
+			}, metadata.GeneratedFieldExemptions); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
+}
+
+func assembleResponsesFixtureStream(wire []byte, operationKey string) ([]byte, error) {
+	events, err := DecodeStream(bytes.NewReader(wire))
+	if err != nil {
+		return nil, err
+	}
+	assembler := provider.NewAssembler(operationKey)
+	for _, event := range events {
+		if err := assembler.Add(event); err != nil {
+			return nil, err
+		}
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(response)
 }
 
 func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
