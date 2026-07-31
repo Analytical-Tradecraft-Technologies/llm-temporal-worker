@@ -1960,7 +1960,7 @@ func TestReleaseEvidenceCollectorRetainsMemoryBenchmarkMeasurement(t *testing.T)
 		t.Fatal("release evidence collector does not run the memory admission benchmark")
 	}
 	pythonCollector := readRepositoryFile(t, root, "scripts", "release", "collect.py")
-	for _, required := range []string{"benchmark-summary", "p99_ms_per_op", "measurement_only"} {
+	for _, required := range []string{"benchmark-summary", "p99_ms_per_op", "target_status", "measurement_only"} {
 		if !strings.Contains(pythonCollector, required) {
 			t.Fatalf("benchmark collector is missing %q", required)
 		}
@@ -1984,7 +1984,7 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 		t.Fatalf("benchmark collector rejected valid output: %v\n%s", err, output)
 	}
 	document := readReleaseEvidenceJSONArtifact(t, filepath.Dir(outputPath), "benchmark_summary")
-	if document["scope"] != "memory" || document["objective_status"] != "measurement_only" {
+	if document["scope"] != "memory" || document["target_status"] != "pass" || document["objective_status"] != "measurement_only" {
 		t.Fatalf("benchmark summary scope/status = %#v/%#v", document["scope"], document["objective_status"])
 	}
 	if document["p99_ms_per_op"] != 0.7286 {
@@ -2000,6 +2000,16 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 	}
 	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
 		t.Fatalf("benchmark collector retained output after rejecting multiple measurements: %v", err)
+	}
+
+	targetInput := "goos: linux\n" +
+		"BenchmarkGenerateMemoryAdmissionAndCompile-14 1 1 ns/op 25 p99_ms/op\nPASS\n"
+	writeReleaseArtifact(t, inputPath, []byte(targetInput))
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("benchmark collector accepted a p99 at the strict target boundary:\n%s", output)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("benchmark collector retained output after rejecting target miss: %v", err)
 	}
 }
 
@@ -2038,7 +2048,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		"test_summary":          releaseEvidenceGateSummary("test_summary"),
 		"race_summary":          releaseEvidenceGateSummary("race_summary"),
 		"fuzz_summary":          releaseEvidenceGateSummary("fuzz_summary"),
-		"benchmark_summary":     `{"schema_version":1,"kind":"benchmark_summary","status":"pass","benchmark":"BenchmarkGenerateMemoryAdmissionAndCompile","scope":"memory","samples":4267,"ns_per_op":255245,"p99_ms_per_op":0.7286,"target_ms":25,"objective_status":"measurement_only","output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_bytes":256,"redacted":true}`,
+		"benchmark_summary":     `{"schema_version":1,"kind":"benchmark_summary","status":"pass","benchmark":"BenchmarkGenerateMemoryAdmissionAndCompile","scope":"memory","samples":4267,"ns_per_op":255245,"p99_ms_per_op":0.7286,"target_ms":25,"target_status":"pass","objective_status":"measurement_only","output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_bytes":256,"redacted":true}`,
 		"fixture_manifest":      `{"schema_version":1,"kind":"fixture_manifest","status":"pass","version":1,"fixtures":[{"profile":"openai-responses","upstream_url":"https://platform.openai.com/docs/api-reference/responses","upstream_date":"2026-07-14","manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"redacted":true}`,
 		"redis_summary":         `{"schema_version":1,"kind":"redis_summary","status":"pass","service":"redis","state":"running","health":"healthy","redacted":true}`,
 		"temporal_summary":      `{"schema_version":1,"kind":"temporal_summary","status":"pass","service":"temporal","state":"running","health":"healthy","redacted":true}`,

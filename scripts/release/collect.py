@@ -34,6 +34,7 @@ NUMERIC_DOTTED_HOST = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
 SAFE_HTTPS_PATH = re.compile(r"^[A-Za-z0-9._~!$&'()*+,;=:@/-]*$")
 GATE_KINDS = {"test_summary", "race_summary", "fuzz_summary"}
 BENCHMARK_NAME = "BenchmarkGenerateMemoryAdmissionAndCompile"
+MEMORY_TARGET_MS = 25
 BENCHMARK_LINE = re.compile(
     rf"^{BENCHMARK_NAME}-[0-9]+\s+([0-9]+)\s+([0-9]+(?:\.[0-9]+)?)\s+ns/op\s+"
     r"([0-9]+(?:\.[0-9]+)?)\s+p99_ms/op(?:\s.*)?$"
@@ -297,6 +298,11 @@ def command_benchmark_summary(args: argparse.Namespace) -> None:
     if len(matches) != 1:
         fail("benchmark output must contain exactly one memory benchmark measurement")
     samples, ns_per_op, p99_ms_per_op = matches[0]
+    # The release job must fail closed when the offline memory proxy misses
+    # its documented target.  This proves the memory half of the objective
+    # without implying that the same-region Redis half has been measured.
+    if p99_ms_per_op >= MEMORY_TARGET_MS:
+        fail(f"memory benchmark p99 {p99_ms_per_op:g} ms/op is not below the {MEMORY_TARGET_MS} ms target")
     write_json(
         Path(args.output),
         {
@@ -308,7 +314,8 @@ def command_benchmark_summary(args: argparse.Namespace) -> None:
             "samples": samples,
             "ns_per_op": ns_per_op,
             "p99_ms_per_op": p99_ms_per_op,
-            "target_ms": 25,
+            "target_ms": MEMORY_TARGET_MS,
+            "target_status": "pass",
             "objective_status": "measurement_only",
             "output_sha256": sha256_bytes(data),
             "output_bytes": len(data),
