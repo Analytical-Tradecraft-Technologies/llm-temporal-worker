@@ -55,11 +55,16 @@ Do not compare its p99 output with the service objectives until repeatable,
 controlled memory and same-region Redis evidence is available.
 
 Trusted master release-evidence collection retains this output as a redacted
-`benchmark-summary.json` artifact. The artifact records the benchmark's sample
-count, p99 measurement, and `scope=memory`, but deliberately marks it
-`objective_status=measurement_only`; it is a reproducible offline measurement,
-not proof that either the memory or same-region Redis release objective has
-been met.
+`benchmark-summary.json` artifact. Collection fails closed when the sampled
+memory p99 is not strictly below 25 ms and records `target_status=pass` when it
+is. The artifact still marks `objective_status=measurement_only`: it is a
+reproducible offline measurement of the memory half only, not proof that the
+same-region Redis release objective has been met.
+
+The artifact schema enforces the same strict boundary for current summaries:
+`target_status=pass` is valid only when `p99_ms_per_op` is below 25. Retained
+schema-v1 summaries from before `target_status` existed remain verifiable through
+an explicit legacy schema branch; collection never emits that legacy shape.
 
 ## Controlled Redis measurement
 

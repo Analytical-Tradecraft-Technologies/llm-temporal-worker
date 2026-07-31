@@ -90,10 +90,11 @@ in separate objects.
 
 The `benchmark-summary.json` artifact records one exact
 `BenchmarkGenerateMemoryAdmissionAndCompile` measurement with its sample count,
-`ns/op`, and sampled `p99_ms/op`. Its `scope` is `memory` and its
-`objective_status` is `measurement_only`: the record proves that the offline
-proxy ran, but does not claim the 25 ms memory objective or the 75 ms Redis
-objective as release evidence. The Redis measurement remains an explicitly
+`ns/op`, and sampled `p99_ms/op`. The collector fails closed unless the sampled
+memory p99 is strictly below the documented 25 ms target and records
+`target_status: "pass"`. Its `scope` is `memory`; `objective_status` remains
+`measurement_only` because the 75 ms same-region Redis counterpart is not
+measured by this workflow. The Redis measurement remains an explicitly
 authorized operator run against a same-region deployment and is never replaced
 by this artifact.
 
@@ -101,6 +102,10 @@ The verifier remains compatible with retained schema-v1 bundles recorded before
 this benchmark was added: those bundles may omit `benchmark-summary.json`. New
 recordings are stricter and the recorder requires the benchmark artifact, so all
 new evidence captures the measurement without invalidating historical bundles.
+Retained bundles that include the benchmark but predate `target_status` are also
+accepted through the `benchmark_summary_legacy` schema branch. That compatibility
+branch is verify-only; newly collected summaries always use the current shape,
+and only current summaries assert the strict p99 target in the schema.
 
 ## Collect, record, and verify
 

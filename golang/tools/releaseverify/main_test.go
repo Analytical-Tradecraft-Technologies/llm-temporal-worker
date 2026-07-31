@@ -391,6 +391,112 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactDir = resolvedArtifactDir
+	digest := strings.Repeat("a", 64)
+	image := "registry.example/project@sha256:" + digest
+	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+
+	// Simulate a retained schema-v1 benchmark summary from before target_status
+	// was introduced. The legacy schema branch must remain verify-compatible.
+	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
+	benchmarkData, err := os.ReadFile(benchmarkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var benchmark map[string]any
+	if err := json.Unmarshal(benchmarkData, &benchmark); err != nil {
+		t.Fatal(err)
+	}
+	delete(benchmark, "target_status")
+	if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	schemaPath := releaseEvidenceSchemaPath(t)
+	recordArgs := []string{
+		"record",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-output", filepath.Join(artifactDir, "evidence.json"),
+		"-repository", "https://github.com/example/project",
+		"-revision", strings.Repeat("b", 40),
+		"-image-reference", image,
+		"-image-digest", "sha256:" + digest,
+	}
+	for _, name := range requiredArtifacts {
+		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
+	}
+	if err := run(recordArgs, io.Discard); err != nil {
+		t.Fatalf("record rejected pre-target_status benchmark summary: %v", err)
+	}
+	if err := run([]string{
+		"verify",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-evidence", filepath.Join(artifactDir, "evidence.json"),
+	}, io.Discard); err != nil {
+		t.Fatalf("verify rejected pre-target_status benchmark summary: %v", err)
+	}
+}
+
+func TestReleaseEvidenceRejectsCurrentBenchmarkAtTargetBoundary(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactDir = resolvedArtifactDir
+	digest := strings.Repeat("a", 64)
+	image := "registry.example/project@sha256:" + digest
+	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+
+	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
+	benchmarkData, err := os.ReadFile(benchmarkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var benchmark map[string]any
+	if err := json.Unmarshal(benchmarkData, &benchmark); err != nil {
+		t.Fatal(err)
+	}
+	benchmark["p99_ms_per_op"] = 25.0
+	if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	schemaPath := releaseEvidenceSchemaPath(t)
+	recordArgs := []string{
+		"record",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-output", filepath.Join(artifactDir, "evidence.json"),
+		"-repository", "https://github.com/example/project",
+		"-revision", strings.Repeat("b", 40),
+		"-image-reference", image,
+		"-image-digest", "sha256:" + digest,
+	}
+	for _, name := range requiredArtifacts {
+		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
+	}
+	if err := run(recordArgs, io.Discard); err == nil || !strings.Contains(err.Error(), "p99_ms_per_op") {
+		t.Fatalf("record accepted current target-boundary benchmark summary: %v", err)
+	}
+}
+
 func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 	root := t.TempDir()
 	artifactDir := filepath.Join(root, "artifacts")
@@ -476,7 +582,7 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory, imageReference, imag
 			"schema_version": 1, "kind": "benchmark_summary", "status": "pass",
 			"benchmark": "BenchmarkGenerateMemoryAdmissionAndCompile", "scope": "memory",
 			"samples": 4267, "ns_per_op": 255245, "p99_ms_per_op": 0.7286,
-			"target_ms": 25, "objective_status": "measurement_only",
+			"target_ms": 25, "target_status": "pass", "objective_status": "measurement_only",
 			"output_sha256": digest, "output_bytes": 256, "redacted": true,
 		},
 		"fixture_manifest": map[string]any{
