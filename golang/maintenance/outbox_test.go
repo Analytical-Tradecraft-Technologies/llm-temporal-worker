@@ -34,6 +34,27 @@ func TestNormalizeSafePayloadBoundsAndCanonicalizes(t *testing.T) {
 	}
 }
 
+func TestOutboxLeaseBoundsAreValidatedBeforeClaim(t *testing.T) {
+	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	claim := ClaimOptions{Now: at, Limit: 1, Lease: MaxOutboxLease}
+	if err := claim.Validate(); err != nil {
+		t.Fatalf("maximum claim lease rejected: %v", err)
+	}
+	claim.Lease = MaxOutboxLease + time.Nanosecond
+	if err := claim.Validate(); err == nil {
+		t.Fatal("claim lease beyond maximum was accepted")
+	}
+
+	dispatch := DispatchOptions{Now: at, Limit: 1, Lease: MaxOutboxLease, RetryDelay: time.Minute}
+	if err := dispatch.Validate(); err != nil {
+		t.Fatalf("maximum dispatch lease rejected: %v", err)
+	}
+	dispatch.Lease = MaxOutboxLease + time.Nanosecond
+	if err := dispatch.Validate(); err == nil {
+		t.Fatal("dispatch lease beyond maximum was accepted")
+	}
+}
+
 func TestDeleteBlobPayloadIsTypedAndBoundToAggregate(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	event := testBlobEvent(t, "typed", at)
