@@ -112,6 +112,16 @@ Implemented repository slices include:
   an atomic publish-and-switch boundary. This is a contract slice only; no
   production factory wires it, and protected cross-store recovery evidence is
   still required.
+- **Tasks 3-5, PostgreSQL operation foundation.** The worker schema, scoped
+  pgx repository, encrypted operation manifests/provider IDs, replay conflict
+  handling, and per-route attempt rows are implemented in
+  [`storage/postgres`](../../../golang/storage/postgres). Terminal completion
+  and failure now close the corresponding attempt row in the same transaction
+  as the operation transition, retaining exact-or-unknown cost facts for
+  attempt-level audit. The integration fixture
+  [`operation_integration_test.go`](../../../golang/storage/postgres/operation_integration_test.go)
+  covers replay, provider-pending recovery, retries, and terminal attempt
+  state/cost persistence; protected production conformance remains separate.
 
 The following blockers are intentionally still open:
 
