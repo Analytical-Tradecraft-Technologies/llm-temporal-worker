@@ -148,6 +148,12 @@ the USD value for operation and budget journal rows; legacy Redis admission
 continues enforcing the independently validated microUSD projection. This
 prevents sub-micro-dollar estimates from being silently recorded as zero while
 preserving the conservative integer materialization required by Redis.
+The memory and Redis admission implementations fail closed when an exact
+projection is present but diverges: every exact amount must match the scalar
+USD reservation and its MicroUSD amount is rounded up at the boundary, while a
+MicroUSD limit may only be more conservative than its exact USD limit. This
+keeps compatibility writes from under-reserving or over-admitting while
+leaving exact values authoritative in PostgreSQL and the durable journal.
 If any component or the checked sum cannot be represented in Redis-safe
 microUSD, estimation fails closed rather than dropping that component from the
 compatibility reservation.

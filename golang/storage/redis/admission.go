@@ -184,7 +184,7 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	if err := validateReservations(request.Reservations); err != nil {
 		return admission.ContinueResult{}, err
 	}
-	if err := admission.ValidateReservationEnvelope(request.Reservations, request.Remaining); err != nil {
+	if err := admission.ValidateExactUSDReservationEnvelope(request.Reservations, request.Remaining, request.RemainingUSD); err != nil {
 		return admission.ContinueResult{}, fmt.Errorf("invalid continuation admission request: %w", err)
 	}
 	outcome, err := encodeOutcome(request.Outcome)
@@ -391,7 +391,7 @@ func validateBegin(request admission.BeginRequest) error {
 	if err := validateReservations(request.Reservations); err != nil {
 		return err
 	}
-	return admission.ValidateReservationEnvelope(request.Reservations, request.Reservation)
+	return admission.ValidateExactUSDReservationEnvelope(request.Reservations, request.Reservation, request.ReservationUSD)
 }
 
 func validateReservations(reservations []admission.WindowReservation) error {
