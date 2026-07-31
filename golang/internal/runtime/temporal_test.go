@@ -118,6 +118,9 @@ func TestDefaultTemporalClientFactoryUsesBoundedDialRetry(t *testing.T) {
 			if got := options.Namespace; got != "test" {
 				t.Errorf("Temporal namespace = %q, want test", got)
 			}
+			if options.DataConverter == nil {
+				t.Error("Temporal client did not receive the bounded Activity payload converter")
+			}
 			if attempts.Add(1) < 2 {
 				return nil, status.Error(codes.Unavailable, "frontend is still starting")
 			}

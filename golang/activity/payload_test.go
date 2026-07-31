@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"go.temporal.io/sdk/converter"
 )
 
 func TestRequestPayloadRoundTrip(t *testing.T) {
@@ -25,6 +26,31 @@ func TestRequestPayloadRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(encoded, mustJSON(t, decoded)) {
 		t.Fatalf("payload encoding is not deterministic: %s != %s", encoded, mustJSON(t, decoded))
+	}
+}
+
+func TestEnvelopeMarshalAndUnmarshalUseTheSameLimit(t *testing.T) {
+	response := GenerateResponse{
+		APIVersion: APIVersion,
+		Response: llm.Response{
+			OperationKey: "operation-1",
+			Status:       llm.ResponseStatusCompleted,
+			Service:      llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard},
+		},
+		Metadata: ResultMetadata{OperationID: "operation-id"},
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The configured limit is deliberately one byte below the full envelope,
+	// while the nested response remains small enough for its own validator.
+	limits := PayloadLimits{MaxInlineBytes: len(encoded) - 1}
+	if _, err := MarshalResponse(response, limits); err == nil {
+		t.Fatal("MarshalResponse accepted an envelope larger than its limit")
+	}
+	if _, err := UnmarshalResponse(encoded, limits); err == nil {
+		t.Fatal("UnmarshalResponse accepted an envelope larger than its limit")
 	}
 }
 
@@ -79,6 +105,22 @@ func TestPayloadUnmarshalRejectsOversizeBeforeJSONDecode(t *testing.T) {
 				t.Fatalf("oversize malformed payload error = %v, want size rejection", err)
 			}
 		})
+	}
+}
+
+func TestBoundedDataConverterRejectsBeforeTemporalDecode(t *testing.T) {
+	limits := PayloadLimits{MaxInlineBytes: 64}
+	bounded := BoundedDataConverter(limits)
+	oversize, err := converter.GetDefaultDataConverter().ToPayload(strings.Repeat("x", 128))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded string
+	if err := bounded.FromPayload(oversize, &decoded); err == nil || !strings.Contains(err.Error(), "Temporal payload is 130 bytes; limit is 64") {
+		t.Fatalf("bounded converter error = %v, want pre-decode size rejection", err)
+	}
+	if _, err := bounded.ToPayload(strings.Repeat("x", 128)); err == nil {
+		t.Fatal("bounded converter accepted oversized encode")
 	}
 }
 

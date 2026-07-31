@@ -23,7 +23,7 @@ func MarshalRequest(request GenerateRequest, limits PayloadLimits) ([]byte, erro
 	if _, err := request.Validate(limits.inlineBytes()); err != nil {
 		return nil, err
 	}
-	return json.Marshal(request)
+	return marshalBoundedEnvelope(request, limits)
 }
 
 func UnmarshalRequest(data []byte, limits PayloadLimits) (GenerateRequest, error) {
@@ -44,7 +44,7 @@ func MarshalResponse(response GenerateResponse, limits PayloadLimits) ([]byte, e
 	if err := response.Validate(limits.inlineBytes()); err != nil {
 		return nil, err
 	}
-	return json.Marshal(response)
+	return marshalBoundedEnvelope(response, limits)
 }
 
 func UnmarshalResponse(data []byte, limits PayloadLimits) (GenerateResponse, error) {
@@ -71,6 +71,17 @@ func rejectOversizedPayload(data []byte, limits PayloadLimits) error {
 		return fmt.Errorf("payload is %d bytes; limit is %d", len(data), max)
 	}
 	return nil
+}
+
+func marshalBoundedEnvelope(value any, limits PayloadLimits) ([]byte, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if err := rejectOversizedPayload(data, limits); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func ValidateBlobRef(ref BlobRef, nowUnixNano int64) error {
