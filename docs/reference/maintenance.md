@@ -52,6 +52,24 @@ The schedule, secret injection, and role grants remain deployment-owned;
 keeping them outside the worker prevents a runtime credential from acquiring
 cleanup privileges.
 
+To capture the current table-settings snapshot without running any cleanup,
+use the same dedicated role with the read-only `inspect-settings` command:
+
+```sh
+LLMTW_MAINTENANCE_POSTGRES_USERNAME=llmtw_maintenance \
+LLMTW_MAINTENANCE_POSTGRES_PASSWORD='(injected by the job secret store)' \
+  ./llmtw-maintenance inspect-settings \
+  --config /etc/llmtw/config.yaml > maintenance-settings.json
+```
+
+The JSON report is limited to the configured namespace and contains one entry
+per expected maintenance relation. It includes only explicitly configured
+reloptions and observed PostgreSQL tuple/timestamp statistics; omitted options
+are not inferred defaults. The command is read-only and still requires the
+dedicated maintenance credentials, never the worker's runtime credential
+references. This snapshot is configuration evidence, not load or SLO evidence:
+it does not establish p99 latency, error rate, or production suitability.
+
 ## Retention passes
 
 `golang/maintenance` exposes a storage-neutral `RetentionPolicy` and

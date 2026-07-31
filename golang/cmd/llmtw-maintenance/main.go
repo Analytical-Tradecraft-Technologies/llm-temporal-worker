@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -43,6 +44,10 @@ type commandOptions struct {
 	MaxWindow   time.Duration
 }
 
+type inspectOptions struct {
+	ConfigPath string
+}
+
 func main() {
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -61,35 +66,76 @@ func signalContext() (context.Context, context.CancelFunc) {
 type lookupEnv func(string) (string, bool)
 
 func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup lookupEnv) error {
-	if len(args) == 0 || args[0] != "retention-once" {
-		return errors.New("usage: llmtw-maintenance retention-once [flags]")
+	if len(args) == 0 {
+		return errors.New("usage: llmtw-maintenance <retention-once|inspect-settings> [flags]")
 	}
-	options, err := parseOptions(args[1:], errOut)
-	if err != nil {
+	switch args[0] {
+	case "retention-once":
+		options, err := parseOptions(args[1:], errOut)
+		if err != nil {
+			return err
+		}
+		repository, closeRepository, err := openMaintenanceRepository(ctx, options.ConfigPath, lookup)
+		if err != nil {
+			return err
+		}
+		defer closeRepository()
+		result, err := repository.RunRetentionBatch(ctx, postgres.RetentionBatchOptions{
+			Now: options.Now, Limit: options.Limit, CacheUnusedBefore: options.Cache,
+			ProviderStatusExpiresBefore: options.Provider, InventoryExpiresBefore: options.Inventory,
+			QueryExecutionsExpiresBefore: options.Queries, OperationsExpiresBefore: options.Operations,
+			BudgetBucketsBefore: options.Budgets, CheckpointsExpiresBefore: options.Checkpoints,
+			MaxBudgetWindow: options.MaxWindow,
+		})
+		if encodeErr := encodeResult(out, result); encodeErr != nil {
+			return encodeErr
+		}
 		return err
+	case "inspect-settings":
+		options, err := parseInspectOptions(args[1:], errOut)
+		if err != nil {
+			return err
+		}
+		repository, closeRepository, err := openMaintenanceRepository(ctx, options.ConfigPath, lookup)
+		if err != nil {
+			return err
+		}
+		defer closeRepository()
+		settings, err := repository.InspectTableSettings(ctx)
+		if err != nil {
+			return err
+		}
+		return encodeSettings(out, settings)
+	default:
+		return errors.New("usage: llmtw-maintenance <retention-once|inspect-settings> [flags]")
 	}
-	data, err := readConfig(options.ConfigPath)
+}
+
+func openMaintenanceRepository(ctx context.Context, configPath string, lookup lookupEnv) (postgres.MaintenanceRepository, func(), error) {
+	data, err := readConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("read configuration: %w", err)
+		return postgres.MaintenanceRepository{}, func() {}, fmt.Errorf("read configuration: %w", err)
 	}
 	value, err := config.Load(data)
 	if err != nil {
-		return fmt.Errorf("load configuration: %w", err)
+		return postgres.MaintenanceRepository{}, func() {}, fmt.Errorf("load configuration: %w", err)
 	}
 	if value.State.Kind != config.StateKindDurable {
-		return errors.New("maintenance requires durable state")
+		return postgres.MaintenanceRepository{}, func() {}, errors.New("maintenance requires durable state")
 	}
+	// Runtime/provider credential references are intentionally never resolved by
+	// this command. Only the dedicated maintenance role may be supplied here.
 	username, err := requiredSecret(lookup, "LLMTW_MAINTENANCE_POSTGRES_USERNAME")
 	if err != nil {
-		return err
+		return postgres.MaintenanceRepository{}, func() {}, err
 	}
 	password, err := requiredSecret(lookup, "LLMTW_MAINTENANCE_POSTGRES_PASSWORD")
 	if err != nil {
-		return err
+		return postgres.MaintenanceRepository{}, func() {}, err
 	}
 	namespace, err := postgres.NewNamespace(value.State.Postgres.Database, value.State.Postgres.Schema, value.State.Postgres.TablePrefix)
 	if err != nil {
-		return fmt.Errorf("construct PostgreSQL namespace: %w", err)
+		return postgres.MaintenanceRepository{}, func() {}, fmt.Errorf("construct PostgreSQL namespace: %w", err)
 	}
 	poolOptions := postgres.PoolOptions{
 		Namespace: namespace, Addresses: value.State.Postgres.Addresses,
@@ -102,26 +148,14 @@ func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup l
 	}
 	pool, err := postgres.NewPool(ctx, poolOptions)
 	if err != nil {
-		return fmt.Errorf("construct maintenance PostgreSQL pool: %w", err)
+		return postgres.MaintenanceRepository{}, func() {}, fmt.Errorf("construct maintenance PostgreSQL pool: %w", err)
 	}
-	defer pool.Close()
+	closeRepository := func() { pool.Close() }
 	if err := postgres.Health(ctx, pool, namespace); err != nil {
-		return fmt.Errorf("check maintenance PostgreSQL: %w", err)
+		closeRepository()
+		return postgres.MaintenanceRepository{}, func() {}, fmt.Errorf("check maintenance PostgreSQL: %w", err)
 	}
-	result, err := (postgres.MaintenanceRepository{Pool: pool, Namespace: namespace}).RunRetentionBatch(ctx, postgres.RetentionBatchOptions{
-		Now: options.Now, Limit: options.Limit, CacheUnusedBefore: options.Cache,
-		ProviderStatusExpiresBefore: options.Provider, InventoryExpiresBefore: options.Inventory,
-		QueryExecutionsExpiresBefore: options.Queries, OperationsExpiresBefore: options.Operations,
-		BudgetBucketsBefore: options.Budgets, CheckpointsExpiresBefore: options.Checkpoints,
-		MaxBudgetWindow: options.MaxWindow,
-	})
-	if encodeErr := encodeResult(out, result); encodeErr != nil {
-		return encodeErr
-	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return postgres.MaintenanceRepository{Pool: pool, Namespace: namespace}, closeRepository, nil
 }
 
 func readConfig(path string) ([]byte, error) {
@@ -215,6 +249,22 @@ func parseOptions(args []string, errOut io.Writer) (commandOptions, error) {
 	return parsed, nil
 }
 
+func parseInspectOptions(args []string, errOut io.Writer) (inspectOptions, error) {
+	flags := flag.NewFlagSet("inspect-settings", flag.ContinueOnError)
+	flags.SetOutput(errOut)
+	configPath := flags.String("config", defaultConfigPath, "worker configuration YAML path")
+	if err := flags.Parse(args); err != nil {
+		return inspectOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return inspectOptions{}, errors.New("inspect-settings does not accept positional arguments")
+	}
+	if *configPath == "" {
+		return inspectOptions{}, errors.New("--config must not be empty")
+	}
+	return inspectOptions{ConfigPath: *configPath}, nil
+}
+
 type resultJSON struct {
 	Passes []passJSON `json:"passes"`
 }
@@ -239,6 +289,46 @@ func encodeResult(out io.Writer, result postgres.RetentionBatchResult) error {
 	}
 	if err := json.NewEncoder(out).Encode(encoded); err != nil {
 		return fmt.Errorf("write retention result: %w", err)
+	}
+	return nil
+}
+
+type settingsJSON struct {
+	Tables []tableSettingsJSON `json:"tables"`
+}
+
+type tableSettingsJSON struct {
+	Resource                     string     `json:"resource"`
+	Fillfactor                   *int       `json:"fillfactor,omitempty"`
+	AutovacuumVacuumThreshold    *int64     `json:"autovacuum_vacuum_threshold,omitempty"`
+	AutovacuumVacuumScaleFactor  *float64   `json:"autovacuum_vacuum_scale_factor,omitempty"`
+	AutovacuumAnalyzeThreshold   *int64     `json:"autovacuum_analyze_threshold,omitempty"`
+	AutovacuumAnalyzeScaleFactor *float64   `json:"autovacuum_analyze_scale_factor,omitempty"`
+	AutovacuumEnabled            *bool      `json:"autovacuum_enabled,omitempty"`
+	ToastAutovacuumEnabled       *bool      `json:"toast_autovacuum_enabled,omitempty"`
+	LiveTuples                   int64      `json:"live_tuples"`
+	DeadTuples                   int64      `json:"dead_tuples"`
+	LastAutovacuum               *time.Time `json:"last_autovacuum,omitempty"`
+	LastAutoanalyze              *time.Time `json:"last_autoanalyze,omitempty"`
+}
+
+func encodeSettings(out io.Writer, settings []postgres.TableMaintenanceSettings) error {
+	encoded := settingsJSON{Tables: make([]tableSettingsJSON, 0, len(settings))}
+	for _, item := range settings {
+		encoded.Tables = append(encoded.Tables, tableSettingsJSON{
+			Resource: item.Resource, Fillfactor: item.Fillfactor,
+			AutovacuumVacuumThreshold:    item.AutovacuumVacuumThreshold,
+			AutovacuumVacuumScaleFactor:  item.AutovacuumVacuumScaleFactor,
+			AutovacuumAnalyzeThreshold:   item.AutovacuumAnalyzeThreshold,
+			AutovacuumAnalyzeScaleFactor: item.AutovacuumAnalyzeScaleFactor,
+			AutovacuumEnabled:            item.AutovacuumEnabled, ToastAutovacuumEnabled: item.ToastAutovacuumEnabled,
+			LiveTuples: item.LiveTuples, DeadTuples: item.DeadTuples,
+			LastAutovacuum: item.LastAutovacuum, LastAutoanalyze: item.LastAutoanalyze,
+		})
+	}
+	sort.Slice(encoded.Tables, func(i, j int) bool { return encoded.Tables[i].Resource < encoded.Tables[j].Resource })
+	if err := json.NewEncoder(out).Encode(encoded); err != nil {
+		return fmt.Errorf("write maintenance settings: %w", err)
 	}
 	return nil
 }

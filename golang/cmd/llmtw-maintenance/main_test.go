@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -65,6 +66,21 @@ func TestParseOptionsRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestParseInspectOptions(t *testing.T) {
+	options, err := parseInspectOptions([]string{"--config", "/tmp/worker.yaml"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseInspectOptions() error = %v", err)
+	}
+	if options.ConfigPath != "/tmp/worker.yaml" {
+		t.Fatalf("unexpected options: %#v", options)
+	}
+	for _, args := range [][]string{{"unexpected"}, {"--config", ""}} {
+		if _, err := parseInspectOptions(args, &bytes.Buffer{}); err == nil {
+			t.Fatalf("parseInspectOptions(%v) unexpectedly succeeded", args)
+		}
+	}
+}
+
 func TestRequiredSecret(t *testing.T) {
 	lookup := func(name string) (string, bool) {
 		if name == "PRESENT" {
@@ -82,6 +98,19 @@ func TestRequiredSecret(t *testing.T) {
 		if _, err := requiredSecret(lookup, name); err == nil {
 			t.Fatalf("requiredSecret(%q) unexpectedly succeeded", name)
 		}
+	}
+}
+
+func TestOpenMaintenanceRepositoryDoesNotUseRuntimeCredentials(t *testing.T) {
+	lookup := func(name string) (string, bool) {
+		if name == "POSTGRES_USERNAME" || name == "POSTGRES_PASSWORD" {
+			return "runtime-value", true
+		}
+		return "", false
+	}
+	_, _, err := openMaintenanceRepository(context.Background(), "../../config.example.yaml", lookup)
+	if err == nil || !strings.Contains(err.Error(), "LLMTW_MAINTENANCE_POSTGRES_USERNAME") {
+		t.Fatalf("openMaintenanceRepository() error = %v, want dedicated credential error", err)
 	}
 }
 
@@ -119,6 +148,36 @@ func TestEncodeResult(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "password") {
 		t.Fatal("encoded result contains a credential marker")
+	}
+}
+
+func TestEncodeSettings(t *testing.T) {
+	fillfactor := 80
+	autovacuumEnabled := false
+	lastAutovacuum := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	var output bytes.Buffer
+	settings := []postgres.TableMaintenanceSettings{
+		{Resource: "operation", Fillfactor: &fillfactor, AutovacuumEnabled: &autovacuumEnabled, LiveTuples: 12, DeadTuples: 3, LastAutovacuum: &lastAutovacuum},
+		{Resource: "budget", LiveTuples: 0},
+	}
+	if err := encodeSettings(&output, settings); err != nil {
+		t.Fatalf("encodeSettings() error = %v", err)
+	}
+	var decoded settingsJSON
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("settings are not JSON: %v", err)
+	}
+	if len(decoded.Tables) != 2 || decoded.Tables[0].Resource != "budget" || decoded.Tables[1].Resource != "operation" {
+		t.Fatalf("settings were not sorted: %#v", decoded)
+	}
+	if decoded.Tables[1].Fillfactor == nil || *decoded.Tables[1].Fillfactor != fillfactor || decoded.Tables[1].AutovacuumEnabled == nil || *decoded.Tables[1].AutovacuumEnabled {
+		t.Fatalf("unexpected encoded options: %#v", decoded.Tables[1])
+	}
+	if decoded.Tables[0].Fillfactor != nil || strings.Contains(output.String(), "autovacuum_vacuum_scale_factor") {
+		t.Fatalf("default-valued options should remain omitted: %s", output.String())
+	}
+	if strings.Contains(output.String(), "password") {
+		t.Fatal("encoded settings contain a credential marker")
 	}
 }
 
