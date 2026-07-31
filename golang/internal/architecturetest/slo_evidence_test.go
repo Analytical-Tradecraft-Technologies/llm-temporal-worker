@@ -419,6 +419,150 @@ func TestSLOEvidenceCandidateSchemaMatchesRecorderInput(t *testing.T) {
 	}
 }
 
+func TestSLOEvidenceWorkerErrorSummaryIsRedactedMeasurementOnly(t *testing.T) {
+	root := repositoryRoot(t)
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "metrics.prom")
+	outputPath := filepath.Join(directory, "worker-error-summary.json")
+	metrics := strings.Join([]string{
+		"# TYPE llmtw_activity_total counter",
+		`llmtw_activity_total{status="completed",error_class="none"} 5000`,
+		`llmtw_activity_total{status="completed",error_class="worker"} 4999`,
+		`llmtw_activity_failure_total{origin="worker"} 1`,
+		`llmtw_activity_failure_total{origin="provider"} 7`,
+		"process_cpu_seconds_total 12",
+	}, "\n") + "\n"
+	if err := os.WriteFile(inputPath, []byte(metrics), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
+	if err != nil {
+		t.Fatalf("worker error summary: %v\n%s", err, output)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(output)), "worker error summary recorded sha256=") {
+		t.Fatalf("summary output = %q", output)
+	}
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	want := map[string]any{
+		"schema_version":         float64(1),
+		"kind":                   "worker_error_summary",
+		"status":                 "pass",
+		"scope":                  "prometheus_snapshot_measurement_only",
+		"completed_attempts":     float64(9999),
+		"worker_failed_attempts": float64(1),
+		"objective_status":       "measurement_only",
+		"redacted":               true,
+	}
+	if len(summary) != len(want) {
+		t.Fatalf("summary keys = %#v, want only %#v", summary, want)
+	}
+	for key, expected := range want {
+		if got := summary[key]; got != expected {
+			t.Fatalf("summary[%q] = %#v, want %#v", key, got, expected)
+		}
+	}
+	schema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-worker-error-summary.schema.json", "urn:llmtw:slo-worker-error-summary:v1")
+	if err := validateSLOEvidenceJSONSchema(schema, summary); err != nil {
+		t.Fatalf("summary schema rejects recorded output: %v", err)
+	}
+	summary["api_key"] = "must-not-be-accepted"
+	if err := validateSLOEvidenceJSONSchema(schema, summary); err == nil {
+		t.Fatal("summary schema accepts unsafe unknown field")
+	}
+	delete(summary, "api_key")
+	if bytes.Contains(raw, []byte("llmtw_activity")) || bytes.Contains(raw, []byte("process_cpu")) {
+		t.Fatalf("summary retained raw metric names: %q", raw)
+	}
+	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
+		t.Fatalf("summary is not canonical JSON: %q", raw)
+	}
+	metadata, err := os.Stat(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metadata.Mode().Perm(); got != 0o600 {
+		t.Fatalf("summary mode = %o, want 600", got)
+	}
+	if _, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath); err == nil {
+		t.Fatal("summary unexpectedly overwrote immutable output")
+	}
+}
+
+func TestSLOEvidenceWorkerErrorSummaryRejectsUnsafeSnapshots(t *testing.T) {
+	root := repositoryRoot(t)
+	testCases := []struct {
+		name    string
+		metrics string
+	}{
+		{
+			name: "missing worker failure series",
+			metrics: strings.Join([]string{
+				`llmtw_activity_total{status="completed",error_class="none"} 1000`,
+			}, "\n"),
+		},
+		{
+			name: "duplicate completed series",
+			metrics: strings.Join([]string{
+				`llmtw_activity_total{status="completed",error_class="none"} 1000`,
+				`llmtw_activity_total{status="completed",error_class="none"} 1000`,
+				`llmtw_activity_failure_total{origin="worker"} 0`,
+			}, "\n"),
+		},
+		{
+			name: "fractional counter",
+			metrics: strings.Join([]string{
+				`llmtw_activity_total{status="completed",error_class="none"} 1000.5`,
+				`llmtw_activity_failure_total{origin="worker"} 0`,
+			}, "\n"),
+		},
+		{
+			name: "non-finite counter",
+			metrics: strings.Join([]string{
+				`llmtw_activity_total{status="completed",error_class="none"} NaN`,
+				`llmtw_activity_failure_total{origin="worker"} 0`,
+			}, "\n"),
+		},
+		{
+			name: "worker rate threshold",
+			metrics: strings.Join([]string{
+				`llmtw_activity_total{status="completed",error_class="none"} 999`,
+				`llmtw_activity_failure_total{origin="worker"} 1`,
+			}, "\n"),
+		},
+		{
+			name: "unknown label escape",
+			metrics: strings.Join([]string{
+				`llmtw_activity_total{status="completed",error_class="bad\q"} 1000`,
+				`llmtw_activity_failure_total{origin="worker"} 0`,
+			}, "\n"),
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			inputPath := filepath.Join(directory, "metrics.prom")
+			outputPath := filepath.Join(directory, "summary.json")
+			if err := os.WriteFile(inputPath, []byte(testCase.metrics+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
+			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+				t.Fatalf("summary result = %v, %q; want safe rejection", err, output)
+			}
+			if _, statErr := os.Stat(outputPath); !os.IsNotExist(statErr) {
+				t.Fatalf("rejected summary left output path: %v", statErr)
+			}
+		})
+	}
+}
+
 func validSLOEvidenceCandidate() map[string]any {
 	return map[string]any{
 		"measured_at":          "2026-07-24T00:00:00Z",

@@ -40,6 +40,34 @@ worker_failed_attempts / (completed_attempts + worker_failed_attempts) < 0.001
 
 This matches the worker-origin metric semantics in the operations guide. It is a retained measurement contract, not a claim that an SLO has been observed in any particular environment. The controlled Redis benchmark procedure remains in [the testing strategy](../testing/strategy.md).
 
+## Prepare a worker-error measurement from a local metrics snapshot
+
+An operator may prepare the worker-error fields from a local Prometheus text
+snapshot without retaining the snapshot itself:
+
+```sh
+python3 scripts/release/slo-evidence.py worker-error-summary \
+  --input /secure/operator/metrics.prom \
+  --output /secure/operator/worker-error-summary.json
+```
+
+The parser accepts only bounded, UTF-8 Prometheus text. It sums
+`llmtw_activity_total{status="completed",error_class="..."}` series and reads
+`llmtw_activity_failure_total{origin="worker"}`. Duplicate series, malformed
+labels, non-integral or non-finite counter values, missing series, and a rate at
+or above `0.1%` are rejected. Unknown valid metric series are ignored and no
+raw metric lines are copied to the output. The output is canonical JSON with
+mode `0600`, contains only the two counts and the
+`objective_status: "measurement_only"` marker, and uses create-only semantics.
+The output shape is defined by
+[`slo-worker-error-summary.schema.json`](slo-worker-error-summary.schema.json).
+
+This command is local evidence preparation only. Its summary is not the full
+candidate accepted by `record`; an operator must still add the closed UTC
+window, source revision, deployment digest, and admission p99 measurements
+before independently reviewing a candidate. It does not update the v1 catalog,
+bind a release, or claim that the production SLO has been observed.
+
 ## Bind a measurement to a release
 
 Recording and verifying a measurement intentionally do not identify a release.
