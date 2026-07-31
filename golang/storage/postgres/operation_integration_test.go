@@ -391,3 +391,96 @@ func TestRejectedFailurePersistsExactCostAndSafeReason(t *testing.T) {
 		t.Fatalf("rejected failure metadata = %q, %q, %q", status, method, reason)
 	}
 }
+
+func TestTerminalOperationClosesItsAttemptWithCostFacts(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	attempts, err := repository.Namespace.Render("operation_attempts")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A completed operation must not leave its provider attempt looking
+	// submitted. The route-level exact cost is retained independently of the
+	// operation projection so retry/reconciliation tooling can audit every
+	// attempted route.
+	completedID := "operation-attempt-complete-" + uuid.NewString()
+	started, err := repository.Begin(ctx, admission.BeginRequest{
+		ID: completedID, ScopeKey: "attempt-terminal/project", RequestDigest: admission.Digest([]byte(completedID)),
+		ReservationUSD: pricing.MustUSD("1.25"), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := admission.AttemptFacts{RouteID: "primary", EndpointID: "endpoint", Provider: "fixture", ResolvedModel: "fixture-model", Dispatch: admission.Accepted}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: completedID, DispatchToken: started.Operation.DispatchToken, Attempt: attempt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Complete(ctx, admission.CompleteRequest{
+		OperationID: completedID, DispatchToken: started.Operation.DispatchToken,
+		ResultRef:     &state.BlobRef{Digest: admission.Digest([]byte("completed")), Size: 9, Media: "application/json"},
+		ActualCostUSD: pricing.MustUSD("1.25"), CostStatus: "exact", CostMethod: "provider_reported", Attempt: attempt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertTerminalAttempt(t, ctx, repository, attempts, completedID, "completed", "accepted", "exact", "provider_reported", "1.25")
+
+	// Accepted/ambiguous provider outcomes retain NULL actual cost and a safe
+	// reason at the attempt level; zero is reserved for a proven free outcome.
+	ambiguousID := "operation-attempt-ambiguous-" + uuid.NewString()
+	started, err = repository.Begin(ctx, admission.BeginRequest{
+		ID: ambiguousID, ScopeKey: "attempt-terminal/project", RequestDigest: admission.Digest([]byte(ambiguousID)),
+		ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: ambiguousID, DispatchToken: started.Operation.DispatchToken, Attempt: attempt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Fail(ctx, admission.FailRequest{OperationID: ambiguousID, DispatchToken: started.Operation.DispatchToken, Certainty: admission.Accepted, Reason: "Provider timeout: request/123", Attempt: attempt}); err != nil {
+		t.Fatal(err)
+	}
+	// The operation outcome is ambiguous, but dispatch itself was accepted.
+	assertTerminalAttempt(t, ctx, repository, attempts, ambiguousID, "ambiguous", "accepted", "unknown", "", "")
+}
+
+func assertTerminalAttempt(t *testing.T, ctx context.Context, repository OperationRepository, relation, operationID, wantState, wantDispatch, wantStatus, wantMethod, wantActual string) {
+	t.Helper()
+	var stateValue, dispatch, status string
+	var method, actual, reason *string
+	var finished time.Time
+	if err := repository.Pool.QueryRow(ctx, "SELECT state, dispatch_disposition, cost_status, cost_method, actual_cost_usd::text, cost_unknown_reason_code, finished_at FROM "+relation+" WHERE operation_id=$1 AND attempt_number=1", operationUUID(operationID)).Scan(&stateValue, &dispatch, &status, &method, &actual, &reason, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if stateValue != wantState || dispatch != wantDispatch || status != wantStatus {
+		t.Fatalf("terminal attempt state = %q/%q/%q, want %q/%q/%q", stateValue, dispatch, status, wantState, wantDispatch, wantStatus)
+	}
+	if !finished.After(time.Time{}) {
+		t.Fatal("terminal attempt has no finished_at timestamp")
+	}
+	gotMethod := ""
+	if method != nil {
+		gotMethod = *method
+	}
+	if gotMethod != wantMethod {
+		t.Fatalf("terminal attempt method = %q, want %q", gotMethod, wantMethod)
+	}
+	if wantActual == "" {
+		if actual != nil {
+			t.Fatalf("terminal attempt actual cost = %q, want SQL NULL", *actual)
+		}
+		if reason == nil || *reason != "providertimeoutrequest123" {
+			t.Fatalf("terminal attempt unknown reason = %#v", reason)
+		}
+		return
+	}
+	if actual == nil {
+		t.Fatal("terminal attempt exact cost is SQL NULL")
+	}
+	decoded, err := DecodeUSD(*actual)
+	if err != nil || decoded.Cmp(pricing.MustUSD(wantActual)) != 0 {
+		t.Fatalf("terminal attempt actual cost = %q (%v), want %s", *actual, err, wantActual)
+	}
+}

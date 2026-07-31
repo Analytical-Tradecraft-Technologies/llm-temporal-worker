@@ -665,7 +665,10 @@ func renderRoleGrants(namespace Namespace, schemaOwned bool) (string, error) {
 		// runtime update privilege to that one column.
 		{table: "blobs", privileges: "UPDATE (expires_at)"},
 		{table: "operations", privileges: "SELECT, INSERT, UPDATE"},
-		{table: "operation_attempts", privileges: "SELECT, INSERT"},
+		// Terminal operation transitions close the matching attempt in the
+		// same transaction. Keep the mutable surface limited to those facts;
+		// request/ciphertext and routing identity remain immutable at runtime.
+		{table: "operation_attempts", privileges: "SELECT, INSERT, UPDATE (state, dispatch_disposition, provider, resolved_model, actual_cost_usd, cost_status, cost_method, cost_unknown_reason_code, finished_at)"},
 		{table: "conversation_checkpoints", privileges: "SELECT, INSERT"},
 		{table: "checkpoint_provider_state", privileges: "SELECT, INSERT"},
 		{table: "checkpoint_provider_affinities", privileges: "SELECT, INSERT"},

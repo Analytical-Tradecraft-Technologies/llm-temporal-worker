@@ -519,7 +519,8 @@ func (r OperationRepository) Complete(ctx context.Context, request admission.Com
 	if err != nil {
 		return err
 	}
-	actual, err := usdText(request.ActualCostUSD)
+	actualUSD := request.ActualCostUSD
+	actual, err := usdText(actualUSD)
 	if err != nil {
 		return err
 	}
@@ -561,7 +562,7 @@ func (r OperationRepository) Complete(ctx context.Context, request admission.Com
 		if _, err := tx.Exec(ctx, "UPDATE "+operations+" SET state='completed', result_inline_ciphertext=$2, result_key_id=$3, result_digest=$4, result_byte_length=$5, result_media_type=$6, actual_cost_usd=$7, cost_status=$8, cost_method=$9, cost_unknown_reason_code=$10, completed_at=clock_timestamp(), retention_expires_at=clock_timestamp()+$11 * interval '1 second', lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1 AND state IN ('dispatching','provider_pending')", opID, resultCipher, resultKey, request.ResultRef.Digest[:], request.ResultRef.Size, request.ResultRef.Media, nullableText(actual), status, nullableText(method), nullableText(request.UnknownReason), r.Retention.Seconds()); err != nil {
 			return err
 		}
-		return updateLatestAttemptFacts(ctx, tx, attempts, opID, request.Attempt)
+		return updateTerminalAttempt(ctx, tx, attempts, opID, request.Attempt, "completed", status, actualUSD, method, request.UnknownReason)
 	})
 }
 
@@ -581,6 +582,10 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 	if err != nil {
 		return err
 	}
+	attempts, err := r.Namespace.Render("operation_attempts")
+	if err != nil {
+		return err
+	}
 	stateValue, status, method := failurePersistence(request.Certainty)
 	actual := pricing.MustUSD("0")
 	actualText := ""
@@ -591,6 +596,12 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 	reason := ""
 	if status == "unknown" {
 		reason = safeReason(request.Reason)
+	}
+	attempt := request.Attempt
+	if attempt.Dispatch == "" {
+		// Preserve an explicit not-dispatched certainty from callers that do not
+		// have route facts (for example, no eligible adapter was compiled).
+		attempt.Dispatch = request.Certainty
 	}
 	retentionArgs := []any{opID, stateValue, nullableText(actualText), status, nullableText(method), nullableText(reason)}
 	if stateValue != "ambiguous" {
@@ -611,8 +622,10 @@ func (r OperationRepository) Fail(ctx context.Context, request admission.FailReq
 		if !r.validToken(opID, request.DispatchToken) {
 			return admission.ErrInvalidToken
 		}
-		_, err := tx.Exec(ctx, "UPDATE "+operations+" SET state=$2, actual_cost_usd=$3, cost_status=$4, cost_method=$5, cost_unknown_reason_code=$6, completed_at=clock_timestamp(), retention_expires_at="+retentionSQL+", lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1", retentionArgs...)
-		return err
+		if _, err := tx.Exec(ctx, "UPDATE "+operations+" SET state=$2, actual_cost_usd=$3, cost_status=$4, cost_method=$5, cost_unknown_reason_code=$6, completed_at=clock_timestamp(), retention_expires_at="+retentionSQL+", lease_expires_at=NULL, updated_at=clock_timestamp() WHERE operation_id=$1", retentionArgs...); err != nil {
+			return err
+		}
+		return updateTerminalAttempt(ctx, tx, attempts, opID, attempt, stateValue, status, actual, method, reason)
 	})
 }
 
@@ -769,13 +782,63 @@ func (r OperationRepository) Attempts(ctx context.Context, id string) ([]admissi
 	return attempts, rows.Err()
 }
 
-func updateLatestAttemptFacts(ctx context.Context, tx pgx.Tx, relation string, operationID uuid.UUID, attempt admission.AttemptFacts) error {
-	returnValue := attempt.AttemptNumber
-	if returnValue < 0 {
-		returnValue = 0
+// updateTerminalAttempt closes the route-attempt row that produced a terminal
+// operation. Operation state and route-attempt state are deliberately kept in
+// the same transaction: a replay/reconciliation reader must never observe a
+// completed operation whose last provider attempt is still pending. The
+// attempt table uses its own zero-cost method name because it predates the
+// operation-level worker_cache_zero vocabulary.
+func updateTerminalAttempt(ctx context.Context, tx pgx.Tx, relation string, operationID uuid.UUID, attempt admission.AttemptFacts, state, status string, actual pricing.USD, method, reason string) error {
+	if status != "exact" && status != "unknown" {
+		return fmt.Errorf("terminal attempt cost status %q is invalid", status)
 	}
-	_, err := tx.Exec(ctx, "UPDATE "+relation+" SET provider=CASE WHEN $2='' THEN provider ELSE $2 END, resolved_model=CASE WHEN $3='' THEN resolved_model ELSE $3 END WHERE operation_id=$1 AND attempt_number=COALESCE(NULLIF($4,0),(SELECT MAX(attempt_number) FROM "+relation+" WHERE operation_id=$1))", operationID, attempt.Provider, attempt.ResolvedModel, returnValue)
-	return err
+	dispatch := attempt.Dispatch
+	if dispatch == "" {
+		switch state {
+		case string(admission.StateCompleted):
+			dispatch = admission.Accepted
+		case string(admission.StateAmbiguous):
+			dispatch = admission.Ambiguous
+		default:
+			dispatch = admission.Rejected
+		}
+	}
+	if dispatch != admission.Accepted && dispatch != admission.Rejected && dispatch != admission.Ambiguous && dispatch != admission.NotDispatched {
+		return fmt.Errorf("terminal attempt dispatch certainty %q is invalid", dispatch)
+	}
+	var actualValue any
+	var attemptMethod any
+	var unknownReason any
+	if status == "exact" {
+		encoded, err := EncodeUSD(actual)
+		if err != nil {
+			return err
+		}
+		actualValue = encoded
+		if method == "worker_cache_zero" {
+			method = "definite_uncharged_zero"
+		}
+		if method != "" {
+			attemptMethod = method
+		}
+	} else {
+		// Unknown actual cost is represented by SQL NULL plus a bounded reason;
+		// never coerce it to zero while closing the attempt.
+		unknownReason = nullableText(safeReason(reason))
+	}
+	attemptNumber := attempt.AttemptNumber
+	if attemptNumber < 0 {
+		attemptNumber = 0
+	}
+	query := "UPDATE " + relation + " SET state=$2, dispatch_disposition=$3, provider=CASE WHEN $4='' THEN provider ELSE $4 END, resolved_model=CASE WHEN $5='' THEN resolved_model ELSE $5 END, actual_cost_usd=$6, cost_status=$7, cost_method=$8, cost_unknown_reason_code=$9, finished_at=clock_timestamp() WHERE operation_id=$1 AND attempt_number=COALESCE(NULLIF($10,0),(SELECT MAX(attempt_number) FROM " + relation + " WHERE operation_id=$1))"
+	updated, err := tx.Exec(ctx, query, operationID, state, string(dispatch), attempt.Provider, attempt.ResolvedModel, actualValue, status, attemptMethod, unknownReason, attemptNumber)
+	if err != nil {
+		return err
+	}
+	if updated.RowsAffected() != 1 {
+		return admission.ErrInvalidTransition
+	}
+	return nil
 }
 
 // ProviderOperation opens the encrypted provider reference for reconciliation
