@@ -194,7 +194,9 @@ array.
 The SQL adapter is deliberately separate from runtime repositories. It uses
 the namespace renderer for every relation and rejects unbounded limits,
 invalid leases, invalid identifiers, and malformed payloads before issuing
-SQL.
+SQL. Claim and dispatch leases are additionally bounded to 24 hours
+(`maintenance.MaxOutboxLease`); a lease is only a fencing interval, so longer
+work should be split into a follow-up event rather than holding a row forever.
 
 ## Maintenance observability
 

@@ -22,6 +22,12 @@ const (
 	// row. Maintenance payloads carry identifiers or encrypted locators, never
 	// prompts, responses, or provider credentials.
 	MaxSafePayloadBytes = 64 << 10
+	// MaxOutboxLease bounds ownership of a claimed row. A lease is a fencing
+	// interval, not a maintenance schedule; allowing an arbitrarily long lease
+	// can strand work after a worker disappears and delay recovery indefinitely.
+	// Callers that need a longer maintenance window should renew by completing
+	// the current claim and publishing a follow-up event.
+	MaxOutboxLease      = 24 * time.Hour
 	maxSafePayloadDepth = 32
 )
 
@@ -215,8 +221,8 @@ func (options ClaimOptions) Validate() error {
 	if options.Limit <= 0 || options.Limit > 10_000 {
 		return errors.New("maintenance outbox claim limit must be between 1 and 10000")
 	}
-	if options.Lease <= 0 {
-		return errors.New("maintenance outbox claim lease must be positive")
+	if options.Lease <= 0 || options.Lease > MaxOutboxLease {
+		return fmt.Errorf("maintenance outbox claim lease must be between 1ns and %s", MaxOutboxLease)
 	}
 	return nil
 }
@@ -441,8 +447,8 @@ func (options DispatchOptions) Validate() error {
 	if options.Limit <= 0 || options.Limit > 10_000 {
 		return errors.New("maintenance dispatch limit must be between 1 and 10000")
 	}
-	if options.Lease <= 0 || options.RetryDelay <= 0 {
-		return errors.New("maintenance dispatch lease and retry delay must be positive")
+	if options.Lease <= 0 || options.Lease > MaxOutboxLease || options.RetryDelay <= 0 {
+		return fmt.Errorf("maintenance dispatch lease must be between 1ns and %s and retry delay must be positive", MaxOutboxLease)
 	}
 	return nil
 }
