@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	checkoutActionPin = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
-	setupGoActionPin  = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
+	checkoutActionPin     = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
+	setupGoActionPin      = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
+	setupKubectlActionPin = "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -366,6 +367,19 @@ func TestWorkflowsRunHardenedImageVerification(t *testing.T) {
 	}
 }
 
+func TestWorkflowsRunPinnedKubernetesDeploymentPolicyVerification(t *testing.T) {
+	for _, name := range []string{"master.yml", "pull-request.yml"} {
+		workflow := readWorkflow(t, name)
+		job := workflowJob(t, workflow, "verify")
+		assertJobUsesAction(t, workflow, "verify", setupKubectlActionPin)
+		assertJobActionInput(t, workflow, "verify", setupKubectlActionPin, "version", "v1.32.6")
+		assertJobActionPrecedesRunCommand(t, workflow, "verify", setupKubectlActionPin, "make deployment-policy-verify")
+		if !jobHasRunCommand(job, "make deployment-policy-verify") {
+			t.Fatalf("%s verify job does not run make deployment-policy-verify", workflow.name)
+		}
+	}
+}
+
 func assertPullRequestTrigger(t *testing.T, workflow workflowDocument) {
 	t.Helper()
 	triggers := workflowMapping(t, workflow, "on")
@@ -436,6 +450,7 @@ func assertRequiredOfflineGates(t *testing.T, workflow workflowDocument) {
 		"scripts/check-go-format.sh",
 		"make schema-verify",
 		"make docs-verify",
+		"make deployment-policy-verify",
 		"go vet ./...",
 		"go test -race ./...",
 		"go build ./...",

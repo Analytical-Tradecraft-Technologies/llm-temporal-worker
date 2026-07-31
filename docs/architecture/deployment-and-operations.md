@@ -454,6 +454,7 @@ port drift apart; overlays inherit the base probes rather than redefining them.
 ## GitHub Actions split
 
 `pull-request.yml` validates documentation and, once Go exists, formatting,
+the rendered Kubernetes deployment policy (with the pinned `kubectl` action),
 vet, race tests, unit/integration tests, build, and Docker build for pull
 requests. It has read-only permissions and no provider credentials.
 
