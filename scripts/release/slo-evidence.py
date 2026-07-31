@@ -5,6 +5,7 @@ import argparse
 import datetime as datetime_module
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -21,6 +22,12 @@ MAX_COUNT = 1_000_000_000
 MAX_P99_MICROSECONDS = 3_600_000_000
 MAX_WORKFLOW_RUN_ID = 9_223_372_036_854_775_807
 RELEASE_EVIDENCE_ARTIFACT = "release-evidence"
+PROMETHEUS_METRIC_RE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([^\s]+)(?:\s+[0-9]+(?:\.[0-9]+)?)?$")
+PROMETHEUS_LABEL_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+PROMETHEUS_NUMBER_RE = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
+PROMETHEUS_SAMPLE_VALUE_RE = re.compile(r"^(?:[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[+-]?Inf|NaN)$")
+PROMETHEUS_COMPLETED_METRIC = "llmtw_activity_total"
+PROMETHEUS_FAILURE_METRIC = "llmtw_activity_failure_total"
 
 
 class EvidenceError(Exception):
@@ -166,6 +173,131 @@ def record_from_payload(payload):
     return record
 
 
+def parse_prometheus_labels(raw):
+    labels = {}
+    position = 0
+    while position < len(raw):
+        while position < len(raw) and raw[position] in " \t":
+            position += 1
+        if position == len(raw):
+            break
+        name_start = position
+        while position < len(raw) and (raw[position].isalnum() or raw[position] == "_"):
+            position += 1
+        name = raw[name_start:position]
+        if not PROMETHEUS_LABEL_NAME_RE.fullmatch(name) or position >= len(raw) or raw[position] != "=":
+            reject()
+        position += 1
+        if position >= len(raw) or raw[position] != '"':
+            reject()
+        position += 1
+        value = []
+        while position < len(raw):
+            character = raw[position]
+            position += 1
+            if character == '"':
+                break
+            if character != "\\":
+                if ord(character) < 0x20:
+                    reject()
+                value.append(character)
+                continue
+            if position >= len(raw) or raw[position] not in ('\\', '"', 'n'):
+                reject()
+            escaped = raw[position]
+            position += 1
+            value.append("\n" if escaped == "n" else escaped)
+        else:
+            reject()
+        if name in labels:
+            reject()
+        labels[name] = "".join(value)
+        while position < len(raw) and raw[position] in " \t":
+            position += 1
+        if position == len(raw):
+            break
+        if raw[position] != ",":
+            reject()
+        position += 1
+        while position < len(raw) and raw[position] in " \t":
+            position += 1
+        if position == len(raw):
+            reject()
+    return labels
+
+
+def parse_prometheus_count(raw):
+    if not PROMETHEUS_NUMBER_RE.fullmatch(raw):
+        reject()
+    try:
+        value = float(raw)
+    except ValueError:
+        reject()
+    if not math.isfinite(value) or value < 0 or not value.is_integer():
+        reject()
+    count = int(value)
+    if count > MAX_COUNT:
+        reject()
+    return count
+
+
+def worker_error_summary_from_snapshot(data):
+    completed_attempts = 0
+    worker_failed_attempts = 0
+    completed_series = set()
+    worker_failure_series = set()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        reject()
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        match = PROMETHEUS_METRIC_RE.fullmatch(line)
+        if match is None:
+            reject()
+        metric_name, raw_labels, raw_value = match.groups()
+        labels = parse_prometheus_labels(raw_labels or "")
+        if not PROMETHEUS_SAMPLE_VALUE_RE.fullmatch(raw_value):
+            reject()
+        if metric_name == PROMETHEUS_COMPLETED_METRIC:
+            if set(labels) != {"status", "error_class"} or labels["status"] != "completed":
+                continue
+            value = parse_prometheus_count(raw_value)
+            series_key = tuple(sorted(labels.items()))
+            if series_key in completed_series:
+                reject()
+            completed_series.add(series_key)
+            completed_attempts += value
+            if completed_attempts > MAX_COUNT:
+                reject()
+        elif metric_name == PROMETHEUS_FAILURE_METRIC:
+            if set(labels) != {"origin"} or labels["origin"] != "worker":
+                continue
+            value = parse_prometheus_count(raw_value)
+            series_key = tuple(sorted(labels.items()))
+            if series_key in worker_failure_series:
+                reject()
+            worker_failure_series.add(series_key)
+            worker_failed_attempts += value
+            if worker_failed_attempts > MAX_COUNT:
+                reject()
+    if not completed_series or not worker_failure_series:
+        reject()
+    if worker_failed_attempts * 1_000 >= completed_attempts + worker_failed_attempts:
+        reject()
+    return {
+        "schema_version": 1,
+        "kind": "worker_error_summary",
+        "status": "pass",
+        "scope": "prometheus_snapshot_measurement_only",
+        "completed_attempts": completed_attempts,
+        "worker_failed_attempts": worker_failed_attempts,
+        "objective_status": "measurement_only",
+        "redacted": True,
+    }
+
+
 def payload_from_record(record):
     exact_object(record, ("schema_version", "kind", "status", "measured_at", "source_revision", "deployment_id_sha256", "region", "admission_compilation", "worker_error_rate", "redacted", "content_sha256"))
     if record["schema_version"] != 1 or record["kind"] != "slo_measurement" or record["status"] != "pass" or record["redacted"] is not True:
@@ -202,6 +334,12 @@ def command_record(arguments):
     record = record_from_payload(payload_from_candidate(parse_json_bytes(read_regular_bytes(arguments.input))))
     write_new(arguments.evidence, canonical_json(record))
     print("slo evidence recorded sha256=" + record["content_sha256"])
+
+
+def command_worker_error_summary(arguments):
+    summary = worker_error_summary_from_snapshot(read_regular_bytes(arguments.input))
+    write_new(arguments.output, canonical_json(summary))
+    print("worker error summary recorded sha256=" + hashlib.sha256(canonical_json(summary)).hexdigest())
 
 
 def command_verify(arguments):
@@ -343,6 +481,9 @@ def main():
     record = subcommands.add_parser("record")
     record.add_argument("--input", required=True)
     record.add_argument("--evidence", required=True)
+    worker_error_summary = subcommands.add_parser("worker-error-summary")
+    worker_error_summary.add_argument("--input", required=True)
+    worker_error_summary.add_argument("--output", required=True)
     verify = subcommands.add_parser("verify")
     verify.add_argument("--evidence", required=True)
     verify.add_argument("--source-revision", required=True)
@@ -367,6 +508,8 @@ def main():
     try:
         if arguments.command == "record":
             command_record(arguments)
+        elif arguments.command == "worker-error-summary":
+            command_worker_error_summary(arguments)
         elif arguments.command == "verify":
             command_verify(arguments)
         elif arguments.command == "bind":
