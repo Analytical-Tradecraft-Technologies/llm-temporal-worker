@@ -277,7 +277,7 @@ func (engine *Engine) beginOrResume(ctx context.Context, request llm.Request, sn
 	if retention <= 0 {
 		retention = defaultRetention
 	}
-	reservations := aggregateReservations(quoted.candidates)
+	reservations := aggregateReservations(quoted.candidates, quoted.maximumUSD)
 	result, err := engine.dependencies.Admission.Begin(ctx, admission.BeginRequest{
 		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest, Reservation: quoted.maximum,
 		ReservationUSD: quoted.maximumUSD,
@@ -394,7 +394,7 @@ func priceVersion(candidates []quotedCandidate) string {
 	return first
 }
 
-func aggregateReservations(candidates []quotedCandidate) []admission.WindowReservation {
+func aggregateReservations(candidates []quotedCandidate, expectedUSD pricing.USD) []admission.WindowReservation {
 	type key struct{ policy, window string }
 	byKey := make(map[key]admission.WindowReservation)
 	for _, candidate := range candidates {
@@ -408,6 +408,14 @@ func aggregateReservations(candidates []quotedCandidate) []admission.WindowReser
 	}
 	result := make([]admission.WindowReservation, 0, len(byKey))
 	for _, reservation := range byKey {
+		// The scalar reservation is the maximum exact estimate across all
+		// eligible candidates. Every union-window reservation must carry that
+		// same exact amount so the admission envelope remains self-consistent;
+		// the legacy MicroUSD amount is still selected conservatively per
+		// window above.
+		if !expectedUSD.IsZero() {
+			reservation.AmountUSD = expectedUSD
+		}
 		result = append(result, reservation)
 	}
 	// Map iteration must not affect admission payloads or digests.

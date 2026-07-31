@@ -113,7 +113,7 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 	if request.ID == "" || request.ScopeKey == "" || request.Reservation < 0 || !request.Reservation.Valid() {
 		return admission.BeginResult{}, fmt.Errorf("invalid admission begin request")
 	}
-	if err := admission.ValidateReservationEnvelope(request.Reservations, request.Reservation); err != nil {
+	if err := admission.ValidateExactUSDReservationEnvelope(request.Reservations, request.Reservation, request.ReservationUSD); err != nil {
 		return admission.BeginResult{}, fmt.Errorf("invalid admission begin request: %w", err)
 	}
 	store.mu.Lock()
@@ -266,7 +266,7 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	if err := ctx.Err(); err != nil {
 		return admission.ContinueResult{}, err
 	}
-	if err := admission.ValidateReservationEnvelope(request.Reservations, request.Remaining); err != nil {
+	if err := admission.ValidateExactUSDReservationEnvelope(request.Reservations, request.Remaining, request.RemainingUSD); err != nil {
 		return admission.ContinueResult{}, fmt.Errorf("invalid continuation admission request: %w", err)
 	}
 	store.mu.Lock()

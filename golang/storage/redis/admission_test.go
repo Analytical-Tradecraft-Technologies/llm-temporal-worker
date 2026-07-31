@@ -218,6 +218,29 @@ func TestReservationEnvelopeIsRejectedBeforeRedisInvocation(t *testing.T) {
 	}
 }
 
+func TestExactUSDReservationProjectionIsRejectedBeforeRedisInvocation(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	invoker := &countingInvoker{}
+	store, err := NewAdmissionStore(AdmissionOptions{Invoker: invoker, Reader: newAdmissionHarness(now), Keys: testKeyOptions(), Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	amountUSD := pricing.MustUSD("0.000001000000000001")
+	reservation := testReservation(1, 1)
+	reservation.AmountUSD = amountUSD
+	reservation.LimitUSD = pricing.MustUSD("0.000002")
+	_, err = store.Begin(context.Background(), admission.BeginRequest{
+		ID: "invalid", ScopeKey: "invalid", Reservation: 1, ReservationUSD: amountUSD,
+		Reservations: []admission.WindowReservation{reservation}, ExpiresAt: now.Add(time.Hour),
+	})
+	if err == nil {
+		t.Fatal("accepted a MicroUSD reservation that under-reserves its exact USD amount")
+	}
+	if invoker.calls != 0 {
+		t.Fatalf("invalid exact reservation invoked Redis function %d times", invoker.calls)
+	}
+}
+
 func TestMarkDispatchingReservesAttemptIncrementHeadroom(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	harness := newAdmissionHarness(now)

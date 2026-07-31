@@ -80,3 +80,29 @@ func TestAdmissionRejectsInvalidReservationEnvelopeBeforeMutation(t *testing.T) 
 		})
 	}
 }
+
+func TestAdmissionRejectsExactUSDProjectionBeforeMutation(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
+	reservation := admission.WindowReservation{
+		PolicyID: "p", WindowID: "w", Bucket: 100, Amount: 1, Limit: 2,
+		AmountUSD: pricing.MustUSD("0.000001000000000001"), LimitUSD: pricing.MustUSD("0.000002"),
+		BucketNanos: int64(time.Second), DurationNanos: int64(10 * time.Second),
+	}
+	_, err := store.Begin(context.Background(), admission.BeginRequest{
+		ID: "invalid", ScopeKey: "invalid", Reservation: 1, ReservationUSD: reservation.AmountUSD,
+		Reservations: []admission.WindowReservation{reservation}, ExpiresAt: now.Add(time.Hour),
+	})
+	if err == nil {
+		t.Fatal("accepted a MicroUSD reservation that under-reserves its exact USD amount")
+	}
+	valid := reservation
+	valid.Amount = 2
+	result, err := store.Begin(context.Background(), admission.BeginRequest{
+		ID: "valid", ScopeKey: "valid", Reservation: 2, ReservationUSD: valid.AmountUSD,
+		Reservations: []admission.WindowReservation{valid}, ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil || result.Denied != nil {
+		t.Fatalf("valid exact reservation = %#v, %v", result, err)
+	}
+}
