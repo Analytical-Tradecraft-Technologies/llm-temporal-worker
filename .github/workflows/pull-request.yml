@@ -116,6 +116,9 @@ jobs:
       - name: Build downstream Dune consumer
         run: opam exec -- dune build --root ocaml/consumer_smoke
 
+      - name: Run downstream consumer smoke
+        run: opam exec -- dune runtest --root ocaml/consumer_smoke
+
       - name: Compile downstream workflow sample
         run: opam exec -- dune build --root ocaml/consumer_workflow_smoke
 
