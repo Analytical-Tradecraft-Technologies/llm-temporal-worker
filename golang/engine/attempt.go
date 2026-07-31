@@ -201,7 +201,7 @@ func (engine *Engine) continueAfterDefiniteFailure(ctx context.Context, operatio
 	request := admission.ContinueRequest{
 		OperationID: operation.ID, DispatchToken: operation.DispatchToken,
 		Outcome:   admission.AttemptOutcome{Certainty: admission.Rejected, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, ResolvedModel: candidate.Model, ServiceClass: string(candidate.AttemptedClass), Dispatch: admission.Rejected}},
-		Remaining: quoted.maximum, RemainingUSD: quoted.maximumUSD, Reservations: aggregateReservations(remaining), LeaseUntil: engine.dependencies.Clock().Add(lease), ExpiresAt: operation.ExpiresAt,
+		Remaining: quoted.maximum, RemainingUSD: quoted.maximumUSD, Reservations: aggregateReservations(remaining, quoted.maximumUSD), LeaseUntil: engine.dependencies.Clock().Add(lease), ExpiresAt: operation.ExpiresAt,
 	}
 	if failure != nil && failure.Provider.RequestID != "" {
 		request.Outcome.ProviderRequestID = failure.Provider.RequestID
