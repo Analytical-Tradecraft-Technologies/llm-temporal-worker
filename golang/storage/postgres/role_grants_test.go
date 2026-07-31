@@ -25,6 +25,7 @@ func TestRenderRoleGrantsUsesLeastPrivilegeRuntimeCatalog(t *testing.T) {
 		`GRANT SELECT, INSERT ON TABLE "private"."tenant_checkpoint_provider_affinities" TO llmtw_runtime;`,
 		`GRANT UPDATE (expires_at) ON TABLE "private"."tenant_blobs" TO llmtw_runtime;`,
 		`GRANT SELECT, INSERT, UPDATE ON TABLE "private"."tenant_operations" TO llmtw_runtime;`,
+		`GRANT SELECT, INSERT, UPDATE (state, dispatch_disposition, provider, resolved_model, actual_cost_usd, cost_status, cost_method, cost_unknown_reason_code, finished_at) ON TABLE "private"."tenant_operation_attempts" TO llmtw_runtime;`,
 		`GRANT SELECT (journal_id, event_id, redis_generation_id, operation_id, window_id, bucket_start, reservation_revision, event_kind, reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd, actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at), INSERT, UPDATE (event_id) ON TABLE "private"."tenant_budget_journal_events" TO llmtw_runtime;`,
 		`GRANT SELECT (reserved_cost_usd, accounted_cost_usd, last_journal_id), INSERT, UPDATE ON TABLE "private"."tenant_budget_buckets" TO llmtw_runtime;`,
 		`GRANT SELECT (operation_id, window_id, state, reserved_cost_usd, reservation_revision), INSERT, UPDATE ON TABLE "private"."tenant_operation_budget_reservations" TO llmtw_runtime;`,

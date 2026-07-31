@@ -442,7 +442,8 @@ func TestTerminalOperationClosesItsAttemptWithCostFacts(t *testing.T) {
 	if err := repository.Fail(ctx, admission.FailRequest{OperationID: ambiguousID, DispatchToken: started.Operation.DispatchToken, Certainty: admission.Accepted, Reason: "Provider timeout: request/123", Attempt: attempt}); err != nil {
 		t.Fatal(err)
 	}
-	assertTerminalAttempt(t, ctx, repository, attempts, ambiguousID, "ambiguous", "ambiguous", "unknown", "", "")
+	// The operation outcome is ambiguous, but dispatch itself was accepted.
+	assertTerminalAttempt(t, ctx, repository, attempts, ambiguousID, "ambiguous", "accepted", "unknown", "", "")
 }
 
 func assertTerminalAttempt(t *testing.T, ctx context.Context, repository OperationRepository, relation, operationID, wantState, wantDispatch, wantStatus, wantMethod, wantActual string) {
