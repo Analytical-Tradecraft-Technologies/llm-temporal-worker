@@ -48,6 +48,9 @@ assertion for:
 
 - compact test, race, deterministic fuzz, and in-memory admission/compilation
   benchmark summaries;
+- an optional redacted worker-origin error-rate summary, when a protected
+  operator supplies a bounded Prometheus snapshot; trusted CI has no production
+  metrics access and omits this artifact by default;
 - fixture manifest records with upstream source dates;
 - compact Redis, Temporal, and Compose health summaries from the local test
   stack;
@@ -97,6 +100,17 @@ memory p99 is strictly below the documented 25 ms target and records
 measured by this workflow. The Redis measurement remains an explicitly
 authorized operator run against a same-region deployment and is never replaced
 by this artifact.
+
+The optional `worker-error-summary.json` artifact is produced only when a
+caller passes `--worker-error-metrics /path/to/metrics.prom` to
+`scripts/release/collect.sh`. The collector invokes the strict Prometheus
+snapshot parser in `scripts/release/slo-evidence.py` and retains only bounded
+completed and worker-failed attempt counts. The raw snapshot remains outside
+the artifact directory. The release verifier accepts this artifact when
+present, but neither the master workflow nor the v1 catalog treats it as a
+recorded production SLO: the summary is marked `objective_status:
+measurement_only`, and the catalog remains `unrecorded` until an independently
+reviewed protected measurement is bound.
 
 The verifier remains compatible with retained schema-v1 bundles recorded before
 this benchmark was added: those bundles may omit `benchmark-summary.json`. New

@@ -451,6 +451,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The trusted job has no production metrics access. If a protected
+          # operator-run collection supplies worker-error-summary.json, retain
+          # it; otherwise leave the worker SLO explicitly unrecorded.
+          worker_error_artifact_args=()
+          if [[ -f release-artifacts/worker-error-summary.json ]]; then
+            worker_error_artifact_args=(-artifact worker_error_summary=worker-error-summary.json)
+          fi
           bash scripts/release/record.sh \
             -artifact-dir release-artifacts \
             -output release-artifacts/evidence.json \
@@ -473,7 +480,8 @@ jobs:
             -artifact dependency_license=dependencies.json \
             -artifact vulnerability_results=vulnerabilities.json \
             -artifact sbom=sbom.cdx.json \
-            -artifact image_scan=image-scan.json
+            -artifact image_scan=image-scan.json \
+            ${worker_error_artifact_args[@]:+"${worker_error_artifact_args[@]}"}
           make release-verify
 
       - name: Retain validated redacted release evidence

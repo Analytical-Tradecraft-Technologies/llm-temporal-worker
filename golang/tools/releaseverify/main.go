@@ -72,6 +72,14 @@ var requiredArtifacts = []string{
 	"image_scan",
 }
 
+// Worker error measurements are collected only when an operator supplies a
+// separately redacted Prometheus snapshot. They are intentionally optional:
+// the trusted release workflow has no production metrics access and must not
+// fabricate or imply a production measurement.
+var optionalArtifacts = []string{
+	"worker_error_summary",
+}
+
 // Legacy v1 bundles were recorded before benchmark_summary was introduced.
 // Keep them verifiable while requiring the benchmark for every newly recorded
 // bundle through requiredArtifacts and artifactArguments.mapForRequired.
@@ -98,6 +106,7 @@ var canonicalArtifactPaths = map[string]string{
 	"race_summary":          "race-summary.json",
 	"fuzz_summary":          "fuzz-summary.json",
 	"benchmark_summary":     "benchmark-summary.json",
+	"worker_error_summary":  "worker-error-summary.json",
 	"fixture_manifest":      "fixture-manifest.json",
 	"redis_summary":         "redis-summary.json",
 	"temporal_summary":      "temporal-summary.json",
@@ -117,6 +126,7 @@ var summaryArtifacts = map[string]struct{}{
 	"race_summary":          {},
 	"fuzz_summary":          {},
 	"benchmark_summary":     {},
+	"worker_error_summary":  {},
 	"fixture_manifest":      {},
 	"redis_summary":         {},
 	"temporal_summary":      {},
@@ -301,9 +311,15 @@ func runRecord(args []string, stdout io.Writer) error {
 	if err := validateCanonicalArtifactPaths(artifactMap); err != nil {
 		return err
 	}
-	evidenceArtifacts := make(map[string]evidenceArtifact, len(requiredArtifacts))
-	paths := make(map[string]string, len(requiredArtifacts))
-	for _, name := range requiredArtifacts {
+	artifactNames := append([]string(nil), requiredArtifacts...)
+	for _, name := range optionalArtifacts {
+		if _, present := artifactMap[name]; present {
+			artifactNames = append(artifactNames, name)
+		}
+	}
+	evidenceArtifacts := make(map[string]evidenceArtifact, len(artifactNames))
+	paths := make(map[string]string, len(artifactNames))
+	for _, name := range artifactNames {
 		relativePath := artifactMap[name]
 		artifactPath, err := secureArtifactPath(artifactDirectory, relativePath)
 		if err != nil {
@@ -361,7 +377,7 @@ func runRecord(args []string, stdout io.Writer) error {
 	if err := validateEvidenceMetadata(record); err != nil {
 		return err
 	}
-	if err := validateSummaryArtifacts(*schemaPath, paths, requiredArtifacts); err != nil {
+	if err := validateSummaryArtifacts(*schemaPath, paths, artifactNames); err != nil {
 		return err
 	}
 	if err := validateFixtureManifest(paths["fixture_manifest"]); err != nil {
@@ -783,10 +799,16 @@ func validateEvidenceMetadata(record evidence) error {
 }
 
 func requiredArtifactsForRecord(record evidence) []string {
+	artifactNames := requiredArtifacts
 	if _, present := record.Artifacts["benchmark_summary"]; present {
-		return requiredArtifacts
+		artifactNames = requiredArtifacts
+	} else {
+		artifactNames = legacyRequiredArtifacts
 	}
-	return legacyRequiredArtifacts
+	if _, present := record.Artifacts["worker_error_summary"]; present {
+		artifactNames = append(append([]string(nil), artifactNames...), "worker_error_summary")
+	}
+	return artifactNames
 }
 
 func validateFixtureManifest(path string) error {
@@ -1411,6 +1433,19 @@ func validateCanonicalArtifactPaths(paths map[string]string) error {
 			return fmt.Errorf("artifact %q must use canonical path %q", name, expected)
 		}
 	}
+	for _, name := range optionalArtifacts {
+		path, present := paths[name]
+		if !present {
+			continue
+		}
+		expected, ok := canonicalArtifactPaths[name]
+		if !ok {
+			return fmt.Errorf("artifact %q has no canonical path", name)
+		}
+		if path != expected {
+			return fmt.Errorf("artifact %q must use canonical path %q", name, expected)
+		}
+	}
 	return nil
 }
 
@@ -1617,8 +1652,11 @@ func (arguments *artifactArguments) Set(value string) error {
 
 func (arguments artifactArguments) mapForRequired() (map[string]string, error) {
 	values := make(map[string]string, len(arguments))
-	allowed := make(map[string]struct{}, len(requiredArtifacts))
+	allowed := make(map[string]struct{}, len(requiredArtifacts)+len(optionalArtifacts))
 	for _, name := range requiredArtifacts {
+		allowed[name] = struct{}{}
+	}
+	for _, name := range optionalArtifacts {
 		allowed[name] = struct{}{}
 	}
 	for _, argument := range arguments {

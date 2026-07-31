@@ -391,6 +391,69 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
+	root := t.TempDir()
+	artifactDir := filepath.Join(root, "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactDir = resolvedArtifactDir
+	digest := strings.Repeat("a", 64)
+	image := "registry.example/project@sha256:" + digest
+	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	workerSummary := map[string]any{
+		"schema_version":         1,
+		"kind":                   "worker_error_summary",
+		"status":                 "pass",
+		"scope":                  "prometheus_snapshot_measurement_only",
+		"completed_attempts":     9999,
+		"worker_failed_attempts": 1,
+		"objective_status":       "measurement_only",
+		"redacted":               true,
+	}
+	workerPath := filepath.Join(artifactDir, canonicalArtifactPaths["worker_error_summary"])
+	if err := os.WriteFile(workerPath, mustJSON(t, workerSummary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	schemaPath := releaseEvidenceSchemaPath(t)
+	recordArgs := []string{
+		"record", "-schema", schemaPath, "-artifact-dir", artifactDir,
+		"-output", filepath.Join(artifactDir, "evidence.json"),
+		"-repository", "https://github.com/example/project", "-revision", strings.Repeat("b", 40),
+		"-image-reference", image, "-image-digest", "sha256:" + digest,
+	}
+	for _, name := range requiredArtifacts {
+		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
+	}
+	recordArgs = append(recordArgs, "-artifact", "worker_error_summary="+canonicalArtifactPaths["worker_error_summary"])
+	if err := run(recordArgs, io.Discard); err != nil {
+		t.Fatalf("record rejected optional worker error summary: %v", err)
+	}
+	evidencePath := filepath.Join(artifactDir, "evidence.json")
+	data, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, ok := record["artifacts"].(map[string]any)
+	if !ok {
+		t.Fatal("evidence artifacts are not an object")
+	}
+	if _, ok := artifacts["worker_error_summary"]; !ok {
+		t.Fatalf("evidence omitted optional worker summary: %#v", artifacts)
+	}
+	if err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", evidencePath}, io.Discard); err != nil {
+		t.Fatalf("verify rejected optional worker error summary: %v", err)
+	}
+}
+
 func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 	root := t.TempDir()
 	artifactDir := filepath.Join(root, "artifacts")

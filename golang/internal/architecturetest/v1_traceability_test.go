@@ -220,9 +220,13 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 			},
 			ImplementationPaths: []string{
 				"docs/architecture/deployment-and-operations.md",
+				"docs/release/artifact.schema.json",
 				"golang/activity/activities.go",
 				"golang/activity/metrics_test.go",
 				"golang/internal/observability/metrics.go",
+				"golang/tools/releaseverify/main.go",
+				"scripts/release/collect.sh",
+				"scripts/release/slo-evidence.py",
 			},
 			Verification: v1TraceabilityVerification{
 				MakeTargets: []string{"test"},

@@ -68,6 +68,22 @@ window, source revision, deployment digest, and admission p99 measurements
 before independently reviewing a candidate. It does not update the v1 catalog,
 bind a release, or claim that the production SLO has been observed.
 
+For a separately collected release-evidence bundle, the same redacted summary
+can be retained without exposing the raw snapshot:
+
+```sh
+bash scripts/release/collect.sh \
+  --artifact-dir release-artifacts \
+  --image-oci-layout /tmp/image.oci \
+  --worker-error-metrics /secure/operator/metrics.prom
+```
+
+The release verifier treats `worker-error-summary.json` as an optional
+measurement-only artifact. The trusted master workflow does not provide a
+metrics snapshot, so it omits the artifact and leaves the catalog requirement
+unrecorded. Supplying the option never changes that status or authorizes a
+release binding; it only preserves the bounded counts for later review.
+
 ## Bind a measurement to a release
 
 Recording and verifying a measurement intentionally do not identify a release.
