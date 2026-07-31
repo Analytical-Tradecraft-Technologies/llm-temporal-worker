@@ -61,6 +61,11 @@ is. The artifact still marks `objective_status=measurement_only`: it is a
 reproducible offline measurement of the memory half only, not proof that the
 same-region Redis release objective has been met.
 
+The artifact schema enforces the same strict boundary for current summaries:
+`target_status=pass` is valid only when `p99_ms_per_op` is below 25. Retained
+schema-v1 summaries from before `target_status` existed remain verifiable through
+an explicit legacy schema branch; collection never emits that legacy shape.
+
 ## Controlled Redis measurement
 
 For a controlled, same-region Redis measurement, an operator may run:

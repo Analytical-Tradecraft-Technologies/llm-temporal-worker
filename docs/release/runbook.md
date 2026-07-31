@@ -102,6 +102,10 @@ The verifier remains compatible with retained schema-v1 bundles recorded before
 this benchmark was added: those bundles may omit `benchmark-summary.json`. New
 recordings are stricter and the recorder requires the benchmark artifact, so all
 new evidence captures the measurement without invalidating historical bundles.
+Retained bundles that include the benchmark but predate `target_status` are also
+accepted through the `benchmark_summary_legacy` schema branch. That compatibility
+branch is verify-only; newly collected summaries always use the current shape,
+and only current summaries assert the strict p99 target in the schema.
 
 ## Collect, record, and verify
 
