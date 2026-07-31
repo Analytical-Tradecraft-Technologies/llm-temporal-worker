@@ -1150,6 +1150,15 @@ maintenance primitives.
 
 ### Task 21: Prove crash, fork, cache, query, and restore behavior
 
+Status: partially complete. The repository now has checked-in deterministic
+and opt-in integration contracts for the bounded 10,000-turn lineage payload
+invariant, 100-way PostgreSQL cache-fill/use races, durable operation replay
+concurrency, budget-table SQL read classification, and Redis generation/Stream
+identity validation. These tests prove bounded local invariants and selected
+storage boundaries only; they do not claim the protected worker-kill,
+cross-service recovery, backup/restore, Redis rebuild, security, query-plan,
+or production SLO evidence still required below.
+
 **Files:**
 
 - Create: **integration/temporal/v1_recovery_test.go**
