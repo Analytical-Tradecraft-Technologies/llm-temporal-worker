@@ -144,6 +144,10 @@ contract:
    every member and the high-water mark came from one generation; independent
    client-side `HMGET` commands are not sufficient. The invocation must not
    use `HSCAN`, `HGETALL`, or an unbounded operation lookup on the query path.
+   The active-generation pointer is included in that same invocation and is
+   fenced against the generation, incarnation, and manifest digest supplied by
+   the reader. A pointer switch between the client-side manifest load and the
+   Function call therefore fails closed instead of returning a stale generation.
    Missing members/fields, duplicate catalog entries, wrong schema or
    generation, malformed integers, digest/provenance mismatches, and
    `reserved + accounted > limit` all fail closed. The response cites the
@@ -171,10 +175,15 @@ incarnation, manifest digest, member key, and the three nano-USD accounting
 fields. `BudgetManifestMember.limit_nano_usd` is required for this reader;
 older manifests that omit it remain valid only for generation adoption and are
 not a `budget_status` source. The adapter invokes the preloaded
-`budget_status_v2` Redis Function (or its explicitly configured Lua SHA) once
-for the full catalog. The Function drains at most the configured expiry bound,
-performs fixed-field `HMGET` for every member, and captures `XINFO STREAM`'s
-high-water mark. The adapter has the method shape of
+`budget_status_v3` Redis Function (or its explicitly configured Lua SHA) once
+for the full catalog. Version 3 is deliberate: the active-generation pointer
+is now an input key and is fenced inside the Function, so this key layout must
+not replace the v2 Function in place. During a rolling upgrade, preload both
+the v2 and v3 libraries and keep the v2 reader on old workers until they have
+drained; the distinct library/function identities let both versions coexist.
+The Function drains at most the configured expiry bound, performs fixed-field
+`HMGET` for every member, and captures `XINFO STREAM`'s high-water mark. The
+adapter has the method shape of
 `internal/runtime.BudgetStatusReader`, so deployments can pass it directly as
 the snapshot-owned `PersistedQueryOptions.BudgetStatus` seam.
 

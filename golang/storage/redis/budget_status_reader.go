@@ -24,9 +24,12 @@ import (
 const (
 	// BudgetStatusWindowSchema is intentionally distinct from the durable v1
 	// record schema. A hash without this exact marker is unsupported.
-	BudgetStatusWindowSchema    = "budget-window/v2"
-	BudgetStatusFunctionLibrary = "llmtw_budget_status_v2"
-	BudgetStatusFunctionVersion = "budget_status_v2"
+	BudgetStatusWindowSchema = "budget-window/v2"
+	// The active-generation fence is part of the Function key contract. Keep
+	// this identity separate from the original v2 Function so old and new
+	// workers can be rolled out together while both libraries remain loaded.
+	BudgetStatusFunctionLibrary = "llmtw_budget_status_v3"
+	BudgetStatusFunctionVersion = "budget_status_v3"
 	BudgetStatusAction          = "read"
 	BudgetStatusMaxExpiryDrain  = 1024
 	maxBudgetStatusMembers      = 4096
@@ -210,7 +213,13 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 	if query.PolicyKey != nil && string(*query.PolicyKey) == "" {
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: policy key is empty", ErrBudgetStatusUnavailable)
 	}
-	keys := []string{reader.keys.EventsKey()}
+	// Include the active-generation pointer in the same Function invocation as
+	// the member reads.  The pointer and manifest are fetched client-side to
+	// build the bounded key list, so a deployment can switch generations between
+	// those reads.  The Function fences the pointer again before reading any
+	// window and rejects a stale snapshot instead of returning data from a
+	// generation that is no longer active.
+	keys := []string{reader.keys.ActiveGenerationKey(), reader.keys.EventsKey()}
 	for _, member := range manifest.Members {
 		if member.LimitNanoUSD == "" {
 			return control.BudgetStatusResult{}, fmt.Errorf("%w: member %q has no v2 limit", ErrBudgetStatusUnavailable, member.Key())
@@ -375,14 +384,18 @@ local function stream_id(value) return type(value) == 'string' and string.match(
 if ARGV[1] ~= 'read' or #ARGV ~= 7 then return {'invalid_request', ''} end
 local generation, incarnation, digest = ARGV[2], ARGV[3], ARGV[4]
 local requested_now, count, expiry_limit = integer(ARGV[5]), integer(ARGV[6]), integer(ARGV[7])
-if not generation or not incarnation or #generation == 0 or #incarnation == 0 or type(digest) ~= 'string' or #digest ~= 64 or not requested_now or not count or count == 0 or count > 4096 or not expiry_limit or expiry_limit == 0 or #KEYS ~= 1 + 2 * count then return {'invalid_request', ''} end
+if not generation or not incarnation or #generation == 0 or #incarnation == 0 or type(digest) ~= 'string' or #digest ~= 64 or not requested_now or not count or count == 0 or count > 4096 or not expiry_limit or expiry_limit == 0 or #KEYS ~= 2 + 2 * count then return {'invalid_request', ''} end
+local active_raw = redis.call('GET', KEYS[1])
+if not active_raw then return {'state_unavailable', ''} end
+local decoded, active = pcall(cjson.decode, active_raw)
+if not decoded or type(active) ~= 'table' or active.generation_id ~= generation or active.incarnation_id ~= incarnation or active.manifest_digest ~= digest then return {'state_unavailable', ''} end
 local redis_time = redis.call('TIME')
 local now = integer(redis_time[1]) * 1000 + math.floor(integer(redis_time[2]) / 1000)
 if not now or math.abs(now - requested_now) > 60000 then return {'state_unavailable', ''} end
 local members = {}
 for i = 1, count do
-  local window_key = KEYS[1 + (i - 1) * 2 + 1]
-  local expiry_key = KEYS[1 + (i - 1) * 2 + 2]
+  local window_key = KEYS[2 + (i - 1) * 2 + 1]
+  local expiry_key = KEYS[2 + (i - 1) * 2 + 2]
   local expired = redis.call('ZRANGEBYSCORE', expiry_key, '-inf', tostring(now), 'LIMIT', 0, expiry_limit)
   for _, item in ipairs(expired) do
     local item_generation, amount = string.match(item, '^([^|]+)|([0-9]+)$')
@@ -399,7 +412,7 @@ for i = 1, count do
 	if values[1] ~= SCHEMA or values[2] ~= generation or values[3] ~= incarnation or values[4] ~= digest or not limit or not reserved or not accounted or reserved > limit or accounted > limit - reserved then return {'state_unavailable', ''} end
   members[i] = {schema=values[1], generation_id=values[2], incarnation_id=values[3], manifest_digest=values[4], member_key=values[5], limit_nano_usd=values[6], reserved_nano_usd=values[7], accounted_nano_usd=values[8], coverage_start=values[9], coverage_end=values[10]}
 end
-local info = redis.call('XINFO', 'STREAM', KEYS[1])
+local info = redis.call('XINFO', 'STREAM', KEYS[2])
 local high_water = nil
 for i = 1, #info, 2 do if info[i] == 'last-generated-id' then high_water = info[i + 1] end end
 if not stream_id(high_water) then return {'state_unavailable', ''} end
