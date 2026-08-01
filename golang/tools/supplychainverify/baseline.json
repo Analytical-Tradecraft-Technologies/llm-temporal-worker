@@ -51,7 +51,7 @@
     },
     {
       "path": "github.com/aws/smithy-go",
-      "version": "v1.27.4",
+      "version": "v1.27.5",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/smithy-go"
     },
@@ -126,6 +126,12 @@
       "version": "v1.44.0",
       "license": "Apache-2.0",
       "source": "https://github.com/open-telemetry/opentelemetry-go"
+    },
+    {
+      "path": "go.temporal.io/api",
+      "version": "v1.63.4",
+      "license": "MIT",
+      "source": "https://github.com/temporalio/api"
     },
     {
       "path": "go.temporal.io/sdk",
