@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"testing"
@@ -83,6 +84,8 @@ func TestEstimateCandidateRejectsUnknownCatalogComponent(t *testing.T) {
 	}
 	if _, err := (Estimator{}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, entry); err == nil {
 		t.Fatal("EstimateCandidate accepted an omitted input price as known zero")
+	} else if !errors.Is(err, ErrUnusablePrice) {
+		t.Fatalf("unknown component error = %v, want ErrUnusablePrice", err)
 	}
 }
 
@@ -158,6 +161,8 @@ func TestEstimateCandidateRejectsMicroUSDCompatibilityOverflow(t *testing.T) {
 			}}
 			if _, err := estimator.EstimateCandidate(request, candidate, entry); err == nil {
 				t.Fatal("estimate silently dropped an overflowing microUSD compatibility value")
+			} else if !errors.Is(err, ErrUnusablePrice) {
+				t.Fatalf("overflow error = %v, want ErrUnusablePrice", err)
 			}
 		})
 	}

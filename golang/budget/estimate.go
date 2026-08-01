@@ -2,6 +2,7 @@ package budget
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -9,6 +10,13 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 )
+
+// ErrUnusablePrice marks an otherwise valid candidate whose active catalog
+// entry cannot produce a safe reservation. Callers that are evaluating an
+// ordered route plan may skip this candidate and continue to the next
+// authorized fallback. Tokenizer, request, and estimator configuration
+// errors deliberately do not use this sentinel and remain hard failures.
+var ErrUnusablePrice = errors.New("candidate price is unusable")
 
 type Estimator struct {
 	SafetyRatio  *big.Rat
@@ -79,7 +87,7 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	legacyTotal := pricing.MicroUSD(0)
 	for _, component := range components {
 		if component.units > 0 && entry.ComponentUnknown(component.component) {
-			return Estimate{}, fmt.Errorf("estimate %s has no known USD catalog price", component.name)
+			return Estimate{}, fmt.Errorf("%w: estimate %s has no known USD catalog price", ErrUnusablePrice, component.name)
 		}
 		value, err := pricing.CeilUSD(component.price, component.units, component.unitsPerPrice)
 		if err != nil {
@@ -94,11 +102,11 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 			// USD is authoritative, but the estimator is also responsible for
 			// producing the bounded compatibility reservation consumed by Redis.
 			// Silently dropping an overflowing component would under-reserve.
-			return Estimate{}, fmt.Errorf("estimate %s microUSD compatibility conversion: %w", component.name, legacyErr)
+			return Estimate{}, fmt.Errorf("%w: estimate %s microUSD compatibility conversion: %w", ErrUnusablePrice, component.name, legacyErr)
 		}
 		legacyTotal, err = legacyTotal.Add(legacy)
 		if err != nil {
-			return Estimate{}, fmt.Errorf("estimate %s microUSD compatibility total: %w", component.name, err)
+			return Estimate{}, fmt.Errorf("%w: estimate %s microUSD compatibility total: %w", ErrUnusablePrice, component.name, err)
 		}
 	}
 	if estimator.SafetyRatio != nil {
@@ -111,7 +119,7 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		}
 		legacyTotal, err = multiplyCeil(legacyTotal, estimator.SafetyRatio)
 		if err != nil {
-			return Estimate{}, err
+			return Estimate{}, fmt.Errorf("%w: estimate microUSD compatibility multiplier: %w", ErrUnusablePrice, err)
 		}
 	}
 	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, CatalogVersion: entry.Version}, nil
