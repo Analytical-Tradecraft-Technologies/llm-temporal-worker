@@ -57,15 +57,16 @@ var evidenceStatusForMode = map[string]string{
 // The release-evidence artifact recorded below was produced by this exact
 // protected master revision. Keep this candidate pin explicit so a later
 // catalog refresh cannot accidentally retain evidence from an older run.
-const expectedV1EvidenceRevision = "ab39674381998c98cda4e51530983c14af389684"
-const expectedV1EvidenceWorkflowRunID int64 = 30717182510
+const expectedV1EvidenceRevision = "b8e3653a43552345898ebc0d7a1074a3a65533ba"
+const expectedV1EvidenceWorkflowRunID int64 = 30721763430
 const expectedV1EvidenceArtifactName = "release-evidence"
+const expectedV1EvidenceArtifactID = "8825461239"
 
 // GitHub exposes the artifact digest as sha256:<hex>; the catalog stores the
 // normalized lowercase hex payload so it remains comparable across evidence
 // sources that use the same digest algorithm.
-const expectedV1EvidenceArtifactDigest = "1b282095095f045c3859bd12756d07ab65b222ebd96fbad26eb03196fc646739"
-const expectedV1EvidenceImageDigest = "6aea55382c942cac83ec08c48e511a6bd12fa42de9b1c0bdff67553987f7e1c5"
+const expectedV1EvidenceArtifactDigest = "e83bd17487fe6e3d3412fc755b0d1c31538bb82a1f34b140a9803ee1ce52eadf"
+const expectedV1EvidenceImageDigest = "c7d476545d65cc023e6972a9df6d4f9747eb68ffa3f0dca9262233982b997ece"
 
 type v1TraceabilityCatalog struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -130,7 +131,7 @@ func TestV1TraceabilityRunbookPinsRecordedEvidence(t *testing.T) {
 	wants := []string{
 		fmt.Sprintf("workflow run `%d`](https://github.com/mfow/llm-temporal-worker/actions/runs/%d)", expectedV1EvidenceWorkflowRunID, expectedV1EvidenceWorkflowRunID),
 		"`" + expectedV1EvidenceRevision + "`",
-		"`release-evidence` (artifact `8824132132`)",
+		"`release-evidence` (artifact `" + expectedV1EvidenceArtifactID + "`)",
 		"`sha256:" + expectedV1EvidenceArtifactDigest + "`",
 		"`sha256:" + expectedV1EvidenceImageDigest + "`",
 	}
