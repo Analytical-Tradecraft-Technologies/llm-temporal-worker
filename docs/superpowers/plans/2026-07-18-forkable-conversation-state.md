@@ -1048,6 +1048,14 @@ Protected release evidence is not inferred from these offline checks.
 
 ### Task 19: Compose Redis budgets with PostgreSQL durable state
 
+Status: a bounded snapshot-owned `durable.CompositionBuilder` now validates
+the complete operation/continuation/result/journal/materializer port set and
+exposes the identity-bound budget boundary and lifecycle. The runtime
+capability bundle can optionally invoke this factory and fails closed when the
+factory or returned composition is invalid. This does not switch production
+composition or claim protected deployment evidence; the infrastructure,
+reload, and recovery work below remains open.
+
 **Files:**
 
 - Modify: **internal/runtime/factory.go**, dependency probes/reload

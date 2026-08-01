@@ -197,10 +197,10 @@ type Journal interface {
 	AppendCompletion(context.Context, budget.CompletionEvent) (postgresstore.JournalRecord, error)
 }
 
-// Composition is the seam consumed by the runtime factory when the durable
-// split is wired. Operation/continuation/result state is authoritative in
-// PostgreSQL; active budget admission is provided by Redis; the journal is
-// append-only PostgreSQL state between those two operations.
+// Composition is the snapshot-owned seam consumed by a runtime factory when
+// the durable split is wired. Operation/continuation/result state is
+// authoritative in PostgreSQL; active budget admission is provided by Redis;
+// the journal is append-only PostgreSQL state between those two operations.
 type Composition struct {
 	Identity      StateIdentity
 	Operations    admission.AdmissionStore
@@ -235,6 +235,12 @@ func (composition Composition) Validate() error {
 	}
 	if isNilPort(composition.Materializer) {
 		return errors.New("durable Redis budget materializer is required")
+	}
+	// Validate the cross-store handoff as part of the composition so callers
+	// cannot validate the operation ports while silently carrying a different
+	// snapshot identity into the Redis/PostgreSQL budget path.
+	if err := composition.BudgetBoundary().Validate(); err != nil {
+		return err
 	}
 	return nil
 }

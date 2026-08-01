@@ -54,3 +54,24 @@ validation rejects both a missing callback and a typed-nil function callback;
 the latter would otherwise pass through an `interface{}` check and panic only
 after polling began. This is a composition guard, not evidence of live
 PostgreSQL, Redis, or provider contract execution.
+
+## Snapshot-owned Task 19 state boundary
+
+The storage-neutral `durable.CompositionBuilder` is the narrow Task 19 seam
+for assembling the PostgreSQL operation/continuation/result ports, the
+write-only budget journal, and the Redis budget materializer from one immutable
+snapshot. `Build` performs only local validation and returns a value bound to
+one `StateIdentity`; it never creates clients, reads PostgreSQL budget state,
+or dispatches a provider request. `Composition.BudgetBoundary()` and
+`Composition.NewLifecycle()` expose the existing Redis/PostgreSQL ordering and
+recovery helpers without allowing a reload to mix stores from another
+snapshot.
+
+Runtime capability bundles may carry an optional
+`DurableCompositionFactory`. Calling
+`V1RuntimeCapabilities.BuildDurableComposition` invokes that factory once and
+validates the complete returned composition before a caller can attach it to
+an Activity. Missing factories, missing ports, typed-nil ports, and invalid
+identities fail closed; no legacy Redis store or in-memory substitute is
+created. The seam is intentionally optional until deployment-owned
+PostgreSQL/Redis bindings and protected recovery evidence are available.
