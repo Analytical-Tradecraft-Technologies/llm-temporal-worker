@@ -35,10 +35,15 @@ func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 		}
 		totalUSD, err = totalUSD.Add(value)
 		if err != nil {
-			return Cost{}, err
+			return Cost{}, fmt.Errorf("usage %s USD total: %w", component.name, err)
 		}
-		if legacy, legacyErr := CeilMicroUSD(component.price, component.units, component.unitsPerPrice); legacyErr == nil {
-			legacyTotal, _ = legacyTotal.Add(legacy)
+		legacy, err := CeilMicroUSD(component.price, component.units, component.unitsPerPrice)
+		if err != nil {
+			return Cost{}, fmt.Errorf("usage %s microUSD compatibility conversion: %w", component.name, err)
+		}
+		legacyTotal, err = legacyTotal.Add(legacy)
+		if err != nil {
+			return Cost{}, fmt.Errorf("usage %s microUSD compatibility total: %w", component.name, err)
 		}
 	}
 	return Cost{USD: totalUSD, MicroUSD: legacyTotal, Method: CostCatalogUsage, CatalogVersion: entry.Version}, nil
