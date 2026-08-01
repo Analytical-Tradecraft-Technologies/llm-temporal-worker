@@ -594,6 +594,16 @@ static AWS credentials, named AWS profiles, auth-skipping mode, and
 chain instead of silently changing authentication. Its catalog family and
 pinned continuation endpoint remain distinct from Bedrock.
 
+Both Bedrock endpoint families (`bedrock_anthropic_messages` and
+`bedrock_converse`) require `auth.kind: aws_default_chain` and a non-empty
+`region`. API-key, header, workload-identity, and other alternate auth modes
+are rejected during configuration validation before an adapter or AWS client
+is constructed. The official SDK then resolves credentials through the
+configured default AWS credential chain. The secret access key is used only for
+local SigV4 signing and is never transmitted; no credential value is serialized
+into the Temporal payload. Signed request headers may still carry temporary
+access-key and session-token metadata.
+
 At runtime the provider client permits HTTPS requests only to those configured
 hostnames and the configured HTTPS port for the endpoint. A base URL hostname
 is permitted only on its explicit base URL port (or 443 when no port is given);
