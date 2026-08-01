@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -52,6 +53,97 @@ func TestDurableV1RuntimeBuilderComposesBothPhasesFromOneSnapshot(t *testing.T) 
 	}
 	if got, want := strings.Join(seen, ","), "generate:snapshot-1,compact:snapshot-1"; got != want {
 		t.Fatalf("factory snapshot observations = %q, want %q", got, want)
+	}
+}
+
+func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *testing.T) {
+	var generateComposition, compactComposition durable.Composition
+	capabilities := completeDurableBuilderCapabilities(
+		func(ctx context.Context, received V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+			composition, ok := received.DurableComposition()
+			if !ok {
+				t.Fatal("Generate phase did not receive the validated composition")
+			}
+			if err := composition.Validate(); err != nil {
+				t.Fatalf("Generate composition is invalid: %v", err)
+			}
+			reused, err := received.BuildDurableComposition(ctx)
+			if err != nil {
+				t.Fatalf("Generate rebuild unexpectedly failed: %v", err)
+			}
+			if !reflect.DeepEqual(composition, reused) {
+				t.Fatalf("Generate rebuild changed composition: got=%+v want=%+v", reused, composition)
+			}
+			generateComposition = composition
+			return validBuilderGeneratePorts(nil), nil
+		},
+		func(ctx context.Context, received V1RuntimeCapabilities) (durable.CompactPorts, error) {
+			composition, ok := received.DurableComposition()
+			if !ok {
+				t.Fatal("Compact phase did not receive the validated composition")
+			}
+			if err := composition.Validate(); err != nil {
+				t.Fatalf("Compact composition is invalid: %v", err)
+			}
+			reused, err := received.BuildDurableComposition(ctx)
+			if err != nil {
+				t.Fatalf("Compact rebuild unexpectedly failed: %v", err)
+			}
+			if !reflect.DeepEqual(composition, reused) {
+				t.Fatalf("Compact rebuild changed composition: got=%+v want=%+v", reused, composition)
+			}
+			compactComposition = composition
+			return validCompactPorts(), nil
+		},
+	)
+	want := validCapabilityComposition()
+	compositionCalls := 0
+	capabilities.CompositionFactory = func(_ context.Context, received V1RuntimeCapabilities) (durable.Composition, error) {
+		compositionCalls++
+		if _, ok := received.DurableComposition(); ok {
+			t.Fatal("composition factory received a pre-bound composition")
+		}
+		return want, nil
+	}
+	runtimeValue, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, &generateBuilderClientSet{capabilities: capabilities})
+	if err != nil {
+		t.Fatalf("builder error = %v", err)
+	}
+	if compositionCalls != 1 {
+		t.Fatalf("composition factory calls = %d, want 1", compositionCalls)
+	}
+	if generateComposition.Identity != compactComposition.Identity {
+		t.Fatalf("phase composition identities differ: Generate=%+v Compact=%+v", generateComposition.Identity, compactComposition.Identity)
+	}
+	if !reflect.DeepEqual(generateComposition, compactComposition) {
+		t.Fatalf("phase factories received different composition values: Generate=%+v Compact=%+v", generateComposition, compactComposition)
+	}
+	if _, ok := runtimeValue.(*activity.DurableV1Runtime); !ok {
+		t.Fatalf("runtime type = %T, want *activity.DurableV1Runtime", runtimeValue)
+	}
+}
+
+func TestDurableV1RuntimeBuilderFailsBeforePhaseFactoriesOnInvalidComposition(t *testing.T) {
+	generateCalled, compactCalled := false, false
+	capabilities := completeDurableBuilderCapabilities(
+		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+			generateCalled = true
+			return validBuilderGeneratePorts(nil), nil
+		},
+		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+			compactCalled = true
+			return validCompactPorts(), nil
+		},
+	)
+	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
+		return durable.Composition{}, nil
+	}
+	_, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, &generateBuilderClientSet{capabilities: capabilities})
+	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "validate durable composition") {
+		t.Fatalf("builder error = %v, want invalid-composition failure", err)
+	}
+	if generateCalled || compactCalled {
+		t.Fatalf("phase factories called after invalid composition: generate=%t compact=%t", generateCalled, compactCalled)
 	}
 }
 

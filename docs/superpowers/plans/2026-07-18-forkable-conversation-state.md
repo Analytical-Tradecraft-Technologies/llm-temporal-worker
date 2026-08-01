@@ -1064,6 +1064,12 @@ factory or returned composition is invalid. This does not switch production
 composition or claim protected deployment evidence; the infrastructure,
 reload, and recovery work below remains open.
 
+The complete durable v1 builder now invokes a configured composition factory
+once per immutable snapshot and passes the validated identity-bound value to
+both Generate and Compact phase factories. This prevents those phase
+constructors from selecting PostgreSQL/Redis ports from different snapshots;
+deployment-owned callbacks and protected recovery evidence remain pending.
+
 **Files:**
 
 - Modify: **internal/runtime/factory.go**, dependency probes/reload

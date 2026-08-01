@@ -81,8 +81,10 @@ identities fail closed; no legacy Redis store or in-memory substitute is
 created. The seam is intentionally optional until deployment-owned
 PostgreSQL/Redis bindings and protected recovery evidence are available.
 
-Supplying `ProductionFactoryOptions.DurableCompositionFactory` alone does not
-install a v1 runtime or invoke the factory. A deployment-owned
-`V1RuntimeBuilder` must explicitly call `BuildDurableComposition` after it has
-composed all required ports; until then, production durable snapshots fail
-before client construction.
+`runtime.NewDurableV1RuntimeBuilder` now invokes the optional composition
+factory exactly once per snapshot. It passes the validated composition by
+value to both phase factories through `V1RuntimeCapabilities.DurableComposition`,
+so Generate and Compact cannot accidentally bind different PostgreSQL/Redis
+identities. A custom `V1RuntimeBuilder` may use the same helper explicitly;
+supplying a composition factory alone still does not install a v1 runtime or
+relax the production readiness guard.
