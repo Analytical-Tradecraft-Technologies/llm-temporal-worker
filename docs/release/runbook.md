@@ -195,12 +195,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30696412288`](https://github.com/mfow/llm-temporal-worker/actions/runs/30696412288) at revision
-`22c1b67394dbae97b1651e80d88aab26b765fd17`. The artifact is named
-`release-evidence` (artifact `8817786731`) and has SHA-256 digest
-`sha256:494e4d3d4b420f11a0764c8e15d23951cb78afdce3cdfc842a78be851e38bbfa`.
+artifact: [workflow run `30708893192`](https://github.com/mfow/llm-temporal-worker/actions/runs/30708893192) at revision
+`803be9368ea2198aab1a560353d6f18592e01fb6`. The artifact is named
+`release-evidence` (artifact `8821626335`) and has SHA-256 digest
+`sha256:95a8b2d16d6d2cc9d95e359e0ea3490b94a022d3a8e7e4815c26266af8ed043f`.
 The retained bundle binds the immutable image descriptor
-`sha256:c3f077c9c08b69e1b7b26d3d55186971479a0089eec7f2aae6d274eedefccd10`.
+`sha256:b23716483c6502bab0da0889012a4999f1bfdaa1611187a15c8ba976d0972817`.
 The catalog refresh binds the thirteen already-recorded offline requirements
 to this successful master run. Pending protected-provider and publication
 requirements, plus the two unrecorded SLO measurements, remain unchanged.
@@ -228,6 +228,9 @@ the only run bound to the retained release-evidence artifact.
 | [#525](https://github.com/mfow/llm-temporal-worker/pull/525) pinned worker PostgreSQL to 17.5 | `ff48d61d4c34cf96b908bc8a46db12de03928195` | [30695089609](https://github.com/mfow/llm-temporal-worker/actions/runs/30695089609) |
 | [#526](https://github.com/mfow/llm-temporal-worker/pull/526) used a tier-capable Converse fixture model | `46ee4431a97843cd58f785c8b074565bf5b81524` | [30694499334](https://github.com/mfow/llm-temporal-worker/actions/runs/30694499334) |
 | [#528](https://github.com/mfow/llm-temporal-worker/pull/528) failed closed on unsupported Bedrock model tiers | `22c1b67394dbae97b1651e80d88aab26b765fd17` | [30695814354](https://github.com/mfow/llm-temporal-worker/actions/runs/30695814354) |
+| [#529](https://github.com/mfow/llm-temporal-worker/pull/529) enforced Bedrock Messages service tiers | `22a0137072ccb0a9debb1af9342adf70dff043c5` | [30700265419](https://github.com/mfow/llm-temporal-worker/actions/runs/30700265419) |
+| [#530](https://github.com/mfow/llm-temporal-worker/pull/530) skipped unusable pricing candidates during fallback | `ad25ace10166cd6ea48dc9227472d80f581d45f5` | [30700330953](https://github.com/mfow/llm-temporal-worker/actions/runs/30700330953) |
+| [#535](https://github.com/mfow/llm-temporal-worker/pull/535) fixed the reload snapshot race | `803be9368ea2198aab1a560353d6f18592e01fb6` | [30708112774](https://github.com/mfow/llm-temporal-worker/actions/runs/30708112774) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
