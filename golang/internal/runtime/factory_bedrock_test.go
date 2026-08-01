@@ -11,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockconverse"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockmessages"
@@ -130,6 +131,127 @@ func TestProductionFactoryRejectsNonDefaultBedrockAuthBeforeDependencies(t *test
 			}
 			if awsConfigCalled {
 				t.Fatal("unsupported Bedrock auth constructed AWS config")
+			}
+		})
+	}
+}
+
+func TestProductionFactoryBuildsBedrockMessagesWithGeneratedProfile(t *testing.T) {
+	endpointID := "bedrock-messages"
+	region := "us-west-2"
+	awsConfigCalled := false
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		HTTPClient: &http.Client{},
+		AWSConfigFactory: func(_ context.Context, gotRegion string) (aws.Config, error) {
+			awsConfigCalled = true
+			if gotRegion != region {
+				t.Fatalf("AWS config region = %q, want %q", gotRegion, region)
+			}
+			return aws.Config{Region: gotRegion}, nil
+		},
+	}}
+	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
+		Family: "bedrock_anthropic_messages", BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
+		Region: region, Auth: config.AuthConfig{Kind: "aws_default_chain"},
+		ServiceClasses: map[llm.ServiceClass]config.TierConfig{
+			llm.ServiceClassEconomy:  {ProviderValue: "flex"},
+			llm.ServiceClassStandard: {ProviderValue: "default"},
+			llm.ServiceClassPriority: {ProviderValue: "priority"},
+		},
+	}}}
+	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
+	}}}
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+	if err != nil {
+		t.Fatalf("buildAdapter() error = %v", err)
+	}
+	bedrockAdapter, ok := adapter.(*bedrockmessages.Adapter)
+	if !ok {
+		t.Fatalf("adapter = %T, want *bedrockmessages.Adapter", adapter)
+	}
+	profile := bedrockAdapter.Profile()
+	if profile.ExpectedBaseURL != value.Endpoints[endpointID].BaseURL+"/" || profile.ServiceTiers[llm.ServiceClassEconomy] != "flex" || profile.ServiceTiers[llm.ServiceClassStandard] != "default" || profile.ServiceTiers[llm.ServiceClassPriority] != "priority" {
+		t.Fatalf("generated Bedrock Messages profile = %#v", profile)
+	}
+	if !awsConfigCalled {
+		t.Fatal("AWS config factory was not called")
+	}
+}
+
+func TestProductionFactoryBuildsBedrockConverseWithGeneratedProfile(t *testing.T) {
+	endpointID := "bedrock-converse"
+	region := "eu-west-1"
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		HTTPClient: &http.Client{},
+		AWSConfigFactory: func(_ context.Context, gotRegion string) (aws.Config, error) {
+			if gotRegion != region {
+				t.Fatalf("AWS config region = %q, want %q", gotRegion, region)
+			}
+			return aws.Config{Region: gotRegion}, nil
+		},
+	}}
+	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
+		Family: "bedrock_converse", BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
+		Region: region, Auth: config.AuthConfig{Kind: "aws_default_chain"},
+		ServiceClasses: map[llm.ServiceClass]config.TierConfig{
+			llm.ServiceClassEconomy:  {ProviderValue: "flex"},
+			llm.ServiceClassStandard: {ProviderValue: "default"},
+			llm.ServiceClassPriority: {ProviderValue: "priority"},
+		},
+	}}}
+	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
+	}}}
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+	if err != nil {
+		t.Fatalf("buildAdapter() error = %v", err)
+	}
+	bedrockAdapter, ok := adapter.(*bedrockconverse.Adapter)
+	if !ok {
+		t.Fatalf("adapter = %T, want *bedrockconverse.Adapter", adapter)
+	}
+	profile := bedrockAdapter.Profile()
+	if profile.ExpectedBaseURL != value.Endpoints[endpointID].BaseURL+"/" || profile.ServiceTiers[llm.ServiceClassEconomy] != "flex" || profile.ServiceTiers[llm.ServiceClassStandard] != "default" || profile.ServiceTiers[llm.ServiceClassPriority] != "priority" {
+		t.Fatalf("generated Bedrock Converse profile = %#v", profile)
+	}
+	if got := profile.Capabilities.Features[provider.FeatureStreaming].State; got != provider.CapabilityUnsupported {
+		t.Fatalf("generated Bedrock Converse streaming capability = %q, want unsupported", got)
+	}
+}
+
+func TestProductionFactoryFailsClosedWhenBedrockAWSConfigFactoryFails(t *testing.T) {
+	wantErr := errors.New("credential chain unavailable")
+	for _, family := range []string{"bedrock_anthropic_messages", "bedrock_converse"} {
+		t.Run(family, func(t *testing.T) {
+			const region = "us-east-2"
+			var gotRegion string
+			factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+				HTTPClient: &http.Client{},
+				AWSConfigFactory: func(_ context.Context, region string) (aws.Config, error) {
+					gotRegion = region
+					return aws.Config{}, wantErr
+				},
+			}}
+			endpointID := "bedrock"
+			value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
+				Family: family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
+				Region: region, Auth: config.AuthConfig{Kind: "aws_default_chain"},
+				ServiceClasses: map[llm.ServiceClass]config.TierConfig{
+					llm.ServiceClassEconomy:  {ProviderValue: "flex"},
+					llm.ServiceClassStandard: {ProviderValue: "default"},
+					llm.ServiceClassPriority: {ProviderValue: "priority"},
+				},
+			}}}
+			snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
+				"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
+			}}}
+			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("buildAdapter() error = %v, want AWS config error", err)
+			}
+			if gotRegion != region {
+				t.Fatalf("AWS config factory region = %q, want %q", gotRegion, region)
 			}
 		})
 	}
