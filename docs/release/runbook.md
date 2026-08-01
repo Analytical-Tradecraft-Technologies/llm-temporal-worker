@@ -195,12 +195,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30708893192`](https://github.com/mfow/llm-temporal-worker/actions/runs/30708893192) at revision
-`803be9368ea2198aab1a560353d6f18592e01fb6`. The artifact is named
-`release-evidence` (artifact `8821626335`) and has SHA-256 digest
-`sha256:95a8b2d16d6d2cc9d95e359e0ea3490b94a022d3a8e7e4815c26266af8ed043f`.
+artifact: [workflow run `30717182510`](https://github.com/mfow/llm-temporal-worker/actions/runs/30717182510) at revision
+`ab39674381998c98cda4e51530983c14af389684`. The artifact is named
+`release-evidence` (artifact `8824132132`) and has SHA-256 digest
+`sha256:1b282095095f045c3859bd12756d07ab65b222ebd96fbad26eb03196fc646739`.
 The retained bundle binds the immutable image descriptor
-`sha256:b23716483c6502bab0da0889012a4999f1bfdaa1611187a15c8ba976d0972817`.
+`sha256:6aea55382c942cac83ec08c48e511a6bd12fa42de9b1c0bdff67553987f7e1c5`.
 The catalog refresh binds the thirteen already-recorded offline requirements
 to this successful master run. Pending protected-provider and publication
 requirements, plus the two unrecorded SLO measurements, remain unchanged.
@@ -231,6 +231,11 @@ the only run bound to the retained release-evidence artifact.
 | [#529](https://github.com/mfow/llm-temporal-worker/pull/529) enforced Bedrock Messages service tiers | `22a0137072ccb0a9debb1af9342adf70dff043c5` | [30700265419](https://github.com/mfow/llm-temporal-worker/actions/runs/30700265419) |
 | [#530](https://github.com/mfow/llm-temporal-worker/pull/530) skipped unusable pricing candidates during fallback | `ad25ace10166cd6ea48dc9227472d80f581d45f5` | [30700330953](https://github.com/mfow/llm-temporal-worker/actions/runs/30700330953) |
 | [#535](https://github.com/mfow/llm-temporal-worker/pull/535) fixed the reload snapshot race | `803be9368ea2198aab1a560353d6f18592e01fb6` | [30708112774](https://github.com/mfow/llm-temporal-worker/actions/runs/30708112774) |
+| [#537](https://github.com/mfow/llm-temporal-worker/pull/537) added the guarded Bedrock Converse live contract | `8ca832d0031380434ac9e43a5905744b268d86a7` | [30711271094](https://github.com/mfow/llm-temporal-worker/actions/runs/30711271094) |
+| [#538](https://github.com/mfow/llm-temporal-worker/pull/538) synchronized enforced fixture profiles with the fixture matrix | `2ce082315a3142e582d577138729eecece2da72e` | [30713973091](https://github.com/mfow/llm-temporal-worker/actions/runs/30713973091) |
+| [#539](https://github.com/mfow/llm-temporal-worker/pull/539) bound durable composition across runtime phases | `8a2f9e98c2af9712efd3b1486c3ad63594ef388d` | [30715566177](https://github.com/mfow/llm-temporal-worker/actions/runs/30715566177) |
+| [#540](https://github.com/mfow/llm-temporal-worker/pull/540) rejected unsupported Bedrock authentication | `09824e628aed45c3e6965fa3ebf5033e113f2844` | [30714761560](https://github.com/mfow/llm-temporal-worker/actions/runs/30714761560) |
+| [#541](https://github.com/mfow/llm-temporal-worker/pull/541) covered generated Bedrock factory profiles | `ab39674381998c98cda4e51530983c14af389684` | [30716360753](https://github.com/mfow/llm-temporal-worker/actions/runs/30716360753) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for

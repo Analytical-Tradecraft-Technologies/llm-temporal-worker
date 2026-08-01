@@ -57,14 +57,15 @@ var evidenceStatusForMode = map[string]string{
 // The release-evidence artifact recorded below was produced by this exact
 // protected master revision. Keep this candidate pin explicit so a later
 // catalog refresh cannot accidentally retain evidence from an older run.
-const expectedV1EvidenceRevision = "803be9368ea2198aab1a560353d6f18592e01fb6"
-const expectedV1EvidenceWorkflowRunID int64 = 30708893192
+const expectedV1EvidenceRevision = "ab39674381998c98cda4e51530983c14af389684"
+const expectedV1EvidenceWorkflowRunID int64 = 30717182510
 const expectedV1EvidenceArtifactName = "release-evidence"
 
 // GitHub exposes the artifact digest as sha256:<hex>; the catalog stores the
 // normalized lowercase hex payload so it remains comparable across evidence
 // sources that use the same digest algorithm.
-const expectedV1EvidenceArtifactDigest = "95a8b2d16d6d2cc9d95e359e0ea3490b94a022d3a8e7e4815c26266af8ed043f"
+const expectedV1EvidenceArtifactDigest = "1b282095095f045c3859bd12756d07ab65b222ebd96fbad26eb03196fc646739"
+const expectedV1EvidenceImageDigest = "6aea55382c942cac83ec08c48e511a6bd12fa42de9b1c0bdff67553987f7e1c5"
 
 type v1TraceabilityCatalog struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -120,6 +121,23 @@ func TestV1TraceabilityCatalog(t *testing.T) {
 	root := repositoryRoot(t)
 	if err := validateV1TraceabilityCatalog(root, readV1TraceabilityCatalog(t, root)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestV1TraceabilityRunbookPinsRecordedEvidence(t *testing.T) {
+	root := repositoryRoot(t)
+	runbook := readRepositoryFile(t, root, "docs", "release", "runbook.md")
+	wants := []string{
+		fmt.Sprintf("workflow run `%d`](https://github.com/mfow/llm-temporal-worker/actions/runs/%d)", expectedV1EvidenceWorkflowRunID, expectedV1EvidenceWorkflowRunID),
+		"`" + expectedV1EvidenceRevision + "`",
+		"`release-evidence` (artifact `8824132132`)",
+		"`sha256:" + expectedV1EvidenceArtifactDigest + "`",
+		"`sha256:" + expectedV1EvidenceImageDigest + "`",
+	}
+	for _, want := range wants {
+		if !strings.Contains(runbook, want) {
+			t.Errorf("release runbook does not pin current evidence %q", want)
+		}
 	}
 }
 
