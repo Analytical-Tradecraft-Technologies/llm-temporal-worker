@@ -1,0 +1,18 @@
+profile: bedrock-converse
+upstream_url: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
+upstream_date: "2026-08-01"
+sdk_version: github.com/aws/aws-sdk-go-v2/service/bedrockruntime@v1.57.0
+provenance: synthetic
+redactions:
+  - credentials and authorization headers
+  - provider request and response identifiers
+  - unstable provider payload fields
+capability_facts:
+  usage: native
+  streaming: unsupported
+  stream_decoder: not_applicable
+  strict_loss: unsupported
+  best_effort: unsupported
+  service_class: native
+  continuation: unsupported
+generated_field_exemptions: []

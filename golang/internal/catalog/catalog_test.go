@@ -406,6 +406,9 @@ func TestEndpointFamilyMapsAnthropicAWSWithoutConflatingBedrock(t *testing.T) {
 	if got := endpointFamily("bedrock_anthropic_messages"); got != provider.FamilyBedrockMessages {
 		t.Fatalf("Bedrock family = %q, want %q", got, provider.FamilyBedrockMessages)
 	}
+	if got := endpointFamily("bedrock_converse"); got != provider.FamilyBedrockConverse {
+		t.Fatalf("Bedrock Converse family = %q, want %q", got, provider.FamilyBedrockConverse)
+	}
 }
 
 func writeCatalog(t *testing.T, body string) config.CatalogRef {
