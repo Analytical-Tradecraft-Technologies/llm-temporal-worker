@@ -214,28 +214,51 @@ func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 func TestCompileRoutesEnforcesBedrockModelServiceClasses(t *testing.T) {
 	tests := []struct {
 		name           string
+		configFamily   string
+		providerFamily provider.Family
 		model          string
 		profileClasses []llm.ServiceClass
 		routeClasses   []llm.ServiceClass
 		wantErr        string
 	}{
 		{
-			name:           "nova lite rejects priority",
+			name:           "converse nova lite rejects priority",
+			configFamily:   "bedrock_converse",
+			providerFamily: provider.FamilyBedrockConverse,
 			model:          "amazon.nova-lite-v1:0",
 			profileClasses: []llm.ServiceClass{llm.ServiceClassStandard},
 			routeClasses:   []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassPriority},
 			wantErr:        "service class \"priority\" is not declared",
 		},
 		{
-			name:           "nova pro accepts all classes",
+			name:           "converse nova pro accepts all classes",
+			configFamily:   "bedrock_converse",
+			providerFamily: provider.FamilyBedrockConverse,
 			model:          "amazon.nova-pro-v1:0",
+			profileClasses: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority},
+			routeClasses:   []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority},
+		},
+		{
+			name:           "messages claude rejects priority",
+			configFamily:   "bedrock_anthropic_messages",
+			providerFamily: provider.FamilyBedrockMessages,
+			model:          "anthropic.claude-3-5-haiku-20241022-v1:0",
+			profileClasses: []llm.ServiceClass{llm.ServiceClassStandard},
+			routeClasses:   []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassPriority},
+			wantErr:        "service class \"priority\" is not declared",
+		},
+		{
+			name:           "messages claude accepts all classes",
+			configFamily:   "bedrock_anthropic_messages",
+			providerFamily: provider.FamilyBedrockMessages,
+			model:          "anthropic.claude-3-5-haiku-20241022-v1:0",
 			profileClasses: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority},
 			routeClasses:   []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			value, bundle := bedrockConverseRouteInputs(t, test.model, test.profileClasses, test.routeClasses)
+			value, bundle := bedrockRouteInputs(t, test.configFamily, test.providerFamily, test.model, test.profileClasses, test.routeClasses)
 			_, err := compileRoutes(value, bundle, time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
 			if test.wantErr == "" {
 				if err != nil {
@@ -250,7 +273,7 @@ func TestCompileRoutesEnforcesBedrockModelServiceClasses(t *testing.T) {
 	}
 }
 
-func bedrockConverseRouteInputs(t *testing.T, model string, profileClasses, routeClasses []llm.ServiceClass) (config.Config, catalog.Bundle) {
+func bedrockRouteInputs(t *testing.T, configFamily string, family provider.Family, model string, profileClasses, routeClasses []llm.ServiceClass) (config.Config, catalog.Bundle) {
 	t.Helper()
 	serviceClasses := map[llm.ServiceClass]config.TierConfig{
 		llm.ServiceClassEconomy:  {ProviderValue: "flex"},
@@ -262,7 +285,7 @@ func bedrockConverseRouteInputs(t *testing.T, model string, profileClasses, rout
 		Limits:  config.LimitsConfig{MaxBudgetBucketsPerWindow: 64},
 		Endpoints: map[string]config.EndpointConfig{
 			"bedrock": {
-				Family: "bedrock_converse", Region: "us-east-1", AccountRegion: "us-east-1", CapabilityProfile: "bedrock-profile", PriceCatalog: "prices",
+				Family: configFamily, Region: "us-east-1", AccountRegion: "us-east-1", CapabilityProfile: "bedrock-profile", PriceCatalog: "prices",
 				ServiceClasses: serviceClasses,
 			},
 		},
@@ -272,7 +295,7 @@ func bedrockConverseRouteInputs(t *testing.T, model string, profileClasses, rout
 	}
 	profile := catalog.CapabilityProfile{
 		ID:                     "bedrock-profile",
-		Family:                 provider.FamilyBedrockConverse,
+		Family:                 family,
 		Model:                  model,
 		ServiceClasses:         profileClasses,
 		ServiceClassesDeclared: true,
@@ -281,7 +304,7 @@ func bedrockConverseRouteInputs(t *testing.T, model string, profileClasses, rout
 	entries := make([]pricing.Entry, 0, len(routeClasses))
 	for _, class := range routeClasses {
 		entries = append(entries, pricing.Entry{
-			Provider: "aws-bedrock", Family: string(provider.FamilyBedrockConverse), EndpointID: "bedrock", Region: "us-east-1", Model: model, ProviderTier: serviceClasses[class].ProviderValue,
+			Provider: "aws-bedrock", Family: string(family), EndpointID: "bedrock", Region: "us-east-1", Model: model, ProviderTier: serviceClasses[class].ProviderValue,
 			Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1"), OutputPerMillion: pricing.MustDecimalUSD("2")},
 		})
 	}

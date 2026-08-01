@@ -139,7 +139,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 			if profile.Model != routeValue.Model {
 				return routing.Catalog{}, fmt.Errorf("route %q model %q does not match capability profile %q model %q", routeValue.ID, routeValue.Model, endpoint.CapabilityProfile, profile.Model)
 			}
-			if family == provider.FamilyBedrockConverse && profile.ServiceClassesDeclared {
+			if (family == provider.FamilyBedrockMessages || family == provider.FamilyBedrockConverse) && profile.ServiceClassesDeclared {
 				supportedClasses := make(map[llm.ServiceClass]struct{}, len(profile.ServiceClasses))
 				for _, class := range profile.ServiceClasses {
 					supportedClasses[class] = struct{}{}

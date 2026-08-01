@@ -117,7 +117,9 @@ endpoint-pinned: direct Anthropic and AWS-gateway continuation state cannot be
 replayed through the Bedrock adapter without an explicit portable transcript.
 The captured SSE fixtures prove decoder and assembler semantics under
 fragmentation; they are not evidence of an end-to-end client dispatch
-implementation.
+implementation. Runtime route compilation also rejects a Bedrock Messages
+route when its service classes are absent from the selected model capability
+profile's explicit `service_classes` claims.
 
 ### Bedrock Converse fixture boundary
 

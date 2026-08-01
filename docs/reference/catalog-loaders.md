@@ -55,9 +55,13 @@ transform. Family aliases used by config (`azure_openai_responses` and
 `bedrock_anthropic_messages`; `bedrock_converse` maps to the dedicated Bedrock
 Converse provider family) are normalized to their provider family.
 
-During runtime snapshot compilation, Bedrock Converse routes are checked
-against an explicitly declared model service-class set. A route that advertises
-an undeclared class is rejected before any provider adapter can dispatch it.
+During runtime snapshot compilation, Bedrock Messages and Bedrock Converse
+routes are checked against an explicitly declared model service-class set. A
+route that advertises an undeclared class is rejected before any provider
+adapter can dispatch it. This keeps model-specific tier availability (for
+example, a Claude or Nova model that does not support Priority) fail-closed at
+the shared catalog boundary rather than relying on an adapter to reject it
+later.
 
 ## Price documents
 
