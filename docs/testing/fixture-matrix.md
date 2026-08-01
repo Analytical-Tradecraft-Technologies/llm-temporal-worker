@@ -14,6 +14,7 @@ The initial fixture suite defines one exact test profile for each path:
 | `anthropic-direct` | Anthropic Messages | official Anthropic Go SDK | system/tool/thinking/tier behavior |
 | `anthropic-aws` | Claude Platform on AWS Messages | official Anthropic Go SDK AWS support | AWS auth/gateway differences |
 | `bedrock-anthropic` | Amazon Bedrock Messages | official Anthropic Bedrock/Mantle support | Bedrock model/tier/error behavior |
+| `bedrock-converse` | Amazon Bedrock Converse | official AWS Bedrock Runtime Go SDK | one-shot Converse lowering/lifting, usage, and service-tier behavior |
 
 An optional compatible endpoint copies `openrouter-chat`'s common suite but must
 add its own profile directory and difference fixtures before registration.
@@ -70,9 +71,12 @@ each configured `Registration` to the corresponding enforced fixture profile
 when it assembles the deployment registry. Adapter SDK types remain inside
 their owning packages.
 
-The Bedrock suite proves exact opaque-state replay, service-tier
+The Bedrock Messages suite proves exact opaque-state replay, service-tier
 lowering/lifting, classified-error redaction, and captured SSE decoding and
-assembly across deterministic fragment boundaries. Anthropic Direct declares
+assembly across deterministic fragment boundaries. The Bedrock Converse suite
+proves deterministic one-shot request/response lowering and lifting, usage,
+classified-error metadata, and service-tier mapping without enabling live token
+streaming. Anthropic Direct declares
 its native usage, service-class, strict-loss, and continuation paths; its
 checked-in decoder fixture proves parser behavior only. In both cases, captured
 SSE coverage is protocol evidence only; it does not establish a v1 client

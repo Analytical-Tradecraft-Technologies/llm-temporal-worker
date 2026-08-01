@@ -119,6 +119,15 @@ The captured SSE fixtures prove decoder and assembler semantics under
 fragmentation; they are not evidence of an end-to-end client dispatch
 implementation.
 
+### Bedrock Converse fixture boundary
+
+The `bedrock-converse` profile has an enforced offline fixture matrix for the
+official AWS SDK Converse request/response shape, usage accounting, service-tier
+mapping, classified errors, and redaction markers. Converse is deliberately a
+one-shot Temporal activity boundary: these fixtures do not claim credentialed
+AWS execution or live token streaming. Protected live-provider evidence remains
+separate and requires the release-run authorization described in the runbook.
+
 ## OpenAI-compatible endpoints
 
 - [OpenAI Chat Completions](https://platform.openai.com/docs/api-reference/chat)

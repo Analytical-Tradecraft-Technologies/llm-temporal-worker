@@ -1,0 +1,41 @@
+version: 1
+id: bedrock-converse
+provider: aws-bedrock
+family: converse
+coverage: enforced
+metadata: metadata.yaml
+service_classes:
+  economy:
+    requested_tier: flex
+    actual_tier: flex
+  standard:
+    requested_tier: default
+    actual_tier: default
+  priority:
+    requested_tier: priority
+    actual_tier: priority
+cases:
+  - id: semantic-request
+    artifacts:
+      semantic: request.semantic.json
+  - id: captured-wire-request
+    artifacts:
+      wire: request.wire.json
+  - id: response
+    artifacts:
+      wire: response.completed.json
+      semantic: response.semantic.json
+  - id: classified-error
+    artifacts:
+      wire: classified-error.wire.json
+  - id: security-redaction
+    artifacts:
+      wire: security-redaction.wire.json
+  - id: usage-cost
+    artifacts:
+      wire: usage-cost.response.json
+      semantic: usage-cost.semantic.json
+  - id: class-facts
+    artifacts:
+      wire: class-facts.wire.json
+      semantic: class-facts.semantic.json

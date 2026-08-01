@@ -47,6 +47,7 @@
       },
       "implementation_paths": [
         "golang/llm/provider/anthropicmessages/contract_fixture_test.go",
+        "golang/llm/provider/bedrockconverse/contract_fixture_test.go",
         "golang/llm/provider/bedrockmessages/contract_fixture_test.go",
         "golang/llm/provider/contracttest",
         "golang/llm/provider/openaichat/contract_fixture_test.go",
