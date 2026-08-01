@@ -151,6 +151,20 @@ func (keys BudgetKeySpace) ManifestKey(generation BudgetGenerationID) string {
 	return keys.space.admissionPrefix() + "budget:g:" + keys.space.digest("budget-generation", string(generation)) + ":manifest"
 }
 
+// BudgetStatusWindowKey derives the v2 generation-scoped window hash. The
+// generation is part of the HMAC input, so a stale member can never be read
+// under a newly adopted pointer even when its policy/window identity matches.
+func (keys BudgetKeySpace) BudgetStatusWindowKey(generation BudgetGenerationID, member BudgetManifestMember) string {
+	return keys.space.admissionPrefix() + "budget:v2:" + keys.space.digest("budget-status-window", string(generation), member.Key())
+}
+
+// BudgetStatusExpiryKey is the bounded expiry index paired with one v2 window
+// hash. It deliberately has the same Redis hash tag as the window key so one
+// server-side Function invocation can drain and read the complete snapshot.
+func (keys BudgetKeySpace) BudgetStatusExpiryKey(generation BudgetGenerationID, member BudgetManifestMember) string {
+	return keys.space.admissionPrefix() + "budget:v2-expiry:" + keys.space.digest("budget-status-expiry", string(generation), member.Key())
+}
+
 // MemoryBudgetGenerationPort is a deterministic contract implementation used
 // by unit tests and offline readiness checks. A production implementation must
 // publish the manifest and pointer atomically in Redis; this implementation

@@ -40,6 +40,7 @@ targets=(
   "./state FuzzCanonicalTranscriptNeverPanics"
   "./state FuzzCheckpointBlobCodecDecodeDeltaNeverPanics"
   "./storage/redis FuzzBudgetManifestMemberOrder"
+  "./storage/redis FuzzParseBudgetStatusNano"
   "./storage/redis FuzzOperationCodecRoundTrip"
 )
 
