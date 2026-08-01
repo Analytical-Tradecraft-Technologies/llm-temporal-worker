@@ -13,8 +13,8 @@ The initial fixture suite defines one exact test profile for each path:
 | `exa-chat` | OpenAI-compatible Chat | official OpenAI Go SDK with Exa endpoint | answer/search response and reported cost |
 | `anthropic-direct` | Anthropic Messages | official Anthropic Go SDK | system/tool/thinking/tier behavior |
 | `anthropic-aws` | Claude Platform on AWS Messages | official Anthropic Go SDK AWS support | AWS auth/gateway differences |
-| `bedrock-anthropic` | Amazon Bedrock Messages | official Anthropic Bedrock/Mantle support | Bedrock model/tier/error behavior |
-| `bedrock-converse` | Amazon Bedrock Converse | official AWS Bedrock Runtime Go SDK | one-shot Converse lowering/lifting, usage, and service-tier behavior |
+| `bedrock-anthropic` | Amazon Bedrock Messages | official Anthropic Bedrock/Mantle support | enforced Bedrock model/tier/error behavior |
+| `bedrock-converse` | Amazon Bedrock Converse | official AWS Bedrock Runtime Go SDK | enforced one-shot Converse lowering/lifting, usage, and service-tier behavior |
 
 An optional compatible endpoint copies `openrouter-chat`'s common suite but must
 add its own profile directory and difference fixtures before registration.
@@ -167,7 +167,8 @@ service-class facts already verified for that profile:
 | Exa Chat | unsupported (enforced) | profile value | unsupported (enforced) |
 | Anthropic direct | unsupported synchronously | `standard_only` | `auto` only with priority-capacity claim |
 | Anthropic AWS | exact offering profile | exact offering profile | exact offering profile |
-| Bedrock Anthropic | `flex` when supported | `default` | `priority` when supported |
+| Bedrock Messages (`bedrock-anthropic`) | `flex` | `default` | `priority` |
+| Bedrock Converse (`bedrock-converse`) | `flex` | `default` | `priority` |
 
 For every supported priority path, include requested priority/actual standard
 downgrade and requested priority/actual priority. For every unknown provider
@@ -239,6 +240,7 @@ llm/provider/openairesponses/testdata/contracts/azure-responses/
 llm/provider/anthropicmessages/testdata/contracts/anthropic-direct/
 llm/provider/anthropicmessages/testdata/contracts/anthropic-aws/
 llm/provider/bedrockmessages/testdata/contracts/bedrock-anthropic/
+llm/provider/bedrockconverse/testdata/contracts/bedrock-converse/
 ```
 
 Each listed profile has a `manifest.yaml` listing its declared matrix cases.
