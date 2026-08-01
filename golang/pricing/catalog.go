@@ -67,6 +67,14 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 			if _, exists := seenUnknown[component]; exists {
 				return Catalog{}, fmt.Errorf("pricing entry %d repeats unknown component %q", index, component)
 			}
+			// UnknownComponents is an omission marker, not an annotation on a
+			// usable quote. Keeping a non-zero price alongside it would make the
+			// catalog's cost and digest semantics contradictory, so fail closed at
+			// the compilation boundary.
+			price := decimalUSDForComponent(entry.Prices, component)
+			if price.numerator.Sign() != 0 {
+				return Catalog{}, fmt.Errorf("pricing entry %d marks component %q unknown but supplies a non-zero price", index, component)
+			}
 			seenUnknown[component] = struct{}{}
 		}
 		if len(entry.UnknownComponents) > 1 {
@@ -92,6 +100,25 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 	}
 	digest := sha256.Sum256(canonical)
 	return Catalog{Version: version, Entries: copyEntries, Digest: digest}, nil
+}
+
+func decimalUSDForComponent(prices UnitPrices, component PriceComponent) DecimalUSD {
+	switch component {
+	case PriceComponentInput:
+		return prices.InputPerMillion
+	case PriceComponentOutput:
+		return prices.OutputPerMillion
+	case PriceComponentCacheRead:
+		return prices.CacheReadPerMillion
+	case PriceComponentCacheWrite:
+		return prices.CacheWritePerMillion
+	case PriceComponentReasoning:
+		return prices.ReasoningPerMillion
+	case PriceComponentPerRequest:
+		return prices.PerRequest
+	default:
+		return DecimalUSD{}
+	}
 }
 
 func (catalog Catalog) DigestHex() string { return hex.EncodeToString(catalog.Digest[:]) }
