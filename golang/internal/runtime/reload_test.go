@@ -166,7 +166,13 @@ func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
 	signals <- syscall.SIGHUP
 	waitForRuntime(t, func() bool {
 		current := runtime.App.Current()
-		return current != nil && current.Config.ConfigVersion() != oldVersion
+		if current == nil || current.Config.ConfigVersion() == oldVersion {
+			return false
+		}
+		// ReloadFile publishes the replacement snapshot before recording the
+		// outcome metric. Wait for both externally visible effects so this test
+		// does not race RunWithReload after observing the swap.
+		return reloadOutcome(t, runtime.Metrics, "success") == 1
 	})
 	if got := reloadOutcome(t, runtime.Metrics, "success"); got != 1 {
 		t.Fatalf("reload success metric = %v, want 1", got)
