@@ -35,6 +35,8 @@ type composeBuild struct {
 	Context string `yaml:"context"`
 }
 
+const workerPostgresImage = "postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa"
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
@@ -188,6 +190,9 @@ func TestComposeDurableProfileIsolatedFromTemporalStorage(t *testing.T) {
 	if !strings.Contains(workerPostgres.Image, "@sha256:") {
 		t.Errorf("worker-postgres image must be digest pinned, got %q", workerPostgres.Image)
 	}
+	if workerPostgres.Image != workerPostgresImage {
+		t.Errorf("worker-postgres image = %q, want the reviewed PostgreSQL 17.5 pin %q", workerPostgres.Image, workerPostgresImage)
+	}
 	if workerPostgres.Healthcheck == nil {
 		t.Error("worker-postgres must expose a healthcheck")
 	}
@@ -204,7 +209,7 @@ func TestComposeDurableProfileIsolatedFromTemporalStorage(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"worker-postgres-data:/var/lib/postgresql/data",
+		"worker-postgres-data-v17:/var/lib/postgresql/data",
 		"POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}",
 		"POSTGRES_DB: ${LLMTW_WORKER_POSTGRES_DATABASE:-llmtw_worker}",
 		"./deploy/local/durable-config.yaml",

@@ -16,18 +16,19 @@ services:
       start_period: 5s
 
   # Worker state is isolated from Temporal's database and role. The durable
-  # worker profile uses this service for PostgreSQL-authoritative operations,
-  # continuations, results, and control-plane state; Redis remains the active
-  # budget/throttle dependency.
+  # worker profile uses PostgreSQL 17.5 for PostgreSQL-authoritative
+  # operations, continuations, results, and control-plane state; Redis remains
+  # the active budget/throttle dependency. Keep this pin independent from the
+  # Temporal-owned PostgreSQL service above.
   worker-postgres:
     profiles: [durable]
-    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
     environment:
       POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}
       POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
       POSTGRES_DB: ${LLMTW_WORKER_POSTGRES_DATABASE:-llmtw_worker}
     volumes:
-      - worker-postgres-data:/var/lib/postgresql/data
+      - worker-postgres-data-v17:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -292,4 +293,4 @@ volumes:
   blob-data:
   redis-data:
   temporal-postgres-data:
-  worker-postgres-data:
+  worker-postgres-data-v17:
