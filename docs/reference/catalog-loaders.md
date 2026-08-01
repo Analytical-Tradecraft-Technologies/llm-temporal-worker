@@ -108,6 +108,12 @@ reserved for an explicitly quoted free component). `pricing.CostFromUsage` and
 the budget estimator fail closed when a request needs an unknown component, so
 partial catalogs cannot silently undercharge.
 
+Final usage reconciliation also computes the bounded Redis `MicroUSD`
+compatibility projection. If any component or the checked aggregate exceeds
+that safe integer range, `pricing.CostFromUsage` returns an error instead of
+dropping the component or returning an understated compatibility amount; the
+exact USD result is not treated as sufficient to bypass this boundary.
+
 Each entry also retains its optional `source`/`provenance` audit linkage. When
 both are supplied they must agree, and the linkage contributes to the compiled
 catalog digest. Effective intervals allow a new price source to replace an
