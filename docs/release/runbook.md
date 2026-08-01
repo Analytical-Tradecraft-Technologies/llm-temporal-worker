@@ -195,12 +195,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30627454946`](https://github.com/mfow/llm-temporal-worker/actions/runs/30627454946) at revision
-`431e897ec74a4d3687f3d972f495c2e3492c26bd`. The artifact is named
-`release-evidence` (artifact `8792862506`) and has SHA-256 digest
-`efbccdf610380c5893215fa96c32fb8e5169c3a429ec3c2d0a6ce8c6609aecd9`.
+artifact: [workflow run `30696412288`](https://github.com/mfow/llm-temporal-worker/actions/runs/30696412288) at revision
+`22c1b67394dbae97b1651e80d88aab26b765fd17`. The artifact is named
+`release-evidence` (artifact `8817786731`) and has SHA-256 digest
+`sha256:494e4d3d4b420f11a0764c8e15d23951cb78afdce3cdfc842a78be851e38bbfa`.
 The retained bundle binds the immutable image descriptor
-`sha256:1055d98fcf7309da3807f112d51544f29743fc2cfa84aa22164a546d7ed34646`.
+`sha256:c3f077c9c08b69e1b7b26d3d55186971479a0089eec7f2aae6d274eedefccd10`.
 The catalog refresh binds the thirteen already-recorded offline requirements
 to this successful master run. Pending protected-provider and publication
 requirements, plus the two unrecorded SLO measurements, remain unchanged.
@@ -218,10 +218,16 @@ the only run bound to the retained release-evidence artifact.
 
 | Change | Merge commit | Pull-request run |
 | --- | --- | --- |
-| [#263](https://github.com/mfow/llm-temporal-worker/pull/263) closed tagged schema boundaries | `97a1c7d688bcdd65640b587621d16ecca7969218` | [29891380461](https://github.com/mfow/llm-temporal-worker/actions/runs/29891380461) |
-| [#265](https://github.com/mfow/llm-temporal-worker/pull/265) added the typed PostgreSQL spend-summary read | `943b4f424ac4b4cb0461a0790add398f066545bf` | [29905847340](https://github.com/mfow/llm-temporal-worker/actions/runs/29905847340) |
-| [#266](https://github.com/mfow/llm-temporal-worker/pull/266) proved resumable polling across worker restart | `13b9f3cc066e1214ab5919577d812050769fc0b3` | [29918566908](https://github.com/mfow/llm-temporal-worker/actions/runs/29918566908) |
-| [#267](https://github.com/mfow/llm-temporal-worker/pull/267) fenced reclaimed maintenance leases | `6d5c23ac36416a9971bf29759a8c973f9180203b` | [29917652182](https://github.com/mfow/llm-temporal-worker/actions/runs/29917652182) |
+| [#518](https://github.com/mfow/llm-temporal-worker/pull/518) exposed a bounded blob GC pass | `7c9abb75c812c6ae01b8ee859ab1d53d6079ab40` | [30686123604](https://github.com/mfow/llm-temporal-worker/actions/runs/30686123604) |
+| [#519](https://github.com/mfow/llm-temporal-worker/pull/519) rejected unconfigured durable snapshots | `ab10512d99ac6dba13c43eef6d1e4d59f80c8400` | [30686821983](https://github.com/mfow/llm-temporal-worker/actions/runs/30686821983) |
+| [#520](https://github.com/mfow/llm-temporal-worker/pull/520) rejected duplicate rendered resources | `bed7279fd4897bb31a008041f77c863195976dc5` | [30687532246](https://github.com/mfow/llm-temporal-worker/actions/runs/30687532246) |
+| [#521](https://github.com/mfow/llm-temporal-worker/pull/521) added the AWS Bedrock Converse provider | `74580a11a350c7416997a2c19b2f8468cb8f9391` | [30688580467](https://github.com/mfow/llm-temporal-worker/actions/runs/30688580467) |
+| [#522](https://github.com/mfow/llm-temporal-worker/pull/522) failed closed on compatibility cost overflow | `e219e9947315304e6e9aa22576410a6e436d1900` | [30691007589](https://github.com/mfow/llm-temporal-worker/actions/runs/30691007589) |
+| [#523](https://github.com/mfow/llm-temporal-worker/pull/523) enforced Bedrock Converse contract coverage | `99359059d22052d518886d906ae3a4ef483f9b9c` | [30691762227](https://github.com/mfow/llm-temporal-worker/actions/runs/30691762227) |
+| [#524](https://github.com/mfow/llm-temporal-worker/pull/524) added a versioned Redis budget-status reader | `f985f13feba4dc4d24608ff64c81643c9653e0a7` | [30692464558](https://github.com/mfow/llm-temporal-worker/actions/runs/30692464558) |
+| [#525](https://github.com/mfow/llm-temporal-worker/pull/525) pinned worker PostgreSQL to 17.5 | `ff48d61d4c34cf96b908bc8a46db12de03928195` | [30695089609](https://github.com/mfow/llm-temporal-worker/actions/runs/30695089609) |
+| [#526](https://github.com/mfow/llm-temporal-worker/pull/526) used a tier-capable Converse fixture model | `46ee4431a97843cd58f785c8b074565bf5b81524` | [30694499334](https://github.com/mfow/llm-temporal-worker/actions/runs/30694499334) |
+| [#528](https://github.com/mfow/llm-temporal-worker/pull/528) failed closed on unsupported Bedrock model tiers | `22c1b67394dbae97b1651e80d88aab26b765fd17` | [30695814354](https://github.com/mfow/llm-temporal-worker/actions/runs/30695814354) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
