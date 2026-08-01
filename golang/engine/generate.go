@@ -232,6 +232,15 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 		}
 		estimate, err := engine.dependencies.Estimator.EstimateCandidate(request, candidate, entry)
 		if err != nil {
+			if errors.Is(err, budget.ErrUnusablePrice) {
+				// A partial entry or a compatibility-boundary overflow is not a
+				// safe reservation for this candidate. Unlike a missing quote,
+				// an active partial entry must never be dispatched as unknown:
+				// its presence cannot authorize an unpriced operation. Continue
+				// to the next ordered fallback instead.
+				skippedForPrice = true
+				continue
+			}
 			return quotedPlan{}, engineError(provider.CodeInvalidArgument, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate cost estimate failed", err)
 		}
 		reservations := reservations(matches, estimate.MicroUSD, estimate.CostUSD, now)

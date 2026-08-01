@@ -108,8 +108,16 @@ NULLs and separately report unknown operation counts.
 The current YAML loader carries omitted components as an `unknown` marker on
 the compiled pricing entry. Costing and reservation estimation fail closed if
 the request needs that component; omission is never decoded as a free USD
-price. The marker is the in-memory boundary for the nullable/partial catalog
-state described above and will map directly to the durable NULL/status fields.
+price. During ordered route planning, an entry with an unknown required
+component or a compatibility-boundary overflow is an unusable quote for that
+candidate: the engine records the safe no-price condition and continues to the
+next authorized fallback. It only fails the plan when no candidate remains.
+An active partial entry is never dispatched as an unknown-cost operation; the
+explicit unpriced policy applies only when the resolver has no active entry at
+all and the candidate has no matching monetary budget. Tokenizer, request, and
+estimator configuration errors remain hard planning failures. The marker is the
+in-memory boundary for the nullable/partial catalog state described above and
+will map directly to the durable NULL/status fields.
 
 ## Estimation
 

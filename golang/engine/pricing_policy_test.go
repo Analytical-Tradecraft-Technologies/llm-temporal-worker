@@ -11,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 )
 
 func TestGenerateSkipsBudgetedUnpricedCandidateAndUsesPricedFallback(t *testing.T) {
@@ -67,6 +68,91 @@ func TestGenerateAllowsUnbudgetedUnpricedCandidateWithUnknownCost(t *testing.T) 
 	if operation.ReservedMicroUSD != 0 || operation.IncurredMicroUSD != 0 || operation.PriceVersion != "" {
 		t.Fatalf("unpriced operation = %#v, want zero unknown-price accounting", operation)
 	}
+}
+
+func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
+	partial := priceEntryForTier("priority-tier")
+	partial.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentInput}
+	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, priceEntryForTier("standard-tier")))
+	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+
+	request := baseRequest("skip-active-partial-price")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	response, err := harness.engine.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Service.Attempted != llm.ServiceClassStandard || response.Cost.Status != llm.CostStatusKnown {
+		t.Fatalf("response = %#v, want complete standard fallback", response)
+	}
+	adapter.mu.Lock()
+	calls := append([]provider.Call(nil), adapter.calls...)
+	adapter.mu.Unlock()
+	if len(calls) != 1 || calls[0].ServiceClass != llm.ServiceClassStandard {
+		t.Fatalf("provider calls = %#v, want only standard fallback", calls)
+	}
+}
+
+func TestGenerateReturnsNoRouteWhenAllCandidatePricesAreUnusable(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
+	partial := priceEntryForTier("priority-tier")
+	partial.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentInput}
+	overflow := priceEntryForTier("standard-tier")
+	// The exact USD value is valid, but the legacy Redis microUSD projection
+	// cannot represent it. The candidate must not abort planning for the route
+	// that follows it, nor can it be admitted itself.
+	overflow.Prices.PerRequest = pricing.MustDecimalUSD("99999999999999999999")
+	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, overflow))
+	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+
+	request := baseRequest("all-unusable-prices")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	_, err := harness.engine.Generate(context.Background(), request)
+	if err == nil {
+		t.Fatal("all unusable candidates unexpectedly dispatched")
+	}
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Code != provider.CodeNoRoute || mapped.Phase != provider.PhasePrice || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("error = %#v, want no-route price failure", err)
+	}
+	if mapped.SafeDetails["reason"] != "no_eligible_price" {
+		t.Fatalf("safe details = %#v, want no_eligible_price", mapped.SafeDetails)
+	}
+	requireNoOperation(t, harness, request)
+	adapter.mu.Lock()
+	invokes := adapter.invokes
+	adapter.mu.Unlock()
+	if invokes != 0 {
+		t.Fatalf("provider invoke count = %d, want zero", invokes)
+	}
+}
+
+func TestGenerateKeepsTokenizerErrorsFatal(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	harness.engine.dependencies.Estimator = budget.Estimator{Tokenizer: func(llm.Request, routing.Candidate) (int64, error) {
+		return 0, errors.New("tokenizer unavailable")
+	}}
+
+	request := baseRequest("tokenizer-error-is-fatal")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	_, err := harness.engine.Generate(context.Background(), request)
+	if err == nil {
+		t.Fatal("tokenizer error unexpectedly fell back")
+	}
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Phase != provider.PhasePrice || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+		t.Fatalf("error = %#v, want fatal price-estimate failure", err)
+	}
+	requireNoOperation(t, harness, request)
 }
 
 func TestGenerateRejectsUnavailablePriceWhenPolicyRequiresIt(t *testing.T) {
