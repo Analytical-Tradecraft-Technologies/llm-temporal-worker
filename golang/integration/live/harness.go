@@ -65,6 +65,10 @@ type Profile struct {
 	Prompt                  string
 	ServiceClass            llm.ServiceClass
 	ContinuationExpectation ContinuationExpectation
+	// ResponseIDRequired is false for providers such as Bedrock Converse whose
+	// one-shot response exposes only an AWS request ID. Evidence records the
+	// response ID as not_reported rather than manufacturing a provider ID.
+	ResponseIDRequired bool
 }
 
 var profiles = []Profile{
@@ -76,6 +80,7 @@ var profiles = []Profile{
 	newProfile("anthropic-direct", "LLMTW_LIVE_ANTHROPIC_DIRECT", "claude-3-5-haiku-latest", CredentialSource{Kind: "header_env", Environment: "ANTHROPIC_API_KEY"}, ContinuationPinned),
 	newProfile("anthropic-aws", "LLMTW_LIVE_ANTHROPIC_AWS", "claude-3-5-haiku-latest", CredentialSource{Kind: "aws_default_chain"}, ContinuationPinned),
 	newProfile("bedrock-anthropic", "LLMTW_LIVE_BEDROCK_ANTHROPIC", "anthropic.claude-3-5-haiku-20241022-v1:0", CredentialSource{Kind: "aws_default_chain"}, ContinuationPinned),
+	newProfileWithoutResponseID("bedrock-converse", "LLMTW_LIVE_BEDROCK_CONVERSE", "amazon.nova-pro-v1:0", CredentialSource{Kind: "aws_default_chain"}, ContinuationUnsupported),
 }
 
 func newProfile(id, enableEnv, model string, credential CredentialSource, continuation ContinuationExpectation) Profile {
@@ -90,7 +95,14 @@ func newProfile(id, enableEnv, model string, credential CredentialSource, contin
 		Prompt:                  livePrompt,
 		ServiceClass:            llm.ServiceClassStandard,
 		ContinuationExpectation: continuation,
+		ResponseIDRequired:      true,
 	}
+}
+
+func newProfileWithoutResponseID(id, enableEnv, model string, credential CredentialSource, continuation ContinuationExpectation) Profile {
+	profile := newProfile(id, enableEnv, model, credential, continuation)
+	profile.ResponseIDRequired = false
+	return profile
 }
 
 // Profiles returns defensive copies so a test cannot mutate the registered
@@ -184,7 +196,7 @@ func validateResponse(profile Profile, response llm.Response) (Evidence, error) 
 	if response.Provider.RequestID == "" {
 		return Evidence{}, fmt.Errorf("profile %s response is missing a request ID", profile.ID)
 	}
-	if response.Provider.ResponseID == "" {
+	if profile.ResponseIDRequired && response.Provider.ResponseID == "" {
 		return Evidence{}, fmt.Errorf("profile %s response is missing a response ID", profile.ID)
 	}
 	if response.Service.Requested != profile.ServiceClass || response.Service.Attempted != profile.ServiceClass {

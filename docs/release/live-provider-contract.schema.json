@@ -38,7 +38,8 @@
         "exa-chat",
         "anthropic-direct",
         "anthropic-aws",
-        "bedrock-anthropic"
+        "bedrock-anthropic",
+        "bedrock-converse"
       ]
     },
     "tenant": {

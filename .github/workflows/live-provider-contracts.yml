@@ -19,6 +19,7 @@ on:
           - anthropic-direct
           - anthropic-aws
           - bedrock-anthropic
+          - bedrock-converse
 
 # Keep the default token read-only. Provider credentials are never passed to a
 # checkout, recorder, or artifact uploader; only the selected probe step
@@ -48,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$PROFILE" in
-            openai-responses|azure-responses|openai-chat|openrouter-chat|exa-chat|anthropic-direct|anthropic-aws|bedrock-anthropic)
+            openai-responses|azure-responses|openai-chat|openrouter-chat|exa-chat|anthropic-direct|anthropic-aws|bedrock-anthropic|bedrock-converse)
               ;;
             *)
               echo "profile must be one checked-in live-provider contract" >&2
@@ -906,6 +907,117 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: live-provider-contract-bedrock-anthropic-evidence
+          path: |
+            ${{ runner.temp }}/live-contract-evidence.json
+            ${{ runner.temp }}/live-contract-evidence.log
+          if-no-files-found: error
+          retention-days: 14
+
+  bedrock-converse:
+    needs: validate-request
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.profile == 'bedrock-converse'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: live-provider-contracts
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out fixed public master anonymously
+        shell: bash
+        env:
+          TRUSTED_MASTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
+            echo "anonymous checkout requires an empty workspace" >&2
+            exit 1
+          }
+          if [[ ! "$TRUSTED_MASTER_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "protected workflow revision is invalid" >&2
+            exit 1
+          fi
+          export HOME="$RUNNER_TEMP/anonymous-git-home"
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_TERMINAL_PROMPT=0
+          export GIT_ASKPASS=/bin/false
+          mkdir -p "$HOME"
+          git init --quiet "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
+            +refs/heads/master:refs/remotes/origin/master
+          fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
+          if [[ "$fetched_master" != "$TRUSTED_MASTER_SHA" ]]; then
+            echo "public master moved after this protected workflow started" >&2
+            exit 1
+          fi
+          git -C "$GITHUB_WORKSPACE" checkout --detach --force "$TRUSTED_MASTER_SHA"
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: golang/.go-version
+          token: ""
+          cache: "false"
+
+      - name: Acquire AWS workload identity
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        with:
+          role-to-assume: ${{ vars.LLMTW_LIVE_AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: llmtw-live-contract
+
+      - name: Run bounded live provider contract
+        working-directory: golang
+        shell: bash
+        env:
+          LLMTW_LIVE_TESTS: "1"
+          LLMTW_LIVE_AUTHORIZED: "1"
+          LLMTW_LIVE_BEDROCK_CONVERSE: "1"
+        run: |
+          set -euo pipefail
+          go test -v -tags=live ./integration/live -run '^TestLiveProviderContracts$/^bedrock-converse$' > "$RUNNER_TEMP/live-contract.raw.log" 2>&1
+
+      - name: Clear credential variables
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo 'OPENAI_API_KEY='
+            echo 'OPENROUTER_API_KEY='
+            echo 'EXA_API_KEY='
+            echo 'ANTHROPIC_API_KEY='
+            echo 'AWS_ACCESS_KEY_ID='
+            echo 'AWS_SECRET_ACCESS_KEY='
+            echo 'AWS_SESSION_TOKEN='
+            echo 'AWS_WEB_IDENTITY_TOKEN_FILE='
+            echo 'AZURE_CLIENT_ID='
+            echo 'AZURE_TENANT_ID='
+            echo 'AZURE_FEDERATED_TOKEN_FILE='
+          } >> "$GITHUB_ENV"
+
+      - name: Record and verify redacted live evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
+            python3 scripts/release/live-contract-evidence.py record \
+              --profile bedrock-converse \
+              --input "$RUNNER_TEMP/live-contract.raw.log" \
+              --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
+          env -i PATH="$PATH" HOME="$RUNNER_TEMP/live-contract-recorder-home" RUNNER_TEMP="$RUNNER_TEMP" \
+            python3 scripts/release/live-contract-evidence.py verify \
+              --evidence "$RUNNER_TEMP/live-contract-evidence.json" \
+              --log "$RUNNER_TEMP/live-contract-evidence.log" \
+              --source-revision "${{ github.sha }}"
+
+      - name: Upload redacted live-provider evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-provider-contract-bedrock-converse-evidence
           path: |
             ${{ runner.temp }}/live-contract-evidence.json
             ${{ runner.temp }}/live-contract-evidence.log

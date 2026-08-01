@@ -296,6 +296,44 @@
       }
     },
     {
+      "id": "v1.contract.live-provider.bedrock-converse",
+      "source": {
+        "path": "docs/reference/live-provider-contracts.md",
+        "anchor": "#pinned-profiles",
+        "quote": "bedrock-converse"
+      },
+      "implementation_paths": [
+        ".github/workflows/live-provider-contracts.yml",
+        "golang/integration/live/harness.go",
+        "golang/integration/live/runner.go",
+        "golang/internal/architecturetest/live_provider_workflow_test.go"
+      ],
+      "verification": {
+        "make_targets": [
+          "test",
+          "workflow-verify"
+        ],
+        "workflow_jobs": [
+          {
+            "path": ".github/workflows/live-provider-contracts.yml",
+            "job": "bedrock-converse"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify"
+          },
+          {
+            "path": ".github/workflows/pull-request.yml",
+            "job": "verify"
+          }
+        ]
+      },
+      "evidence": {
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
+      }
+    },
+    {
       "id": "v1.contract.live-provider.exa-chat",
       "source": {
         "path": "docs/reference/live-provider-contracts.md",

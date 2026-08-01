@@ -26,6 +26,7 @@ func TestFamilyForProfilePinsTheProtocol(t *testing.T) {
 		"anthropic-direct":  provider.FamilyAnthropicMessages,
 		"anthropic-aws":     provider.FamilyAnthropicMessages,
 		"bedrock-anthropic": provider.FamilyBedrockMessages,
+		"bedrock-converse":  provider.FamilyBedrockConverse,
 	}
 
 	for _, profile := range Profiles() {
