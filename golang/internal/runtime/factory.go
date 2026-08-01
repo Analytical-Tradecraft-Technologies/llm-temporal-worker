@@ -324,6 +324,15 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	value := snapshot.Config()
+	// A production durable snapshot must never return the legacy engine and
+	// Redis continuation/result stores without an explicit v1 composition
+	// builder. Runtime.Start has a second readiness guard, but rejecting the
+	// snapshot here prevents callers that use EngineFactory directly from
+	// accidentally treating that legacy bundle as a durable worker. The check
+	// runs before provider credentials or state clients are constructed.
+	if err := requireDurableV1RuntimeBuilder(value, factory.options.V1RuntimeBuilder); err != nil {
+		return nil, nil, err
+	}
 	engineSnapshot, err := factory.options.SnapshotLoader.Load(ctx, snapshot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load engine snapshot: %w", err)

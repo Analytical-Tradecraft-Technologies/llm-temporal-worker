@@ -132,6 +132,11 @@ The following blockers are intentionally still open:
    boundary is documented in
    [`postgresql-repository-foundation.md`](../../reference/postgresql-repository-foundation.md)
    and [`internal/runtime/factory.go`](../../../golang/internal/runtime/factory.go).
+   A production durable snapshot without a `V1RuntimeBuilder` is now rejected
+   before external clients are constructed, so the legacy Redis
+   continuation/result stores cannot be returned as if they were the durable
+   v1 runtime. This is an early fail-closed guard only; it does not compose
+   Task 19 state or provide protected recovery evidence.
    Enabling it requires deployment-owned blob locators, key bindings,
    authorization, and protected Redis/PostgreSQL failure tests.
 2. **Task 20 operations.** There is no worker maintenance command: the
