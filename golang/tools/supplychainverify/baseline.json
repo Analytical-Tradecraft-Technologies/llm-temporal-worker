@@ -27,7 +27,7 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2",
-      "version": "v1.43.0",
+      "version": "v1.43.3",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
@@ -50,8 +50,14 @@
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
     {
+      "path": "github.com/aws/aws-sdk-go-v2/service/bedrockruntime",
+      "version": "v1.57.0",
+      "license": "Apache-2.0",
+      "source": "https://github.com/aws/aws-sdk-go-v2"
+    },
+    {
       "path": "github.com/aws/smithy-go",
-      "version": "v1.27.5",
+      "version": "v1.27.6",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/smithy-go"
     },

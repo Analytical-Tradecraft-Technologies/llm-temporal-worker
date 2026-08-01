@@ -33,6 +33,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockconverse"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockmessages"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openaichat"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openairesponses"
@@ -70,10 +71,11 @@ const (
 // derive safe generic profiles from the compiled route snapshot. Specialized
 // OpenRouter/Exa profiles should be supplied explicitly.
 type EndpointProfile struct {
-	ChatDialect ChatDialect
-	Chat        *openaichat.Profile
-	Anthropic   *anthropicmessages.Profile
-	Bedrock     *bedrockmessages.Profile
+	ChatDialect     ChatDialect
+	Chat            *openaichat.Profile
+	Anthropic       *anthropicmessages.Profile
+	Bedrock         *bedrockmessages.Profile
+	BedrockConverse *bedrockconverse.Profile
 }
 
 type RedisFactory func(context.Context, config.RedisConfig, string, string) (redis.UniversalClient, error)
@@ -983,6 +985,23 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
 		return bedrockmessages.NewAdapter(bedrockClient, endpointID, *bedrockProfile)
+	case "bedrock_converse":
+		if endpoint.Auth.Kind != "aws_default_chain" {
+			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
+		}
+		bedrockProfile, err := factory.bedrockConverseProfile(endpointID, endpoint, capabilities, profile)
+		if err != nil {
+			return nil, err
+		}
+		awsValue, err := factory.options.AWSConfigFactory(ctx, endpoint.Region)
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %q: create AWS config: %w", endpointID, err)
+		}
+		bedrockClient, err := bedrockconverse.NewClient(ctx, bedrockconverse.ClientConfig{BaseURL: endpoint.BaseURL, HTTPClient: client, AWSConfig: awsValue})
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+		}
+		return bedrockconverse.NewAdapter(bedrockClient, endpointID, *bedrockProfile)
 	default:
 		return nil, fmt.Errorf("endpoint %q: unsupported provider family %q", endpointID, endpoint.Family)
 	}
@@ -1122,6 +1141,19 @@ func (factory *ProductionEngineFactory) bedrockProfile(endpointID string, endpoi
 	}
 	tiers, actual := endpointTiers(endpoint)
 	value, err := bedrockmessages.NewProfile(bedrockmessages.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ExpectedBaseURL: endpoint.BaseURL})
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+	}
+	return &value, nil
+}
+
+func (factory *ProductionEngineFactory) bedrockConverseProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile) (*bedrockconverse.Profile, error) {
+	if supplied.BedrockConverse != nil {
+		copy := *supplied.BedrockConverse
+		return &copy, nil
+	}
+	tiers, actual := endpointTiers(endpoint)
+	value, err := bedrockconverse.NewProfile(bedrockconverse.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ExpectedBaseURL: endpoint.BaseURL})
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 	}

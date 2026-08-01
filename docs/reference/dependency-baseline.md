@@ -26,15 +26,16 @@ the `llm` package.
 | `github.com/Azure/azure-sdk-for-go/sdk/azcore` | `v1.22.0` | Official Azure OpenAI endpoint/auth middleware used by the Chat profile | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
 | `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | `v1.14.0` | Azure workload/default credential resolution | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
 | `github.com/anthropics/anthropic-sdk-go` | `v1.61.0` | Official Anthropic Messages client | MIT; [official repository](https://github.com/anthropics/anthropic-sdk-go) |
-| `github.com/aws/aws-sdk-go-v2` | `v1.43.0` | AWS SDK base types and request configuration | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/aws-sdk-go-v2` | `v1.43.3` | AWS SDK base types and request configuration | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/aws/aws-sdk-go-v2/config` | `v1.32.31` | AWS region and default credential-chain loading | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/aws/aws-sdk-go-v2/credentials` | `v1.19.30` | Explicit AWS credential providers used by runtime composition | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | `v1.57.0` | Official AWS Bedrock Runtime Converse API client | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | Local Draft 2020-12 schema compilation and validation | MIT; [official repository](https://github.com/santhosh-tekuri/jsonschema-go) |
 | `go.yaml.in/yaml/v4` | `v4.0.0-rc.6` | Strict YAML configuration parsing | MIT; [official repository](https://github.com/yaml/go-yaml) |
 | `go.temporal.io/api` | `v1.63.4` | Temporal API protocol types used by the worker boundary | MIT; [official repository](https://github.com/temporalio/api) |
 | `go.temporal.io/sdk` | `v1.46.0` | Temporal Activity payload, heartbeat, error, and worker registration boundary | MIT; [official release](https://github.com/temporalio/sdk-go/releases/tag/v1.46.0) |
 | `github.com/aws/aws-sdk-go-v2/service/s3` | `v1.106.0` | Official AWS S3 client for production content-addressed blobs | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/aws/smithy-go` | `v1.27.5` | AWS SDK transport and protocol support | Apache-2.0; [official repository](https://github.com/aws/smithy-go) |
+| `github.com/aws/smithy-go` | `v1.27.6` | AWS SDK transport and protocol support | Apache-2.0; [official repository](https://github.com/aws/smithy-go) |
 | `github.com/google/uuid` | `v1.6.0` | UUIDv7 identifiers for durable repository records | BSD-3-Clause; [official repository](https://github.com/google/uuid) |
 | `github.com/jackc/pgx/v5` | `v5.10.0` | PostgreSQL pool, transactions, and typed durable repositories | MIT; [official repository](https://github.com/jackc/pgx) |
 | `github.com/prometheus/client_golang` | `v1.24.1` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |

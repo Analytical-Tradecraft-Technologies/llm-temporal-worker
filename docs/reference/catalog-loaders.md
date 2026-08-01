@@ -47,7 +47,8 @@ The loader converts claims to `provider.CapabilitySet`; `reference` is
 validated as a known catalog claim but is not emitted because the provider
 port has no external-reference feature. An `emulated` claim must name a
 transform. Family aliases used by config (`azure_openai_responses` and
-`bedrock_anthropic_messages`) are normalized to their provider family.
+`bedrock_anthropic_messages`; `bedrock_converse` maps to the dedicated Bedrock
+Converse provider family) are normalized to their provider family.
 
 ## Price documents
 

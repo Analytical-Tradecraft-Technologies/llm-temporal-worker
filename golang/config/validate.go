@@ -21,6 +21,7 @@ var supportedFamilies = map[string]struct{}{
 	"anthropic_messages":         {},
 	"anthropic_aws_messages":     {},
 	"bedrock_anthropic_messages": {},
+	"bedrock_converse":           {},
 }
 
 var postgresNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
@@ -442,7 +443,7 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 	}
 	baseHost := ""
 	var err error
-	if endpoint.Family == "bedrock_anthropic_messages" {
+	if endpoint.Family == "bedrock_anthropic_messages" || endpoint.Family == "bedrock_converse" {
 		if endpoint.Region == "" {
 			return fmt.Errorf("%s.region is required for Bedrock", path)
 		}

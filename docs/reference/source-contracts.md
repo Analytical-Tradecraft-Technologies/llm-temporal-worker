@@ -93,6 +93,10 @@ model, economy-tier, continuation, or token-event availability.
   region, workspace ID, and base URL.
 - [Amazon Bedrock service tiers](https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html)
   define flex, default, priority, and reserved behavior and availability.
+- [Amazon Bedrock Converse API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
+  defines the one-shot model invocation request/response union used by the
+  `bedrock_converse` adapter, including tool-use blocks, usage, stop reasons,
+  and service-tier reporting.
 
 Design consequence: direct synchronous Anthropic has no assumed economy mapping.
 `anthropic_aws_messages` supplies the AWS gateway base URL, region, and

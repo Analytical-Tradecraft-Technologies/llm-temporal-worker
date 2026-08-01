@@ -334,6 +334,9 @@ func endpointFamily(value string) provider.Family {
 	if value == "bedrock_anthropic_messages" {
 		return provider.FamilyBedrockMessages
 	}
+	if value == "bedrock_converse" {
+		return provider.FamilyBedrockConverse
+	}
 	return provider.Family(value)
 }
 
