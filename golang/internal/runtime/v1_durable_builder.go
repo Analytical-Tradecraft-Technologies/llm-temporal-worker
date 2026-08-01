@@ -48,11 +48,26 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 		if err := capabilities.ValidateCompact(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
 		}
-		generate, err := capabilities.GeneratePortsFactory(ctx, capabilities)
+		// Bind one validated composition to both phase factories. This keeps
+		// PostgreSQL operation state, the write-only journal, and Redis active
+		// budgets on the same snapshot identity across Generate and Compact.
+		// A missing factory remains valid for contract-only tests and lets the
+		// deployment-owned phase factories use their direct capabilities; when
+		// configured, however, an invalid result fails before either phase
+		// factory can construct ports.
+		phaseCapabilities := capabilities
+		if capabilities.CompositionFactory != nil {
+			composition, err := capabilities.BuildDurableComposition(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
+			}
+			phaseCapabilities.composition = &composition
+		}
+		generate, err := phaseCapabilities.GeneratePortsFactory(ctx, phaseCapabilities)
 		if err != nil {
 			return nil, fmt.Errorf("%w: construct Generate ports: %v", ErrDurableV1Composition, err)
 		}
-		compact, err := capabilities.CompactPortsFactory(ctx, capabilities)
+		compact, err := phaseCapabilities.CompactPortsFactory(ctx, phaseCapabilities)
 		if err != nil {
 			return nil, fmt.Errorf("%w: construct Compact ports: %v", ErrDurableV1Composition, err)
 		}

@@ -190,10 +190,16 @@ type V1RuntimeCapabilities struct {
 	Journal durablestore.Journal
 	// CompositionFactory is the Task 19 seam for the snapshot-owned
 	// PostgreSQL/Redis responsibility split. It is optional while deployments
-	// still use the preparatory phase factories; when selected, callers must
-	// invoke BuildDurableComposition and fail closed on a missing factory or
-	// incomplete returned Composition.
-	CompositionFactory     DurableCompositionFactory
+	// still use the preparatory phase factories. The complete durable builder
+	// invokes BuildDurableComposition once and passes its validated value to
+	// both phase factories; custom builders may invoke the helper explicitly.
+	CompositionFactory DurableCompositionFactory
+	// composition is populated only by the complete durable builder after it
+	// has invoked and validated CompositionFactory. Keeping it private prevents
+	// a deployment callback from mutating the snapshot-owned value in place;
+	// DurableComposition returns a copy for phase factories to bind to their
+	// callbacks.
+	composition            *durablestore.Composition
 	ProviderStatusRecorder engine.ProviderStatusRecorder
 	Clock                  func() time.Time
 	// GeneratePortsFactory is a per-snapshot constructor for the storage-
@@ -210,6 +216,18 @@ type V1RuntimeCapabilities struct {
 	CompactPortsFactory CompactPortsFactory
 }
 
+// DurableComposition returns the validated PostgreSQL/Redis state boundary
+// attached to this immutable capability bundle. The boolean is false when no
+// composition factory was configured. A value is returned rather than the
+// internal pointer so phase factories cannot mutate a sibling phase's
+// snapshot-owned composition while constructing their ports.
+func (capabilities V1RuntimeCapabilities) DurableComposition() (durablestore.Composition, bool) {
+	if capabilities.composition == nil {
+		return durablestore.Composition{}, false
+	}
+	return *capabilities.composition, true
+}
+
 // BuildDurableComposition invokes and validates the optional snapshot-owned
 // composition factory. Validation is intentionally completed after the
 // factory returns and before any caller can attach the value to an Activity.
@@ -218,6 +236,14 @@ func (capabilities V1RuntimeCapabilities) BuildDurableComposition(ctx context.Co
 	var zero durablestore.Composition
 	if ctx == nil {
 		return zero, errors.New("durable composition context is nil")
+	}
+	// A complete durable builder attaches the already validated value before
+	// invoking phase factories. Reuse it if a phase callback asks for the
+	// helper again; otherwise a per-call factory could silently construct a
+	// second PostgreSQL/Redis identity and violate the once-per-snapshot
+	// boundary.
+	if capabilities.composition != nil {
+		return *capabilities.composition, nil
 	}
 	if capabilities.CompositionFactory == nil {
 		return zero, errors.New("durable composition factory is not configured")
