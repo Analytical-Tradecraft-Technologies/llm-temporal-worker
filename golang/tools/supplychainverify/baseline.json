@@ -128,6 +128,12 @@
       "source": "https://github.com/open-telemetry/opentelemetry-go"
     },
     {
+      "path": "go.temporal.io/api",
+      "version": "v1.63.4",
+      "license": "MIT",
+      "source": "https://github.com/temporalio/api"
+    },
+    {
       "path": "go.temporal.io/sdk",
       "version": "v1.47.0",
       "license": "MIT",
