@@ -158,6 +158,20 @@ contract:
    instant, generation, manifest digest, and Stream high-water mark must all
    be captured and validated by the same coherent read.
 
+The Go storage adapter is `redis.NewRedisBudgetStatusReader`. Its v2 window
+keys are derived from the generation and canonical `policy_id`/`window_id`
+member key, and each member hash must carry `budget-window/v2`, the generation,
+incarnation, manifest digest, member key, and the three nano-USD accounting
+fields. `BudgetManifestMember.limit_nano_usd` is required for this reader;
+older manifests that omit it remain valid only for generation adoption and are
+not a `budget_status` source. The adapter invokes the preloaded
+`budget_status_v2` Redis Function (or its explicitly configured Lua SHA) once
+for the full catalog. The Function drains at most the configured expiry bound,
+performs fixed-field `HMGET` for every member, and captures `XINFO STREAM`'s
+high-water mark. The adapter has the method shape of
+`internal/runtime.BudgetStatusReader`, so deployments can pass it directly as
+the snapshot-owned `PersistedQueryOptions.BudgetStatus` seam.
+
 Migration is an explicit, fenced operation. A v1/legacy active pointer keeps
 `budget_status` unavailable; there is no in-place reinterpretation, automatic
 dual-read, or PostgreSQL fallback. The deployment must build a complete v2

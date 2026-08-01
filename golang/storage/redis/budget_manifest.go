@@ -58,6 +58,10 @@ type BudgetManifestMember struct {
 	BucketCount         int           `json:"bucket_count"`
 	BucketWidth         time.Duration `json:"bucket_width_ns"`
 	BucketCatalogDigest string        `json:"bucket_catalog_digest"`
+	// LimitNanoUSD is required by the versioned budget-status reader. It is
+	// optional for the older generation-adoption contract so legacy manifests
+	// continue to validate but can never be exposed as budget_status data.
+	LimitNanoUSD string `json:"limit_nano_usd,omitempty"`
 }
 
 // Key is the stable, non-secret identity used in the expected member catalog.
