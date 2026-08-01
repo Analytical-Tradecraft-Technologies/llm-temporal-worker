@@ -76,7 +76,10 @@ lowering/lifting, classified-error redaction, and captured SSE decoding and
 assembly across deterministic fragment boundaries. The Bedrock Converse suite
 proves deterministic one-shot request/response lowering and lifting, usage,
 classified-error metadata, and service-tier mapping without enabling live token
-streaming. Anthropic Direct declares
+streaming. Its three-class matrix is pinned to Amazon Nova Pro
+(`amazon.nova-pro-v1:0`), which AWS documents as supporting Standard, Priority,
+and Flex; Amazon Nova Lite (`amazon.nova-lite-v1:0`) is Standard-only and is
+therefore not used for those tier fixtures. Anthropic Direct declares
 its native usage, service-class, strict-loss, and continuation paths; its
 checked-in decoder fixture proves parser behavior only. In both cases, captured
 SSE coverage is protocol evidence only; it does not establish a v1 client

@@ -35,6 +35,17 @@ the response tier back to the public class. Model identifiers remain opaque
 strings, so foundation model IDs, inference profiles, provisioned throughput
 ARNs, and future identifiers can be configured without changing this library.
 
+Tier availability is still a property of the selected Bedrock model, not of
+the Converse transport. For example, the [Nova Lite model
+card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-lite.html)
+currently lists Standard only, so `amazon.nova-lite-v1:0` must not be used for
+an economy/Flex or priority request. The [Nova Pro model
+card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html)
+lists Standard, Priority, and Flex; the enforced offline Converse contract
+therefore uses `amazon.nova-pro-v1:0` for its three-class matrix. Production
+route configuration remains responsible for advertising only the classes
+supported by its pinned model and region.
+
 ## Capability boundary
 
 The generic Converse adapter currently verifies text, client tool calls, and

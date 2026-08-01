@@ -37,7 +37,7 @@ func TestDefaultProfileMapsExplicitServiceClasses(t *testing.T) {
 
 func TestLowerRequestRejectsMixedInstructionHierarchyInStrictMode(t *testing.T) {
 	request := llm.Request{
-		Model: "amazon.nova-lite-v1:0",
+		Model: "amazon.nova-pro-v1:0",
 		Instructions: []llm.Instruction{
 			{Level: llm.InstructionLevelApplication, Text: "Answer concisely."},
 			{Level: llm.InstructionLevelPolicy, Text: "Do not reveal secrets."},
