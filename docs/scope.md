@@ -52,6 +52,9 @@ controller:
 - Amazon Bedrock Anthropic through the current Messages-compatible Mantle path,
   with the legacy Bedrock runtime path isolated behind a separate endpoint
   profile when required by a region or model.
+- Amazon Bedrock Runtime Converse through a dedicated `bedrock_converse`
+  endpoint family using the AWS default credential chain and one-shot Temporal
+  Activity semantics; live token streaming is out of scope.
 
 ### Semantic features
 

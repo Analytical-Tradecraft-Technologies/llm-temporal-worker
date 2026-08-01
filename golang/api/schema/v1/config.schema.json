@@ -295,7 +295,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["family", "base_url", "outbound_hosts", "region", "auth", "account_region", "timeout", "service_classes", "capability_profile", "price_catalog", "provider_storage", "extensions"],
       "properties": {
-        "family": { "enum": ["openai_responses", "azure_openai_responses", "azure_openai_chat", "openai_chat", "anthropic_messages", "anthropic_aws_messages", "bedrock_anthropic_messages"] },
+        "family": { "enum": ["openai_responses", "azure_openai_responses", "azure_openai_chat", "openai_chat", "anthropic_messages", "anthropic_aws_messages", "bedrock_anthropic_messages", "bedrock_converse"] },
         "base_url": { "type": "string" },
         "outbound_hosts": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
         "region": { "type": "string" }, "aws_workspace_id": { "type": "string" }, "auth": { "$ref": "#/$defs/auth" },
@@ -321,6 +321,15 @@
               "auth": {
                 "properties": { "kind": { "const": "aws_default_chain" } }
               }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "family": { "enum": ["bedrock_anthropic_messages", "bedrock_converse"] } } },
+          "then": {
+            "properties": {
+              "region": { "type": "string", "minLength": 1 },
+              "auth": { "properties": { "kind": { "const": "aws_default_chain" } } }
             }
           }
         }

@@ -70,6 +70,7 @@ is the single status/authority index:
 - [Catalog loader contract](reference/catalog-loaders.md)
 - [Error model](reference/error-model.md)
 - [Verified upstream contracts](reference/source-contracts.md)
+- [AWS Bedrock Converse provider](reference/provider-bedrock-converse.md)
 - [Generic compaction safeguards](reference/generic-compaction.md)
 - [v1 Activity runtime boundary](reference/activity-runtime.md)
 - [Query execution audit ledger](reference/query-audit-ledger.md)

@@ -287,6 +287,22 @@ endpoints:
     capability_profile: bedrock-anthropic-v2
     price_catalog: catalog-2026-07-13
 
+  bedrock-converse-us-east-1:
+    # One-shot AWS Bedrock Runtime Converse; live streaming is not supported.
+    family: bedrock_converse
+    base_url: https://bedrock-runtime.us-east-1.amazonaws.com
+    outbound_hosts: [bedrock-runtime.us-east-1.amazonaws.com]
+    region: us-east-1
+    auth:
+      kind: aws_default_chain
+    timeout: 115s
+    service_classes:
+      economy: {provider_value: flex}
+      standard: {provider_value: default}
+      priority: {provider_value: priority}
+    capability_profile: bedrock-converse-v1
+    price_catalog: catalog-2026-07-13
+
 models:
   invoice-summarizer:
     allowed_tenants: [acme]

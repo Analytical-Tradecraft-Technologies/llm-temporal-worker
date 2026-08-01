@@ -277,6 +277,8 @@ func endpointFamily(value string) provider.Family {
 		return provider.FamilyAnthropicMessages
 	case "bedrock_anthropic_messages":
 		return provider.FamilyBedrockMessages
+	case "bedrock_converse":
+		return provider.FamilyBedrockConverse
 	default:
 		return provider.Family(value)
 	}
