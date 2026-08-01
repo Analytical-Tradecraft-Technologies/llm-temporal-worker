@@ -420,6 +420,52 @@ func TestLoadRejectsAnthropicAWSGatewayEndpointWithoutClosedAWSIdentity(t *testi
 	}
 }
 
+func TestLoadRejectsBedrockEndpointsWithoutClosedAWSIdentity(t *testing.T) {
+	tests := []struct {
+		name   string
+		family string
+		auth   string
+	}{
+		{
+			name:   "anthropic messages bearer",
+			family: "bedrock_anthropic_messages",
+			auth:   "kind: bearer_env\n      name: BEDROCK_API_KEY",
+		},
+		{
+			name:   "converse header",
+			family: "bedrock_converse",
+			auth:   "kind: header_env\n      name: BEDROCK_API_KEY",
+		},
+		{
+			name:   "anthropic messages workload identity",
+			family: "bedrock_anthropic_messages",
+			auth:   "kind: workload_identity\n      audience: https://bedrock.amazonaws.com",
+		},
+		{
+			name:   "converse Azure credential",
+			family: "bedrock_converse",
+			auth:   "kind: azure_default_credential",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data := string(exampleYAML(t))
+			if test.family == "bedrock_converse" {
+				data = strings.Replace(data, "family: bedrock_anthropic_messages", "family: bedrock_converse", 1)
+			}
+			old := "  bedrock-us-east-1:\n    family: " + test.family + "\n    outbound_hosts: [bedrock-runtime.us-east-1.amazonaws.com]\n    region: us-east-1\n    auth:\n      kind: aws_default_chain"
+			newBlock := strings.Replace(old, "kind: aws_default_chain", test.auth, 1)
+			data = strings.Replace(data, old, newBlock, 1)
+			if !strings.Contains(data, newBlock) {
+				t.Fatal("test fixture block was not found")
+			}
+			if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "auth.kind must be aws_default_chain for Bedrock") {
+				t.Fatalf("Load() error = %v, want Bedrock default-chain authentication rejection", err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsAWSWorkspaceIDOnNonAWSGatewayEndpoint(t *testing.T) {
 	data := strings.Replace(string(exampleYAML(t)), "  anthropic-direct:\n", "  anthropic-direct:\n    aws_workspace_id: ws-example-123\n", 1)
 	_, err := config.Load([]byte(data))

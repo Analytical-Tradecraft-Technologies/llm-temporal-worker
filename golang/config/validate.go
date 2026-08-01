@@ -447,6 +447,9 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 		if endpoint.Region == "" {
 			return fmt.Errorf("%s.region is required for Bedrock", path)
 		}
+		if endpoint.Auth.Kind != "aws_default_chain" {
+			return fmt.Errorf("%s.auth.kind must be aws_default_chain for Bedrock", path)
+		}
 		baseHost, err = normalizedHTTPSURLHost(endpoint.BaseURL, path+".base_url", true)
 		if err != nil {
 			return err
