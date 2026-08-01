@@ -33,7 +33,7 @@ the `llm` package.
 | `go.yaml.in/yaml/v4` | `v4.0.0-rc.6` | Strict YAML configuration parsing | MIT; [official repository](https://github.com/yaml/go-yaml) |
 | `go.temporal.io/sdk` | `v1.46.0` | Temporal Activity payload, heartbeat, error, and worker registration boundary | MIT; [official release](https://github.com/temporalio/sdk-go/releases/tag/v1.46.0) |
 | `github.com/aws/aws-sdk-go-v2/service/s3` | `v1.106.0` | Official AWS S3 client for production content-addressed blobs | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/aws/smithy-go` | `v1.27.4` | AWS SDK transport and protocol support | Apache-2.0; [official repository](https://github.com/aws/smithy-go) |
+| `github.com/aws/smithy-go` | `v1.27.5` | AWS SDK transport and protocol support | Apache-2.0; [official repository](https://github.com/aws/smithy-go) |
 | `github.com/google/uuid` | `v1.6.0` | UUIDv7 identifiers for durable repository records | BSD-3-Clause; [official repository](https://github.com/google/uuid) |
 | `github.com/jackc/pgx/v5` | `v5.10.0` | PostgreSQL pool, transactions, and typed durable repositories | MIT; [official repository](https://github.com/jackc/pgx) |
 | `github.com/prometheus/client_golang` | `v1.24.1` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |

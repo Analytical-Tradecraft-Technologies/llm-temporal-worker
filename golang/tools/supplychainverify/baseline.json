@@ -51,7 +51,7 @@
     },
     {
       "path": "github.com/aws/smithy-go",
-      "version": "v1.27.4",
+      "version": "v1.27.5",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/smithy-go"
     },
