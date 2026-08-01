@@ -4,6 +4,14 @@
 for the durable budget path. It binds one immutable `StateIdentity` to a Redis
 `BudgetMaterializer` and a PostgreSQL `Journal`.
 
+`storage/durable.CompositionBuilder` provides the snapshot-owned assembly seam
+around that boundary. A deployment supplies the complete operation,
+continuation, result, journal, and materializer ports in one
+`CompositionPorts` value; `Build` validates them and returns a `Composition`
+whose `BudgetBoundary()` and `NewLifecycle()` are tied to the same identity.
+The builder has no client-construction or provider-dispatch side effects, so
+an incomplete reload fails before the worker can poll.
+
 ## Ordering
 
 For a new operation the caller must advance the lifecycle through
@@ -32,6 +40,8 @@ The ports intentionally do not expose mutable identity state. The caller must
 construct both adapters from the same immutable `StateIdentity` and replace
 the complete boundary on reload; mixing a Redis adapter or journal from another
 snapshot is outside this contract and must be rejected by the runtime factory.
+The runtime capability bundle's optional `DurableCompositionFactory` invokes
+the builder-owned value and validates it before exposing it to an Activity.
 
 ## Failure semantics
 
@@ -62,5 +72,7 @@ different completion batch after PostgreSQL has committed the original.
 This slice is intentionally separate from the legacy engine and runtime
 factory. It does not yet wire provider dispatch, operation/checkpoint/cache
 stores, Compact, Query, reload orchestration, or the complete V1 runtime
-composition. Those pieces must consume this boundary only after their own
-snapshot and recovery contracts are defined.
+composition. The builder and factory capability are validation seams only;
+they are not evidence that a paid production deployment, protected recovery
+run, or complete V1 composition is enabled. Those pieces must consume this
+boundary only after their own snapshot and recovery contracts are defined.

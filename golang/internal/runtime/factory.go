@@ -151,6 +151,11 @@ type ProductionFactoryOptions struct {
 	// authorization, cursor-key, and audit composition explicitly before the
 	// production factory exposes persisted control-plane queries.
 	QueryServiceBuilder QueryServiceBuilder
+	// DurableCompositionFactory is an optional Task 19 binding for the complete
+	// snapshot-owned PostgreSQL/Redis durable state composition. It is not
+	// inferred from the legacy admission stores; callers must supply every
+	// storage port and validate the returned Composition before enabling it.
+	DurableCompositionFactory DurableCompositionFactory
 }
 
 // ProductionEngineFactory composes the full provider-neutral engine from one
@@ -553,6 +558,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			Adapters:               capabilityAdapterRegistry,
 			Checkpoints:            checkpointCapabilities,
 			Journal:                journal,
+			CompositionFactory:     factory.options.DurableCompositionFactory,
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
 			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
@@ -657,6 +663,7 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 			Planner:              planner,
 			Adapters:             capabilityAdapterRegistry,
 			Clock:                clock,
+			CompositionFactory:   factory.options.DurableCompositionFactory,
 			GeneratePortsFactory: factory.options.GeneratePortsFactory,
 			CompactPortsFactory:  factory.options.CompactPortsFactory,
 		},

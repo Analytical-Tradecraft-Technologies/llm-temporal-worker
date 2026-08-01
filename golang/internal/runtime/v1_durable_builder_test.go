@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -158,3 +160,75 @@ func TestNewProductionEngineFactoryLeavesPartialPhaseCompositionUnconfigured(t *
 		t.Fatal("partial phase factories installed a durable v1 builder")
 	}
 }
+
+func TestV1RuntimeCapabilitiesBuildDurableCompositionFailsClosedWithoutFactory(t *testing.T) {
+	capabilities := completeGenerateCapabilities(nil)
+	if _, err := capabilities.BuildDurableComposition(context.Background()); err == nil || !strings.Contains(err.Error(), "factory is not configured") {
+		t.Fatalf("missing composition factory error = %v", err)
+	}
+}
+
+func TestV1RuntimeCapabilitiesBuildDurableCompositionValidatesFactoryResult(t *testing.T) {
+	capabilities := completeGenerateCapabilities(nil)
+	called := false
+	capabilities.CompositionFactory = func(_ context.Context, _ V1RuntimeCapabilities) (durable.Composition, error) {
+		called = true
+		return durable.Composition{}, nil
+	}
+	if _, err := capabilities.BuildDurableComposition(context.Background()); err == nil || !strings.Contains(err.Error(), "validate durable composition") {
+		t.Fatalf("invalid composition error = %v", err)
+	}
+	if !called {
+		t.Fatal("composition factory was not called")
+	}
+}
+
+func TestV1RuntimeCapabilitiesBuildDurableCompositionUsesSnapshotOwnedPorts(t *testing.T) {
+	capabilities := completeGenerateCapabilities(nil)
+	capabilities.CompositionFactory = func(_ context.Context, received V1RuntimeCapabilities) (durable.Composition, error) {
+		if received.CompositionFactory == nil {
+			t.Fatal("factory did not receive the snapshot capability bundle")
+		}
+		return validCapabilityComposition(), nil
+	}
+	composition, err := capabilities.BuildDurableComposition(context.Background())
+	if err != nil {
+		t.Fatalf("BuildDurableComposition() error = %v", err)
+	}
+	if err := composition.Validate(); err != nil {
+		t.Fatalf("returned composition invalid after construction: %v", err)
+	}
+}
+
+// The capability stubs intentionally embed the narrow interfaces. The
+// composition builder validates their presence without invoking a client,
+// which keeps this factory test independent of Redis, PostgreSQL, and any
+// provider credentials.
+type capabilityAdmissionStub struct{ admission.AdmissionStore }
+type capabilityContinuationStub struct{ state.ContinuationStore }
+type capabilityResultStub struct{ durable.ResultStore }
+type capabilityJournalStub struct{ durable.Journal }
+type capabilityMaterializerStub struct{ durable.BudgetMaterializer }
+
+func validCapabilityComposition() durable.Composition {
+	return durable.Composition{
+		Identity: durable.StateIdentity{
+			Postgres:     durable.PostgresIdentity{Database: "llmtw", Schema: "worker", TablePrefix: "prod_"},
+			Redis:        durable.RedisIdentity{KeyPrefix: "llmtw", HashTag: "admission"},
+			ConfigDigest: [32]byte{1},
+		},
+		Operations:    capabilityAdmissionStub{},
+		Continuations: capabilityContinuationStub{},
+		Results:       capabilityResultStub{},
+		Journal:       capabilityJournalStub{},
+		Materializer:  capabilityMaterializerStub{},
+	}
+}
+
+var (
+	_ admission.AdmissionStore   = capabilityAdmissionStub{}
+	_ state.ContinuationStore    = capabilityContinuationStub{}
+	_ durable.ResultStore        = capabilityResultStub{}
+	_ durable.Journal            = capabilityJournalStub{}
+	_ durable.BudgetMaterializer = capabilityMaterializerStub{}
+)

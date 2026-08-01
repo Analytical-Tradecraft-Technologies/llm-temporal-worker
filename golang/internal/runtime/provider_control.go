@@ -156,6 +156,13 @@ type JournalSource interface {
 	Journal() durablestore.Journal
 }
 
+// DurableCompositionFactory constructs the complete storage-neutral
+// Composition for one immutable runtime snapshot. Implementations must close
+// over only the supplied snapshot capability bundle and must return before
+// any provider dispatch; the factory never fabricates missing stores or
+// adapts the legacy engine.
+type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error)
+
 // V1RuntimeCapabilities is the preparatory storage- and provider-neutral
 // dependency bundle owned by one immutable configuration snapshot. It exposes
 // only the snapshot/planning/adapter contracts, checkpoint capability, and
@@ -174,7 +181,13 @@ type V1RuntimeCapabilities struct {
 	Checkpoints CheckpointCapabilities
 	// Journal is the optional write-only PostgreSQL budget journal. It is
 	// preparatory input for Task 19 and does not activate V1 composition.
-	Journal                durablestore.Journal
+	Journal durablestore.Journal
+	// CompositionFactory is the Task 19 seam for the snapshot-owned
+	// PostgreSQL/Redis responsibility split. It is optional while deployments
+	// still use the preparatory phase factories; when selected, callers must
+	// invoke BuildDurableComposition and fail closed on a missing factory or
+	// incomplete returned Composition.
+	CompositionFactory     DurableCompositionFactory
 	ProviderStatusRecorder engine.ProviderStatusRecorder
 	Clock                  func() time.Time
 	// GeneratePortsFactory is a per-snapshot constructor for the storage-
@@ -189,6 +202,28 @@ type V1RuntimeCapabilities struct {
 	// production builder must not expose Compact until a deployment supplies
 	// every callback behind this factory.
 	CompactPortsFactory CompactPortsFactory
+}
+
+// BuildDurableComposition invokes and validates the optional snapshot-owned
+// composition factory. Validation is intentionally completed after the
+// factory returns and before any caller can attach the value to an Activity.
+// The method performs no fallback to Redis-only or in-memory durable state.
+func (capabilities V1RuntimeCapabilities) BuildDurableComposition(ctx context.Context) (durablestore.Composition, error) {
+	var zero durablestore.Composition
+	if ctx == nil {
+		return zero, errors.New("durable composition context is nil")
+	}
+	if capabilities.CompositionFactory == nil {
+		return zero, errors.New("durable composition factory is not configured")
+	}
+	composition, err := capabilities.CompositionFactory(ctx, capabilities)
+	if err != nil {
+		return zero, fmt.Errorf("construct durable composition: %w", err)
+	}
+	if err := composition.Validate(); err != nil {
+		return zero, fmt.Errorf("validate durable composition: %w", err)
+	}
+	return composition, nil
 }
 
 // GeneratePortsFactory constructs the complete durable Generate port set for
