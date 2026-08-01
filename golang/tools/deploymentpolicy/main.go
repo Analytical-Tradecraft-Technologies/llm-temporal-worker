@@ -86,14 +86,22 @@ func decodeDocuments(rendered []byte) ([]map[string]any, error) {
 }
 
 func findResource(documents []map[string]any, kind, name string) (map[string]any, error) {
+	var found map[string]any
 	for _, document := range documents {
 		if stringAt(document, "kind") != kind {
 			continue
 		}
 		metadata, ok := mapAt(document, "metadata")
-		if ok && stringAt(metadata, "name") == name {
-			return document, nil
+		if !ok || stringAt(metadata, "name") != name {
+			continue
 		}
+		if found != nil {
+			return nil, fmt.Errorf("rendered %s %q appears more than once", strings.ToLower(kind), name)
+		}
+		found = document
+	}
+	if found != nil {
+		return found, nil
 	}
 	return nil, fmt.Errorf("rendered %s %q is missing", strings.ToLower(kind), name)
 }
