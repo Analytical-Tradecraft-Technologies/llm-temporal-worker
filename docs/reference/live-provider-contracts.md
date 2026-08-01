@@ -58,7 +58,7 @@ endpoints are checked in rather than supplied by an environment variable.
 | `anthropic-direct` | Anthropic Messages; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_DIRECT` | `ANTHROPIC_API_KEY`; Anthropic API endpoint | Pinned |
 | `anthropic-aws` | Anthropic Messages through AWS; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_AWS` | AWS default credential chain; `LLMTW_LIVE_ANTHROPIC_AWS_WORKSPACE_ID` | Pinned |
 | `bedrock-anthropic` | Amazon Bedrock Anthropic; `anthropic.claude-3-5-haiku-20241022-v1:0` | `LLMTW_LIVE_BEDROCK_ANTHROPIC` | AWS default credential chain; default AWS SDK endpoint resolution | Pinned |
-| `bedrock-converse` | Amazon Bedrock Converse; `amazon.nova-pro-v1:0` | `LLMTW_LIVE_BEDROCK_CONVERSE` | AWS default credential chain; default AWS SDK endpoint resolution | Rejected before invocation |
+| `bedrock-converse` | Amazon Bedrock Converse; `amazon.nova-pro-v1:0` | `LLMTW_LIVE_BEDROCK_CONVERSE` | AWS default credential chain; default AWS SDK endpoint resolution | Rejected before invocation; response ID not reported by API |
 
 The request deliberately omits the public service class. The worker must
 normalize that omission to `standard`. Before invocation, the harness checks
@@ -93,7 +93,9 @@ provider payload, or raw SDK error. The test uses `provider.NopObserver{}` so
 it does not add request tracing that could capture these values.
 
 Responses must report positive input and output token usage, valid actual
-`standard` service class, request and response IDs, and a completed status.
+`standard` service class, a request ID, and a completed status. Providers that
+do not expose a response ID (currently Bedrock Converse) record
+`response_id=not_reported`; the harness never manufactures one.
 When a provider reports cost, it must be USD, name one of the closed reported
 methods (`provider_reported`, `usage`, `openrouter_reported`, or
 `exa_reported`), and be at or below the fixed ceiling. When cost is not

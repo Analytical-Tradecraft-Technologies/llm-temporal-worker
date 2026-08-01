@@ -32,7 +32,11 @@ func TestLiveProviderContracts(t *testing.T) {
 				// print them from a credentialed test run.
 				t.Fatal("live provider contract failed")
 			}
-			t.Logf("profile=%s tenant=%s request_id=%s response_id=%s actual_service_class=%s actual_spend_known=%t actual_micro_usd=%d cost_method=%s continuation_verified=%t", evidence.Profile, evidence.Tenant, evidence.RequestID, evidence.ResponseID, evidence.ActualServiceClass, evidence.ActualSpendKnown, evidence.ActualMicroUSD, evidence.CostMethod, evidence.ContinuationVerified)
+			responseID := evidence.ResponseID
+			if responseID == "" {
+				responseID = "not_reported"
+			}
+			t.Logf("profile=%s tenant=%s request_id=%s response_id=%s actual_service_class=%s actual_spend_known=%t actual_micro_usd=%d cost_method=%s continuation_verified=%t", evidence.Profile, evidence.Tenant, evidence.RequestID, responseID, evidence.ActualServiceClass, evidence.ActualSpendKnown, evidence.ActualMicroUSD, evidence.CostMethod, evidence.ContinuationVerified)
 		})
 	}
 }

@@ -52,6 +52,9 @@ func TestProfilesDeclareTheGuardedLiveContract(t *testing.T) {
 		if profile.ServiceClass != llm.ServiceClassStandard {
 			t.Errorf("%s service class = %q, want %q", profile.ID, profile.ServiceClass, llm.ServiceClassStandard)
 		}
+		if profile.ID == "bedrock-converse" && profile.ResponseIDRequired {
+			t.Errorf("%s requires a response ID even though Converse does not report one", profile.ID)
+		}
 	}
 	if len(wantIDs) != 0 {
 		t.Errorf("missing live profiles: %v", wantIDs)
@@ -218,6 +221,24 @@ func TestValidateResponseRecordsUnreportedAndImplicitProviderCost(t *testing.T) 
 	}
 }
 
+func TestValidateResponseAllowsBedrockConverseWithoutResponseID(t *testing.T) {
+	profile := profileForTest(t, "bedrock-converse")
+	actual := llm.ServiceClassStandard
+	response := llm.Response{
+		Status:   llm.ResponseStatusCompleted,
+		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
+		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
+		Provider: llm.ProviderFacts{RequestID: "bedrock-request-123"},
+	}
+	evidence, err := validateResponse(profile, response)
+	if err != nil {
+		t.Fatalf("validate Bedrock Converse response: %v", err)
+	}
+	if evidence.RequestID != response.Provider.RequestID || evidence.ResponseID != "" {
+		t.Fatalf("evidence provider facts = %#v, want request ID and no response ID", evidence)
+	}
+}
+
 func TestValidateResponseFailsClosedOnMissingOrOverCeilingFacts(t *testing.T) {
 	pinned := Profiles()[0]
 	unsupported := Profiles()[2]
@@ -241,6 +262,7 @@ func TestValidateResponseFailsClosedOnMissingOrOverCeilingFacts(t *testing.T) {
 		want    string
 	}{
 		{name: "missing request ID", profile: pinned, mutate: func(response *llm.Response) { response.Provider.RequestID = "" }, want: "request ID"},
+		{name: "missing response ID", profile: pinned, mutate: func(response *llm.Response) { response.Provider.ResponseID = "" }, want: "response ID"},
 		{name: "missing actual class", profile: pinned, mutate: func(response *llm.Response) { response.Service.Actual = nil }, want: "actual service class"},
 		{name: "missing usage", profile: pinned, mutate: func(response *llm.Response) { response.Usage.OutputTokens = 0 }, want: "usage"},
 		{name: "unpinned continuation", profile: pinned, mutate: func(response *llm.Response) { response.Continuation.Pinned = false }, want: "pinned continuation"},
