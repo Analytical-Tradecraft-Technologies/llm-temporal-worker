@@ -1190,6 +1190,15 @@ func (factory *ProductionEngineFactory) bedrockConverseProfile(endpointID string
 		copy := *supplied.BedrockConverse
 		return &copy, nil
 	}
+	// Streaming is intentionally outside the routing capability projection,
+	// so an automatically generated Converse profile would otherwise retain an
+	// unknown state and fail its one-shot adapter validation. Make the durable
+	// Temporal boundary explicit before constructing the profile.
+	capabilities = completeCapabilities(capabilities)
+	capabilities.Features[provider.FeatureStreaming] = provider.Capability{
+		State:  provider.CapabilityUnsupported,
+		Reason: "Bedrock Converse is a one-shot adapter",
+	}
 	tiers, actual := endpointTiers(endpoint)
 	value, err := bedrockconverse.NewProfile(bedrockconverse.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ExpectedBaseURL: endpoint.BaseURL})
 	if err != nil {
