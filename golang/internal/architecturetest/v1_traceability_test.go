@@ -29,6 +29,7 @@ var expectedV1TraceabilityIDs = []string{
 	"v1.contract.live-provider.anthropic-direct",
 	"v1.contract.live-provider.azure-responses",
 	"v1.contract.live-provider.bedrock-anthropic",
+	"v1.contract.live-provider.bedrock-converse",
 	"v1.contract.live-provider.exa-chat",
 	"v1.contract.live-provider.openai-chat",
 	"v1.contract.live-provider.openai-responses",

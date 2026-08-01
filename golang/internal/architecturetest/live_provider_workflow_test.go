@@ -31,6 +31,7 @@ var liveProviderWorkflowProfiles = []liveProviderWorkflowProfile{
 	{id: "anthropic-direct", enableEnv: "LLMTW_LIVE_ANTHROPIC_DIRECT", secretName: "ANTHROPIC_API_KEY", credentialKind: "api key"},
 	{id: "anthropic-aws", enableEnv: "LLMTW_LIVE_ANTHROPIC_AWS", requiresOIDC: true, credentialKind: "AWS workload identity"},
 	{id: "bedrock-anthropic", enableEnv: "LLMTW_LIVE_BEDROCK_ANTHROPIC", requiresOIDC: true, credentialKind: "AWS workload identity"},
+	{id: "bedrock-converse", enableEnv: "LLMTW_LIVE_BEDROCK_CONVERSE", requiresOIDC: true, credentialKind: "AWS workload identity"},
 }
 
 func TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile(t *testing.T) {
@@ -192,7 +193,7 @@ func assertLiveProviderCredentialAction(t *testing.T, workflow workflowDocument,
 				t.Fatalf("%s job %q must not configure an AWS credential", workflow.name, profile.id)
 			}
 		}
-	case "anthropic-aws", "bedrock-anthropic":
+	case "anthropic-aws", "bedrock-anthropic", "bedrock-converse":
 		assertJobUsesAction(t, workflow, profile.id, awsConfigureCredentialsActionPin)
 		for _, reference := range references {
 			if reference == azureLoginActionPin {

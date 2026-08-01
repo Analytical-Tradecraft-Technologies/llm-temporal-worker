@@ -21,6 +21,7 @@ func TestProfilesDeclareTheGuardedLiveContract(t *testing.T) {
 		"anthropic-direct":  {},
 		"anthropic-aws":     {},
 		"bedrock-anthropic": {},
+		"bedrock-converse":  {},
 	}
 	if len(profiles) != len(wantIDs) {
 		t.Fatalf("live profile count = %d, want %d", len(profiles), len(wantIDs))

@@ -76,6 +76,7 @@ var profiles = []Profile{
 	newProfile("anthropic-direct", "LLMTW_LIVE_ANTHROPIC_DIRECT", "claude-3-5-haiku-latest", CredentialSource{Kind: "header_env", Environment: "ANTHROPIC_API_KEY"}, ContinuationPinned),
 	newProfile("anthropic-aws", "LLMTW_LIVE_ANTHROPIC_AWS", "claude-3-5-haiku-latest", CredentialSource{Kind: "aws_default_chain"}, ContinuationPinned),
 	newProfile("bedrock-anthropic", "LLMTW_LIVE_BEDROCK_ANTHROPIC", "anthropic.claude-3-5-haiku-20241022-v1:0", CredentialSource{Kind: "aws_default_chain"}, ContinuationPinned),
+	newProfile("bedrock-converse", "LLMTW_LIVE_BEDROCK_CONVERSE", "amazon.nova-pro-v1:0", CredentialSource{Kind: "aws_default_chain"}, ContinuationUnsupported),
 }
 
 func newProfile(id, enableEnv, model string, credential CredentialSource, continuation ContinuationExpectation) Profile {

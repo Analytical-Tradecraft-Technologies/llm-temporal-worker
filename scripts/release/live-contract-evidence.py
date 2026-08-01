@@ -30,6 +30,7 @@ PROFILES = frozenset(
         "anthropic-direct",
         "anthropic-aws",
         "bedrock-anthropic",
+        "bedrock-converse",
     }
 )
 ACTUAL_SERVICE_CLASS = "standard"

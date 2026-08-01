@@ -19,6 +19,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockconverse"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockmessages"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openaichat"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openairesponses"
@@ -53,6 +54,8 @@ func familyFor(profile Profile) provider.Family {
 		return provider.FamilyAnthropicMessages
 	case "bedrock-anthropic":
 		return provider.FamilyBedrockMessages
+	case "bedrock-converse":
+		return provider.FamilyBedrockConverse
 	default:
 		return ""
 	}
@@ -405,6 +408,22 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 		profileConfig := bedrockmessages.DefaultProfile(profile.ID)
 		profileConfig.ExpectedModel = profile.Model
 		adapter, err := bedrockmessages.NewAdapter(client, profile.ID, profileConfig)
+		if err != nil {
+			return nil, fmt.Errorf("live adapter construction failed")
+		}
+		return adapter, nil
+	case "bedrock-converse":
+		config, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(liveAWSRegion))
+		if err != nil {
+			return nil, fmt.Errorf("live adapter construction failed")
+		}
+		client, err := bedrockconverse.NewClient(ctx, bedrockconverse.ClientConfig{HTTPClient: newLiveHTTPClient(), AWSConfig: config})
+		if err != nil {
+			return nil, fmt.Errorf("live adapter construction failed")
+		}
+		profileConfig := bedrockconverse.DefaultProfile(profile.ID)
+		profileConfig.ExpectedModel = profile.Model
+		adapter, err := bedrockconverse.NewAdapter(client, profile.ID, profileConfig)
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
