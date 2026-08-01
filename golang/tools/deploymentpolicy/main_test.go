@@ -18,6 +18,51 @@ func TestVerifyRenderedRejectsInsufficientShutdownGrace(t *testing.T) {
 	}
 }
 
+func TestVerifyRenderedRejectsDuplicateRequiredResources(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		duplicate string
+		resource  string
+	}{
+		{
+			name: "deployment",
+			duplicate: `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmtw-worker
+`,
+			resource: "deployment",
+		},
+		{
+			name: "service account",
+			duplicate: `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llmtw-worker
+`,
+			resource: "serviceaccount",
+		},
+		{
+			name: "config map",
+			duplicate: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llmtw-config
+`,
+			resource: "configmap",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rendered := validRenderedWorkload + "---\n" + test.duplicate
+			err := verifyRendered("base", []byte(rendered))
+			want := "rendered " + test.resource + " \"llmtw-"
+			if err == nil || !strings.Contains(err.Error(), "appears more than once") || !strings.Contains(err.Error(), want) {
+				t.Fatalf("verify rendered duplicate %s error = %v, want duplicate-resource rejection", test.name, err)
+			}
+		})
+	}
+}
+
 func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
 	tests := []struct {
 		name    string
