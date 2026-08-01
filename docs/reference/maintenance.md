@@ -52,6 +52,29 @@ The schedule, secret injection, and role grants remain deployment-owned;
 keeping them outside the worker prevents a runtime credential from acquiring
 cleanup privileges.
 
+Blob metadata eligibility is an explicit, separately bounded pass. Run it with
+the same dedicated role when the object-store deleter is scheduled to consume
+newly eligible rows:
+
+```sh
+LLMTW_MAINTENANCE_POSTGRES_USERNAME=llmtw_maintenance \
+LLMTW_MAINTENANCE_POSTGRES_PASSWORD='(injected by the job secret store)' \
+  ./llmtw-maintenance blob-gc-once \
+  --config /etc/llmtw/config.yaml \
+  --now 2026-07-29T00:00:00Z \
+  --limit 1000
+```
+
+This command only marks expired, unreferenced blob metadata `eligible`; its
+bounded SQL rechecks active operation, checkpoint, provider-state, cache-use,
+and cache-fill references while each candidate is locked. It does not perform
+an object-store delete. The deleter must claim eligible rows, delete the
+external object after the SQL transaction commits, and finalize the row using
+the fenced lifecycle described in [blob garbage collection](blob-garbage-collection.md).
+Keeping eligibility explicit prevents a retention invocation from silently
+claiming external deletion work or from treating a successful SQL mark as
+proof that the object was physically removed.
+
 To capture the current table-settings snapshot without running any cleanup,
 use the same dedicated role with the read-only `inspect-settings` command:
 

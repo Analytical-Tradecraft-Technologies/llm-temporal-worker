@@ -81,6 +81,30 @@ func TestParseInspectOptions(t *testing.T) {
 	}
 }
 
+func TestParseBlobGCOptions(t *testing.T) {
+	options, err := parseBlobGCOptions([]string{
+		"--config", "/etc/llmtw/config.yaml",
+		"--now", testNow,
+		"--limit", "100",
+	}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseBlobGCOptions() error = %v", err)
+	}
+	if options.ConfigPath != "/etc/llmtw/config.yaml" || options.Limit != 100 || !options.Now.Equal(time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("unexpected blob GC options: %#v", options)
+	}
+	for _, args := range [][]string{
+		{"--now", "2026-07-29T00:00:00+00:00", "--limit", "1"},
+		{"--now", testNow, "--limit", "0"},
+		{"--now", testNow, "--limit", "10001"},
+		{"--now", testNow, "--limit", "1", "unexpected"},
+	} {
+		if _, err := parseBlobGCOptions(args, &bytes.Buffer{}); err == nil {
+			t.Fatalf("parseBlobGCOptions(%v) unexpectedly succeeded", args)
+		}
+	}
+}
+
 func TestRequiredSecret(t *testing.T) {
 	lookup := func(name string) (string, bool) {
 		if name == "PRESENT" {
@@ -148,6 +172,24 @@ func TestEncodeResult(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "password") {
 		t.Fatal("encoded result contains a credential marker")
+	}
+}
+
+func TestEncodeBlobGCResult(t *testing.T) {
+	var output bytes.Buffer
+	if err := encodeBlobGCResult(&output, postgres.BlobGCResult{Examined: 4, Eligible: 2, Skipped: 2}); err != nil {
+		t.Fatalf("encodeBlobGCResult() error = %v", err)
+	}
+	var decoded struct {
+		Examined int `json:"examined"`
+		Eligible int `json:"eligible"`
+		Skipped  int `json:"skipped"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("blob GC result is not JSON: %v", err)
+	}
+	if decoded.Examined != 4 || decoded.Eligible != 2 || decoded.Skipped != 2 {
+		t.Fatalf("unexpected blob GC result: %#v", decoded)
 	}
 }
 

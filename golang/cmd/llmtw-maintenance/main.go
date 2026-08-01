@@ -48,6 +48,12 @@ type inspectOptions struct {
 	ConfigPath string
 }
 
+type blobGCOptions struct {
+	ConfigPath string
+	Now        time.Time
+	Limit      int
+}
+
 func main() {
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -67,7 +73,7 @@ type lookupEnv func(string) (string, bool)
 
 func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup lookupEnv) error {
 	if len(args) == 0 {
-		return errors.New("usage: llmtw-maintenance <retention-once|inspect-settings> [flags]")
+		return errors.New("usage: llmtw-maintenance <retention-once|blob-gc-once|inspect-settings> [flags]")
 	}
 	switch args[0] {
 	case "retention-once":
@@ -106,8 +112,23 @@ func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup l
 			return err
 		}
 		return encodeSettings(out, settings)
+	case "blob-gc-once":
+		options, err := parseBlobGCOptions(args[1:], errOut)
+		if err != nil {
+			return err
+		}
+		repository, closeRepository, err := openMaintenanceRepository(ctx, options.ConfigPath, lookup)
+		if err != nil {
+			return err
+		}
+		defer closeRepository()
+		result, err := repository.MarkExpiredBlobsEligible(ctx, options.Now, options.Limit)
+		if encodeErr := encodeBlobGCResult(out, result); encodeErr != nil {
+			return encodeErr
+		}
+		return err
 	default:
-		return errors.New("usage: llmtw-maintenance <retention-once|inspect-settings> [flags]")
+		return errors.New("usage: llmtw-maintenance <retention-once|blob-gc-once|inspect-settings> [flags]")
 	}
 }
 
@@ -265,6 +286,34 @@ func parseInspectOptions(args []string, errOut io.Writer) (inspectOptions, error
 	return inspectOptions{ConfigPath: *configPath}, nil
 }
 
+func parseBlobGCOptions(args []string, errOut io.Writer) (blobGCOptions, error) {
+	flags := flag.NewFlagSet("blob-gc-once", flag.ContinueOnError)
+	flags.SetOutput(errOut)
+	configPath := flags.String("config", defaultConfigPath, "worker configuration YAML path")
+	now := flags.String("now", "", "UTC maintenance timestamp (RFC3339 with Z)")
+	limit := flags.Int("limit", 0, "maximum rows per eligibility pass (1-10000)")
+	if err := flags.Parse(args); err != nil {
+		return blobGCOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return blobGCOptions{}, errors.New("blob-gc-once does not accept positional arguments")
+	}
+	if *configPath == "" {
+		return blobGCOptions{}, errors.New("--config must not be empty")
+	}
+	if *now == "" || !strings.HasSuffix(*now, "Z") {
+		return blobGCOptions{}, errors.New("--now must use UTC RFC3339 with Z")
+	}
+	parsedNow, err := time.Parse(time.RFC3339Nano, *now)
+	if err != nil || parsedNow.Location() != time.UTC {
+		return blobGCOptions{}, errors.New("--now must use UTC RFC3339 with Z")
+	}
+	if *limit <= 0 || *limit > 10000 {
+		return blobGCOptions{}, errors.New("--limit must be between 1 and 10000")
+	}
+	return blobGCOptions{ConfigPath: *configPath, Now: parsedNow, Limit: *limit}, nil
+}
+
 type resultJSON struct {
 	Passes []passJSON `json:"passes"`
 }
@@ -289,6 +338,19 @@ func encodeResult(out io.Writer, result postgres.RetentionBatchResult) error {
 	}
 	if err := json.NewEncoder(out).Encode(encoded); err != nil {
 		return fmt.Errorf("write retention result: %w", err)
+	}
+	return nil
+}
+
+type blobGCResultJSON struct {
+	Examined int `json:"examined"`
+	Eligible int `json:"eligible"`
+	Skipped  int `json:"skipped"`
+}
+
+func encodeBlobGCResult(out io.Writer, result postgres.BlobGCResult) error {
+	if err := json.NewEncoder(out).Encode(blobGCResultJSON{Examined: result.Examined, Eligible: result.Eligible, Skipped: result.Skipped}); err != nil {
+		return fmt.Errorf("write blob GC result: %w", err)
 	}
 	return nil
 }
