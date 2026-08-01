@@ -37,7 +37,9 @@ func TestCompileAndInvokeConverse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-lite-v1:0", ServiceClass: llm.ServiceClassPriority,
+	// Nova Lite is Standard-only in Bedrock.  Use Nova Pro for the priority
+	// contract so this fixture exercises a tier the documented model supports.
+	request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-pro-v1:0", ServiceClass: llm.ServiceClassPriority,
 		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{Family: provider.FamilyBedrockConverse, EndpointID: "bedrock-prod", Model: request.Model}, Strict: true})
 	if err != nil {
@@ -77,7 +79,7 @@ func TestLowerToolCallUsesSmithyJSONDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := llm.Request{Model: "nova", Input: []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"city":"Sydney"}`)}}}
+	request := llm.Request{Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"city":"Sydney"}`)}}}
 	input, err := lowerRequest(request, profile, string(types.ServiceTierTypeDefault), true)
 	if err != nil {
 		t.Fatal(err)

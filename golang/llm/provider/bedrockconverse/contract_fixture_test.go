@@ -19,6 +19,9 @@ import (
 const (
 	bedrockFixtureEndpoint  = "bedrock-fixture"
 	bedrockFixtureRequestID = "bedrock-request-fixture"
+	// Amazon Nova Lite is Standard-only. Nova Pro is the documented Converse
+	// model used here because it supports Flex, Standard, and Priority.
+	bedrockFixtureModel = "amazon.nova-pro-v1:0"
 )
 
 func TestBedrockConverseContractProfileIsEnforced(t *testing.T) {
@@ -37,6 +40,9 @@ func TestBedrockConverseContractProfileIsEnforced(t *testing.T) {
 
 func TestBedrockConverseContractFixturesMatchLoweringAndLifting(t *testing.T) {
 	request := loadBedrockConverseRequestFixture(t, "request.semantic.json")
+	if request.Model != bedrockFixtureModel {
+		t.Fatalf("fixture model = %q, want tier-capable %q", request.Model, bedrockFixtureModel)
+	}
 	profile := mustBedrockConverseProfile(t)
 	adapter := &Adapter{endpointID: bedrockFixtureEndpoint, profile: profile}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
@@ -84,7 +90,7 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 			}
 			response := bedrockConverseResponse(text, inputTokens, outputTokens)
 			assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), fixture.wire)
-			request := llm.Request{OperationKey: fixture.operation, Model: "amazon.nova-lite-v1:0", ServiceClass: fixture.requested, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "fixture"}}}}}
+			request := llm.Request{OperationKey: fixture.operation, Model: bedrockFixtureModel, ServiceClass: fixture.requested, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "fixture"}}}}}
 			call := provider.Call{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model, OperationKey: fixture.operation, ServiceClass: fixture.requested}
 			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID)
 			if err != nil {

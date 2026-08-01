@@ -127,6 +127,10 @@ mapping, classified errors, and redaction markers. Converse is deliberately a
 one-shot Temporal activity boundary: these fixtures do not claim credentialed
 AWS execution or live token streaming. Protected live-provider evidence remains
 separate and requires the release-run authorization described in the runbook.
+The matrix uses `amazon.nova-pro-v1:0`, whose AWS model card documents Standard,
+Priority, and Flex support. It deliberately does not use
+`amazon.nova-lite-v1:0`: that model card currently documents Standard only, so
+its model ID would make the priority fixture an invalid provider claim.
 
 ## OpenAI-compatible endpoints
 
