@@ -25,7 +25,12 @@ production readiness guard treats as unconfigured. When both phase factories
 are supplied and no explicit `V1RuntimeBuilder` is set,
 `NewProductionEngineFactory` installs `NewDurableV1RuntimeBuilder`
 automatically. A missing or partial factory set remains unconfigured and
-fails closed before Temporal polling.
+fails closed before Temporal polling. The production factory also rejects a
+durable snapshot before constructing provider, Redis, or PostgreSQL clients
+when no `V1RuntimeBuilder` is present. This early guard prevents an
+`EngineFactory` caller from mistaking the legacy continuation/result stores
+for the Task 19 durable composition; it does not provide the missing
+PostgreSQL/Redis wiring.
 
 `runtime.NewCompactV1RuntimeBuilder` provides the corresponding contract-only
 Compact composition. It requires the same snapshot-owned capabilities plus a
