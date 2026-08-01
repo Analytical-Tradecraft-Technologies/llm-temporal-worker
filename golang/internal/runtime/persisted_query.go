@@ -22,6 +22,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
+	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
 // QueryServiceBuilder composes a QueryService for one immutable config
@@ -52,6 +53,29 @@ type spendSummaryReader interface {
 // the generation materializer publishes that format.
 type BudgetStatusReader interface {
 	ReadBudgetStatus(context.Context, control.BudgetStatusQuery, time.Time) (control.BudgetStatusResult, error)
+}
+
+// BudgetStatusReaderFactory constructs one Redis reader for one immutable
+// configuration snapshot. The options contain only snapshot-owned Redis
+// capabilities and are never retained by the production factory after the
+// builder returns. A nil reader is a valid fail-closed result: callers still
+// receive a query service, but budget_status remains unsupported.
+//
+// The factory is deliberately separate from QueryServiceBuilder. Redis and
+// PostgreSQL clients are created and drained by different composition paths;
+// this seam lets the production factory bind the Redis generation reader to
+// the same snapshot without allowing a process-lifetime query builder to
+// capture a reader across reloads.
+type BudgetStatusReaderFactory func(context.Context, *config.Snapshot, redisstore.BudgetStatusReaderOptions) (BudgetStatusReader, error)
+
+// NewRedisBudgetStatusReaderFactory adapts the storage implementation to the
+// runtime query seam. Deployments may wrap or replace it when they need an
+// explicitly controlled Function invoker, but must return nil on unavailable
+// state rather than falling back to PostgreSQL.
+func NewRedisBudgetStatusReaderFactory() BudgetStatusReaderFactory {
+	return func(_ context.Context, _ *config.Snapshot, options redisstore.BudgetStatusReaderOptions) (BudgetStatusReader, error) {
+		return redisstore.NewRedisBudgetStatusReader(options)
+	}
 }
 
 // QueryScopeResolver maps an already-authorized tenant/project scope to its
@@ -112,6 +136,7 @@ func NewPersistedQueryServiceBuilder(options PersistedQueryBuilderOptions) (Quer
 			Audit:        repositories.QueryAudit.RecordAudit,
 			Clock:        options.Clock,
 			ResolveScope: repositories.ScopeResolver,
+			BudgetStatus: repositories.BudgetStatus,
 		})
 	}, nil
 }

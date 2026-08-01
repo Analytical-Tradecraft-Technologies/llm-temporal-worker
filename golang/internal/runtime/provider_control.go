@@ -37,6 +37,12 @@ type PostgresQueryRepositories struct {
 	SpendSummary   *postgresstore.SpendSummaryRepository
 	QueryAudit     *postgresstore.QueryExecutionRepository
 	ScopeResolver  QueryScopeResolver
+	// BudgetStatus is the snapshot-owned Redis reader for budget_status. It is
+	// kept beside the query repository bundle only because this bundle is the
+	// existing per-snapshot query composition handoff. It is never read from
+	// PostgreSQL and remains nil unless production composition explicitly
+	// constructs a Redis generation reader.
+	BudgetStatus BudgetStatusReader
 }
 
 // PostgresQueryRepositoriesSource is implemented by PostgreSQL closers that

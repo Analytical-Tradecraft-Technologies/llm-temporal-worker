@@ -61,13 +61,19 @@ separate callback at this production composition boundary. A PostgreSQL
 closer may expose the query capabilities through
 `PostgresQueryRepositoriesSource`; missing read repositories remain a
 permanent unsupported-capability response rather than an empty result.
-Budget status remains unavailable through this helper: a process-lifetime
-builder must not capture a Redis reader across reloads. An embedding may use
-the low-level constructor only when it can supply a reader owned by that exact
-snapshot; the default production factory does not yet expose that capability.
-For the same reload-safety reason, spend summary obtains its scope resolver
-from `PostgresQueryRepositories.ScopeResolver`, not from process-lifetime
-builder options.
+
+Budget status is composed through the separate
+`ProductionFactoryOptions.BudgetStatusReaderFactory` seam. The factory invokes
+it once for each immutable snapshot and passes the exact Redis client,
+generation port, key space, Function mode, and clock owned by that snapshot.
+`runtime.NewRedisBudgetStatusReaderFactory()` adapts the built-in
+`redis.NewRedisBudgetStatusReader`; deployments that need a custom invoker may
+wrap that constructor, but must preserve the same generation/provenance and
+bounded-read contract. A nil factory, nil reader, or unavailable Redis
+generation leaves `budget_status` unsupported and never falls back to
+PostgreSQL. For the same reload-safety reason, spend summary obtains its
+scope resolver from `PostgresQueryRepositories.ScopeResolver`, not from
+process-lifetime builder options.
 
 The PostgreSQL composition is persisted-only. Refresh requests are rejected
 until an explicit management refresh adapter is supplied. Budget status
@@ -201,12 +207,15 @@ queryBuilder, _ := runtime.NewPersistedQueryServiceBuilder(runtime.PersistedQuer
     Cursor:    &control.CursorCodec{Key: cursorKey, TTL: 15 * time.Minute},
 })
 factory, _ := runtime.NewProductionEngineFactory(runtime.ProductionFactoryOptions{
-    QueryServiceBuilder: queryBuilder,
+    QueryServiceBuilder:          queryBuilder,
+    BudgetStatusReaderFactory: runtime.NewRedisBudgetStatusReaderFactory(),
 })
 ```
 
 The builder receives the same immutable snapshot used to construct the worker;
-it must not resolve credentials or mutate that snapshot. The deployment's
+it must not resolve credentials or mutate that snapshot. The budget reader
+factory receives that snapshot's Redis capabilities independently and must not
+retain them after the reader is drained. The deployment's
 `PostgresQueryRepositoriesSource` must provide `QueryAudit`; the default
 PostgreSQL closer deliberately does not invent the HMAC keyrings and scope
 repository required to construct that ledger. A deployment that enables spend
