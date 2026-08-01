@@ -144,6 +144,10 @@ contract:
    every member and the high-water mark came from one generation; independent
    client-side `HMGET` commands are not sufficient. The invocation must not
    use `HSCAN`, `HGETALL`, or an unbounded operation lookup on the query path.
+   The active-generation pointer is included in that same invocation and is
+   fenced against the generation, incarnation, and manifest digest supplied by
+   the reader. A pointer switch between the client-side manifest load and the
+   Function call therefore fails closed instead of returning a stale generation.
    Missing members/fields, duplicate catalog entries, wrong schema or
    generation, malformed integers, digest/provenance mismatches, and
    `reserved + accounted > limit` all fail closed. The response cites the
