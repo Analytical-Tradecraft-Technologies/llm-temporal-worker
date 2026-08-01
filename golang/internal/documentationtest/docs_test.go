@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/contracttest"
 )
 
 var markdownLink = regexp.MustCompile(`(?m)(?:^|[^!])\[[^\]]+\]\(([^)]+)\)`)
@@ -112,6 +114,36 @@ func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.
 	}
 	if strings.Contains(text, "protected manual release workflow") {
 		t.Fatal("live-provider workflow must not be documented as a release workflow")
+	}
+}
+
+func TestFixtureMatrixListsEveryEnforcedProfile(t *testing.T) {
+	root := repositoryRoot(t)
+	matrixPath := filepath.Join(root, "docs", "testing", "fixture-matrix.md")
+	matrixBytes, err := os.ReadFile(matrixPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matrix := string(matrixBytes)
+
+	report, err := contracttest.ValidateRepository(moduleRoot(t))
+	if err != nil {
+		t.Fatalf("validate provider fixture manifests: %v", err)
+	}
+	if len(report.Enforced) == 0 {
+		t.Fatal("no enforced provider fixture manifests found")
+	}
+	for _, profile := range report.Enforced {
+		listed := false
+		for _, line := range strings.Split(matrix, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "| `"+profile.ID+"` |") {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			t.Errorf("fixture matrix does not list enforced profile %q from %s", profile.ID, profile.Path)
+		}
 	}
 }
 
