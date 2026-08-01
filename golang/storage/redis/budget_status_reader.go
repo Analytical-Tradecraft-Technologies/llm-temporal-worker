@@ -24,9 +24,12 @@ import (
 const (
 	// BudgetStatusWindowSchema is intentionally distinct from the durable v1
 	// record schema. A hash without this exact marker is unsupported.
-	BudgetStatusWindowSchema    = "budget-window/v2"
-	BudgetStatusFunctionLibrary = "llmtw_budget_status_v2"
-	BudgetStatusFunctionVersion = "budget_status_v2"
+	BudgetStatusWindowSchema = "budget-window/v2"
+	// The active-generation fence is part of the Function key contract. Keep
+	// this identity separate from the original v2 Function so old and new
+	// workers can be rolled out together while both libraries remain loaded.
+	BudgetStatusFunctionLibrary = "llmtw_budget_status_v3"
+	BudgetStatusFunctionVersion = "budget_status_v3"
 	BudgetStatusAction          = "read"
 	BudgetStatusMaxExpiryDrain  = 1024
 	maxBudgetStatusMembers      = 4096

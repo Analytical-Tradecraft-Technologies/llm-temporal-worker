@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -175,6 +177,19 @@ func TestBudgetStatusFunctionSourceIsBoundedAndVersioned(t *testing.T) {
 		if !strings.Contains(source, required) {
 			t.Fatalf("source is missing %q", required)
 		}
+	}
+}
+
+func TestBudgetStatusFunctionIdentitySeparatesFencedKeyContract(t *testing.T) {
+	if BudgetStatusFunctionLibrary == "llmtw_budget_status_v2" || BudgetStatusFunctionVersion == "budget_status_v2" {
+		t.Fatalf("fenced budget status Function must not reuse the v2 identity: %q/%q", BudgetStatusFunctionLibrary, BudgetStatusFunctionVersion)
+	}
+	source := BudgetStatusFunctionLibrarySource()
+	legacy := strings.Replace(source, "#!lua name="+BudgetStatusFunctionLibrary, "#!lua name=llmtw_budget_status_v2", 1)
+	legacy = strings.Replace(legacy, "redis.register_function('"+BudgetStatusFunctionVersion+"'", "redis.register_function('budget_status_v2'", 1)
+	legacyDigest := sha256.Sum256([]byte(legacy))
+	if BudgetStatusFunctionDigest() == hex.EncodeToString(legacyDigest[:]) {
+		t.Fatal("fenced Function digest must differ from the v2 key contract")
 	}
 }
 
