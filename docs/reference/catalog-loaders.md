@@ -43,12 +43,21 @@ entries:
 
 The local fixture's `profiles` map is also supported. Its `input`, `output`,
 and `service_classes` lists are validated against the same closed vocabulary.
-The loader converts claims to `provider.CapabilitySet`; `reference` is
+The loader retains declared service classes on the compiled capability profile.
+For the versioned `entries` shape, `service.economy`, `service.standard`, and
+`service.priority` claims are retained in the same field; an `unsupported`
+claim is not considered available. An omitted service-class declaration is
+distinguished from an explicitly empty declaration for compatibility with
+older catalogs. `reference` is
 validated as a known catalog claim but is not emitted because the provider
 port has no external-reference feature. An `emulated` claim must name a
 transform. Family aliases used by config (`azure_openai_responses` and
 `bedrock_anthropic_messages`; `bedrock_converse` maps to the dedicated Bedrock
 Converse provider family) are normalized to their provider family.
+
+During runtime snapshot compilation, Bedrock Converse routes are checked
+against an explicitly declared model service-class set. A route that advertises
+an undeclared class is rejected before any provider adapter can dispatch it.
 
 ## Price documents
 

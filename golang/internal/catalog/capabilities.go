@@ -2,9 +2,11 @@ package catalog
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -109,11 +111,23 @@ func compileCapabilityEntry(version string, index int, entry capabilityEntryDocu
 	if err := entry.Limits.validate(path + ".limits"); err != nil {
 		return CapabilityProfile{}, err
 	}
+	serviceClasses, serviceClassesDeclared, err := compileEntryServiceClasses(entry.Features, path+".features")
+	if err != nil {
+		return CapabilityProfile{}, err
+	}
 	set, err := compileClaims(version, entry.Features, path+".features")
 	if err != nil {
 		return CapabilityProfile{}, err
 	}
-	return CapabilityProfile{ID: entry.ID, Family: family, Model: entry.Model.Exact, VerifiedAt: entry.VerifiedAt, Set: set}, nil
+	return CapabilityProfile{
+		ID:                     entry.ID,
+		Family:                 family,
+		Model:                  entry.Model.Exact,
+		VerifiedAt:             entry.VerifiedAt,
+		Set:                    set,
+		ServiceClasses:         serviceClasses,
+		ServiceClassesDeclared: serviceClassesDeclared,
+	}, nil
 }
 
 func compileCapabilityProfile(version, id string, profile capabilityProfileFile) (CapabilityProfile, error) {
@@ -155,21 +169,62 @@ func compileCapabilityProfile(version, id string, profile capabilityProfileFile)
 		outputSeen[canonical] = struct{}{}
 		features[canonical] = capabilityClaimFile{Level: "native"}
 	}
+	serviceClasses := make([]llm.ServiceClass, 0, len(profile.ServiceClasses))
 	seenClasses := make(map[string]struct{}, len(profile.ServiceClasses))
 	for index, value := range profile.ServiceClasses {
-		if _, err := validateServiceClass(value, fmt.Sprintf("profiles.%s.service_classes[%d]", id, index)); err != nil {
+		class, err := validateServiceClass(value, fmt.Sprintf("profiles.%s.service_classes[%d]", id, index))
+		if err != nil {
 			return CapabilityProfile{}, err
 		}
 		if _, exists := seenClasses[value]; exists {
 			return CapabilityProfile{}, fmt.Errorf("profiles.%s repeats service class %q", id, value)
 		}
 		seenClasses[value] = struct{}{}
+		serviceClasses = append(serviceClasses, class)
 	}
+	sort.Slice(serviceClasses, func(i, j int) bool { return serviceClasses[i] < serviceClasses[j] })
 	set, err := compileClaims(version, features, "profiles."+id+".features")
 	if err != nil {
 		return CapabilityProfile{}, err
 	}
-	return CapabilityProfile{ID: id, Family: family, Model: profile.Model, Set: set}, nil
+	return CapabilityProfile{
+		ID:                     id,
+		Family:                 family,
+		Model:                  profile.Model,
+		Set:                    set,
+		ServiceClasses:         serviceClasses,
+		ServiceClassesDeclared: profile.ServiceClasses != nil,
+	}, nil
+}
+
+func compileEntryServiceClasses(claims map[string]capabilityClaimFile, path string) ([]llm.ServiceClass, bool, error) {
+	classes := make([]llm.ServiceClass, 0, 3)
+	seen := make(map[llm.ServiceClass]struct{}, 3)
+	declared := false
+	for name, claim := range claims {
+		class, ok := serviceClassFeature(name)
+		if !ok {
+			continue
+		}
+		declared = true
+		state := provider.CapabilityState(claim.Level)
+		if !state.Valid() {
+			return nil, false, fmt.Errorf("%s.%s.level %q is unsupported", path, name, claim.Level)
+		}
+		if state == provider.CapabilityEmulated && strings.TrimSpace(claim.Transform) == "" {
+			return nil, false, fmt.Errorf("%s.%s.transform is required for emulated capability", path, name)
+		}
+		if state == provider.CapabilityUnsupported {
+			continue
+		}
+		if _, exists := seen[class]; exists {
+			return nil, false, fmt.Errorf("%s maps conflicting claims to service class %q", path, class)
+		}
+		seen[class] = struct{}{}
+		classes = append(classes, class)
+	}
+	sort.Slice(classes, func(i, j int) bool { return classes[i] < classes[j] })
+	return classes, declared, nil
 }
 
 func (limits capabilityLimitsFile) validate(path string) error {
@@ -245,6 +300,19 @@ func providerFeature(name, path string) (provider.Feature, bool, error) {
 		return "", false, nil
 	default:
 		return "", false, fmt.Errorf("%s has unsupported feature %q", path, name)
+	}
+}
+
+func serviceClassFeature(name string) (llm.ServiceClass, bool) {
+	switch name {
+	case "service.economy":
+		return llm.ServiceClassEconomy, true
+	case "service.standard":
+		return llm.ServiceClassStandard, true
+	case "service.priority":
+		return llm.ServiceClassPriority, true
+	default:
+		return "", false
 	}
 }
 

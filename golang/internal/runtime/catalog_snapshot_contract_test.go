@@ -211,6 +211,86 @@ func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 	}
 }
 
+func TestCompileRoutesEnforcesBedrockModelServiceClasses(t *testing.T) {
+	tests := []struct {
+		name           string
+		model          string
+		profileClasses []llm.ServiceClass
+		routeClasses   []llm.ServiceClass
+		wantErr        string
+	}{
+		{
+			name:           "nova lite rejects priority",
+			model:          "amazon.nova-lite-v1:0",
+			profileClasses: []llm.ServiceClass{llm.ServiceClassStandard},
+			routeClasses:   []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassPriority},
+			wantErr:        "service class \"priority\" is not declared",
+		},
+		{
+			name:           "nova pro accepts all classes",
+			model:          "amazon.nova-pro-v1:0",
+			profileClasses: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority},
+			routeClasses:   []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value, bundle := bedrockConverseRouteInputs(t, test.model, test.profileClasses, test.routeClasses)
+			_, err := compileRoutes(value, bundle, time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("compileRoutes() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("compileRoutes() = %v, want error containing %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func bedrockConverseRouteInputs(t *testing.T, model string, profileClasses, routeClasses []llm.ServiceClass) (config.Config, catalog.Bundle) {
+	t.Helper()
+	serviceClasses := map[llm.ServiceClass]config.TierConfig{
+		llm.ServiceClassEconomy:  {ProviderValue: "flex"},
+		llm.ServiceClassStandard: {ProviderValue: "default"},
+		llm.ServiceClassPriority: {ProviderValue: "priority"},
+	}
+	value := config.Config{
+		Version: "config-v1",
+		Limits:  config.LimitsConfig{MaxBudgetBucketsPerWindow: 64},
+		Endpoints: map[string]config.EndpointConfig{
+			"bedrock": {
+				Family: "bedrock_converse", Region: "us-east-1", AccountRegion: "us-east-1", CapabilityProfile: "bedrock-profile", PriceCatalog: "prices",
+				ServiceClasses: serviceClasses,
+			},
+		},
+		Models: map[string]config.ModelConfig{
+			"logical-model": {AllowedTenants: []string{"tenant-a"}, DataRegions: []string{"us-east-1"}, Routes: []config.RouteConfig{{ID: "bedrock-route", Endpoint: "bedrock", Model: model, Classes: routeClasses}}},
+		},
+	}
+	profile := catalog.CapabilityProfile{
+		ID:                     "bedrock-profile",
+		Family:                 provider.FamilyBedrockConverse,
+		Model:                  model,
+		ServiceClasses:         profileClasses,
+		ServiceClassesDeclared: true,
+		Set:                    provider.CapabilitySet{Version: "bedrock-converse/v1", Features: map[provider.Feature]provider.Capability{provider.FeatureText: {State: provider.CapabilityNative}}},
+	}
+	entries := make([]pricing.Entry, 0, len(routeClasses))
+	for _, class := range routeClasses {
+		entries = append(entries, pricing.Entry{
+			Provider: "aws-bedrock", Family: string(provider.FamilyBedrockConverse), EndpointID: "bedrock", Region: "us-east-1", Model: model, ProviderTier: serviceClasses[class].ProviderValue,
+			Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1"), OutputPerMillion: pricing.MustDecimalUSD("2")},
+		})
+	}
+	return value, catalog.Bundle{
+		Capabilities: map[string]catalog.CapabilityProfile{"bedrock-profile": profile},
+		Pricing:      map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices-v1", entries)},
+	}
+}
+
 func TestRuntimeCatalogRouteAffinityUsesCompiledAccountIdentity(t *testing.T) {
 	value, bundle := testRouteInputs(t)
 	model := value.Models["logical-model"]

@@ -139,6 +139,17 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 			if profile.Model != routeValue.Model {
 				return routing.Catalog{}, fmt.Errorf("route %q model %q does not match capability profile %q model %q", routeValue.ID, routeValue.Model, endpoint.CapabilityProfile, profile.Model)
 			}
+			if family == provider.FamilyBedrockConverse && profile.ServiceClassesDeclared {
+				supportedClasses := make(map[llm.ServiceClass]struct{}, len(profile.ServiceClasses))
+				for _, class := range profile.ServiceClasses {
+					supportedClasses[class] = struct{}{}
+				}
+				for _, class := range routeValue.Classes {
+					if _, supported := supportedClasses[class]; !supported {
+						return routing.Catalog{}, fmt.Errorf("route %q service class %q is not declared by Bedrock capability profile %q for model %q", routeValue.ID, class, endpoint.CapabilityProfile, profile.Model)
+					}
+				}
+			}
 			providerName, routeRegion, priceVersion, priceAvailable, err := routePriceIdentity(bundle, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, now)
 			if err != nil {
 				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)
