@@ -53,11 +53,13 @@ func (options Options) maxBytes() (int, error) {
 // an endpoint/model; Set is the provider-neutral capability contract consumed
 // by adapters.
 type CapabilityProfile struct {
-	ID         string
-	Family     provider.Family
-	Model      string
-	VerifiedAt time.Time
-	Set        provider.CapabilitySet
+	ID                     string
+	Family                 provider.Family
+	Model                  string
+	VerifiedAt             time.Time
+	Set                    provider.CapabilitySet
+	ServiceClasses         []llm.ServiceClass
+	ServiceClassesDeclared bool
 }
 
 // CapabilityCatalog is one verified capability document. Profiles are keyed

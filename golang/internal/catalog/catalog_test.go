@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
@@ -69,6 +70,9 @@ entries:
 	if got := profile.Set.Features[provider.FeatureContinuation]; got.State != provider.CapabilityUnsupported {
 		t.Fatalf("continuation = %#v", got)
 	}
+	if !profile.ServiceClassesDeclared || !reflect.DeepEqual(profile.ServiceClasses, []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassPriority, llm.ServiceClassStandard}) {
+		t.Fatalf("service classes = %#v (declared=%v)", profile.ServiceClasses, profile.ServiceClassesDeclared)
+	}
 	if catalog.Digest == ([32]byte{}) {
 		t.Fatal("catalog digest is empty")
 	}
@@ -93,6 +97,34 @@ profiles:
 	profile := catalog.Profiles["local-mock-v1"]
 	if !profile.Set.Supports(provider.FeatureText, true) || !profile.Set.Supports(provider.FeatureToolCall, true) {
 		t.Fatalf("compiled local features = %#v", profile.Set.Features)
+	}
+	if !profile.ServiceClassesDeclared || !reflect.DeepEqual(profile.ServiceClasses, []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassPriority, llm.ServiceClassStandard}) {
+		t.Fatalf("compiled local service classes = %#v (declared=%v)", profile.ServiceClasses, profile.ServiceClassesDeclared)
+	}
+}
+
+func TestLoadCapabilitiesPreservesAbsentAndExplicitlyEmptyServiceClasses(t *testing.T) {
+	ref := writeCatalog(t, `version: local-mock-v1
+profiles:
+  absent:
+    family: openai_chat
+    model: absent-model
+    input: [text]
+  empty:
+    family: openai_chat
+    model: empty-model
+    input: [text]
+    service_classes: []
+`)
+	catalog, err := LoadCapabilities(ref)
+	if err != nil {
+		t.Fatalf("LoadCapabilities() error = %v", err)
+	}
+	if catalog.Profiles["absent"].ServiceClassesDeclared {
+		t.Fatal("omitted service_classes should remain undeclared")
+	}
+	if !catalog.Profiles["empty"].ServiceClassesDeclared || len(catalog.Profiles["empty"].ServiceClasses) != 0 {
+		t.Fatalf("explicit empty service_classes = %#v (declared=%v)", catalog.Profiles["empty"].ServiceClasses, catalog.Profiles["empty"].ServiceClassesDeclared)
 	}
 }
 

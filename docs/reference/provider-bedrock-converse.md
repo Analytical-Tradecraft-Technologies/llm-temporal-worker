@@ -43,8 +43,13 @@ an economy/Flex or priority request. The [Nova Pro model
 card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-pro.html)
 lists Standard, Priority, and Flex; the enforced offline Converse contract
 therefore uses `amazon.nova-pro-v1:0` for its three-class matrix. Production
-route configuration remains responsible for advertising only the classes
-supported by its pinned model and region.
+route compilation now fails closed when a capability profile explicitly declares
+model service classes and a route advertises a class outside that declaration.
+This prevents a Nova Lite route from accidentally advertising Priority or Flex.
+Profiles from older catalogs that omit model service-class claims remain
+compatible and retain the previous operator responsibility to advertise only
+classes supported by the pinned model and region; new Bedrock profiles should
+declare the supported classes explicitly.
 
 ## Capability boundary
 
