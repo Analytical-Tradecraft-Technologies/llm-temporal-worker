@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,6 +91,41 @@ func TestCompileUSDRejectsInvalidUnknownComponent(t *testing.T) {
 	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard", UnknownComponents: []PriceComponent{"future"}}
 	if _, err := CompileUSD("catalog-v1", []Entry{entry}); err == nil {
 		t.Fatal("CompileUSD accepted an unknown price component")
+	}
+}
+
+func TestCompileUSDRejectsUnknownComponentWithNonZeroPrice(t *testing.T) {
+	tests := []struct {
+		name      string
+		component PriceComponent
+		prices    UnitPrices
+	}{
+		{name: "input", component: PriceComponentInput, prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}},
+		{name: "output", component: PriceComponentOutput, prices: UnitPrices{OutputPerMillion: MustDecimalUSD("1")}},
+		{name: "cache_read", component: PriceComponentCacheRead, prices: UnitPrices{CacheReadPerMillion: MustDecimalUSD("1")}},
+		{name: "cache_write", component: PriceComponentCacheWrite, prices: UnitPrices{CacheWritePerMillion: MustDecimalUSD("1")}},
+		{name: "reasoning", component: PriceComponentReasoning, prices: UnitPrices{ReasoningPerMillion: MustDecimalUSD("1")}},
+		{name: "per_request", component: PriceComponentPerRequest, prices: UnitPrices{PerRequest: MustDecimalUSD("1")}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry := Entry{
+				Provider:          "openai",
+				Family:            "responses",
+				EndpointID:        "prod",
+				Model:             "gpt",
+				ProviderTier:      "standard",
+				Prices:            test.prices,
+				UnknownComponents: []PriceComponent{test.component},
+			}
+			_, err := CompileUSD("catalog-v1", []Entry{entry})
+			if err == nil {
+				t.Fatal("CompileUSD accepted an unknown component with a non-zero price")
+			}
+			if !strings.Contains(err.Error(), "unknown") || !strings.Contains(err.Error(), "non-zero") {
+				t.Fatalf("CompileUSD error = %q, want unknown/non-zero context", err)
+			}
+		})
 	}
 }
 
