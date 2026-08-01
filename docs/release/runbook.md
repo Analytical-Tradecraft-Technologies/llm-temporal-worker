@@ -195,12 +195,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30717182510`](https://github.com/mfow/llm-temporal-worker/actions/runs/30717182510) at revision
-`ab39674381998c98cda4e51530983c14af389684`. The artifact is named
-`release-evidence` (artifact `8824132132`) and has SHA-256 digest
-`sha256:1b282095095f045c3859bd12756d07ab65b222ebd96fbad26eb03196fc646739`.
+artifact: [workflow run `30721763430`](https://github.com/mfow/llm-temporal-worker/actions/runs/30721763430) at revision
+`b8e3653a43552345898ebc0d7a1074a3a65533ba`. The artifact is named
+`release-evidence` (artifact `8825461239`) and has SHA-256 digest
+`sha256:e83bd17487fe6e3d3412fc755b0d1c31538bb82a1f34b140a9803ee1ce52eadf`.
 The retained bundle binds the immutable image descriptor
-`sha256:6aea55382c942cac83ec08c48e511a6bd12fa42de9b1c0bdff67553987f7e1c5`.
+`sha256:c7d476545d65cc023e6972a9df6d4f9747eb68ffa3f0dca9262233982b997ece`.
 The catalog refresh binds the thirteen already-recorded offline requirements
 to this successful master run. Pending protected-provider and publication
 requirements, plus the two unrecorded SLO measurements, remain unchanged.
@@ -236,6 +236,8 @@ the only run bound to the retained release-evidence artifact.
 | [#539](https://github.com/mfow/llm-temporal-worker/pull/539) bound durable composition across runtime phases | `8a2f9e98c2af9712efd3b1486c3ad63594ef388d` | [30715566177](https://github.com/mfow/llm-temporal-worker/actions/runs/30715566177) |
 | [#540](https://github.com/mfow/llm-temporal-worker/pull/540) rejected unsupported Bedrock authentication | `09824e628aed45c3e6965fa3ebf5033e113f2844` | [30714761560](https://github.com/mfow/llm-temporal-worker/actions/runs/30714761560) |
 | [#541](https://github.com/mfow/llm-temporal-worker/pull/541) covered generated Bedrock factory profiles | `ab39674381998c98cda4e51530983c14af389684` | [30716360753](https://github.com/mfow/llm-temporal-worker/actions/runs/30716360753) |
+| [#544](https://github.com/mfow/llm-temporal-worker/pull/544) rejected contradictory unknown pricing components | `0723ffc7489aaf9f52e2f7234d7aade7505031c7` | [30719825510](https://github.com/mfow/llm-temporal-worker/actions/runs/30719825510) |
+| [#543](https://github.com/mfow/llm-temporal-worker/pull/543) fenced Redis budget-status reads to the active generation | `b8e3653a43552345898ebc0d7a1074a3a65533ba` | [30720458198](https://github.com/mfow/llm-temporal-worker/actions/runs/30720458198) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
