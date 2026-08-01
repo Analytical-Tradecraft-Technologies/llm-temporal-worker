@@ -194,6 +194,37 @@ func TestPersistedQueryBudgetStatusRejectsMismatchedReaderInstant(t *testing.T) 
 	}
 }
 
+func TestNewPersistedQueryServiceBuilderBindsSnapshotRedisBudgetReader(t *testing.T) {
+	authorize := func(context.Context, control.Authorization) error { return nil }
+	reader := &fakeBudgetStatus{}
+	audit := &postgresstore.QueryExecutionRepository{}
+	builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
+		Authorize: authorize,
+		Cursor:    &control.CursorCodec{Key: []byte("query-builder-key"), TTL: time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{
+		QueryAudit:   audit,
+		BudgetStatus: reader,
+	})
+	if err != nil {
+		t.Fatalf("builder() error = %v", err)
+	}
+	queryService, ok := service.(*control.QueryService)
+	if !ok {
+		t.Fatalf("query service = %T, want *control.QueryService", service)
+	}
+	handler, ok := queryService.TypedHandler.(*persistedQueryHandler)
+	if !ok {
+		t.Fatalf("typed handler = %T, want *persistedQueryHandler", queryService.TypedHandler)
+	}
+	if handler.budget != reader {
+		t.Fatalf("budget reader = %T (%p), want snapshot reader %p", handler.budget, handler.budget, reader)
+	}
+}
+
 func TestPersistedQueryBudgetAndSpendFailClosed(t *testing.T) {
 	service := persistedQueryTestService(t, &fakePersistedProvider{}, nil)
 	for _, kind := range []llm.QueryKind{llm.QueryBudgetStatus, llm.QuerySpendSummary} {

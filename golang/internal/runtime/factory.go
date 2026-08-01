@@ -153,6 +153,13 @@ type ProductionFactoryOptions struct {
 	// authorization, cursor-key, and audit composition explicitly before the
 	// production factory exposes persisted control-plane queries.
 	QueryServiceBuilder QueryServiceBuilder
+	// BudgetStatusReaderFactory is an optional per-snapshot Redis composition
+	// seam. When supplied, the factory receives the exact Redis client,
+	// generation port, and key space owned by the snapshot being built. A nil
+	// reader leaves budget_status unsupported; it never falls back to
+	// PostgreSQL. The default is intentionally nil until a deployment opts into
+	// the versioned Redis reader and its preloaded Function contract.
+	BudgetStatusReaderFactory BudgetStatusReaderFactory
 	// DurableCompositionFactory is an optional Task 19 binding for the complete
 	// snapshot-owned PostgreSQL/Redis durable state composition. It is not
 	// inferred from the legacy admission stores; callers must supply every
@@ -425,6 +432,18 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			return nil, nil, fmt.Errorf("construct Redis budget generation port: %w", err)
 		}
 	}
+	budgetStatusReader, err := composeBudgetStatusReader(ctx, snapshot, factory.options.Clock, value.State.Redis.AdmissionMode, redisClient, generationPort, budgetKeys, factory.options.BudgetStatusReaderFactory)
+	if err != nil {
+		if postgresCloser != nil {
+			_ = postgresCloser.Close()
+		}
+		closeOwned()
+		return nil, nil, fmt.Errorf("construct Redis budget status reader: %w", err)
+	}
+	// The query repository bundle is the existing per-snapshot composition
+	// handoff. BudgetStatus is deliberately the only non-PostgreSQL capability
+	// carried here and is nil when its Redis seam was not explicitly enabled.
+	queryRepos.BudgetStatus = budgetStatusReader
 	var redisProbe DependencyProbe
 	switch {
 	case generationPort != nil && streamEnabled:
@@ -611,6 +630,25 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	}
 	clients.v1Runtime = v1Runtime
 	return engineValue, clients, nil
+}
+
+// composeBudgetStatusReader binds the Redis budget reader only when all of
+// the snapshot-owned capabilities required by its coherent read are present.
+// In particular, a missing Redis client or generation port is not repaired by
+// consulting PostgreSQL: the returned nil reader keeps budget_status typed
+// unsupported at the query boundary.
+func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, clock func() time.Time, admissionMode string, client redis.UniversalClient, generation redisstore.BudgetGenerationPort, keys redisstore.BudgetKeySpace, factory BudgetStatusReaderFactory) (BudgetStatusReader, error) {
+	if factory == nil || client == nil || generation == nil {
+		return nil, nil
+	}
+	return factory(ctx, snapshot, redisstore.BudgetStatusReaderOptions{
+		Client:          client,
+		Generation:      generation,
+		Keys:            keys,
+		Mode:            redisstore.AdmissionMode(admissionMode),
+		FunctionVersion: redisstore.BudgetStatusFunctionVersion,
+		Clock:           clock,
+	})
 }
 
 // buildMemory composes the explicitly development-only, single-process state

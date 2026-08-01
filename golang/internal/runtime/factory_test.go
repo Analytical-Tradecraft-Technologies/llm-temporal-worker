@@ -44,6 +44,49 @@ func TestRedisKeyOptionsUseConfiguredPrefix(t *testing.T) {
 	}
 }
 
+func TestComposeBudgetStatusReaderBindsSnapshotOwnedRedisCapabilities(t *testing.T) {
+	client := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
+	defer client.Close()
+	keys, err := redisstore.NewBudgetKeySpace(redisstore.KeyOptions{
+		Prefix:    "worker",
+		HashTag:   "budget",
+		KeySecret: []byte("01234567890123456789012345678901"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := &fakeBudgetGenerationProbe{}
+	snapshot := &config.Snapshot{}
+	var observed redisstore.BudgetStatusReaderOptions
+	calls := 0
+	factory := func(_ context.Context, gotSnapshot *config.Snapshot, options redisstore.BudgetStatusReaderOptions) (BudgetStatusReader, error) {
+		calls++
+		if gotSnapshot != snapshot {
+			t.Fatalf("snapshot = %p, want %p", gotSnapshot, snapshot)
+		}
+		observed = options
+		return &fakeBudgetStatus{}, nil
+	}
+	reader, err := composeBudgetStatusReader(context.Background(), snapshot, time.Now, string(redisstore.AdmissionModeFunction), client, generation, keys, factory)
+	if err != nil {
+		t.Fatalf("composeBudgetStatusReader() error = %v", err)
+	}
+	if reader == nil || calls != 1 {
+		t.Fatalf("reader=%T calls=%d, want one snapshot reader", reader, calls)
+	}
+	if observed.Client != client || observed.Generation != generation || observed.Keys.ActiveGenerationKey() != keys.ActiveGenerationKey() || observed.Mode != redisstore.AdmissionModeFunction || observed.FunctionVersion != redisstore.BudgetStatusFunctionVersion {
+		t.Fatalf("reader options were not snapshot-owned: client=%T generation=%T mode=%q version=%q", observed.Client, observed.Generation, observed.Mode, observed.FunctionVersion)
+	}
+
+	calls = 0
+	if reader, err := composeBudgetStatusReader(context.Background(), snapshot, time.Now, "function", nil, generation, keys, factory); err != nil || reader != nil || calls != 0 {
+		t.Fatalf("missing Redis client should remain unavailable: reader=%T err=%v calls=%d", reader, err, calls)
+	}
+	if reader, err := composeBudgetStatusReader(context.Background(), snapshot, time.Now, "function", client, nil, keys, factory); err != nil || reader != nil || calls != 0 {
+		t.Fatalf("missing generation should remain unavailable: reader=%T err=%v calls=%d", reader, err, calls)
+	}
+}
+
 func TestBuildPostgresResolvesDurableNamespaceAndKeepsSecretsOutOfProbe(t *testing.T) {
 	var got config.PostgresConfig
 	var gotNamespace postgresstore.Namespace

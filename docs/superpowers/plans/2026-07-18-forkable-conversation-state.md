@@ -810,10 +810,13 @@ horizon-bound cursors, persisted PostgreSQL read adapters, Redis budget reader
 seam, and query-execution audit adapter are implemented with offline and
 opt-in PostgreSQL plan coverage. The boundary now also rejects unordered or
 duplicate typed result keys before a continuation is signed or audit evidence
-is committed. Provider refresh management, live Redis window materialization,
-and deployment-owned authorization/key/audit wiring remain explicit
-composition and protected-evidence work; they are intentionally fail-closed
-and are not represented as complete by the checked-in tests.
+is committed. The production factory now has an explicit per-snapshot Redis
+budget-reader seam that binds the versioned reader to the active Redis
+generation without a PostgreSQL fallback. Provider refresh management, live
+Redis window materialization, and deployment-owned authorization/key/audit
+wiring remain explicit composition and protected-evidence work; they are
+intentionally fail-closed and are not represented as complete by the
+checked-in tests.
 
 The current durable Redis v1 hashes are not safe input for `budget_status`:
 they are aggregate-only, not generation-scoped, do not provide a complete

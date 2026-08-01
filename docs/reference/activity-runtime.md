@@ -81,13 +81,20 @@ and spend summary is documented in
 through an explicit `ProductionFactoryOptions.QueryServiceBuilder`. Spend
 summary additionally requires `PersistedQueryOptions.ResolveScope`, an
 authenticated deployment resolver for the opaque PostgreSQL scope UUID;
-missing, failed, or nil scope resolution fails closed. Refresh requests and
-budget status remain fail-closed until their management and Redis-generation
-adapters are supplied. `PersistedQueryOptions.BudgetStatus` is the typed
-snapshot-scoped reader seam for that Redis adapter; it must bind the requested
-instant to active generation/manifest/Stream provenance and cannot fall back
-to PostgreSQL. The current storage package does not yet publish a versioned
-window-hash field reader, so a manifest-only adapter is intentionally rejected.
+missing, failed, or nil scope resolution fails closed. Refresh requests remain
+fail-closed until their management adapters are supplied.
+
+Budget status is enabled independently through the explicit per-snapshot
+`ProductionFactoryOptions.BudgetStatusReaderFactory` seam. The built-in
+`runtime.NewRedisBudgetStatusReaderFactory()` binds
+`redis.NewRedisBudgetStatusReader` to the exact Redis client, generation port,
+key space, and clock for each immutable snapshot. A nil factory, unavailable
+generation, or nil reader leaves the typed query unsupported; it never reads
+PostgreSQL budget tables. `PersistedQueryOptions.BudgetStatus` remains the
+low-level snapshot-scoped reader seam and must bind the requested instant to
+active generation/manifest/Stream provenance. The versioned window-hash field
+reader and its bounded Function read are implemented by the storage adapter;
+a manifest-only adapter is still rejected.
 Remaining
 complete Activity composition work is tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
