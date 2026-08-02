@@ -170,6 +170,28 @@ credentials and raw billing payloads are outside this contract. Until an
 authorized adapter supplies evidence, unknown-cost rows remain conservatively
 retained and must never be changed to zero.
 
+The queue can be read one bounded page at a time with the maintenance adapter.
+This command only lists opaque operation identities, completion timestamps, and
+the validated safe reason code; it does not resolve costs or mutate PostgreSQL
+or Redis. It requires the dedicated maintenance credentials and an already
+authorized opaque scope UUID:
+
+```sh
+LLMTW_MAINTENANCE_POSTGRES_USERNAME=llmtw_maintenance \
+LLMTW_MAINTENANCE_POSTGRES_PASSWORD='(injected by the job secret store)' \
+  ./llmtw-maintenance unknown-cost-list \
+  --config /etc/llmtw/config.yaml \
+  --scope-id 00000000-0000-0000-0000-000000000001 \
+  --limit 100
+```
+
+When the page is full, the JSON response includes `next_cursor` with the
+completion timestamp and operation UUID of the last row. Supply both values on
+the next invocation with `--after-completed-at` and `--after-operation-id`.
+The cursor is scope-bound and must not be reused for another scope. The
+operator remains responsible for authenticating the scope and for obtaining
+authoritative billing evidence before calling `ResolveUnknownExact`.
+
 The storage-neutral `durable.UnknownCostBoundary` is the handoff contract for
 that caller. It validates one operation/generation/incarnation identity and a
 set of exact `resolve_unknown_exact` events, commits them through the
