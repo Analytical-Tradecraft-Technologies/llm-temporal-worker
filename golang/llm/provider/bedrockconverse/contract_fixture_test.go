@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -77,18 +78,21 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 	adapter := &Adapter{endpointID: bedrockFixtureEndpoint, profile: profile}
 	for _, fixture := range []struct {
 		name, wire, semantic, operation string
-		requested                       llm.ServiceClass
+		requested, actual               llm.ServiceClass
+		providerTier                    types.ServiceTierType
 	}{
-		{name: "usage", wire: "usage-cost.response.json", semantic: "usage-cost.semantic.json", operation: "fixture-usage-cost", requested: llm.ServiceClassStandard},
-		{name: "class", wire: "class-facts.wire.json", semantic: "class-facts.semantic.json", operation: "fixture-class-facts", requested: llm.ServiceClassPriority},
+		{name: "economy-flex", wire: "class-facts-economy.wire.json", semantic: "class-facts-economy.semantic.json", operation: "fixture-class-facts-economy", requested: llm.ServiceClassEconomy, actual: llm.ServiceClassEconomy, providerTier: types.ServiceTierTypeFlex},
+		{name: "standard-default", wire: "class-facts-standard.wire.json", semantic: "class-facts-standard.semantic.json", operation: "fixture-class-facts-standard", requested: llm.ServiceClassStandard, actual: llm.ServiceClassStandard, providerTier: types.ServiceTierTypeDefault},
+		{name: "priority", wire: "class-facts.wire.json", semantic: "class-facts.semantic.json", operation: "fixture-class-facts", requested: llm.ServiceClassPriority, actual: llm.ServiceClassPriority, providerTier: types.ServiceTierTypePriority},
+		{name: "usage", wire: "usage-cost.response.json", semantic: "usage-cost.semantic.json", operation: "fixture-usage-cost", requested: llm.ServiceClassStandard, actual: llm.ServiceClassPriority, providerTier: types.ServiceTierTypePriority},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			text := "Usage fixture response."
 			inputTokens, outputTokens := int32(9), int32(4)
-			if fixture.name == "class" {
+			if fixture.name != "usage" {
 				text, inputTokens, outputTokens = "Class fixture response.", 1, 1
 			}
-			response := bedrockConverseResponse(text, inputTokens, outputTokens)
+			response := bedrockConverseResponseForTier(text, inputTokens, outputTokens, fixture.providerTier)
 			assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), fixture.wire)
 			request := llm.Request{OperationKey: fixture.operation, Model: bedrockFixtureModel, ServiceClass: fixture.requested, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "fixture"}}}}}
 			call := provider.Call{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model, OperationKey: fixture.operation, ServiceClass: fixture.requested}
@@ -103,6 +107,9 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 			assertBedrockConverseCanonicalFixture(t, semantic, fixture.semantic)
 			if lifted.Usage.InputTokens <= 0 || lifted.Usage.OutputTokens <= 0 {
 				t.Fatalf("usage was not lifted: %#v", lifted.Usage)
+			}
+			if lifted.Service.Actual == nil || *lifted.Service.Actual != fixture.actual {
+				t.Fatalf("actual service class = %#v, want %q", lifted.Service.Actual, fixture.actual)
 			}
 		})
 	}
@@ -125,6 +132,46 @@ func TestBedrockConverseContractFixturesDeclareRedactionAndClassifiedError(t *te
 	if !containsBytes(readBedrockConverseFixture(t, "classified-error.wire.json"), []byte("provider rejected")) {
 		t.Fatal("classified error fixture does not describe the mapped provider rejection")
 	}
+}
+
+func TestBedrockConverseToolUseContractFixtures(t *testing.T) {
+	request := loadBedrockConverseRequestFixture(t, "request.tool-use.semantic.json")
+	profile := mustBedrockConverseProfile(t)
+	adapter := &Adapter{endpointID: bedrockFixtureEndpoint, profile: profile}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: request,
+		Query:   provider.CapabilityQuery{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBedrockConverseCanonicalFixture(t, mustJSON(t, call.SDKParams), "request.tool-use.wire.json")
+	params, ok := call.SDKParams.(bedrockruntime.ConverseInput)
+	if !ok || params.ToolConfig == nil || len(params.ToolConfig.Tools) != 1 {
+		t.Fatalf("tool request configuration = %#v", params.ToolConfig)
+	}
+	spec, ok := params.ToolConfig.Tools[0].(*types.ToolMemberToolSpec)
+	var schemaBlock *types.ToolInputSchemaMemberJson
+	var schemaOK bool
+	if ok && spec.Value.InputSchema != nil {
+		schemaBlock, schemaOK = spec.Value.InputSchema.(*types.ToolInputSchemaMemberJson)
+	}
+	if !ok || !schemaOK || schemaBlock.Value == nil {
+		t.Fatalf("tool specification = %#v", params.ToolConfig.Tools[0])
+	}
+	schema, err := schemaBlock.Value.MarshalSmithyDocument()
+	if err != nil || string(schema) != `{"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}` {
+		t.Fatalf("tool input schema = %s, err=%v", schema, err)
+	}
+
+	response := bedrockConverseToolResponse()
+	assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), "response.tool-use.completed.json")
+	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBedrockConverseCanonicalFixture(t, mustJSON(t, lifted), "response.tool-use.semantic.json")
 }
 
 func mustBedrockConverseProfile(t *testing.T) Profile {
@@ -175,10 +222,26 @@ func assertBedrockConverseCanonicalFixture(t *testing.T, got []byte, name string
 }
 
 func bedrockConverseResponse(text string, inputTokens, outputTokens int32) bedrockruntime.ConverseOutput {
+	return bedrockConverseResponseForTier(text, inputTokens, outputTokens, types.ServiceTierTypePriority)
+}
+
+func bedrockConverseResponseForTier(text string, inputTokens, outputTokens int32, tier types.ServiceTierType) bedrockruntime.ConverseOutput {
 	return bedrockruntime.ConverseOutput{
 		Output:      &types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: text}}}},
 		StopReason:  types.StopReasonEndTurn,
 		Usage:       &types.TokenUsage{InputTokens: aws.Int32(inputTokens), OutputTokens: aws.Int32(outputTokens)},
+		ServiceTier: &types.ServiceTier{Type: tier},
+	}
+}
+
+func bedrockConverseToolResponse() bedrockruntime.ConverseOutput {
+	return bedrockruntime.ConverseOutput{
+		Output: &types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: []types.ContentBlock{
+			&types.ContentBlockMemberText{Value: "I will look that up."},
+			&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: aws.String("tool-call-1"), Name: aws.String("lookup"), Input: document.NewLazyDocument(map[string]any{"city": "Sydney"})}},
+		}}},
+		StopReason:  types.StopReasonToolUse,
+		Usage:       &types.TokenUsage{InputTokens: aws.Int32(5), OutputTokens: aws.Int32(7)},
 		ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypePriority},
 	}
 }
