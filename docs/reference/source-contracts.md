@@ -119,7 +119,9 @@ The captured SSE fixtures prove decoder and assembler semantics under
 fragmentation; they are not evidence of an end-to-end client dispatch
 implementation. Runtime route compilation also rejects a Bedrock Messages
 route when its service classes are absent from the selected model capability
-profile's explicit `service_classes` claims.
+profile's explicit `service_classes` claims. The service-class fixtures include
+both requested `priority`/actual `priority` and requested `priority`/actual
+`standard` downgrade outcomes.
 
 ### Bedrock Converse fixture boundary
 
@@ -127,7 +129,8 @@ The `bedrock-converse` profile has an enforced offline fixture matrix for the
 official AWS SDK Converse request/response shape, usage accounting, service-tier
 mapping, classified errors, and redaction markers. The service-class cases cover
 all three public mappings (`economy`/Flex, `standard`/Default, and
-`priority`/Priority), and the tool-use case covers a required tool request plus
+`priority`/Priority), including a `priority` request that receives an actual
+`standard`/Default response, and the tool-use case covers a required tool request plus
 a `tool_use` response lifted into the provider-neutral model. Converse is
 deliberately a one-shot Temporal activity boundary: these fixtures do not claim credentialed
 AWS execution or live token streaming. Protected live-provider evidence remains

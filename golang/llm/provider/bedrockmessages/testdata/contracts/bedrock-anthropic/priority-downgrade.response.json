@@ -1,0 +1,13 @@
+{
+  "id": "msg-bedrock-priority-downgrade",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-contract",
+  "content": [{"type":"text","text":"priority fell back to standard"}],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 5,
+    "service_tier": "default"
+  }
+}
