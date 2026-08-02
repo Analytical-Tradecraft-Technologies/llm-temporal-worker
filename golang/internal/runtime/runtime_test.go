@@ -275,7 +275,7 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 	metrics.RecordActivity("success", "none", time.Millisecond, "response_received")
 	metrics.RecordActivity("completed", "none", time.Millisecond, "total")
 	metrics.RecordActivity("success", "none", time.Millisecond, "streaming")
-	metrics.RecordCost("endpoint", "model", "standard", "catalog_usage", 1)
+	metrics.RecordExactCost("endpoint", "model", "standard", "catalog_usage")
 	metrics.RecordProviderAttempt("endpoint", "provider-model", "standard", "success", time.Millisecond)
 	families, err := metrics.Gather()
 	if err != nil {
@@ -308,7 +308,7 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 	}
 	methods := make(map[string]struct{})
 	for _, family := range families {
-		if family.GetName() != "llmtw_cost_micro_usd_total" {
+		if family.GetName() != "llmtw_cost_usd_total" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {

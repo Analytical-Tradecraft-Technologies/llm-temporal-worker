@@ -240,8 +240,8 @@ Metric labels use bounded configured IDs, never tenant-provided free text:
 - `llmtw_provider_duration_seconds{endpoint,model,class}`;
 - `llmtw_service_class_actual_total{requested,actual,endpoint}`;
 - `llmtw_budget_admission_total{policy,outcome}`;
-- `llmtw_budget_reserved_micro_usd{policy,window}`;
-- `llmtw_cost_micro_usd_total{endpoint,model,class,method}`;
+- `llmtw_cost_usd_total{endpoint,model,class,method}` as a bounded count of
+  exact-cost events (the amount remains in the durable ledger);
 - `llmtw_cost_status_total{endpoint,model,class,status,method}` where `status`
   is `exact` or `unknown`; the amount and unknown reason remain in PostgreSQL;
 - `llmtw_operation_state_total{state}`;
@@ -271,13 +271,9 @@ the bounded failure outcome, and log only a safe error classification. Success
 records the matching bounded success outcome. Alert on failures rather than
 attempting to parse logs for configuration content.
 
-Money counters use microUSD integer semantics; exporters may expose them as
-floating-point observations only after the accounting decision.
-
-The target Phase A PostgreSQL change removes the two **micro_usd** metrics as
-authoritative money. Prometheus floating-point samples cannot faithfully carry
-**NUMERIC(38,18)**. Exact totals come from the typed PostgreSQL query Activity;
-telemetry exposes bounded counts such as
+Prometheus floating-point samples cannot faithfully carry **NUMERIC(38,18)**.
+Exact totals come from the typed PostgreSQL query Activity; telemetry exposes
+bounded counts such as
 **llmtw_cost_status_total{endpoint,model,class,status,method}** and
 unknown-cost/price conditions.
 Dashboards must not reconstruct actual spend by treating an unknown observation

@@ -55,11 +55,6 @@ func recordCompletion(ctx context.Context, response llm.Response) {
 			metrics.RecordCostStatus(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), "exact", response.Cost.Method)
 			metrics.RecordExactCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method)
 		}
-		if response.Cost.ActualCostUSD != nil {
-			if materialized, err := compatibilityActualMicroUSD(*response.Cost.ActualCostUSD); err == nil {
-				metrics.RecordCost(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), response.Cost.Method, float64(materialized))
-			}
-		}
 	} else if response.Cost.Status == llm.CostStatusUnknown {
 		metrics.RecordCostStatus(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), "unknown", "")
 	}

@@ -25,8 +25,8 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 	metrics.RecordProviderAttempt("secret-endpoint", "secret-model", "secret-class", "secret-outcome", time.Second)
 	metrics.RecordActivityFailure("worker")
 	metrics.RecordActivityFailure("secret-origin")
-	metrics.RecordCost("endpoint-a", "model-a", "standard", "provider", 7)
-	metrics.RecordCost("endpoint-a", "model-a", "standard", "tenant-secret", 3)
+	metrics.RecordExactCost("endpoint-a", "model-a", "standard", "provider")
+	metrics.RecordCostStatus("endpoint-a", "model-a", "standard", "exact", "provider")
 
 	response := &strings.Builder{}
 	metricFamilies, err := metrics.Gather()
@@ -83,8 +83,6 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.RecordProviderAttempt("endpoint-a", "model-a", "priority", "success", time.Second)
 	metrics.RecordServiceClass("standard", "priority", "endpoint-a")
 	metrics.RecordBudgetAdmission("policy-a", "success")
-	metrics.SetBudgetReserved("policy-a", "hour", 12.5)
-	metrics.RecordCost("endpoint-a", "model-a", "standard", "provider", 7.25)
 	metrics.RecordExactCost("endpoint-a", "model-a", "standard", "provider")
 	metrics.RecordCostStatus("endpoint-a", "model-a", "standard", "exact", "provider")
 	metrics.RecordCostStatus("endpoint-a", "model-a", "standard", "unknown", "")
@@ -118,7 +116,7 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	wantFamilies := []string{
 		"llmtw_activity_total", "llmtw_activity_duration_seconds", "llmtw_activity_failure_total",
 		"llmtw_provider_attempt_total", "llmtw_provider_duration_seconds", "llmtw_service_class_actual_total",
-		"llmtw_budget_admission_total", "llmtw_budget_reserved_micro_usd", "llmtw_cost_micro_usd_total",
+		"llmtw_budget_admission_total",
 		"llmtw_cost_usd_total", "llmtw_operation_state_total", "llmtw_ambiguous_total",
 		"llmtw_continuation_total", "llmtw_config_reload_total", "llmtw_worker_polling",
 		"llmtw_heartbeat_age_seconds", "llmtw_maintenance_rows_total",
@@ -134,9 +132,6 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		if !seen[name] {
 			t.Fatalf("metric family %q was not gathered; families = %v", name, seen)
 		}
-	}
-	if got := metricValue(families, "llmtw_budget_reserved_micro_usd", nil); got != 12.5 {
-		t.Fatalf("reserved budget = %v, want 12.5", got)
 	}
 	if got := metricValue(families, "llmtw_worker_polling", nil); got != 0 {
 		t.Fatalf("worker polling = %v, want 0 after stop", got)
@@ -211,8 +206,6 @@ func TestMetricsNilBindingsAndDefaultBuiltInsAreSafe(t *testing.T) {
 	metrics.RecordProviderAttempt("endpoint", "model", "economy", "success", time.Second)
 	metrics.RecordServiceClass("standard", "priority", "endpoint")
 	metrics.RecordBudgetAdmission("policy", "success")
-	metrics.SetBudgetReserved("policy", "window", 1)
-	metrics.RecordCost("endpoint", "model", "standard", "provider", 1)
 	metrics.RecordExactCost("endpoint", "model", "standard", "provider")
 	metrics.RecordCostStatus("endpoint", "model", "standard", "unknown", "secret-method")
 	metrics.RecordOperationState("started")

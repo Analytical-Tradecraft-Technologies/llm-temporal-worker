@@ -28,7 +28,8 @@ func TestGenerateRecordsMetricsForSuccessfulProviderDispatch(t *testing.T) {
 		assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
 	}
 	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_micro_usd_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "method": "catalog_usage"}, 2)
+	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "method": "catalog_usage"}, 1)
+	assertMetricCounter(t, metrics, "llmtw_cost_status_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "status": "exact", "method": "catalog_usage"}, 1)
 }
 
 func TestGenerateRecordsMetricsForAmbiguousProviderDispatch(t *testing.T) {
@@ -45,7 +46,7 @@ func TestGenerateRecordsMetricsForAmbiguousProviderDispatch(t *testing.T) {
 		assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
 	}
 	assertMetricCounter(t, metrics, "llmtw_ambiguous_total", map[string]string{"endpoint": "endpoint-1"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_micro_usd_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "method": "catalog_usage"}, 0)
+	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "method": "catalog_usage"}, 0)
 }
 
 func TestOperationMetricsMapRawFailedStatesToBoundedFailedLabel(t *testing.T) {
