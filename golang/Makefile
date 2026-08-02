@@ -58,6 +58,7 @@ live-contract-verify:
 		LLMTW_LIVE_ANTHROPIC_DIRECT=0 \
 		LLMTW_LIVE_ANTHROPIC_AWS=0 \
 		LLMTW_LIVE_BEDROCK_ANTHROPIC=0 \
+		LLMTW_LIVE_BEDROCK_CONVERSE=0 \
 		$(GO) test -tags=live ./integration/live -count=1
 
 build:

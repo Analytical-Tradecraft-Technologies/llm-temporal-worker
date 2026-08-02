@@ -129,6 +129,24 @@ func TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile(t *testi
 	assertExactWorkflowSecretReferences(t, workflow)
 }
 
+func TestLiveContractOfflineTargetDisablesEveryProfileGate(t *testing.T) {
+	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
+	target := makeTarget(t, makefile, "live-contract-verify:\n", "\n\nbuild:\n")
+
+	for _, gate := range []string{"LLMTW_LIVE_TESTS", "LLMTW_LIVE_AUTHORIZED"} {
+		assignment := "\t\t" + gate + "=0 \\\n"
+		if strings.Count(target, assignment) != 1 {
+			t.Fatalf("live-contract-verify must disable %s exactly once, found %d", gate, strings.Count(target, assignment))
+		}
+	}
+	for _, profile := range liveProviderWorkflowProfiles {
+		assignment := "\t\t" + profile.enableEnv + "=0 \\\n"
+		if strings.Count(target, assignment) != 1 {
+			t.Fatalf("live-contract-verify must disable profile %q exactly once, found %d", profile.enableEnv, strings.Count(target, assignment))
+		}
+	}
+}
+
 func assertLiveProviderWorkflowSourceAndActionBoundary(t *testing.T, workflow workflowDocument) {
 	t.Helper()
 	if strings.Contains(workflow.raw, "actions/checkout@") {
