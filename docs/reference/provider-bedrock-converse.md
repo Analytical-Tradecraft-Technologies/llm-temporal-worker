@@ -5,6 +5,12 @@ the Bedrock Runtime `Converse` operation. It is a single request/response
 boundary intended for Temporal Activities; this adapter intentionally does not
 implement live token streaming or `ConverseStream`.
 
+The checked-in [`config.example.yaml`](../../golang/config.example.yaml)
+contains a complete `bedrock-converse-us-east-1` endpoint and route using
+Amazon Nova Pro (`amazon.nova-pro-v1:0`). Use that as the shape for a
+production endpoint, replacing the example pricing and capability catalog
+references with the deployment's pinned catalogs.
+
 ## Configuration
 
 Configure the AWS default credential chain explicitly. The region selects the
