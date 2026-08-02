@@ -1061,12 +1061,43 @@ func endpointCapabilities(snapshot engine.Snapshot, endpointID string) (provider
 			if found.Version != capabilities.Version {
 				return provider.CapabilitySet{}, fmt.Errorf("endpoint %q has conflicting capability versions", endpointID)
 			}
+			if feature, conflict := capabilityFeatureConflict(found, capabilities); conflict {
+				return provider.CapabilitySet{}, fmt.Errorf("endpoint %q has conflicting capability declaration for feature %q", endpointID, feature)
+			}
 		}
 	}
 	if found.Version == "" {
 		return provider.CapabilitySet{}, fmt.Errorf("endpoint %q has no route capability profile", endpointID)
 	}
 	return completeCapabilities(found), nil
+}
+
+// capabilityFeatureConflict keeps one endpoint's adapter profile immutable
+// when that endpoint is referenced by more than one model route. A route
+// snapshot is allowed to reuse an endpoint only when its complete provider
+// capability declarations agree; otherwise map iteration order could select a
+// different feature state, transform, or diagnostic on each process start.
+func capabilityFeatureConflict(left, right provider.CapabilitySet) (provider.Feature, bool) {
+	features := make(map[provider.Feature]struct{}, len(left.Features)+len(right.Features))
+	for feature := range left.Features {
+		features[feature] = struct{}{}
+	}
+	for feature := range right.Features {
+		features[feature] = struct{}{}
+	}
+	ordered := make([]provider.Feature, 0, len(features))
+	for feature := range features {
+		ordered = append(ordered, feature)
+	}
+	sort.Slice(ordered, func(index, next int) bool { return ordered[index] < ordered[next] })
+	for _, feature := range ordered {
+		leftCapability, leftOK := left.Features[feature]
+		rightCapability, rightOK := right.Features[feature]
+		if leftOK != rightOK || (leftOK && leftCapability != rightCapability) {
+			return feature, true
+		}
+	}
+	return "", false
 }
 
 func providerCapabilities(value routing.CapabilitySet) provider.CapabilitySet {
