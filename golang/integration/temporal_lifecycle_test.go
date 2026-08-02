@@ -480,7 +480,7 @@ func TestObservabilityRejectsContentAndTenantMarkersAcrossSinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	metrics.RecordProviderAttempt(marker, marker, marker, marker, time.Second)
-	metrics.RecordCost("endpoint-1", "model-1", "standard", marker, 1)
+	metrics.RecordExactCost("endpoint-1", "model-1", "standard", marker)
 	families, err := metrics.Gather()
 	if err != nil {
 		t.Fatal(err)
