@@ -401,7 +401,19 @@ go test ./llm/provider/anthropicmessages -run 'Stream|Fragment|Client|Strict'
 go test -race ./llm/provider/anthropicmessages
 ```
 
-## Task 9: Wire Bedrock Anthropic streaming
+## Task 9: [Superseded] Wire Bedrock Anthropic streaming
+
+**Status:** Out of scope for the Generate-only v1 boundary. The Temporal
+runtime supports one-shot `Generate` and returns a completed normalized
+response; it does not dispatch Bedrock Anthropic streaming or any other
+token-event API. The existing Bedrock Messages stream decoders and fixtures
+remain fixture-only parser-regression coverage. Keep their tests and source
+intact, but do not add runtime streaming dispatch or treat this historical
+task as an outstanding v1 requirement.
+
+The historical PR title, file list, implementation steps, and acceptance
+commands below are retained for traceability only; they are not v1 work and
+must not be used to justify stream dispatch.
 
 **PR title:** `feat(bedrock): dispatch Anthropic streams`
 
