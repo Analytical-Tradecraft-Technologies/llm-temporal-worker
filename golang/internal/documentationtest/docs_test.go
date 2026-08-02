@@ -254,6 +254,10 @@ func TestV1DocumentationStatesGenerateOnlyBoundary(t *testing.T) {
 			required: "V1 supports only one-shot `Generate` and a completed normalized response. It does not require a streaming adapter, SDK stream dispatch, or Temporal runtime dispatch.",
 		},
 		{
+			path:     "docs/superpowers/plans/2026-07-14-v1-completion.md",
+			required: "Task 9: [Superseded] Wire Bedrock Anthropic streaming **Status:** Out of scope for the Generate-only v1 boundary.",
+		},
+		{
 			path:     "llm/engine.go",
 			required: "Deprecated: streaming is unsupported in v1. This interface remains for source compatibility only and MUST NOT be wired into the Temporal runtime.",
 		},
