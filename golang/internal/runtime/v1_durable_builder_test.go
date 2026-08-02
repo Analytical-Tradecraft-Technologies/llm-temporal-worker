@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -120,6 +121,70 @@ func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *test
 	}
 	if _, ok := runtimeValue.(*activity.DurableV1Runtime); !ok {
 		t.Fatalf("runtime type = %T, want *activity.DurableV1Runtime", runtimeValue)
+	}
+}
+
+func TestDurableV1RuntimeBuilderRejectsCompositionFromDifferentConfigSnapshot(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("compile example config: %v", err)
+	}
+
+	generateCalled, compactCalled := false, false
+	capabilities := completeDurableBuilderCapabilities(
+		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+			generateCalled = true
+			return validBuilderGeneratePorts(nil), nil
+		},
+		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+			compactCalled = true
+			return validCompactPorts(), nil
+		},
+	)
+	// The composition is locally valid, but its identity belongs to another
+	// configuration epoch. The builder must reject it before either phase
+	// factory can attach ports to the Activity.
+	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
+		return validCapabilityComposition(), nil
+	}
+	_, err = NewDurableV1RuntimeBuilder()(context.Background(), snapshot, nil, &generateBuilderClientSet{capabilities: capabilities})
+	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "config digest") {
+		t.Fatalf("builder error = %v, want snapshot config-digest failure", err)
+	}
+	if generateCalled || compactCalled {
+		t.Fatalf("phase factories ran after snapshot identity mismatch: generate=%t compact=%t", generateCalled, compactCalled)
+	}
+}
+
+func TestDurableV1RuntimeBuilderAcceptsCompositionBoundToConfigSnapshot(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("compile example config: %v", err)
+	}
+
+	capabilities := completeDurableBuilderCapabilities(
+		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+			return validBuilderGeneratePorts(nil), nil
+		},
+		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+			return validCompactPorts(), nil
+		},
+	)
+	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
+		composition := validCapabilityComposition()
+		composition.Identity.ConfigDigest = snapshot.Digest()
+		return composition, nil
+	}
+	if _, err := NewDurableV1RuntimeBuilder()(context.Background(), snapshot, nil, &generateBuilderClientSet{capabilities: capabilities}); err != nil {
+		t.Fatalf("builder rejected composition bound to snapshot: %v", err)
 	}
 }
 
