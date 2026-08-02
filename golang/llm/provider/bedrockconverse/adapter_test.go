@@ -19,6 +19,16 @@ type fakeConverse struct {
 	err    error
 }
 
+func TestStreamingCapabilityCannotOutrunAdapterPort(t *testing.T) {
+	profile := DefaultProfile("bedrock-converse-no-stream")
+	if capability := profile.Capabilities.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Reason == "" {
+		t.Fatalf("default streaming capability = %#v, want unsupported with a reason", capability)
+	}
+	if _, ok := any((*Adapter)(nil)).(provider.StreamingAdapter); ok {
+		t.Fatal("adapter advertises streaming capability without an OpenStream implementation")
+	}
+}
+
 func (fake *fakeConverse) Converse(_ context.Context, input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
 	fake.input = input
 	return fake.output, fake.err
