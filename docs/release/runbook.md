@@ -195,12 +195,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30738472814`](https://github.com/mfow/llm-temporal-worker/actions/runs/30738472814) at revision
-`5744d217d1df1a129c951c57f54250ab9cd798b8`. The artifact is named
-`release-evidence` (artifact `8830872165`) and has SHA-256 digest
-`sha256:468ab4f763815f6fd9aebd722b91f05a70b6b8fb2170a10719d9f2a6b5dd7b0f`.
+artifact: [workflow run `30742292478`](https://github.com/mfow/llm-temporal-worker/actions/runs/30742292478) at revision
+`3ba3264782d2802b69a078681c923c3a3a44e2b6`. The artifact is named
+`release-evidence` (artifact `8832114301`) and has SHA-256 digest
+`sha256:80b99bb1bb1e3ea17f5ce1b4a65b674fdff017e737ad58a7f8d5c17dbba51189`.
 The retained bundle binds the immutable image descriptor
-`sha256:3237b5c8f0c80e38f54aadf8ca0d264f1a0712c289a15498e19dbe342a3e4d3b`.
+`sha256:21f85f06a575a22255b471a480d438426ca7c2be7e64719acb4860dab24ba56a`.
 The catalog refresh binds the thirteen already-recorded offline requirements
 to this successful master run. Pending protected-provider and publication
 requirements, plus the two unrecorded SLO measurements, remain unchanged.
@@ -254,6 +254,7 @@ the only run bound to the retained release-evidence artifact.
 | [#558](https://github.com/mfow/llm-temporal-worker/pull/558) listed merged validation through #557 | `5744d217d1df1a129c951c57f54250ab9cd798b8` | [30737739698](https://github.com/mfow/llm-temporal-worker/actions/runs/30737739698) |
 | [#559](https://github.com/mfow/llm-temporal-worker/pull/559) included Bedrock Converse in the v1 completion gate | `ae8e531a11a723e077ade7ef1d3d86e36c289337` | [30739975204](https://github.com/mfow/llm-temporal-worker/actions/runs/30739975204) |
 | [#560](https://github.com/mfow/llm-temporal-worker/pull/560) refreshed the v1 catalog evidence pin | `aa32e1ed2fe8d7874a6ee8154261e65ffac7cd99` | [30740725332](https://github.com/mfow/llm-temporal-worker/actions/runs/30740725332) |
+| [#561](https://github.com/mfow/llm-temporal-worker/pull/561) listed merged validation through #560 | `3ba3264782d2802b69a078681c923c3a3a44e2b6` | [30741588777](https://github.com/mfow/llm-temporal-worker/actions/runs/30741588777) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
