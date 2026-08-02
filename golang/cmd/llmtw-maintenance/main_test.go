@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/maintenance"
 	"github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
@@ -105,6 +106,43 @@ func TestParseBlobGCOptions(t *testing.T) {
 	}
 }
 
+func TestParseUnknownCostOptions(t *testing.T) {
+	scopeID := uuid.New()
+	operationID := uuid.New()
+	args := []string{
+		"--config", "/etc/llmtw/config.yaml",
+		"--scope-id", scopeID.String(),
+		"--limit", "100",
+		"--after-completed-at", testNow,
+		"--after-operation-id", operationID.String(),
+	}
+	options, err := parseUnknownCostOptions(args, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseUnknownCostOptions() error = %v", err)
+	}
+	if options.ConfigPath != "/etc/llmtw/config.yaml" || options.ScopeID != scopeID || options.Limit != 100 {
+		t.Fatalf("unexpected options: %#v", options)
+	}
+	if options.After == nil || options.After.OperationID != operationID || options.After.CompletedAt.Location() != time.UTC {
+		t.Fatalf("unexpected cursor: %#v", options.After)
+	}
+
+	invalid := [][]string{
+		{"--scope-id", scopeID.String(), "--limit", "1", "--after-completed-at", testNow},
+		{"--scope-id", scopeID.String(), "--limit", "1", "--after-operation-id", operationID.String()},
+		{"--scope-id", scopeID.String(), "--limit", "1", "--after-completed-at", "2026-07-29T00:00:00+00:00", "--after-operation-id", operationID.String()},
+		{"--scope-id", scopeID.String(), "--limit", "1", "--after-completed-at", testNow, "--after-operation-id", uuid.Nil.String()},
+		{"--scope-id", uuid.Nil.String(), "--limit", "1"},
+		{"--scope-id", scopeID.String(), "--limit", "10001"},
+		{"--scope-id", scopeID.String(), "--limit", "1", "unexpected"},
+	}
+	for _, args := range invalid {
+		if _, err := parseUnknownCostOptions(args, &bytes.Buffer{}); err == nil {
+			t.Fatalf("parseUnknownCostOptions(%v) unexpectedly succeeded", args)
+		}
+	}
+}
+
 func TestRequiredSecret(t *testing.T) {
 	lookup := func(name string) (string, bool) {
 		if name == "PRESENT" {
@@ -190,6 +228,54 @@ func TestEncodeBlobGCResult(t *testing.T) {
 	}
 	if decoded.Examined != 4 || decoded.Eligible != 2 || decoded.Skipped != 2 {
 		t.Fatalf("unexpected blob GC result: %#v", decoded)
+	}
+}
+
+func TestEncodeUnknownCostResult(t *testing.T) {
+	firstID, secondID := uuid.New(), uuid.New()
+	firstAt := time.Date(2026, 7, 29, 0, 0, 0, 123, time.FixedZone("test", 3600))
+	secondAt := firstAt.Add(-time.Minute)
+	candidates := []postgres.UnknownCostCandidate{
+		{OperationID: firstID, CompletedAt: firstAt, UnknownReasonCode: "provider_timeout"},
+		{OperationID: secondID, CompletedAt: secondAt, UnknownReasonCode: "provider_charge_unavailable"},
+	}
+	var output bytes.Buffer
+	if err := encodeUnknownCostResult(&output, candidates, len(candidates)); err != nil {
+		t.Fatalf("encodeUnknownCostResult() error = %v", err)
+	}
+	var decoded struct {
+		Candidates []struct {
+			OperationID       string `json:"operation_id"`
+			CompletedAt       string `json:"completed_at"`
+			UnknownReasonCode string `json:"unknown_reason_code"`
+		} `json:"candidates"`
+		NextCursor *struct {
+			CompletedAt string `json:"completed_at"`
+			OperationID string `json:"operation_id"`
+		} `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("result is not JSON: %v", err)
+	}
+	if len(decoded.Candidates) != 2 || decoded.Candidates[0].OperationID != firstID.String() || decoded.Candidates[0].UnknownReasonCode != "provider_timeout" {
+		t.Fatalf("unexpected candidates: %#v", decoded.Candidates)
+	}
+	if decoded.Candidates[0].CompletedAt != firstAt.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("completed timestamp = %q, want %q", decoded.Candidates[0].CompletedAt, firstAt.UTC().Format(time.RFC3339Nano))
+	}
+	if decoded.NextCursor == nil || decoded.NextCursor.OperationID != secondID.String() || decoded.NextCursor.CompletedAt != secondAt.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("unexpected next cursor: %#v", decoded.NextCursor)
+	}
+	if strings.Contains(output.String(), "provider_id") || strings.Contains(output.String(), "credential") {
+		t.Fatalf("unknown-cost output contains a forbidden field: %s", output.String())
+	}
+
+	output.Reset()
+	if err := encodeUnknownCostResult(&output, candidates, len(candidates)+1); err != nil {
+		t.Fatalf("encodeUnknownCostResult(short page) error = %v", err)
+	}
+	if strings.Contains(output.String(), "next_cursor") {
+		t.Fatalf("short page unexpectedly emitted a cursor: %s", output.String())
 	}
 }
 

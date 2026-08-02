@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
@@ -54,6 +55,13 @@ type blobGCOptions struct {
 	Limit      int
 }
 
+type unknownCostOptions struct {
+	ConfigPath string
+	ScopeID    uuid.UUID
+	Limit      int
+	After      *postgres.UnknownCostCursor
+}
+
 func main() {
 	ctx, cancel := signalContext()
 	defer cancel()
@@ -73,7 +81,7 @@ type lookupEnv func(string) (string, bool)
 
 func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup lookupEnv) error {
 	if len(args) == 0 {
-		return errors.New("usage: llmtw-maintenance <retention-once|blob-gc-once|inspect-settings> [flags]")
+		return errors.New("usage: llmtw-maintenance <retention-once|blob-gc-once|inspect-settings|unknown-cost-list> [flags]")
 	}
 	switch args[0] {
 	case "retention-once":
@@ -127,8 +135,24 @@ func execute(ctx context.Context, args []string, out, errOut io.Writer, lookup l
 			return encodeErr
 		}
 		return err
+	case "unknown-cost-list":
+		options, err := parseUnknownCostOptions(args[1:], errOut)
+		if err != nil {
+			return err
+		}
+		maintenanceRepository, closeRepository, err := openMaintenanceRepository(ctx, options.ConfigPath, lookup)
+		if err != nil {
+			return err
+		}
+		defer closeRepository()
+		repository := postgres.UnknownCostRepository{Pool: maintenanceRepository.Pool, Namespace: maintenanceRepository.Namespace}
+		candidates, err := repository.List(ctx, postgres.UnknownCostListOptions{ScopeID: options.ScopeID, After: options.After, Limit: options.Limit})
+		if encodeErr := encodeUnknownCostResult(out, candidates, options.Limit); encodeErr != nil {
+			return encodeErr
+		}
+		return err
 	default:
-		return errors.New("usage: llmtw-maintenance <retention-once|blob-gc-once|inspect-settings> [flags]")
+		return errors.New("usage: llmtw-maintenance <retention-once|blob-gc-once|inspect-settings|unknown-cost-list> [flags]")
 	}
 }
 
@@ -314,6 +338,51 @@ func parseBlobGCOptions(args []string, errOut io.Writer) (blobGCOptions, error) 
 	return blobGCOptions{ConfigPath: *configPath, Now: parsedNow, Limit: *limit}, nil
 }
 
+func parseUnknownCostOptions(args []string, errOut io.Writer) (unknownCostOptions, error) {
+	flags := flag.NewFlagSet("unknown-cost-list", flag.ContinueOnError)
+	flags.SetOutput(errOut)
+	configPath := flags.String("config", defaultConfigPath, "worker configuration YAML path")
+	scopeID := flags.String("scope-id", "", "opaque scope UUID authorized for billing reconciliation")
+	limit := flags.Int("limit", 0, "maximum candidates to return (1-10000)")
+	afterCompletedAt := flags.String("after-completed-at", "", "UTC cursor completion timestamp (RFC3339 with Z)")
+	afterOperationID := flags.String("after-operation-id", "", "cursor operation UUID paired with --after-completed-at")
+	if err := flags.Parse(args); err != nil {
+		return unknownCostOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return unknownCostOptions{}, errors.New("unknown-cost-list does not accept positional arguments")
+	}
+	if *configPath == "" {
+		return unknownCostOptions{}, errors.New("--config must not be empty")
+	}
+	if *limit <= 0 || *limit > 10000 {
+		return unknownCostOptions{}, errors.New("--limit must be between 1 and 10000")
+	}
+	parsedScope, err := uuid.Parse(*scopeID)
+	if err != nil || parsedScope == uuid.Nil {
+		return unknownCostOptions{}, errors.New("--scope-id must be a non-zero UUID")
+	}
+	if (*afterCompletedAt == "") != (*afterOperationID == "") {
+		return unknownCostOptions{}, errors.New("--after-completed-at and --after-operation-id must be supplied together")
+	}
+	var cursor *postgres.UnknownCostCursor
+	if *afterCompletedAt != "" {
+		if !strings.HasSuffix(*afterCompletedAt, "Z") {
+			return unknownCostOptions{}, errors.New("--after-completed-at must use UTC RFC3339 with Z")
+		}
+		completedAt, parseErr := time.Parse(time.RFC3339Nano, *afterCompletedAt)
+		if parseErr != nil || completedAt.Location() != time.UTC {
+			return unknownCostOptions{}, errors.New("--after-completed-at must use UTC RFC3339 with Z")
+		}
+		operationID, parseErr := uuid.Parse(*afterOperationID)
+		if parseErr != nil || operationID == uuid.Nil {
+			return unknownCostOptions{}, errors.New("--after-operation-id must be a non-zero UUID")
+		}
+		cursor = &postgres.UnknownCostCursor{CompletedAt: completedAt, OperationID: operationID}
+	}
+	return unknownCostOptions{ConfigPath: *configPath, ScopeID: parsedScope, Limit: *limit, After: cursor}, nil
+}
+
 type resultJSON struct {
 	Passes []passJSON `json:"passes"`
 }
@@ -351,6 +420,43 @@ type blobGCResultJSON struct {
 func encodeBlobGCResult(out io.Writer, result postgres.BlobGCResult) error {
 	if err := json.NewEncoder(out).Encode(blobGCResultJSON{Examined: result.Examined, Eligible: result.Eligible, Skipped: result.Skipped}); err != nil {
 		return fmt.Errorf("write blob GC result: %w", err)
+	}
+	return nil
+}
+
+type unknownCostResultJSON struct {
+	Candidates []unknownCostCandidateJSON `json:"candidates"`
+	NextCursor *unknownCostCursorJSON     `json:"next_cursor,omitempty"`
+}
+
+type unknownCostCandidateJSON struct {
+	OperationID       string `json:"operation_id"`
+	CompletedAt       string `json:"completed_at"`
+	UnknownReasonCode string `json:"unknown_reason_code"`
+}
+
+type unknownCostCursorJSON struct {
+	CompletedAt string `json:"completed_at"`
+	OperationID string `json:"operation_id"`
+}
+
+func encodeUnknownCostResult(out io.Writer, candidates []postgres.UnknownCostCandidate, limit int) error {
+	if limit <= 0 || limit > 10000 {
+		return errors.New("unknown-cost result limit must be between 1 and 10000")
+	}
+	encoded := unknownCostResultJSON{Candidates: make([]unknownCostCandidateJSON, 0, len(candidates))}
+	for _, candidate := range candidates {
+		encoded.Candidates = append(encoded.Candidates, unknownCostCandidateJSON{
+			OperationID: candidate.OperationID.String(), CompletedAt: candidate.CompletedAt.UTC().Format(time.RFC3339Nano),
+			UnknownReasonCode: candidate.UnknownReasonCode,
+		})
+	}
+	if len(candidates) == limit {
+		last := candidates[len(candidates)-1]
+		encoded.NextCursor = &unknownCostCursorJSON{CompletedAt: last.CompletedAt.UTC().Format(time.RFC3339Nano), OperationID: last.OperationID.String()}
+	}
+	if err := json.NewEncoder(out).Encode(encoded); err != nil {
+		return fmt.Errorf("write unknown-cost result: %w", err)
 	}
 	return nil
 }
