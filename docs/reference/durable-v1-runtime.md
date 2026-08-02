@@ -85,6 +85,10 @@ PostgreSQL/Redis bindings and protected recovery evidence are available.
 factory exactly once per snapshot. It passes the validated composition by
 value to both phase factories through `V1RuntimeCapabilities.DurableComposition`,
 so Generate and Compact cannot accidentally bind different PostgreSQL/Redis
-identities. A custom `V1RuntimeBuilder` may use the same helper explicitly;
+identities. For a compiled configuration snapshot, it also requires the
+composition's `StateIdentity.ConfigDigest` to match that snapshot before either
+phase factory runs; a valid composition from a previous reload therefore fails
+closed instead of being attached to the new Activity runtime. A custom
+`V1RuntimeBuilder` may use the same helper explicitly;
 supplying a composition factory alone still does not install a v1 runtime or
 relax the production readiness guard.
