@@ -195,12 +195,12 @@ context.
 ## Catalog-bound offline traceability record
 
 The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30721763430`](https://github.com/mfow/llm-temporal-worker/actions/runs/30721763430) at revision
-`b8e3653a43552345898ebc0d7a1074a3a65533ba`. The artifact is named
-`release-evidence` (artifact `8825461239`) and has SHA-256 digest
-`sha256:e83bd17487fe6e3d3412fc755b0d1c31538bb82a1f34b140a9803ee1ce52eadf`.
+artifact: [workflow run `30726147846`](https://github.com/mfow/llm-temporal-worker/actions/runs/30726147846) at revision
+`9a1e09b74730ae9b8899508af8ce8751f1b2c689`. The artifact is named
+`release-evidence` (artifact `8826798238`) and has SHA-256 digest
+`sha256:160de51f3e62b15d2b274a78c1876ee446a4fb393b0765f9202653ba1c2218c9`.
 The retained bundle binds the immutable image descriptor
-`sha256:c7d476545d65cc023e6972a9df6d4f9747eb68ffa3f0dca9262233982b997ece`.
+`sha256:745713c4a6f80f7f15908d4f175c0f9d81636d70498c8f011fe35216832d6e65`.
 The catalog refresh binds the thirteen already-recorded offline requirements
 to this successful master run. Pending protected-provider and publication
 requirements, plus the two unrecorded SLO measurements, remain unchanged.
@@ -238,6 +238,10 @@ the only run bound to the retained release-evidence artifact.
 | [#541](https://github.com/mfow/llm-temporal-worker/pull/541) covered generated Bedrock factory profiles | `ab39674381998c98cda4e51530983c14af389684` | [30716360753](https://github.com/mfow/llm-temporal-worker/actions/runs/30716360753) |
 | [#544](https://github.com/mfow/llm-temporal-worker/pull/544) rejected contradictory unknown pricing components | `0723ffc7489aaf9f52e2f7234d7aade7505031c7` | [30719825510](https://github.com/mfow/llm-temporal-worker/actions/runs/30719825510) |
 | [#543](https://github.com/mfow/llm-temporal-worker/pull/543) fenced Redis budget-status reads to the active generation | `b8e3653a43552345898ebc0d7a1074a3a65533ba` | [30720458198](https://github.com/mfow/llm-temporal-worker/actions/runs/30720458198) |
+| [#545](https://github.com/mfow/llm-temporal-worker/pull/545) refreshed final release evidence binding | `0c1ac68c2685a7be3a28238cd0717b875d74045a` | [30723213296](https://github.com/mfow/llm-temporal-worker/actions/runs/30723213296) |
+| [#546](https://github.com/mfow/llm-temporal-worker/pull/546) scrubbed live-contract environments | `7b1ddc7958c3eee9f281e24c8f727c6df42cf1fb` | [30725437358](https://github.com/mfow/llm-temporal-worker/actions/runs/30725437358) |
+| [#547](https://github.com/mfow/llm-temporal-worker/pull/547) rejected conflicting endpoint capabilities | `c62795cbd182d3ea96adbab006750bf047999c52` | [30725462901](https://github.com/mfow/llm-temporal-worker/actions/runs/30725462901) |
+| [#548](https://github.com/mfow/llm-temporal-worker/pull/548) kept exact USD out of Prometheus amounts | `9a1e09b74730ae9b8899508af8ce8751f1b2c689` | [30725490716](https://github.com/mfow/llm-temporal-worker/actions/runs/30725490716) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
