@@ -53,7 +53,12 @@ func TestRedisDependencyProbeVerifiesActiveBudgetGenerationWhenConfigured(t *tes
 
 func TestRedisDependencyProbeRejectsUnvalidatedActiveBudgetManifest(t *testing.T) {
 	client := healthyRedisProbeClient()
-	generation := &fakeBudgetGenerationProbe{manifest: validBudgetManifestForProbe()}
+	manifest := validBudgetManifestForProbe()
+	pointer, err := manifest.Pointer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := &fakeBudgetGenerationProbe{manifest: manifest, active: pointer}
 	generation.manifest.RebuildComplete = false
 	probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
 	if err != nil {
@@ -479,6 +484,7 @@ type fakeBudgetGenerationProbe struct {
 	activeErr     error
 	manifestErr   error
 	manifest      redisstore.BudgetManifest
+	active        redisstore.ActiveBudgetGeneration
 	activeCalls   int
 	manifestCalls int
 }
@@ -487,6 +493,9 @@ func (probe *fakeBudgetGenerationProbe) ActiveGeneration(context.Context) (redis
 	probe.activeCalls++
 	if probe.activeErr != nil {
 		return redisstore.ActiveBudgetGeneration{}, probe.activeErr
+	}
+	if probe.active.GenerationID != "" {
+		return probe.active, nil
 	}
 	manifest := probe.manifest
 	if manifest.Schema == "" {
