@@ -289,6 +289,23 @@ func TestV1DocumentationStatesGenerateOnlyBoundary(t *testing.T) {
 	}
 }
 
+func TestProviderAdapterDocumentationListsBedrockConverseProfile(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "docs/architecture/provider-adapters.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(strings.Fields(string(data)), " ")
+	for _, required := range []string{
+		"| Amazon Bedrock Converse | AWS SDK for Go v2 `bedrockruntime` | Converse |",
+		"One-shot `Converse` only; live token streaming is outside the Temporal v1 boundary",
+	} {
+		if !strings.Contains(text, strings.Join(strings.Fields(required), " ")) {
+			t.Fatalf("provider adapter documentation must list Bedrock Converse with its one-shot boundary: missing %q", required)
+		}
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()

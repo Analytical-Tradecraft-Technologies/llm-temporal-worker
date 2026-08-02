@@ -91,6 +91,7 @@ verified profile.
 | Anthropic | `anthropic-sdk-go` | Messages | standard -> `standard_only`; priority -> `auto` only for accounts/models where priority capacity is explicitly enabled; economy unsupported synchronously | Lift the actual service tier from usage |
 | Claude Platform on AWS | Anthropic SDK AWS gateway support | Messages | capability-declared from the selected AWS offering | AWS auth belongs to client construction, not semantic input |
 | Amazon Bedrock | Anthropic SDK Bedrock/Mantle client | Messages | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | `reserved` is deployment capacity, never a public service class |
+| Amazon Bedrock Converse | AWS SDK for Go v2 `bedrockruntime` | Converse | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | One-shot `Converse` only; live token streaming is outside the Temporal v1 boundary |
 
 This table is a starting profile, not a promise that every model supports every
 cell. Configuration compilation intersects it with exact model/deployment
