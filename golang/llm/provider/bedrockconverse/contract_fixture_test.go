@@ -84,6 +84,7 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 		{name: "economy-flex", wire: "class-facts-economy.wire.json", semantic: "class-facts-economy.semantic.json", operation: "fixture-class-facts-economy", requested: llm.ServiceClassEconomy, actual: llm.ServiceClassEconomy, providerTier: types.ServiceTierTypeFlex},
 		{name: "standard-default", wire: "class-facts-standard.wire.json", semantic: "class-facts-standard.semantic.json", operation: "fixture-class-facts-standard", requested: llm.ServiceClassStandard, actual: llm.ServiceClassStandard, providerTier: types.ServiceTierTypeDefault},
 		{name: "priority", wire: "class-facts.wire.json", semantic: "class-facts.semantic.json", operation: "fixture-class-facts", requested: llm.ServiceClassPriority, actual: llm.ServiceClassPriority, providerTier: types.ServiceTierTypePriority},
+		{name: "priority-downgrade", wire: "class-facts-priority-downgrade.wire.json", semantic: "class-facts-priority-downgrade.semantic.json", operation: "fixture-class-facts-priority-downgrade", requested: llm.ServiceClassPriority, actual: llm.ServiceClassStandard, providerTier: types.ServiceTierTypeDefault},
 		{name: "usage", wire: "usage-cost.response.json", semantic: "usage-cost.semantic.json", operation: "fixture-usage-cost", requested: llm.ServiceClassStandard, actual: llm.ServiceClassPriority, providerTier: types.ServiceTierTypePriority},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {

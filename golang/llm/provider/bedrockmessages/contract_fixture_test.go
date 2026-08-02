@@ -115,10 +115,33 @@ func TestBedrockContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 func TestBedrockContractFixturesCoverUsageClassesStrictLossErrorsAndContinuation(t *testing.T) {
 	adapter := fixtureBedrockAdapter(t)
 	assertBedrockClassFacts(t, adapter)
+	assertBedrockPriorityDowngrade(t, adapter)
 	assertBedrockUsageAndCost(t, adapter)
 	assertBedrockStrictLoss(t, adapter)
 	assertBedrockClassifiedError(t)
 	assertBedrockContinuationCompatibility(t, adapter)
+}
+
+func assertBedrockPriorityDowngrade(t *testing.T, adapter *Adapter) {
+	t.Helper()
+	call := compileBedrockFixture(t, adapter, llm.Request{
+		OperationKey: "fixture-bedrock-priority-downgrade",
+		Model:        "claude-contract",
+		ServiceClass: llm.ServiceClassPriority,
+	})
+	response := loadBedrockContractResponse(t, "priority-downgrade.response.json")
+	lifted, err := adapter.profile.liftResponse(call, &response, bedrockFixtureRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(lifted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBedrockFixtureJSON(t, got, "priority-downgrade.semantic.json")
+	if lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard {
+		t.Fatalf("priority downgrade actual class = %#v, want standard", lifted.Service.Actual)
+	}
 }
 
 func TestBedrockContractStreamFixturesRemainFragmentationInvariant(t *testing.T) {
