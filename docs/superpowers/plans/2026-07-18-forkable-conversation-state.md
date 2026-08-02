@@ -62,7 +62,7 @@ At each exit, update release traceability only for that phase and leave later
 requirements explicitly pending. The phase owner may split commits further;
 task numbering is dependency guidance, not a mandate to publish one giant PR.
 
-## Current implementation and evidence status (2026-07-29)
+## Current implementation and evidence status (2026-08-02)
 
 This plan remains the implementation contract; its task checkboxes are the
 original work breakdown and are not a release-evidence ledger. The following
