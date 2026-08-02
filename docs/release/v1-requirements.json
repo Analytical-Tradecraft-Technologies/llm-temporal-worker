@@ -114,10 +114,11 @@
       "source": {
         "path": "docs/index.md",
         "anchor": "#v1-completion-gate",
-        "quote": "The same semantic request passes contract tests against OpenAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on AWS, and Amazon Bedrock Anthropic profiles supported by the capability matrix."
+        "quote": "The same semantic request passes contract tests against OpenAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on AWS, Amazon Bedrock Anthropic, and Amazon Bedrock Converse profiles supported by the capability matrix."
       },
       "implementation_paths": [
         "golang/llm/provider/anthropicmessages",
+        "golang/llm/provider/bedrockconverse",
         "golang/llm/provider/bedrockmessages",
         "golang/llm/provider/contracttest",
         "golang/llm/provider/openaichat",

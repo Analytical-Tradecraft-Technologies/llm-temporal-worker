@@ -85,8 +85,8 @@ The first release is complete only when all of these statements are true:
 
 - The same semantic request passes contract tests against OpenAI Responses,
   OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on
-  AWS, and Amazon Bedrock Anthropic profiles supported by the capability
-  matrix.
+  AWS, Amazon Bedrock Anthropic, and Amazon Bedrock Converse profiles supported
+  by the capability matrix.
 - Every adapter has request, response, error, and usage golden tests;
   strict-mode lossy conversions fail before dispatch.
 - The router is deterministic for a fixed configuration snapshot and never

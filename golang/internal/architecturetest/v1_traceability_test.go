@@ -172,6 +172,46 @@ func TestV1TraceabilityAdapterGoldenRequirementUsesGenerateOnlySource(t *testing
 	}
 }
 
+func TestV1TraceabilityCrossProtocolRequirementIncludesBedrockConverse(t *testing.T) {
+	root := repositoryRoot(t)
+	canonical, err := llm.CanonicalJSON(readV1TraceabilityCatalog(t, root))
+	if err != nil {
+		t.Fatalf("canonicalize catalog: %v", err)
+	}
+	var catalog v1TraceabilityCatalog
+	if err := json.Unmarshal(canonical, &catalog); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	const id = "v1.contract.cross-protocol"
+	var requirement *v1TraceabilityRequirement
+	for index := range catalog.Requirements {
+		if catalog.Requirements[index].ID == id {
+			requirement = &catalog.Requirements[index]
+			break
+		}
+	}
+	if requirement == nil {
+		t.Fatalf("catalog is missing %q", id)
+	}
+	if got, want := requirement.Source, (v1TraceabilitySource{
+		Path:   "docs/index.md",
+		Anchor: "#v1-completion-gate",
+		Quote:  "The same semantic request passes contract tests against OpenAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on AWS, Amazon Bedrock Anthropic, and Amazon Bedrock Converse profiles supported by the capability matrix.",
+	}); got != want {
+		t.Errorf("requirement %q source = %#v, want %#v", id, got, want)
+	}
+	if got, want := requirement.ImplementationPaths, []string{
+		"golang/llm/provider/anthropicmessages",
+		"golang/llm/provider/bedrockconverse",
+		"golang/llm/provider/bedrockmessages",
+		"golang/llm/provider/contracttest",
+		"golang/llm/provider/openaichat",
+		"golang/llm/provider/openairesponses",
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("requirement %q implementation paths = %#v, want %#v", id, got, want)
+	}
+}
+
 func TestV1TraceabilitySLORequirements(t *testing.T) {
 	root := repositoryRoot(t)
 	canonical, err := llm.CanonicalJSON(readV1TraceabilityCatalog(t, root))
