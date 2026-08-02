@@ -62,7 +62,7 @@ At each exit, update release traceability only for that phase and leave later
 requirements explicitly pending. The phase owner may split commits further;
 task numbering is dependency guidance, not a mandate to publish one giant PR.
 
-## Current implementation and evidence status (2026-07-29)
+## Current implementation and evidence status (2026-08-02)
 
 This plan remains the implementation contract; its task checkboxes are the
 original work breakdown and are not a release-evidence ledger. The following
@@ -139,10 +139,12 @@ The following blockers are intentionally still open:
    Task 19 state or provide protected recovery evidence.
    Enabling it requires deployment-owned blob locators, key bindings,
    authorization, and protected Redis/PostgreSQL failure tests.
-2. **Task 20 operations.** There is no worker maintenance command: the
-   documented `llmtw-maintenance retention-once` adapter must be owned by the
-   deployment so runtime credentials cannot acquire the maintenance role.
-   Full operation/journal/reservation retention and autovacuum/fillfactor load
+2. **Task 20 operations.** The separately operated `llmtw-maintenance`
+   adapter now provides bounded retention, blob-GC eligibility, table-settings
+   inspection, and unknown-cost inventory commands. Deployment still owns the
+   adapter schedule and dedicated maintenance credentials, so runtime
+   credentials cannot acquire the maintenance role. Full
+   operation/journal/reservation retention and autovacuum/fillfactor load
    evidence remain deliberately disabled until their foreign-key and rebuild
    obligations are proven; see [`maintenance.md`](../../reference/maintenance.md).
 3. **Task 21 protected recovery evidence.** The repository still needs the
