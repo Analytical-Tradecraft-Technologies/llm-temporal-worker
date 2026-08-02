@@ -68,6 +68,9 @@ func TestRedisDependencyProbeRejectsUnvalidatedActiveBudgetManifest(t *testing.T
 	if result.Dependency != DependencyRedis || result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
 		t.Fatalf("unvalidated generation manifest result = %#v", result)
 	}
+	if generation.activeCalls != 1 || generation.manifestCalls != 1 {
+		t.Fatalf("unvalidated generation calls active=%d manifest=%d, want one each", generation.activeCalls, generation.manifestCalls)
+	}
 }
 
 func TestRedisDependencyProbeValidatesEnabledCoordinationStream(t *testing.T) {
