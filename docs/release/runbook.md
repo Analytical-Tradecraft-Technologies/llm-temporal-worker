@@ -242,6 +242,15 @@ the only run bound to the retained release-evidence artifact.
 | [#546](https://github.com/mfow/llm-temporal-worker/pull/546) scrubbed live-contract environments | `7b1ddc7958c3eee9f281e24c8f727c6df42cf1fb` | [30725437358](https://github.com/mfow/llm-temporal-worker/actions/runs/30725437358) |
 | [#547](https://github.com/mfow/llm-temporal-worker/pull/547) rejected conflicting endpoint capabilities | `c62795cbd182d3ea96adbab006750bf047999c52` | [30725462901](https://github.com/mfow/llm-temporal-worker/actions/runs/30725462901) |
 | [#548](https://github.com/mfow/llm-temporal-worker/pull/548) kept exact USD out of Prometheus amounts | `9a1e09b74730ae9b8899508af8ce8751f1b2c689` | [30725490716](https://github.com/mfow/llm-temporal-worker/actions/runs/30725490716) |
+| [#549](https://github.com/mfow/llm-temporal-worker/pull/549) refreshed the latest release-evidence binding | `a9e6dddc6d0942c0c70f6466778869f4684054a2` | [30727618310](https://github.com/mfow/llm-temporal-worker/actions/runs/30727618310) |
+| [#550](https://github.com/mfow/llm-temporal-worker/pull/550) included Bedrock Converse in example configuration | `1c73743c34ab112f1df018377f9daa9e6a891a10` | [30727646006](https://github.com/mfow/llm-temporal-worker/actions/runs/30727646006) |
+| [#551](https://github.com/mfow/llm-temporal-worker/pull/551) enforced the Bedrock Converse one-shot boundary | `dc0b885772c94a4e01526453fbc34d2c15be7751` | [30728570804](https://github.com/mfow/llm-temporal-worker/actions/runs/30728570804) |
+| [#552](https://github.com/mfow/llm-temporal-worker/pull/552) covered Bedrock Converse tiers and tools | `a8d398cee7fd34447ebfbd13078ca99e634a6e7b` | [30728110395](https://github.com/mfow/llm-temporal-worker/actions/runs/30728110395) |
+| [#553](https://github.com/mfow/llm-temporal-worker/pull/553) bound durable composition to a config snapshot | `a96e474cd0a8e2e51be8c4514186baad3c2eda79` | [30730640740](https://github.com/mfow/llm-temporal-worker/actions/runs/30730640740) |
+| [#554](https://github.com/mfow/llm-temporal-worker/pull/554) exposed the unknown-cost maintenance queue | `55808d3f8334144d132ccfe562d78ea2c855f056` | [30731293417](https://github.com/mfow/llm-temporal-worker/actions/runs/30731293417) |
+| [#555](https://github.com/mfow/llm-temporal-worker/pull/555) covered Bedrock priority downgrade contracts | `b4c2aa67c07f94972448b8c30b1136a51595e384` | [30731962647](https://github.com/mfow/llm-temporal-worker/actions/runs/30731962647) |
+| [#556](https://github.com/mfow/llm-temporal-worker/pull/556) reflected maintenance adapter status in the plan | `680b2afc70d4ca5337cff405801d07735b719c21` | [30733989566](https://github.com/mfow/llm-temporal-worker/actions/runs/30733989566) |
+| [#557](https://github.com/mfow/llm-temporal-worker/pull/557) validated active Redis budget manifests at readiness | `bebec8e5a12664da7d6e5a7ae4d592f8ded7fccc` | [30735537401](https://github.com/mfow/llm-temporal-worker/actions/runs/30735537401) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
