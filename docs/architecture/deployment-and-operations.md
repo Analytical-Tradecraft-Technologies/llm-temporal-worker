@@ -110,9 +110,11 @@ timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
 configured AOF/RDB policy, and expose the exact configured budget Function
 library/version/digest. Durable production workers additionally perform a
 bounded, read-only check of the configured worker keyspace: the active
-budget-generation pointer must resolve to its canonical, complete manifest. A missing,
-malformed, or mismatched pointer/manifest keeps readiness false; readiness
-never publishes a generation or rebuilds state. Development and Redis-only
+budget-generation pointer must resolve to its canonical, complete manifest.
+The runtime revalidates the manifest invariants and pointer digest/incarnation
+binding at this boundary, so a custom generation port cannot bypass the contract.
+A missing, malformed, or mismatched pointer/manifest keeps readiness false;
+readiness never publishes a generation or rebuilds state. Development and Redis-only
 fixtures continue to omit this durable-generation check. The default Function
 path is provisioned by deployment automation before the worker starts; the
 runtime only verifies and calls it. Durable deployments also use an enabled

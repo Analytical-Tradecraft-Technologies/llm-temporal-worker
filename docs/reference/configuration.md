@@ -417,8 +417,10 @@ timezone, and the installed schema contract for the configured namespace; the
 Redis probe performs its normal connectivity, clock, policy, and configured
 Function or Lua script identity checks. Production additionally reads the
 configured Redis keyspace's active budget-generation pointer and canonical,
-complete manifest. A missing or invalid pointer/manifest keeps readiness closed; the
-probe is read-only and never publishes or rebuilds a generation. The validated
+complete manifest. Readiness revalidates the manifest invariants and binds the
+pointer to the manifest digest and Redis incarnation even when a custom generation
+port is supplied; a missing, invalid, or unbound pointer/manifest keeps readiness
+closed. The probe is read-only and never publishes or rebuilds a generation. The validated
 `state.redis.key_prefix` is applied to every worker-owned key constructor and
 the active-generation read therefore also proves the configured namespace is
 being addressed. A failure or timeout keeps readiness closed, and both clients
