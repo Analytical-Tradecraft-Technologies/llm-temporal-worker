@@ -42,6 +42,31 @@ func TestLoadCompleteExample(t *testing.T) {
 	if _, ok := classes[llm.ServiceClass("provider_default")]; ok {
 		t.Fatal("configuration exposed a provider-default public service class")
 	}
+	for _, test := range []struct {
+		id     string
+		family string
+	}{
+		{id: "bedrock-us-east-1", family: "bedrock_anthropic_messages"},
+		{id: "bedrock-converse-us-east-1", family: "bedrock_converse"},
+	} {
+		endpoint, ok := loaded.Endpoints[test.id]
+		if !ok {
+			t.Fatalf("example is missing AWS Bedrock endpoint %q", test.id)
+		}
+		if endpoint.Family != test.family || endpoint.Region != "us-east-1" || endpoint.Auth.Kind != "aws_default_chain" {
+			t.Fatalf("loaded Bedrock endpoint %q = %#v", test.id, endpoint)
+		}
+	}
+	var converseRoute bool
+	for _, route := range loaded.Models["invoice-summarizer"].Routes {
+		if route.ID == "bedrock-converse" {
+			converseRoute = route.Endpoint == "bedrock-converse-us-east-1" && route.Model == "amazon.nova-pro-v1:0"
+			break
+		}
+	}
+	if !converseRoute {
+		t.Fatal("example is missing the Amazon Bedrock Converse route")
+	}
 	if got, want := time.Duration(loaded.Temporal.Worker.HeartbeatKeepaliveInterval), time.Second; got != want {
 		t.Fatalf("worker heartbeat keepalive interval = %s, want %s", got, want)
 	}
