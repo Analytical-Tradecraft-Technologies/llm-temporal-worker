@@ -51,6 +51,28 @@ func TestRedisDependencyProbeVerifiesActiveBudgetGenerationWhenConfigured(t *tes
 	}
 }
 
+func TestRedisDependencyProbeRejectsUnvalidatedActiveBudgetManifest(t *testing.T) {
+	client := healthyRedisProbeClient()
+	manifest := validBudgetManifestForProbe()
+	pointer, err := manifest.Pointer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := &fakeBudgetGenerationProbe{manifest: manifest, active: pointer}
+	generation.manifest.RebuildComplete = false
+	probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := probe.Probe(context.Background())
+	if result.Dependency != DependencyRedis || result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
+		t.Fatalf("unvalidated generation manifest result = %#v", result)
+	}
+	if generation.activeCalls != 1 || generation.manifestCalls != 1 {
+		t.Fatalf("unvalidated generation calls active=%d manifest=%d, want one each", generation.activeCalls, generation.manifestCalls)
+	}
+}
+
 func TestRedisDependencyProbeValidatesEnabledCoordinationStream(t *testing.T) {
 	value := testRedisProbeConfig()
 	enabled := true
@@ -464,6 +486,8 @@ func TestBlobDependencyProbeUsesOnlyBucketCapabilityAndMasksErrors(t *testing.T)
 type fakeBudgetGenerationProbe struct {
 	activeErr     error
 	manifestErr   error
+	manifest      redisstore.BudgetManifest
+	active        redisstore.ActiveBudgetGeneration
 	activeCalls   int
 	manifestCalls int
 }
@@ -473,7 +497,14 @@ func (probe *fakeBudgetGenerationProbe) ActiveGeneration(context.Context) (redis
 	if probe.activeErr != nil {
 		return redisstore.ActiveBudgetGeneration{}, probe.activeErr
 	}
-	return redisstore.ActiveBudgetGeneration{GenerationID: "generation-1", IncarnationID: "incarnation-1", ManifestDigest: strings.Repeat("a", 64)}, nil
+	if probe.active.GenerationID != "" {
+		return probe.active, nil
+	}
+	manifest := probe.manifest
+	if manifest.Schema == "" {
+		manifest = validBudgetManifestForProbe()
+	}
+	return manifest.Pointer()
 }
 
 func (probe *fakeBudgetGenerationProbe) LoadManifest(context.Context, redisstore.ActiveBudgetGeneration) (redisstore.BudgetManifest, error) {
@@ -481,11 +512,34 @@ func (probe *fakeBudgetGenerationProbe) LoadManifest(context.Context, redisstore
 	if probe.manifestErr != nil {
 		return redisstore.BudgetManifest{}, probe.manifestErr
 	}
-	return redisstore.BudgetManifest{}, nil
+	if probe.manifest.Schema == "" {
+		return validBudgetManifestForProbe(), nil
+	}
+	return probe.manifest, nil
 }
 
 func (probe *fakeBudgetGenerationProbe) PublishGeneration(context.Context, redisstore.BudgetManifest) (redisstore.ActiveBudgetGeneration, error) {
 	return redisstore.ActiveBudgetGeneration{}, errors.New("readiness must not publish budget state")
+}
+
+func validBudgetManifestForProbe() redisstore.BudgetManifest {
+	start := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Minute)
+	policyHash := strings.Repeat("b", 64)
+	windowHash := strings.Repeat("c", 64)
+	member := redisstore.BudgetManifestMember{
+		PolicyID: "policy-1", WindowID: "window-1", PolicyHash: policyHash, WindowHash: windowHash,
+		ConfigVersion: "config-1", PriceVersion: "price-1", CoverageStart: start, CoverageEnd: end,
+		BucketCount: 1, BucketWidth: time.Minute, BucketCatalogDigest: strings.Repeat("d", 64),
+	}
+	catalog, _ := redisstore.MemberCatalogDigest([]redisstore.BudgetManifestMember{member})
+	return redisstore.BudgetManifest{
+		Schema: redisstore.BudgetManifestSchema, GenerationID: "generation-1", IncarnationID: "incarnation-1",
+		ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: policyHash, WindowHash: windowHash,
+		RebuildComplete: true, CoverageStart: start, CoverageEnd: end, PolicyCount: 1, WindowCount: 1,
+		BucketCount: 1, StreamHighWaterMark: "1-0", RoundingVersion: redisstore.BudgetRoundingVersion,
+		MemberCatalogDigest: catalog, Members: []redisstore.BudgetManifestMember{member},
+	}
 }
 
 type fakeBucketProbe struct {

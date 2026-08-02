@@ -502,7 +502,18 @@ func (probe *redisDependencyProbe) verifyBudgetGeneration(ctx context.Context) P
 	if err != nil {
 		return redisGenerationFailure(ctx, err)
 	}
-	if _, err := probe.generation.LoadManifest(ctx, pointer); err != nil {
+	manifest, err := probe.generation.LoadManifest(ctx, pointer)
+	if err != nil {
+		return redisGenerationFailure(ctx, err)
+	}
+	// Keep the readiness boundary defensive even when a custom generation
+	// implementation returns a manifest without validating it. A canonical
+	// value is not sufficient: active state must satisfy the complete manifest
+	// invariants and the pointer must bind to its digest and incarnation.
+	if err := manifest.Validate(); err != nil {
+		return redisGenerationFailure(ctx, err)
+	}
+	if err := pointer.ValidateAgainst(manifest); err != nil {
 		return redisGenerationFailure(ctx, err)
 	}
 	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
