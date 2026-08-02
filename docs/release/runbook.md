@@ -251,6 +251,9 @@ the only run bound to the retained release-evidence artifact.
 | [#555](https://github.com/mfow/llm-temporal-worker/pull/555) covered Bedrock priority downgrade contracts | `b4c2aa67c07f94972448b8c30b1136a51595e384` | [30731962647](https://github.com/mfow/llm-temporal-worker/actions/runs/30731962647) |
 | [#556](https://github.com/mfow/llm-temporal-worker/pull/556) reflected maintenance adapter status in the plan | `680b2afc70d4ca5337cff405801d07735b719c21` | [30733989566](https://github.com/mfow/llm-temporal-worker/actions/runs/30733989566) |
 | [#557](https://github.com/mfow/llm-temporal-worker/pull/557) validated active Redis budget manifests at readiness | `bebec8e5a12664da7d6e5a7ae4d592f8ded7fccc` | [30735537401](https://github.com/mfow/llm-temporal-worker/actions/runs/30735537401) |
+| [#558](https://github.com/mfow/llm-temporal-worker/pull/558) listed merged validation through #557 | `5744d217d1df1a129c951c57f54250ab9cd798b8` | [30737739698](https://github.com/mfow/llm-temporal-worker/actions/runs/30737739698) |
+| [#559](https://github.com/mfow/llm-temporal-worker/pull/559) included Bedrock Converse in the v1 completion gate | `ae8e531a11a723e077ade7ef1d3d86e36c289337` | [30739975204](https://github.com/mfow/llm-temporal-worker/actions/runs/30739975204) |
+| [#560](https://github.com/mfow/llm-temporal-worker/pull/560) refreshed the v1 catalog evidence pin | `aa32e1ed2fe8d7874a6ee8154261e65ffac7cd99` | [30740725332](https://github.com/mfow/llm-temporal-worker/actions/runs/30740725332) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
