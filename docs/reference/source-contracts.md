@@ -125,8 +125,11 @@ profile's explicit `service_classes` claims.
 
 The `bedrock-converse` profile has an enforced offline fixture matrix for the
 official AWS SDK Converse request/response shape, usage accounting, service-tier
-mapping, classified errors, and redaction markers. Converse is deliberately a
-one-shot Temporal activity boundary: these fixtures do not claim credentialed
+mapping, classified errors, and redaction markers. The service-class cases cover
+all three public mappings (`economy`/Flex, `standard`/Default, and
+`priority`/Priority), and the tool-use case covers a required tool request plus
+a `tool_use` response lifted into the provider-neutral model. Converse is
+deliberately a one-shot Temporal activity boundary: these fixtures do not claim credentialed
 AWS execution or live token streaming. Protected live-provider evidence remains
 separate and requires the release-run authorization described in the runbook.
 The matrix uses `amazon.nova-pro-v1:0`, whose AWS model card documents Standard,

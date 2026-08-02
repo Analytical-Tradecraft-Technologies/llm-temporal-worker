@@ -68,5 +68,7 @@ leaving retry ownership with the Temporal/routing layer.
 
 The deterministic unit and contract tests exercise tier mapping, strict
 instruction hierarchy rejection, tool JSON documents, and response lifting.
+The enforced contract matrix includes Flex, Default, and Priority response-tier
+fixtures plus a required-tool request and `tool_use` response fixture.
 Credentialed live-provider runs are intentionally not part of this change and
 must be executed and retained separately as protected release evidence.
