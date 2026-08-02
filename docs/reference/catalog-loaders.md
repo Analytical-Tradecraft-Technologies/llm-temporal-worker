@@ -63,6 +63,11 @@ example, a Claude or Nova model that does not support Priority) fail-closed at
 the shared catalog boundary rather than relying on an adapter to reject it
 later.
 
+An endpoint reused by multiple model routes must also carry one identical
+capability declaration at the compiled version. A state, transform, or reason
+that differs between routes is rejected during runtime composition instead of
+letting map iteration choose an arbitrary adapter profile at worker startup.
+
 ## Price documents
 
 Price documents contain a version, immutable `id`, and USD-denominated entries.
