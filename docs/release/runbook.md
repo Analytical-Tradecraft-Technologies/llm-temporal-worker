@@ -260,6 +260,7 @@ the only run bound to the retained release-evidence artifact.
 | [#564](https://github.com/mfow/llm-temporal-worker/pull/564) listed the Bedrock Converse adapter profile | `47f33c033f9c3fdcfc8554e279516bdb51b0a31d` | [30746120429](https://github.com/mfow/llm-temporal-worker/actions/runs/30746120429) |
 | [#565](https://github.com/mfow/llm-temporal-worker/pull/565) rebound the catalog to latest evidence | `832be7a08d5efc2c7214f2bc629b43839ba94710` | [30746200992](https://github.com/mfow/llm-temporal-worker/actions/runs/30746200992) |
 | [#566](https://github.com/mfow/llm-temporal-worker/pull/566) enforced live-provider profile table parity | `efa76d8dc722057111a5fdde82f574b5bcfcbb1b` | [30748402963](https://github.com/mfow/llm-temporal-worker/actions/runs/30748402963) |
+| [#567](https://github.com/mfow/llm-temporal-worker/pull/567) listed merged validation through #566 | `559a098f5633a8258e37b735191bbe94f1b13d82` | [30790691313](https://github.com/mfow/llm-temporal-worker/actions/runs/30790691313) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
