@@ -129,6 +129,31 @@ func TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile(t *testi
 	assertExactWorkflowSecretReferences(t, workflow)
 }
 
+func TestLiveProviderContractsDocumentationListsEveryWorkflowProfile(t *testing.T) {
+	root := repositoryRoot(t)
+	documentation := readRepositoryFile(t, root, "docs", "reference", "live-provider-contracts.md")
+	rows := strings.Split(documentation, "\n")
+
+	for _, profile := range liveProviderWorkflowProfiles {
+		profile := profile
+		t.Run(profile.id, func(t *testing.T) {
+			marker := "| `" + profile.id + "` |"
+			var matches []string
+			for _, row := range rows {
+				if strings.HasPrefix(row, marker) {
+					matches = append(matches, row)
+				}
+			}
+			if len(matches) != 1 {
+				t.Fatalf("live-provider documentation rows for %q = %d, want exactly one", profile.id, len(matches))
+			}
+			if want := "`" + profile.enableEnv + "`"; !strings.Contains(matches[0], want) {
+				t.Fatalf("live-provider documentation row for %q does not name gate %q: %s", profile.id, want, matches[0])
+			}
+		})
+	}
+}
+
 func TestLiveContractOfflineTargetDisablesEveryProfileGate(t *testing.T) {
 	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
 	target := makeTarget(t, makefile, "live-contract-verify:\n", "\n\nbuild:\n")
