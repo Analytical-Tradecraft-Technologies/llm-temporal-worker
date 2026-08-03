@@ -141,6 +141,7 @@ func TestReleaseRunbookListsRecentMergedValidation(t *testing.T) {
 		{pr: "#564", commit: "47f33c033f9c3fdcfc8554e279516bdb51b0a31d", run: "30746120429"},
 		{pr: "#565", commit: "832be7a08d5efc2c7214f2bc629b43839ba94710", run: "30746200992"},
 		{pr: "#566", commit: "efa76d8dc722057111a5fdde82f574b5bcfcbb1b", run: "30748402963"},
+		{pr: "#567", commit: "559a098f5633a8258e37b735191bbe94f1b13d82", run: "30790691313"},
 	} {
 		prMarker := "[" + want.pr + "](https://github.com/mfow/llm-temporal-worker/pull/" + strings.TrimPrefix(want.pr, "#") + ")"
 		runMarker := "[" + want.run + "](https://github.com/mfow/llm-temporal-worker/actions/runs/" + want.run + ")"
