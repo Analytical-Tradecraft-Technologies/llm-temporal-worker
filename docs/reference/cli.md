@@ -50,8 +50,11 @@ continue to use `worker --config /etc/llmtw/config.yaml`.
 
 ## `worker`
 
-Start the production composition, including the configured provider and state
-backends, Temporal client, health and metrics listeners, and Activity worker:
+Attempt to start the production composition, including the configured provider
+and state backends, Temporal client, health and metrics listeners, and Activity
+worker. Temporal polling begins only when deployment supplies a complete durable
+`V1RuntimeBuilder` and its phase callbacks; otherwise startup fails closed
+before listeners or polling:
 
 ```sh
 llm-temporal-worker worker --config /etc/llmtw/config.yaml

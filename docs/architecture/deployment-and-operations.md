@@ -20,8 +20,12 @@ llm-temporal-worker print-effective-config
 All three commands accept `--config PATH`, defaulting to
 `/etc/llmtw/config.yaml`. `print-effective-config` emits canonical JSON with
 secret references but never resolved secret values. `validate-config` checks
-the strict document without starting external dependencies. `worker` performs
-the full production composition and starts Temporal polling. See the
+the strict document without starting external dependencies. `worker` attempts
+the full production composition and starts Temporal polling only after
+deployment supplies a complete durable `V1RuntimeBuilder` and its phase
+callbacks. Until that deployment-owned seam is present, production startup
+fails closed before listeners or polling; the development fixture is limited to
+parser/configuration/readiness checks. See the
 [command-line reference](../reference/cli.md) for exact behavior and exit
 statuses.
 
