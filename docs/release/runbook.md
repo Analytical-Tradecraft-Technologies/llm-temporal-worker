@@ -255,6 +255,11 @@ the only run bound to the retained release-evidence artifact.
 | [#559](https://github.com/mfow/llm-temporal-worker/pull/559) included Bedrock Converse in the v1 completion gate | `ae8e531a11a723e077ade7ef1d3d86e36c289337` | [30739975204](https://github.com/mfow/llm-temporal-worker/actions/runs/30739975204) |
 | [#560](https://github.com/mfow/llm-temporal-worker/pull/560) refreshed the v1 catalog evidence pin | `aa32e1ed2fe8d7874a6ee8154261e65ffac7cd99` | [30740725332](https://github.com/mfow/llm-temporal-worker/actions/runs/30740725332) |
 | [#561](https://github.com/mfow/llm-temporal-worker/pull/561) listed merged validation through #560 | `3ba3264782d2802b69a078681c923c3a3a44e2b6` | [30741588777](https://github.com/mfow/llm-temporal-worker/actions/runs/30741588777) |
+| [#562](https://github.com/mfow/llm-temporal-worker/pull/562) listed merged validation through #561 | `a48258d6e6ce7996ad4492b419a597e948c14e9b` | [30743830181](https://github.com/mfow/llm-temporal-worker/actions/runs/30743830181) |
+| [#563](https://github.com/mfow/llm-temporal-worker/pull/563) marked the Bedrock streaming task superseded | `9d0ceb4a3c8157fc31fce2b9b71519aa0f4662c4` | [30743919451](https://github.com/mfow/llm-temporal-worker/actions/runs/30743919451) |
+| [#564](https://github.com/mfow/llm-temporal-worker/pull/564) listed the Bedrock Converse adapter profile | `47f33c033f9c3fdcfc8554e279516bdb51b0a31d` | [30746120429](https://github.com/mfow/llm-temporal-worker/actions/runs/30746120429) |
+| [#565](https://github.com/mfow/llm-temporal-worker/pull/565) rebound the catalog to latest evidence | `832be7a08d5efc2c7214f2bc629b43839ba94710` | [30746200992](https://github.com/mfow/llm-temporal-worker/actions/runs/30746200992) |
+| [#566](https://github.com/mfow/llm-temporal-worker/pull/566) enforced live-provider profile table parity | `efa76d8dc722057111a5fdde82f574b5bcfcbb1b` | [30748402963](https://github.com/mfow/llm-temporal-worker/actions/runs/30748402963) |
 
 PR #265 intentionally remains a storage read seam. The production query
 composition still requires an explicit PostgreSQL-authoritative builder for
