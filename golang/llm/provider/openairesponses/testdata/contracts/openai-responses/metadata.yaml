@@ -1,7 +1,7 @@
 profile: openai-responses
 upstream_url: https://platform.openai.com/docs/api-reference/responses
 upstream_date: "2026-07-14"
-sdk_version: github.com/openai/openai-go/v3@v3.48.0
+sdk_version: github.com/openai/openai-go/v3@v3.49.0
 provenance: synthetic
 redactions:
   - credentials

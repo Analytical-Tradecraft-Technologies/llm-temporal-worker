@@ -45,7 +45,7 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/service/s3",
-      "version": "v1.106.0",
+      "version": "v1.106.2",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
@@ -75,7 +75,7 @@
     },
     {
       "path": "github.com/openai/openai-go/v3",
-      "version": "v3.48.0",
+      "version": "v3.49.0",
       "license": "Apache-2.0",
       "source": "https://github.com/openai/openai-go"
     },
