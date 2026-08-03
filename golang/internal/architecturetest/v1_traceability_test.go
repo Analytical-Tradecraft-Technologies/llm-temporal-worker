@@ -57,16 +57,16 @@ var evidenceStatusForMode = map[string]string{
 // The release-evidence artifact recorded below was produced by this exact
 // protected master revision. Keep this candidate pin explicit so a later
 // catalog refresh cannot accidentally retain evidence from an older run.
-const expectedV1EvidenceRevision = "9d0ceb4a3c8157fc31fce2b9b71519aa0f4662c4"
-const expectedV1EvidenceWorkflowRunID int64 = 30744599241
+const expectedV1EvidenceRevision = "1aae4ff2095a5adaf3fee13aa696d78d73616ddd"
+const expectedV1EvidenceWorkflowRunID int64 = 30795754773
 const expectedV1EvidenceArtifactName = "release-evidence"
-const expectedV1EvidenceArtifactID = "8832865267"
+const expectedV1EvidenceArtifactID = "8849743942"
 
 // GitHub exposes the artifact digest as sha256:<hex>; the catalog stores the
 // normalized lowercase hex payload so it remains comparable across evidence
 // sources that use the same digest algorithm.
-const expectedV1EvidenceArtifactDigest = "cda557c5f4d8a131dca59381ed65bb77a1e6f133316400fef796410c094d311c"
-const expectedV1EvidenceImageDigest = "36f68fd9af6c82c2d3ee43d3e71c63327c68f57df43b8d4ad60225a0788ad377"
+const expectedV1EvidenceArtifactDigest = "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+const expectedV1EvidenceImageDigest = "bd95d9d7bbd81582ed3f7ec18131a5e31106dee9152de9373f7676dbc3806f27"
 
 type v1TraceabilityCatalog struct {
 	SchemaVersion int                         `json:"schema_version"`
