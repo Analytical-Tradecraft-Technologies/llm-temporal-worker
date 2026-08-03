@@ -129,6 +129,39 @@ func TestReleaseRunbookDocumentsExternalAuthorizationBoundary(t *testing.T) {
 	}
 }
 
+func TestReleaseRunbookListsRecentMergedValidation(t *testing.T) {
+	runbook := readRepositoryFile(t, repositoryRoot(t), "docs", "release", "runbook.md")
+	for _, want := range []struct {
+		pr     string
+		commit string
+		run    string
+	}{
+		{pr: "#562", commit: "a48258d6e6ce7996ad4492b419a597e948c14e9b", run: "30743830181"},
+		{pr: "#563", commit: "9d0ceb4a3c8157fc31fce2b9b71519aa0f4662c4", run: "30743919451"},
+		{pr: "#564", commit: "47f33c033f9c3fdcfc8554e279516bdb51b0a31d", run: "30746120429"},
+		{pr: "#565", commit: "832be7a08d5efc2c7214f2bc629b43839ba94710", run: "30746200992"},
+		{pr: "#566", commit: "efa76d8dc722057111a5fdde82f574b5bcfcbb1b", run: "30748402963"},
+	} {
+		prMarker := "[" + want.pr + "](https://github.com/mfow/llm-temporal-worker/pull/" + strings.TrimPrefix(want.pr, "#") + ")"
+		runMarker := "[" + want.run + "](https://github.com/mfow/llm-temporal-worker/actions/runs/" + want.run + ")"
+		var rows []string
+		for _, line := range strings.Split(runbook, "\n") {
+			if strings.Contains(line, prMarker) {
+				rows = append(rows, line)
+			}
+		}
+		if len(rows) != 1 {
+			t.Fatalf("release runbook rows for %s = %d, want exactly one", want.pr, len(rows))
+		}
+		if !strings.Contains(rows[0], "`"+want.commit+"`") {
+			t.Errorf("release runbook row for %s does not bind merge commit %s: %s", want.pr, want.commit, rows[0])
+		}
+		if !strings.Contains(rows[0], runMarker) {
+			t.Errorf("release runbook row for %s does not bind green PR run %s: %s", want.pr, want.run, rows[0])
+		}
+	}
+}
+
 func TestReleaseGuardValidatesTagReferencesAndImageSubjects(t *testing.T) {
 	repository, commit := createGuardedReleaseTestRepository(t)
 	trustedRepository := "registry.example.com/team/llm-temporal-worker"
