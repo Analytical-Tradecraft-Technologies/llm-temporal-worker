@@ -45,7 +45,7 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/service/s3",
-      "version": "v1.106.2",
+      "version": "v1.106.3",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
