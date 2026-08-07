@@ -15,7 +15,7 @@ const (
 	checkoutActionPin     = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
 	setupGoActionPin      = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
 	githubScriptActionPin = "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
-	cacheActionPin        = "actions/cache@5a3ec84eff668545956fd18022155c47e93e2684"
+	cacheActionPin        = "actions/cache@caa296126883cff596d87d8935842f9db880ef25"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
