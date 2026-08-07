@@ -105,19 +105,19 @@
     },
     {
       "path": "github.com/santhosh-tekuri/jsonschema/v6",
-      "version": "v6.0.2",
+      "version": "v6.0.3",
       "license": "MIT",
       "source": "https://github.com/santhosh-tekuri/jsonschema-go"
     },
     {
       "path": "go.opentelemetry.io/otel",
-      "version": "v1.44.0",
+      "version": "v1.45.0",
       "license": "Apache-2.0",
       "source": "https://github.com/open-telemetry/opentelemetry-go"
     },
     {
       "path": "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",
-      "version": "v1.44.0",
+      "version": "v1.45.0",
       "license": "Apache-2.0",
       "source": "https://github.com/open-telemetry/opentelemetry-go"
     },
@@ -129,7 +129,7 @@
     },
     {
       "path": "go.opentelemetry.io/otel/trace",
-      "version": "v1.44.0",
+      "version": "v1.45.0",
       "license": "Apache-2.0",
       "source": "https://github.com/open-telemetry/opentelemetry-go"
     },

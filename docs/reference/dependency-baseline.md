@@ -22,7 +22,7 @@ the `llm` package.
 
 | Module | Selected release | Use | License/source |
 | --- | --- | --- | --- |
-| `github.com/openai/openai-go/v3` | `v3.48.0` | Official OpenAI Responses and Chat Completions clients | Apache-2.0; [official repository](https://github.com/openai/openai-go) |
+| `github.com/openai/openai-go/v3` | `v3.50.0` | Official OpenAI Responses and Chat Completions clients | Apache-2.0; [official repository](https://github.com/openai/openai-go) |
 | `github.com/Azure/azure-sdk-for-go/sdk/azcore` | `v1.22.0` | Official Azure OpenAI endpoint/auth middleware used by the Chat profile | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
 | `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | `v1.14.0` | Azure workload/default credential resolution | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
 | `github.com/anthropics/anthropic-sdk-go` | `v1.61.0` | Official Anthropic Messages client | MIT; [official repository](https://github.com/anthropics/anthropic-sdk-go) |
@@ -30,7 +30,7 @@ the `llm` package.
 | `github.com/aws/aws-sdk-go-v2/config` | `v1.32.31` | AWS region and default credential-chain loading | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/aws/aws-sdk-go-v2/credentials` | `v1.19.30` | Explicit AWS credential providers used by runtime composition | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
 | `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | `v1.57.0` | Official AWS Bedrock Runtime Converse API client | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | Local Draft 2020-12 schema compilation and validation | MIT; [official repository](https://github.com/santhosh-tekuri/jsonschema-go) |
+| `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.3` | Local Draft 2020-12 schema compilation and validation | MIT; [official repository](https://github.com/santhosh-tekuri/jsonschema-go) |
 | `go.yaml.in/yaml/v4` | `v4.0.0-rc.6` | Strict YAML configuration parsing | MIT; [official repository](https://github.com/yaml/go-yaml) |
 | `go.temporal.io/api` | `v1.63.4` | Temporal API protocol types used by the worker boundary | MIT; [official repository](https://github.com/temporalio/api) |
 | `go.temporal.io/sdk` | `v1.46.0` | Temporal Activity payload, heartbeat, error, and worker registration boundary | MIT; [official release](https://github.com/temporalio/sdk-go/releases/tag/v1.46.0) |
@@ -41,8 +41,8 @@ the `llm` package.
 | `github.com/prometheus/client_golang` | `v1.24.1` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |
 | `github.com/prometheus/client_model` | `v0.6.2` | Prometheus metric model types used by tests and exposition boundaries | Apache-2.0; [official repository](https://github.com/prometheus/client_model) |
 | `github.com/prometheus/common` | `v0.70.1` | Prometheus exposition and helper types | Apache-2.0; [official repository](https://github.com/prometheus/common) |
-| `go.opentelemetry.io/otel`, `/sdk`, and `/trace` | `v1.44.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | `v1.44.0` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `go.opentelemetry.io/otel`, `/sdk`, and `/trace` | `v1.45.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | `v1.45.0` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
 | `go.temporal.io/api` | `v1.63.4` | Temporal API protocol types used by the worker boundary | MIT; [official repository](https://github.com/temporalio/api) |
 | `github.com/redis/go-redis/v9` | `v9.21.0` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
 | `google.golang.org/grpc` | `v1.83.0` | OTLP transport and Temporal SDK gRPC connectivity | Apache-2.0; [official repository](https://github.com/grpc/grpc-go) |

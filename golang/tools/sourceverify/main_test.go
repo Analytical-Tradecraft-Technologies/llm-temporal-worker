@@ -61,7 +61,7 @@ func TestScanContentAllowsExplicitRedactions(t *testing.T) {
 	}
 }
 
-func TestScanTestOutputDetectsRawAndDecodedDenyFieldLeaks(t *testing.T) {
+func TestScanCapturedStreamDetectsRawAndDecodedDenyFieldFindings(t *testing.T) {
 	t.Parallel()
 
 	raw := "raw provider body leaked: " + strings.Repeat("opaque-", 4)
@@ -198,7 +198,7 @@ func TestVerifyAllowsTestOutputAboveTheRepositoryFileLimit(t *testing.T) {
 	}
 }
 
-func TestVerifyDetectsLeaksNearTheTailOfLargeTestOutput(t *testing.T) {
+func TestVerifyDetectsFindingsNearTheTailOfLargeTestStream(t *testing.T) {
 	secret := "Bearer " + strings.Repeat("z", 24)
 	rawCredential := `{"authorization":"` + secret + `"}`
 	tests := []struct {
@@ -209,7 +209,7 @@ func TestVerifyDetectsLeaksNearTheTailOfLargeTestOutput(t *testing.T) {
 		{name: "raw credential field", tail: rawCredential, wantPart: "credential-like denied field"},
 		{name: "URL encoded credential field", tail: url.QueryEscape(rawCredential), wantPart: "credential-like denied field"},
 		{name: "base64 encoded credential field", tail: base64.StdEncoding.EncodeToString([]byte(rawCredential)), wantPart: "credential-like denied field"},
-		{name: "denied field leak", tail: "raw provider body leaked: " + strings.Repeat("opaque-", 4), wantPart: "denied-field leak"},
+		{name: "denied field finding", tail: "raw provider body leaked: " + strings.Repeat("opaque-", 4), wantPart: "denied-field leak"},
 	}
 
 	for _, test := range tests {
@@ -233,7 +233,7 @@ func TestVerifyDetectsLeaksNearTheTailOfLargeTestOutput(t *testing.T) {
 	}
 }
 
-func TestVerifyDetectsBase64LeakAtTheTailOfGoTestJSONOutput(t *testing.T) {
+func TestVerifyDetectsBase64FindingAtTheTailOfGoTestJSONStream(t *testing.T) {
 	secret := "Bearer " + strings.Repeat("q", 24)
 	rawCredential := `{"authorization":"` + secret + `"}`
 	root := t.TempDir()
