@@ -41,7 +41,29 @@ func TestWorkflowNativeOPAMSetupReusesRestoredSwitch(t *testing.T) {
 	}
 }
 
+func TestWorkflowNativeOPAMSetupFailsClosedWithoutBubblewrap(t *testing.T) {
+	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false)
+	if err == nil {
+		t.Fatal("setup-opam.sh accepted a missing bwrap sandbox dependency")
+	}
+	if !strings.Contains(string(output), "bwrap") {
+		t.Fatalf("setup-opam.sh did not diagnose the missing sandbox dependency:\n%s", output)
+	}
+	if strings.Contains(calls, "opam ") {
+		t.Fatalf("setup-opam.sh invoked OPAM without its sandbox dependency:\n%s", calls)
+	}
+}
+
 func runNativeCIHelper(t *testing.T, script, restoredSwitch string) string {
+	t.Helper()
+	calls, output, err := runNativeCIHelperWithBubblewrap(t, script, restoredSwitch, script == "setup-opam.sh")
+	if err != nil {
+		t.Fatalf("%s failed: %v\n%s", script, err, output)
+	}
+	return calls
+}
+
+func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapAvailable bool) (string, []byte, error) {
 	t.Helper()
 	tempDir := t.TempDir()
 	fakeBin := filepath.Join(tempDir, "bin")
@@ -89,6 +111,11 @@ touch "$destination/syft" "$destination/trivy"
 grep -qx 'sha256sum' "$FAKE_LOG"
 printf 'docker\n' >> "$FAKE_LOG"
 `)
+	if bubblewrapAvailable {
+		writeFakeCommand(t, fakeBin, "bwrap", `
+exit 0
+`)
+	}
 	writeFakeCommand(t, fakeBin, "opam", `
 grep -qx 'sha256sum' "$FAKE_LOG"
 printf 'opam %s %s\n' "$1" "${2:-}" >> "$FAKE_LOG"
@@ -132,15 +159,12 @@ esac
 		"PATH="+fakeBin+":"+os.Getenv("PATH"),
 		"RUNNER_TEMP="+runnerTemp,
 	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s failed: %v\n%s", script, err, output)
+	output, commandErr := command.CombinedOutput()
+	calls, readErr := os.ReadFile(log)
+	if readErr != nil {
+		return "", output, readErr
 	}
-	calls, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(calls)
+	return string(calls), output, commandErr
 }
 
 func writeFakeCommand(t *testing.T, directory, name, body string) {

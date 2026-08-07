@@ -171,6 +171,15 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 	}
 }
 
+func TestWorkflowOCamlSandboxPrerequisitesPrecedeSetup(t *testing.T) {
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		assertJobRunPrecedesRunContains(t, workflow, "ocaml", "sudo apt-get install --yes protobuf-compiler bubblewrap", "bash scripts/ci/setup-opam.sh")
+	}
+}
+
 func TestWorkflowContainerBuildContract(t *testing.T) {
 	for _, test := range []struct {
 		name  string
