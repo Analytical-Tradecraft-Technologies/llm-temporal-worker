@@ -59,7 +59,9 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 		// budgets on the same snapshot identity across Generate and Compact. The
 		// complete builder never lets deployment callbacks construct phase ports
 		// without that state boundary: missing or invalid composition fails before
-		// any phase, snapshot, adapter, or provider callback can run.
+		// either phase callback. Only the production factory's automatic preflight,
+		// not an explicitly supplied builder, guarantees validation before client
+		// construction.
 		composition, err := capabilities.BuildDurableComposition(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
