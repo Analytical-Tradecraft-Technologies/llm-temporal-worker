@@ -54,7 +54,7 @@ func TestWorkflowContract(t *testing.T) {
 	}
 }
 
-func TestAutomaticallyTriggeredWorkflowsUseOnlyGitHubOwnedActions(t *testing.T) {
+func TestWorkflowAutomaticallyTriggeredWorkflowsUseOnlyGitHubOwnedActions(t *testing.T) {
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),
 		readWorkflow(t, "master.yml"),

@@ -118,6 +118,32 @@ Expected: PASS. The workflow verification target must execute the newly added ca
 
 Commit the corrective changes separately, preserve the Task 1 report and review findings in the ignored SDD workspace, and request a new reviewer who verifies the fixed cache/runtime, Buildx/BuildKit compatibility, OPAM cache behavior, sandboxing, and test selection before any push.
 
+### Task 3: Include the action-origin guard in workflow verification
+
+**Files:**
+
+- Modify: `golang/internal/architecturetest/workflow_test.go`
+- Modify: `docs/superpowers/plans/2026-08-07-github-actions-policy-compatibility.md`
+
+**Step 1: Demonstrate the selector omission**
+
+Show that the `TestWorkflow.*` selector in `golang/scripts/check-workflow-policy.sh` does not select the action-origin guard while its name begins `TestAutomatically`.
+
+**Step 2: Repair the selector contract**
+
+Rename the guard with the `TestWorkflow` prefix without weakening its action-origin assertion. Preserve its failure message and coverage of both automatic workflows.
+
+**Step 3: Verify**
+
+Run:
+
+```bash
+go test ./internal/architecturetest -run '^TestWorkflowAutomaticallyTriggeredWorkflowsUseOnlyGitHubOwnedActions$'
+make -C golang workflow-verify
+```
+
+Expected: PASS. The normal workflow verification selector must execute the action-origin guard.
+
 ## Task 1 implementation record
 
 The blocked automatic-workflow actions were replaced with repository-owned,
