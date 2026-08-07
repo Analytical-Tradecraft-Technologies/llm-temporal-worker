@@ -39,7 +39,7 @@ if opam switch list --short | grep -Fx -- "${ocaml_version}" > /dev/null; then
 else
   opam switch create --yes "${ocaml_version}"
 fi
-[[ "$(opam var ocaml-version)" == "${ocaml_version}" ]]
+[[ "$(opam var ocaml:version)" == "${ocaml_version}" ]]
 {
   printf 'OPAMROOT=%s\n' "${opam_root}"
   printf 'OPAMSWITCH=%s\n' "${ocaml_version}"

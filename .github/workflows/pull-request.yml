@@ -95,6 +95,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes protobuf-compiler bubblewrap
 
+      - name: Enable unprivileged user namespaces for OPAM sandboxing
+        shell: bash
+        run: |
+          set -euo pipefail
+          for setting in \
+            kernel.unprivileged_userns_clone=1 \
+            kernel.apparmor_restrict_unprivileged_userns=0; do
+            key="${setting%=*}"
+            want="${setting#*=}"
+            if current="$(sysctl -n "${key}" 2>/dev/null)" && [[ "${current}" != "${want}" ]]; then
+              sudo sysctl -w "${key}=${want}"
+            fi
+          done
+
       - name: Verify OCaml Temporal dependency pin parity
         run: bash scripts/check-ocaml-temporal-pin.sh
 

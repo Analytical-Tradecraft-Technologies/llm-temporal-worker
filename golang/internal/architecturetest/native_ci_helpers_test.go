@@ -41,6 +41,13 @@ func TestWorkflowNativeOPAMSetupReusesRestoredSwitch(t *testing.T) {
 	}
 }
 
+func TestWorkflowNativeOPAMSetupUsesSupportedOCamlVersionVariable(t *testing.T) {
+	calls := runNativeCIHelper(t, "setup-opam.sh", "")
+	if !strings.Contains(calls, "opam var ocaml:version") {
+		t.Fatalf("native OPAM setup did not query the supported OCaml version variable:\n%s", calls)
+	}
+}
+
 func TestWorkflowNativeOPAMSetupFailsClosedWithUnusableBubblewrap(t *testing.T) {
 	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false)
 	if err == nil {
@@ -144,6 +151,10 @@ case "$1" in
     esac
     ;;
   var)
+    if [[ "${2:-}" != "ocaml:version" ]]; then
+      printf 'unsupported fake OPAM variable %s\n' "${2:-}" >&2
+      exit 1
+    fi
     printf '5.2.0\n'
     ;;
 esac

@@ -180,6 +180,89 @@ func TestWorkflowOCamlSandboxPrerequisitesPrecedeSetup(t *testing.T) {
 	}
 }
 
+func TestWorkflowOCamlSandboxUserNamespacesAreGuardedAndScoped(t *testing.T) {
+	const stepName = "Enable unprivileged user namespaces for OPAM sandboxing"
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		job := workflowJob(t, workflow, "ocaml")
+		steps, ok := job["steps"].([]any)
+		if !ok {
+			t.Fatalf("%s OCaml job has no steps", workflow.name)
+		}
+		aptIndex, sysctlIndex, cacheIndex, setupIndex := -1, -1, -1, -1
+		for index, rawStep := range steps {
+			step, ok := rawStep.(map[string]any)
+			if !ok {
+				continue
+			}
+			if step["name"] == "Install Protocol Buffers compiler" {
+				aptIndex = index
+			}
+			if step["name"] == stepName {
+				sysctlIndex = index
+				run, _ := step["run"].(string)
+				for _, want := range []string{
+					"set -euo pipefail",
+					"kernel.unprivileged_userns_clone=1",
+					"kernel.apparmor_restrict_unprivileged_userns=0",
+					`if current="$(sysctl -n "${key}" 2>/dev/null)" && [[ "${current}" != "${want}" ]]; then`,
+					`sudo sysctl -w "${key}=${want}"`,
+				} {
+					if !strings.Contains(run, want) {
+						t.Fatalf("%s user-namespace step does not retain guarded %q", workflow.name, want)
+					}
+				}
+			}
+			if step["uses"] == cacheActionPin {
+				cacheIndex = index
+			}
+			if run, _ := step["run"].(string); strings.TrimSpace(run) == "bash scripts/ci/setup-opam.sh" {
+				setupIndex = index
+			}
+		}
+		if aptIndex == -1 || sysctlIndex == -1 || cacheIndex == -1 || setupIndex == -1 {
+			t.Fatalf("%s OCaml job is missing an apt, guarded sysctl, cache, or setup step", workflow.name)
+		}
+		if !(aptIndex < sysctlIndex && sysctlIndex < cacheIndex && cacheIndex < setupIndex) {
+			t.Fatalf("%s runs OCaml sandbox setup in wrong order: apt=%d sysctl=%d cache=%d setup=%d", workflow.name, aptIndex, sysctlIndex, cacheIndex, setupIndex)
+		}
+		for jobName, rawJob := range workflowMapping(t, workflow, "jobs") {
+			if jobName == "ocaml" {
+				continue
+			}
+			otherJob, ok := rawJob.(map[string]any)
+			if !ok {
+				continue
+			}
+			steps, _ := otherJob["steps"].([]any)
+			for _, rawStep := range steps {
+				step, ok := rawStep.(map[string]any)
+				if ok && step["name"] == stepName {
+					t.Fatalf("%s unexpectedly configures OCaml sandbox sysctls in job %q", workflow.name, jobName)
+				}
+			}
+		}
+	}
+
+	for _, workflow := range []workflowDocument{readWorkflow(t, "release.yml")} {
+		for jobName, rawJob := range workflowMapping(t, workflow, "jobs") {
+			job, ok := rawJob.(map[string]any)
+			if !ok {
+				continue
+			}
+			steps, _ := job["steps"].([]any)
+			for _, rawStep := range steps {
+				step, ok := rawStep.(map[string]any)
+				if ok && step["name"] == stepName {
+					t.Fatalf("manual %s workflow unexpectedly configures OCaml sandbox sysctls in job %q", workflow.name, jobName)
+				}
+			}
+		}
+	}
+}
+
 func TestWorkflowContainerBuildContract(t *testing.T) {
 	for _, test := range []struct {
 		name  string
