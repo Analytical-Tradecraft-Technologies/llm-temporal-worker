@@ -30,6 +30,24 @@ jobs:
           go-version-file: golang/.go-version
           cache: false
 
+      - name: Export GitHub Actions cache runtime for Buildx API v2
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const required = [
+              "ACTIONS_CACHE_URL",
+              "ACTIONS_RESULTS_URL",
+              "ACTIONS_RUNTIME_TOKEN",
+            ];
+            for (const name of required) {
+              const value = process.env[name];
+              if (!value) {
+                throw new Error(`GitHub Actions cache runtime variable ${name} is unavailable`);
+              }
+              core.exportVariable(name, value);
+            }
+            core.exportVariable("ACTIONS_CACHE_SERVICE_V2", "true");
+
       - name: Set up Docker Buildx
         run: bash scripts/ci/setup-buildx.sh
 
@@ -53,8 +71,8 @@ jobs:
           docker buildx build \
             --file ./golang/Dockerfile \
             --tag llm-temporal-worker:pr-${{ github.event.pull_request.number }}-${{ github.run_number }} \
-            --cache-from type=gha,scope=llmtw-pr-${{ github.event.pull_request.number }} \
-            --cache-to type=gha,mode=max,scope=llmtw-pr-${{ github.event.pull_request.number }},ignore-error=true \
+            --cache-from type=gha,scope=llmtw-pr-${{ github.event.pull_request.number }},version=2 \
+            --cache-to type=gha,mode=max,scope=llmtw-pr-${{ github.event.pull_request.number }},version=2,ignore-error=true \
             --build-arg VERSION=${{ steps.metadata.outputs.version }} \
             --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
             --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
@@ -79,6 +97,12 @@ jobs:
 
       - name: Verify OCaml Temporal dependency pin parity
         run: bash scripts/check-ocaml-temporal-pin.sh
+
+      - name: Restore isolated OPAM root
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/llmtw-opam-root
+          key: opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-pr-${{ github.event.pull_request.number }}-opam-2.3.0-ocaml-5.2.0-sandboxed-${{ hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project') }}
 
       - name: Set up OCaml
         run: bash scripts/ci/setup-opam.sh

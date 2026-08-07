@@ -68,6 +68,56 @@ Expected: PASS. The workflow test should prove the automatic workflows contain n
 
 Commit the workflow, helper, architecture-test, and plan changes together. In the PR description, identify the hosted `OCaml package`, `Container image`, `Verify`, fuzz, and release-evidence jobs as the integration proof; do not claim green CI until GitHub has run them.
 
+### Task 2: Correct cache and sandbox regressions found in independent review
+
+**Files:**
+
+- Modify: `.github/workflows/master.yml`
+- Modify: `.github/workflows/pull-request.yml`
+- Modify: `golang/internal/architecturetest/workflow_test.go`
+- Modify: `golang/scripts/check-workflow-policy.sh`
+- Modify: `scripts/ci/setup-buildx.sh`
+- Modify: `scripts/ci/setup-opam.sh`
+- Modify: `docs/superpowers/plans/2026-08-07-github-actions-policy-compatibility.md`
+- Create or modify: focused deterministic native-helper tests under `golang/internal/architecturetest/`
+
+**Step 1: Write failing behavioral regression tests**
+
+Rename or select every native-workflow test so `make -C golang workflow-verify` executes it. Add tests that fail against the current implementation unless all of the following are true:
+
+- the container jobs use a full-SHA-pinned GitHub-owned bridge that exports the GitHub Actions cache runtime URL, results URL, token, and cache-v2 flag before native Buildx setup/build;
+- the native Buildx helper pins a Buildx/BuildKit pair that supports GitHub cache API v2, selects the builder, bootstraps it, and keeps the reviewed image digest;
+- cache import/export explicitly use the supported GitHub cache API v2 behavior while retaining master and PR isolation;
+- the OCaml jobs restore/save an isolated OPAM root through a full-SHA-pinned `actions/cache` step keyed by runner OS, runner architecture, repository, OPAM version, OCaml version, sandbox mode, and the nested package dependency inputs;
+- the OPAM helper preserves sandboxing, initializes a fresh root only when absent, reuses a restored switch when present, and persists its executable path exactly once; and
+- deterministic fake-command helper tests prove every downloaded binary/archive passes checksum verification before install, extract, Docker bootstrap, or OPAM use.
+
+Run the focused test subset before implementation.
+
+Expected: FAIL against the reviewed Task 1 commit, demonstrating that the test suite catches the broken cache/runtime and sandbox behavior.
+
+**Step 2: Repair native cache and OPAM behavior**
+
+Use only GitHub-owned, full-SHA-pinned actions. Add the reviewed runtime-cache bridge before both container builds; fail clearly when a required runtime value is unavailable. Update the Buildx binary checksum and BuildKit image digest together to a supported API-v2 pair from their official releases. Do not retain an API-v1 fallback.
+
+Add an isolated OPAM cache in each OCaml job before setup. The cache may reuse immutable compiler/dependency state but must not mix master and pull-request identity. Revise `setup-opam.sh` to retain the default sandboxed behavior, safely reuse a restored root/switch, and use `GITHUB_PATH` plus `GITHUB_ENV` without duplicating PATH entries.
+
+**Step 3: Verify the corrected contract**
+
+Run:
+
+```bash
+bash -n scripts/ci/*.sh
+go test ./internal/architecturetest
+make -C golang workflow-verify
+```
+
+Expected: PASS. The workflow verification target must execute the newly added cache, sandbox, and helper-behavior tests.
+
+**Step 4: Request a fresh independent review**
+
+Commit the corrective changes separately, preserve the Task 1 report and review findings in the ignored SDD workspace, and request a new reviewer who verifies the fixed cache/runtime, Buildx/BuildKit compatibility, OPAM cache behavior, sandboxing, and test selection before any push.
+
 ## Task 1 implementation record
 
 The blocked automatic-workflow actions were replaced with repository-owned,

@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-readonly buildx_version="v0.16.2"
-readonly buildx_sha256="43e4c928a0be38ab34e206c82957edfdd54f3e7124f1dadd7779591c3acf77ea"
-readonly buildkit_image="moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27"
+readonly buildx_version="v0.21.2"
+readonly buildx_sha256="b13bee81c3db12a4be7d0b9d042b64d0dd9ed116f7674dfac0ffdf2a71acfe3d"
+readonly buildkit_image="moby/buildkit:v0.20.2@sha256:c457984bd29f04d6acc90c8d9e717afe3922ae14665f3187e0096976fe37b1c8"
 
 : "${RUNNER_TEMP:?RUNNER_TEMP must identify a runner-temporary directory}"
 : "${GITHUB_ENV:?GITHUB_ENV must be available in GitHub Actions}"

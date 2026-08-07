@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	checkoutActionPin = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
-	setupGoActionPin  = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
+	checkoutActionPin     = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
+	setupGoActionPin      = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
+	githubScriptActionPin = "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
+	cacheActionPin        = "actions/cache@5a3ec84eff668545956fd18022155c47e93e2684"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -65,13 +67,13 @@ func TestAutomaticallyTriggeredWorkflowsUseOnlyGitHubOwnedActions(t *testing.T) 
 	}
 }
 
-func TestNativeCISetupHelpersVerifyPinnedDownloads(t *testing.T) {
+func TestWorkflowNativeCISetupHelpersVerifyPinnedDownloads(t *testing.T) {
 	for _, test := range []struct {
-		file string
-		version string
+		file     string
+		version  string
 		checksum string
 	}{
-		{file: "setup-buildx.sh", version: "v0.16.2", checksum: "43e4c928a0be38ab34e206c82957edfdd54f3e7124f1dadd7779591c3acf77ea"},
+		{file: "setup-buildx.sh", version: "v0.21.2", checksum: "b13bee81c3db12a4be7d0b9d042b64d0dd9ed116f7674dfac0ffdf2a71acfe3d"},
 		{file: "setup-opam.sh", version: "2.3.0", checksum: "324e78e3f33efeba279aacf9f9610cfec7b2df7d7e0e1640f75f09de85f96cc9"},
 		{file: "setup-kubectl.sh", version: "v1.32.6", checksum: "0e31ebf882578b50e50fe6c43e3a0e3db61f6a41c9cded46485bc74d03d576eb"},
 		{file: "setup-syft.sh", version: "v1.44.0", checksum: "0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a"},
@@ -100,6 +102,75 @@ func TestNativeCISetupHelpersVerifyPinnedDownloads(t *testing.T) {
 	}
 }
 
+func TestWorkflowContainerBuildCacheV2BridgeAndIsolation(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		scope string
+	}{
+		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number }}"},
+		{name: "master.yml", scope: "llmtw-master"},
+	} {
+		workflow := readWorkflow(t, test.name)
+		assertJobUsesAction(t, workflow, "container", githubScriptActionPin)
+		assertJobActionPrecedesRunCommand(t, workflow, "container", githubScriptActionPin, "bash scripts/ci/setup-buildx.sh")
+		assertJobActionPrecedesRunContains(t, workflow, "container", githubScriptActionPin, "docker buildx build")
+		assertJobRunContains(t, workflow, "container", "--cache-from type=gha,scope="+test.scope+",version=2")
+		assertJobRunContains(t, workflow, "container", "--cache-to type=gha,mode=max,scope="+test.scope+",version=2,ignore-error=true")
+		for _, want := range []string{
+			"ACTIONS_CACHE_URL",
+			"ACTIONS_RESULTS_URL",
+			"ACTIONS_RUNTIME_TOKEN",
+			"ACTIONS_CACHE_SERVICE_V2",
+		} {
+			if !strings.Contains(workflow.raw, want) {
+				t.Fatalf("%s does not export %s through the GitHub-owned runtime bridge", workflow.name, want)
+			}
+		}
+	}
+}
+
+func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		identity string
+	}{
+		{name: "pull-request.yml", identity: "pr-${{ github.event.pull_request.number }}"},
+		{name: "master.yml", identity: "master"},
+	} {
+		workflow := readWorkflow(t, test.name)
+		assertJobUsesAction(t, workflow, "ocaml", cacheActionPin)
+		assertJobActionPrecedesRunCommand(t, workflow, "ocaml", cacheActionPin, "bash scripts/ci/setup-opam.sh")
+		for _, want := range []string{
+			"path: ${{ runner.temp }}/llmtw-opam-root",
+			"opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-" + test.identity,
+			"opam-2.3.0-ocaml-5.2.0-sandboxed",
+			"hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project')",
+		} {
+			if !strings.Contains(workflow.raw, want) {
+				t.Fatalf("%s OCaml cache does not retain %q", workflow.name, want)
+			}
+		}
+	}
+
+	opamSetup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "setup-opam.sh")
+	for _, want := range []string{
+		"GITHUB_PATH",
+		"opam switch list --short",
+		"opam switch set --yes",
+		"opam init --bare --no-setup --yes",
+	} {
+		if !strings.Contains(opamSetup, want) {
+			t.Fatalf("native OPAM setup does not retain %q", want)
+		}
+	}
+	if strings.Contains(opamSetup, "--disable-sandboxing") {
+		t.Fatal("native OPAM setup disables sandboxing")
+	}
+	if strings.Contains(opamSetup, "printf 'PATH=") || strings.Count(opamSetup, `>> "${GITHUB_PATH}"`) != 1 {
+		t.Fatal("native OPAM setup does not persist its executable path exactly once through GITHUB_PATH")
+	}
+}
+
 func TestWorkflowContainerBuildContract(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -113,8 +184,8 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 		assertJobReadOnlyPermissions(t, workflow.name, "container", job)
 		assertJobHasRunCommand(t, workflow, "container", "bash scripts/ci/setup-buildx.sh")
 		assertJobRunContains(t, workflow, "container", "docker buildx build")
-		assertJobRunContains(t, workflow, "container", "--cache-from type=gha,scope="+test.scope)
-		assertJobRunContains(t, workflow, "container", "--cache-to type=gha,mode=max,scope="+test.scope+",ignore-error=true")
+		assertJobRunContains(t, workflow, "container", "--cache-from type=gha,scope="+test.scope+",version=2")
+		assertJobRunContains(t, workflow, "container", "--cache-to type=gha,mode=max,scope="+test.scope+",version=2,ignore-error=true")
 		assertJobRunContains(t, workflow, "container", "--file ./golang/Dockerfile")
 		if !strings.Contains(workflow.raw, "go-version-file: golang/.go-version") {
 			t.Fatalf("%s container build does not use the reviewed Go toolchain file", workflow.name)
@@ -130,11 +201,13 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 
 	buildxSetup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "setup-buildx.sh")
 	for _, want := range []string{
-		"readonly buildx_version=\"v0.16.2\"",
-		"readonly buildx_sha256=\"43e4c928a0be38ab34e206c82957edfdd54f3e7124f1dadd7779591c3acf77ea\"",
-		"moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27",
+		"readonly buildx_version=\"v0.21.2\"",
+		"readonly buildx_sha256=\"b13bee81c3db12a4be7d0b9d042b64d0dd9ed116f7674dfac0ffdf2a71acfe3d\"",
+		"moby/buildkit:v0.20.2@sha256:c457984bd29f04d6acc90c8d9e717afe3922ae14665f3187e0096976fe37b1c8",
 		"sha256sum --check --status",
 		"--driver docker-container",
+		"docker buildx create",
+		"docker buildx inspect --bootstrap",
 	} {
 		if !strings.Contains(buildxSetup, want) {
 			t.Fatalf("native Buildx setup does not retain %q", want)
@@ -775,6 +848,34 @@ func assertJobActionPrecedesRunCommand(t *testing.T, workflow workflowDocument, 
 		}
 	}
 	t.Fatalf("%s job %q does not run %q", workflow.name, jobName, command)
+}
+
+func assertJobActionPrecedesRunContains(t *testing.T, workflow workflowDocument, jobName, action, command string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	seenAction := false
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		if step["uses"] == action {
+			seenAction = true
+		}
+		run, _ := step["run"].(string)
+		if !strings.Contains(run, command) {
+			continue
+		}
+		if !seenAction {
+			t.Fatalf("%s job %q runs %q before %q", workflow.name, jobName, command, action)
+		}
+		return
+	}
+	t.Fatalf("%s job %q does not run a command containing %q", workflow.name, jobName, command)
 }
 
 func assertJobReadOnlyPermissions(t *testing.T, workflowName, jobName string, job map[string]any) {

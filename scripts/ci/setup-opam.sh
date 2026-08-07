@@ -8,6 +8,7 @@ readonly ocaml_version="5.2.0"
 
 : "${RUNNER_TEMP:?RUNNER_TEMP must identify a runner-temporary directory}"
 : "${GITHUB_ENV:?GITHUB_ENV must be available in GitHub Actions}"
+: "${GITHUB_PATH:?GITHUB_PATH must be available in GitHub Actions}"
 
 tool_root="${RUNNER_TEMP}/llmtw-ci-tools"
 bin_dir="${tool_root}/bin"
@@ -25,11 +26,17 @@ rm -f -- "${download}"
 export PATH="${bin_dir}:${PATH}"
 export OPAMROOT="${opam_root}"
 export OPAMSWITCH="${ocaml_version}"
-opam init --bare --disable-sandboxing --no-setup --yes
-opam switch create --yes "${ocaml_version}"
+if [[ ! -d "${opam_root}" ]]; then
+  opam init --bare --no-setup --yes
+fi
+if opam switch list --short | grep -Fx -- "${ocaml_version}" > /dev/null; then
+  opam switch set --yes "${ocaml_version}"
+else
+  opam switch create --yes "${ocaml_version}"
+fi
 [[ "$(opam var ocaml-version)" == "${ocaml_version}" ]]
 {
-  printf 'PATH=%s\n' "${bin_dir}:${PATH}"
   printf 'OPAMROOT=%s\n' "${opam_root}"
   printf 'OPAMSWITCH=%s\n' "${ocaml_version}"
 } >> "${GITHUB_ENV}"
+printf '%s\n' "${bin_dir}" >> "${GITHUB_PATH}"
