@@ -80,7 +80,8 @@ particular, the production factory's reusable `llm.Engine` is not a v1
 runtime: it cannot be losslessly adapted to Compact or Query, nor can it
 perform checkpoint materialization and the required Redis/PostgreSQL phase
 ordering. A durable v1 implementation must therefore be supplied separately
-or through an adapter that owns the complete phase order.
+or through an adapter that owns the complete phase order and one validated
+snapshot-owned durable state composition.
 
 ## Payload contract
 

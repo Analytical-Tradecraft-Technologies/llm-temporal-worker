@@ -79,6 +79,44 @@ func TestProductionFactoryRejectsUnconfiguredDurableSnapshotBeforeLoadingEngine(
 	}
 }
 
+func TestProductionFactoryRejectsPhaseFactoriesWithoutCompositionBeforeLoadingEngine(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("compile example config: %v", err)
+	}
+	loaded := false
+	generateCalled, compactCalled := false, false
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+			loaded = true
+			return engine.Snapshot{}, nil
+		}),
+		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
+			generateCalled = true
+			return validBuilderGeneratePorts(nil), nil
+		},
+		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
+			compactCalled = true
+			return validCompactPorts(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = factory.Build(context.Background(), snapshot)
+	if !errors.Is(err, ErrDurableV1Composition) {
+		t.Fatalf("Build() error = %v, want ErrDurableV1Composition", err)
+	}
+	if loaded || generateCalled || compactCalled {
+		t.Fatalf("missing composition reached external work: snapshot=%t generate=%t compact=%t", loaded, generateCalled, compactCalled)
+	}
+}
+
 func TestProductionFactoryDoesNotInferDurableBuilderFromCompositionFactory(t *testing.T) {
 	data, err := os.ReadFile("../../config.example.yaml")
 	if err != nil {

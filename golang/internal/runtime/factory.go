@@ -136,9 +136,9 @@ type ProductionFactoryOptions struct {
 	AzureAPIVersions          map[string]string
 	// V1RuntimeBuilder is optional until the durable phase ports are composed.
 	// When supplied, it is invoked independently for every immutable config
-	// snapshot, including reloads. If both phase factories below are supplied,
-	// NewProductionEngineFactory installs the complete durable builder when
-	// this field is omitted.
+	// snapshot, including reloads. If both phase factories below and the
+	// DurableCompositionFactory are supplied, NewProductionEngineFactory installs
+	// the complete durable builder when this field is omitted.
 	V1RuntimeBuilder V1RuntimeBuilder
 	// GeneratePortsFactory supplies the complete snapshot-owned durable
 	// Generate phase to NewGenerateV1RuntimeBuilder. Nil intentionally leaves
@@ -163,7 +163,9 @@ type ProductionFactoryOptions struct {
 	// DurableCompositionFactory is an optional Task 19 binding for the complete
 	// snapshot-owned PostgreSQL/Redis durable state composition. It is not
 	// inferred from the legacy admission stores; callers must supply every
-	// storage port and validate the returned Composition before enabling it.
+	// storage port and validate the returned Composition before enabling it. The
+	// built-in complete V1RuntimeBuilder requires this factory; a custom explicit
+	// V1RuntimeBuilder remains responsible for an equivalent fail-closed guard.
 	DurableCompositionFactory DurableCompositionFactory
 }
 
@@ -310,11 +312,13 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 	if options.AnthropicAWSClientFactory == nil {
 		options.AnthropicAWSClientFactory = anthropicmessages.NewAWSGatewayClient
 	}
-	// When both durable phase factories are supplied, compose the complete
-	// Activity runtime by default. A partial or absent factory set remains
-	// unconfigured and is rejected by the production readiness guard; callers
-	// can still provide an explicit builder for an equivalent implementation.
-	if options.V1RuntimeBuilder == nil && options.GeneratePortsFactory != nil && options.CompactPortsFactory != nil {
+	// Compose the complete Activity runtime by default only when both durable
+	// phase factories and their single validated state composition are supplied.
+	// A partial or absent factory set remains unconfigured and is rejected by the
+	// production readiness guard before the engine snapshot or external clients
+	// are constructed; callers can still provide an explicit builder for an
+	// equivalent implementation.
+	if options.V1RuntimeBuilder == nil && options.GeneratePortsFactory != nil && options.CompactPortsFactory != nil && options.DurableCompositionFactory != nil {
 		options.V1RuntimeBuilder = NewDurableV1RuntimeBuilder()
 	}
 	return &ProductionEngineFactory{options: options}, nil

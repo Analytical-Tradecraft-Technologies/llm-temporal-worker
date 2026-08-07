@@ -164,7 +164,11 @@ independent authorized callback. The wrapper owns no PostgreSQL, Redis, blob,
 provider, or credential clients and therefore cannot bypass the snapshot
 lease. A zero or partial port set remains fail-closed; this adapter is a bridge
 to the durable composition, not evidence that deployment wiring has been
-completed.
+completed. The built-in complete runtime builder additionally requires one
+validated snapshot-owned `durable.Composition` before it invokes either phase
+factory, so those factories cannot select PostgreSQL/Redis ports independently.
+A deployment that provides only phase factories remains unconfigured rather
+than activating a partial runtime.
 
 The runtime capability bundle also exposes a separate
 `CompactPortsFactory` contract and `ValidateCompact` readiness check. The
