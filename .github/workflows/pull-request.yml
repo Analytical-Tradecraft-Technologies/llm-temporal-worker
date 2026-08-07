@@ -31,10 +31,7 @@ jobs:
           cache: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-        with:
-          version: v0.16.2
-          driver-opts: image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27
+        run: bash scripts/ci/setup-buildx.sh
 
       - name: Resolve image build metadata
         id: metadata
@@ -50,20 +47,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build container image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: ./golang
-          file: ./golang/Dockerfile
-          push: false
-          tags: llm-temporal-worker:pr-${{ github.event.pull_request.number }}-${{ github.run_number }}
-          cache-from: type=gha,scope=llmtw-pr-${{ github.event.pull_request.number }}
-          cache-to: type=gha,mode=max,scope=llmtw-pr-${{ github.event.pull_request.number }},ignore-error=true
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            REVISION=${{ steps.metadata.outputs.revision }}
-            BUILD_TIME=${{ steps.metadata.outputs.build_time }}
-            SOURCE=${{ steps.metadata.outputs.source }}
-            GO_VERSION=${{ steps.metadata.outputs.go_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file ./golang/Dockerfile \
+            --tag llm-temporal-worker:pr-${{ github.event.pull_request.number }}-${{ github.run_number }} \
+            --cache-from type=gha,scope=llmtw-pr-${{ github.event.pull_request.number }} \
+            --cache-to type=gha,mode=max,scope=llmtw-pr-${{ github.event.pull_request.number }},ignore-error=true \
+            --build-arg VERSION=${{ steps.metadata.outputs.version }} \
+            --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
+            --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
+            --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
+            --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
+            ./golang
 
   ocaml:
     name: OCaml package
@@ -84,9 +81,7 @@ jobs:
         run: bash scripts/check-ocaml-temporal-pin.sh
 
       - name: Set up OCaml
-        uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3
-        with:
-          ocaml-compiler: 5.2.0
+        run: bash scripts/ci/setup-opam.sh
 
       - name: Install pinned nested package dependencies
         working-directory: ocaml/llm_temporal_worker
@@ -203,9 +198,7 @@ jobs:
 
       - name: Set up pinned kubectl for deployment policy
         if: steps.go.outputs.present == 'true'
-        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
-        with:
-          version: v1.32.6
+        run: bash scripts/ci/setup-kubectl.sh
 
       - name: Verify workflow policy
         if: steps.go.outputs.present == 'true'

@@ -35,10 +35,7 @@ jobs:
           cache: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-        with:
-          version: v0.16.2
-          driver-opts: image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27
+        run: bash scripts/ci/setup-buildx.sh
 
       - name: Resolve image build metadata
         id: metadata
@@ -54,20 +51,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build container image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: ./golang
-          file: ./golang/Dockerfile
-          push: false
-          tags: llm-temporal-worker:master-${{ github.run_number }}
-          cache-from: type=gha,scope=llmtw-master
-          cache-to: type=gha,mode=max,scope=llmtw-master,ignore-error=true
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            REVISION=${{ steps.metadata.outputs.revision }}
-            BUILD_TIME=${{ steps.metadata.outputs.build_time }}
-            SOURCE=${{ steps.metadata.outputs.source }}
-            GO_VERSION=${{ steps.metadata.outputs.go_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file ./golang/Dockerfile \
+            --tag llm-temporal-worker:master-${{ github.run_number }} \
+            --cache-from type=gha,scope=llmtw-master \
+            --cache-to type=gha,mode=max,scope=llmtw-master,ignore-error=true \
+            --build-arg VERSION=${{ steps.metadata.outputs.version }} \
+            --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
+            --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
+            --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
+            --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
+            ./golang
 
   ocaml:
     name: OCaml package
@@ -88,9 +85,7 @@ jobs:
         run: bash scripts/check-ocaml-temporal-pin.sh
 
       - name: Set up OCaml
-        uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3
-        with:
-          ocaml-compiler: 5.2.0
+        run: bash scripts/ci/setup-opam.sh
 
       - name: Install pinned nested package dependencies
         working-directory: ocaml/llm_temporal_worker
@@ -231,9 +226,7 @@ jobs:
 
       - name: Set up pinned kubectl for deployment policy
         if: steps.go.outputs.present == 'true'
-        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
-        with:
-          version: v1.32.6
+        run: bash scripts/ci/setup-kubectl.sh
 
       - name: Verify workflow policy
         if: steps.go.outputs.present == 'true'
@@ -377,15 +370,10 @@ jobs:
           cache-dependency-path: golang/go.sum
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-        with:
-          version: v0.16.2
-          driver-opts: image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27
+        run: bash scripts/ci/setup-buildx.sh
 
       - name: Set up pinned kubectl for local manifest rendering
-        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
-        with:
-          version: v1.32.6
+        run: bash scripts/ci/setup-kubectl.sh
 
       - name: Collect compact redacted release inputs
         env:
@@ -409,33 +397,33 @@ jobs:
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           printf 'reference=llm-temporal-worker@%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Download pinned Syft
-        id: syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          syft-version: v1.44.0
+      - name: Set up pinned Syft
+        run: bash scripts/ci/setup-syft.sh
 
       - name: Generate and bind CycloneDX SBOM for temporary OCI directory
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.syft.outputs.cmd }}" oci-dir:"$RUNNER_TEMP/image.oci" -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
+          syft oci-dir:"$RUNNER_TEMP/image.oci" -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
           python3 scripts/release/collect.py annotate-sbom \
             --input "$RUNNER_TEMP/sbom.cdx.json" \
             --output release-artifacts/sbom.cdx.json \
             --reference "${{ steps.image.outputs.reference }}" \
             --digest "${{ steps.image.outputs.digest }}"
 
+      - name: Set up pinned Trivy
+        run: bash scripts/ci/setup-trivy.sh
+
       - name: Scan temporary OCI directory with pinned Trivy
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: image
-          input: ${{ runner.temp }}/image.oci
-          format: json
-          output: ${{ runner.temp }}/image-scan.json
-          trivy-config: scripts/release/trivy.yaml
-          version: v0.72.0
-          cache: false
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy image \
+            --input "$RUNNER_TEMP/image.oci" \
+            --format json \
+            --output "$RUNNER_TEMP/image-scan.json" \
+            --config scripts/release/trivy.yaml \
+            --cache-dir "$TRIVY_CACHE_DIR"
 
       - name: Bind Trivy result to temporary OCI descriptor
         shell: bash

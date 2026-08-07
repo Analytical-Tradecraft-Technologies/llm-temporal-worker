@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	checkoutActionPin     = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
-	setupGoActionPin      = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
-	setupKubectlActionPin = "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede"
+	checkoutActionPin = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
+	setupGoActionPin  = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -53,6 +52,54 @@ func TestWorkflowContract(t *testing.T) {
 	}
 }
 
+func TestAutomaticallyTriggeredWorkflowsUseOnlyGitHubOwnedActions(t *testing.T) {
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		for _, reference := range actionReferences(t, workflow) {
+			if !strings.HasPrefix(reference, "actions/") {
+				t.Fatalf("%s references non-GitHub-owned action %q", workflow.name, reference)
+			}
+		}
+	}
+}
+
+func TestNativeCISetupHelpersVerifyPinnedDownloads(t *testing.T) {
+	for _, test := range []struct {
+		file string
+		version string
+		checksum string
+	}{
+		{file: "setup-buildx.sh", version: "v0.16.2", checksum: "43e4c928a0be38ab34e206c82957edfdd54f3e7124f1dadd7779591c3acf77ea"},
+		{file: "setup-opam.sh", version: "2.3.0", checksum: "324e78e3f33efeba279aacf9f9610cfec7b2df7d7e0e1640f75f09de85f96cc9"},
+		{file: "setup-kubectl.sh", version: "v1.32.6", checksum: "0e31ebf882578b50e50fe6c43e3a0e3db61f6a41c9cded46485bc74d03d576eb"},
+		{file: "setup-syft.sh", version: "v1.44.0", checksum: "0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a"},
+		{file: "setup-trivy.sh", version: "v0.72.0", checksum: "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"},
+	} {
+		t.Run(test.file, func(t *testing.T) {
+			setup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", test.file)
+			for _, want := range []string{
+				test.version,
+				test.checksum,
+				"sha256sum --check --status",
+				"RUNNER_TEMP",
+			} {
+				if !strings.Contains(setup, want) {
+					t.Fatalf("%s does not retain %q", test.file, want)
+				}
+			}
+		})
+	}
+
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		assertJobHasRunCommand(t, workflow, "ocaml", "bash scripts/ci/setup-opam.sh")
+	}
+}
+
 func TestWorkflowContainerBuildContract(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -64,17 +111,33 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 		workflow := readWorkflow(t, test.name)
 		job := workflowJob(t, workflow, "container")
 		assertJobReadOnlyPermissions(t, workflow.name, "container", job)
-		assertJobUsesAction(t, workflow, "container", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c")
-		assertJobUsesAction(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf")
-		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-from", "type=gha,scope="+test.scope)
-		assertJobActionInput(t, workflow, "container", "docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf", "cache-to", "type=gha,mode=max,scope="+test.scope+",ignore-error=true")
+		assertJobHasRunCommand(t, workflow, "container", "bash scripts/ci/setup-buildx.sh")
+		assertJobRunContains(t, workflow, "container", "docker buildx build")
+		assertJobRunContains(t, workflow, "container", "--cache-from type=gha,scope="+test.scope)
+		assertJobRunContains(t, workflow, "container", "--cache-to type=gha,mode=max,scope="+test.scope+",ignore-error=true")
+		assertJobRunContains(t, workflow, "container", "--file ./golang/Dockerfile")
 		if !strings.Contains(workflow.raw, "go-version-file: golang/.go-version") {
 			t.Fatalf("%s container build does not use the reviewed Go toolchain file", workflow.name)
 		}
-		if !strings.Contains(workflow.raw, "GO_VERSION=${{ steps.metadata.outputs.go_version }}") ||
-			!strings.Contains(workflow.raw, "REVISION=${{ steps.metadata.outputs.revision }}") ||
-			!strings.Contains(workflow.raw, "BUILD_TIME=${{ steps.metadata.outputs.build_time }}") {
+		if !strings.Contains(workflow.raw, "--build-arg VERSION=${{ steps.metadata.outputs.version }}") ||
+			!strings.Contains(workflow.raw, "--build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }}") ||
+			!strings.Contains(workflow.raw, "--build-arg REVISION=${{ steps.metadata.outputs.revision }}") ||
+			!strings.Contains(workflow.raw, "--build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }}") ||
+			!strings.Contains(workflow.raw, "--build-arg SOURCE=${{ steps.metadata.outputs.source }}") {
 			t.Fatalf("%s container build does not pass commit and build metadata", workflow.name)
+		}
+	}
+
+	buildxSetup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "setup-buildx.sh")
+	for _, want := range []string{
+		"readonly buildx_version=\"v0.16.2\"",
+		"readonly buildx_sha256=\"43e4c928a0be38ab34e206c82957edfdd54f3e7124f1dadd7779591c3acf77ea\"",
+		"moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27",
+		"sha256sum --check --status",
+		"--driver docker-container",
+	} {
+		if !strings.Contains(buildxSetup, want) {
+			t.Fatalf("native Buildx setup does not retain %q", want)
 		}
 	}
 }
@@ -128,18 +191,14 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	for _, action := range []string{
 		checkoutActionPin,
 		setupGoActionPin,
-		"docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
-		"azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede",
-		"anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610",
-		"aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1",
 		"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
 	} {
 		assertJobUsesAction(t, master, "release-evidence", action)
 	}
-	assertJobActionInput(t, master, "release-evidence", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "version", "v0.16.2")
-	assertJobActionInput(t, master, "release-evidence", "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c", "driver-opts", "image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27")
-	assertJobActionInput(t, master, "release-evidence", "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede", "version", "v1.32.6")
-	assertJobActionPrecedesRunCommand(t, master, "release-evidence", "azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede", "--image-oci-layout \"$RUNNER_TEMP/image.oci\"")
+	assertJobHasRunCommand(t, master, "release-evidence", "bash scripts/ci/setup-buildx.sh")
+	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-kubectl.sh", "--image-oci-layout \"$RUNNER_TEMP/image.oci\"")
+	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-syft.sh", "syft oci-dir:\"$RUNNER_TEMP/image.oci\"")
+	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-trivy.sh", "trivy image")
 	for _, command := range []string{"make release-verify"} {
 		if !jobHasRunCommand(job, command) {
 			t.Fatalf("release-evidence job does not run %q", command)
@@ -147,16 +206,29 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	}
 	for _, want := range []string{
 		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
-		"input: ${{ runner.temp }}/image.oci",
-		"syft-version: v1.44.0",
-		"version: v0.72.0",
-		"version: v1.32.6",
+		"--input \"$RUNNER_TEMP/image.oci\"",
+		"--config scripts/release/trivy.yaml",
 		"RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6",
-		"trivy-config: scripts/release/trivy.yaml",
 		"retention-days: 14",
 	} {
 		if !strings.Contains(master.raw, want) {
 			t.Fatalf("master release-evidence job does not retain exact OCI evidence boundary %q", want)
+		}
+	}
+	for _, test := range []struct {
+		name string
+		file string
+		want []string
+	}{
+		{name: "kubectl", file: "setup-kubectl.sh", want: []string{"readonly kubectl_version=\"v1.32.6\"", "readonly kubectl_sha256=\"0e31ebf882578b50e50fe6c43e3a0e3db61f6a41c9cded46485bc74d03d576eb\"", "sha256sum --check --status"}},
+		{name: "syft", file: "setup-syft.sh", want: []string{"readonly syft_version=\"v1.44.0\"", "readonly syft_sha256=\"0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a\"", "sha256sum --check --status"}},
+		{name: "trivy", file: "setup-trivy.sh", want: []string{"readonly trivy_version=\"v0.72.0\"", "readonly trivy_sha256=\"bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea\"", "sha256sum --check --status"}},
+	} {
+		setup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", test.file)
+		for _, want := range test.want {
+			if !strings.Contains(setup, want) {
+				t.Fatalf("native %s setup does not retain %q", test.name, want)
+			}
 		}
 	}
 
@@ -371,9 +443,7 @@ func TestWorkflowsRunPinnedKubernetesDeploymentPolicyVerification(t *testing.T) 
 	for _, name := range []string{"master.yml", "pull-request.yml"} {
 		workflow := readWorkflow(t, name)
 		job := workflowJob(t, workflow, "verify")
-		assertJobUsesAction(t, workflow, "verify", setupKubectlActionPin)
-		assertJobActionInput(t, workflow, "verify", setupKubectlActionPin, "version", "v1.32.6")
-		assertJobActionPrecedesRunCommand(t, workflow, "verify", setupKubectlActionPin, "make deployment-policy-verify")
+		assertJobRunPrecedesRunContains(t, workflow, "verify", "bash scripts/ci/setup-kubectl.sh", "make deployment-policy-verify")
 		if !jobHasRunCommand(job, "make deployment-policy-verify") {
 			t.Fatalf("%s verify job does not run make deployment-policy-verify", workflow.name)
 		}
@@ -600,6 +670,59 @@ func assertJobUsesAction(t *testing.T, workflow workflowDocument, jobName, want 
 	t.Fatalf("%s job %q does not use %q", workflow.name, jobName, want)
 }
 
+func assertJobHasRunCommand(t *testing.T, workflow workflowDocument, jobName, want string) {
+	t.Helper()
+	if !jobHasRunCommand(workflowJob(t, workflow, jobName), want) {
+		t.Fatalf("%s job %q does not run %q", workflow.name, jobName, want)
+	}
+}
+
+func assertJobRunContains(t *testing.T, workflow workflowDocument, jobName, want string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		if run, _ := step["run"].(string); strings.Contains(run, want) {
+			return
+		}
+	}
+	t.Fatalf("%s job %q does not contain %q in a run command", workflow.name, jobName, want)
+}
+
+func assertJobRunPrecedesRunContains(t *testing.T, workflow workflowDocument, jobName, before, after string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	seenBefore := false
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		run, _ := step["run"].(string)
+		if strings.Contains(run, before) {
+			seenBefore = true
+		}
+		if strings.Contains(run, after) {
+			if !seenBefore {
+				t.Fatalf("%s job %q runs %q before %q", workflow.name, jobName, after, before)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s job %q does not run %q", workflow.name, jobName, after)
+}
+
 func assertJobActionInput(t *testing.T, workflow workflowDocument, jobName, action, input, want string) {
 	t.Helper()
 	job := workflowJob(t, workflow, jobName)
@@ -783,14 +906,13 @@ func validateReleaseEvidencePathOverridePolicy(workflow workflowDocument) error 
 
 func validateReleaseEvidenceTemporaryOCIDirectoryPolicy(workflow workflowDocument) error {
 	const temporaryOCIDirectory = "$RUNNER_TEMP/image.oci"
-	const actionTemporaryOCIDirectory = "${{ runner.temp }}/image.oci"
 	for _, required := range []string{
 		"bash scripts/release/collect.sh \\",
 		"--artifact-dir release-artifacts \\",
 		"--image-oci-layout \"$RUNNER_TEMP/image.oci\"",
 		"layout-digest -layout \"$RUNNER_TEMP/image.oci\"",
 		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
-		"input: ${{ runner.temp }}/image.oci",
+		"--input \"$RUNNER_TEMP/image.oci\"",
 		`rm -rf -- "$RUNNER_TEMP/image.oci"`,
 	} {
 		if !strings.Contains(workflow.raw, required) {
@@ -813,7 +935,7 @@ func validateReleaseEvidenceTemporaryOCIDirectoryPolicy(workflow workflowDocumen
 	if upload < 0 || cleanup <= upload {
 		return fmt.Errorf("%s does not remove the temporary OCI directory after artifact upload", workflow.name)
 	}
-	if !strings.Contains(workflow.raw, temporaryOCIDirectory) || !strings.Contains(workflow.raw, actionTemporaryOCIDirectory) {
+	if !strings.Contains(workflow.raw, temporaryOCIDirectory) {
 		return fmt.Errorf("%s does not bind all OCI tooling to the runner temporary directory", workflow.name)
 	}
 	return nil
