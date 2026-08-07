@@ -34,11 +34,26 @@ jobs:
           go-version-file: golang/.go-version
           cache: false
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Export GitHub Actions cache runtime for Buildx API v2
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
-          version: v0.16.2
-          driver-opts: image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27
+          script: |
+            const required = [
+              "ACTIONS_CACHE_URL",
+              "ACTIONS_RESULTS_URL",
+              "ACTIONS_RUNTIME_TOKEN",
+            ];
+            for (const name of required) {
+              const value = process.env[name];
+              if (!value) {
+                throw new Error(`GitHub Actions cache runtime variable ${name} is unavailable`);
+              }
+              core.exportVariable(name, value);
+            }
+            core.exportVariable("ACTIONS_CACHE_SERVICE_V2", "true");
+
+      - name: Set up Docker Buildx
+        run: bash scripts/ci/setup-buildx.sh
 
       - name: Resolve image build metadata
         id: metadata
@@ -54,20 +69,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build container image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: ./golang
-          file: ./golang/Dockerfile
-          push: false
-          tags: llm-temporal-worker:master-${{ github.run_number }}
-          cache-from: type=gha,scope=llmtw-master
-          cache-to: type=gha,mode=max,scope=llmtw-master,ignore-error=true
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            REVISION=${{ steps.metadata.outputs.revision }}
-            BUILD_TIME=${{ steps.metadata.outputs.build_time }}
-            SOURCE=${{ steps.metadata.outputs.source }}
-            GO_VERSION=${{ steps.metadata.outputs.go_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --file ./golang/Dockerfile \
+            --tag llm-temporal-worker:master-${{ github.run_number }} \
+            --cache-from type=gha,scope=llmtw-master,version=2 \
+            --cache-to type=gha,mode=max,scope=llmtw-master,version=2,ignore-error=true \
+            --build-arg VERSION=${{ steps.metadata.outputs.version }} \
+            --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
+            --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
+            --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
+            --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
+            ./golang
 
   ocaml:
     name: OCaml package
@@ -82,23 +97,45 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes protobuf-compiler
+          sudo apt-get install --yes protobuf-compiler bubblewrap
+
+      - name: Enable unprivileged user namespaces for OPAM sandboxing
+        if: ${{ runner.environment == 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for setting in \
+            kernel.unprivileged_userns_clone=1 \
+            kernel.apparmor_restrict_unprivileged_userns=0; do
+            key="${setting%=*}"
+            want="${setting#*=}"
+            if current="$(sysctl -n "${key}" 2>/dev/null)" && [[ "${current}" != "${want}" ]]; then
+              sudo sysctl -w "${key}=${want}"
+            fi
+          done
 
       - name: Verify OCaml Temporal dependency pin parity
         run: bash scripts/check-ocaml-temporal-pin.sh
 
-      - name: Set up OCaml
-        uses: ocaml/setup-ocaml@15d660006c1d3110d77c34b7faa3bddefe8b82f0 # v3
+      - name: Restore isolated OPAM root
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          ocaml-compiler: 5.2.0
+          path: |
+            ${{ runner.temp }}/llmtw-opam-root
+            ${{ runner.temp }}/llmtw-xdg-cache
+          key: opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-master-opam-2.3.0-ocaml-5.2.0-sandboxed-${{ hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project', 'scripts/ci/setup-opam.sh') }}
+
+      - name: Set up OCaml
+        run: bash scripts/ci/setup-opam.sh
 
       - name: Install pinned nested package dependencies
         working-directory: ocaml/llm_temporal_worker
         run: |
           set -euo pipefail
-          opam pin add --yes --kind=git temporal-sdk \
+          opam pin add --yes --no-action --kind=git temporal-sdk \
             'git+https://github.com/mfow/ocaml-temporal.git#936d354807cc5c2ee1e1f81a22125a9cbec1df8e'
-          opam install --yes . --deps-only
+          bash ../../scripts/ci/prefetch-temporal-sdk-cargo.sh
+          CARGO_NET_OFFLINE=true opam install --yes . --deps-only
 
       - name: Build and test nested package
         working-directory: ocaml/llm_temporal_worker
@@ -231,9 +268,7 @@ jobs:
 
       - name: Set up pinned kubectl for deployment policy
         if: steps.go.outputs.present == 'true'
-        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
-        with:
-          version: v1.32.6
+        run: bash scripts/ci/setup-kubectl.sh
 
       - name: Verify workflow policy
         if: steps.go.outputs.present == 'true'
@@ -377,15 +412,10 @@ jobs:
           cache-dependency-path: golang/go.sum
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-        with:
-          version: v0.16.2
-          driver-opts: image=moby/buildkit:v0.16.0@sha256:bc1fe18224dbcb92599139db0c745696c48ba9fd4ac24038d1fa81fdd7dcac27
+        run: bash scripts/ci/setup-buildx.sh
 
       - name: Set up pinned kubectl for local manifest rendering
-        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
-        with:
-          version: v1.32.6
+        run: bash scripts/ci/setup-kubectl.sh
 
       - name: Collect compact redacted release inputs
         env:
@@ -409,33 +439,33 @@ jobs:
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           printf 'reference=llm-temporal-worker@%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Download pinned Syft
-        id: syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          syft-version: v1.44.0
+      - name: Set up pinned Syft
+        run: bash scripts/ci/setup-syft.sh
 
       - name: Generate and bind CycloneDX SBOM for temporary OCI directory
         shell: bash
         run: |
           set -euo pipefail
-          "${{ steps.syft.outputs.cmd }}" oci-dir:"$RUNNER_TEMP/image.oci" -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
+          syft oci-dir:"$RUNNER_TEMP/image.oci" -o cyclonedx-json > "$RUNNER_TEMP/sbom.cdx.json"
           python3 scripts/release/collect.py annotate-sbom \
             --input "$RUNNER_TEMP/sbom.cdx.json" \
             --output release-artifacts/sbom.cdx.json \
             --reference "${{ steps.image.outputs.reference }}" \
             --digest "${{ steps.image.outputs.digest }}"
 
+      - name: Set up pinned Trivy
+        run: bash scripts/ci/setup-trivy.sh
+
       - name: Scan temporary OCI directory with pinned Trivy
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: image
-          input: ${{ runner.temp }}/image.oci
-          format: json
-          output: ${{ runner.temp }}/image-scan.json
-          trivy-config: scripts/release/trivy.yaml
-          version: v0.72.0
-          cache: false
+        shell: bash
+        run: |
+          set -euo pipefail
+          trivy image \
+            --input "$RUNNER_TEMP/image.oci" \
+            --format json \
+            --output "$RUNNER_TEMP/image-scan.json" \
+            --config scripts/release/trivy.yaml \
+            --cache-dir "$TRIVY_CACHE_DIR"
 
       - name: Bind Trivy result to temporary OCI descriptor
         shell: bash

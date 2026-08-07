@@ -1,0 +1,303 @@
+package architecturetest
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestWorkflowNativeCIHelpersVerifyDownloadsBeforeUse(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		script    string
+		afterHash []string
+	}{
+		{name: "buildx", script: "setup-buildx.sh", afterHash: []string{"install", "docker"}},
+		{name: "opam", script: "setup-opam.sh", afterHash: []string{"install", "opam init"}},
+		{name: "kubectl", script: "setup-kubectl.sh", afterHash: []string{"install"}},
+		{name: "syft", script: "setup-syft.sh", afterHash: []string{"tar", "install"}},
+		{name: "trivy", script: "setup-trivy.sh", afterHash: []string{"tar", "install"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := runNativeCIHelper(t, test.script, "")
+			for _, command := range test.afterHash {
+				assertFakeCommandFollowsChecksum(t, calls, command)
+			}
+		})
+	}
+}
+
+func TestWorkflowNativeOPAMSetupReusesRestoredSwitch(t *testing.T) {
+	calls := runNativeCIHelper(t, "setup-opam.sh", "5.2.0")
+	for _, forbidden := range []string{"opam init", "opam switch create"} {
+		if strings.Contains(calls, forbidden) {
+			t.Fatalf("restored OPAM root unexpectedly ran %q:\n%s", forbidden, calls)
+		}
+	}
+	if !strings.Contains(calls, "opam switch set") {
+		t.Fatalf("restored OPAM root did not select its cached switch:\n%s", calls)
+	}
+}
+
+func TestWorkflowNativeOPAMSetupUsesSupportedOCamlVersionVariable(t *testing.T) {
+	calls := runNativeCIHelper(t, "setup-opam.sh", "")
+	if !strings.Contains(calls, "opam var ocaml:version") {
+		t.Fatalf("native OPAM setup did not query the supported OCaml version variable:\n%s", calls)
+	}
+}
+
+func TestWorkflowNativeOPAMSetupProvidesIsolatedCargoHomeBeforeOPAM(t *testing.T) {
+	calls, output, githubEnv, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", true, true)
+	if err != nil {
+		t.Fatalf("setup-opam.sh failed: %v\n%s", err, output)
+	}
+	cargoHome := workflowEnvironmentValue(githubEnv, "CARGO_HOME")
+	xdgCacheHome := workflowEnvironmentValue(githubEnv, "XDG_CACHE_HOME")
+	if !strings.HasSuffix(xdgCacheHome, "/llmtw-xdg-cache") {
+		t.Fatalf("XDG_CACHE_HOME = %q, want an isolated runner-temporary cache", xdgCacheHome)
+	}
+	if !strings.HasPrefix(cargoHome, xdgCacheHome+"/dune/") {
+		t.Fatalf("CARGO_HOME = %q, want a child of the Dune writable mount %q", cargoHome, xdgCacheHome+"/dune")
+	}
+	if strings.Contains(cargoHome, "/home/runner/.cargo") {
+		t.Fatalf("CARGO_HOME retains the default HOME path: %q", cargoHome)
+	}
+	if err := os.WriteFile(filepath.Join(cargoHome, "cargo-write-probe"), []byte("ok"), 0o600); err != nil {
+		t.Fatalf("isolated CARGO_HOME is not writable: %v", err)
+	}
+	for _, call := range strings.Split(strings.TrimSpace(calls), "\n") {
+		if strings.HasPrefix(call, "opam ") && !strings.Contains(call, "cargo_home="+cargoHome) {
+			t.Fatalf("OPAM call did not receive isolated CARGO_HOME %q:\n%s", cargoHome, calls)
+		}
+	}
+}
+
+func TestWorkflowNativeOPAMSetupFailsClosedWithUnusableBubblewrap(t *testing.T) {
+	calls, output, _, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false, false)
+	if err == nil {
+		t.Fatal("setup-opam.sh accepted an unusable bwrap sandbox dependency")
+	}
+	if !strings.Contains(string(output), "bwrap") {
+		t.Fatalf("setup-opam.sh did not diagnose the unusable sandbox dependency:\n%s", output)
+	}
+	if strings.Contains(calls, "opam ") {
+		t.Fatalf("setup-opam.sh invoked OPAM without its sandbox dependency:\n%s", calls)
+	}
+}
+
+func TestWorkflowNativeOPAMSetupFailsClosedWhenBubblewrapNamespaceProbeFails(t *testing.T) {
+	calls, output, _, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", true, false)
+	if err == nil {
+		t.Fatal("setup-opam.sh accepted a Bubblewrap namespace probe failure")
+	}
+	if !strings.Contains(string(output), "namespace") {
+		t.Fatalf("setup-opam.sh did not diagnose the Bubblewrap namespace probe failure:\n%s", output)
+	}
+	if !strings.Contains(calls, "bwrap --unshare-user --unshare-net --ro-bind / / true") {
+		t.Fatalf("setup-opam.sh did not exercise the Bubblewrap namespace probe:\n%s", calls)
+	}
+	for _, forbidden := range []string{"curl", "opam "} {
+		if strings.Contains(calls, forbidden) {
+			t.Fatalf("setup-opam.sh invoked %q after a Bubblewrap namespace probe failure:\n%s", forbidden, calls)
+		}
+	}
+}
+
+func runNativeCIHelper(t *testing.T, script, restoredSwitch string) string {
+	t.Helper()
+	calls, output, _, err := runNativeCIHelperWithBubblewrap(t, script, restoredSwitch, script == "setup-opam.sh", script == "setup-opam.sh")
+	if err != nil {
+		t.Fatalf("%s failed: %v\n%s", script, err, output)
+	}
+	return calls
+}
+
+func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapUsable, namespaceProbeUsable bool) (string, []byte, string, error) {
+	t.Helper()
+	tempDir := t.TempDir()
+	fakeBin := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(tempDir, "calls.log")
+	writeFakeCommand(t, fakeBin, "curl", `
+printf 'curl\n' >> "$FAKE_LOG"
+output=""
+while [[ "$#" -gt 0 ]]; do
+  if [[ "$1" == "--output" ]]; then
+    output="$2"
+    shift 2
+    continue
+  fi
+  shift
+done
+: > "$output"
+`)
+	writeFakeCommand(t, fakeBin, "sha256sum", `
+printf 'sha256sum\n' >> "$FAKE_LOG"
+cat >/dev/null
+`)
+	writeFakeCommand(t, fakeBin, "install", `
+grep -qx 'sha256sum' "$FAKE_LOG"
+printf 'install\n' >> "$FAKE_LOG"
+`)
+	writeFakeCommand(t, fakeBin, "tar", `
+grep -qx 'sha256sum' "$FAKE_LOG"
+printf 'tar\n' >> "$FAKE_LOG"
+destination=""
+while [[ "$#" -gt 0 ]]; do
+  if [[ "$1" == "-C" ]]; then
+    destination="$2"
+    shift 2
+    continue
+  fi
+  shift
+done
+mkdir -p "$destination"
+touch "$destination/syft" "$destination/trivy"
+`)
+	writeFakeCommand(t, fakeBin, "docker", `
+grep -qx 'sha256sum' "$FAKE_LOG"
+printf 'docker\n' >> "$FAKE_LOG"
+`)
+	bwrapBody := `
+printf 'bwrap' >> "$FAKE_LOG"
+printf ' %s' "$@" >> "$FAKE_LOG"
+printf '\n' >> "$FAKE_LOG"
+case "${1:-}" in
+  --version)
+    printf '%s\n' 'bwrap 0.0.0'
+    ;;
+  --unshare-user)
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+	if !bubblewrapUsable {
+		bwrapBody = `
+printf 'bwrap' >> "$FAKE_LOG"
+printf ' %s' "$@" >> "$FAKE_LOG"
+printf '\n' >> "$FAKE_LOG"
+printf '%s\n' 'bwrap test fixture is unusable' >&2
+exit 1
+`
+	} else if !namespaceProbeUsable {
+		bwrapBody = `
+printf 'bwrap' >> "$FAKE_LOG"
+printf ' %s' "$@" >> "$FAKE_LOG"
+printf '\n' >> "$FAKE_LOG"
+case "${1:-}" in
+  --version)
+    printf '%s\n' 'bwrap 0.0.0'
+    ;;
+  --unshare-user)
+    printf '%s\n' 'bwrap test fixture cannot create a namespace' >&2
+    exit 1
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+	}
+	writeFakeCommand(t, fakeBin, "bwrap", bwrapBody)
+	writeFakeCommand(t, fakeBin, "opam", `
+grep -qx 'sha256sum' "$FAKE_LOG"
+if [[ -z "${XDG_CACHE_HOME:-}" || "${CARGO_HOME:-}" != "${XDG_CACHE_HOME}/dune/"* || ! -d "${CARGO_HOME}" || ! -w "${CARGO_HOME}" ]]; then
+  printf '%s\n' 'fake OPAM requires writable CARGO_HOME beneath the Dune writable mount before invocation' >&2
+  exit 1
+fi
+printf 'opam %s %s cargo_home=%s\n' "$1" "${2:-}" "${CARGO_HOME:-}" >> "$FAKE_LOG"
+case "$1" in
+  init)
+    mkdir -p "$OPAMROOT"
+    : > "$OPAMROOT/config"
+    ;;
+  switch)
+    case "${2:-}" in
+      list)
+        printf '%s\n' "${FAKE_OPAM_SWITCHES:-}"
+        ;;
+      create)
+        mkdir -p "$OPAMROOT"
+        ;;
+    esac
+    ;;
+  var)
+    if [[ "${2:-}" != "ocaml:version" ]]; then
+      printf 'unsupported fake OPAM variable %s\n' "${2:-}" >&2
+      exit 1
+    fi
+    printf '5.2.0\n'
+    ;;
+esac
+`)
+
+	runnerTemp := filepath.Join(tempDir, "runner-temp")
+	if err := os.Mkdir(runnerTemp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if restoredSwitch != "" {
+		opamRoot := filepath.Join(runnerTemp, "llmtw-opam-root")
+		if err := os.Mkdir(opamRoot, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(opamRoot, "config"), []byte("fake OPAM root\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	githubEnv := filepath.Join(tempDir, "github-env")
+	githubPath := filepath.Join(tempDir, "github-path")
+	command := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts", "ci", script))
+	command.Env = append(os.Environ(),
+		"FAKE_LOG="+log,
+		"FAKE_OPAM_SWITCHES="+restoredSwitch,
+		"GITHUB_ENV="+githubEnv,
+		"GITHUB_PATH="+githubPath,
+		"PATH="+fakeBin+":"+os.Getenv("PATH"),
+		"RUNNER_TEMP="+runnerTemp,
+	)
+	output, commandErr := command.CombinedOutput()
+	calls, readErr := os.ReadFile(log)
+	if readErr != nil {
+		return "", output, "", readErr
+	}
+	githubEnvContents, readEnvErr := os.ReadFile(githubEnv)
+	if readEnvErr != nil && !os.IsNotExist(readEnvErr) {
+		return string(calls), output, "", readEnvErr
+	}
+	return string(calls), output, string(githubEnvContents), commandErr
+}
+
+func workflowEnvironmentValue(contents, key string) string {
+	prefix := key + "="
+	for _, line := range strings.Split(contents, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	return ""
+}
+
+func writeFakeCommand(t *testing.T, directory, name, body string) {
+	t.Helper()
+	path := filepath.Join(directory, name)
+	contents := "#!/usr/bin/env bash\nset -euo pipefail\n" + strings.TrimSpace(body) + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertFakeCommandFollowsChecksum(t *testing.T, calls, command string) {
+	t.Helper()
+	checksumIndex := strings.Index(calls, "sha256sum\n")
+	commandIndex := strings.Index(calls, command)
+	if checksumIndex == -1 || commandIndex == -1 || checksumIndex > commandIndex {
+		t.Fatalf("expected sha256sum before %s, got:\n%s", command, calls)
+	}
+}
