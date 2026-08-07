@@ -42,6 +42,12 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 			return nil, fmt.Errorf("%w: snapshot client set does not expose V1RuntimeCapabilitiesSource", ErrDurableV1Composition)
 		}
 		capabilities := source.V1RuntimeCapabilities()
+		if expected := snapshot.Digest(); expected != ([32]byte{}) {
+			if capabilities.ConfigDigest != ([32]byte{}) && capabilities.ConfigDigest != expected {
+				return nil, fmt.Errorf("%w: runtime capability config digest does not match configuration snapshot", ErrDurableV1Composition)
+			}
+			capabilities.ConfigDigest = expected
+		}
 		if err := capabilities.ValidateGenerate(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
 		}
@@ -57,16 +63,6 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 		composition, err := capabilities.BuildDurableComposition(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
-		}
-		// A compiled configuration snapshot is the identity boundary for every
-		// PostgreSQL and Redis capability in this runtime. The storage-neutral
-		// composition carries the same digest so a deployment callback cannot
-		// accidentally return a valid-looking composition assembled for a
-		// different reload. Contract-only tests may use an uncompiled zero-value
-		// Snapshot; production snapshots always have a non-zero digest from
-		// config.Compile.
-		if expected := snapshot.Digest(); expected != ([32]byte{}) && composition.Identity.ConfigDigest != expected {
-			return nil, fmt.Errorf("%w: durable composition config digest does not match configuration snapshot", ErrDurableV1Composition)
 		}
 		phaseCapabilities := capabilities
 		phaseCapabilities.composition = &composition

@@ -131,17 +131,30 @@ func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *test
 
 func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
 	compositionCalls := 0
+	wantDigest := [32]byte{9}
 	capabilities := completeDurableBuilderCapabilities(
-		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+		func(_ context.Context, received V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+			if received.ConfigDigest != wantDigest {
+				t.Fatalf("Generate capability config digest = %x, want %x", received.ConfigDigest, wantDigest)
+			}
 			return validBuilderGeneratePorts(nil), nil
 		},
-		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+		func(_ context.Context, received V1RuntimeCapabilities) (durable.CompactPorts, error) {
+			if received.ConfigDigest != wantDigest {
+				t.Fatalf("Compact capability config digest = %x, want %x", received.ConfigDigest, wantDigest)
+			}
 			return validCompactPorts(), nil
 		},
 	)
-	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
+	capabilities.ConfigDigest = wantDigest
+	capabilities.CompositionFactory = func(_ context.Context, received V1RuntimeCapabilities) (durable.Composition, error) {
 		compositionCalls++
-		return validCapabilityComposition(), nil
+		if received.ConfigDigest != wantDigest {
+			t.Fatalf("preflight capability config digest = %x, want %x", received.ConfigDigest, wantDigest)
+		}
+		composition := validCapabilityComposition()
+		composition.Identity.ConfigDigest = wantDigest
+		return composition, nil
 	}
 	preflight, err := capabilities.BuildDurableComposition(context.Background())
 	if err != nil {

@@ -745,7 +745,7 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 		Limits:       config.LimitsConfig{RequestBytes: 1024, ContinuationDepth: 4, RouteAttempts: 1, TokenEstimateSafetyRatio: "1", MaxOutputTokens: 16},
 		Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{ID: "key-2026-07", Primary: true, Secret: config.SecretRef{Kind: config.SecretEnv, Name: "CONTINUATION_KEY"}}}},
 	}
-	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.Snapshot{}, nil, nil)
+	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.Snapshot{}, nil, nil, [32]byte{})
 	if err != nil {
 		t.Fatalf("buildMemory() error = %v", err)
 	}

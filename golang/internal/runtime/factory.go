@@ -361,7 +361,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	if value.State.Kind == config.StateKindMemory {
-		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters, precomposed)
+		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters, precomposed, snapshot.Digest())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -594,6 +594,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		checkpoints:     checkpointCapabilities,
 		journal:         journal,
 		v1Capabilities: V1RuntimeCapabilities{
+			ConfigDigest:           snapshot.Digest(),
 			Snapshot:               snapshotSource,
 			Planner:                planner,
 			Adapters:               capabilityAdapterRegistry,
@@ -630,12 +631,9 @@ func (factory *ProductionEngineFactory) preflightAutomaticDurableComposition(ctx
 	if snapshot == nil {
 		return nil, fmt.Errorf("%w: automatic durable composition requires a configuration snapshot", ErrDurableV1Composition)
 	}
-	composition, err := (V1RuntimeCapabilities{CompositionFactory: factory.options.DurableCompositionFactory}).BuildDurableComposition(ctx)
+	composition, err := (V1RuntimeCapabilities{ConfigDigest: snapshot.Digest(), CompositionFactory: factory.options.DurableCompositionFactory}).BuildDurableComposition(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: automatic durable composition preflight: %v", ErrDurableV1Composition, err)
-	}
-	if expected := snapshot.Digest(); expected != ([32]byte{}) && composition.Identity.ConfigDigest != expected {
-		return nil, fmt.Errorf("%w: automatic durable composition config digest does not match configuration snapshot", ErrDurableV1Composition)
 	}
 	return &composition, nil
 }
@@ -691,7 +689,7 @@ func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, c
 // blob store; all state is held by the process-local implementations and is
 // lost on restart. Provider adapters are still built normally because memory
 // mode changes state durability, not the provider contract.
-func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter, precomposed *durablestore.Composition) (llm.Engine, app.ClientSet, error) {
+func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter, precomposed *durablestore.Composition, configDigest [32]byte) (llm.Engine, app.ClientSet, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -743,6 +741,7 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	}
 	return engineValue, &productionClientSet{
 		v1Capabilities: V1RuntimeCapabilities{
+			ConfigDigest:         configDigest,
 			Snapshot:             snapshotSource,
 			Planner:              planner,
 			Adapters:             capabilityAdapterRegistry,

@@ -229,6 +229,61 @@ func TestProductionFactoryRejectsMismatchedAutomaticCompositionBeforeLoadingEngi
 	}
 }
 
+func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("compile first config: %v", err)
+	}
+	secondData := []byte(strings.Replace(string(data), "route_attempts: 6", "route_attempts: 5", 1))
+	second, err := config.Compile(context.Background(), secondData, nil)
+	if err != nil {
+		t.Fatalf("compile second config: %v", err)
+	}
+	if first.Digest() == second.Digest() {
+		t.Fatal("distinct compiled snapshots share a config digest")
+	}
+
+	seen := make(map[[32]byte]int)
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
+			return validBuilderGeneratePorts(nil), nil
+		},
+		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
+			return validCompactPorts(), nil
+		},
+		DurableCompositionFactory: func(_ context.Context, capabilities V1RuntimeCapabilities) (durablestore.Composition, error) {
+			if capabilities.ConfigDigest == ([32]byte{}) {
+				t.Fatal("automatic preflight omitted the current config digest")
+			}
+			seen[capabilities.ConfigDigest]++
+			composition := validCapabilityComposition()
+			composition.Identity.ConfigDigest = capabilities.ConfigDigest
+			return composition, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, snapshot := range []*config.Snapshot{first, second} {
+		composition, err := factory.preflightAutomaticDurableComposition(context.Background(), snapshot)
+		if err != nil {
+			t.Fatalf("preflight snapshot %x: %v", snapshot.Digest(), err)
+		}
+		if composition.Identity.ConfigDigest != snapshot.Digest() {
+			t.Fatalf("preflight composition digest = %x, want %x", composition.Identity.ConfigDigest, snapshot.Digest())
+		}
+	}
+	if seen[first.Digest()] != 1 || seen[second.Digest()] != 1 {
+		t.Fatalf("composition factory reload digests = %#v, want one invocation per snapshot", seen)
+	}
+}
+
 func TestProductionFactoryDoesNotPreflightCompositionForExplicitBuilder(t *testing.T) {
 	compositionCalled := false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
