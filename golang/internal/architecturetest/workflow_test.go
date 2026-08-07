@@ -174,7 +174,7 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 
 func TestWorkflowTemporalSDKCargoPrefetchPrecedesOfflineSandboxBuild(t *testing.T) {
 	const (
-		pinSource = "git+https://github.com/mfow/ocaml-temporal.git#936d354807cc5c2ee1e1f81a22125a9cbec1df8e"
+		pinSource = "opam pin add --yes --no-action --kind=git temporal-sdk"
 		prefetch  = "bash ../../scripts/ci/prefetch-temporal-sdk-cargo.sh"
 		offline   = "CARGO_NET_OFFLINE=true opam install --yes . --deps-only"
 	)

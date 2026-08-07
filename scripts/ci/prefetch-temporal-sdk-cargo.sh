@@ -13,6 +13,7 @@ fail() {
 : "${OPAMSWITCH:?OPAMSWITCH must identify the selected OPAM switch}"
 : "${XDG_CACHE_HOME:?XDG_CACHE_HOME must identify the isolated cache}"
 : "${CARGO_HOME:?CARGO_HOME must identify the Dune-writable Cargo cache}"
+: "${GITHUB_ENV:?GITHUB_ENV must be available in GitHub Actions}"
 
 case "${CARGO_HOME}" in
   "${XDG_CACHE_HOME}"/dune/*) ;;
@@ -34,4 +35,5 @@ actual_commit="$(git -C "${source_root}" rev-parse HEAD)" ||
 [[ "${actual_commit}" == "${temporal_sdk_commit}" ]] ||
   fail "pinned Temporal SDK revision does not match the approved commit"
 
-cargo fetch --locked --manifest-path "${cargo_manifest}"
+CARGO_NET_OFFLINE=false cargo fetch --locked --manifest-path "${cargo_manifest}"
+printf '%s\n' 'CARGO_NET_OFFLINE=true' >> "${GITHUB_ENV}"

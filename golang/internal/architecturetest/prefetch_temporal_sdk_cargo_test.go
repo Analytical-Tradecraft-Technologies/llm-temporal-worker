@@ -42,9 +42,17 @@ printf 'git %s\n' "$*" >> "$FAKE_LOG"
 printf '%s\n' "${FAKE_GIT_COMMIT:-936d354807cc5c2ee1e1f81a22125a9cbec1df8e}"
 `)
 	writeFakeCommand(t, fakeBin, "cargo", `
-printf 'cargo %s\n' "$*" >> "$FAKE_LOG"
-[[ "${1:-}" == "fetch" && "${2:-}" == "--locked" && "${3:-}" == "--manifest-path" && -f "${4:-}" ]]
+if [[ -f "${GITHUB_ENV}" ]] && grep -Fxq 'CARGO_NET_OFFLINE=true' "${GITHUB_ENV}"; then
+  printf '%s\n' 'fake Cargo observed offline mode before prefetch' >&2
+  exit 1
+fi
+printf 'cargo offline=%s %s\n' "${CARGO_NET_OFFLINE:-}" "$*" >> "$FAKE_LOG"
+if [[ "${CARGO_NET_OFFLINE:-}" != "false" || "${1:-}" != "fetch" || "${2:-}" != "--locked" || "${3:-}" != "--manifest-path" || ! -f "${4:-}" ]]; then
+  printf '%s\n' 'fake Cargo requires an explicitly network-enabled locked prefetch' >&2
+  exit 1
+fi
 `)
+	githubEnv := filepath.Join(tempDir, "github-env")
 	runPrefetch := func(logPath, commit string) ([]byte, error) {
 		command := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts", "ci", "prefetch-temporal-sdk-cargo.sh"))
 		command.Env = append(os.Environ(),
@@ -54,6 +62,7 @@ printf 'cargo %s\n' "$*" >> "$FAKE_LOG"
 			"OPAMSWITCH=5.2.0",
 			"XDG_CACHE_HOME="+xdgCacheHome,
 			"CARGO_HOME="+cargoHome,
+			"GITHUB_ENV="+githubEnv,
 			"PATH="+fakeBin+":"+os.Getenv("PATH"),
 		)
 		return command.CombinedOutput()
@@ -68,11 +77,18 @@ printf 'cargo %s\n' "$*" >> "$FAKE_LOG"
 	}
 	for _, want := range []string{
 		"git -C " + sourceRoot + " rev-parse HEAD",
-		"cargo fetch --locked --manifest-path " + filepath.Join(sourceRoot, "rust", "Cargo.toml"),
+		"cargo offline=false fetch --locked --manifest-path " + filepath.Join(sourceRoot, "rust", "Cargo.toml"),
 	} {
 		if !strings.Contains(string(calls), want) {
 			t.Fatalf("prefetch helper did not run %q:\n%s", want, calls)
 		}
+	}
+	githubEnvContents, err := os.ReadFile(githubEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(githubEnvContents), "CARGO_NET_OFFLINE=true\n") {
+		t.Fatalf("prefetch helper did not persist offline mode after fetch:\n%s", githubEnvContents)
 	}
 	for _, test := range []struct {
 		name   string
