@@ -48,8 +48,30 @@ func TestWorkflowNativeOPAMSetupUsesSupportedOCamlVersionVariable(t *testing.T) 
 	}
 }
 
+func TestWorkflowNativeOPAMSetupProvidesIsolatedCargoHomeBeforeOPAM(t *testing.T) {
+	calls, output, githubEnv, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", true, true)
+	if err != nil {
+		t.Fatalf("setup-opam.sh failed: %v\n%s", err, output)
+	}
+	cargoHome := workflowEnvironmentValue(githubEnv, "CARGO_HOME")
+	if !strings.HasSuffix(cargoHome, "/llmtw-opam-root/cargo") {
+		t.Fatalf("CARGO_HOME = %q, want an isolated OPAM-root cargo directory", cargoHome)
+	}
+	if strings.Contains(cargoHome, "/home/runner/.cargo") {
+		t.Fatalf("CARGO_HOME retains the default HOME path: %q", cargoHome)
+	}
+	if err := os.WriteFile(filepath.Join(cargoHome, "cargo-write-probe"), []byte("ok"), 0o600); err != nil {
+		t.Fatalf("isolated CARGO_HOME is not writable: %v", err)
+	}
+	for _, call := range strings.Split(strings.TrimSpace(calls), "\n") {
+		if strings.HasPrefix(call, "opam ") && !strings.Contains(call, "cargo_home="+cargoHome) {
+			t.Fatalf("OPAM call did not receive isolated CARGO_HOME %q:\n%s", cargoHome, calls)
+		}
+	}
+}
+
 func TestWorkflowNativeOPAMSetupFailsClosedWithUnusableBubblewrap(t *testing.T) {
-	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false, false)
+	calls, output, _, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false, false)
 	if err == nil {
 		t.Fatal("setup-opam.sh accepted an unusable bwrap sandbox dependency")
 	}
@@ -62,7 +84,7 @@ func TestWorkflowNativeOPAMSetupFailsClosedWithUnusableBubblewrap(t *testing.T) 
 }
 
 func TestWorkflowNativeOPAMSetupFailsClosedWhenBubblewrapNamespaceProbeFails(t *testing.T) {
-	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", true, false)
+	calls, output, _, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", true, false)
 	if err == nil {
 		t.Fatal("setup-opam.sh accepted a Bubblewrap namespace probe failure")
 	}
@@ -81,14 +103,14 @@ func TestWorkflowNativeOPAMSetupFailsClosedWhenBubblewrapNamespaceProbeFails(t *
 
 func runNativeCIHelper(t *testing.T, script, restoredSwitch string) string {
 	t.Helper()
-	calls, output, err := runNativeCIHelperWithBubblewrap(t, script, restoredSwitch, script == "setup-opam.sh", script == "setup-opam.sh")
+	calls, output, _, err := runNativeCIHelperWithBubblewrap(t, script, restoredSwitch, script == "setup-opam.sh", script == "setup-opam.sh")
 	if err != nil {
 		t.Fatalf("%s failed: %v\n%s", script, err, output)
 	}
 	return calls
 }
 
-func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapUsable, namespaceProbeUsable bool) (string, []byte, error) {
+func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapUsable, namespaceProbeUsable bool) (string, []byte, string, error) {
 	t.Helper()
 	tempDir := t.TempDir()
 	fakeBin := filepath.Join(tempDir, "bin")
@@ -182,10 +204,15 @@ esac
 	writeFakeCommand(t, fakeBin, "bwrap", bwrapBody)
 	writeFakeCommand(t, fakeBin, "opam", `
 grep -qx 'sha256sum' "$FAKE_LOG"
-printf 'opam %s %s\n' "$1" "${2:-}" >> "$FAKE_LOG"
+if [[ ! -d "${CARGO_HOME:-}" || ! -w "${CARGO_HOME}" ]]; then
+  printf '%s\n' 'fake OPAM requires writable CARGO_HOME before invocation' >&2
+  exit 1
+fi
+printf 'opam %s %s cargo_home=%s\n' "$1" "${2:-}" "${CARGO_HOME:-}" >> "$FAKE_LOG"
 case "$1" in
   init)
     mkdir -p "$OPAMROOT"
+    : > "$OPAMROOT/config"
     ;;
   switch)
     case "${2:-}" in
@@ -212,7 +239,11 @@ esac
 		t.Fatal(err)
 	}
 	if restoredSwitch != "" {
-		if err := os.Mkdir(filepath.Join(runnerTemp, "llmtw-opam-root"), 0o755); err != nil {
+		opamRoot := filepath.Join(runnerTemp, "llmtw-opam-root")
+		if err := os.Mkdir(opamRoot, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(opamRoot, "config"), []byte("fake OPAM root\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -230,9 +261,23 @@ esac
 	output, commandErr := command.CombinedOutput()
 	calls, readErr := os.ReadFile(log)
 	if readErr != nil {
-		return "", output, readErr
+		return "", output, "", readErr
 	}
-	return string(calls), output, commandErr
+	githubEnvContents, readEnvErr := os.ReadFile(githubEnv)
+	if readEnvErr != nil && !os.IsNotExist(readEnvErr) {
+		return string(calls), output, "", readEnvErr
+	}
+	return string(calls), output, string(githubEnvContents), commandErr
+}
+
+func workflowEnvironmentValue(contents, key string) string {
+	prefix := key + "="
+	for _, line := range strings.Split(contents, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	return ""
 }
 
 func writeFakeCommand(t *testing.T, directory, name, body string) {

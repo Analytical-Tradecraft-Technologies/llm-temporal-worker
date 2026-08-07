@@ -23,6 +23,7 @@ tool_root="${RUNNER_TEMP}/llmtw-ci-tools"
 bin_dir="${tool_root}/bin"
 download="${tool_root}/opam-${opam_version}-x86_64-linux"
 opam_root="${RUNNER_TEMP}/llmtw-opam-root"
+cargo_home="${opam_root}/cargo"
 
 mkdir -p -- "${bin_dir}"
 curl --fail --location --retry 3 --silent --show-error \
@@ -35,7 +36,12 @@ rm -f -- "${download}"
 export PATH="${bin_dir}:${PATH}"
 export OPAMROOT="${opam_root}"
 export OPAMSWITCH="${ocaml_version}"
-if [[ ! -d "${opam_root}" ]]; then
+export CARGO_HOME="${cargo_home}"
+if ! mkdir -p -- "${cargo_home}" || [[ ! -w "${cargo_home}" ]]; then
+  printf '%s\n' 'setup-opam requires a writable CARGO_HOME inside the isolated OPAM root' >&2
+  exit 1
+fi
+if [[ ! -f "${opam_root}/config" ]]; then
   opam init --bare --no-setup --yes
 fi
 if opam switch list --short | grep -Fx -- "${ocaml_version}" > /dev/null; then
@@ -47,5 +53,6 @@ fi
 {
   printf 'OPAMROOT=%s\n' "${opam_root}"
   printf 'OPAMSWITCH=%s\n' "${ocaml_version}"
+  printf 'CARGO_HOME=%s\n' "${cargo_home}"
 } >> "${GITHUB_ENV}"
 printf '%s\n' "${bin_dir}" >> "${GITHUB_PATH}"
