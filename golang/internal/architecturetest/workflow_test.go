@@ -141,10 +141,11 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 		assertJobUsesAction(t, workflow, "ocaml", cacheActionPin)
 		assertJobActionPrecedesRunCommand(t, workflow, "ocaml", cacheActionPin, "bash scripts/ci/setup-opam.sh")
 		for _, want := range []string{
-			"path: ${{ runner.temp }}/llmtw-opam-root",
+			"${{ runner.temp }}/llmtw-opam-root",
+			"${{ runner.temp }}/llmtw-xdg-cache",
 			"opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-" + test.identity,
 			"opam-2.3.0-ocaml-5.2.0-sandboxed",
-			"hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project')",
+			"hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project', 'scripts/ci/setup-opam.sh')",
 		} {
 			if !strings.Contains(workflow.raw, want) {
 				t.Fatalf("%s OCaml cache does not retain %q", workflow.name, want)

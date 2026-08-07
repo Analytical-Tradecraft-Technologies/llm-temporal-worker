@@ -54,8 +54,12 @@ func TestWorkflowNativeOPAMSetupProvidesIsolatedCargoHomeBeforeOPAM(t *testing.T
 		t.Fatalf("setup-opam.sh failed: %v\n%s", err, output)
 	}
 	cargoHome := workflowEnvironmentValue(githubEnv, "CARGO_HOME")
-	if !strings.HasSuffix(cargoHome, "/llmtw-opam-root/cargo") {
-		t.Fatalf("CARGO_HOME = %q, want an isolated OPAM-root cargo directory", cargoHome)
+	xdgCacheHome := workflowEnvironmentValue(githubEnv, "XDG_CACHE_HOME")
+	if !strings.HasSuffix(xdgCacheHome, "/llmtw-xdg-cache") {
+		t.Fatalf("XDG_CACHE_HOME = %q, want an isolated runner-temporary cache", xdgCacheHome)
+	}
+	if !strings.HasPrefix(cargoHome, xdgCacheHome+"/dune/") {
+		t.Fatalf("CARGO_HOME = %q, want a child of the Dune writable mount %q", cargoHome, xdgCacheHome+"/dune")
 	}
 	if strings.Contains(cargoHome, "/home/runner/.cargo") {
 		t.Fatalf("CARGO_HOME retains the default HOME path: %q", cargoHome)
@@ -204,8 +208,8 @@ esac
 	writeFakeCommand(t, fakeBin, "bwrap", bwrapBody)
 	writeFakeCommand(t, fakeBin, "opam", `
 grep -qx 'sha256sum' "$FAKE_LOG"
-if [[ ! -d "${CARGO_HOME:-}" || ! -w "${CARGO_HOME}" ]]; then
-  printf '%s\n' 'fake OPAM requires writable CARGO_HOME before invocation' >&2
+if [[ -z "${XDG_CACHE_HOME:-}" || "${CARGO_HOME:-}" != "${XDG_CACHE_HOME}/dune/"* || ! -d "${CARGO_HOME}" || ! -w "${CARGO_HOME}" ]]; then
+  printf '%s\n' 'fake OPAM requires writable CARGO_HOME beneath the Dune writable mount before invocation' >&2
   exit 1
 fi
 printf 'opam %s %s cargo_home=%s\n' "$1" "${2:-}" "${CARGO_HOME:-}" >> "$FAKE_LOG"

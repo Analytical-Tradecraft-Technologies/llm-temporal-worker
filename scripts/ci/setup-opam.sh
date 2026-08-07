@@ -23,7 +23,10 @@ tool_root="${RUNNER_TEMP}/llmtw-ci-tools"
 bin_dir="${tool_root}/bin"
 download="${tool_root}/opam-${opam_version}-x86_64-linux"
 opam_root="${RUNNER_TEMP}/llmtw-opam-root"
-cargo_home="${opam_root}/cargo"
+xdg_cache_home="${RUNNER_TEMP}/llmtw-xdg-cache"
+# OPAM's Bubblewrap wrapper mounts this Dune cache subdirectory writable while
+# remounting OPAMROOT read-only for package builds.
+cargo_home="${xdg_cache_home}/dune/cargo"
 
 mkdir -p -- "${bin_dir}"
 curl --fail --location --retry 3 --silent --show-error \
@@ -36,9 +39,10 @@ rm -f -- "${download}"
 export PATH="${bin_dir}:${PATH}"
 export OPAMROOT="${opam_root}"
 export OPAMSWITCH="${ocaml_version}"
+export XDG_CACHE_HOME="${xdg_cache_home}"
 export CARGO_HOME="${cargo_home}"
 if ! mkdir -p -- "${cargo_home}" || [[ ! -w "${cargo_home}" ]]; then
-  printf '%s\n' 'setup-opam requires a writable CARGO_HOME inside the isolated OPAM root' >&2
+  printf '%s\n' 'setup-opam requires a writable CARGO_HOME beneath the isolated Dune cache mount' >&2
   exit 1
 fi
 if [[ ! -f "${opam_root}/config" ]]; then
@@ -53,6 +57,7 @@ fi
 {
   printf 'OPAMROOT=%s\n' "${opam_root}"
   printf 'OPAMSWITCH=%s\n' "${ocaml_version}"
+  printf 'XDG_CACHE_HOME=%s\n' "${xdg_cache_home}"
   printf 'CARGO_HOME=%s\n' "${cargo_home}"
 } >> "${GITHUB_ENV}"
 printf '%s\n' "${bin_dir}" >> "${GITHUB_PATH}"

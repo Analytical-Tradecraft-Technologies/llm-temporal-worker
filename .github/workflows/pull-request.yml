@@ -116,8 +116,10 @@ jobs:
       - name: Restore isolated OPAM root
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
-          path: ${{ runner.temp }}/llmtw-opam-root
-          key: opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-pr-${{ github.event.pull_request.number }}-opam-2.3.0-ocaml-5.2.0-sandboxed-${{ hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project') }}
+          path: |
+            ${{ runner.temp }}/llmtw-opam-root
+            ${{ runner.temp }}/llmtw-xdg-cache
+          key: opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-pr-${{ github.event.pull_request.number }}-opam-2.3.0-ocaml-5.2.0-sandboxed-${{ hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project', 'scripts/ci/setup-opam.sh') }}
 
       - name: Set up OCaml
         run: bash scripts/ci/setup-opam.sh
