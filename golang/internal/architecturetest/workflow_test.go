@@ -172,6 +172,41 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 	}
 }
 
+func TestWorkflowTemporalSDKCargoPrefetchPrecedesOfflineSandboxBuild(t *testing.T) {
+	const (
+		pinSource = "git+https://github.com/mfow/ocaml-temporal.git#936d354807cc5c2ee1e1f81a22125a9cbec1df8e"
+		prefetch  = "bash ../../scripts/ci/prefetch-temporal-sdk-cargo.sh"
+		offline   = "CARGO_NET_OFFLINE=true opam install --yes . --deps-only"
+	)
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		job := workflowJob(t, workflow, "ocaml")
+		steps, ok := job["steps"].([]any)
+		if !ok {
+			t.Fatalf("%s OCaml job has no steps", workflow.name)
+		}
+		var installRun string
+		for _, rawStep := range steps {
+			step, ok := rawStep.(map[string]any)
+			if !ok || step["name"] != "Install pinned nested package dependencies" {
+				continue
+			}
+			installRun, _ = step["run"].(string)
+		}
+		pinIndex := strings.Index(installRun, pinSource)
+		prefetchIndex := strings.Index(installRun, prefetch)
+		offlineIndex := strings.Index(installRun, offline)
+		if pinIndex == -1 || prefetchIndex == -1 || offlineIndex == -1 {
+			t.Fatalf("%s does not pin, prefetch, and install the Temporal SDK with an offline build:\n%s", workflow.name, installRun)
+		}
+		if !(pinIndex < prefetchIndex && prefetchIndex < offlineIndex) {
+			t.Fatalf("%s runs Temporal SDK pin/prefetch/offline install in the wrong order:\n%s", workflow.name, installRun)
+		}
+	}
+}
+
 func TestWorkflowOCamlSandboxPrerequisitesPrecedeSetup(t *testing.T) {
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),
