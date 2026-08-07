@@ -129,6 +129,34 @@ func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *test
 	}
 }
 
+func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
+	compositionCalls := 0
+	capabilities := completeDurableBuilderCapabilities(
+		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+			return validBuilderGeneratePorts(nil), nil
+		},
+		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+			return validCompactPorts(), nil
+		},
+	)
+	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
+		compositionCalls++
+		return validCapabilityComposition(), nil
+	}
+	preflight, err := capabilities.BuildDurableComposition(context.Background())
+	if err != nil {
+		t.Fatalf("preflight composition error = %v", err)
+	}
+	capabilities.composition = &preflight
+
+	if _, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, &generateBuilderClientSet{capabilities: capabilities}); err != nil {
+		t.Fatalf("builder error = %v", err)
+	}
+	if compositionCalls != 1 {
+		t.Fatalf("composition factory calls = %d, want one preflight call", compositionCalls)
+	}
+}
+
 func TestDurableV1RuntimeBuilderRequiresCompositionBeforePhaseFactories(t *testing.T) {
 	generateCalled, compactCalled := false, false
 	capabilities := completeDurableBuilderCapabilities(

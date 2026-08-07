@@ -163,10 +163,14 @@ type JournalSource interface {
 }
 
 // DurableCompositionFactory constructs the complete storage-neutral
-// Composition for one immutable runtime snapshot. Implementations must close
-// over only the supplied snapshot capability bundle and must return before
-// any provider dispatch; the factory never fabricates missing stores or
-// adapts the legacy engine.
+// Composition for one immutable runtime snapshot. Implementations must return
+// before any provider dispatch; the factory never fabricates missing stores or
+// adapts the legacy engine. When NewProductionEngineFactory auto-installs the
+// built-in complete V1 builder, this factory is first invoked with only itself
+// in the capability bundle, before runtime-created clients or the engine
+// snapshot exist. That automatic path therefore requires deployment-owned
+// ports that can be validated without those capabilities. Explicit custom
+// V1RuntimeBuilder implementations retain responsibility for their own timing.
 type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error)
 
 // V1RuntimeCapabilities is the preparatory storage- and provider-neutral

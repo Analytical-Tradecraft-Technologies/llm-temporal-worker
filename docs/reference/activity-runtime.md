@@ -168,7 +168,12 @@ completed. The built-in complete runtime builder additionally requires one
 validated snapshot-owned `durable.Composition` before it invokes either phase
 factory, so those factories cannot select PostgreSQL/Redis ports independently.
 A deployment that provides only phase factories remains unconfigured rather
-than activating a partial runtime.
+than activating a partial runtime. The automatic production builder validates
+that composition before it loads an engine snapshot or constructs provider,
+Redis, PostgreSQL, or blob clients, then reuses the same validated value for
+both phases. Its composition factory must therefore validate deployment-owned
+ports without relying on runtime-created clients; deployments that require a
+different construction order must provide an explicit custom `V1RuntimeBuilder`.
 
 The runtime capability bundle also exposes a separate
 `CompactPortsFactory` contract and `ValidateCompact` readiness check. The

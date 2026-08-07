@@ -173,7 +173,8 @@ type ProductionFactoryOptions struct {
 // immutable config snapshot. It owns the SDK/state clients returned in the
 // ClientSet and never places resolved secrets into the engine snapshot.
 type ProductionEngineFactory struct {
-	options ProductionFactoryOptions
+	options                   ProductionFactoryOptions
+	automaticV1RuntimeBuilder bool
 }
 
 // productionClientSet owns the SDK clients built for one immutable snapshot
@@ -318,10 +319,11 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 	// production readiness guard before the engine snapshot or external clients
 	// are constructed; callers can still provide an explicit builder for an
 	// equivalent implementation.
-	if options.V1RuntimeBuilder == nil && options.GeneratePortsFactory != nil && options.CompactPortsFactory != nil && options.DurableCompositionFactory != nil {
+	automaticV1RuntimeBuilder := options.V1RuntimeBuilder == nil && options.GeneratePortsFactory != nil && options.CompactPortsFactory != nil && options.DurableCompositionFactory != nil
+	if automaticV1RuntimeBuilder {
 		options.V1RuntimeBuilder = NewDurableV1RuntimeBuilder()
 	}
-	return &ProductionEngineFactory{options: options}, nil
+	return &ProductionEngineFactory{options: options, automaticV1RuntimeBuilder: automaticV1RuntimeBuilder}, nil
 }
 
 var _ EngineFactory = (*ProductionEngineFactory)(nil)
@@ -346,6 +348,10 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err := requireDurableV1RuntimeBuilder(value, factory.options.V1RuntimeBuilder); err != nil {
 		return nil, nil, err
 	}
+	precomposed, err := factory.preflightAutomaticDurableComposition(ctx, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
 	engineSnapshot, err := factory.options.SnapshotLoader.Load(ctx, snapshot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load engine snapshot: %w", err)
@@ -355,7 +361,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	if value.State.Kind == config.StateKindMemory {
-		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters)
+		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters, precomposed)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -363,6 +369,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: memory factory returned an unsupported client set", ErrProductionFactoryInvalid)
 		}
+		set.v1Capabilities.composition = precomposed
 		return factory.attachV1Runtime(ctx, snapshot, engineValue, set)
 	}
 	redisClient, redisOwned, err := factory.buildRedis(ctx, value)
@@ -593,6 +600,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			Checkpoints:            checkpointCapabilities,
 			Journal:                journal,
 			CompositionFactory:     factory.options.DurableCompositionFactory,
+			composition:            precomposed,
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
 			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
@@ -607,6 +615,29 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		},
 	}
 	return factory.attachV1Runtime(ctx, snapshot, engineValue, clients)
+}
+
+// preflightAutomaticDurableComposition validates the composition installed by
+// this factory's built-in V1 runtime before loading the engine snapshot or
+// constructing any provider, Redis, PostgreSQL, or blob client. The automatic
+// path therefore accepts only a composition factory that can validate its
+// deployment-owned ports without runtime-created capabilities. Explicit custom
+// V1RuntimeBuilder implementations retain their existing composition timing.
+func (factory *ProductionEngineFactory) preflightAutomaticDurableComposition(ctx context.Context, snapshot *config.Snapshot) (*durablestore.Composition, error) {
+	if factory == nil || !factory.automaticV1RuntimeBuilder {
+		return nil, nil
+	}
+	if snapshot == nil {
+		return nil, fmt.Errorf("%w: automatic durable composition requires a configuration snapshot", ErrDurableV1Composition)
+	}
+	composition, err := (V1RuntimeCapabilities{CompositionFactory: factory.options.DurableCompositionFactory}).BuildDurableComposition(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: automatic durable composition preflight: %v", ErrDurableV1Composition, err)
+	}
+	if expected := snapshot.Digest(); expected != ([32]byte{}) && composition.Identity.ConfigDigest != expected {
+		return nil, fmt.Errorf("%w: automatic durable composition config digest does not match configuration snapshot", ErrDurableV1Composition)
+	}
+	return &composition, nil
 }
 
 // attachV1Runtime invokes the optional snapshot-bound builder only after the
@@ -660,7 +691,7 @@ func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, c
 // blob store; all state is held by the process-local implementations and is
 // lost on restart. Provider adapters are still built normally because memory
 // mode changes state durability, not the provider contract.
-func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter) (llm.Engine, app.ClientSet, error) {
+func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter, precomposed *durablestore.Composition) (llm.Engine, app.ClientSet, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -717,6 +748,7 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 			Adapters:             capabilityAdapterRegistry,
 			Clock:                clock,
 			CompositionFactory:   factory.options.DurableCompositionFactory,
+			composition:          precomposed,
 			GeneratePortsFactory: factory.options.GeneratePortsFactory,
 			CompactPortsFactory:  factory.options.CompactPortsFactory,
 		},

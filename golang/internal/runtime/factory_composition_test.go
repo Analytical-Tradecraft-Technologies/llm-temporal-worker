@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestRequireDurableV1RuntimeBuilderRejectsProductionDurableWithoutBuilder(t *testing.T) {
@@ -89,13 +91,21 @@ func TestProductionFactoryRejectsPhaseFactoriesWithoutCompositionBeforeLoadingEn
 		t.Fatalf("compile example config: %v", err)
 	}
 	loaded := false
+	resolverCalled, redisCalled := false, false
 	generateCalled, compactCalled := false, false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+			resolverCalled = true
+			return nil, nil
+		}),
 		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
 			loaded = true
 			return engine.Snapshot{}, nil
 		}),
+		RedisFactory: func(context.Context, config.RedisConfig, string, string) (redis.UniversalClient, error) {
+			redisCalled = true
+			return nil, errors.New("Redis must not be constructed")
+		},
 		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
 			generateCalled = true
 			return validBuilderGeneratePorts(nil), nil
@@ -112,8 +122,138 @@ func TestProductionFactoryRejectsPhaseFactoriesWithoutCompositionBeforeLoadingEn
 	if !errors.Is(err, ErrDurableV1Composition) {
 		t.Fatalf("Build() error = %v, want ErrDurableV1Composition", err)
 	}
-	if loaded || generateCalled || compactCalled {
-		t.Fatalf("missing composition reached external work: snapshot=%t generate=%t compact=%t", loaded, generateCalled, compactCalled)
+	if loaded || resolverCalled || redisCalled || generateCalled || compactCalled {
+		t.Fatalf("missing composition reached external work: snapshot=%t provider=%t redis=%t generate=%t compact=%t", loaded, resolverCalled, redisCalled, generateCalled, compactCalled)
+	}
+}
+
+func TestProductionFactoryRejectsInvalidAutomaticCompositionBeforeLoadingEngine(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("compile example config: %v", err)
+	}
+	loaded := false
+	resolverCalled, redisCalled := false, false
+	compositionCalled := false
+	generateCalled, compactCalled := false, false
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+			resolverCalled = true
+			return nil, nil
+		}),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+			loaded = true
+			return engine.Snapshot{}, nil
+		}),
+		RedisFactory: func(context.Context, config.RedisConfig, string, string) (redis.UniversalClient, error) {
+			redisCalled = true
+			return nil, errors.New("Redis must not be constructed")
+		},
+		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
+			generateCalled = true
+			return validBuilderGeneratePorts(nil), nil
+		},
+		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
+			compactCalled = true
+			return validCompactPorts(), nil
+		},
+		DurableCompositionFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
+			compositionCalled = true
+			return durablestore.Composition{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = factory.Build(context.Background(), snapshot)
+	if !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "validate durable composition") {
+		t.Fatalf("Build() error = %v, want invalid automatic-composition failure", err)
+	}
+	if !compositionCalled || loaded || resolverCalled || redisCalled || generateCalled || compactCalled {
+		t.Fatalf("invalid composition reached external work: composition=%t snapshot=%t provider=%t redis=%t generate=%t compact=%t", compositionCalled, loaded, resolverCalled, redisCalled, generateCalled, compactCalled)
+	}
+}
+
+func TestProductionFactoryRejectsMismatchedAutomaticCompositionBeforeLoadingEngine(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatalf("compile example config: %v", err)
+	}
+	loaded := false
+	resolverCalled, redisCalled := false, false
+	compositionCalled := false
+	generateCalled, compactCalled := false, false
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+			resolverCalled = true
+			return nil, nil
+		}),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+			loaded = true
+			return engine.Snapshot{}, nil
+		}),
+		RedisFactory: func(context.Context, config.RedisConfig, string, string) (redis.UniversalClient, error) {
+			redisCalled = true
+			return nil, errors.New("Redis must not be constructed")
+		},
+		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
+			generateCalled = true
+			return validBuilderGeneratePorts(nil), nil
+		},
+		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
+			compactCalled = true
+			return validCompactPorts(), nil
+		},
+		DurableCompositionFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
+			compositionCalled = true
+			return validCapabilityComposition(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = factory.Build(context.Background(), snapshot)
+	if !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "config digest does not match") {
+		t.Fatalf("Build() error = %v, want mismatched automatic-composition failure", err)
+	}
+	if !compositionCalled || loaded || resolverCalled || redisCalled || generateCalled || compactCalled {
+		t.Fatalf("mismatched composition reached external work: composition=%t snapshot=%t provider=%t redis=%t generate=%t compact=%t", compositionCalled, loaded, resolverCalled, redisCalled, generateCalled, compactCalled)
+	}
+}
+
+func TestProductionFactoryDoesNotPreflightCompositionForExplicitBuilder(t *testing.T) {
+	compositionCalled := false
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver:         secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
+		SnapshotLoader:   SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		V1RuntimeBuilder: NewGenerateV1RuntimeBuilder(),
+		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
+			return validBuilderGeneratePorts(nil), nil
+		},
+		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
+			return validCompactPorts(), nil
+		},
+		DurableCompositionFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
+			compositionCalled = true
+			return durablestore.Composition{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := factory.preflightAutomaticDurableComposition(context.Background(), &config.Snapshot{}); err != nil {
+		t.Fatalf("explicit builder preflight error = %v", err)
+	}
+	if compositionCalled {
+		t.Fatal("production factory preflighted a composition for an explicit builder")
 	}
 }
 
