@@ -49,7 +49,7 @@ func TestWorkflowNativeOPAMSetupUsesSupportedOCamlVersionVariable(t *testing.T) 
 }
 
 func TestWorkflowNativeOPAMSetupFailsClosedWithUnusableBubblewrap(t *testing.T) {
-	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false)
+	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false, false)
 	if err == nil {
 		t.Fatal("setup-opam.sh accepted an unusable bwrap sandbox dependency")
 	}
@@ -61,16 +61,34 @@ func TestWorkflowNativeOPAMSetupFailsClosedWithUnusableBubblewrap(t *testing.T) 
 	}
 }
 
+func TestWorkflowNativeOPAMSetupFailsClosedWhenBubblewrapNamespaceProbeFails(t *testing.T) {
+	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", true, false)
+	if err == nil {
+		t.Fatal("setup-opam.sh accepted a Bubblewrap namespace probe failure")
+	}
+	if !strings.Contains(string(output), "namespace") {
+		t.Fatalf("setup-opam.sh did not diagnose the Bubblewrap namespace probe failure:\n%s", output)
+	}
+	if !strings.Contains(calls, "bwrap --unshare-user --unshare-net --ro-bind / / true") {
+		t.Fatalf("setup-opam.sh did not exercise the Bubblewrap namespace probe:\n%s", calls)
+	}
+	for _, forbidden := range []string{"curl", "opam "} {
+		if strings.Contains(calls, forbidden) {
+			t.Fatalf("setup-opam.sh invoked %q after a Bubblewrap namespace probe failure:\n%s", forbidden, calls)
+		}
+	}
+}
+
 func runNativeCIHelper(t *testing.T, script, restoredSwitch string) string {
 	t.Helper()
-	calls, output, err := runNativeCIHelperWithBubblewrap(t, script, restoredSwitch, script == "setup-opam.sh")
+	calls, output, err := runNativeCIHelperWithBubblewrap(t, script, restoredSwitch, script == "setup-opam.sh", script == "setup-opam.sh")
 	if err != nil {
 		t.Fatalf("%s failed: %v\n%s", script, err, output)
 	}
 	return calls
 }
 
-func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapUsable bool) (string, []byte, error) {
+func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapUsable, namespaceProbeUsable bool) (string, []byte, error) {
 	t.Helper()
 	tempDir := t.TempDir()
 	fakeBin := filepath.Join(tempDir, "bin")
@@ -119,17 +137,46 @@ grep -qx 'sha256sum' "$FAKE_LOG"
 printf 'docker\n' >> "$FAKE_LOG"
 `)
 	bwrapBody := `
-printf 'bwrap %s\n' "${1:-}" >> "$FAKE_LOG"
-if [[ "${1:-}" != "--version" ]]; then
-  exit 1
-fi
-printf '%s\n' 'bwrap 0.0.0'
+printf 'bwrap' >> "$FAKE_LOG"
+printf ' %s' "$@" >> "$FAKE_LOG"
+printf '\n' >> "$FAKE_LOG"
+case "${1:-}" in
+  --version)
+    printf '%s\n' 'bwrap 0.0.0'
+    ;;
+  --unshare-user)
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac
 `
 	if !bubblewrapUsable {
 		bwrapBody = `
-printf 'bwrap %s\n' "${1:-}" >> "$FAKE_LOG"
+printf 'bwrap' >> "$FAKE_LOG"
+printf ' %s' "$@" >> "$FAKE_LOG"
+printf '\n' >> "$FAKE_LOG"
 printf '%s\n' 'bwrap test fixture is unusable' >&2
 exit 1
+`
+	} else if !namespaceProbeUsable {
+		bwrapBody = `
+printf 'bwrap' >> "$FAKE_LOG"
+printf ' %s' "$@" >> "$FAKE_LOG"
+printf '\n' >> "$FAKE_LOG"
+case "${1:-}" in
+  --version)
+    printf '%s\n' 'bwrap 0.0.0'
+    ;;
+  --unshare-user)
+    printf '%s\n' 'bwrap test fixture cannot create a namespace' >&2
+    exit 1
+    ;;
+  *)
+    exit 1
+    ;;
+esac
 `
 	}
 	writeFakeCommand(t, fakeBin, "bwrap", bwrapBody)

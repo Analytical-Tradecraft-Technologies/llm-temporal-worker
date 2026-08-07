@@ -202,6 +202,9 @@ func TestWorkflowOCamlSandboxUserNamespacesAreGuardedAndScoped(t *testing.T) {
 			}
 			if step["name"] == stepName {
 				sysctlIndex = index
+				if got, ok := step["if"].(string); !ok || got != "${{ runner.environment == 'github-hosted' }}" {
+					t.Fatalf("%s user-namespace step if = %#v, want GitHub-hosted-only guard", workflow.name, step["if"])
+				}
 				run, _ := step["run"].(string)
 				for _, want := range []string{
 					"set -euo pipefail",

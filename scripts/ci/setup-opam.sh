@@ -14,6 +14,10 @@ if ! bwrap --version > /dev/null 2>&1; then
   printf '%s\n' 'setup-opam requires a usable Bubblewrap (bwrap) runtime to preserve OPAM sandboxing' >&2
   exit 1
 fi
+if ! bwrap --unshare-user --unshare-net --ro-bind / / true > /dev/null 2>&1; then
+  printf '%s\n' 'setup-opam requires Bubblewrap user and network namespace support to preserve OPAM sandboxing' >&2
+  exit 1
+fi
 
 tool_root="${RUNNER_TEMP}/llmtw-ci-tools"
 bin_dir="${tool_root}/bin"
