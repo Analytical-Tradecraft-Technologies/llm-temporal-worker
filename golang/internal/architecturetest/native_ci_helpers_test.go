@@ -41,13 +41,13 @@ func TestWorkflowNativeOPAMSetupReusesRestoredSwitch(t *testing.T) {
 	}
 }
 
-func TestWorkflowNativeOPAMSetupFailsClosedWithoutBubblewrap(t *testing.T) {
+func TestWorkflowNativeOPAMSetupFailsClosedWithUnusableBubblewrap(t *testing.T) {
 	calls, output, err := runNativeCIHelperWithBubblewrap(t, "setup-opam.sh", "", false)
 	if err == nil {
-		t.Fatal("setup-opam.sh accepted a missing bwrap sandbox dependency")
+		t.Fatal("setup-opam.sh accepted an unusable bwrap sandbox dependency")
 	}
 	if !strings.Contains(string(output), "bwrap") {
-		t.Fatalf("setup-opam.sh did not diagnose the missing sandbox dependency:\n%s", output)
+		t.Fatalf("setup-opam.sh did not diagnose the unusable sandbox dependency:\n%s", output)
 	}
 	if strings.Contains(calls, "opam ") {
 		t.Fatalf("setup-opam.sh invoked OPAM without its sandbox dependency:\n%s", calls)
@@ -63,7 +63,7 @@ func runNativeCIHelper(t *testing.T, script, restoredSwitch string) string {
 	return calls
 }
 
-func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapAvailable bool) (string, []byte, error) {
+func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapUsable bool) (string, []byte, error) {
 	t.Helper()
 	tempDir := t.TempDir()
 	fakeBin := filepath.Join(tempDir, "bin")
@@ -111,11 +111,21 @@ touch "$destination/syft" "$destination/trivy"
 grep -qx 'sha256sum' "$FAKE_LOG"
 printf 'docker\n' >> "$FAKE_LOG"
 `)
-	if bubblewrapAvailable {
-		writeFakeCommand(t, fakeBin, "bwrap", `
-exit 0
-`)
+	bwrapBody := `
+printf 'bwrap %s\n' "${1:-}" >> "$FAKE_LOG"
+if [[ "${1:-}" != "--version" ]]; then
+  exit 1
+fi
+printf '%s\n' 'bwrap 0.0.0'
+`
+	if !bubblewrapUsable {
+		bwrapBody = `
+printf 'bwrap %s\n' "${1:-}" >> "$FAKE_LOG"
+printf '%s\n' 'bwrap test fixture is unusable' >&2
+exit 1
+`
 	}
+	writeFakeCommand(t, fakeBin, "bwrap", bwrapBody)
 	writeFakeCommand(t, fakeBin, "opam", `
 grep -qx 'sha256sum' "$FAKE_LOG"
 printf 'opam %s %s\n' "$1" "${2:-}" >> "$FAKE_LOG"

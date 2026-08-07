@@ -10,8 +10,8 @@ readonly ocaml_version="5.2.0"
 : "${GITHUB_ENV:?GITHUB_ENV must be available in GitHub Actions}"
 : "${GITHUB_PATH:?GITHUB_PATH must be available in GitHub Actions}"
 
-if ! command -v bwrap > /dev/null 2>&1; then
-  printf '%s\n' 'setup-opam requires Bubblewrap (bwrap) to preserve OPAM sandboxing' >&2
+if ! bwrap --version > /dev/null 2>&1; then
+  printf '%s\n' 'setup-opam requires a usable Bubblewrap (bwrap) runtime to preserve OPAM sandboxing' >&2
   exit 1
 fi
 
