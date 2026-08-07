@@ -77,11 +77,17 @@ process-lifetime builder options.
 
 The PostgreSQL composition is persisted-only. Refresh requests are rejected
 until an explicit management refresh adapter is supplied. Budget status
-remains fail-closed until a concrete Redis generation/window reader is
-composed through `BudgetStatus`. The storage package currently exposes the
-generation pointer/manifest port, but not yet a versioned window-hash field
-reader; deployments must not infer that layout or treat a manifest-only read
-as a complete budget answer. The
+remains fail-closed until the deployment explicitly composes the built-in
+versioned Redis generation/window reader through `BudgetStatus`. The storage
+package provides `redis.NewRedisBudgetStatusReader`, but default production
+composition does not activate it: the deployment must supply
+`ProductionFactoryOptions.BudgetStatusReaderFactory`. The production factory
+then supplies the snapshot-owned Redis client, generation port, key space, and
+approved Function version needed for the bounded read. A nil factory or
+incomplete Redis capability leaves `budget_status` unsupported; after a reader
+is configured, an unavailable generation or Function produces a propagated,
+fail-closed read error. Deployments must not infer the layout or treat a
+manifest-only read as a complete budget answer. The
 PostgreSQL `SpendSummaryRepository` provides the storage read seam for spend:
 it unions completed `operations` with completed `query_executions`, joins each
 operation to its highest-numbered durable attempt for provider and model
