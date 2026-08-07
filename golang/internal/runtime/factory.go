@@ -136,9 +136,9 @@ type ProductionFactoryOptions struct {
 	AzureAPIVersions          map[string]string
 	// V1RuntimeBuilder is optional until the durable phase ports are composed.
 	// When supplied, it is invoked independently for every immutable config
-	// snapshot, including reloads. If both phase factories below are supplied,
-	// NewProductionEngineFactory installs the complete durable builder when
-	// this field is omitted.
+	// snapshot, including reloads. If both phase factories below and the
+	// DurableCompositionFactory are supplied, NewProductionEngineFactory installs
+	// the complete durable builder when this field is omitted.
 	V1RuntimeBuilder V1RuntimeBuilder
 	// GeneratePortsFactory supplies the complete snapshot-owned durable
 	// Generate phase to NewGenerateV1RuntimeBuilder. Nil intentionally leaves
@@ -163,7 +163,9 @@ type ProductionFactoryOptions struct {
 	// DurableCompositionFactory is an optional Task 19 binding for the complete
 	// snapshot-owned PostgreSQL/Redis durable state composition. It is not
 	// inferred from the legacy admission stores; callers must supply every
-	// storage port and validate the returned Composition before enabling it.
+	// storage port and validate the returned Composition before enabling it. The
+	// built-in complete V1RuntimeBuilder requires this factory; a custom explicit
+	// V1RuntimeBuilder remains responsible for an equivalent fail-closed guard.
 	DurableCompositionFactory DurableCompositionFactory
 }
 
@@ -171,7 +173,8 @@ type ProductionFactoryOptions struct {
 // immutable config snapshot. It owns the SDK/state clients returned in the
 // ClientSet and never places resolved secrets into the engine snapshot.
 type ProductionEngineFactory struct {
-	options ProductionFactoryOptions
+	options                   ProductionFactoryOptions
+	automaticV1RuntimeBuilder bool
 }
 
 // productionClientSet owns the SDK clients built for one immutable snapshot
@@ -310,14 +313,17 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 	if options.AnthropicAWSClientFactory == nil {
 		options.AnthropicAWSClientFactory = anthropicmessages.NewAWSGatewayClient
 	}
-	// When both durable phase factories are supplied, compose the complete
-	// Activity runtime by default. A partial or absent factory set remains
-	// unconfigured and is rejected by the production readiness guard; callers
-	// can still provide an explicit builder for an equivalent implementation.
-	if options.V1RuntimeBuilder == nil && options.GeneratePortsFactory != nil && options.CompactPortsFactory != nil {
+	// Compose the complete Activity runtime by default only when both durable
+	// phase factories and their single validated state composition are supplied.
+	// A partial or absent factory set remains unconfigured and is rejected by the
+	// production readiness guard before the engine snapshot or external clients
+	// are constructed; callers can still provide an explicit builder for an
+	// equivalent implementation.
+	automaticV1RuntimeBuilder := options.V1RuntimeBuilder == nil && options.GeneratePortsFactory != nil && options.CompactPortsFactory != nil && options.DurableCompositionFactory != nil
+	if automaticV1RuntimeBuilder {
 		options.V1RuntimeBuilder = NewDurableV1RuntimeBuilder()
 	}
-	return &ProductionEngineFactory{options: options}, nil
+	return &ProductionEngineFactory{options: options, automaticV1RuntimeBuilder: automaticV1RuntimeBuilder}, nil
 }
 
 var _ EngineFactory = (*ProductionEngineFactory)(nil)
@@ -342,6 +348,10 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err := requireDurableV1RuntimeBuilder(value, factory.options.V1RuntimeBuilder); err != nil {
 		return nil, nil, err
 	}
+	precomposed, err := factory.preflightAutomaticDurableComposition(ctx, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
 	engineSnapshot, err := factory.options.SnapshotLoader.Load(ctx, snapshot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load engine snapshot: %w", err)
@@ -351,7 +361,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	if value.State.Kind == config.StateKindMemory {
-		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters)
+		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters, precomposed, snapshot.Digest())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -359,6 +369,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: memory factory returned an unsupported client set", ErrProductionFactoryInvalid)
 		}
+		set.v1Capabilities.composition = precomposed
 		return factory.attachV1Runtime(ctx, snapshot, engineValue, set)
 	}
 	redisClient, redisOwned, err := factory.buildRedis(ctx, value)
@@ -583,12 +594,14 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		checkpoints:     checkpointCapabilities,
 		journal:         journal,
 		v1Capabilities: V1RuntimeCapabilities{
+			ConfigDigest:           snapshot.Digest(),
 			Snapshot:               snapshotSource,
 			Planner:                planner,
 			Adapters:               capabilityAdapterRegistry,
 			Checkpoints:            checkpointCapabilities,
 			Journal:                journal,
 			CompositionFactory:     factory.options.DurableCompositionFactory,
+			composition:            precomposed,
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
 			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
@@ -603,6 +616,26 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		},
 	}
 	return factory.attachV1Runtime(ctx, snapshot, engineValue, clients)
+}
+
+// preflightAutomaticDurableComposition validates the composition installed by
+// this factory's built-in V1 runtime before loading the engine snapshot or
+// constructing any provider, Redis, PostgreSQL, or blob client. The automatic
+// path therefore accepts only a composition factory that can validate its
+// deployment-owned ports without runtime-created capabilities. Explicit custom
+// V1RuntimeBuilder implementations retain their existing composition timing.
+func (factory *ProductionEngineFactory) preflightAutomaticDurableComposition(ctx context.Context, snapshot *config.Snapshot) (*durablestore.Composition, error) {
+	if factory == nil || !factory.automaticV1RuntimeBuilder {
+		return nil, nil
+	}
+	if snapshot == nil {
+		return nil, fmt.Errorf("%w: automatic durable composition requires a configuration snapshot", ErrDurableV1Composition)
+	}
+	composition, err := (V1RuntimeCapabilities{ConfigDigest: snapshot.Digest(), CompositionFactory: factory.options.DurableCompositionFactory}).BuildDurableComposition(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: automatic durable composition preflight: %v", ErrDurableV1Composition, err)
+	}
+	return &composition, nil
 }
 
 // attachV1Runtime invokes the optional snapshot-bound builder only after the
@@ -656,7 +689,7 @@ func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, c
 // blob store; all state is held by the process-local implementations and is
 // lost on restart. Provider adapters are still built normally because memory
 // mode changes state durability, not the provider contract.
-func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter) (llm.Engine, app.ClientSet, error) {
+func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter, precomposed *durablestore.Composition, configDigest [32]byte) (llm.Engine, app.ClientSet, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -708,11 +741,13 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	}
 	return engineValue, &productionClientSet{
 		v1Capabilities: V1RuntimeCapabilities{
+			ConfigDigest:         configDigest,
 			Snapshot:             snapshotSource,
 			Planner:              planner,
 			Adapters:             capabilityAdapterRegistry,
 			Clock:                clock,
 			CompositionFactory:   factory.options.DurableCompositionFactory,
+			composition:          precomposed,
 			GeneratePortsFactory: factory.options.GeneratePortsFactory,
 			CompactPortsFactory:  factory.options.CompactPortsFactory,
 		},

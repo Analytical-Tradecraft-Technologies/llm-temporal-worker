@@ -80,7 +80,13 @@ particular, the production factory's reusable `llm.Engine` is not a v1
 runtime: it cannot be losslessly adapted to Compact or Query, nor can it
 perform checkpoint materialization and the required Redis/PostgreSQL phase
 ordering. A durable v1 implementation must therefore be supplied separately
-or through an adapter that owns the complete phase order.
+or through an adapter that owns the complete phase order and one validated
+snapshot-owned durable state composition. The automatic built-in production
+adapter supplies the current deterministic configuration digest and validates
+that composition before it builds an engine snapshot or external provider/state
+clients. A deployment that needs runtime-created clients during composition
+must provide and own an explicit custom adapter instead; the early preflight
+does not apply to arbitrary explicit builders.
 
 ## Payload contract
 

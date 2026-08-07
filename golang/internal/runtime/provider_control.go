@@ -163,10 +163,14 @@ type JournalSource interface {
 }
 
 // DurableCompositionFactory constructs the complete storage-neutral
-// Composition for one immutable runtime snapshot. Implementations must close
-// over only the supplied snapshot capability bundle and must return before
-// any provider dispatch; the factory never fabricates missing stores or
-// adapts the legacy engine.
+// Composition for one immutable runtime snapshot. Implementations must return
+// before any provider dispatch; the factory never fabricates missing stores or
+// adapts the legacy engine. When NewProductionEngineFactory auto-installs the
+// built-in complete V1 builder, this factory is first invoked before
+// runtime-created clients or the engine snapshot exist. That automatic path
+// provides ConfigDigest so deployment-owned ports can bind to the current
+// immutable configuration without those capabilities. Explicit custom
+// V1RuntimeBuilder implementations retain responsibility for their own timing.
 type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error)
 
 // V1RuntimeCapabilities is the preparatory storage- and provider-neutral
@@ -181,10 +185,16 @@ type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (dur
 // clock is an unconfigured capability; callers must not fall back to a legacy
 // engine or a process-global dependency.
 type V1RuntimeCapabilities struct {
-	Snapshot    engine.SnapshotSource
-	Planner     routing.Planner
-	Adapters    engine.AdapterRegistry
-	Checkpoints CheckpointCapabilities
+	// ConfigDigest identifies the immutable configuration snapshot that owns
+	// this capability bundle. The automatic production factory provides it both
+	// to preflight composition and to the later complete builder, which validates
+	// that the returned durable state identity matches. A zero digest leaves the
+	// identity unbound for contract-only and explicitly custom builder tests.
+	ConfigDigest [32]byte
+	Snapshot     engine.SnapshotSource
+	Planner      routing.Planner
+	Adapters     engine.AdapterRegistry
+	Checkpoints  CheckpointCapabilities
 	// Journal is the optional write-only PostgreSQL budget journal. It is
 	// preparatory input for Task 19 and does not activate V1 composition.
 	Journal durablestore.Journal
@@ -231,7 +241,9 @@ func (capabilities V1RuntimeCapabilities) DurableComposition() (durablestore.Com
 // BuildDurableComposition invokes and validates the optional snapshot-owned
 // composition factory. Validation is intentionally completed after the
 // factory returns and before any caller can attach the value to an Activity.
-// The method performs no fallback to Redis-only or in-memory durable state.
+// When ConfigDigest is present, validation also requires the durable identity
+// to bind to that exact configuration snapshot. The method performs no
+// fallback to Redis-only or in-memory durable state.
 func (capabilities V1RuntimeCapabilities) BuildDurableComposition(ctx context.Context) (durablestore.Composition, error) {
 	var zero durablestore.Composition
 	if ctx == nil {
@@ -243,6 +255,9 @@ func (capabilities V1RuntimeCapabilities) BuildDurableComposition(ctx context.Co
 	// second PostgreSQL/Redis identity and violate the once-per-snapshot
 	// boundary.
 	if capabilities.composition != nil {
+		if err := capabilities.validateDurableComposition(*capabilities.composition); err != nil {
+			return zero, err
+		}
 		return *capabilities.composition, nil
 	}
 	if capabilities.CompositionFactory == nil {
@@ -252,10 +267,20 @@ func (capabilities V1RuntimeCapabilities) BuildDurableComposition(ctx context.Co
 	if err != nil {
 		return zero, fmt.Errorf("construct durable composition: %w", err)
 	}
-	if err := composition.Validate(); err != nil {
-		return zero, fmt.Errorf("validate durable composition: %w", err)
+	if err := capabilities.validateDurableComposition(composition); err != nil {
+		return zero, err
 	}
 	return composition, nil
+}
+
+func (capabilities V1RuntimeCapabilities) validateDurableComposition(composition durablestore.Composition) error {
+	if err := composition.Validate(); err != nil {
+		return fmt.Errorf("validate durable composition: %w", err)
+	}
+	if expected := capabilities.ConfigDigest; expected != ([32]byte{}) && composition.Identity.ConfigDigest != expected {
+		return errors.New("durable composition config digest does not match capability configuration")
+	}
+	return nil
 }
 
 // GeneratePortsFactory constructs the complete durable Generate port set for
