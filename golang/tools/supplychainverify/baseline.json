@@ -51,7 +51,7 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/service/bedrockruntime",
-      "version": "v1.57.0",
+      "version": "v1.57.1",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
