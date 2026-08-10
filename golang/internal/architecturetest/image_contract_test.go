@@ -13,8 +13,8 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerfile := string(data)
-	if strings.Contains(dockerfile, "@sha256:") {
-		t.Fatal("Dockerfile base images must use mutable tags rather than pinned digests")
+	if strings.Count(dockerfile, "@sha256:") != 2 {
+		t.Fatal("Dockerfile must pin both reviewed base images by immutable digest")
 	}
 
 	for _, want := range []string{
@@ -52,8 +52,11 @@ func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"ARG GO_IMAGE=docker.io/library/golang:1.26.5",
-		"FROM gcr.io/distroless/static-debian12:nonroot",
+		"ARG GO_IMAGE=docker.io/library/golang:1.26.5@sha256:2005724102f45917a63e9d092fc0e4ea56ea575048ce147caad5f5f61502c365",
+		"FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35",
+		`test "${TARGETOS:-linux}" = "linux"`,
+		`test "${TARGETARCH:-amd64}" = "amd64"`,
+		"CGO_ENABLED=0 GOOS=linux GOARCH=amd64",
 	} {
 		if !strings.Contains(string(dockerfileData), want) {
 			t.Errorf("Dockerfile toolchain policy is missing %q", want)
@@ -69,6 +72,40 @@ func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
 	}
 }
 
+func TestImageBuildContextAndFinalStageExcludeSecretsAndTools(t *testing.T) {
+	dockerfileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(dockerfileData)
+	finalStage := dockerfile[strings.LastIndex(dockerfile, "\nFROM "):]
+	for _, want := range []string{
+		"COPY --from=build /out/llm-temporal-worker /usr/local/bin/llm-temporal-worker",
+		"USER 65532:65532",
+		`ENTRYPOINT ["/usr/local/bin/llm-temporal-worker"]`,
+	} {
+		if !strings.Contains(finalStage, want) {
+			t.Errorf("final image contract is missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"RUN ", "COPY .", " API_KEY", " TOKEN", " PASSWORD", " CREDENTIAL", " MODEL", " PROMPT", "CMD [", "/bin/sh"} {
+		if strings.Contains(finalStage, forbidden) {
+			t.Errorf("final image stage contains forbidden tool, secret, or wrapper surface %q", forbidden)
+		}
+	}
+
+	ignoreData, err := os.ReadFile(filepath.Join(moduleRoot(t), ".dockerignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ignore := string(ignoreData)
+	for _, want := range []string{".env.*", "*.pem", "*.key", "secrets/", "**/.aws/", "**/.docker/config.json", "**/*credential*", "**/*token*", "release-artifacts/"} {
+		if !strings.Contains(ignore, want) {
+			t.Errorf(".dockerignore does not exclude %q", want)
+		}
+	}
+}
+
 func TestImageVerifyTargetUsesHardenedRuntimeContract(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
 	if err != nil {
@@ -78,7 +115,7 @@ func TestImageVerifyTargetUsesHardenedRuntimeContract(t *testing.T) {
 
 	for _, want := range []string{
 		"image-verify:",
-		"docker build --tag",
+		"docker build --platform linux/amd64 --tag",
 		"git rev-parse HEAD",
 		"LLMTW_IMAGE=",
 		"-tags=imageintegration ./integration",
@@ -97,9 +134,39 @@ func TestImageVerifyTargetUsesHardenedRuntimeContract(t *testing.T) {
 		"/tmp:rw,nosuid,nodev,noexec,size=64m",
 		"--user",
 		"65532:65532",
+		`Entrypoint []string`,
+		`"/bin/sh"`,
+		`"amd64"`,
 	} {
 		if !strings.Contains(string(runtimeData), want) {
 			t.Errorf("image runtime verification is missing %q", want)
+		}
+	}
+}
+
+func TestMasterWorkflowSmokesActualProductionImageProcess(t *testing.T) {
+	workflow := readRepositoryFile(t, repositoryRoot(t), ".github", "workflows", "master.yml")
+	script := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "smoke-image.sh")
+	for _, want := range []string{
+		"--platform linux/amd64",
+		"--load",
+		"LLMTW_SMOKE_IMAGE: llm-temporal-worker:master-${{ github.run_number }}",
+		"run: bash scripts/release/smoke-image.sh",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("master image job is missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"--profile worker up",
+		"--no-build",
+		`"/usr/local/bin/llm-temporal-worker"`,
+		`'["worker","--config","/etc/llmtw/config.yaml"]'`,
+		"/health/live",
+		"/health/ready",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("production image smoke is missing %q", want)
 		}
 	}
 }

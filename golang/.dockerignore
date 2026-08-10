@@ -12,6 +12,15 @@
 *.crt
 secrets/
 tmp/
+**/.aws/
+**/.azure/
+**/.config/gcloud/
+**/.docker/config.json
+**/.kube/
+**/*credential*
+**/*token*
+auth.json
+config.json
 
 # Build/test output.
 bin/

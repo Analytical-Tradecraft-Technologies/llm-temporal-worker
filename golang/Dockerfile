@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-# Use the same reviewed patch release as CI and the security verifier. The
-# version tag remains mutable (rather than a digest) so image maintenance can
-# update it in one reviewed dependency change.
-ARG GO_IMAGE=docker.io/library/golang:1.26.5
+# Both build and runtime roots are reviewed immutable manifest-list digests.
+# Buildx still selects only linux/amd64; a dependency update changes the
+# readable patch tag and digest together.
+ARG GO_IMAGE=docker.io/library/golang:1.26.5@sha256:2005724102f45917a63e9d092fc0e4ea56ea575048ce147caad5f5f61502c365
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
@@ -12,6 +12,7 @@ ARG GO_VERSION=unknown
 
 FROM ${GO_IMAGE} AS build
 
+ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION
 ARG REVISION
@@ -32,6 +33,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    test "${TARGETOS:-linux}" = "linux" && \
+    test "${TARGETARCH:-amd64}" = "amd64" && \
+    test -n "${VERSION}" && test "${VERSION}" != "dev" && \
+    test -n "${REVISION}" && test "${REVISION}" != "unknown" && \
+    test -n "${BUILD_TIME}" && test "${BUILD_TIME}" != "unknown" && \
+    test -n "${SOURCE}" && \
     actual_go_version="$(go env GOVERSION)" && \
     if [ "${GO_VERSION}" = "unknown" ]; then \
       go_version="${actual_go_version}"; \
@@ -39,7 +46,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       test "${actual_go_version}" = "${GO_VERSION}"; \
       go_version="${GO_VERSION}"; \
     fi && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -buildvcs=false \
       -ldflags="-s -w \
         -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION} \
@@ -50,9 +57,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/llm-temporal-worker ./cmd/llm-temporal-worker
 
 # Distroless static includes CA roots, time-zone data, and uid 65532, but no
-# shell or package manager. Keep the tag mutable so builds pull the current
-# image for this stable Debian 12 variant.
-FROM gcr.io/distroless/static-debian12:nonroot
+# shell, package manager, or toolchain. The reviewed digest is the same
+# manifest list for which Buildx selects linux/amd64.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 
 ARG VERSION
 ARG REVISION
@@ -82,6 +89,6 @@ WORKDIR /home/nonroot
 
 # Health is provided by the orchestrator. Distroless intentionally has no
 # shell/curl healthcheck and the root filesystem is expected to be read-only.
-# The worker does not publish a fixed port; callers choose the health-server
-# address when they need the optional local probe.
+# The production deployment supplies `worker --config ...`; keeping CMD empty
+# makes the native binary the only image entrypoint.
 ENTRYPOINT ["/usr/local/bin/llm-temporal-worker"]

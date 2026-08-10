@@ -656,12 +656,18 @@
       "source": {
         "path": "docs/release/runbook.md",
         "anchor": "#guarded-manual-publication-boundary",
-        "quote": "Task 24 adds .github/workflows/release.yml as a deliberately incomplete publication control. It has only a workflow_dispatch trigger, and both jobs reject a dispatch that is not started from master."
+        "quote": "Task 24 enables .github/workflows/release.yml as a fail-closed publication control. It has only a workflow_dispatch trigger, and both jobs reject a dispatch that is not started from master."
       },
       "implementation_paths": [
         ".github/workflows/release.yml",
         "golang/internal/architecturetest/release_publication_test.go",
-        "scripts/release/guard.sh"
+        "scripts/release/finalize-ecr-tag.sh",
+        "scripts/release/guard.sh",
+        "scripts/release/publish-ecr.sh",
+        "scripts/release/setup-crane.sh",
+        "scripts/release/smoke-image.sh",
+        "scripts/release/stage-image.sh",
+        "scripts/release/write-provenance.py"
       ],
       "verification": {
         "make_targets": [
@@ -685,12 +691,18 @@
       "source": {
         "path": "docs/release/runbook.md",
         "anchor": "#guarded-manual-publication-boundary",
-        "quote": "The protected job always exits nonzero after preflight. It does not sign, publish, push, create a tag, or create a release."
+        "quote": "The source is always the input's exact digest reference; neither a source tag nor an unpinned source is accepted."
       },
       "implementation_paths": [
         ".github/workflows/release.yml",
         "golang/internal/architecturetest/release_publication_test.go",
-        "scripts/release/guard.sh"
+        "scripts/release/finalize-ecr-tag.sh",
+        "scripts/release/guard.sh",
+        "scripts/release/publish-ecr.sh",
+        "scripts/release/setup-crane.sh",
+        "scripts/release/smoke-image.sh",
+        "scripts/release/stage-image.sh",
+        "scripts/release/write-provenance.py"
       ],
       "verification": {
         "make_targets": [
@@ -705,8 +717,8 @@
         ]
       },
       "evidence": {
-        "mode": "external_authorization_required",
-        "status": "authorization_required"
+        "mode": "protected_manual",
+        "status": "awaiting_protected_run"
       }
     },
     {

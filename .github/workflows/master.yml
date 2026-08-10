@@ -20,7 +20,7 @@ jobs:
   container:
     name: Container image
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
 
@@ -63,7 +63,7 @@ jobs:
           {
             printf 'version=master-%s\n' "$GITHUB_RUN_NUMBER"
             printf 'revision=%s\n' "$GITHUB_SHA"
-            printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf 'build_time=%s\n' "$(git show -s --format=%cI "$GITHUB_SHA")"
             printf 'source=https://github.com/%s\n' "$GITHUB_REPOSITORY"
             printf 'go_version=%s\n' "$(go env GOVERSION)"
           } >> "$GITHUB_OUTPUT"
@@ -73,6 +73,8 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx build \
+            --platform linux/amd64 \
+            --load \
             --file ./golang/Dockerfile \
             --tag llm-temporal-worker:master-${{ github.run_number }} \
             --cache-from type=gha,scope=llmtw-master,version=2 \
@@ -83,6 +85,11 @@ jobs:
             --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
             --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
             ./golang
+
+      - name: Exercise production image process and readiness without live provider credentials
+        env:
+          LLMTW_SMOKE_IMAGE: llm-temporal-worker:master-${{ github.run_number }}
+        run: bash scripts/release/smoke-image.sh
 
   ocaml:
     name: OCaml package
@@ -420,6 +427,9 @@ jobs:
       - name: Collect compact redacted release inputs
         env:
           RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6
+          IMAGE_VERIFY_VERSION: ${{ github.sha }}
+          IMAGE_VERIFY_SOURCE: https://github.com/${{ github.repository }}
+          IMAGE_VERIFY_GO_VERSION: go1.26.5
         run: |
           bash scripts/release/collect.sh \
             --artifact-dir release-artifacts \

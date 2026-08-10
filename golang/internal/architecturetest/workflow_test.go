@@ -1224,6 +1224,12 @@ func validateReleaseMakeInvocationPolicy(workflows ...workflowDocument) error {
 			target:   "release-verify",
 			line:     "make release-verify",
 		},
+		"release.yml/protected-signing-publication": {
+			workflow: "release.yml",
+			job:      "protected-signing-publication",
+			target:   "release-verify",
+			line:     "make release-verify",
+		},
 	}
 	if len(invocations) != len(want) {
 		return fmt.Errorf("release evidence policy found %d make release* invocations, want %#v: %#v", len(invocations), want, invocations)

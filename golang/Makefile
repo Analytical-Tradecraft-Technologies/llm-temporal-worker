@@ -217,7 +217,7 @@ image-verify:
 			tar -xf "$$archive" -C "$$layout"; \
 			docker image inspect "$(IMAGE_VERIFY_TAG)" >/dev/null; \
 		else \
-			docker build --tag "$(IMAGE_VERIFY_TAG)" \
+			docker build --platform linux/amd64 --tag "$(IMAGE_VERIFY_TAG)" \
 				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
 				--build-arg REVISION="$$revision" \
 				--build-arg BUILD_TIME="$$build_time" \
