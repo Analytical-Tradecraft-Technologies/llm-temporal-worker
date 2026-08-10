@@ -135,7 +135,7 @@
     },
     {
       "path": "go.temporal.io/api",
-      "version": "v1.63.4",
+      "version": "v1.63.5",
       "license": "MIT",
       "source": "https://github.com/temporalio/api"
     },
