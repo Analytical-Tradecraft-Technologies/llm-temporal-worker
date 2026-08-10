@@ -25,6 +25,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
@@ -84,6 +85,11 @@ type RedisFactory func(context.Context, config.RedisConfig, string, string) (red
 // installation is intentionally not part of this hook: deployment owns
 // provisioning, while workers only verify the immutable contract.
 type PostgresFactory func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error)
+type postgresDurableRepositorySource interface {
+	DurableOperations() admission.AdmissionStore
+	ScopeRepository() postgresstore.ScopeRepository
+	BlobRepository() postgresstore.BlobRepository
+}
 type BlobFactory func(context.Context, config.Config) (blob.Store, io.Closer, error)
 type AWSConfigFactory func(context.Context, string) (aws.Config, error)
 type AzureCredentialFactory func(context.Context, config.EndpointConfig) (azcore.TokenCredential, error)
@@ -166,7 +172,11 @@ type ProductionFactoryOptions struct {
 	// storage port and validate the returned Composition before enabling it. The
 	// built-in complete V1RuntimeBuilder requires this factory; a custom explicit
 	// V1RuntimeBuilder remains responsible for an equivalent fail-closed guard.
-	DurableCompositionFactory DurableCompositionFactory
+	// ComposeProductionDurableState enables the built-in PostgreSQL/S3/Redis
+	// state composition. Embeddings with custom phase ports leave it false and
+	// retain full control of their injected composition factory.
+	ComposeProductionDurableState bool
+	DurableCompositionFactory     DurableCompositionFactory
 }
 
 // ProductionEngineFactory composes the full provider-neutral engine from one
@@ -381,6 +391,17 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			_ = redisClient.Close()
 		}
 	}
+	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+		functionClient, ok := redisClient.(redisstore.BudgetColdStartFunctionClient)
+		if !ok {
+			closeOwned()
+			return nil, nil, fmt.Errorf("%w: Redis client does not support Function identity verification", ErrDependencyUnavailable)
+		}
+		if err := redisstore.VerifyBudgetColdStartFunctions(ctx, functionClient); err != nil {
+			closeOwned()
+			return nil, nil, fmt.Errorf("verify Redis durable Function identities: %w", err)
+		}
+	}
 	keySecret, err := factory.redisKeySecret(ctx, value)
 	if err != nil {
 		closeOwned()
@@ -441,6 +462,43 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			}
 			closeOwned()
 			return nil, nil, fmt.Errorf("construct Redis budget generation port: %w", err)
+		}
+	}
+	var budgetMaterializer durablestore.BudgetMaterializer
+	var budgetGenerationID durablestore.GenerationID
+	var budgetIncarnationID durablestore.IncarnationID
+	if generationPort != nil {
+		active, activeErr := generationPort.ActiveGeneration(ctx)
+		if activeErr != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("load active Redis budget generation: %w", activeErr)
+		}
+		manifest, manifestErr := generationPort.LoadManifest(ctx, active)
+		if manifestErr != nil || manifest.Validate() != nil || active.ValidateAgainst(manifest) != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("%w: active Redis budget generation is invalid", ErrDependencyUnavailable)
+		}
+		budgetGenerationID = durablestore.GenerationID(active.GenerationID)
+		budgetIncarnationID = durablestore.IncarnationID(active.IncarnationID)
+		budgetMaterializer, err = redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
+			Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
+			FunctionVersion: value.State.Redis.AdmissionVersion,
+			GenerationID:    durablestore.GenerationID(active.GenerationID),
+			IncarnationID:   durablestore.IncarnationID(active.IncarnationID),
+			Clock:           clock,
+		})
+		if err != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("construct Redis budget materializer: %w", err)
 		}
 	}
 	budgetStatusReader, err := composeBudgetStatusReader(ctx, snapshot, factory.options.Clock, value.State.Redis.AdmissionMode, redisClient, generationPort, budgetKeys, factory.options.BudgetStatusReaderFactory)
@@ -547,6 +605,20 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeAll()
 		return nil, nil, err
 	}
+	var durableOperations admission.AdmissionStore
+	var durableResults durablestore.ResultStore
+	var durableSource postgresDurableRepositorySource
+	if source, ok := postgresCloser.(postgresDurableRepositorySource); ok {
+		durableSource = source
+		durableOperations = source.DurableOperations()
+		if !isNilCapability(durableOperations) {
+			durableResults, err = NewBlobResultStore(blobStore, durableOperations, refResolver, clock)
+			if err != nil {
+				closeAll()
+				return nil, nil, fmt.Errorf("construct PostgreSQL-authoritative result store: %w", err)
+			}
+		}
+	}
 	estimator, err := buildEstimator(value)
 	if err != nil {
 		closeAll()
@@ -576,16 +648,76 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
 	}
 	var checkpointBlobReader state.CheckpointBlobReader
-	if factory.options.CheckpointBlobLocator != nil {
+	checkpointLocator := factory.options.CheckpointBlobLocator
+	if checkpointLocator == nil && durableSource != nil {
+		repository := durableSource.BlobRepository()
+		if repository.Pool != nil {
+			checkpointLocator = postgresstore.CheckpointBlobLocator(repository)
+		}
+	}
+	if checkpointLocator != nil {
 		checkpointBlobReader = state.ScopedBlobReader{
-			Store:    blobStore,
-			Resolve:  factory.options.CheckpointBlobLocator,
-			MaxBytes: int64(value.Limits.RequestBytes),
-			Now:      clock,
+			Store: blobStore, Resolve: checkpointLocator,
+			MaxBytes: int64(value.Limits.RequestBytes), Now: clock,
 		}
 	}
 	checkpointCapabilities := checkpointCapabilitiesFromCloserWithBindings(postgresCloser, checkpointBlobReader, keyring, clock)
+	checkpointCapabilities.BlobStore = blobStore
+	if keyring != nil {
+		checkpointCapabilities.IssueHandle = keyring.IssueCheckpointHandleMetadata
+		checkpointCapabilities.VerifyHandle = keyring.VerifyCheckpointHandle
+	}
+	if durableSource != nil {
+		checkpointCapabilities.BlobRepository = durableSource.BlobRepository()
+	}
 	journal := journalFromCloser(postgresCloser)
+	var durableComposition *durablestore.Composition
+	var resolveScope func(context.Context, llm.RequestContext) (string, error)
+	if durableSource != nil {
+		scopeRepository := durableSource.ScopeRepository()
+		resolveScope = func(ctx context.Context, requestContext llm.RequestContext) (string, error) {
+			scope, err := scopeRepository.Ensure(ctx, requestContext.Tenant, requestContext.Project)
+			if err != nil {
+				return "", err
+			}
+			return scope.ID.String(), nil
+		}
+	}
+	if value.State.Kind == config.StateKindDurable && factory.options.ComposeProductionDurableState && factory.options.DurableCompositionFactory == nil {
+		composition, compositionErr := (durablestore.CompositionBuilder{
+			Identity: durablestore.StateIdentity{
+				Postgres: durablestore.PostgresIdentity{
+					Database: value.State.Postgres.Database, Schema: value.State.Postgres.Schema,
+					TablePrefix: value.State.Postgres.TablePrefix,
+				},
+				Redis: durablestore.RedisIdentity{
+					KeyPrefix: value.State.Redis.KeyPrefix, HashTag: value.State.Redis.AdmissionHashTag,
+				},
+				ConfigDigest: snapshot.Digest(),
+			},
+			Ports: durablestore.CompositionPorts{
+				Operations: durableOperations, Continuations: continuationStore,
+				Checkpoints: checkpointCapabilities.Materializer, Results: durableResults,
+				Journal: journal, Materializer: budgetMaterializer,
+			},
+		}).Build()
+		if compositionErr != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("construct production durable composition: %w", compositionErr)
+		}
+		durableComposition = &composition
+	}
+	compositionFactory := factory.options.DurableCompositionFactory
+	if compositionFactory == nil && durableComposition != nil {
+		ownedComposition := *durableComposition
+		compositionFactory = func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
+			return ownedComposition, nil
+		}
+	}
+	compositionValue := precomposed
+	if durableComposition != nil {
+		compositionValue = durableComposition
+	}
 	clients := &productionClientSet{
 		probes:          probes,
 		providerControl: providerControl,
@@ -597,13 +729,19 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			ConfigDigest:           snapshot.Digest(),
 			Snapshot:               snapshotSource,
 			Planner:                planner,
+			Estimator:              estimator,
 			Adapters:               capabilityAdapterRegistry,
 			Checkpoints:            checkpointCapabilities,
-			Journal:                journal,
-			CompositionFactory:     factory.options.DurableCompositionFactory,
-			composition:            precomposed,
+			CompositionFactory:     compositionFactory,
+			BudgetGenerationID:     budgetGenerationID,
+			BudgetIncarnationID:    budgetIncarnationID,
+			OperationRetention:     time.Duration(value.State.OperationTerminalRetention),
+			CheckpointRetention:    time.Duration(value.State.ContinuationRetention),
+			MaxRequestBytes:        int64(value.Limits.RequestBytes),
+			composition:            compositionValue,
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
+			ResolveScope:           resolveScope,
 			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
 			CompactPortsFactory:    factory.options.CompactPortsFactory,
 		},
@@ -790,7 +928,55 @@ func (factory *ProductionEngineFactory) buildPostgres(ctx context.Context, value
 		}
 		return nil, nil, fmt.Errorf("%w: PostgreSQL factory returned no readiness probe", ErrDependencyUnavailable)
 	}
+	if closerValue, ok := closer.(*postgresPoolCloser); ok {
+		envelopeKeys, scopeKeys, keyErr := factory.resolvePostgresKeyrings(ctx, value.State.Postgres)
+		if keyErr != nil {
+			_ = closerValue.Close()
+			return nil, nil, keyErr
+		}
+		repositories, repositoryErr := postgresstore.NewDurableRepositories(postgresstore.DurableRepositoryOptions{
+			Pool: closerValue.pool, Namespace: namespace, EnvelopeKeys: envelopeKeys,
+			ScopeKeys: scopeKeys, OperationRetention: time.Duration(value.State.OperationTerminalRetention),
+			Clock: factory.options.Clock,
+		})
+		if repositoryErr != nil {
+			_ = closerValue.Close()
+			return nil, nil, fmt.Errorf("construct PostgreSQL durable repositories: %w", repositoryErr)
+		}
+		closerValue.repositories = repositories
+	}
 	return probe, closer, nil
+}
+
+func (factory *ProductionEngineFactory) resolvePostgresKeyrings(ctx context.Context, value config.PostgresConfig) (postgresstore.Keyring, postgresstore.ScopeKeyring, error) {
+	envelope := postgresstore.Keyring{Keys: make(map[string][]byte, len(value.EnvelopeKeys))}
+	scope := postgresstore.ScopeKeyring{Keys: make(map[string][]byte, len(value.ScopeKeys))}
+	resolve := func(keys []config.HandleKey, destination map[string][]byte, primary *string, label string) error {
+		for _, key := range keys {
+			secret, err := factory.options.Resolver.Resolve(ctx, key.Secret)
+			if err != nil {
+				return fmt.Errorf("resolve PostgreSQL %s key %q: %w", label, key.ID, err)
+			}
+			if len(secret) != 32 {
+				return fmt.Errorf("PostgreSQL %s key %q must be exactly 32 bytes", label, key.ID)
+			}
+			destination[key.ID] = append([]byte(nil), secret...)
+			if key.Primary {
+				*primary = key.ID
+			}
+		}
+		if *primary == "" {
+			return fmt.Errorf("PostgreSQL %s keyring has no primary key", label)
+		}
+		return nil
+	}
+	if err := resolve(value.EnvelopeKeys, envelope.Keys, &envelope.Active, "envelope"); err != nil {
+		return postgresstore.Keyring{}, postgresstore.ScopeKeyring{}, err
+	}
+	if err := resolve(value.ScopeKeys, scope.Keys, &scope.ActiveVersion, "scope"); err != nil {
+		return postgresstore.Keyring{}, postgresstore.ScopeKeyring{}, err
+	}
+	return envelope, scope, nil
 }
 
 func redisKeyOptions(value config.Config, keySecret []byte) (redisstore.KeyOptions, error) {
@@ -1393,7 +1579,8 @@ func defaultPostgresFactory(ctx context.Context, value config.PostgresConfig, na
 		pool.Close()
 		return nil, nil, err
 	}
-	return probe, postgresPoolCloser{pool: pool, namespace: namespace}, nil
+	closer := &postgresPoolCloser{pool: pool, namespace: namespace}
+	return probe, closer, nil
 }
 
 // postgresPoolOptions is the one configuration-to-driver projection for the
@@ -1420,12 +1607,33 @@ func postgresPoolOptions(value config.PostgresConfig, namespace postgresstore.Na
 type postgresProbeClient struct{ pool *pgxpool.Pool }
 
 type postgresPoolCloser struct {
-	pool      *pgxpool.Pool
-	namespace postgresstore.Namespace
+	pool         *pgxpool.Pool
+	namespace    postgresstore.Namespace
+	repositories postgresstore.DurableRepositories
 }
 
 func (closer postgresPoolCloser) ProviderStatusRepository() postgresstore.ProviderStatusRepository {
 	return postgresstore.DefaultProviderStatusRepository(closer.pool, closer.namespace)
+}
+func (closer *postgresPoolCloser) DurableOperations() admission.AdmissionStore {
+	if closer == nil || closer.repositories.Operations.Pool == nil {
+		return nil
+	}
+	return closer.repositories.Operations
+}
+
+func (closer *postgresPoolCloser) ScopeRepository() postgresstore.ScopeRepository {
+	if closer == nil {
+		return postgresstore.ScopeRepository{}
+	}
+	return closer.repositories.Scopes
+}
+
+func (closer *postgresPoolCloser) BlobRepository() postgresstore.BlobRepository {
+	if closer == nil {
+		return postgresstore.BlobRepository{}
+	}
+	return closer.repositories.Blobs
 }
 
 func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
@@ -1437,7 +1645,13 @@ func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
 // Journal exposes only the write-only durable journal contract. The runtime
 // wraps it before storing it on the snapshot client set so callers cannot
 // recover this concrete repository or its pool through a type assertion.
-func (closer postgresPoolCloser) Journal() durablestore.Journal {
+func (closer *postgresPoolCloser) Journal() durablestore.Journal {
+	if closer == nil {
+		return nil
+	}
+	if closer.repositories.Journal.Pool != nil {
+		return &closer.repositories.Journal
+	}
 	return &postgresstore.BudgetJournalRepository{Pool: closer.pool, Namespace: closer.namespace}
 }
 
@@ -1445,15 +1659,27 @@ func (closer postgresPoolCloser) Journal() durablestore.Journal {
 // The default factory cannot construct a blob reader because PostgreSQL
 // locator encryption keys and the object-store binding are deployment-owned;
 // custom closers may implement CheckpointBlobReader as well.
-func (closer postgresPoolCloser) CheckpointRepository() state.CheckpointRepository {
-	return snapshotCheckpointRepository{delegate: postgresstore.DurableCheckpointRepository{Pool: closer.pool, Namespace: closer.namespace}}
+func (closer *postgresPoolCloser) CheckpointRepository() state.CheckpointRepository {
+	if closer == nil {
+		return nil
+	}
+	return snapshotCheckpointRepository{delegate: closer.repositories.Checkpoints}
 }
 
-func (closer postgresPoolCloser) CheckpointBlobReader() state.CheckpointBlobReader {
+func (closer *postgresPoolCloser) CheckpointBlobReader() state.CheckpointBlobReader {
 	return nil
 }
 
-func (closer postgresPoolCloser) Close() error {
+func (closer *postgresPoolCloser) Close() error {
+	if closer == nil {
+		return nil
+	}
+	for _, key := range closer.repositories.Operations.Keys.Keys {
+		clear(key)
+	}
+	for _, key := range closer.repositories.Scopes.Keys.Keys {
+		clear(key)
+	}
 	if closer.pool != nil {
 		closer.pool.Close()
 	}

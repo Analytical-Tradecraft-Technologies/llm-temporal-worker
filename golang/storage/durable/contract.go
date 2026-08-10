@@ -198,13 +198,14 @@ type Journal interface {
 }
 
 // Composition is the snapshot-owned seam consumed by a runtime factory when
-// the durable split is wired. Operation/continuation/result state is
-// authoritative in PostgreSQL; active budget admission is provided by Redis;
-// the journal is append-only PostgreSQL state between those two operations.
+// the durable split is wired. Operation, checkpoint, and result state is
+// authoritative in PostgreSQL/S3; active budget admission is provided by
+// Redis; the journal is append-only PostgreSQL state between those operations.
 type Composition struct {
 	Identity      StateIdentity
 	Operations    admission.AdmissionStore
 	Continuations state.ContinuationStore
+	Checkpoints   state.CheckpointHandleMaterializer
 	Results       ResultStore
 	Journal       Journal
 	Materializer  BudgetMaterializer
@@ -226,6 +227,9 @@ func (composition Composition) Validate() error {
 	}
 	if isNilPort(composition.Continuations) {
 		return errors.New("durable continuation store is required")
+	}
+	if isNilPort(composition.Checkpoints) {
+		return errors.New("durable checkpoint store is required")
 	}
 	if isNilPort(composition.Results) {
 		return errors.New("durable result store is required")

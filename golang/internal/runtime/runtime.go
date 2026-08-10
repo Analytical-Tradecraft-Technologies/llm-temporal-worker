@@ -632,8 +632,12 @@ func newProductionRuntime(ctx context.Context, data []byte) (*Runtime, error) {
 	secretResolver := secrets.New(secrets.Options{})
 	references := secrets.ConfigResolver{Resolver: secretResolver}
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver:       secretResolver,
-		SnapshotLoader: CatalogSnapshotLoader{},
+		Resolver:                      secretResolver,
+		SnapshotLoader:                CatalogSnapshotLoader{},
+		V1RuntimeBuilder:              NewDurableV1RuntimeBuilder(),
+		GeneratePortsFactory:          NewProductionGeneratePortsFactory(),
+		CompactPortsFactory:           NewProductionCompactPortsFactory(),
+		ComposeProductionDurableState: true,
 	})
 	if err != nil {
 		return nil, err

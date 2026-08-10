@@ -12,9 +12,11 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	blobstore "github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
@@ -61,9 +63,13 @@ type PostgresQueryRepositoriesSource interface {
 // complete scoped replay binding; callers must fail closed rather than
 // substituting an in-memory reader or verifier.
 type CheckpointCapabilities struct {
-	Repository   state.CheckpointRepository
-	Blobs        state.CheckpointBlobReader
-	Materializer state.CheckpointHandleMaterializer
+	Repository     state.CheckpointRepository
+	Blobs          state.CheckpointBlobReader
+	Materializer   state.CheckpointHandleMaterializer
+	BlobStore      blobstore.Store
+	IssueHandle    func(string, state.CheckpointID) (string, string, [32]byte, error)
+	VerifyHandle   func(context.Context, string, string) (state.CheckpointID, error)
+	BlobRepository postgresstore.BlobRepository
 }
 
 // Validate checks the optional checkpoint bundle's capability relationships.
@@ -193,6 +199,7 @@ type V1RuntimeCapabilities struct {
 	ConfigDigest [32]byte
 	Snapshot     engine.SnapshotSource
 	Planner      routing.Planner
+	Estimator    budget.Estimator
 	Adapters     engine.AdapterRegistry
 	Checkpoints  CheckpointCapabilities
 	// Journal is the optional write-only PostgreSQL budget journal. It is
@@ -212,6 +219,15 @@ type V1RuntimeCapabilities struct {
 	composition            *durablestore.Composition
 	ProviderStatusRecorder engine.ProviderStatusRecorder
 	Clock                  func() time.Time
+	// ResolveScope maps authenticated tenant/project values to the opaque
+	// PostgreSQL scope owned by this snapshot. It may create the scope row but
+	// never returns raw identifiers to durable checkpoint records.
+	ResolveScope        func(context.Context, llm.RequestContext) (string, error)
+	BudgetGenerationID  durablestore.GenerationID
+	BudgetIncarnationID durablestore.IncarnationID
+	OperationRetention  time.Duration
+	CheckpointRetention time.Duration
+	MaxRequestBytes     int64
 	// GeneratePortsFactory is a per-snapshot constructor for the storage-
 	// neutral durable Generate phase. It must close over only the immutable
 	// adapters and stores represented by this capability bundle; a nil value is

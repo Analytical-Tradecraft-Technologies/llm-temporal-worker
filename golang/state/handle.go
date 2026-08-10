@@ -75,6 +75,15 @@ func NewKeyring(keys []Key, reader io.Reader) (*Keyring, error) {
 	return result, nil
 }
 
+// PrimaryID returns the non-secret identifier of the key used to issue new
+// handles. The secret remains private to the immutable keyring.
+func (keyring *Keyring) PrimaryID() string {
+	if keyring == nil || len(keyring.order) == 0 {
+		return ""
+	}
+	return keyring.order[0]
+}
+
 func (keyring *Keyring) Issue(tenant string) (string, error) {
 	if keyring == nil || tenant == "" {
 		return "", ErrInvalidHandle
@@ -106,6 +115,29 @@ func (keyring *Keyring) IssueCheckpointHandle(scope string, checkpointID Checkpo
 		return "", fmt.Errorf("checkpoint ID must be a canonical UUID: %w", ErrInvalidHandle)
 	}
 	return keyring.issue(scope, parsed[:])
+}
+
+// IssueCheckpointHandleMetadata issues a checkpoint handle and returns the
+// non-secret key identity and public MAC persisted beside the checkpoint.
+// Keeping derivation here prevents runtime adapters from decoding capability
+// tokens or reimplementing the handle domain separation.
+func (keyring *Keyring) IssueCheckpointHandleMetadata(scope string, checkpointID CheckpointID) (string, string, [32]byte, error) {
+	var publicMAC [32]byte
+	parsed, err := uuid.Parse(string(checkpointID))
+	if err != nil || parsed == uuid.Nil || parsed.String() != string(checkpointID) {
+		return "", "", publicMAC, fmt.Errorf("checkpoint ID must be a canonical UUID: %w", ErrInvalidHandle)
+	}
+	if keyring == nil || strings.TrimSpace(scope) == "" || len(keyring.order) == 0 {
+		return "", "", publicMAC, ErrInvalidHandle
+	}
+	keyID := keyring.order[0]
+	mac := keyring.mac(keyID, parsed[:], scope)
+	copy(publicMAC[:], mac)
+	handle, err := keyring.issue(scope, parsed[:])
+	if err != nil {
+		return "", "", [32]byte{}, err
+	}
+	return handle, keyID, publicMAC, nil
 }
 
 // Verify validates a handle and returns its random identifier. The result is

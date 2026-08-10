@@ -46,6 +46,18 @@ state:
     password:
       kind: env
       name: WORKER_POSTGRES_PASSWORD
+    envelope_keys:
+      - id: envelope-v1
+        primary: true
+        secret:
+          kind: env
+          name: WORKER_POSTGRES_ENVELOPE_KEY
+    scope_keys:
+      - id: scope-v1
+        primary: true
+        secret:
+          kind: env
+          name: WORKER_POSTGRES_SCOPE_KEY
 
 blob_store:
   kind: file

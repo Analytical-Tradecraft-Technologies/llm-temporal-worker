@@ -59,6 +59,13 @@ func TestCompositionValidateRejectsTypedNilCapabilities(t *testing.T) {
 			},
 		},
 		{
+			name: "checkpoints",
+			set: func(composition *Composition) {
+				var value *typedNilCheckpointStore
+				composition.Checkpoints = value
+			},
+		},
+		{
 			name: "results",
 			set: func(composition *Composition) {
 				var value *typedNilResultStore
@@ -103,6 +110,7 @@ func validComposition() Composition {
 		Identity:      validIdentity(),
 		Operations:    compositionAdmissionStub{},
 		Continuations: compositionContinuationStub{},
+		Checkpoints:   compositionCheckpointStub{},
 		Results:       compositionResultStub{},
 		Journal:       compositionJournalStub{},
 		Materializer:  compositionMaterializerStub{},
@@ -113,6 +121,9 @@ func validComposition() Composition {
 // implementation without needing to invoke any of its methods.
 type typedNilAdmissionStore struct{ admission.AdmissionStore }
 type typedNilContinuationStore struct{ state.ContinuationStore }
+type typedNilCheckpointStore struct {
+	state.CheckpointHandleMaterializer
+}
 type typedNilResultStore struct{ ResultStore }
 type typedNilJournal struct{ Journal }
 type typedNilMaterializer struct{ BudgetMaterializer }

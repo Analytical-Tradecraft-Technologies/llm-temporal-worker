@@ -22,6 +22,7 @@ var ErrCompositionBuilderInvalid = errors.New("durable composition builder is in
 type CompositionPorts struct {
 	Operations    admission.AdmissionStore
 	Continuations state.ContinuationStore
+	Checkpoints   state.CheckpointHandleMaterializer
 	Results       ResultStore
 	Journal       Journal
 	Materializer  BudgetMaterializer
@@ -45,6 +46,7 @@ func (builder CompositionBuilder) Build() (Composition, error) {
 		Identity:      builder.Identity,
 		Operations:    builder.Ports.Operations,
 		Continuations: builder.Ports.Continuations,
+		Checkpoints:   builder.Ports.Checkpoints,
 		Results:       builder.Ports.Results,
 		Journal:       builder.Ports.Journal,
 		Materializer:  builder.Ports.Materializer,

@@ -177,7 +177,12 @@ type PostgresConfig struct {
 	TablePrefix string    `yaml:"table_prefix" json:"table_prefix"`
 	Username    SecretRef `yaml:"username" json:"username"`
 	Password    SecretRef `yaml:"password" json:"password"`
-	TLS         TLSConfig `yaml:"tls" json:"tls"`
+	// EnvelopeKeys encrypt operation manifests and object-store locators.
+	// ScopeKeys HMAC tenant/project identities before PostgreSQL persistence.
+	// Both sets are snapshot-owned and require exactly one primary key.
+	EnvelopeKeys []HandleKey `yaml:"envelope_keys" json:"envelope_keys"`
+	ScopeKeys    []HandleKey `yaml:"scope_keys" json:"scope_keys"`
+	TLS          TLSConfig   `yaml:"tls" json:"tls"`
 	// MinConnections keeps a bounded warm pool without making connection
 	// establishment part of the readiness contract. Zero is valid and lets
 	// pgx grow the pool on demand.

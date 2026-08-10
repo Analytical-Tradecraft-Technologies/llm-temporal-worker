@@ -12,8 +12,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
@@ -87,9 +90,19 @@ type CompactionDecision struct {
 	Required bool
 }
 
-// RoutePlan is an opaque, snapshot-bound route selection.  Implementations may
-// attach route identity and pricing in an unexported wrapper while the runner
-// only carries the immutable plan between typed ports.
+// RouteExecution is the immutable in-process provider/pricing binding selected
+// for one phase. It is never serialized into Temporal history or persisted as
+// provider state; retries deterministically reconstruct it from the snapshot.
+type RouteExecution struct {
+	Request      llm.Request
+	Candidate    routing.Candidate
+	Price        pricing.Entry
+	Reservations []admission.WindowReservation
+	EstimatedUSD pricing.USD
+}
+
+// RoutePlan carries the public durable identities plus the private execution
+// binding consumed by production ports in the same snapshot.
 type RoutePlan struct {
 	OperationID  OperationID
 	GenerationID GenerationID
@@ -98,6 +111,7 @@ type RoutePlan struct {
 	Provider     string
 	Model        string
 	PriceVersion string
+	Execution    *RouteExecution
 }
 
 func (plan RoutePlan) Validate() error {

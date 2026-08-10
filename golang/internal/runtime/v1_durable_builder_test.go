@@ -477,6 +477,9 @@ func TestV1RuntimeCapabilitiesBuildDurableCompositionUsesSnapshotOwnedPorts(t *t
 // provider credentials.
 type capabilityAdmissionStub struct{ admission.AdmissionStore }
 type capabilityContinuationStub struct{ state.ContinuationStore }
+type capabilityCheckpointStub struct {
+	state.CheckpointHandleMaterializer
+}
 type capabilityResultStub struct{ durable.ResultStore }
 type capabilityJournalStub struct{ durable.Journal }
 type capabilityMaterializerStub struct{ durable.BudgetMaterializer }
@@ -490,6 +493,7 @@ func validCapabilityComposition() durable.Composition {
 		},
 		Operations:    capabilityAdmissionStub{},
 		Continuations: capabilityContinuationStub{},
+		Checkpoints:   capabilityCheckpointStub{},
 		Results:       capabilityResultStub{},
 		Journal:       capabilityJournalStub{},
 		Materializer:  capabilityMaterializerStub{},
@@ -497,9 +501,10 @@ func validCapabilityComposition() durable.Composition {
 }
 
 var (
-	_ admission.AdmissionStore   = capabilityAdmissionStub{}
-	_ state.ContinuationStore    = capabilityContinuationStub{}
-	_ durable.ResultStore        = capabilityResultStub{}
-	_ durable.Journal            = capabilityJournalStub{}
-	_ durable.BudgetMaterializer = capabilityMaterializerStub{}
+	_ admission.AdmissionStore           = capabilityAdmissionStub{}
+	_ state.ContinuationStore            = capabilityContinuationStub{}
+	_ state.CheckpointHandleMaterializer = capabilityCheckpointStub{}
+	_ durable.ResultStore                = capabilityResultStub{}
+	_ durable.Journal                    = capabilityJournalStub{}
+	_ durable.BudgetMaterializer         = capabilityMaterializerStub{}
 )

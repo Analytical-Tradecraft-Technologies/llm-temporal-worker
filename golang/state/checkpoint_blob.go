@@ -334,6 +334,18 @@ func settingsPatchFromWire(wire llm.SettingsPatchV1) (SettingsPatch, error) {
 	return patch, nil
 }
 
+// SettingsPatchFromV1 converts the closed public patch contract into the
+// checkpoint patch persisted by durable runtimes.
+func SettingsPatchFromV1(wire llm.SettingsPatchV1) (SettingsPatch, error) {
+	return settingsPatchFromWire(wire)
+}
+
+// SettingsPatchForModel seals a complete materialized model state as a patch.
+// It is used by compaction checkpoints that start a new replay segment.
+func SettingsPatchForModel(model ModelState) SettingsPatch {
+	return settingsPatchFromModel(model)
+}
+
 func patchFromWire[T any](patch llm.Patch[T]) Patch[T] {
 	return Patch[T]{Set: patch.Set, Clear: patch.Clear}
 }

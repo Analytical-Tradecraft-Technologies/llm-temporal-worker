@@ -66,6 +66,18 @@ state:
     password:
       kind: file
       path: /var/run/secrets/llmtw/postgres-password
+    envelope_keys:
+      - id: envelope-v1
+        primary: true
+        secret:
+          kind: file
+          path: /var/run/secrets/llmtw/postgres-envelope-key
+    scope_keys:
+      - id: scope-v1
+        primary: true
+        secret:
+          kind: file
+          path: /var/run/secrets/llmtw/postgres-scope-key
     tls:
       enabled: true
       server_name: postgres.example.internal

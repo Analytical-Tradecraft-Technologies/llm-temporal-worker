@@ -275,6 +275,14 @@ func (postgres PostgresConfig) validate(environment string, required bool) error
 			return err
 		}
 	}
+	if required {
+		if err := validateSecretKeySet(postgres.EnvelopeKeys, "state.postgres.envelope_keys"); err != nil {
+			return err
+		}
+		if err := validateSecretKeySet(postgres.ScopeKeys, "state.postgres.scope_keys"); err != nil {
+			return err
+		}
+	}
 	if postgres.MaxConnections <= 0 || postgres.MaxConnections > 100000 {
 		return fmt.Errorf("state.postgres.max_connections is outside safe bounds")
 	}
@@ -671,29 +679,33 @@ func hasBudgetMatchRestriction(match BudgetMatch) bool {
 }
 
 func (continuation ContinuationConfig) validate() error {
-	if len(continuation.HandleKeys) == 0 {
-		return fmt.Errorf("continuation.handle_keys must not be empty")
+	return validateSecretKeySet(continuation.HandleKeys, "continuation.handle_keys")
+}
+
+func validateSecretKeySet(keys []HandleKey, path string) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("%s must not be empty", path)
 	}
 	primary := 0
-	seen := make(map[string]struct{}, len(continuation.HandleKeys))
-	for index, key := range continuation.HandleKeys {
-		path := fmt.Sprintf("continuation.handle_keys[%d]", index)
-		if err := validateIdentifier(key.ID, path+".id"); err != nil {
+	seen := make(map[string]struct{}, len(keys))
+	for index, key := range keys {
+		keyPath := fmt.Sprintf("%s[%d]", path, index)
+		if err := validateIdentifier(key.ID, keyPath+".id"); err != nil {
 			return err
 		}
 		if _, exists := seen[key.ID]; exists {
-			return fmt.Errorf("%s duplicate key ID %q", path, key.ID)
+			return fmt.Errorf("%s duplicate key ID %q", keyPath, key.ID)
 		}
 		seen[key.ID] = struct{}{}
 		if key.Primary {
 			primary++
 		}
-		if err := key.Secret.Validate(path + ".secret"); err != nil {
+		if err := key.Secret.Validate(keyPath + ".secret"); err != nil {
 			return err
 		}
 	}
 	if primary != 1 {
-		return fmt.Errorf("continuation.handle_keys must contain exactly one primary key")
+		return fmt.Errorf("%s must contain exactly one primary key", path)
 	}
 	return nil
 }

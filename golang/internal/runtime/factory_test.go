@@ -245,7 +245,7 @@ func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	closer := postgresPoolCloser{namespace: namespace}
+	closer := &postgresPoolCloser{namespace: namespace}
 	repository := closer.ProviderStatusRepository()
 	if repository.Pool != closer.pool {
 		t.Fatalf("status repository pool = %p, want %p", repository.Pool, closer.pool)
@@ -314,7 +314,7 @@ func (closer checkpointCompositionCloser) CheckpointMaterializer() state.Checkpo
 
 func TestCheckpointCapabilitiesCopyTypedBundleFromPostgresCloser(t *testing.T) {
 	reader := checkpointBlobReaderStub{}
-	closer := checkpointCompositionCloser{blobs: reader}
+	closer := &checkpointCompositionCloser{blobs: reader}
 	capabilities := checkpointCapabilitiesFromCloser(closer)
 	if capabilities.Repository == nil {
 		t.Fatal("checkpoint capability bundle omitted repository")
@@ -358,7 +358,7 @@ func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing
 	reader := checkpointBlobReaderStub{}
 	materializer := &checkpointMaterializerStub{}
 	base := postgresPoolCloser{}
-	complete := checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader, materializer: materializer}
+	complete := &checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader, materializer: materializer}
 	capabilities := checkpointCapabilitiesFromCloser(complete)
 	wrapped, ok := capabilities.Materializer.(snapshotCheckpointMaterializer)
 	if !ok {
@@ -378,7 +378,7 @@ func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing
 		t.Fatal("snapshot client set omitted complete checkpoint materializer")
 	}
 
-	missingBlobs := checkpointCompositionCloser{postgresPoolCloser: base, materializer: materializer}
+	missingBlobs := &checkpointCompositionCloser{postgresPoolCloser: base, materializer: materializer}
 	if got := checkpointCapabilitiesFromCloser(missingBlobs).Materializer; got != nil {
 		t.Fatalf("materializer with missing blob reader = %T, want nil", got)
 	}
@@ -386,7 +386,7 @@ func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing
 	if got := checkpointCapabilitiesFromCloser(missingRepository).Materializer; got != nil {
 		t.Fatalf("materializer with missing repository = %T, want nil", got)
 	}
-	missingMaterializer := checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader}
+	missingMaterializer := &checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader}
 	if got := checkpointCapabilitiesFromCloser(missingMaterializer).Materializer; got != nil {
 		t.Fatalf("nil supplied materializer = %T, want nil", got)
 	}
@@ -398,7 +398,7 @@ func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing
 func TestCheckpointCapabilitiesRejectsIncompleteMaterializerBundles(t *testing.T) {
 	materializer := &checkpointMaterializerStub{}
 	reader := checkpointBlobReaderStub{}
-	repository := checkpointCompositionCloser{}.CheckpointRepository()
+	repository := (&checkpointCompositionCloser{}).CheckpointRepository()
 	tests := []struct {
 		name         string
 		capabilities CheckpointCapabilities
@@ -473,7 +473,7 @@ func TestCheckpointCapabilitiesBindSnapshotBlobReaderAndHandleKeyring(t *testing
 		t.Fatal(err)
 	}
 	reader := checkpointBlobReaderStub{}
-	capabilities := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, reader, keyring, nowFunc(time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)))
+	capabilities := checkpointCapabilitiesFromCloserWithBindings(&postgresPoolCloser{}, reader, keyring, nowFunc(time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)))
 	if err := capabilities.RequireMaterializer(); err != nil {
 		t.Fatalf("bound checkpoint capabilities failed validation: %v", err)
 	}
@@ -499,11 +499,11 @@ func TestCheckpointCapabilitiesBindSnapshotBlobReaderAndHandleKeyring(t *testing
 		t.Fatalf("durable materializer verifier = %T, want snapshot keyring", durable.HandleVerifier)
 	}
 
-	missingReader := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, nil, keyring, nil)
+	missingReader := checkpointCapabilitiesFromCloserWithBindings(&postgresPoolCloser{}, nil, keyring, nil)
 	if missingReader.Materializer != nil {
 		t.Fatal("checkpoint materializer published without a blob reader")
 	}
-	missingVerifier := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, reader, nil, nil)
+	missingVerifier := checkpointCapabilitiesFromCloserWithBindings(&postgresPoolCloser{}, reader, nil, nil)
 	if missingVerifier.Materializer != nil {
 		t.Fatal("checkpoint materializer published without an opaque-handle verifier")
 	}
@@ -514,7 +514,7 @@ func TestPostgresCloserExposesPrivateWriteOnlyJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	closer := postgresPoolCloser{namespace: namespace}
+	closer := &postgresPoolCloser{namespace: namespace}
 	raw := closer.Journal()
 	repository, ok := raw.(*postgresstore.BudgetJournalRepository)
 	if !ok {
@@ -699,7 +699,7 @@ func (closer queryCompositionCloser) QueryService() activity.QueryService { retu
 
 func TestProductionClientSetRetainsSnapshotQueryBundleAndService(t *testing.T) {
 	var service activity.QueryService = queryServiceStub{}
-	queryCloser := queryCompositionCloser{
+	queryCloser := &queryCompositionCloser{
 		repositories: PostgresQueryRepositories{Inventory: &postgresstore.InventoryRepository{}},
 		service:      service,
 	}

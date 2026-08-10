@@ -156,7 +156,7 @@
             "properties": {
               "postgres": {
                 "$ref": "#/$defs/postgres",
-                "required": ["addresses", "database", "schema", "table_prefix", "username", "password", "tls", "min_connections", "max_connections", "dial_timeout", "statement_timeout", "lock_timeout", "idle_transaction_timeout"]
+                "required": ["addresses", "database", "schema", "table_prefix", "username", "password", "envelope_keys", "scope_keys", "tls", "min_connections", "max_connections", "dial_timeout", "statement_timeout", "lock_timeout", "idle_transaction_timeout"]
               }
             }
           }
@@ -190,6 +190,8 @@
         "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
         "table_prefix": { "type": "string", "pattern": "^$|^[a-z][a-z0-9_]{0,22}_$", "maxLength": 24 },
         "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" },
+        "envelope_keys": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/secret_key" } },
+        "scope_keys": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/secret_key" } },
         "tls": { "$ref": "#/$defs/tls" },
         "min_connections": { "type": "integer", "minimum": 0 },
         "max_connections": { "type": "integer", "minimum": 1 },
@@ -393,10 +395,19 @@
       "type": "object", "additionalProperties": false, "required": ["require_match", "policies"],
       "properties": { "require_match": { "type": "boolean" }, "policies": { "type": "array", "items": { "$ref": "#/$defs/budget_policy" } } }
     },
+    "secret_key": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "primary", "secret"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "primary": { "type": "boolean" },
+        "secret": { "$ref": "#/$defs/secret" }
+      }
+    },
     "continuation": {
       "type": "object", "additionalProperties": false, "required": ["handle_keys", "retain_canonical_transcript", "allow_provider_hosted_state"],
       "properties": {
-        "handle_keys": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "primary", "secret"], "properties": { "id": { "type": "string" }, "primary": { "type": "boolean" }, "secret": { "$ref": "#/$defs/secret" } } } },
+        "handle_keys": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/secret_key" } },
         "retain_canonical_transcript": { "type": "boolean" }, "allow_provider_hosted_state": { "type": "boolean" }
       }
     },
