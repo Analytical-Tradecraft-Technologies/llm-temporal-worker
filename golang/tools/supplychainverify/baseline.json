@@ -9,7 +9,7 @@
   "direct_modules": [
     {
       "path": "github.com/Azure/azure-sdk-for-go/sdk/azcore",
-      "version": "v1.22.0",
+      "version": "v1.23.0",
       "license": "MIT",
       "source": "https://github.com/Azure/azure-sdk-for-go"
     },
