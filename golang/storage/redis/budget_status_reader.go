@@ -68,11 +68,17 @@ type BudgetStatusRead struct {
 	Members             []BudgetStatusWindowRecord `json:"members"`
 }
 
+// BudgetStatusFunctionInvoker executes the Redis budget status read with
+// arguments already shaped for go-redis command invocation.
+type BudgetStatusFunctionInvoker interface {
+	Run(context.Context, string, []string, ...any) ([]any, error)
+}
+
 // BudgetStatusReaderOptions configures one snapshot-owned reader. Generation
 // and Keys must belong to the same immutable Redis snapshot as the worker.
 type BudgetStatusReaderOptions struct {
 	Client          redisclient.Scripter
-	Invoker         FunctionInvoker
+	Invoker         BudgetStatusFunctionInvoker
 	Generation      BudgetGenerationPort
 	Keys            BudgetKeySpace
 	Mode            AdmissionMode
@@ -87,16 +93,12 @@ type budgetStatusInvoker struct {
 	version string
 }
 
-func (invoker budgetStatusInvoker) Run(ctx context.Context, name string, keys []string, args ...string) ([]any, error) {
+func (invoker budgetStatusInvoker) Run(ctx context.Context, name string, keys []string, args ...any) ([]any, error) {
 	if name != invoker.version || name != BudgetStatusFunctionVersion {
 		return nil, fmt.Errorf("unsupported Redis budget status function %q", name)
 	}
 	if invoker.client == nil {
 		return nil, errors.New("Redis budget status Function client is required")
-	}
-	values := make([]interface{}, len(args))
-	for i, value := range args {
-		values[i] = value
 	}
 	var result interface{}
 	var err error
@@ -108,9 +110,9 @@ func (invoker budgetStatusInvoker) Run(ctx context.Context, name string, keys []
 		if !ok {
 			return nil, errors.New("Redis budget status client does not support FCALL")
 		}
-		result, err = caller.FCall(ctx, name, keys, values...).Result()
+		result, err = caller.FCall(ctx, name, keys, args...).Result()
 	case AdmissionModeLua:
-		result, err = invoker.client.EvalSha(ctx, budgetStatusScript.Hash(), keys, values...).Result()
+		result, err = invoker.client.EvalSha(ctx, budgetStatusScript.Hash(), keys, args...).Result()
 	default:
 		return nil, fmt.Errorf("unsupported Redis budget status mode %q", invoker.mode)
 	}
@@ -129,7 +131,7 @@ func (invoker budgetStatusInvoker) Run(ctx context.Context, name string, keys []
 type RedisBudgetStatusReader struct {
 	generation BudgetGenerationPort
 	keys       BudgetKeySpace
-	invoke     FunctionInvoker
+	invoke     BudgetStatusFunctionInvoker
 	function   string
 	clock      func() time.Time
 	maxExpiry  int
@@ -241,7 +243,7 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 			return control.BudgetStatusResult{}, fmt.Errorf("%w: policy key is unknown", ErrBudgetStatusUnavailable)
 		}
 	}
-	args := []string{BudgetStatusAction, string(pointer.GenerationID), string(pointer.IncarnationID), digest, strconv.FormatInt(now.UnixMilli(), 10), strconv.Itoa(len(manifest.Members)), strconv.Itoa(reader.maxExpiry)}
+	args := []any{BudgetStatusAction, string(pointer.GenerationID), string(pointer.IncarnationID), digest, strconv.FormatInt(now.UnixMilli(), 10), strconv.Itoa(len(manifest.Members)), strconv.Itoa(reader.maxExpiry)}
 	raw, err := reader.invoke.Run(ctx, reader.function, keys, args...)
 	if err != nil {
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: coherent Redis read: %v", ErrBudgetStatusUnavailable, err)

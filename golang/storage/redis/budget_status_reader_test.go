@@ -32,13 +32,13 @@ type budgetStatusInvokerFake struct {
 	result []any
 	calls  int
 	keys   [][]string
-	args   [][]string
+	args   [][]any
 }
 
-func (fake *budgetStatusInvokerFake) Run(_ context.Context, _ string, keys []string, args ...string) ([]any, error) {
+func (fake *budgetStatusInvokerFake) Run(_ context.Context, _ string, keys []string, args ...any) ([]any, error) {
 	fake.calls++
 	fake.keys = append(fake.keys, append([]string(nil), keys...))
-	fake.args = append(fake.args, append([]string(nil), args...))
+	fake.args = append(fake.args, append([]any(nil), args...))
 	return fake.result, nil
 }
 
@@ -52,18 +52,24 @@ type budgetStatusPointerFenceInvokerFake struct {
 	result []any
 }
 
-func (fake budgetStatusPointerFenceInvokerFake) Run(_ context.Context, _ string, _ []string, args ...string) ([]any, error) {
+func (fake budgetStatusPointerFenceInvokerFake) Run(_ context.Context, _ string, _ []string, args ...any) ([]any, error) {
 	if len(args) < 5 {
 		return []any{"invalid_request", ""}, nil
 	}
-	want := ActiveBudgetGeneration{GenerationID: BudgetGenerationID(args[1]), IncarnationID: BudgetIncarnationID(args[2]), ManifestDigest: args[3]}
+	generationID, generationOK := args[1].(string)
+	incarnationID, incarnationOK := args[2].(string)
+	manifestDigest, digestOK := args[3].(string)
+	if !generationOK || !incarnationOK || !digestOK {
+		return []any{"invalid_request", ""}, nil
+	}
+	want := ActiveBudgetGeneration{GenerationID: BudgetGenerationID(generationID), IncarnationID: BudgetIncarnationID(incarnationID), ManifestDigest: manifestDigest}
 	if want != fake.active {
 		return []any{"state_unavailable", ""}, nil
 	}
 	return fake.result, nil
 }
 
-func testBudgetStatusReader(t *testing.T, invoker FunctionInvoker) (*RedisBudgetStatusReader, BudgetManifest, time.Time) {
+func testBudgetStatusReader(t *testing.T, invoker BudgetStatusFunctionInvoker) (*RedisBudgetStatusReader, BudgetManifest, time.Time) {
 	t.Helper()
 	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
