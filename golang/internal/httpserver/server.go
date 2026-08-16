@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	LivePath    = "/health/live"
-	ReadyPath   = "/health/ready"
-	MetricsPath = "/metrics"
+	LivePath                 = "/health/live"
+	ReadyPath                = "/health/ready"
+	MetricsPath              = "/metrics"
+	defaultReadHeaderTimeout = 5 * time.Second
 )
 
 // Handler builds the deliberately small probe surface. Probe responses do
@@ -74,6 +75,7 @@ type Options struct {
 	Address           string
 	Health            *HealthState
 	Metrics           http.Handler
+	ReadTimeout       time.Duration
 	ReadHeaderTimeout time.Duration
 }
 
@@ -90,12 +92,16 @@ func New(options Options) (*Server, error) {
 		return nil, fmt.Errorf("health server address is required")
 	}
 	if options.ReadHeaderTimeout <= 0 {
-		options.ReadHeaderTimeout = 5 * time.Second
+		options.ReadHeaderTimeout = defaultReadHeaderTimeout
+	}
+	if options.ReadTimeout <= 0 {
+		options.ReadTimeout = options.ReadHeaderTimeout
 	}
 	return &Server{
 		httpServer: &http.Server{
 			Addr:              options.Address,
 			Handler:           Handler(options.Health, options.Metrics),
+			ReadTimeout:       options.ReadTimeout,
 			ReadHeaderTimeout: options.ReadHeaderTimeout,
 		},
 		errCh: make(chan error, 1),
