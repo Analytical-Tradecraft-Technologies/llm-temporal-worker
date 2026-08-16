@@ -439,7 +439,7 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 	defer cancel()
 	addresses, err := policy.resolver.LookupIPAddr(connectionContext, host)
 	if err != nil || len(addresses) == 0 {
-		if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+		if callerErr := providerEgressCallerContextError(connectionParent, state); callerErr != nil {
 			return nil, callerErr
 		}
 		if connectionContext.Err() != nil {
@@ -464,7 +464,7 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 	for _, target := range resolved {
 		connection, dialErr := policy.dial(connectionContext, network, net.JoinHostPort(target.String(), port))
 		if dialErr != nil {
-			if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+			if callerErr := providerEgressCallerContextError(connectionParent, state); callerErr != nil {
 				return nil, callerErr
 			}
 			if connectionContext.Err() != nil {
@@ -472,7 +472,7 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 			}
 			continue
 		}
-		if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+		if callerErr := providerEgressCallerContextError(connectionParent, state); callerErr != nil {
 			_ = connection.Close()
 			return nil, callerErr
 		}
@@ -482,7 +482,7 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 		}
 		return connection, nil
 	}
-	if callerErr := providerEgressCallerContextError(state, connectionParent); callerErr != nil {
+	if callerErr := providerEgressCallerContextError(connectionParent, state); callerErr != nil {
 		return nil, callerErr
 	}
 	if connectionContext.Err() != nil {
@@ -491,7 +491,7 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 	return nil, preDispatchProviderFailure("connection_failed")
 }
 
-func providerEgressCallerContextError(state *providerEgressCallState, fallback context.Context) error {
+func providerEgressCallerContextError(fallback context.Context, state *providerEgressCallState) error {
 	if state != nil && state.callerContext != nil {
 		return state.callerContext.Err()
 	}
