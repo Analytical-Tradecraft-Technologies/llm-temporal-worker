@@ -69,9 +69,9 @@ func (invoker redisInvoker) Run(ctx context.Context, name string, keys []string,
 	if invoker.client == nil {
 		return nil, fmt.Errorf("Redis Function client is required")
 	}
-	values := make([]interface{}, len(args))
-	for index, value := range args {
-		values[index] = value
+	values := make([]interface{}, 0, len(args))
+	for _, value := range args {
+		values = append(values, value)
 	}
 	var (
 		result interface{}
