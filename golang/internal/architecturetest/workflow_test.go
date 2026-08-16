@@ -54,6 +54,32 @@ func TestWorkflowContract(t *testing.T) {
 	}
 }
 
+func TestWorkflowPullRequestExpensiveVerificationRunsInParallelJobs(t *testing.T) {
+	pullRequest := readWorkflow(t, "pull-request.yml")
+
+	for _, test := range []struct {
+		job     string
+		command string
+	}{
+		{job: "race", command: "go test -race ./..."},
+		{job: "security", command: "make security-verify"},
+	} {
+		assertJobUsesAction(t, pullRequest, test.job, checkoutActionPin)
+		assertJobUsesAction(t, pullRequest, test.job, setupGoActionPin)
+		assertJobHasRunCommand(t, pullRequest, test.job, test.command)
+		if jobHasRunCommand(workflowJob(t, pullRequest, "verify"), test.command) {
+			t.Fatalf("pull-request.yml verify job still runs %q", test.command)
+		}
+	}
+
+	if jobHasRunCommand(workflowJob(t, pullRequest, "race"), "make security-verify") {
+		t.Fatal("pull-request.yml race job also runs security verification")
+	}
+	if jobHasRunCommand(workflowJob(t, pullRequest, "security"), "go test -race ./...") {
+		t.Fatal("pull-request.yml security job also runs the race detector")
+	}
+}
+
 func TestWorkflowAutomaticallyTriggeredWorkflowsUseOnlyGitHubOwnedActions(t *testing.T) {
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),
