@@ -159,6 +159,70 @@ jobs:
       - name: Compile downstream workflow sample
         run: opam exec -- dune build --root ocaml/consumer_workflow_smoke
 
+  race:
+    name: Test with race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Detect Go implementation
+        id: go
+        shell: bash
+        run: |
+          if [[ -f golang/go.mod ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.go.outputs.present == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: golang/.go-version
+          cache: true
+          cache-dependency-path: golang/go.sum
+
+      - name: Test with race detector
+        if: steps.go.outputs.present == 'true'
+        working-directory: golang
+        run: go test -race ./...
+
+  security:
+    name: Verify source safety and supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Detect Go implementation
+        id: go
+        shell: bash
+        run: |
+          if [[ -f golang/go.mod ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.go.outputs.present == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: golang/.go-version
+          cache: true
+          cache-dependency-path: golang/go.sum
+
+      - name: Verify source safety and supply chain
+        if: steps.go.outputs.present == 'true'
+        working-directory: golang
+        run: make security-verify
+
   verify:
     name: Verify
     runs-on: ubuntu-latest
@@ -279,11 +343,6 @@ jobs:
         working-directory: golang
         run: go vet ./...
 
-      - name: Test with race detector
-        if: steps.go.outputs.present == 'true'
-        working-directory: golang
-        run: go test -race ./...
-
       - name: Compile guarded live-provider harness
         if: steps.go.outputs.present == 'true'
         working-directory: golang
@@ -305,11 +364,6 @@ jobs:
         run: |
           make fuzz-smoke
           make mutation-verify
-
-      - name: Verify source safety and supply chain
-        if: steps.go.outputs.present == 'true'
-        working-directory: golang
-        run: make security-verify
 
       - name: Run authorized Compose lifecycle
         if: steps.go.outputs.present == 'true' && github.event.pull_request.head.repo.full_name == github.repository
