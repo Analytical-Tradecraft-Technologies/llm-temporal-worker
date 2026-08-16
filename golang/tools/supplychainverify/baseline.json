@@ -162,7 +162,7 @@
     {
       "id": "GO-2026-5932",
       "owner": "platform-security",
-      "expires": "2026-08-14T00:00:00Z",
+      "expires": "2026-09-15T00:00:00Z",
       "remediation": "https://pkg.go.dev/vuln/GO-2026-5932",
       "scope": "module_only"
     }
