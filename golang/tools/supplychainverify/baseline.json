@@ -39,13 +39,13 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/credentials",
-      "version": "v1.19.34",
+      "version": "v1.19.35",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/service/s3",
-      "version": "v1.107.0",
+      "version": "v1.107.1",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
@@ -99,7 +99,7 @@
     },
     {
       "path": "github.com/redis/go-redis/v9",
-      "version": "v9.21.0",
+      "version": "v9.22.0",
       "license": "BSD-2-Clause",
       "source": "https://github.com/redis/go-redis"
     },
