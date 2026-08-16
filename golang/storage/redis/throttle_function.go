@@ -28,9 +28,9 @@ func (invoker throttleRedisInvoker) Run(ctx context.Context, name string, keys [
 	if name != invoker.version || name != ThrottleFunctionVersion {
 		return nil, fmt.Errorf("unsupported Redis throttle function %q", name)
 	}
-	values := make([]interface{}, len(args))
-	for index, value := range args {
-		values[index] = value
+	values := make([]interface{}, 0, len(args))
+	for _, value := range args {
+		values = append(values, value)
 	}
 	var result interface{}
 	var err error
