@@ -99,7 +99,7 @@
     },
     {
       "path": "github.com/redis/go-redis/v9",
-      "version": "v9.21.0",
+      "version": "v9.22.0",
       "license": "BSD-2-Clause",
       "source": "https://github.com/redis/go-redis"
     },
