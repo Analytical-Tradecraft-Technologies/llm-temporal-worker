@@ -1,7 +1,7 @@
 profile: anthropic-direct
 upstream_url: https://docs.anthropic.com/en/api/messages
 upstream_date: "2026-07-14"
-sdk_version: github.com/anthropics/anthropic-sdk-go@v1.63.0
+sdk_version: github.com/anthropics/anthropic-sdk-go@v1.63.1
 provenance: synthetic
 redactions:
   - credentials
