@@ -141,7 +141,7 @@
     },
     {
       "path": "go.temporal.io/sdk",
-      "version": "v1.47.0",
+      "version": "v1.48.0",
       "license": "MIT",
       "source": "https://github.com/temporalio/sdk-go"
     },
