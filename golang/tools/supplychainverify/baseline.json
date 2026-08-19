@@ -33,7 +33,7 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/config",
-      "version": "v1.32.36",
+      "version": "v1.32.37",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
@@ -141,7 +141,7 @@
     },
     {
       "path": "go.temporal.io/sdk",
-      "version": "v1.47.0",
+      "version": "v1.48.0",
       "license": "MIT",
       "source": "https://github.com/temporalio/sdk-go"
     },
