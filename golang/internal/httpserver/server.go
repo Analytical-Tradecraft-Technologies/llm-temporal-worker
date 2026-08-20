@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -79,12 +80,28 @@ type Options struct {
 	ReadHeaderTimeout time.Duration
 }
 
+type serverState uint8
+
+const (
+	// A failed bind returns to idle because no listener or Serve goroutine was
+	// published. Once Serve is published, shutdown or exit closes the server.
+	serverIdle serverState = iota
+	serverStarting
+	serverStarted
+	serverClosed
+)
+
 // Server owns only the probe listener. It is intentionally independent of
 // the worker so readiness can be turned off before worker shutdown begins.
 type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	errCh      chan error
+
+	mu        sync.Mutex
+	state     serverState
+	startDone chan struct{}
+	errOnce   sync.Once
 }
 
 func New(options Options) (*Server, error) {
@@ -114,26 +131,58 @@ func (server *Server) Start() error {
 	if server == nil || server.httpServer == nil {
 		return fmt.Errorf("health server is not initialized")
 	}
-	if server.listener != nil {
+	server.mu.Lock()
+	if server.state != serverIdle {
+		server.mu.Unlock()
 		return fmt.Errorf("health server is already started")
 	}
-	listener, err := net.Listen("tcp", server.httpServer.Addr)
+	server.state = serverStarting
+	server.startDone = make(chan struct{})
+	address := server.httpServer.Addr
+	server.mu.Unlock()
+
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
+		server.finishStart(serverIdle, nil)
 		return fmt.Errorf("listen for health server: %w", err)
 	}
-	server.listener = listener
+	server.finishStart(serverStarted, listener)
 	go func() {
 		err := server.httpServer.Serve(listener)
 		if err != nil && err != http.ErrServerClosed {
 			server.errCh <- err
 		}
-		close(server.errCh)
+		server.closeErrorStream()
+		server.mu.Lock()
+		server.state = serverClosed
+		server.mu.Unlock()
 	}()
 	return nil
 }
 
+func (server *Server) finishStart(state serverState, listener net.Listener) {
+	server.mu.Lock()
+	server.state = state
+	server.listener = listener
+	done := server.startDone
+	server.startDone = nil
+	if done != nil {
+		close(done)
+	}
+	server.mu.Unlock()
+}
+
+func (server *Server) closeErrorStream() {
+	server.errOnce.Do(func() { close(server.errCh) })
+}
+
 func (server *Server) Addr() string {
-	if server == nil || server.listener == nil {
+	if server == nil {
+		return ""
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	if server.listener == nil {
 		return ""
 	}
 	return server.listener.Addr().String()
@@ -150,5 +199,38 @@ func (server *Server) Shutdown(ctx context.Context) error {
 	if server == nil || server.httpServer == nil {
 		return nil
 	}
-	return server.httpServer.Shutdown(ctx)
+	for {
+		server.mu.Lock()
+		switch server.state {
+		case serverStarting:
+			done := server.startDone
+			server.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		case serverIdle:
+			server.state = serverClosed
+			server.mu.Unlock()
+			server.closeErrorStream()
+			return server.httpServer.Shutdown(ctx)
+		case serverClosed:
+			server.mu.Unlock()
+			return nil
+		case serverStarted:
+			server.mu.Unlock()
+			err := server.httpServer.Shutdown(ctx)
+			if err == nil {
+				server.mu.Lock()
+				server.state = serverClosed
+				server.mu.Unlock()
+			}
+			return err
+		default:
+			server.mu.Unlock()
+			return nil
+		}
+	}
 }

@@ -9,7 +9,6 @@ COMPOSE ?= docker compose
 KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
-READINESS_REDIS_PORT ?= 16379
 REDIS_INTEGRATION_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
 REDIS_INTEGRATION_CONTAINER_PREFIX ?= llmtw-redis-integration
 POSTGRES_INTEGRATION_IMAGE ?= postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
@@ -108,18 +107,23 @@ readiness-integration:
 		echo "readiness-integration requires a running Docker daemon" >&2; \
 		exit 2; \
 	}
-	@container="$(READINESS_REDIS_CONTAINER_PREFIX)-$$$$"; \
-	cleanup() { docker rm -f "$$container" >/dev/null 2>&1 || true; }; \
-	trap cleanup EXIT INT TERM; \
-	docker run --detach --name "$$container" --publish 127.0.0.1:$(READINESS_REDIS_PORT):6379 "$(READINESS_REDIS_IMAGE)" redis-server --appendonly yes --appendfsync always --save 60 1 --maxmemory-policy noeviction >/dev/null; \
-	if ! LLMTW_READINESS_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_READINESS_REDIS_CONTAINER="$$container" $(GO) test -count=1 -tags=readinessintegration ./integration; then \
-		docker logs "$$container" >&2 || true; \
-		exit 1; \
-	fi; \
-	if ! LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_CONTAINER_PREFIX="$(READINESS_REDIS_CONTAINER_PREFIX)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; then \
-		docker logs "$$container" >&2 || true; \
-		exit 1; \
-	fi
+	@set -eu; \
+		container="$(READINESS_REDIS_CONTAINER_PREFIX)-$$(date +%s)-$$$$"; \
+		cleanup() { \
+			status=$$?; \
+			if [ "$$status" -ne 0 ]; then docker logs "$$container" >&2 || true; fi; \
+			docker rm -f "$$container" >/dev/null 2>&1 || true; \
+			exit "$$status"; \
+		}; \
+		trap cleanup EXIT; \
+		trap 'exit 130' HUP INT TERM; \
+		docker run --detach --name "$$container" --publish 127.0.0.1::6379 "$(READINESS_REDIS_IMAGE)" redis-server --appendonly yes --appendfsync always --save 60 1 --maxmemory-policy noeviction >/dev/null; \
+		port="$$(docker inspect --format '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}' "$$container")"; \
+		case "$$port" in \
+			''|*[!0-9]*) echo "readiness-integration could not discover its loopback Redis port" >&2; exit 1 ;; \
+		esac; \
+		LLMTW_READINESS_REDIS_ADDR="127.0.0.1:$$port" LLMTW_READINESS_REDIS_CONTAINER="$$container" $(GO) test -count=1 -tags=readinessintegration ./integration; \
+		LLMTW_REDIS_ADDR="127.0.0.1:$$port" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_CONTAINER_PREFIX="$(READINESS_REDIS_CONTAINER_PREFIX)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'
 
 # Runs the black-box StoreFactory contract against memory and one fresh,
 # digest-pinned Redis daemon. The target discovers an ephemeral loopback port

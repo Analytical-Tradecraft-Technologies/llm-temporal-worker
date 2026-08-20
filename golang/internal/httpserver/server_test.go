@@ -1,6 +1,9 @@
 package httpserver
 
 import (
+	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -48,4 +51,57 @@ func TestNewConfiguresReadTimeouts(t *testing.T) {
 			t.Fatalf("ReadHeaderTimeout = %v, want %v", server.httpServer.ReadHeaderTimeout, readHeaderTimeout)
 		}
 	})
+}
+
+func TestConcurrentServerStartHasExactlyOneOwner(t *testing.T) {
+	server, err := New(Options{Address: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
+
+	const callers = 64
+	start := make(chan struct{})
+	errors := make(chan error, callers)
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	for range callers {
+		go func() {
+			ready.Done()
+			<-start
+			errors <- server.Start()
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	successes := 0
+	for range callers {
+		err := <-errors
+		if err == nil {
+			successes++
+			continue
+		}
+		if !strings.Contains(err.Error(), "already started") {
+			t.Fatalf("concurrent Start() error = %v, want already-started error", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent Start() successes = %d, want exactly 1", successes)
+	}
+	if server.Addr() == "" {
+		t.Fatal("successful Start did not publish its listener address")
+	}
+
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case _, ok := <-server.Errors():
+		if ok {
+			t.Fatal("server reported an unexpected serve error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server error stream did not close after shutdown")
+	}
 }

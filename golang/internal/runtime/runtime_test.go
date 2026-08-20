@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -166,6 +167,64 @@ func testRuntimeOptions(t *testing.T, workerController *testWorker, closed *atom
 	}
 }
 
+func TestRuntimeMetricsSurfaceMatchesListenerConfiguration(t *testing.T) {
+	tests := []struct {
+		name              string
+		configuration     func(*testing.T) []byte
+		wantMetricsServer bool
+		wantHealthStatus  int
+	}{
+		{
+			name:             "shared listener exposes metrics",
+			configuration:    runtimeConfig,
+			wantHealthStatus: http.StatusOK,
+		},
+		{
+			name: "distinct listener isolates metrics",
+			configuration: func(t *testing.T) []byte {
+				return []byte(strings.Replace(
+					string(runtimeConfig(t)),
+					"metrics_address: 127.0.0.1:0",
+					"metrics_address: localhost:0",
+					1,
+				))
+			},
+			wantMetricsServer: true,
+			wantHealthStatus:  http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &testWorker{}
+			var closed atomic.Bool
+			runtime, err := New(context.Background(), test.configuration(t), testRuntimeOptions(t, controller, &closed))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Start(); err != nil {
+				if strings.Contains(err.Error(), "operation not permitted") {
+					t.Skipf("sandbox does not permit loopback listeners: %v", err)
+				}
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+
+			if got := runtime.MetricsServer != nil; got != test.wantMetricsServer {
+				t.Fatalf("metrics server presence = %v, want %v", got, test.wantMetricsServer)
+			}
+			if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/metrics"); got != test.wantHealthStatus {
+				t.Fatalf("health listener /metrics status = %d, want %d", got, test.wantHealthStatus)
+			}
+			if runtime.MetricsServer != nil {
+				if got := runtimeHealthStatus(t, runtime.MetricsServer.Addr(), "/metrics"); got != http.StatusOK {
+					t.Fatalf("metrics listener /metrics status = %d, want %d", got, http.StatusOK)
+				}
+			}
+		})
+	}
+}
+
 func TestRuntimeStartFailsClosedWithoutV1Runtime(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
@@ -202,6 +261,90 @@ func TestDevelopmentRuntimeAllowsFailClosedV1Runtime(t *testing.T) {
 	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
 	if !controller.started.Load() || !runtime.Health.Ready() {
 		t.Fatalf("development runtime did not start: started=%v ready=%v", controller.started.Load(), runtime.Health.Ready())
+	}
+}
+
+func TestConcurrentRuntimeStartHasExactlyOneOwner(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	runtime, err := New(context.Background(), runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+
+	const callers = 32
+	start := make(chan struct{})
+	errors := make(chan error, callers)
+	var ready sync.WaitGroup
+	ready.Add(callers)
+	var attempting sync.WaitGroup
+	attempting.Add(callers)
+
+	// Queue every caller behind the existing lifecycle check. Once released,
+	// a correct implementation records one starting owner before any network
+	// or worker startup can run.
+	runtime.mu.Lock()
+	for range callers {
+		go func() {
+			ready.Done()
+			<-start
+			attempting.Done()
+			errors <- runtime.Start()
+		}()
+	}
+	ready.Wait()
+	close(start)
+	attempting.Wait()
+	time.Sleep(20 * time.Millisecond)
+	runtime.mu.Unlock()
+
+	successes := 0
+	for range callers {
+		err := <-errors
+		if err == nil {
+			successes++
+			continue
+		}
+		if !strings.Contains(err.Error(), "already started") {
+			t.Fatalf("concurrent Start() error = %v, want already-started error", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent Start() successes = %d, want exactly 1", successes)
+	}
+}
+
+func TestRuntimeStartCanRetryAfterInitialBindFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	data := strings.Replace(
+		string(runtimeConfig(t)),
+		"health_address: 127.0.0.1:0",
+		"health_address: "+listener.Addr().String(),
+		1,
+	)
+	controller := &testWorker{}
+	var closed atomic.Bool
+	runtime, err := New(context.Background(), []byte(data), testRuntimeOptions(t, controller, &closed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+
+	if err := runtime.Start(); err == nil || !strings.Contains(err.Error(), "listen for health server") {
+		t.Fatalf("Start() error = %v, want wrapped listen error", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start() after failed bind error = %v, want retry to succeed", err)
 	}
 }
 

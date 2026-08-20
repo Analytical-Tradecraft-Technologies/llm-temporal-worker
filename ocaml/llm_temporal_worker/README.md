@@ -313,8 +313,9 @@ the closed result tag matches the requested constructor and returns a codec
 unchecked JSON cast or `Obj.magic`. `Query.start` returns a workflow-owned
 Temporal future whose successful value is a typed `result` (so protocol-kind
 mismatches stay on the error channel without raising in a workflow callback),
-while `Query.execute_with` is available for deterministic dispatch injection
-in tests.
+while `Query.execute_with` and `Query.start_with` are available for
+deterministic synchronous and asynchronous dispatch injection in tests. Both
+paths revalidate raw filter records before calling the injected dispatcher.
 
 For paginated responses, `Query.next query response` constructs the next page
 with the same GADT result type. It returns `Ok None` for the final page and

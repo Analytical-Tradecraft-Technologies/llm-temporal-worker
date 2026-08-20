@@ -52,6 +52,26 @@ func TestErrorMappingUsesSafeStableTypes(t *testing.T) {
 	}
 }
 
+func TestErrorMappingSetsTemporalRetryDelay(t *testing.T) {
+	providerErr := provider.NewError(
+		provider.CodeProviderRateLimited,
+		provider.PhaseDispatch,
+		provider.DispatchRejected,
+		provider.RetryAfter,
+		"provider rate limited the request",
+	)
+	providerErr.RetryAfter = 2 * time.Second
+
+	mapped := ToTemporalError(providerErr)
+	var application *temporal.ApplicationError
+	if !errors.As(mapped, &application) {
+		t.Fatalf("mapped error = %T %v, want *temporal.ApplicationError", mapped, mapped)
+	}
+	if got, want := application.NextRetryDelay(), 2*time.Second; got != want {
+		t.Fatalf("next retry delay = %s, want %s", got, want)
+	}
+}
+
 func TestErrorMappingPreservesCancellation(t *testing.T) {
 	if got := ToTemporalError(context.Canceled); !errors.Is(got, context.Canceled) {
 		t.Fatalf("mapped cancellation = %v", got)

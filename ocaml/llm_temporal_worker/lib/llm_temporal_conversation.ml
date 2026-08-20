@@ -227,6 +227,22 @@ let child conversation (patch : settings_patch) checkpoint =
     checkpoint = Some checkpoint;
     restore_after_compact = false }
 
+let accept_generate_response conversation (request : generate_request)
+    (response : generate_response) =
+  if not (String.equal
+            (Operation_key.to_string response.operation_key)
+            (Operation_key.to_string request.operation_key))
+  then Error (operation_key_mismatch ~expected:request.operation_key
+                ~actual:response.operation_key)
+  else
+    match Llm_temporal_response_validation.validate_generate_response_for_request
+            request response with
+    | Error error -> Error error
+    | Ok () ->
+        Ok { response;
+             conversation = child conversation request.settings_patch
+                 response.checkpoint.handle }
+
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
   (generate_request, generate_response) Temporal.Activity.t ->
@@ -239,13 +255,7 @@ let respond_with ?task_queue ~dispatch ?settings_patch ?cache ~operation_key ~ap
   | Ok () ->
       match Llm_temporal_invocation.invoke_generate_once ?task_queue ~dispatch request with
       | Error error -> Error error
-      | Ok response when
-          not (String.equal
-                 (Operation_key.to_string response.operation_key)
-                 (Operation_key.to_string request.operation_key)) ->
-          Error (operation_key_mismatch ~expected:request.operation_key
-                   ~actual:response.operation_key)
-      | Ok response -> Ok { response; conversation = child conversation request.settings_patch response.checkpoint.handle }
+      | Ok response -> accept_generate_response conversation request response
 
 let activity_dispatch ?task_queue activity input =
   Temporal.Activity.execute
@@ -269,13 +279,7 @@ let start_respond ?task_queue ?settings_patch ?cache ~operation_key ~append conv
           Llm_temporal_invocation.generate_v1_activity request
       in
       Temporal.Future.map
-        (fun (response : generate_response) ->
-          if String.equal
-               (Operation_key.to_string response.operation_key)
-               (Operation_key.to_string request.operation_key)
-          then Ok { response; conversation = child conversation request.settings_patch response.checkpoint.handle }
-          else Error (operation_key_mismatch ~expected:request.operation_key
-                        ~actual:response.operation_key))
+        (accept_generate_response conversation request)
         future
 
 type compact_dispatcher =
@@ -294,21 +298,31 @@ let compact_request ?policy ?cache ~operation_key conversation =
            Ok { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key;
                 context = conversation.context; parent; policy; cache })
 
+let accept_compaction_response conversation (request : compact_request)
+    (response : compaction_response) =
+  if not (String.equal
+            (Operation_key.to_string response.operation_key)
+            (Operation_key.to_string request.operation_key))
+  then Error (operation_key_mismatch ~expected:request.operation_key
+                ~actual:response.operation_key)
+  else
+    match Llm_temporal_response_validation.validate_compaction_response_for_request
+            request response with
+    | Error error -> Error error
+    | Ok () ->
+        let conversation =
+          { conversation with checkpoint = Some response.checkpoint.handle;
+                              restore_after_compact = true }
+        in
+        Ok (response, conversation)
+
 let compact_with ?task_queue ~dispatch ?policy ?cache ~operation_key conversation =
   match compact_request ?policy ?cache ~operation_key conversation with
   | Error error -> Error error
   | Ok request ->
       match Llm_temporal_invocation.invoke_compact_once ?task_queue ~dispatch request with
       | Error error -> Error error
-      | Ok response when
-          not (String.equal
-                 (Operation_key.to_string response.operation_key)
-                 (Operation_key.to_string request.operation_key)) ->
-          Error (operation_key_mismatch ~expected:request.operation_key
-                   ~actual:response.operation_key)
-      | Ok response ->
-          let conversation = { conversation with checkpoint = Some response.checkpoint.handle; restore_after_compact = true } in
-          Ok (response, conversation)
+      | Ok response -> accept_compaction_response conversation request response
 
 let compact_dispatch ?task_queue activity input =
   Temporal.Activity.execute
@@ -330,13 +344,5 @@ let start_compact ?task_queue ?policy ?cache ~operation_key conversation =
           Llm_temporal_invocation.compact_v1_activity request
       in
       Temporal.Future.map
-        (fun (response : compaction_response) ->
-          if String.equal
-               (Operation_key.to_string response.operation_key)
-               (Operation_key.to_string request.operation_key)
-          then
-            let conversation = { conversation with checkpoint = Some response.checkpoint.handle; restore_after_compact = true } in
-            Ok (response, conversation)
-          else Error (operation_key_mismatch ~expected:request.operation_key
-                        ~actual:response.operation_key))
+        (accept_compaction_response conversation request)
         future
