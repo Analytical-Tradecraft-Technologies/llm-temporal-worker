@@ -1743,7 +1743,11 @@ func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	cost := CostV1{Status: status}
-	if raw, ok := fields["actual_cost_usd"]; ok && string(raw) != "null" {
+	raw, err := requireField(fields, "actual_cost_usd")
+	if err != nil {
+		return err
+	}
+	if string(raw) != "null" {
 		value, err := requiredString(map[string]json.RawMessage{"actual_cost_usd": raw}, "actual_cost_usd")
 		if err != nil {
 			return err

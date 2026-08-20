@@ -384,6 +384,54 @@ func validQueryResponse(kind llm.QueryKind) llm.QueryResponseV1 {
 	return response
 }
 
+func TestQueryResponseV1RequiresExplicitActualCost(t *testing.T) {
+	unknownPayload := func(actualCost string) []byte {
+		return []byte(fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":{"routes":[]},"cost_status":"unknown"%s,"cost_unknown_reason_code":"state_unavailable"}`, actualCost))
+	}
+
+	t.Run("missing unknown actual cost", func(t *testing.T) {
+		var response llm.QueryResponseV1
+		err := json.Unmarshal(unknownPayload(""), &response)
+		if err == nil || !strings.Contains(err.Error(), `missing required JSON field "actual_cost_usd"`) {
+			t.Fatalf("error = %v, want missing actual_cost_usd rejection", err)
+		}
+	})
+
+	t.Run("explicit null unknown actual cost", func(t *testing.T) {
+		var response llm.QueryResponseV1
+		if err := json.Unmarshal(unknownPayload(`,"actual_cost_usd":null`), &response); err != nil {
+			t.Fatalf("explicit null actual_cost_usd was rejected: %v", err)
+		}
+	})
+
+	t.Run("unknown marshal emits null actual cost", func(t *testing.T) {
+		response := validQueryResponse(llm.QueryProviderStatus)
+		response.Cost = llm.CostV1{Status: "unknown", UnknownReason: "state_unavailable"}
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, []byte(`"actual_cost_usd":null`)) {
+			t.Fatalf("unknown query response omitted explicit null actual cost: %s", encoded)
+		}
+	})
+
+	t.Run("exact actual cost remains canonical", func(t *testing.T) {
+		payload := []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":{"routes":[]},"cost_status":"exact","actual_cost_usd":"0.1000","cost_method":"provider_reported"}`)
+		var response llm.QueryResponseV1
+		if err := json.Unmarshal(payload, &response); err != nil {
+			t.Fatalf("exact actual cost was rejected: %v", err)
+		}
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, []byte(`"actual_cost_usd":"0.1"`)) {
+			t.Fatalf("exact actual cost was not canonicalized: %s", encoded)
+		}
+	})
+}
+
 func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
 	base := `{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":%s,"cost_status":"exact","actual_cost_usd":"0","cost_method":"control_query_zero"}`
 	for _, test := range []struct {
