@@ -34,8 +34,11 @@ var (
 	slackTokenPattern            = regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9-]{10,}\b`)
 	openAITokenPattern           = regexp.MustCompile(`\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b`)
 	anthropicTokenPattern        = regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}\b`)
-	credentialFieldPattern       = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|access[_-]?token|secret[_-]?key|password)\s*(?:\\?["']\s*)?[:=]\s*(?:\\?["']\s*)?(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
-	quotedCredentialFieldPattern = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|access[_-]?token|secret[_-]?key|password)\s*(?:\\?["']\s*)?[:=]\s*(?:\\?["']\s*)(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
+	credentialFieldPattern       = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|auth[_-]?token|access[_-]?token|secret[_-]?key|password)\s*(?:\\?["']\s*)?[:=]\s*(?:\\?["']\s*)?(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
+	quotedCredentialFieldPattern = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|auth[_-]?token|access[_-]?token|secret[_-]?key|password)\s*(?:\\?["']\s*)?[:=]\s*(?:\\?["']\s*)(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
+	executableCredentialPattern  = regexp.MustCompile(`(?i)(?:authorization|api[_-]?key|auth[_-]?token|access[_-]?token|secret[_-]?key|password)\s*(?:\\?["']\s*)?(?:[:][:][:]=|[:][:]=|\?=|\+=|!=|:=|:|=)\s*(?:\\?["']\s*)?(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
+	dockerSpaceCredentialPattern = regexp.MustCompile(`(?im)^[ \t]*env[ \t]+(?:authorization|api[_-]?key|auth[_-]?token|access[_-]?token|secret[_-]?key|password)[ \t]+(?:\\?["'][ \t]*)?(?:bearer[ \t]+)?[A-Za-z0-9_./=+-]{8,}`)
+	netrcPasswordPattern         = regexp.MustCompile(`(?i)\bpassword\s+(?:\\?["']\s*)?(?:bearer\s+)?[A-Za-z0-9_./=+-]{8,}`)
 	testOutputLeakPattern        = regexp.MustCompile(`(?i)\b(?:prompt|output|tool(?:[_ -](?:arguments?|results?))?|continuation(?:[_ -]?handle)?|authorization|provider[_ -]?state|raw provider (?:body|message))\b[^\r\n]{0,120}\b(?:leak(?:ed|age)?|emit(?:ted|ting)?|log(?:ged|ging)?|expos(?:ed|ure))\b[^\r\n]{0,256}`)
 	base64TokenPattern           = regexp.MustCompile(`[A-Za-z0-9+/_-]{16,}={0,2}`)
 	quotedStringPattern          = regexp.MustCompile(`"(?:\\.|[^"\\])*"`)
@@ -99,15 +102,21 @@ func verify(root, testOutput string) error {
 		if err != nil {
 			return fmt.Errorf("source safety verification cannot identify a repository path")
 		}
-		if !shouldScanSource(relative) {
-			return nil
-		}
-		data, err := readBounded(path, maxSourceFileBytes)
+		data, text, err := readBoundedText(path, maxSourceFileBytes)
 		if err != nil {
 			return fmt.Errorf("source safety verification cannot read %s", filepath.ToSlash(relative))
 		}
+		if !text {
+			return nil
+		}
 		scan := scanContent
-		if isSourceCode(relative) {
+		if strings.EqualFold(filepath.Base(relative), ".netrc") {
+			scan = scanNetrcContent
+		} else if isDockerSource(relative) {
+			scan = scanDockerSourceContent
+		} else if isShellLikeSource(relative) {
+			scan = scanExecutableSourceContent
+		} else if isSourceCode(relative) {
 			scan = scanSourceContent
 		}
 		found, err := scan(data)
@@ -141,41 +150,42 @@ func verify(root, testOutput string) error {
 }
 
 func isSourceCode(relative string) bool {
+	name := strings.ToLower(filepath.Base(relative))
+	if name == "dockerfile" || strings.HasPrefix(name, "dockerfile.") ||
+		name == "makefile" || strings.HasPrefix(name, "makefile.") {
+		return true
+	}
 	switch strings.ToLower(filepath.Ext(relative)) {
-	case ".go", ".ml", ".mli":
+	case ".go", ".ml", ".mli", ".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".rs", ".java", ".kt", ".kts", ".rb", ".php":
 		return true
 	default:
 		return false
 	}
+}
+
+func isShellLikeSource(relative string) bool {
+	name := strings.ToLower(filepath.Base(relative))
+	if name == "dockerfile" || strings.HasPrefix(name, "dockerfile.") ||
+		name == "makefile" || strings.HasPrefix(name, "makefile.") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(relative)) {
+	case ".sh", ".bash", ".zsh":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDockerSource(relative string) bool {
+	name := strings.ToLower(filepath.Base(relative))
+	return name == "dockerfile" || strings.HasPrefix(name, "dockerfile.")
 }
 
 func ignoredDirectory(name string) bool {
 	switch name {
-	case ".git", ".cache", "node_modules", "vendor":
-		return true
-	default:
-		return false
-	}
-}
-
-func shouldScanSource(relative string) bool {
-	parts := strings.Split(filepath.ToSlash(relative), "/")
-	fixture := false
-	for _, part := range parts[:len(parts)-1] {
-		switch strings.ToLower(part) {
-		case "testdata", "fixture", "fixtures":
-			fixture = true
-		}
-	}
-	name := parts[len(parts)-1]
-	if strings.HasSuffix(name, "_test.go") {
-		return false
-	}
-	if fixture {
-		return true
-	}
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".go", ".ml", ".mli", ".json", ".yaml", ".yml", ".toml", ".env", ".sh", ".bash", ".zsh", ".properties", ".ini", ".cfg", ".conf":
+	case ".git", ".cache", ".direnv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", ".worktrees", "__pycache__",
+		"_build", "build", "coverage", "dist", "node_modules", "out", "release-artifacts", "target", "vendor":
 		return true
 	default:
 		return false
@@ -199,19 +209,59 @@ func readBounded(path string, limit int) ([]byte, error) {
 	return data, nil
 }
 
+func readBoundedText(path string, limit int) ([]byte, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+		return nil, false, nil
+	}
+	if len(data) > limit {
+		return nil, true, fmt.Errorf("file exceeds the verification size limit of %d bytes", limit)
+	}
+	return data, true, nil
+}
+
 func scanContent(data []byte) (*finding, error) {
-	return scanWithCredentialFieldPattern(data, credentialFieldPattern, false, maxSourceFileBytes)
+	return scanWithCredentialFieldPattern(data, credentialFieldPattern, false, false, maxSourceFileBytes)
+}
+
+func scanNetrcContent(data []byte) (*finding, error) {
+	found, err := scanContent(data)
+	if err != nil || found != nil {
+		return found, err
+	}
+	return scanWithCredentialFieldPattern(data, netrcPasswordPattern, false, false, maxSourceFileBytes)
 }
 
 func scanSourceContent(data []byte) (*finding, error) {
-	return scanWithCredentialFieldPattern(data, quotedCredentialFieldPattern, false, maxSourceFileBytes)
+	return scanWithCredentialFieldPattern(data, quotedCredentialFieldPattern, false, false, maxSourceFileBytes)
+}
+
+func scanExecutableSourceContent(data []byte) (*finding, error) {
+	return scanWithCredentialFieldPattern(data, executableCredentialPattern, false, true, maxSourceFileBytes)
+}
+
+func scanDockerSourceContent(data []byte) (*finding, error) {
+	found, err := scanExecutableSourceContent(data)
+	if err != nil || found != nil {
+		return found, err
+	}
+	return scanWithCredentialFieldPattern(data, dockerSpaceCredentialPattern, false, true, maxSourceFileBytes)
 }
 
 func scanTestOutput(data []byte) (*finding, error) {
-	return scanWithCredentialFieldPattern(data, credentialFieldPattern, true, maxTestOutputBytes)
+	return scanWithCredentialFieldPattern(data, credentialFieldPattern, true, false, maxTestOutputBytes)
 }
 
-func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, detectOutputLeaks bool, limit int) (*finding, error) {
+func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, detectOutputLeaks, allowVariableWiring bool, limit int) (*finding, error) {
 	if len(data) > limit {
 		return nil, fmt.Errorf("source safety verification input exceeds the %d byte limit", limit)
 	}
@@ -230,7 +280,7 @@ func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, de
 			continue
 		}
 		seen[key] = struct{}{}
-		if found := findCredentialLikeMaterial(current.data, current.encoding, fieldPattern, detectOutputLeaks); found != nil {
+		if found := findCredentialLikeMaterial(current.data, current.encoding, fieldPattern, detectOutputLeaks, allowVariableWiring); found != nil {
 			return found, nil
 		}
 		if current.depth == maxDecodeDepth || len(seen) >= maxCandidates {
@@ -254,7 +304,7 @@ func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, de
 				continue
 			}
 			batch[key] = struct{}{}
-			if found := findCredentialLikeMaterial(candidate.data, candidate.encoding, fieldPattern, detectOutputLeaks); found != nil {
+			if found := findCredentialLikeMaterial(candidate.data, candidate.encoding, fieldPattern, detectOutputLeaks, allowVariableWiring); found != nil {
 				return found, nil
 			}
 			// Go's JSON test stream can contain tens of thousands of unique
@@ -279,7 +329,7 @@ func scanWithCredentialFieldPattern(data []byte, fieldPattern *regexp.Regexp, de
 	return nil, nil
 }
 
-func findCredentialLikeMaterial(data []byte, encoding string, fieldPattern *regexp.Regexp, detectOutputLeaks bool) *finding {
+func findCredentialLikeMaterial(data []byte, encoding string, fieldPattern *regexp.Regexp, detectOutputLeaks, allowVariableWiring bool) *finding {
 	if detectOutputLeaks && testOutputLeakPattern.Match(data) {
 		return &finding{category: "denied-field leak", encoding: encoding}
 	}
@@ -296,21 +346,104 @@ func findCredentialLikeMaterial(data []byte, encoding string, fieldPattern *rege
 		}
 	}
 	for _, match := range fieldPattern.FindAll(data, -1) {
-		if !containsRedactionMarker(match) {
-			return &finding{category: "credential-like denied field", encoding: encoding}
+		if containsRedactionMarker(match) || allowVariableWiring && isCredentialVariableWiring(match) {
+			continue
 		}
+		return &finding{category: "credential-like denied field", encoding: encoding}
 	}
 	return nil
 }
 
 func containsRedactionMarker(value []byte) bool {
-	normalized := strings.ToLower(string(value))
-	for _, marker := range []string{"redacted", "placeholder", "example", "fixture", "local-only"} {
-		if strings.Contains(normalized, marker) {
+	assignment, ok := parseCredentialAssignment(value)
+	if !ok {
+		return false
+	}
+	for _, marker := range []string{"redacted", "placeholder", "example", "fixture", "local-only", "not-configured"} {
+		if assignment.value == marker {
+			return true
+		}
+	}
+	for _, prefix := range []string{"redacted-", "placeholder-", "example-", "fixture-", "local-", "mock-", "test-"} {
+		if strings.HasPrefix(assignment.value, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+type credentialAssignment struct {
+	field  string
+	value  string
+	quoted bool
+	bearer bool
+}
+
+func parseCredentialAssignment(match []byte) (credentialAssignment, bool) {
+	raw := strings.TrimSpace(strings.ToLower(string(match)))
+	delimiter := strings.IndexAny(raw, ":=")
+	fieldValue := ""
+	value := ""
+	colonDelimited := false
+	if delimiter >= 0 {
+		fieldValue = raw[:delimiter]
+		value = strings.TrimSpace(raw[delimiter+1:])
+		colonDelimited = raw[delimiter] == ':'
+	} else {
+		parts := strings.Fields(raw)
+		if len(parts) < 2 {
+			return credentialAssignment{}, false
+		}
+		if parts[0] == "env" && len(parts) >= 3 {
+			fieldValue = parts[1]
+			value = strings.Join(parts[2:], " ")
+		} else {
+			fieldValue = parts[0]
+			value = strings.Join(parts[1:], " ")
+		}
+	}
+	field := normalizeCredentialIdentifier(fieldValue)
+	if colonDelimited {
+		value = strings.TrimSpace(strings.TrimLeft(value, ":="))
+		if strings.HasPrefix(value, "-") {
+			value = strings.TrimSpace(value[1:])
+		}
+	}
+	quoted := false
+	for _, quote := range []string{`\"`, `\'`, `"`, `'`} {
+		if strings.HasPrefix(value, quote) {
+			quoted = true
+			value = strings.TrimSpace(value[len(quote):])
+			break
+		}
+	}
+	bearer := strings.HasPrefix(value, "bearer ")
+	if bearer {
+		value = strings.TrimSpace(strings.TrimPrefix(value, "bearer "))
+	}
+	value = strings.Trim(value, `\"' `)
+	if field == "" || value == "" {
+		return credentialAssignment{}, false
+	}
+	return credentialAssignment{field: field, value: value, quoted: quoted, bearer: bearer}, true
+}
+
+func isCredentialVariableWiring(match []byte) bool {
+	assignment, ok := parseCredentialAssignment(match)
+	if !ok || assignment.quoted || assignment.bearer {
+		return false
+	}
+	return assignment.field == normalizeCredentialIdentifier(assignment.value)
+}
+
+func normalizeCredentialIdentifier(value string) string {
+	var normalized strings.Builder
+	for _, char := range value {
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
+			normalized.WriteRune(char)
+		}
+	}
+	return normalized.String()
 }
 
 func decodedCandidates(data []byte, depth int) []candidate {

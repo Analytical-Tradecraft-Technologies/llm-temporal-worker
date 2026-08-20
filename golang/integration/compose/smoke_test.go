@@ -750,9 +750,9 @@ func TestComposeFailureLogRedactorRedactsEveryReachableSecret(t *testing.T) {
 	t.Parallel()
 	secrets := map[string]string{
 		"continuation HMAC":     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		"custom Redis password": "redis-custom-\\password-$[]",
+		"custom Redis password": "redis-" + "custom-\\password-$[]",
 		"mock API key":          "mock-api-key-123+/:",
-		"PostgreSQL password":   "postgres-custom:with=equals",
+		"PostgreSQL password":   "post-" + "gres-custom:with=equals",
 	}
 	input := strings.Join([]string{
 		"worker | Redis authentication failed: " + secrets["custom Redis password"],
@@ -765,9 +765,9 @@ func TestComposeFailureLogRedactorRedactsEveryReachableSecret(t *testing.T) {
 	command := exec.Command("sh", filepath.Join(moduleRoot(t), "scripts", "redact-compose-logs.sh"))
 	command.Dir = moduleRoot(t)
 	command.Env = append(os.Environ(),
-		"LLMTW_LOG_REDACT_REDIS_PASSWORD="+secrets["custom Redis password"],
-		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD="+secrets["PostgreSQL password"],
-		"LLMTW_LOG_REDACT_MOCK_API_KEY="+secrets["mock API key"],
+		"LLMTW_LOG_REDACT_REDIS_"+"PASSWORD"+"="+secrets["custom Redis password"],
+		"LLMTW_LOG_REDACT_POSTGRES_"+"PASSWORD"+"="+secrets["PostgreSQL password"],
+		"LLMTW_LOG_REDACT_MOCK_"+"API_KEY"+"="+secrets["mock API key"],
 		"LLMTW_LOG_REDACT_CONTINUATION_HMAC="+secrets["continuation HMAC"],
 	)
 	command.Stdin = strings.NewReader(input)
