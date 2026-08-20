@@ -680,12 +680,26 @@ let query_result_to_json = function
   | Budget_status_result value -> "budget_status", budget_to_json value
   | Spend_summary_result value -> "spend_summary", spend_to_json value
 
+let validate_query_pagination ~kind ~complete ~next_cursor =
+  match kind, complete, next_cursor with
+  | ("provider_status" | "model_inventory" | "credit_status"), true, Some _ ->
+      Error
+        (errorf "query response.%s complete response must not include next_cursor"
+           kind)
+  | ("provider_status" | "model_inventory" | "credit_status"), false, None ->
+      Error
+        (errorf "query response.%s incomplete response requires next_cursor" kind)
+  | ("budget_status" | "spend_summary"), _, Some _ ->
+      Error (errorf "query response.%s must not include next_cursor" kind)
+  | ("budget_status" | "spend_summary"), false, None ->
+      Error (errorf "query response.%s must be complete" kind)
+  | _ -> Ok ()
+
 let query_response_to_json (value : query_response) =
   let kind, result = query_result_to_json value.result in
-  let* () = match kind, value.next_cursor with
-    | ("budget_status" | "spend_summary"), Some _ ->
-        Error (errorf "query response.%s must not include next_cursor" kind)
-    | _ -> Ok ()
+  let* () =
+    validate_query_pagination ~kind ~complete:value.complete
+      ~next_cursor:value.next_cursor
   in
   let cost_fields = match value.cost with
     | Exact_cost { actual_cost_usd; method_; catalog_version = _ } -> ["cost_status", `String "exact"; "actual_cost_usd", usd_json actual_cost_usd; "cost_method", `String (match method_ with Provider_reported -> "provider_reported" | Catalog_usage -> "catalog_usage" | Control_query_zero -> "control_query_zero")]
@@ -711,6 +725,7 @@ let query_response_of_json value =
         Error (errorf "query response.%s must not include next_cursor" kind)
     | Some value -> string "query response.next_cursor" value >>= fun value -> validated "query response.next_cursor" (Query_cursor.of_string_for_kind cursor_kind) value >>= fun value -> Ok (Some value)
   in
+  let* () = validate_query_pagination ~kind ~complete ~next_cursor in
   let* result_value = required "query response" "result" fields in
   let* result = match kind with
     | "provider_status" -> provider_page_of_json "query response.provider_status" result_value >>= fun value -> Ok (Provider_status_result value)

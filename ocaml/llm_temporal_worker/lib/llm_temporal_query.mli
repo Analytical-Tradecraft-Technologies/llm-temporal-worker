@@ -83,12 +83,11 @@ val of_response :
   'a t -> query_response -> ('a response, Temporal.Error.t) result
 
 (** Build the next page from a successful response without losing the GADT's
-    result type.  Snapshot queries return [Ok None]; paginated queries return
-    [Ok (Some query)] when the worker supplies a cursor.  Cursor kind and
-    snapshot invariants are checked again so callers using a custom
-    dispatcher cannot bypass the protocol boundary.  The worker may mark a
-    response complete while still returning a cursor; cursor presence, not the
-    completion flag, determines whether another page is available. *)
+    result type.  Snapshot queries must be complete and cursor-free, and return
+    [Ok None].  Paginated queries return [Ok (Some query)] exactly when they are
+    incomplete and carry a cursor; complete pages must not carry one.  Cursor
+    kind and completion invariants are checked again so callers using a custom
+    dispatcher cannot bypass the protocol boundary. *)
 val next : 'a t -> 'a response -> ('a t option, Temporal.Error.t) result
 
 type dispatcher =

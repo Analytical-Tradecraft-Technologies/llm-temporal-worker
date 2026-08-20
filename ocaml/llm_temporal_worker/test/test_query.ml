@@ -115,6 +115,47 @@ let expect_start_validation_error :
     | None -> failwith (label ^ " start did not return a ready validation error"));
     if !dispatch_called then failwith (label ^ " called its injected async dispatcher")
 
+let expect_response_error :
+    type a. string -> string -> a Query.t -> query_response -> unit =
+  fun label expected query response ->
+    let check_error boundary = function
+      | Error error when String.equal (Temporal.Error.message error) expected -> ()
+      | Error error ->
+          failf "%s %s returned unexpected response error: %s" label boundary
+            (Temporal.Error.message error)
+      | Ok _ -> failwith (label ^ " " ^ boundary ^ " accepted an invalid response")
+    in
+    check_error "of_response" (Query.of_response query response);
+    let sync_dispatch ?task_queue:_ _activity _envelope = Ok response in
+    check_error "execute_with"
+      (Query.execute_with ~dispatch:sync_dispatch ~operation_key ~context query);
+    let async_dispatch ?task_queue:_ _activity _envelope =
+      Temporal.Future.map (fun _ -> response) (Temporal.Future.all [])
+    in
+    match Temporal.Future.peek
+            (Query.start_with ~dispatch:async_dispatch ~operation_key ~context query)
+    with
+    | Some (Ok result) -> check_error "start_with" result
+    | Some (Error error) ->
+        failf "%s start_with returned an Activity error: %s" label
+          (Temporal.Error.message error)
+    | None -> failwith (label ^ " start_with did not return a ready response")
+
+let expect_codec_error label expected = function
+  | Error error when String.equal (Temporal.Error.message error) expected -> ()
+  | Error error ->
+      failf "%s returned unexpected codec error: %s" label
+        (Temporal.Error.message error)
+  | Ok _ -> failwith (label ^ " accepted an invalid response")
+
+let replace_json_field name value bytes =
+  match Yojson.Safe.from_string (Bytes.to_string bytes) with
+  | `Assoc fields ->
+      Bytes.of_string
+        (Yojson.Safe.to_string
+           (`Assoc ((name, value) :: List.remove_assoc name fields)))
+  | _ -> failwith "encoded query response was not an object"
+
 let () =
   (match Budget_stream_id.of_string "not-a-stream-id" with
    | Error _ -> ()
@@ -144,9 +185,15 @@ let () =
    | Ok _ -> failwith "typed pagination dropped the provider cursor"
    | Error error -> failf "unexpected pagination error: %s" (Temporal.Error.message error));
   (match Query.next provider { first_page with complete = true } with
-   | Ok (Some (Query.Provider_status { cursor = Some next; _ })) when next = provider_cursor -> ()
-   | Ok _ -> failwith "complete page dropped its worker-provided cursor"
-   | Error error -> failf "unexpected complete-page pagination error: %s" (Temporal.Error.message error));
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response.provider_status complete response must not include next_cursor" -> ()
+   | Error error -> failf "unexpected complete-page pagination error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "complete page with a cursor exposed another page");
+  (match Query.next provider { (run provider) with complete = false } with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response.provider_status incomplete response requires next_cursor" -> ()
+   | Error error -> failf "unexpected incomplete-page pagination error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "incomplete page without a cursor was accepted");
   (* Pagination keeps the GADT result type for every paginated query, not only
      provider status.  These branches intentionally bind the returned filters
      to their constructor so a future implementation cannot accidentally
@@ -168,6 +215,11 @@ let () =
                          "query response.budget_status must not include next_cursor" -> ()
    | Error error -> failf "unexpected snapshot pagination error: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "snapshot query unexpectedly exposed a next page");
+  (match Query.next budget { (run budget) with complete = false } with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response.budget_status must be complete" -> ()
+   | Error error -> failf "unexpected incomplete snapshot error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "incomplete snapshot query response was accepted");
 
   let wrong_kind =
     Query.Model_inventory
@@ -265,13 +317,43 @@ let () =
   let encoded =
     ok (V1_codec.encode_query_response
           { (response (Provider_status_result { routes = [] })) with
-            next_cursor = Some provider_cursor })
+            complete = false; next_cursor = Some provider_cursor })
   in
   (match V1_codec.decode_query_response encoded with
    | Ok { next_cursor = Some value; _ }
      when Query_cursor.kind value = Some Query_cursor.Provider_status -> ()
    | Ok _ -> failwith "decoded response cursor lost its query kind"
    | Error error -> failf "response cursor failed to round-trip: %s" (Temporal.Error.message error));
+
+  let provider_response = response (Provider_status_result { routes = [] }) in
+  let provider_complete_with_cursor =
+    { provider_response with next_cursor = Some provider_cursor }
+  in
+  let provider_incomplete_without_cursor =
+    { provider_response with complete = false }
+  in
+  expect_codec_error "encode complete provider page with cursor"
+    "query response.provider_status complete response must not include next_cursor"
+    (V1_codec.encode_query_response provider_complete_with_cursor);
+  expect_codec_error "encode incomplete provider page without cursor"
+    "query response.provider_status incomplete response requires next_cursor"
+    (V1_codec.encode_query_response provider_incomplete_without_cursor);
+  let valid_provider_wire = ok (V1_codec.encode_query_response provider_response) in
+  expect_codec_error "decode complete provider page with cursor"
+    "query response.provider_status complete response must not include next_cursor"
+    (V1_codec.decode_query_response
+       (replace_json_field "next_cursor" (`String "page-2") valid_provider_wire));
+  expect_codec_error "decode incomplete provider page without cursor"
+    "query response.provider_status incomplete response requires next_cursor"
+    (V1_codec.decode_query_response
+       (replace_json_field "complete" (`Bool false) valid_provider_wire));
+
+  expect_response_error "complete provider page with cursor"
+    "query response.provider_status complete response must not include next_cursor"
+    provider provider_complete_with_cursor;
+  expect_response_error "incomplete provider page without cursor"
+    "query response.provider_status incomplete response requires next_cursor"
+    provider provider_incomplete_without_cursor;
 
   let reject_non_paginated_cursor kind result =
     let candidate =
@@ -294,6 +376,23 @@ let () =
        start_time = time "2026-01-01T00:00:00Z";
        end_time = time "2026-01-02T00:00:00Z";
        buckets = [] });
+
+  let budget_response = response_for (Budget_status_request (budget_filter ())) in
+  let spend_response = response_for (Spend_summary_request (spend_filter ())) in
+  List.iter
+    (fun (kind, candidate) ->
+      let incomplete = { candidate with complete = false } in
+      let expected = Printf.sprintf "query response.%s must be complete" kind in
+      expect_codec_error ("encode incomplete " ^ kind ^ " snapshot") expected
+        (V1_codec.encode_query_response incomplete);
+      let valid_wire = ok (V1_codec.encode_query_response candidate) in
+      expect_codec_error ("decode incomplete " ^ kind ^ " snapshot") expected
+        (V1_codec.decode_query_response
+           (replace_json_field "complete" (`Bool false) valid_wire)))
+    [ "budget_status", budget_response; "spend_summary", spend_response ];
+  expect_response_error "incomplete budget snapshot"
+    "query response.budget_status must be complete"
+    budget { budget_response with complete = false };
 
   let mismatched =
     { (response (Provider_status_result { routes = [] })) with
@@ -321,6 +420,7 @@ let () =
      JSON codec, so the ergonomic facade validates this boundary as well. *)
   let wrong_response_cursor =
     { (response (Provider_status_result { routes = [] })) with
+      complete = false;
       next_cursor = Some (tagged_cursor Query_cursor.Model_inventory "model-page-2") }
   in
   (match Query.of_response provider wrong_response_cursor with
@@ -331,6 +431,7 @@ let () =
 
   let untagged_response_cursor =
     { (response (Provider_status_result { routes = [] })) with
+      complete = false;
       next_cursor = Some (Query_cursor.of_string_exn "provider:untagged-page-2") }
   in
   (match Query.of_response provider untagged_response_cursor with
