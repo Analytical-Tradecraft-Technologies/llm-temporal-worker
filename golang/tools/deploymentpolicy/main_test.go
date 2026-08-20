@@ -11,6 +11,149 @@ func TestVerifyRenderedAcceptsBaseWorkloadPolicy(t *testing.T) {
 	}
 }
 
+func TestVerifyRenderedRejectsPublicStateAndControlEgress(t *testing.T) {
+	tests := []struct {
+		name string
+		cidr string
+	}{
+		{name: "IPv4 default route", cidr: "0.0.0.0/0"},
+		{name: "IPv6 default route", cidr: "::/0"},
+		{name: "public network", cidr: "198.51.100.0/24"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workload := strings.Replace(validRenderedWorkload, "cidr: 10.64.0.0/16", "cidr: "+test.cidr, 1)
+			err := verifyRendered("base", []byte(workload))
+			if err == nil || !strings.Contains(err.Error(), "state/control egress CIDR must be private") {
+				t.Fatalf("verify rendered public state/control egress error = %v, want private-CIDR rejection", err)
+			}
+		})
+	}
+}
+
+func TestVerifyRenderedRejectsUnscopedStateAndControlSelectors(t *testing.T) {
+	workload := strings.Replace(validRenderedWorkload, "namespaceSelector:\n            matchLabels:\n              llmtw.io/state-egress: allowed", "namespaceSelector: {}", 1)
+	err := verifyRendered("base", []byte(workload))
+	if err == nil || !strings.Contains(err.Error(), "state/control namespaceSelector must require llmtw.io/state-egress=allowed") {
+		t.Fatalf("verify rendered unscoped state/control selector error = %v, want explicit-selector rejection", err)
+	}
+}
+
+func TestVerifyRenderedRequiresSeparateTLSAndStateControlRules(t *testing.T) {
+	workload := strings.Replace(validRenderedWorkload, "        - port: 7233\n          protocol: TCP", "        - port: 7233\n          protocol: TCP\n        - port: 443\n          protocol: TCP", 1)
+	err := verifyRendered("base", []byte(workload))
+	if err == nil || !strings.Contains(err.Error(), "state/control egress must be separate from general TLS") {
+		t.Fatalf("verify rendered mixed TLS and state/control egress error = %v, want rule-separation rejection", err)
+	}
+}
+
+func TestVerifyRenderedRejectsUnrestrictedAllPortEgress(t *testing.T) {
+	workload := strings.Replace(validRenderedWorkload, "  egress:\n", "  egress:\n    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n", 1)
+	err := verifyRendered("base", []byte(workload))
+	if err == nil || !strings.Contains(err.Error(), "all-port egress must not use an unrestricted destination") {
+		t.Fatalf("verify rendered unrestricted all-port egress error = %v, want unrestricted-destination rejection", err)
+	}
+}
+
+func TestVerifyRenderedRejectsPortRangesThatSpanStateControlPorts(t *testing.T) {
+	workload := strings.Replace(validRenderedWorkload, "        - port: 443\n          protocol: TCP", "        - port: 443\n          endPort: 8000\n          protocol: TCP", 1)
+	err := verifyRendered("base", []byte(workload))
+	if err == nil || !strings.Contains(err.Error(), "NetworkPolicy port ranges are not allowed") {
+		t.Fatalf("verify rendered ranged egress error = %v, want port-range rejection", err)
+	}
+}
+
+func TestVerifyRenderedBindsNetworkPolicyToWorkerDeployment(t *testing.T) {
+	tests := []struct {
+		name    string
+		change  func(string) string
+		message string
+	}{
+		{
+			name: "selector targets another workload",
+			change: func(workload string) string {
+				return strings.Replace(workload, "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: another-worker\n      app.kubernetes.io/component: worker", 1)
+			},
+			message: "podSelector must exactly match the worker Deployment selector",
+		},
+		{
+			name: "selector targets every pod",
+			change: func(workload string) string {
+				return strings.Replace(workload, "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector: {}", 1)
+			},
+			message: "podSelector must exactly match the worker Deployment selector",
+		},
+		{
+			name: "different namespace",
+			change: func(workload string) string {
+				marker := "kind: NetworkPolicy\nmetadata:\n  name: llmtw-worker\n  namespace: llmtw-system"
+				return strings.Replace(workload, marker, strings.Replace(marker, "llmtw-system", "another-namespace", 1), 1)
+			},
+			message: "NetworkPolicy namespace must match the worker Deployment namespace",
+		},
+		{
+			name: "egress policy type omitted",
+			change: func(workload string) string {
+				return strings.Replace(workload, "policyTypes: [Ingress, Egress]", "policyTypes: [Ingress]", 1)
+			},
+			message: "NetworkPolicy policyTypes must include Egress",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := verifyRendered("base", []byte(test.change(validRenderedWorkload)))
+			if err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("verify rendered worker NetworkPolicy binding error = %v, want %q", err, test.message)
+			}
+		})
+	}
+}
+
+func TestVerifyRenderedRejectsNegativeStateNamespaceSelectors(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+	}{
+		{
+			name: "DoesNotExist",
+			expression: `matchExpressions:
+              - key: llmtw.io/state-egress
+                operator: DoesNotExist`,
+		},
+		{
+			name: "NotIn",
+			expression: `matchExpressions:
+              - key: llmtw.io/state-egress
+                operator: NotIn
+                values: [allowed]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workload := strings.Replace(validRenderedWorkload, "matchLabels:\n              llmtw.io/state-egress: allowed", test.expression, 1)
+			err := verifyRendered("base", []byte(workload))
+			if err == nil || !strings.Contains(err.Error(), "state/control namespaceSelector must require llmtw.io/state-egress=allowed") {
+				t.Fatalf("verify rendered negative namespace selector error = %v, want positive opt-in rejection", err)
+			}
+		})
+	}
+}
+
+func TestVerifyRenderedRejectsPodSelectorOnlyStateDestination(t *testing.T) {
+	workload := strings.Replace(validRenderedWorkload, `namespaceSelector:
+            matchLabels:
+              llmtw.io/state-egress: allowed`, `podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis`, 1)
+	err := verifyRendered("base", []byte(workload))
+	if err == nil || !strings.Contains(err.Error(), "state/control selector destination must include llmtw.io/state-egress=allowed namespaceSelector") {
+		t.Fatalf("verify rendered pod-selector-only destination error = %v, want required namespace opt-in rejection", err)
+	}
+}
+
 func TestVerifyRenderedRejectsInsufficientShutdownGrace(t *testing.T) {
 	workload := strings.Replace(validRenderedWorkload, "terminationGracePeriodSeconds: 120", "terminationGracePeriodSeconds: 90", 1)
 	if err := verifyRendered("base", []byte(workload)); err == nil || !strings.Contains(err.Error(), "must exceed server.shutdown_timeout") {
@@ -243,8 +386,17 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: llmtw-worker
+  namespace: llmtw-system
 spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-temporal-worker
+      app.kubernetes.io/component: worker
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-temporal-worker
+        app.kubernetes.io/component: worker
     spec:
       serviceAccountName: llmtw-worker
       automountServiceAccountToken: false
@@ -302,6 +454,49 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llmtw-worker
+  namespace: llmtw-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llm-temporal-worker
+      app.kubernetes.io/component: worker
+  policyTypes: [Ingress, Egress]
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+    - ports:
+        - port: 6379
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 7233
+          protocol: TCP
+      to:
+        - namespaceSelector:
+            matchLabels:
+              llmtw.io/state-egress: allowed
+        - ipBlock:
+            cidr: 10.64.0.0/16
+    - ports:
+        - port: 443
+          protocol: TCP
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
 ---
 apiVersion: v1
 kind: ConfigMap
