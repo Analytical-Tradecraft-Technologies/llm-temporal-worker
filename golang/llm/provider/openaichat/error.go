@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	openai "github.com/openai/openai-go/v3"
 
@@ -86,6 +87,9 @@ func mapAPIError(apiErr *openai.Error, profileName string) *provider.Error {
 	if retry == provider.RetryAfter && apiErr.Response != nil {
 		if retryAfter := apiErr.Response.Header.Get("retry-after"); retryAfter != "" {
 			mapped.SafeDetails["retry_after"] = retryAfter
+			if retryDelay, ok := provider.ParseRetryAfter(retryAfter, time.Now()); ok {
+				mapped.RetryAfter = retryDelay
+			}
 		}
 	}
 	if apiErr.Response != nil {
