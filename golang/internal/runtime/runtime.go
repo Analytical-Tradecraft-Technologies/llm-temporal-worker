@@ -285,11 +285,14 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		_ = application.Close(context.Background())
 		return nil, err
 	}
-	healthServer, err := httpserver.New(httpserver.Options{
+	healthServerOptions := httpserver.Options{
 		Address: configuration.Server.HealthAddress,
 		Health:  health,
-		Metrics: metrics.Handler(),
-	})
+	}
+	if configuration.Server.MetricsAddress == configuration.Server.HealthAddress {
+		healthServerOptions.Metrics = metrics.Handler()
+	}
+	healthServer, err := httpserver.New(healthServerOptions)
 	if err != nil {
 		_ = tracer.Shutdown(context.Background())
 		temporalClient.Close()
