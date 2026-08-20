@@ -1,6 +1,5 @@
 {
   "api_version": "llm.temporal/v1",
-  "continuation": {"endpoint_id": "anthropic-aws", "handle": "anthropic-messages:msg-aws-fixture", "model": "claude-contract", "pinned": true},
   "cost": {"actual_cost_usd": null, "catalog_version": "", "method": "", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-anthropic-aws",

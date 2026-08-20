@@ -41,7 +41,7 @@ manual run selects one profile by adding its flag and the two suite gates; it
 runs `TestLiveProviderContracts` with scoped credentials. The harness does not
 read a provider's environment variables until those gates pass.
 
-## Pinned profiles
+## Profiles
 
 Every profile uses tenant `llmtw-live-contract`, the exact prompt `Reply with
 exactly: live-contract-ok`, a maximum output of 8 tokens, and a maximum actual
@@ -55,9 +55,9 @@ endpoints are checked in rather than supplied by an environment variable.
 | `openai-chat` | OpenAI Chat Completions; `gpt-4.1-mini` | `LLMTW_LIVE_OPENAI_CHAT` | `OPENAI_API_KEY`; OpenAI v1 endpoint | Rejected before invocation |
 | `openrouter-chat` | OpenRouter Chat Completions; `openai/gpt-4.1-mini` | `LLMTW_LIVE_OPENROUTER_CHAT` | `OPENROUTER_API_KEY`; OpenRouter API endpoint | Rejected before invocation |
 | `exa-chat` | Exa Chat; `exa` | `LLMTW_LIVE_EXA_CHAT` | `EXA_API_KEY`; Exa API endpoint | Rejected before invocation |
-| `anthropic-direct` | Anthropic Messages; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_DIRECT` | `ANTHROPIC_API_KEY`; Anthropic API endpoint | Pinned |
-| `anthropic-aws` | Anthropic Messages through AWS; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_AWS` | AWS default credential chain; `LLMTW_LIVE_ANTHROPIC_AWS_WORKSPACE_ID` | Pinned |
-| `bedrock-anthropic` | Amazon Bedrock Anthropic; `anthropic.claude-3-5-haiku-20241022-v1:0` | `LLMTW_LIVE_BEDROCK_ANTHROPIC` | AWS default credential chain; default AWS SDK endpoint resolution | Pinned |
+| `anthropic-direct` | Anthropic Messages; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_DIRECT` | `ANTHROPIC_API_KEY`; Anthropic API endpoint | Conditional: pinned only when replayable opaque state is returned |
+| `anthropic-aws` | Anthropic Messages through AWS; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_AWS` | AWS default credential chain; `LLMTW_LIVE_ANTHROPIC_AWS_WORKSPACE_ID` | Conditional: pinned only when replayable opaque state is returned |
+| `bedrock-anthropic` | Amazon Bedrock Anthropic; `anthropic.claude-3-5-haiku-20241022-v1:0` | `LLMTW_LIVE_BEDROCK_ANTHROPIC` | AWS default credential chain; default AWS SDK endpoint resolution | Conditional: pinned only when replayable opaque state is returned |
 | `bedrock-converse` | Amazon Bedrock Converse; `amazon.nova-pro-v1:0` | `LLMTW_LIVE_BEDROCK_CONVERSE` | AWS default credential chain; default AWS SDK endpoint resolution | Rejected before invocation; response ID not reported by API |
 
 The request deliberately omits the public service class. The worker must
@@ -70,9 +70,11 @@ provider default.
 
 For profiles that do not support continuations, the harness first compiles a
 pinned-continuation request and requires the adapter to reject it before any
-provider invocation. For the remaining profiles, a completed response must
-carry a non-empty continuation handle pinned to the selected endpoint and
-model.
+provider invocation. Profiles marked `Pinned` must return a non-empty
+continuation handle pinned to the selected endpoint and model. Profiles marked
+`Conditional` may omit a continuation for a text-only response; if they return
+one, it must contain at least one replayable provider-state record and a
+non-empty handle pinned to the selected endpoint and model.
 
 ## Evidence and cost handling
 
@@ -86,7 +88,7 @@ A successful live test emits only the following release-evidence fields:
   probe;
 - whether actual spend was reported, its microUSD amount when known, and the
   provider cost method;
-- whether a pinned continuation was verified.
+- whether a returned pinned continuation was verified.
 
 It never logs the prompt, model output, raw endpoint URL, credential, raw
 provider payload, or raw SDK error. The test uses `provider.NopObserver{}` so
