@@ -230,6 +230,23 @@ let cursor_forbidden kind =
     ~message:(Printf.sprintf "query response.%s must not include next_cursor"
                 (Query_cursor.kind_to_string kind))
 
+let complete_with_cursor kind =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf
+                "query response.%s complete response must not include next_cursor"
+                (Query_cursor.kind_to_string kind))
+
+let incomplete_without_cursor kind =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf
+                "query response.%s incomplete response requires next_cursor"
+                (Query_cursor.kind_to_string kind))
+
+let snapshot_incomplete kind =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf "query response.%s must be complete"
+                (Query_cursor.kind_to_string kind))
+
 let result_kind = function
   | Provider_status_result _ -> "provider_status"
   | Model_inventory_result _ -> "model_inventory"
@@ -237,20 +254,27 @@ let result_kind = function
   | Budget_status_result _ -> "budget_status"
   | Spend_summary_result _ -> "spend_summary"
 
-let validate_next_cursor : type a. a t -> Query_cursor.t option -> (unit, Temporal.Error.t) result =
-  fun query next_cursor ->
+let validate_response_pagination :
+    type a. a t -> complete:bool -> next_cursor:Query_cursor.t option ->
+    (unit, Temporal.Error.t) result =
+  fun query ~complete ~next_cursor ->
     let expected = expected_cursor_kind query in
-    match query, next_cursor with
-    | (Budget_status _ | Spend_summary _), Some _ -> Error (cursor_forbidden expected)
-    | (_, None) -> Ok ()
-    | (_, Some cursor) ->
+    match query, complete, next_cursor with
+    | (Budget_status _ | Spend_summary _), _, Some _ ->
+        Error (cursor_forbidden expected)
+    | (Budget_status _ | Spend_summary _), false, None ->
+        Error (snapshot_incomplete expected)
+    | (Budget_status _ | Spend_summary _), true, None -> Ok ()
+    | (Provider_status _ | Model_inventory _ | Credit_status _), true, Some _ ->
+        Error (complete_with_cursor expected)
+    | (Provider_status _ | Model_inventory _ | Credit_status _), false, None ->
+        Error (incomplete_without_cursor expected)
+    | (Provider_status _ | Model_inventory _ | Credit_status _), true, None -> Ok ()
+    | (Provider_status _ | Model_inventory _ | Credit_status _), false, Some cursor ->
         (match Query_cursor.kind cursor with
          | Some actual when actual = expected -> Ok ()
          | Some actual -> Error (cursor_mismatch expected actual)
          | None -> Error (cursor_missing_kind expected))
-
-let validate_response_cursor : type a. a t -> query_response -> (unit, Temporal.Error.t) result =
-  fun query response -> validate_next_cursor query response.next_cursor
 
 let response_metadata (response : query_response) value =
   { value;
@@ -264,7 +288,8 @@ let response_metadata (response : query_response) value =
 
 let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
   fun query response ->
-    match validate_next_cursor query response.next_cursor with
+    match validate_response_pagination query ~complete:response.complete
+            ~next_cursor:response.next_cursor with
     | Error error -> Error error
     | Ok () ->
         match response.next_cursor with
@@ -281,7 +306,8 @@ let of_response : type a. a t -> query_response -> (a response, Temporal.Error.t
     match Llm_temporal_response_validation.validate_query_cost response.cost with
     | Error error -> Error error
     | Ok () ->
-        match validate_response_cursor query response with
+        match validate_response_pagination query ~complete:response.complete
+                ~next_cursor:response.next_cursor with
         | Error error -> Error error
         | Ok () ->
             match query, response.result with
