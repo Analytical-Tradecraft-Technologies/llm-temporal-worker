@@ -4,7 +4,7 @@ GO ?= go
 # Keep the security scan on the reviewed Go patch release. A moving `go env
 # GOVERSION` default can select an older runner toolchain than the documented
 # baseline and reintroduce fixed standard-library vulnerabilities.
-SECURITY_GO_TOOLCHAIN ?= go1.26.6
+SECURITY_GO_TOOLCHAIN ?= go1.26.7
 COMPOSE ?= docker compose
 KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952

@@ -160,7 +160,7 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
   credential-like payloads. It also checks every direct `go.mod` requirement
   against the reviewed license/source inventory, and runs the pinned
   `govulncheck` release with the reviewed Go
-  1.26.5 toolchain. It scans the reachable program, including transitive
+  1.26.7 toolchain. It scans the reachable program, including transitive
   dependencies, rather than treating a dependency list as proof of safety.
 - Pull-request CI runs `make security-verify`. Trusted-master failures retain
   only a redacted JSON report containing component status, direct-module
