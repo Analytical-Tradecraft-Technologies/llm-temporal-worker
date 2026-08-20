@@ -224,8 +224,13 @@ let () =
     refresh_if_older_than_seconds = None; page_size = 20; cursor = None });
   run_query (Query.Budget_status {
     policy_key = None; active_at = None; include_windows = true });
+  let spend_end =
+    match Ptime.add_span Ptime.epoch (Ptime.Span.of_int_s 1) with
+    | Some value -> value
+    | None -> failwith "consumer smoke spend interval overflowed"
+  in
   run_query (Query.Spend_summary {
-    start_time = Ptime.epoch; end_time = Ptime.epoch;
+    start_time = Ptime.epoch; end_time = spend_end;
     group_by = [ By_operation_kind ]; operation_kinds = [ Generate ] });
 
   (* Keep the old smoke assertion too: this fixture is additive and does not
