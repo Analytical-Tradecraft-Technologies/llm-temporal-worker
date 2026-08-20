@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	openai "github.com/openai/openai-go/v3"
 
@@ -33,6 +34,19 @@ func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "secret provider body") {
 		t.Fatalf("raw provider message leaked: %s", encoded)
+	}
+}
+
+func TestMapAPIErrorMapsRetryAfterDelay(t *testing.T) {
+	mapped := mapAPIError(&openai.Error{
+		StatusCode: http.StatusTooManyRequests,
+		Response:   &http.Response{Header: http.Header{"Retry-After": []string{"2"}}},
+	})
+	if got, want := mapped.RetryAfter, 2*time.Second; got != want {
+		t.Fatalf("retry after = %s, want %s", got, want)
+	}
+	if got, want := mapped.SafeDetails["retry_after"], "2"; got != want {
+		t.Fatalf("safe retry after = %q, want %q", got, want)
 	}
 }
 
