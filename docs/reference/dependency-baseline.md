@@ -84,17 +84,33 @@ its redacted report: component pass/fail state, direct-module identifiers/count,
 and finding identifiers. It deliberately excludes test output, source paths,
 scanner traces, provider data, and credential-like material.
 
-The source scanner decodes only bounded inputs: each source file is capped at
-1 MiB, test output at 8 MiB, recursion at three decode levels, and queued
-decoded candidates at 1,024 per input. Candidates are deduplicated by decoded
-bytes before the queue bound is applied, and each candidate is inspected before
-the bound is enforced. Go JSON test records and their URL/escape-decoded
-variants are inspected directly but are not recursively queued, which prevents
-a large test stream's unique bookkeeping values from consuming the recursive
-budget; base64 candidates remain recursive for nested encodings. Reaching any
-bound fails closed instead of silently skipping the remaining candidates. This
-keeps URL, escaped JSON, and base64 representations covered without allowing a
-large fixture or log to push an unscanned value past the safety gate.
+The source scanner inspects every bounded UTF-8, NUL-free regular file outside
+known generated-output, cache, dependency-vendor, and virtual-environment
+directories. Coverage therefore does not depend on an extension allowlist: it
+includes implementation and test sources, scripts, Dockerfile and Makefile
+variants, Markdown and plain text, environment variants such as
+`.env.production`, credential dotfiles, PEM/key files, and extensionless
+configuration. Invalid UTF-8 and NUL-containing files are treated as binary and
+skipped. Executable-text checks cover both Docker `ENV key=value` and legacy
+`ENV key value` forms plus Make assignment operators, while allowing credential
+variable references. Test-only credential values use exact safe sentinels or
+explicit `test-`, `mock-`, `fixture-`, `example-`, `placeholder-`, `local-`, or
+`redacted-` prefixes; marker substrings embedded later in a value are not
+exempt. Scanner self-tests construct recognized token sentinels from fragments
+so the repository never contains the contiguous credential-like value it is
+testing.
+
+Every scanned source file is capped at 1 MiB, test output at 8 MiB, recursion
+at three decode levels, and queued decoded candidates at 1,024 per input.
+Candidates are deduplicated by decoded bytes before the queue bound is applied,
+and each candidate is inspected before the bound is enforced. Go JSON test
+records and their URL/escape-decoded variants are inspected directly but are
+not recursively queued, which prevents a large test stream's unique bookkeeping
+values from consuming the recursive budget; base64 candidates remain recursive
+for nested encodings. Reaching any bound fails closed instead of silently
+skipping the remaining candidates. This keeps URL, escaped JSON, and base64
+representations covered without allowing a large fixture or log to push an
+unscanned value past the safety gate.
 
 ### Active vulnerability exceptions
 

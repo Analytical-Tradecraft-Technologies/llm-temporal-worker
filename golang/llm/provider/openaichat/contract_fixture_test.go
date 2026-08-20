@@ -387,11 +387,11 @@ func newChatFixtureClient(t *testing.T, profile chatFixtureProfile, transport ht
 	)
 	switch profile.id {
 	case "openai-chat":
-		client, err = NewClient(ClientConfig{BaseURL: "http://127.0.0.1/v1", APIKey: "chat-fixture-key", HTTPClient: httpClient})
+		client, err = NewClient(ClientConfig{BaseURL: "http://127.0.0.1/v1", APIKey: "fixture-chat-key", HTTPClient: httpClient})
 	case "openrouter-chat":
-		client, err = NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "openrouter-fixture-key", HTTPClient: httpClient})
+		client, err = NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "fixture-openrouter-key", HTTPClient: httpClient})
 	case "exa-chat":
-		client, err = NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-fixture-key", HTTPClient: httpClient})
+		client, err = NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "fixture-exa-key", HTTPClient: httpClient})
 	default:
 		t.Fatalf("unknown chat fixture profile %q", profile.id)
 	}
@@ -611,7 +611,7 @@ func assertChatFixtureRedaction(t *testing.T, profile chatFixtureProfile) {
 	if !bytes.Contains(redaction, []byte("[REDACTED]")) {
 		t.Fatalf("%s redaction fixture has no explicit marker", profile.id)
 	}
-	for _, unsafe := range []string{"chat-fixture-key", "openrouter-fixture-key", "exa-fixture-key", "Bearer sk-", "api-key-real"} {
+	for _, unsafe := range []string{"fixture-chat-key", "fixture-openrouter-key", "fixture-exa-key", "Bearer sk-", "api-key-real"} {
 		if bytes.Contains(redaction, []byte(unsafe)) {
 			t.Fatalf("%s redaction fixture contains %q", profile.id, unsafe)
 		}
@@ -622,15 +622,15 @@ func assertChatFixtureAuth(t *testing.T, profile chatFixtureProfile, request *ht
 	t.Helper()
 	switch profile.id {
 	case "openai-chat":
-		if request.URL.Path != "/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer chat-fixture-key" {
+		if request.URL.Path != "/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer fixture-chat-key" {
 			t.Fatalf("openai chat transport = %s %#v", request.URL, request.Header)
 		}
 	case "openrouter-chat":
-		if request.URL.Path != "/api/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer openrouter-fixture-key" {
+		if request.URL.Path != "/api/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer fixture-openrouter-key" {
 			t.Fatalf("openrouter chat transport = %s %#v", request.URL, request.Header)
 		}
 	case "exa-chat":
-		if request.URL.Path != "/chat/completions" || request.Header.Get("X-Api-Key") != "exa-fixture-key" || request.Header.Get("Authorization") != "" {
+		if request.URL.Path != "/chat/completions" || request.Header.Get("X-Api-Key") != "fixture-exa-key" || request.Header.Get("Authorization") != "" {
 			t.Fatalf("exa chat transport = %s %#v", request.URL, request.Header)
 		}
 	}
