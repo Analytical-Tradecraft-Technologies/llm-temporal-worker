@@ -696,6 +696,7 @@ let validate_query_pagination ~kind ~complete ~next_cursor =
   | _ -> Ok ()
 
 let query_response_to_json (value : query_response) =
+  let* () = Llm_temporal_response_validation.validate_query_cost value.cost in
   let kind, result = query_result_to_json value.result in
   let* () =
     validate_query_pagination ~kind ~complete:value.complete
@@ -737,10 +738,39 @@ let query_response_of_json value =
   in
   let* cost_status = required "query response" "cost_status" fields >>= string "query response.cost_status" in
   let* cost = match cost_status with
-    | "exact" -> let* actual = required "query response" "actual_cost_usd" fields in let* actual = string "query response.actual_cost_usd" actual in let* actual = match Usd_decimal.of_string actual with Ok value -> Ok value | Error message -> Error (errorf "query response.actual_cost_usd: %s" message) in let* method_ = required "query response" "cost_method" fields >>= string "query response.cost_method" >>= function "provider_reported" -> Ok Provider_reported | "catalog_usage" -> Ok Catalog_usage | "control_query_zero" -> Ok Control_query_zero | _ -> Error (errorf "query response.cost_method is invalid") in Ok (Exact_cost { actual_cost_usd = actual; method_; catalog_version = None })
-    | "unknown" -> let* reason = required "query response" "cost_unknown_reason_code" fields >>= string "query response.cost_unknown_reason_code" >>= function "provider_did_not_report_cost" -> Ok Provider_did_not_report_cost | "catalog_incomplete" -> Ok Catalog_incomplete | "state_unavailable" -> Ok State_unavailable | "ambiguous_dispatch" -> Ok Ambiguous_dispatch | _ -> Error (errorf "query response.cost_unknown_reason_code is invalid") in Ok (Unknown_cost { reason })
+    | "exact" ->
+        let* () =
+          match optional "cost_unknown_reason_code" fields with
+          | None -> Ok ()
+          | Some _ ->
+              Error (errorf
+                       "query response exact cost must not have cost_unknown_reason_code")
+        in
+        let* actual = required "query response" "actual_cost_usd" fields in
+        let* actual = string "query response.actual_cost_usd" actual in
+        let* actual = match Usd_decimal.of_string actual with Ok value -> Ok value | Error message -> Error (errorf "query response.actual_cost_usd: %s" message) in
+        let* method_ = required "query response" "cost_method" fields >>= string "query response.cost_method" >>= function "provider_reported" -> Ok Provider_reported | "catalog_usage" -> Ok Catalog_usage | "control_query_zero" -> Ok Control_query_zero | _ -> Error (errorf "query response.cost_method is invalid") in
+        Ok (Exact_cost { actual_cost_usd = actual; method_; catalog_version = None })
+    | "unknown" ->
+        let* () =
+          match optional "actual_cost_usd" fields with
+          | Some `Null -> Ok ()
+          | None | Some _ ->
+              Error (errorf
+                       "query response unknown cost must have null actual_cost_usd")
+        in
+        let* () =
+          match optional "cost_method" fields with
+          | None -> Ok ()
+          | Some _ ->
+              Error (errorf
+                       "query response unknown cost must not have cost_method")
+        in
+        let* reason = required "query response" "cost_unknown_reason_code" fields >>= string "query response.cost_unknown_reason_code" >>= function "provider_did_not_report_cost" -> Ok Provider_did_not_report_cost | "catalog_incomplete" -> Ok Catalog_incomplete | "state_unavailable" -> Ok State_unavailable | "ambiguous_dispatch" -> Ok Ambiguous_dispatch | _ -> Error (errorf "query response.cost_unknown_reason_code is invalid") in
+        Ok (Unknown_cost { reason })
     | _ -> Error (errorf "query response.cost_status is invalid")
   in
+  let* () = Llm_temporal_response_validation.validate_query_cost cost in
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; query_execution_id = Query_execution_id.of_string query_execution_id; observed_at; source; freshness; complete; next_cursor; result; cost }
 
 let encode_query_response value = let* value = query_response_to_json value in to_bytes value

@@ -35,7 +35,7 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 	client, err := NewAzureClient(AzureClientConfig{
 		Endpoint:   "http://127.0.0.1",
 		APIVersion: "v1",
-		APIKey:     "azure-key",
+		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
 	if err != nil {
@@ -63,7 +63,7 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 	if got.URL.Path != "/openai/v1/responses" || got.URL.Query().Get("api-version") != "v1" {
 		t.Fatalf("Azure Responses request URL = %s", got.URL)
 	}
-	if got.Header.Get("Api-Key") != "azure-key" || got.Header.Get("Authorization") != "" {
+	if got.Header.Get("Api-Key") != "test-azure-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("Azure Responses auth headers = %#v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
@@ -82,7 +82,7 @@ func TestAzureResponsesValidatesResolvedConfig(t *testing.T) {
 	valid := AzureClientConfig{
 		Endpoint:   "https://resource.openai.azure.com",
 		APIVersion: "v1",
-		APIKey:     "azure-key",
+		APIKey:     "test-azure-key",
 		HTTPClient: http.DefaultClient,
 	}
 	for name, config := range map[string]AzureClientConfig{
@@ -159,7 +159,7 @@ func TestAzureResponsesAdapterAliases(t *testing.T) {
 	client, err := NewAzureOpenAIClient(AzureClientConfig{
 		Endpoint:   "https://resource.openai.azure.com",
 		APIVersion: "v1",
-		APIKey:     "azure-key",
+		APIKey:     "test-azure-key",
 		HTTPClient: http.DefaultClient,
 	})
 	if err != nil {
@@ -180,7 +180,7 @@ func TestAzureResponsesPreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 	client, err := NewAzureClient(AzureClientConfig{
 		Endpoint:   "https://resource.openai.azure.com",
 		APIVersion: "v1",
-		APIKey:     "azure-key",
+		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
 	if err != nil {
@@ -236,7 +236,7 @@ func TestAzureResponsesRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 	client, err := NewAzureClient(AzureClientConfig{
 		Endpoint:   "https://resource.openai.azure.com",
 		APIVersion: "v1",
-		APIKey:     "azure-key",
+		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{
 			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 				calls++

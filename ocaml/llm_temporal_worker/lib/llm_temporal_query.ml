@@ -303,21 +303,24 @@ let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
 
 let of_response : type a. a t -> query_response -> (a response, Temporal.Error.t) result =
   fun query response ->
-    match validate_response_pagination query ~complete:response.complete
-            ~next_cursor:response.next_cursor with
+    match Llm_temporal_response_validation.validate_query_cost response.cost with
     | Error error -> Error error
     | Ok () ->
-        match query, response.result with
-        | Provider_status _, Provider_status_result value -> Ok (response_metadata response value)
-        | Model_inventory _, Model_inventory_result value -> Ok (response_metadata response value)
-        | Credit_status _, Credit_status_result value -> Ok (response_metadata response value)
-        | Budget_status _, Budget_status_result value -> Ok (response_metadata response value)
-        | Spend_summary _, Spend_summary_result value -> Ok (response_metadata response value)
-        | Provider_status _, result -> Error (mismatch "provider_status" (result_kind result))
-        | Model_inventory _, result -> Error (mismatch "model_inventory" (result_kind result))
-        | Credit_status _, result -> Error (mismatch "credit_status" (result_kind result))
-        | Budget_status _, result -> Error (mismatch "budget_status" (result_kind result))
-        | Spend_summary _, result -> Error (mismatch "spend_summary" (result_kind result))
+        match validate_response_pagination query ~complete:response.complete
+                ~next_cursor:response.next_cursor with
+        | Error error -> Error error
+        | Ok () ->
+            match query, response.result with
+            | Provider_status _, Provider_status_result value -> Ok (response_metadata response value)
+            | Model_inventory _, Model_inventory_result value -> Ok (response_metadata response value)
+            | Credit_status _, Credit_status_result value -> Ok (response_metadata response value)
+            | Budget_status _, Budget_status_result value -> Ok (response_metadata response value)
+            | Spend_summary _, Spend_summary_result value -> Ok (response_metadata response value)
+            | Provider_status _, result -> Error (mismatch "provider_status" (result_kind result))
+            | Model_inventory _, result -> Error (mismatch "model_inventory" (result_kind result))
+            | Credit_status _, result -> Error (mismatch "credit_status" (result_kind result))
+            | Budget_status _, result -> Error (mismatch "budget_status" (result_kind result))
+            | Spend_summary _, result -> Error (mismatch "spend_summary" (result_kind result))
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->

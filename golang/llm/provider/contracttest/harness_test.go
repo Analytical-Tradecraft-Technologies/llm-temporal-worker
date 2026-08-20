@@ -57,7 +57,7 @@ generated_field_exemptions: []
 }
 
 func TestValidateRepositoryRejectsInvalidServiceClassesWithoutLeakingValues(t *testing.T) {
-	secret := "AKIA1234567890ABCDEF"
+	secret := "AKIA" + "1234567890ABCDEF"
 	tests := []struct {
 		name           string
 		serviceClasses string
@@ -194,7 +194,7 @@ capability_facts:
   streaming: unsupported
 generated_field_exemptions: []
 `)
-	secret := "AKIA1234567890ABCDEF"
+	secret := "AKIA" + "1234567890ABCDEF"
 	mustWriteFile(t, filepath.Join(profileDir, "request.wire.json"), `{"authorization":"`+secret+`"}`)
 
 	_, err := ValidateRepository(root)
@@ -216,15 +216,15 @@ func TestContainsUnsafeFixtureBytesDetectsCredentialFieldsAcrossSyntaxes(t *test
 	}{
 		{
 			name:    "quoted JSON authorization",
-			fixture: `{"authorization":"Bearer sk-live-0123456789abcdef"}`,
+			fixture: `{"authorization":"Bearer s` + `k-live-0123456789abcdef"}`,
 		},
 		{
 			name:    "escaped JSON authorization",
-			fixture: `{\"authorization\":\"Bearer sk-live-0123456789abcdef\"}`,
+			fixture: `{\"authorization\":\"Bearer s` + `k-live-0123456789abcdef\"}`,
 		},
 		{
 			name:    "quoted JSON API key",
-			fixture: `{"api_key":"sk-live-0123456789abcdef"}`,
+			fixture: `{"api_key":"s` + `k-live-0123456789abcdef"}`,
 		},
 		{
 			name:    "YAML access token",
@@ -603,7 +603,7 @@ cases:
 `)
 	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
 	mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
-	secret := "AKIA1234567890ABCDEF"
+	secret := "AKIA" + "1234567890ABCDEF"
 	mustWriteFile(t, filepath.Join(filepath.Dir(profileDir), "events.wire"), "token: "+secret)
 
 	_, err := ValidateRepository(root)
