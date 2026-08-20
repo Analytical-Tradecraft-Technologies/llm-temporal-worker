@@ -22,6 +22,12 @@ let validate_generate_response (response : generate_response) =
 let validate_compaction_response (response : compaction_response) =
   validate_compaction_checkpoint response.checkpoint
 
+let validate_query_cost = function
+  | Exact_cost { actual_cost_usd; method_ = Control_query_zero; _ }
+    when Usd_decimal.compare actual_cost_usd Usd_decimal.zero <> 0 ->
+      error "query response control_query_zero requires zero actual_cost_usd"
+  | Exact_cost _ | Unknown_cost _ -> Ok ()
+
 let checkpoint_equal left right =
   String.equal (Checkpoint.to_string left) (Checkpoint.to_string right)
 
