@@ -574,6 +574,44 @@ type GenerateRequestV1 struct {
 	Cache         *CachePolicyV1
 }
 
+func marshalRequestContextV1(context RequestContext) (json.RawMessage, error) {
+	if len(context.Tags) > 0 {
+		return nil, fmt.Errorf("v1 context tags are not supported")
+	}
+	data, err := marshalObject(map[string]any{
+		"tenant":  context.Tenant,
+		"project": context.Project,
+		"actor":   context.Actor,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("v1 context: %w", err)
+	}
+	return json.RawMessage(data), nil
+}
+
+func decodeRequestContextV1(data []byte) (RequestContext, error) {
+	fields, err := decodeObject(data)
+	if err != nil {
+		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
+	}
+	if err := checkUnknownFields(fields, "tenant", "project", "actor"); err != nil {
+		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
+	}
+	tenant, _, err := optionalString(fields, "tenant")
+	if err != nil {
+		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
+	}
+	project, _, err := optionalString(fields, "project")
+	if err != nil {
+		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
+	}
+	actor, _, err := optionalString(fields, "actor")
+	if err != nil {
+		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
+	}
+	return RequestContext{Tenant: tenant, Project: project, Actor: actor}, nil
+}
+
 func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 	if request.APIVersion != "" && request.APIVersion != APIVersion {
 		return nil, fmt.Errorf("api_version %q is unsupported", request.APIVersion)
@@ -589,11 +627,15 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 	}
+	context, err := marshalRequestContextV1(request.Context)
+	if err != nil {
+		return nil, err
+	}
 	appendItems := request.Append
 	if appendItems == nil {
 		appendItems = []Item{}
 	}
-	fields := map[string]any{"api_version": APIVersion, "operation_key": request.OperationKey, "context": request.Context, "append": appendItems}
+	fields := map[string]any{"api_version": APIVersion, "operation_key": request.OperationKey, "context": context, "append": appendItems}
 	if request.Parent != nil {
 		fields["parent"] = string(*request.Parent)
 	}
@@ -628,7 +670,7 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	context, err := decodeRequestContext(contextRaw)
+	context, err := decodeRequestContextV1(contextRaw)
 	if err != nil {
 		return err
 	}
@@ -1070,7 +1112,11 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 	}
-	fields := map[string]any{"api_version": CompactAPIVersion, "operation_key": request.OperationKey, "context": request.Context, "parent": string(request.Parent)}
+	context, err := marshalRequestContextV1(request.Context)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]any{"api_version": CompactAPIVersion, "operation_key": request.OperationKey, "context": context, "parent": string(request.Parent)}
 	if len(request.Policy) > 0 {
 		if !validObjectJSON(request.Policy) {
 			return nil, fmt.Errorf("compact policy must be an object")
@@ -1106,7 +1152,7 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	context, err := decodeRequestContext(contextRaw)
+	context, err := decodeRequestContextV1(contextRaw)
 	if err != nil {
 		return err
 	}
@@ -1309,7 +1355,11 @@ func (request QueryRequestV1) MarshalJSON() ([]byte, error) {
 	if request.OperationKey == "" || request.Context.Tenant == "" || request.Context.Project == "" || request.Context.Actor == "" || !request.Kind.valid() || !validObjectJSON(request.Query) || validateQueryObject(request.Kind, request.Query) != nil {
 		return nil, fmt.Errorf("query request is invalid")
 	}
-	return marshalObject(map[string]any{"api_version": QueryAPIVersion, "operation_key": request.OperationKey, "context": request.Context, "kind": request.Kind, "query": json.RawMessage(request.Query)})
+	context, err := marshalRequestContextV1(request.Context)
+	if err != nil {
+		return nil, err
+	}
+	return marshalObject(map[string]any{"api_version": QueryAPIVersion, "operation_key": request.OperationKey, "context": context, "kind": request.Kind, "query": json.RawMessage(request.Query)})
 }
 func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
 	fields, err := decodeObject(data)
@@ -1339,7 +1389,7 @@ func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	context, err := decodeRequestContext(contextRaw)
+	context, err := decodeRequestContextV1(contextRaw)
 	if err != nil {
 		return err
 	}

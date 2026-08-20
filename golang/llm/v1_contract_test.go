@@ -53,6 +53,103 @@ func TestV1GenerateAndCompactFixturesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestV1RequestContextRejectsTags(t *testing.T) {
+	contextWithTags := llm.RequestContext{
+		Tenant: "tenant", Project: "project", Actor: "actor",
+		Tags: map[string]string{"region": "au"},
+	}
+	tests := []struct {
+		name   string
+		value  any
+		wire   string
+		target func() any
+	}{
+		{
+			name:   "generate",
+			value:  llm.GenerateRequestV1{OperationKey: "generate", Context: contextWithTags},
+			wire:   `{"api_version":"llm.temporal/v1","operation_key":"generate","context":{"tenant":"tenant","project":"project","actor":"actor","tags":{"region":"au"}},"append":[]}`,
+			target: func() any { return new(llm.GenerateRequestV1) },
+		},
+		{
+			name:   "compact",
+			value:  llm.CompactRequestV1{OperationKey: "compact", Context: contextWithTags, Parent: "ckp_v1.parent"},
+			wire:   `{"api_version":"llm.temporal/compact/v1","operation_key":"compact","context":{"tenant":"tenant","project":"project","actor":"actor","tags":{"region":"au"}},"parent":"ckp_v1.parent"}`,
+			target: func() any { return new(llm.CompactRequestV1) },
+		},
+		{
+			name:   "query",
+			value:  llm.QueryRequestV1{OperationKey: "query", Context: contextWithTags, Kind: llm.QueryProviderStatus, Query: json.RawMessage(`{}`)},
+			wire:   `{"api_version":"llm.temporal/query/v1","operation_key":"query","context":{"tenant":"tenant","project":"project","actor":"actor","tags":{"region":"au"}},"kind":"provider_status","query":{}}`,
+			target: func() any { return new(llm.QueryRequestV1) },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name+" marshal", func(t *testing.T) {
+			_, err := json.Marshal(test.value)
+			if err == nil {
+				t.Fatal("nonempty context tags were accepted")
+			}
+			if message := err.Error(); !strings.Contains(message, "context") || !strings.Contains(message, "tags") {
+				t.Fatalf("error = %q, want clear context tags rejection", message)
+			}
+		})
+		t.Run(test.name+" unmarshal", func(t *testing.T) {
+			err := json.Unmarshal([]byte(test.wire), test.target())
+			if err == nil {
+				t.Fatal("wire context tags were accepted")
+			}
+			if message := err.Error(); !strings.Contains(message, "context") || !strings.Contains(message, "tags") {
+				t.Fatalf("error = %q, want clear context tags rejection", message)
+			}
+		})
+	}
+}
+
+func TestV1RequestContextRoundTripsClosedFields(t *testing.T) {
+	context := llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}
+	tests := []struct {
+		name       string
+		value      any
+		target     func() any
+		getContext func(any) llm.RequestContext
+	}{
+		{
+			name:       "generate",
+			value:      llm.GenerateRequestV1{OperationKey: "generate", Context: context},
+			target:     func() any { return new(llm.GenerateRequestV1) },
+			getContext: func(value any) llm.RequestContext { return value.(*llm.GenerateRequestV1).Context },
+		},
+		{
+			name:       "compact",
+			value:      llm.CompactRequestV1{OperationKey: "compact", Context: context, Parent: "ckp_v1.parent"},
+			target:     func() any { return new(llm.CompactRequestV1) },
+			getContext: func(value any) llm.RequestContext { return value.(*llm.CompactRequestV1).Context },
+		},
+		{
+			name:       "query",
+			value:      llm.QueryRequestV1{OperationKey: "query", Context: context, Kind: llm.QueryProviderStatus, Query: json.RawMessage(`{}`)},
+			target:     func() any { return new(llm.QueryRequestV1) },
+			getContext: func(value any) llm.RequestContext { return value.(*llm.QueryRequestV1).Context },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := json.Marshal(test.value)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			target := test.target()
+			if err := json.Unmarshal(encoded, target); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			got := test.getContext(target)
+			if got.Tenant != context.Tenant || got.Project != context.Project || got.Actor != context.Actor || len(got.Tags) != 0 {
+				t.Fatalf("context = %#v, want %#v with no tags", got, context)
+			}
+		})
+	}
+}
+
 func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 	var request llm.GenerateRequestV1
 	if err := json.Unmarshal(readV1Fixture(t, "negative-unknown-field.json"), &request); err == nil {
