@@ -90,7 +90,7 @@ func (request GenerateRequest) Validate(maxInlineBytes int) (llm.Request, error)
 	if len(encoded) > maxInlineBytes {
 		return llm.Request{}, fmt.Errorf("inline request payload is %d bytes; limit is %d", len(encoded), maxInlineBytes)
 	}
-	if err := validateEmbeddedBlobRefs(encoded, time.Now()); err != nil {
+	if err := validateRequestBlobRefs(normalized, time.Now()); err != nil {
 		return llm.Request{}, err
 	}
 	return normalized, nil
@@ -247,43 +247,45 @@ func checkUnknownFields(fields map[string]json.RawMessage, allowed ...string) er
 	return nil
 }
 
-func validateEmbeddedBlobRefs(data []byte, now time.Time) error {
-	var value any
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	return walkEmbeddedBlobRefs(value, now)
-}
-
-func walkEmbeddedBlobRefs(value any, now time.Time) error {
-	switch value := value.(type) {
-	case []any:
-		for _, child := range value {
-			if err := walkEmbeddedBlobRefs(child, now); err != nil {
-				return err
+// validateRequestBlobRefs validates only the typed blob source positions in
+// the canonical request. Tool arguments, JSON parts, schemas, extensions, and
+// other opaque JSON values may legitimately use a field named "digest".
+func validateRequestBlobRefs(request llm.Request, now time.Time) error {
+	validateParts := func(parts []llm.Part) error {
+		for _, part := range parts {
+			var ref *llm.BlobRef
+			var source string
+			switch part := part.(type) {
+			case llm.ImagePart:
+				ref, source = part.Blob, "image"
+			case llm.DocumentPart:
+				ref, source = part.Blob, "document"
+			default:
+				continue
 			}
-		}
-	case map[string]any:
-		if _, ok := value["digest"]; ok {
-			encoded, err := json.Marshal(value)
-			if err != nil {
-				return err
-			}
-			var ref struct {
-				Digest     string `json:"digest"`
-				ByteLength int64  `json:"byte_length"`
-				MediaType  string `json:"media_type"`
-				Locator    string `json:"locator"`
-			}
-			if err := json.Unmarshal(encoded, &ref); err != nil {
-				return err
+			if ref == nil {
+				continue
 			}
 			if err := (BlobRef{Store: "embedded", Locator: ref.Locator, Digest: ref.Digest, ByteLength: ref.ByteLength, MediaType: ref.MediaType}).Validate(now); err != nil {
-				return err
+				return fmt.Errorf("%s blob: %w", source, err)
 			}
 		}
-		for _, child := range value {
-			if err := walkEmbeddedBlobRefs(child, now); err != nil {
+		return nil
+	}
+
+	for _, instruction := range request.Instructions {
+		if err := validateParts(instruction.Content); err != nil {
+			return err
+		}
+	}
+	for _, item := range request.Input {
+		switch item := item.(type) {
+		case llm.Message:
+			if err := validateParts(item.Content); err != nil {
+				return err
+			}
+		case llm.ToolResult:
+			if err := validateParts(item.Content); err != nil {
 				return err
 			}
 		}
