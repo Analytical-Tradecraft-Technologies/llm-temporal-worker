@@ -70,7 +70,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 	if response.Provider.ResponseID != "msg-aws-fixture" || response.Provider.RequestID != "aws-req-1" || response.Usage.InputTokens != 4 || response.Usage.OutputTokens != 3 {
 		t.Fatalf("AWS gateway response facts = %#v", response)
 	}
-	if response.Service.Actual == nil || *response.Service.Actual != llm.ServiceClassStandard || response.Continuation == nil || !response.Continuation.Pinned || response.Continuation.EndpointID != "anthropic-aws" || response.Continuation.Handle != "anthropic-messages:msg-aws-fixture" {
+	if response.Service.Actual == nil || *response.Service.Actual != llm.ServiceClassStandard || response.Continuation != nil {
 		t.Fatalf("AWS gateway service/continuation = %#v %#v", response.Service, response.Continuation)
 	}
 }
@@ -178,7 +178,7 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 	}
 }
 
-func TestAWSGatewayFixtureLiftsPinnedContinuation(t *testing.T) {
+func TestAWSGatewayFixtureTextOnlyResponseDoesNotLiftContinuation(t *testing.T) {
 	var response anthropic.Message
 	if err := json.Unmarshal(mustReadAWSFixture(t, "response.completed.json"), &response); err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestAWSGatewayFixtureLiftsPinnedContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lifted.Route.APIFamily != string(provider.FamilyAnthropicMessages) || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard || lifted.Continuation == nil || !lifted.Continuation.Pinned || lifted.Continuation.EndpointID != "anthropic-aws" {
+	if lifted.Route.APIFamily != string(provider.FamilyAnthropicMessages) || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard || lifted.Continuation != nil {
 		t.Fatalf("AWS fixture response = %#v", lifted)
 	}
 }

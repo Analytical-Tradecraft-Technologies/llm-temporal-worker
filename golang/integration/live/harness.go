@@ -41,12 +41,13 @@ type CredentialSource struct {
 }
 
 // ContinuationExpectation distinguishes a profile whose live response must
-// yield a pinned continuation from one that must reject continuation before a
-// provider request is sent.
+// yield a pinned continuation, may yield one only when replayable opaque state
+// is present, or must reject continuation before a provider request is sent.
 type ContinuationExpectation string
 
 const (
 	ContinuationPinned      ContinuationExpectation = "pinned"
+	ContinuationConditional ContinuationExpectation = "conditional"
 	ContinuationUnsupported ContinuationExpectation = "unsupported"
 )
 
@@ -77,9 +78,9 @@ var profiles = []Profile{
 	newProfile("openai-chat", "LLMTW_LIVE_OPENAI_CHAT", "gpt-4.1-mini", CredentialSource{Kind: "bearer_env", Environment: "OPENAI_API_KEY"}, ContinuationUnsupported),
 	newProfile("openrouter-chat", "LLMTW_LIVE_OPENROUTER_CHAT", "openai/gpt-4.1-mini", CredentialSource{Kind: "bearer_env", Environment: "OPENROUTER_API_KEY"}, ContinuationUnsupported),
 	newProfile("exa-chat", "LLMTW_LIVE_EXA_CHAT", "exa", CredentialSource{Kind: "header_env", Environment: "EXA_API_KEY"}, ContinuationUnsupported),
-	newProfile("anthropic-direct", "LLMTW_LIVE_ANTHROPIC_DIRECT", "claude-3-5-haiku-latest", CredentialSource{Kind: "header_env", Environment: "ANTHROPIC_API_KEY"}, ContinuationPinned),
-	newProfile("anthropic-aws", "LLMTW_LIVE_ANTHROPIC_AWS", "claude-3-5-haiku-latest", CredentialSource{Kind: "aws_default_chain"}, ContinuationPinned),
-	newProfile("bedrock-anthropic", "LLMTW_LIVE_BEDROCK_ANTHROPIC", "anthropic.claude-3-5-haiku-20241022-v1:0", CredentialSource{Kind: "aws_default_chain"}, ContinuationPinned),
+	newProfile("anthropic-direct", "LLMTW_LIVE_ANTHROPIC_DIRECT", "claude-3-5-haiku-latest", CredentialSource{Kind: "header_env", Environment: "ANTHROPIC_API_KEY"}, ContinuationConditional),
+	newProfile("anthropic-aws", "LLMTW_LIVE_ANTHROPIC_AWS", "claude-3-5-haiku-latest", CredentialSource{Kind: "aws_default_chain"}, ContinuationConditional),
+	newProfile("bedrock-anthropic", "LLMTW_LIVE_BEDROCK_ANTHROPIC", "anthropic.claude-3-5-haiku-20241022-v1:0", CredentialSource{Kind: "aws_default_chain"}, ContinuationConditional),
 	newProfileWithoutResponseID("bedrock-converse", "LLMTW_LIVE_BEDROCK_CONVERSE", "amazon.nova-pro-v1:0", CredentialSource{Kind: "aws_default_chain"}, ContinuationUnsupported),
 }
 
@@ -222,7 +223,7 @@ func validateResponse(profile Profile, response llm.Response) (Evidence, error) 
 		RequestID:            response.Provider.RequestID,
 		ResponseID:           response.Provider.ResponseID,
 		ActualServiceClass:   *response.Service.Actual,
-		ContinuationVerified: profile.ContinuationExpectation == ContinuationPinned,
+		ContinuationVerified: response.Continuation != nil,
 	}
 	known, err := reportedCost(response.Cost)
 	if err != nil {
@@ -250,6 +251,19 @@ func validateContinuation(profile Profile, continuation *llm.Continuation) error
 	case ContinuationPinned:
 		if continuation == nil || !continuation.Pinned || continuation.Handle == "" {
 			return fmt.Errorf("profile %s did not return a pinned continuation", profile.ID)
+		}
+		if continuation.EndpointID != profile.ID || continuation.Model != profile.Model {
+			return fmt.Errorf("profile %s continuation is not pinned to the enabled endpoint and model", profile.ID)
+		}
+	case ContinuationConditional:
+		if continuation == nil {
+			return nil
+		}
+		if !continuation.Pinned || continuation.Handle == "" {
+			return fmt.Errorf("profile %s returned an invalid pinned continuation", profile.ID)
+		}
+		if len(continuation.ProviderStates) == 0 {
+			return fmt.Errorf("profile %s returned a pinned continuation without replayable provider state", profile.ID)
 		}
 		if continuation.EndpointID != profile.ID || continuation.Model != profile.Model {
 			return fmt.Errorf("profile %s continuation is not pinned to the enabled endpoint and model", profile.ID)
