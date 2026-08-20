@@ -1,6 +1,5 @@
 {
   "api_version": "llm.temporal/v1",
-  "continuation": {"endpoint_id": "anthropic-prod", "handle": "anthropic-messages:msg-usage", "model": "claude-resolved", "pinned": true},
   "cost": {"actual_cost_usd": null, "catalog_version": "", "method": "", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-usage-cost",
