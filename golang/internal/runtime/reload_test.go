@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 )
 
@@ -185,6 +186,96 @@ func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunWithReload did not shut down")
+	}
+}
+
+func TestRuntimeRunCancellationInterruptsPublishedReloadDrain(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	data := runtimeConfig(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	replacement := strings.Replace(string(data), "provider_timeout: 120s", "provider_timeout: 121s", 1)
+	if replacement == string(data) {
+		t.Fatal("test replacement did not change the provider timeout")
+	}
+	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := New(context.Background(), data, testRuntimeOptions(t, controller, &closed))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reloads := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	var lease *app.Lease
+	runFinished := false
+	defer func() {
+		cancel()
+		if lease != nil {
+			lease.Release()
+		}
+		if !runFinished {
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}()
+	go func() { done <- runtime.RunWithReload(ctx, path, reloads) }()
+	waitForReloadRuntimeStart(t, runtime, done)
+	old := runtime.App.Current()
+	lease, err = runtime.App.Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reloads <- struct{}{}
+	waitForRuntime(t, func() bool {
+		current := runtime.App.Current()
+		return current != nil && current != old
+	})
+	if controller.stopped.Load() {
+		t.Fatal("worker stopped before run cancellation")
+	}
+	cancel()
+
+	deadline := time.After(time.Second)
+	for !controller.stopped.Load() {
+		select {
+		case err := <-done:
+			runFinished = true
+			if err != nil {
+				t.Fatalf("RunWithReload returned %v", err)
+			}
+			if !controller.stopped.Load() {
+				t.Fatal("RunWithReload returned before the worker stopped")
+			}
+		case <-deadline:
+			t.Fatal("cancellation did not begin shutdown while the published reload was draining")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if runtime.Health.Ready() {
+		t.Fatal("worker stop began before readiness dropped")
+	}
+
+	// The old snapshot lease is deliberately held through the shutdown
+	// assertions. Releasing it here must only finish its already-cancelled
+	// cleanup; it must not be what allows shutdown to start.
+	lease.Release()
+	if !runFinished {
+		select {
+		case err := <-done:
+			runFinished = true
+			if err != nil {
+				t.Fatalf("RunWithReload returned %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("RunWithReload did not finish after cancellation")
+		}
 	}
 }
 
