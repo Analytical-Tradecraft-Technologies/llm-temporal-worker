@@ -10,6 +10,10 @@ let context = { tenant = None; project = None; actor = None; tags = [] }
 let operation_key = Operation_key.of_string "generate-test"
 let model = Model_selector.of_string "arbitrary-model"
 let input = [ Message { actor = Human; content = [ Text "hello" ] } ]
+let malformed_response_failures = ref []
+let require_codec_rejection label = function
+  | Error _ -> ()
+  | Ok _ -> malformed_response_failures := label :: !malformed_response_failures
 
 let response (request : generate_request) =
   { api_version = V1_codec.generate_api_version;
@@ -57,6 +61,34 @@ let () =
                           "generate response operation key mismatch: expected generate-test, got different-operation" -> ()
    | Error error -> failf "unexpected operation key mismatch: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "mismatched Generate operation key was accepted");
+  let malformed_checkpoint_dispatch ?task_queue:_ activity request =
+    if Temporal.Activity.name activity <> "llm.generate.v1" then
+      failwith "Generate dispatched the wrong Activity";
+    let value = response request in
+    Ok { value with checkpoint = { value.checkpoint with kind = Compaction_checkpoint } }
+  in
+  require_codec_rejection "Generate invocation accepted a compaction checkpoint"
+    (Generate.invoke_with ~dispatch:malformed_checkpoint_dispatch request);
+  let root_with_parent_dispatch ?task_queue:_ activity request =
+    if Temporal.Activity.name activity <> "llm.generate.v1" then
+      failwith "Generate dispatched the wrong Activity";
+    let value = response request in
+    Ok { value with checkpoint =
+         { value.checkpoint with parent = Some (Checkpoint.of_string_exn "unexpected-parent") } }
+  in
+  require_codec_rejection "root Generate accepted a response checkpoint parent"
+    (Generate.invoke_with ~dispatch:root_with_parent_dispatch request);
+  let child_request =
+    { request with parent = Some (Checkpoint.of_string_exn "expected-parent") }
+  in
+  let child_without_parent_dispatch ?task_queue:_ activity request =
+    if Temporal.Activity.name activity <> "llm.generate.v1" then
+      failwith "Generate dispatched the wrong Activity";
+    let value = response request in
+    Ok { value with checkpoint = { value.checkpoint with parent = None } }
+  in
+  require_codec_rejection "child Generate accepted a response without a checkpoint parent"
+    (Generate.invoke_with ~dispatch:child_without_parent_dispatch child_request);
   let zero_settings = Generate.Settings.make
       ~temperature:(match Decimal.of_string "0" with
         | Ok value -> value
@@ -75,4 +107,7 @@ let () =
      when String.equal message "positive cache variant requires an explicitly positive temperature" -> ());
   let legacy = Request.make ~operation_key ~model ~service_class:Standard ~input () in
   if legacy.model <> model then failwith "legacy Request compatibility changed";
+  (match List.rev !malformed_response_failures with
+   | [] -> ()
+   | failures -> failf "%s" (String.concat "; " failures));
   print_endline "one-shot Generate facade passed"

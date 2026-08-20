@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -73,6 +74,9 @@ func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {
 	if retry == provider.RetryAfter && apiErr.Response != nil {
 		if retryAfter := apiErr.Response.Header.Get("retry-after"); retryAfter != "" {
 			mapped.SafeDetails["retry_after"] = retryAfter
+			if retryDelay, ok := provider.ParseRetryAfter(retryAfter, time.Now()); ok {
+				mapped.RetryAfter = retryDelay
+			}
 		}
 	}
 	mapped.Provider.RequestID = apiErr.RequestID

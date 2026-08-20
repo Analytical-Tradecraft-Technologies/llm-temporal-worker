@@ -77,6 +77,44 @@ let filter_ok = function
   | Ok value -> value
   | Error error -> failwith ("unexpected filter validation error: " ^ error)
 
+let expect_execute_validation_error :
+    type a. string -> string -> a Query.t -> unit =
+  fun label expected query ->
+    let dispatch_called = ref false in
+    let should_not_dispatch ?task_queue:_ _activity _envelope =
+      dispatch_called := true;
+      failwith (label ^ " dispatched an invalid query")
+    in
+    (match Query.execute_with ~dispatch:should_not_dispatch ~operation_key ~context query with
+     | Error error when String.equal (Temporal.Error.message error) expected -> ()
+     | Error error ->
+         failf "%s returned unexpected validation error: %s" label
+           (Temporal.Error.message error)
+     | Ok _ -> failwith (label ^ " accepted an invalid direct filter"));
+    if !dispatch_called then failwith (label ^ " called its injected dispatcher")
+
+let expect_start_validation_error :
+    type a. string -> string -> a Query.t -> unit =
+  fun label expected query ->
+    let dispatch_called = ref false in
+    let should_not_dispatch ?task_queue:_ _activity _envelope =
+      dispatch_called := true;
+      failwith (label ^ " called its injected async dispatcher")
+    in
+    let future =
+      Query.start_with ~dispatch:should_not_dispatch ~operation_key ~context query
+    in
+    (match Temporal.Future.peek future with
+    | Some (Ok (Error error)) when String.equal (Temporal.Error.message error) expected -> ()
+    | Some (Ok (Error error)) ->
+        failf "%s returned unexpected start validation error: %s" label
+          (Temporal.Error.message error)
+    | Some (Ok (Ok _)) -> failwith (label ^ " start accepted an invalid direct filter")
+    | Some (Error error) ->
+        failf "%s start scheduled an Activity: %s" label (Temporal.Error.message error)
+    | None -> failwith (label ^ " start did not return a ready validation error"));
+    if !dispatch_called then failwith (label ^ " called its injected async dispatcher")
+
 let () =
   (match Budget_stream_id.of_string "not-a-stream-id" with
    | Error _ -> ()
@@ -146,6 +184,83 @@ let () =
    | Error error -> failf "unexpected cursor mismatch error: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "mismatched query cursor was accepted");
   if !dispatch_called then failwith "mismatched cursor was dispatched";
+
+  (* The public GADT constructors intentionally continue to accept the raw
+     protocol records for source compatibility.  Every invariant enforced by
+     [Query.Filter] must therefore be checked again at both dispatch seams. *)
+  let invalid_provider_page =
+    Query.Provider_status { (provider_filter ()) with page_size = 0 }
+  in
+  let invalid_model_refresh =
+    Query.Model_inventory
+      { (model_filter ()) with refresh_if_older_than_seconds = Some 0L }
+  in
+  let invalid_provider_cursor =
+    Query.Provider_status
+      (provider_filter ~cursor:(Query_cursor.of_string_exn (String.make 513 'x')) ())
+  in
+  let invalid_credit_page =
+    Query.Credit_status { (credit_filter ()) with page_size = 1001 }
+  in
+  let invalid_spend_interval =
+    Query.Spend_summary
+      { (spend_filter ()) with
+        end_time = time "2026-01-01T00:00:00Z" }
+  in
+  let invalid_spend_groups =
+    Query.Spend_summary
+      { (spend_filter ()) with group_by = [ By_provider; By_provider ] }
+  in
+  let invalid_spend_kinds =
+    Query.Spend_summary
+      { (spend_filter ()) with operation_kinds = [ Generate; Generate ] }
+  in
+  let check_both label expected query =
+    expect_execute_validation_error (label ^ " execute") expected query;
+    expect_start_validation_error (label ^ " start") expected query
+  in
+  check_both "provider page size"
+    "provider_status.page_size must be between 1 and 1000"
+    invalid_provider_page;
+  check_both "model refresh age"
+    "model_inventory.refresh_if_older_than_seconds must be between 1 and 86400"
+    invalid_model_refresh;
+  check_both "provider cursor length"
+    "provider_status.cursor must be between 1 and 512 bytes"
+    invalid_provider_cursor;
+  check_both "credit page size"
+    "credit_status.page_size must be between 1 and 1000"
+    invalid_credit_page;
+  check_both "spend interval"
+    "spend_summary.end_time must be after start_time"
+    invalid_spend_interval;
+  check_both "spend dimensions"
+    "spend_summary.group_by contains duplicate value"
+    invalid_spend_groups;
+  check_both "spend operation kinds"
+    "spend_summary.operation_kinds contains duplicate value"
+    invalid_spend_kinds;
+
+  let async_dispatch_called = ref false in
+  let async_dispatch ?task_queue:_ activity envelope =
+    async_dispatch_called := true;
+    if Temporal.Activity.name activity <> "llm.query.v1" then
+      failwith "Query.start_with used the wrong Activity descriptor";
+    Temporal.Future.map
+      (fun _ -> response_for envelope.query)
+      (Temporal.Future.all [])
+  in
+  (match Temporal.Future.peek
+           (Query.start_with ~dispatch:async_dispatch ~operation_key ~context provider) with
+   | Some (Ok (Ok { value = { routes = [] }; _ })) -> ()
+   | Some (Ok (Ok _)) -> failwith "valid async provider result changed"
+   | Some (Ok (Error error)) ->
+       failf "valid async provider query failed: %s" (Temporal.Error.message error)
+   | Some (Error error) ->
+       failf "valid async dispatcher returned a Temporal error: %s"
+         (Temporal.Error.message error)
+   | None -> failwith "valid injected async dispatcher did not return a ready result");
+  if not !async_dispatch_called then failwith "valid async query was not dispatched";
 
   let encoded =
     ok (V1_codec.encode_query_response

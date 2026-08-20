@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -37,5 +38,18 @@ func TestMapAPIErrorTreatsRedirectResponseAsAmbiguous(t *testing.T) {
 	}, "anthropic-profile")
 	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
 		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
+	}
+}
+
+func TestMapAPIErrorMapsRetryAfterDelay(t *testing.T) {
+	mapped := mapAPIError(&anthropic.Error{
+		StatusCode: http.StatusTooManyRequests,
+		Response:   &http.Response{Header: http.Header{"Retry-After": []string{"2"}}},
+	}, "anthropic-profile")
+	if got, want := mapped.RetryAfter, 2*time.Second; got != want {
+		t.Fatalf("retry after = %s, want %s", got, want)
+	}
+	if got, want := mapped.SafeDetails["retry_after"], "2"; got != want {
+		t.Fatalf("safe retry after = %q, want %q", got, want)
 	}
 }

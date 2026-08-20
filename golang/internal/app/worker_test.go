@@ -27,6 +27,13 @@ func (worker *fakeWorker) Start() error {
 }
 func (worker *fakeWorker) Stop() { worker.stopped.Store(true) }
 
+// nonComparableWorker deliberately has a slice dynamic type. WorkerController
+// implementations are not required to be comparable.
+type nonComparableWorker []int
+
+func (nonComparableWorker) Start() error { return errors.New("start failed") }
+func (nonComparableWorker) Stop()        {}
+
 type blockingWorker struct {
 	startErr     error
 	startEntered chan struct{}
@@ -205,6 +212,170 @@ func TestWorkerStartErrorLeavesReadinessFalse(t *testing.T) {
 	}
 	if err := temporalWorker.Start(); err == nil || health.Ready() {
 		t.Fatal("start error did not fail closed")
+	}
+}
+
+func TestWorkerResumeRebuildsControllerAfterStartFailure(t *testing.T) {
+	startErr := errors.New("start failed")
+	failed := &blockingWorker{startErr: startErr}
+	replacement := &fakeWorker{}
+	var factoryCalls atomic.Int32
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+			switch factoryCalls.Add(1) {
+			case 1:
+				return failed, &fakeRegistry{}, nil
+			case 2:
+				return replacement, &fakeRegistry{}, nil
+			default:
+				return nil, nil, errors.New("unexpected worker construction")
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { temporalWorker.Stop() })
+
+	if err := temporalWorker.Start(); !errors.Is(err, startErr) {
+		t.Fatalf("Start() error = %v, want %v", err, startErr)
+	}
+	if failed.stopCalls.Load() != 1 {
+		t.Fatalf("failed controller stop calls = %d, want 1", failed.stopCalls.Load())
+	}
+	if err := temporalWorker.Resume(); err != nil {
+		t.Fatalf("Resume() error = %v, want nil", err)
+	}
+	if got := factoryCalls.Load(); got != 2 {
+		t.Fatalf("worker factory calls = %d, want 2", got)
+	}
+	if !replacement.started.Load() || !temporalWorker.Started() {
+		t.Fatal("Resume did not start the replacement controller")
+	}
+}
+
+func TestWorkerStartFailureSupportsNonComparableController(t *testing.T) {
+	replacement := &fakeWorker{}
+	var factoryCalls atomic.Int32
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+			if factoryCalls.Add(1) == 1 {
+				return nonComparableWorker{1}, &fakeRegistry{}, nil
+			}
+			return replacement, &fakeRegistry{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { temporalWorker.Stop() })
+
+	if err := temporalWorker.Start(); err == nil {
+		t.Fatal("Start() error = nil, want failure")
+	}
+	if err := temporalWorker.Resume(); err != nil {
+		t.Fatalf("Resume() error = %v, want nil", err)
+	}
+	if got := factoryCalls.Load(); got != 2 || !replacement.started.Load() {
+		t.Fatalf("factory calls=%d replacement-started=%v, want 2 and true", got, replacement.started.Load())
+	}
+}
+
+func TestWorkerResumeWaitsForFailedStartCleanup(t *testing.T) {
+	startErr := errors.New("start failed")
+	releaseStop := make(chan struct{})
+	release := closeWorkerGate(releaseStop)
+	failed := &blockingWorker{
+		startErr:    startErr,
+		stopEntered: make(chan struct{}, 1),
+		releaseStop: releaseStop,
+	}
+	replacement := &fakeWorker{}
+	var factoryCalls atomic.Int32
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+			if factoryCalls.Add(1) == 1 {
+				return failed, &fakeRegistry{}, nil
+			}
+			return replacement, &fakeRegistry{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { temporalWorker.Stop() })
+	t.Cleanup(release)
+
+	started := make(chan error, 1)
+	go func() { started <- temporalWorker.Start() }()
+	waitForWorkerEvent(t, failed.stopEntered, "failed controller cleanup")
+	if err := temporalWorker.Resume(); err == nil {
+		t.Fatal("Resume during failed controller cleanup = nil, want an error")
+	}
+	if got := factoryCalls.Load(); got != 1 {
+		t.Fatalf("worker factory calls during cleanup = %d, want 1", got)
+	}
+
+	release()
+	if err := <-started; !errors.Is(err, startErr) {
+		t.Fatalf("Start() error = %v, want %v", err, startErr)
+	}
+	if err := temporalWorker.Resume(); err != nil {
+		t.Fatalf("Resume() after cleanup error = %v, want nil", err)
+	}
+	if got := factoryCalls.Load(); got != 2 || !replacement.started.Load() {
+		t.Fatalf("factory calls=%d replacement-started=%v, want 2 and true", got, replacement.started.Load())
+	}
+}
+
+func TestWorkerStopWaitsForFailedStartCleanup(t *testing.T) {
+	startErr := errors.New("start failed")
+	releaseStop := make(chan struct{})
+	release := closeWorkerGate(releaseStop)
+	failed := &blockingWorker{
+		startErr:    startErr,
+		stopEntered: make(chan struct{}, 1),
+		releaseStop: releaseStop,
+	}
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+			return failed, &fakeRegistry{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
+
+	started := make(chan error, 1)
+	go func() { started <- temporalWorker.Start() }()
+	waitForWorkerEvent(t, failed.stopEntered, "failed controller cleanup")
+	stopped := make(chan struct{})
+	go func() {
+		temporalWorker.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before failed controller cleanup completed")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	release()
+	if err := <-started; !errors.Is(err, startErr) {
+		t.Fatalf("Start() error = %v, want %v", err, startErr)
+	}
+	waitForWorkerEvent(t, stopped, "Stop after failed controller cleanup")
+	if failed.stopCalls.Load() != 1 {
+		t.Fatalf("failed controller stop calls = %d, want 1", failed.stopCalls.Load())
 	}
 }
 

@@ -1,6 +1,6 @@
 # Dependency Baseline
 
-Recorded: 2026-07-28
+Recorded: 2026-08-20
 
 This baseline records the toolchain and the direct dependency versions checked
 into `go.mod`. The implementation layers that own these dependencies have
@@ -14,9 +14,9 @@ the `llm` package.
 | Component | Selection | Source and notes |
 | --- | --- | --- |
 | Go module language | `go 1.26` | The module declares the Go 1.26 language/toolchain line. |
-| Current patch at baseline | `go1.26.5` | [Go release history](https://go.dev/doc/devel/release), checked 2026-07-13. |
+| Current patch at baseline | `go1.26.7` | [Go release history](https://go.dev/doc/devel/release), checked 2026-08-20. |
 | Minimum bootstrap for Go 1.26 | `go1.24.6` | [Go 1.26 release notes](https://go.dev/doc/go1.26), checked 2026-07-13. |
-| Local version hint | `.go-version` = `1.26.5` | CI and the container use the reviewed Go 1.26.5 patch through `actions/setup-go`. |
+| Local version hint | `.go-version` = `1.26.7` | CI and the container use the reviewed Go 1.26.7 patch through `actions/setup-go`. |
 
 ## Direct modules
 
