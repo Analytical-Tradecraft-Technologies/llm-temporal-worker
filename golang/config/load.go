@@ -156,6 +156,9 @@ func applyDefaults(config *Config) {
 	if config.Limits.ProviderTimeout == 0 {
 		config.Limits.ProviderTimeout = Duration(120 * time.Second)
 	}
+	if config.Limits.ProviderResponseBytes == 0 {
+		config.Limits.ProviderResponseBytes = DefaultProviderResponseBytes
+	}
 	if config.Limits.MaxOutputTokens == 0 {
 		config.Limits.MaxOutputTokens = 32768
 	}

@@ -430,6 +430,9 @@ func (limits LimitsConfig) validate() error {
 	if err := validatePositiveDuration(limits.ProviderTimeout, "limits.provider_timeout"); err != nil {
 		return err
 	}
+	if limits.ProviderResponseBytes <= 0 || limits.ProviderResponseBytes > MaxProviderResponseBytes {
+		return fmt.Errorf("limits.provider_response_bytes must be between 1 and %d", MaxProviderResponseBytes)
+	}
 	ratio, ok := new(big.Rat).SetString(limits.TokenEstimateSafetyRatio)
 	if !ok || ratio.Sign() <= 0 || ratio.Cmp(big.NewRat(100, 1)) > 0 {
 		return fmt.Errorf("limits.token_estimate_safety_ratio must be a finite positive decimal <= 100")

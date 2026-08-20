@@ -276,13 +276,14 @@
     },
     "limits": {
       "type": "object", "additionalProperties": false,
-      "required": ["request_bytes", "items", "parts_per_item", "tools", "schema_bytes", "json_depth", "continuation_depth", "route_attempts", "provider_timeout", "max_output_tokens", "max_budget_buckets_per_window", "token_estimate_safety_ratio"],
+      "required": ["request_bytes", "items", "parts_per_item", "tools", "schema_bytes", "json_depth", "continuation_depth", "route_attempts", "provider_timeout", "provider_response_bytes", "max_output_tokens", "max_budget_buckets_per_window", "token_estimate_safety_ratio"],
       "properties": {
         "request_bytes": { "type": "integer", "minimum": 1 }, "items": { "type": "integer", "minimum": 1 },
         "parts_per_item": { "type": "integer", "minimum": 1 }, "tools": { "type": "integer", "minimum": 1 },
         "schema_bytes": { "type": "integer", "minimum": 1 }, "json_depth": { "type": "integer", "minimum": 1 },
         "continuation_depth": { "type": "integer", "minimum": 1 }, "route_attempts": { "type": "integer", "minimum": 1 },
-        "provider_timeout": { "$ref": "#/$defs/duration" }, "max_output_tokens": { "type": "integer", "minimum": 1 },
+        "provider_timeout": { "$ref": "#/$defs/duration" }, "provider_response_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+        "max_output_tokens": { "type": "integer", "minimum": 1 },
         "max_budget_buckets_per_window": { "type": "integer", "minimum": 1 }, "token_estimate_safety_ratio": { "type": "string" }
       }
     },

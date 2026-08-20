@@ -220,10 +220,16 @@ type LimitsConfig struct {
 	ContinuationDepth         int      `yaml:"continuation_depth" json:"continuation_depth"`
 	RouteAttempts             int      `yaml:"route_attempts" json:"route_attempts"`
 	ProviderTimeout           Duration `yaml:"provider_timeout" json:"provider_timeout"`
+	ProviderResponseBytes     int64    `yaml:"provider_response_bytes" json:"provider_response_bytes"`
 	MaxOutputTokens           int      `yaml:"max_output_tokens" json:"max_output_tokens"`
 	MaxBudgetBucketsPerWindow int      `yaml:"max_budget_buckets_per_window" json:"max_budget_buckets_per_window"`
 	TokenEstimateSafetyRatio  string   `yaml:"token_estimate_safety_ratio" json:"token_estimate_safety_ratio"`
 }
+
+const (
+	DefaultProviderResponseBytes int64 = 16 << 20
+	MaxProviderResponseBytes     int64 = 64 << 20
+)
 
 type EndpointConfig struct {
 	Family            string                          `yaml:"family" json:"family"`

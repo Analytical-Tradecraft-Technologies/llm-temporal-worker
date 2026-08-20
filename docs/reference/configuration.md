@@ -121,6 +121,7 @@ limits:
   continuation_depth: 256
   route_attempts: 6
   provider_timeout: 120s
+  provider_response_bytes: 16777216
   max_output_tokens: 32768
   max_budget_buckets_per_window: 2048
   token_estimate_safety_ratio: "1.35"
@@ -625,6 +626,17 @@ handshake phases are independently bounded to at most 10 seconds. Transport
 failures are emitted as a safe endpoint-scoped classification, never as a URL,
 credential, authorization header, request body, continuation value, or raw
 provider response.
+
+`limits.provider_response_bytes` bounds every HTTP response body shared by all
+provider SDKs, including successful JSON, provider error bodies, and streaming
+protocols such as SSE. It defaults to 16 MiB and cannot exceed the 64 MiB hard
+safety cap. A declared `Content-Length` above the configured limit is rejected
+before parsing and the body is closed. Unknown-length, chunked, or incorrectly
+declared bodies are read through a counting wrapper: bytes through the limit
+remain available incrementally, and the next byte returns a content-free
+oversize classification. Configure enough space for the largest legitimate
+single provider response; the limit is cumulative per HTTP response, not per
+stream event.
 
 ## Readiness and Redis budget policy
 

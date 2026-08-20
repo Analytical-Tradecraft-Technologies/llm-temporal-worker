@@ -136,6 +136,9 @@ func ClassifyEgressOutcome(outcome *EgressOutcome, err error) *Error {
 	if errors.Is(err, ErrProviderPreDispatch) {
 		return NewPreDispatchUnavailableError(err)
 	}
+	if errors.Is(err, ErrProviderResponseTooLarge) {
+		return NewProviderResponseTooLargeError(err)
+	}
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}

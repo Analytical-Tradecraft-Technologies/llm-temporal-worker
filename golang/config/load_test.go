@@ -85,6 +85,36 @@ func TestLoadCompleteExample(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsAndValidatesProviderResponseBytes(t *testing.T) {
+	withoutSetting := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 16777216\n", "", 1)
+	loaded, err := config.Load([]byte(withoutSetting))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loaded.Limits.ProviderResponseBytes, int64(16<<20); got != want {
+		t.Fatalf("default provider response bytes = %d, want %d", got, want)
+	}
+
+	configured := strings.Replace(withoutSetting, "  provider_timeout: 120s\n", "  provider_timeout: 120s\n  provider_response_bytes: 8388608\n", 1)
+	loaded, err = config.Load([]byte(configured))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loaded.Limits.ProviderResponseBytes, int64(8<<20); got != want {
+		t.Fatalf("configured provider response bytes = %d, want %d", got, want)
+	}
+
+	unsafe := strings.Replace(configured, "provider_response_bytes: 8388608", "provider_response_bytes: 67108865", 1)
+	if _, err := config.Load([]byte(unsafe)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes") {
+		t.Fatalf("unsafe provider response bytes error = %v", err)
+	}
+
+	negative := strings.Replace(configured, "provider_response_bytes: 8388608", "provider_response_bytes: -1", 1)
+	if _, err := config.Load([]byte(negative)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes") {
+		t.Fatalf("negative provider response bytes error = %v", err)
+	}
+}
+
 func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
 	withoutSetting := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s\n", "", 1)
 	loaded, err := config.Load([]byte(withoutSetting))
