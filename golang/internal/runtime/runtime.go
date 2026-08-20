@@ -570,7 +570,7 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 				reloads = nil
 				continue
 			}
-			runtime.reloadFromTrigger(reloadPath)
+			runtime.reloadFromTrigger(ctx, reloadPath)
 		case err, ok := <-healthErrors:
 			if !ok {
 				healthErrors = nil
@@ -594,15 +594,18 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 	return runtime.gracefulShutdown()
 }
 
-func (runtime *Runtime) reloadFromTrigger(path string) {
+func (runtime *Runtime) reloadFromTrigger(parent context.Context, path string) {
 	if runtime == nil || path == "" {
 		return
+	}
+	if parent == nil {
+		parent = context.Background()
 	}
 	timeout := runtime.timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	_ = runtime.ReloadFile(ctx, path)
 }
