@@ -41,7 +41,7 @@ manual run selects one profile by adding its flag and the two suite gates; it
 runs `TestLiveProviderContracts` with scoped credentials. The harness does not
 read a provider's environment variables until those gates pass.
 
-## Profiles
+## Pinned profiles
 
 Every profile uses tenant `llmtw-live-contract`, the exact prompt `Reply with
 exactly: live-contract-ok`, a maximum output of 8 tokens, and a maximum actual
