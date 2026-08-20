@@ -3,7 +3,7 @@
 # Use the same reviewed patch release as CI and the security verifier. The
 # version tag remains mutable (rather than a digest) so image maintenance can
 # update it in one reviewed dependency change.
-ARG GO_IMAGE=docker.io/library/golang:1.26.5
+ARG GO_IMAGE=docker.io/library/golang:1.26.7
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
