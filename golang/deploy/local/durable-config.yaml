@@ -63,6 +63,7 @@ limits:
   continuation_depth: 64
   route_attempts: 3
   provider_timeout: 30s
+  provider_response_bytes: 16777216
   max_output_tokens: 4096
   token_estimate_safety_ratio: "1.35"
 

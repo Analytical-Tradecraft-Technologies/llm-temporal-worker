@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -48,8 +49,9 @@ type providerEgressPolicy struct {
 }
 
 type providerEgressRoundTripper struct {
-	policy *providerEgressPolicy
-	next   http.RoundTripper
+	policy           *providerEgressPolicy
+	next             http.RoundTripper
+	maxResponseBytes int64
 }
 
 type providerEgressCallStateKey struct{}
@@ -205,10 +207,13 @@ func preDispatchProviderFailure(classification string) error {
 // factory; all other clients get the same host, address, redirect, and timeout
 // protections as configured production endpoints.
 func NewProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig) (*http.Client, error) {
-	return newProviderEgressHTTPClient(base, endpoint, nil, nil)
+	return newProviderEgressHTTPClient(base, endpoint, nil, nil, config.DefaultProviderResponseBytes)
 }
 
-func newProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig, resolver ProviderEgressResolver, dial ProviderEgressDialContext) (*http.Client, error) {
+func newProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig, resolver ProviderEgressResolver, dial ProviderEgressDialContext, maxResponseBytes int64) (*http.Client, error) {
+	if maxResponseBytes <= 0 || maxResponseBytes > config.MaxProviderResponseBytes {
+		return nil, deniedProviderEgress("invalid_policy")
+	}
 	timeout := boundedProviderRequestTimeout(time.Duration(endpoint.Timeout))
 	policy, err := newProviderEgressPolicy(endpoint, resolver, dial, boundedProviderConnectTimeout(timeout))
 	if err != nil {
@@ -227,7 +232,7 @@ func newProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConf
 	transport.ExpectContinueTimeout = minDuration(time.Second, boundedProviderConnectTimeout(timeout))
 
 	return &http.Client{
-		Transport: &providerEgressRoundTripper{policy: policy, next: transport},
+		Transport: &providerEgressRoundTripper{policy: policy, next: transport, maxResponseBytes: maxResponseBytes},
 		// This bounds the complete response read. ResponseHeaderTimeout and the
 		// bounded dial/TLS timeouts cover the earlier phases separately.
 		Timeout: timeout,
@@ -356,6 +361,15 @@ func (guard *providerEgressRoundTripper) RoundTrip(request *http.Request) (*http
 		return nil, err
 	}
 	response, err := guard.next.RoundTrip(guardedRequest)
+	if response != nil && response.ContentLength > guard.responseByteLimit() {
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return nil, provider.ErrProviderResponseTooLarge
+	}
+	if response != nil && response.Body != nil && response.Body != http.NoBody {
+		response.Body = &providerResponseBody{body: response.Body, remaining: guard.responseByteLimit()}
+	}
 	if response == nil {
 		if state.writableConnectionWasAcquired() {
 			if errors.Is(err, ErrProviderEgressDenied) || errors.Is(err, provider.ErrProviderPreDispatch) {
@@ -375,6 +389,53 @@ func (guard *providerEgressRoundTripper) RoundTrip(request *http.Request) (*http
 		}
 	}
 	return response, err
+}
+
+func (guard *providerEgressRoundTripper) responseByteLimit() int64 {
+	if guard != nil && guard.maxResponseBytes > 0 {
+		return guard.maxResponseBytes
+	}
+	return config.DefaultProviderResponseBytes
+}
+
+// providerResponseBody never exposes more than the configured bytes. Once the
+// caller consumes that allowance it probes exactly one additional byte to
+// distinguish an exact-bound response from an oversized response. Close is
+// delegated unchanged so SDK streaming and connection cleanup retain their
+// normal lifecycle.
+type providerResponseBody struct {
+	body      io.ReadCloser
+	remaining int64
+}
+
+func (body *providerResponseBody) Read(buffer []byte) (int, error) {
+	if body == nil || body.body == nil {
+		return 0, io.EOF
+	}
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if body.remaining > 0 {
+		if int64(len(buffer)) > body.remaining {
+			buffer = buffer[:body.remaining]
+		}
+		read, err := body.body.Read(buffer)
+		body.remaining -= int64(read)
+		return read, err
+	}
+	var probe [1]byte
+	read, err := body.body.Read(probe[:])
+	if read > 0 {
+		return 0, provider.ErrProviderResponseTooLarge
+	}
+	return 0, err
+}
+
+func (body *providerResponseBody) Close() error {
+	if body == nil || body.body == nil {
+		return nil
+	}
+	return body.body.Close()
 }
 
 func recordProviderEgressDenied(request *http.Request, err error) {

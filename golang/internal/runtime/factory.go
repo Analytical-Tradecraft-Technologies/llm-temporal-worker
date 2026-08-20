@@ -904,7 +904,11 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 	if err != nil {
 		return nil, err
 	}
-	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial)
+	providerResponseBytes := value.Limits.ProviderResponseBytes
+	if providerResponseBytes == 0 {
+		providerResponseBytes = config.DefaultProviderResponseBytes
+	}
+	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, providerResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %q: provider egress policy: %w", endpointID, err)
 	}

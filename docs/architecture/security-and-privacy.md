@@ -76,6 +76,10 @@ Endpoints are operator-configured and validated:
   limited to 443;
 - automatic redirects and environment proxies are disabled; no v1 endpoint is
   documented as redirecting, so a future exception must revalidate every hop;
+- every success, error, and streaming response body is capped by
+  `limits.provider_response_bytes` (16 MiB by default, with a 64 MiB hard
+  ceiling); oversized declared lengths are rejected before parsing and
+  unknown or misleading lengths are stopped by a one-byte overrun probe;
 - DNS is resolved at dial time, every returned address is rejected if it is
   loopback, private, link-local, multicast, unspecified, carrier-grade NAT,
   benchmarking, deprecated IPv6 site-local (`fec0::/10`), or a known cloud

@@ -97,6 +97,7 @@ limits:
   continuation_depth: 256
   route_attempts: 6
   provider_timeout: 120s
+  provider_response_bytes: 16777216
   max_output_tokens: 32768
   max_budget_buckets_per_window: 2048
   token_estimate_safety_ratio: "1.35"
