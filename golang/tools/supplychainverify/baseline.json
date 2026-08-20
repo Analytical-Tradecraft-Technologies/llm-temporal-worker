@@ -21,7 +21,7 @@
     },
     {
       "path": "github.com/anthropics/anthropic-sdk-go",
-      "version": "v1.63.1",
+      "version": "v1.66.0",
       "license": "MIT",
       "source": "https://github.com/anthropics/anthropic-sdk-go"
     },

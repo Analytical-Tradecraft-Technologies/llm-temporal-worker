@@ -1,7 +1,7 @@
 profile: anthropic-aws
-upstream_url: https://github.com/anthropics/anthropic-sdk-go/blob/v1.63.1/aws/aws.go
+upstream_url: https://github.com/anthropics/anthropic-sdk-go/blob/v1.66.0/aws/aws.go
 upstream_date: "2026-08-06"
-sdk_version: github.com/anthropics/anthropic-sdk-go@v1.63.1
+sdk_version: github.com/anthropics/anthropic-sdk-go@v1.66.0
 provenance: synthetic
 redactions:
   - credentials
