@@ -95,31 +95,31 @@ Redis durable-operation composition.
 All data required to decide every active budget window lives in the configured
 Redis namespace and one Redis Cluster hash slot. It includes:
 
-- `<redis-prefix>:{<budget-hash-tag>}:budget:active-generation`, pointing to an
+- `<redis-prefix>:{<admission-hash-tag>}:budget:active-generation`, pointing to an
   immutable random generation ID;
-- `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:manifest`, containing schema/config/price versions,
+- `<redis-prefix>:{<admission-hash-tag>}:budget:g:<generation>:manifest`, containing schema/config/price versions,
   `rebuild_complete`, coverage bounds, policy/window/bucket counts, the budget
   Stream high-water mark, the nano-USD rounding version, and a digest of the
   expected member catalog;
-- `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:window:<window-hmac>`
+- `<redis-prefix>:{<admission-hash-tag>}:budget:g:<generation>:window:<window-hmac>`
   for each policy/window, containing its limit, complete zero-or-value bucket
   fields for the entire active horizon, retained reservations, and version;
-- `<redis-prefix>:{<budget-hash-tag>}:budget:g:<generation>:operation:<operation-hmac>`
+- `<redis-prefix>:{<admission-hash-tag>}:budget:g:<generation>:operation:<operation-hmac>`
   as the reservation index for idempotent acquire/reconcile/release;
-- `<redis-prefix>:{<budget-hash-tag>}:budget:events`, the one Redis Stream to
+- `<redis-prefix>:{<admission-hash-tag>}:budget:events`, the one Redis Stream to
   which the Function appends every acquire,
   denial-state change, reconciliation, release, policy refresh, horizon advance,
   and generation switch; and
-- `<redis-prefix>:{<budget-hash-tag>}:budget:workers`, containing leases,
+- `<redis-prefix>:{<admission-hash-tag>}:budget:workers`, containing leases,
   persistent process-session roster entries, and each
   worker's last consumed Stream ID.
 
 These are the exact key families; implementation may add only a documented
 version suffix inside them. Every key comes from the one validated
-`state.redis.key_prefix` and `budget_hash_tag`, so two deployments sharing Redis
-remain isolated while all keys touched by one Function stay in one Cluster
-slot. The Stream is the particular cross-worker communication key; Pub/Sub is
-not used because its notifications are lossy.
+`state.redis.key_prefix` and `state.redis.admission_hash_tag`, so two deployments
+sharing Redis remain isolated while all keys touched by one Function stay in
+one Cluster slot. The Stream is the particular cross-worker communication key;
+Pub/Sub is not used because its notifications are lossy.
 
 Every expected bucket is materialized, including zero-valued buckets, so a
 missing field is corruption rather than an ambiguous zero. The Function checks

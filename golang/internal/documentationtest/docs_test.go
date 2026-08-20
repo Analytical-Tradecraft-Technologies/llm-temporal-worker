@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/contracttest"
 )
 
@@ -76,6 +77,65 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 	}
 	if strings.Count(string(decision), "economy | standard | priority") != 1 {
 		t.Fatal("service-class decision must state the exact public enum once")
+	}
+}
+
+func TestConfigurationReferenceCompleteShapeLoads(t *testing.T) {
+	withoutConfigEnvironmentOverrides(t)
+
+	path := filepath.Join(repositoryRoot(t), "docs/reference/configuration.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	example := fencedYAMLForSection(t, string(data), "## Complete shape")
+	if _, err := config.Load([]byte(example)); err != nil {
+		t.Fatalf("complete configuration example must pass the strict loader: %v", err)
+	}
+}
+
+func fencedYAMLForSection(t *testing.T, document, heading string) string {
+	t.Helper()
+	sectionStart := strings.Index(document, heading)
+	if sectionStart < 0 {
+		t.Fatalf("missing documentation section %q", heading)
+	}
+	section := document[sectionStart+len(heading):]
+	if sectionEnd := strings.Index(section, "\n## "); sectionEnd >= 0 {
+		section = section[:sectionEnd]
+	}
+	fenceStart := strings.Index(section, "```yaml\n")
+	if fenceStart < 0 {
+		t.Fatalf("section %q has no YAML fence", heading)
+	}
+	yaml := section[fenceStart+len("```yaml\n"):]
+	fenceEnd := strings.Index(yaml, "\n```")
+	if fenceEnd < 0 {
+		t.Fatalf("section %q has no closing YAML fence", heading)
+	}
+	return yaml[:fenceEnd]
+}
+
+func withoutConfigEnvironmentOverrides(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"LLMTW_POSTGRES_DATABASE",
+		"LLMTW_POSTGRES_SCHEMA",
+		"LLMTW_POSTGRES_TABLE_PREFIX",
+		"LLMTW_REDIS_KEY_PREFIX",
+	} {
+		value, present := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+		t.Cleanup(func() {
+			if present {
+				_ = os.Setenv(name, value)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
 	}
 }
 
