@@ -310,6 +310,7 @@ let generate_request_of_json value =
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; append; settings_patch; cache }
 
 let generate_response_to_json (value : generate_response) =
+  let* () = Llm_temporal_response_validation.validate_generate_response value in
   let fields = ["api_version", `String generate_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "operation_id", `String (Operation_id.to_string value.operation_id); "status", response_status_to_json value.status; "output", `List (List.map item_to_json value.output); "checkpoint", checkpoint_to_json value.checkpoint; "cache", cache_disposition_to_json value.cache; "cost", settled_cost_to_json value.cost] in
   let fields = fields @ option_field "route" route_to_v1_json value.route @ option_field "usage" usage_to_json value.usage in
   Ok (`Assoc (fields @ ["diagnostics", `List (List.map diagnostic_to_json value.diagnostics)]))
@@ -328,7 +329,9 @@ let generate_response_of_json value =
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "generate response.usage" value in Ok (Some value) in
   let* cost = required "generate response" "cost" fields >>= settled_cost_of_json "generate response.cost" in
   let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "generate response.diagnostics" value >>= map_result (diagnostic_of_json "generate response.diagnostic") in
-  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; usage; cost; diagnostics }
+  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; usage; cost; diagnostics } in
+  let* () = Llm_temporal_response_validation.validate_generate_response response in
+  Ok response
 
 let encode_generate_request value = let* value = generate_request_to_json value in to_bytes value
 let decode_generate_request bytes = parse_json generate_request_of_json bytes
@@ -376,6 +379,7 @@ let provenance_of_json context value =
   Ok { source; origin_operation_id; policy }
 
 let compaction_response_to_json (value : compaction_response) =
+  let* () = Llm_temporal_response_validation.validate_compaction_response value in
   let fields = ["api_version", `String compact_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "operation_id", `String (Operation_id.to_string value.operation_id); "status", `String "completed"; "checkpoint", checkpoint_to_json value.checkpoint; "cache", cache_disposition_to_json value.cache; "cost", settled_cost_to_json value.cost] in
   let fields = fields @ option_field "provenance" provenance_to_json value.provenance @ option_field "usage" usage_to_json value.usage in
   Ok (`Assoc (fields @ ["diagnostics", `List (List.map diagnostic_to_json value.diagnostics)]))
@@ -389,14 +393,15 @@ let compaction_response_of_json value =
   let* status = required "compact response" "status" fields >>= string "compact response.status" in
   let* () = if status = "completed" then Ok () else Error (errorf "compact response.status must be completed") in
   let* checkpoint = required "compact response" "checkpoint" fields >>= checkpoint_of_json "compact response.checkpoint" in
-  let* () = if checkpoint.kind = Compaction_checkpoint then Ok () else Error (errorf "compact response checkpoint must be compaction") in
   let* cache = required "compact response" "cache" fields >>= cache_disposition_of_json "compact response.cache" in
   let* () = if cache.variant = 0l then Ok () else Error (errorf "compact response cache variant must be zero") in
   let* provenance = match optional "provenance" fields with None | Some `Null -> Ok None | Some value -> let* value = provenance_of_json "compact response.provenance" value in Ok (Some value) in
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "compact response.usage" value in Ok (Some value) in
   let* cost = required "compact response" "cost" fields >>= settled_cost_of_json "compact response.cost" in
   let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "compact response.diagnostics" value >>= map_result (diagnostic_of_json "compact response.diagnostic") in
-  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; checkpoint; cache; provenance; usage; cost; diagnostics }
+  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; checkpoint; cache; provenance; usage; cost; diagnostics } in
+  let* () = Llm_temporal_response_validation.validate_compaction_response response in
+  Ok response
 
 let encode_compact_request value = let* value = compact_request_to_json value in to_bytes value
 let decode_compact_request bytes = parse_json compact_request_of_json bytes

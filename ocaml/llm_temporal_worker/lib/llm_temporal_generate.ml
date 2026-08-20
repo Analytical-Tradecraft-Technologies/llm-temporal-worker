@@ -41,7 +41,11 @@ let invoke_with ?task_queue ~dispatch (request : request) =
                  (Operation_key.to_string request.operation_key)) ->
           Error (operation_key_mismatch ~expected:request.operation_key
                    ~actual:response.operation_key)
-      | Ok response -> Ok response
+      | Ok response ->
+          (match Llm_temporal_response_validation.validate_generate_response_for_request
+                   request response with
+           | Error error -> Error error
+           | Ok () -> Ok response)
 
 let invoke_dispatch ?task_queue activity request =
   Temporal.Activity.execute
