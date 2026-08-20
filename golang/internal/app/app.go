@@ -153,6 +153,8 @@ type App struct {
 	clients             func(context.Context, *config.Snapshot) (ClientSet, error)
 	validateReplacement func(current, replacement *config.Snapshot) error
 	verify              func(context.Context, *config.Snapshot, ClientSet) error
+	lifecycleMu         sync.Mutex
+	closed              bool
 	current             atomic.Pointer[RuntimeSnapshot]
 }
 
@@ -241,7 +243,14 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 		closeUnpublishedClients(clients)
 		return err
 	}
+	app.lifecycleMu.Lock()
+	if app.closed {
+		app.lifecycleMu.Unlock()
+		closeUnpublishedClients(clients)
+		return fmt.Errorf("app is closed")
+	}
 	old := app.current.Swap(next)
+	app.lifecycleMu.Unlock()
 	if old == nil {
 		return nil
 	}
@@ -261,7 +270,14 @@ func (app *App) Close(ctx context.Context) error {
 	if app == nil {
 		return nil
 	}
+	app.lifecycleMu.Lock()
+	if app.closed {
+		app.lifecycleMu.Unlock()
+		return nil
+	}
+	app.closed = true
 	old := app.current.Swap(nil)
+	app.lifecycleMu.Unlock()
 	if old == nil {
 		return nil
 	}
