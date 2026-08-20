@@ -146,13 +146,26 @@ type Runtime struct {
 	monitorCancel          context.CancelFunc
 	monitorDone            chan struct{}
 
-	mu      sync.Mutex
-	started bool
+	mu        sync.Mutex
+	state     runtimeState
+	startDone chan struct{}
 	// readinessMu serializes the monitor's cancellation handoff with the
 	// final Pause/Resume transition. Without this handoff, shutdown could
 	// cancel a monitor tick between its probe result and Worker.Resume.
 	readinessMu sync.Mutex
 }
+
+type runtimeState uint8
+
+const (
+	// A failed initial listener bind returns to idle. Once any listener has
+	// started, a later startup failure closes the runtime instead of offering a
+	// retry over resources that net/http cannot safely reuse.
+	runtimeIdle runtimeState = iota
+	runtimeStarting
+	runtimeStarted
+	runtimeClosed
+)
 
 // New validates and composes a runtime. It performs no provider calls when
 // EngineFactory is unavailable; the returned error is safe to show in CLI
@@ -427,24 +440,30 @@ func (runtime *Runtime) Start() error {
 	if runtime == nil || runtime.Worker == nil {
 		return errors.New("runtime is not initialized")
 	}
+	runtime.mu.Lock()
+	if runtime.state != runtimeIdle {
+		runtime.mu.Unlock()
+		return errors.New("runtime is already started")
+	}
+	runtime.state = runtimeStarting
+	runtime.startDone = make(chan struct{})
+	runtime.mu.Unlock()
+
 	if !runtime.v1RuntimeConfigured {
 		if runtime.Health != nil {
 			runtime.Health.SetReady(false)
 		}
+		runtime.finishStart(runtimeIdle)
 		return ErrV1RuntimeUnavailable
 	}
-	runtime.mu.Lock()
-	if runtime.started {
-		runtime.mu.Unlock()
-		return errors.New("runtime is already started")
-	}
-	runtime.mu.Unlock()
 	if err := runtime.HealthServer.Start(); err != nil {
+		runtime.finishStart(runtimeIdle)
 		return err
 	}
 	if runtime.MetricsServer != nil {
 		if err := runtime.MetricsServer.Start(); err != nil {
 			_ = runtime.HealthServer.Shutdown(context.Background())
+			runtime.finishStart(runtimeClosed)
 			return err
 		}
 	}
@@ -453,13 +472,23 @@ func (runtime *Runtime) Start() error {
 		if runtime.MetricsServer != nil {
 			_ = runtime.MetricsServer.Shutdown(context.Background())
 		}
+		runtime.finishStart(runtimeClosed)
 		return err
 	}
-	runtime.mu.Lock()
-	runtime.started = true
-	runtime.mu.Unlock()
 	runtime.startDependencyMonitor()
+	runtime.finishStart(runtimeStarted)
 	return nil
+}
+
+func (runtime *Runtime) finishStart(state runtimeState) {
+	runtime.mu.Lock()
+	runtime.state = state
+	done := runtime.startDone
+	runtime.startDone = nil
+	if done != nil {
+		close(done)
+	}
+	runtime.mu.Unlock()
 }
 
 // Shutdown applies the readiness-first, worker-stop, client-drain, telemetry
@@ -470,6 +499,22 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	for {
+		runtime.mu.Lock()
+		if runtime.state != runtimeStarting {
+			runtime.state = runtimeClosed
+			runtime.mu.Unlock()
+			break
+		}
+		done := runtime.startDone
+		runtime.mu.Unlock()
+		select {
+		case <-done:
+			continue
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	runtime.stopDependencyMonitor(ctx)
 	err := runtime.shutdown.Shutdown(ctx)
