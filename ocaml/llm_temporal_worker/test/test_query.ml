@@ -14,6 +14,34 @@ let time value =
   | Ok (value, _, _) -> value
   | Error _ -> failwith "invalid test timestamp"
 
+let usd value =
+  match Usd_decimal.of_string value with
+  | Ok value -> value
+  | Error message -> failwith ("invalid test USD value: " ^ message)
+
+let expect_codec_error label expected = function
+  | Error error when String.equal (Temporal.Error.message error) expected -> ()
+  | Error error ->
+      failf "%s returned unexpected codec error: %s" label
+        (Temporal.Error.message error)
+  | Ok _ -> failwith (label ^ " accepted an invalid query response")
+
+let provider_response_payload cost_fields =
+  Bytes.of_string
+    (Yojson.Safe.to_string
+       (`Assoc
+          ([ "api_version", `String "llm.temporal/query/v1";
+             "operation_key", `String "query-test";
+             "query_execution_id", `String "execution-1";
+             "kind", `String "provider_status";
+             "observed_at", `String "2026-01-01T00:00:00Z";
+             "source", `String "persisted";
+             "freshness", `String "current";
+             "complete", `Bool true;
+             "next_cursor", `Null;
+             "result", `Assoc [ "routes", `List [] ] ]
+           @ cost_fields)))
+
 let context = { tenant = None; project = None; actor = None; tags = [] }
 let operation_key = Operation_key.of_string "query-test"
 
@@ -261,6 +289,115 @@ let () =
          (Temporal.Error.message error)
    | None -> failwith "valid injected async dispatcher did not return a ready result");
   if not !async_dispatch_called then failwith "valid async query was not dispatched";
+
+  (* The in-memory response type makes exact-vs-unknown field combinations
+     structural, but a nonzero [control_query_zero] remains representable.
+     Injected dispatchers bypass the JSON codec, so both facade seams must
+     reject it before returning typed query data. *)
+  let invalid_control_cost_response =
+    { (response_for (Provider_status_request (provider_filter ()))) with
+      cost = Exact_cost { actual_cost_usd = usd "1";
+                          method_ = Control_query_zero;
+                          catalog_version = None } }
+  in
+  let invalid_cost_dispatch ?task_queue:_ _activity _envelope =
+    Ok invalid_control_cost_response
+  in
+  expect_codec_error "injected sync control query cost"
+    "query response control_query_zero requires zero actual_cost_usd"
+    (Query.execute_with ~dispatch:invalid_cost_dispatch ~operation_key ~context
+       provider);
+  let invalid_async_cost_dispatch ?task_queue:_ _activity _envelope =
+    Temporal.Future.map
+      (fun _ -> invalid_control_cost_response)
+      (Temporal.Future.all [])
+  in
+  (match Temporal.Future.peek
+           (Query.start_with ~dispatch:invalid_async_cost_dispatch
+              ~operation_key ~context provider) with
+   | Some (Ok result) ->
+       expect_codec_error "injected async control query cost"
+         "query response control_query_zero requires zero actual_cost_usd"
+         result
+   | Some (Error error) ->
+       failf "invalid injected async cost returned a Temporal error: %s"
+         (Temporal.Error.message error)
+   | None -> failwith "invalid injected async cost did not return a ready result");
+
+  (* Query response cost fields form a closed state machine at the JSON
+     boundary. These hand-written payloads catch each cross-state field leak,
+     including a nonzero control-query amount. *)
+  let reject_cost_payload label expected fields =
+    expect_codec_error label expected
+      (V1_codec.decode_query_response (provider_response_payload fields))
+  in
+  reject_cost_payload "exact cost with unknown reason"
+    "query response exact cost must not have cost_unknown_reason_code"
+    [ "cost_status", `String "exact";
+      "actual_cost_usd", `String "0";
+      "cost_method", `String "control_query_zero";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "unknown cost without amount field"
+    "query response unknown cost must have null actual_cost_usd"
+    [ "cost_status", `String "unknown";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "unknown cost with amount"
+    "query response unknown cost must have null actual_cost_usd"
+    [ "cost_status", `String "unknown";
+      "actual_cost_usd", `String "0";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "unknown cost with method"
+    "query response unknown cost must not have cost_method"
+    [ "cost_status", `String "unknown";
+      "actual_cost_usd", `Null;
+      "cost_method", `String "control_query_zero";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "nonzero control query cost"
+    "query response control_query_zero requires zero actual_cost_usd"
+    [ "cost_status", `String "exact";
+      "actual_cost_usd", `String "1";
+      "cost_method", `String "control_query_zero" ];
+
+  let invalid_control_cost_encoding =
+    { (response (Provider_status_result { routes = [] })) with
+      cost = Exact_cost { actual_cost_usd = usd "1";
+                          method_ = Control_query_zero;
+                          catalog_version = None } }
+  in
+  expect_codec_error "nonzero control query cost encoding"
+    "query response control_query_zero requires zero actual_cost_usd"
+    (V1_codec.encode_query_response invalid_control_cost_encoding);
+
+  let exact_json =
+    Yojson.Safe.from_string
+      (Bytes.to_string
+         (ok (V1_codec.encode_query_response
+                (response (Provider_status_result { routes = [] })))))
+  in
+  (match exact_json with
+   | `Assoc fields ->
+       (match List.assoc_opt "actual_cost_usd" fields,
+              List.assoc_opt "cost_method" fields,
+              List.assoc_opt "cost_unknown_reason_code" fields with
+        | Some (`String "0"), Some (`String "control_query_zero"), None -> ()
+        | _ -> failwith "exact query cost encoded an invalid field combination")
+   | _ -> failwith "exact query response did not encode an object");
+  let unknown_response =
+    { (response (Provider_status_result { routes = [] })) with
+      cost = Unknown_cost { reason = State_unavailable } }
+  in
+  let unknown_json =
+    Yojson.Safe.from_string
+      (Bytes.to_string (ok (V1_codec.encode_query_response unknown_response)))
+  in
+  (match unknown_json with
+   | `Assoc fields ->
+       (match List.assoc_opt "actual_cost_usd" fields,
+              List.assoc_opt "cost_method" fields,
+              List.assoc_opt "cost_unknown_reason_code" fields with
+        | Some `Null, None, Some (`String "state_unavailable") -> ()
+        | _ -> failwith "unknown query cost encoded an invalid field combination")
+   | _ -> failwith "unknown query response did not encode an object");
 
   let encoded =
     ok (V1_codec.encode_query_response
