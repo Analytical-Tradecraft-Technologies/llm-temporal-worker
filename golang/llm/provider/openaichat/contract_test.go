@@ -69,6 +69,36 @@ func TestStreamingCapabilityCannotOutrunAdapterPort(t *testing.T) {
 	}
 }
 
+func TestContinuationCapabilityCannotOutrunAdapterPort(t *testing.T) {
+	for _, state := range []provider.CapabilityState{provider.CapabilityNative, provider.CapabilityEmulated} {
+		t.Run(string(state), func(t *testing.T) {
+			profile := testProfile()
+			profile.Capabilities.Features[provider.FeatureContinuation] = provider.Capability{State: state}
+			if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "continuation") {
+				t.Fatalf("NewProfile() error = %v, want a continuation capability error", err)
+			}
+		})
+	}
+
+	profile := testProfile()
+	profile.Capabilities.Features[provider.FeatureContinuation] = provider.Capability{State: provider.CapabilityUnknown, Transform: "unverified-continuation"}
+	validated, err := NewProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability := validated.Capabilities.Features[provider.FeatureContinuation]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
+		t.Fatalf("validated continuation capability = %#v, want normalized unsupported capability", capability)
+	}
+	adapter := &Adapter{endpointID: "chat-prod", profile: validated}
+	set, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability := set.Features[provider.FeatureContinuation]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
+		t.Fatalf("reported continuation capability = %#v, want normalized unsupported capability", capability)
+	}
+}
+
 func TestCompileRejectsUnknownCapabilityInStrictMode(t *testing.T) {
 	adapter := testAdapter(t)
 	request := llm.Request{
