@@ -166,6 +166,64 @@ func testRuntimeOptions(t *testing.T, workerController *testWorker, closed *atom
 	}
 }
 
+func TestRuntimeMetricsSurfaceMatchesListenerConfiguration(t *testing.T) {
+	tests := []struct {
+		name              string
+		configuration     func(*testing.T) []byte
+		wantMetricsServer bool
+		wantHealthStatus  int
+	}{
+		{
+			name:             "shared listener exposes metrics",
+			configuration:    runtimeConfig,
+			wantHealthStatus: http.StatusOK,
+		},
+		{
+			name: "distinct listener isolates metrics",
+			configuration: func(t *testing.T) []byte {
+				return []byte(strings.Replace(
+					string(runtimeConfig(t)),
+					"metrics_address: 127.0.0.1:0",
+					"metrics_address: localhost:0",
+					1,
+				))
+			},
+			wantMetricsServer: true,
+			wantHealthStatus:  http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &testWorker{}
+			var closed atomic.Bool
+			runtime, err := New(context.Background(), test.configuration(t), testRuntimeOptions(t, controller, &closed))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Start(); err != nil {
+				if strings.Contains(err.Error(), "operation not permitted") {
+					t.Skipf("sandbox does not permit loopback listeners: %v", err)
+				}
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+
+			if got := runtime.MetricsServer != nil; got != test.wantMetricsServer {
+				t.Fatalf("metrics server presence = %v, want %v", got, test.wantMetricsServer)
+			}
+			if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/metrics"); got != test.wantHealthStatus {
+				t.Fatalf("health listener /metrics status = %d, want %d", got, test.wantHealthStatus)
+			}
+			if runtime.MetricsServer != nil {
+				if got := runtimeHealthStatus(t, runtime.MetricsServer.Addr(), "/metrics"); got != http.StatusOK {
+					t.Fatalf("metrics listener /metrics status = %d, want %d", got, http.StatusOK)
+				}
+			}
+		})
+	}
+}
+
 func TestRuntimeStartFailsClosedWithoutV1Runtime(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool

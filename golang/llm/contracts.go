@@ -48,7 +48,9 @@ const (
 
 type CheckpointHandle string
 
-func (handle CheckpointHandle) valid() bool { return len(handle) > 0 && len(handle) <= 512 }
+func (handle CheckpointHandle) valid() bool {
+	return validateCodePointLength("checkpoint handle", string(handle), 1, checkpointHandleMaxCodePoints) == nil
+}
 
 type CachePolicyV1 struct {
 	MaxAgeSeconds int64 `json:"max_age_seconds"`
@@ -633,6 +635,9 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 	if request.OperationKey == "" || request.Context.Tenant == "" || request.Context.Project == "" || request.Context.Actor == "" {
 		return nil, fmt.Errorf("operation_key and complete context are required")
 	}
+	if err := validateGenerateRequestV1Bounds(request); err != nil {
+		return nil, err
+	}
 	if request.Parent != nil && !request.Parent.valid() {
 		return nil, fmt.Errorf("parent checkpoint is invalid")
 	}
@@ -725,6 +730,9 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		result.Cache = &policy
+	}
+	if err := validateGenerateRequestV1Bounds(result); err != nil {
+		return err
 	}
 	*request = result
 	return nil
