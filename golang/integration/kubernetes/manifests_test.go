@@ -1,12 +1,15 @@
 package kubernetes_test
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"testing"
+
+	yaml "go.yaml.in/yaml/v4"
 )
 
 func repositoryRoot(t *testing.T) string {
@@ -85,6 +88,7 @@ func TestBaseManifestSecurityContract(t *testing.T) {
 func TestEveryOverlayReferencesBaseAndUsesAReviewablePatch(t *testing.T) {
 	overlays := map[string][]string{
 		"redis-tls":               {"deployment-patch.yaml"},
+		"private-state-egress":    {"networkpolicy-patch.yaml"},
 		"aws-workload-identity":   {"deployment-patch.yaml", "serviceaccount-patch.yaml"},
 		"azure-workload-identity": {"deployment-patch.yaml", "serviceaccount-patch.yaml"},
 	}
@@ -105,14 +109,90 @@ func TestEveryOverlayReferencesBaseAndUsesAReviewablePatch(t *testing.T) {
 	}
 }
 
-func TestBaseNetworkPolicyAllowsWorkerPostgres(t *testing.T) {
-	policy := readRepositoryFile(t, "deploy", "kubernetes", "base", "networkpolicy.yaml")
+func TestBaseNetworkPolicyScopesStateAndControlEgress(t *testing.T) {
+	var policy struct {
+		Spec struct {
+			Egress []struct {
+				Ports []struct {
+					Port     int    `yaml:"port"`
+					Protocol string `yaml:"protocol"`
+				} `yaml:"ports"`
+				To []struct {
+					NamespaceSelector struct {
+						MatchLabels map[string]string `yaml:"matchLabels"`
+					} `yaml:"namespaceSelector"`
+					IPBlock struct {
+						CIDR string `yaml:"cidr"`
+					} `yaml:"ipBlock"`
+				} `yaml:"to"`
+			} `yaml:"egress"`
+		} `yaml:"spec"`
+	}
+	policyData := readRepositoryFile(t, "deploy", "kubernetes", "base", "networkpolicy.yaml")
+	if err := yaml.Unmarshal([]byte(policyData), &policy); err != nil {
+		t.Fatalf("decode base NetworkPolicy: %v", err)
+	}
 	config := readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")
 
 	if !strings.Contains(config, "addresses: [postgres.example.internal:5432]") {
 		t.Fatal("base configuration must use the worker PostgreSQL endpoint on port 5432")
 	}
-	if !strings.Contains(policy, "- port: 5432\n          protocol: TCP") {
-		t.Fatal("base NetworkPolicy must allow worker PostgreSQL TCP traffic")
+
+	sensitive := map[int]bool{5432: true, 6379: true, 7233: true}
+	seen := make(map[int]bool, len(sensitive))
+	for _, rule := range policy.Spec.Egress {
+		if len(rule.Ports) == 0 {
+			t.Fatal("base NetworkPolicy must not declare all-port egress")
+		}
+		touchesStateControl := false
+		touchesOther := false
+		for _, port := range rule.Ports {
+			if !sensitive[port.Port] {
+				touchesOther = true
+				continue
+			}
+			touchesStateControl = true
+			seen[port.Port] = true
+			if port.Protocol != "TCP" {
+				t.Errorf("state/control egress port %d protocol = %q, want TCP", port.Port, port.Protocol)
+			}
+		}
+		if !touchesStateControl {
+			continue
+		}
+		if touchesOther {
+			t.Error("base NetworkPolicy must keep state/control ports separate from general egress")
+		}
+		if len(rule.To) == 0 {
+			t.Fatal("state/control egress must declare destinations")
+		}
+		for _, destination := range rule.To {
+			if len(destination.NamespaceSelector.MatchLabels) > 0 {
+				continue
+			}
+			if !privateNetwork(destination.IPBlock.CIDR) {
+				t.Errorf("state/control destination %q is neither an explicit namespace selector nor a private CIDR", destination.IPBlock.CIDR)
+			}
+		}
 	}
+	for port := range sensitive {
+		if !seen[port] {
+			t.Errorf("base NetworkPolicy is missing reviewed state/control egress for TCP %d", port)
+		}
+	}
+}
+
+func privateNetwork(cidr string) bool {
+	prefix, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return false
+	}
+	prefix = prefix.Masked()
+	for _, allowed := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"} {
+		privatePrefix := netip.MustParsePrefix(allowed)
+		if prefix.Addr().BitLen() == privatePrefix.Addr().BitLen() && prefix.Bits() >= privatePrefix.Bits() && privatePrefix.Contains(prefix.Addr()) {
+			return true
+		}
+	}
+	return false
 }

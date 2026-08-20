@@ -2,27 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: llmtw-worker
-  labels:
-    app.kubernetes.io/component: worker
 spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: llm-temporal-worker
-      app.kubernetes.io/component: worker
-  policyTypes: [Ingress, Egress]
-  ingress:
-    - ports:
-        - port: 8080
-          protocol: TCP
-        - port: 9090
-          protocol: TCP
-      from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: observability
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: llmtw-system
   egress:
     - ports:
         - port: 53
@@ -44,6 +24,10 @@ spec:
         - namespaceSelector:
             matchLabels:
               llmtw.io/state-egress: allowed
+        # Replace this example with the narrow private CIDR(s) allocated to
+        # the reviewed Redis, PostgreSQL, and Temporal endpoints.
+        - ipBlock:
+            cidr: 10.64.0.0/16
     - ports:
         - port: 443
           protocol: TCP

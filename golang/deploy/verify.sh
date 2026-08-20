@@ -31,6 +31,7 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 for overlay in \
   "$root/deploy/kubernetes/base" \
   "$root/deploy/kubernetes/examples/redis-tls" \
+  "$root/deploy/kubernetes/examples/private-state-egress" \
   "$root/deploy/kubernetes/examples/aws-workload-identity" \
   "$root/deploy/kubernetes/examples/azure-workload-identity"; do
   name=$(basename "$overlay")

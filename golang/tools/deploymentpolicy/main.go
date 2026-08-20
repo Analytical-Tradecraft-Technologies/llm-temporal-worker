@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -57,10 +58,275 @@ func verifyRendered(overlay string, rendered []byte) error {
 	if err != nil {
 		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
 	}
+	networkPolicy, err := findResource(documents, "NetworkPolicy", "llmtw-worker")
+	if err != nil {
+		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
 	if err := verifyWorkload(overlay, deployment, serviceAccount, configMap); err != nil {
 		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
 	}
+	if err := verifyNetworkPolicy(deployment, networkPolicy); err != nil {
+		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
 	return nil
+}
+
+var stateControlPorts = map[int64]struct{}{
+	5432: {}, // worker PostgreSQL state
+	6379: {}, // Redis state and cache
+	7233: {}, // Temporal frontend
+}
+
+func verifyNetworkPolicy(deployment, networkPolicy map[string]any) error {
+	if err := verifyNetworkPolicyBinding(deployment, networkPolicy); err != nil {
+		return err
+	}
+	spec, ok := mapAt(networkPolicy, "spec")
+	if !ok {
+		return errors.New("worker NetworkPolicy spec is missing")
+	}
+	egress, ok := listAt(spec, "egress")
+	if !ok || len(egress) == 0 {
+		return errors.New("worker NetworkPolicy egress rules are missing")
+	}
+
+	seenStateControlPorts := make(map[int64]bool, len(stateControlPorts))
+	for _, rawRule := range egress {
+		rule, ok := asMap(rawRule)
+		if !ok {
+			return errors.New("worker NetworkPolicy egress rule is invalid")
+		}
+		ports, portsDeclared := listAt(rule, "ports")
+		if !portsDeclared || len(ports) == 0 {
+			return errors.New("all-port egress must not use an unrestricted destination")
+		}
+
+		touchesStateControl := false
+		touchesOtherPorts := false
+		for _, rawPort := range ports {
+			port, protocol, err := networkPolicyPort(rawPort)
+			if err != nil {
+				return err
+			}
+			if _, sensitive := stateControlPorts[port]; !sensitive {
+				touchesOtherPorts = true
+				continue
+			}
+			if protocol != "TCP" {
+				return fmt.Errorf("state/control egress port %d must use TCP", port)
+			}
+			touchesStateControl = true
+			seenStateControlPorts[port] = true
+		}
+		if !touchesStateControl {
+			continue
+		}
+		if touchesOtherPorts {
+			return errors.New("state/control egress must be separate from general TLS and other egress")
+		}
+		if err := verifyStateControlDestinations(rule); err != nil {
+			return err
+		}
+	}
+
+	for _, port := range []int64{5432, 6379, 7233} {
+		if !seenStateControlPorts[port] {
+			return fmt.Errorf("worker NetworkPolicy must declare reviewed state/control egress for TCP port %d", port)
+		}
+	}
+	return nil
+}
+
+func verifyNetworkPolicyBinding(deployment, networkPolicy map[string]any) error {
+	if resourceNamespace(deployment) != resourceNamespace(networkPolicy) {
+		return errors.New("worker NetworkPolicy namespace must match the worker Deployment namespace")
+	}
+
+	deploymentSpec, ok := mapAt(deployment, "spec")
+	if !ok {
+		return errors.New("deployment spec is missing")
+	}
+	deploymentSelector, ok := mapAt(deploymentSpec, "selector")
+	if !ok {
+		return errors.New("worker Deployment selector is missing")
+	}
+	deploymentLabels, ok := exactMatchLabels(deploymentSelector)
+	if !ok {
+		return errors.New("worker Deployment selector must use explicit matchLabels")
+	}
+	template, ok := mapAt(deploymentSpec, "template")
+	if !ok {
+		return errors.New("deployment template is missing")
+	}
+	templateMetadata, ok := mapAt(template, "metadata")
+	if !ok {
+		return errors.New("worker Deployment template metadata is missing")
+	}
+	templateLabels, ok := mapAt(templateMetadata, "labels")
+	if !ok || !containsStringLabels(templateLabels, deploymentLabels) {
+		return errors.New("worker Deployment selector must match its pod-template labels")
+	}
+
+	networkPolicySpec, ok := mapAt(networkPolicy, "spec")
+	if !ok {
+		return errors.New("worker NetworkPolicy spec is missing")
+	}
+	policyTypes, ok := listAt(networkPolicySpec, "policyTypes")
+	if !ok || !listContainsString(policyTypes, "Egress") {
+		return errors.New("worker NetworkPolicy policyTypes must include Egress")
+	}
+	podSelector, ok := mapAt(networkPolicySpec, "podSelector")
+	if !ok {
+		return errors.New("worker NetworkPolicy podSelector is missing")
+	}
+	networkPolicyLabels, ok := exactMatchLabels(podSelector)
+	if !ok || !equalStringLabels(networkPolicyLabels, deploymentLabels) {
+		return errors.New("worker NetworkPolicy podSelector must exactly match the worker Deployment selector")
+	}
+	return nil
+}
+
+func resourceNamespace(resource map[string]any) string {
+	metadata, ok := mapAt(resource, "metadata")
+	if !ok {
+		return "default"
+	}
+	namespace := stringAt(metadata, "namespace")
+	if namespace == "" {
+		return "default"
+	}
+	return namespace
+}
+
+func exactMatchLabels(selector map[string]any) (map[string]string, bool) {
+	if len(selector) != 1 {
+		return nil, false
+	}
+	labels, ok := mapAt(selector, "matchLabels")
+	if !ok || len(labels) == 0 {
+		return nil, false
+	}
+	result := make(map[string]string, len(labels))
+	for key, value := range labels {
+		text, ok := value.(string)
+		if !ok || key == "" || text == "" {
+			return nil, false
+		}
+		result[key] = text
+	}
+	return result, true
+}
+
+func containsStringLabels(values map[string]any, expected map[string]string) bool {
+	for key, expectedValue := range expected {
+		value, ok := values[key].(string)
+		if !ok || value != expectedValue {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringLabels(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func networkPolicyPort(rawPort any) (int64, string, error) {
+	entry, ok := asMap(rawPort)
+	if !ok {
+		return 0, "", errors.New("worker NetworkPolicy port entry is invalid")
+	}
+	if _, ranged := entry["endPort"]; ranged {
+		return 0, "", errors.New("worker NetworkPolicy port ranges are not allowed")
+	}
+	port, ok := integerValue(valueAt(entry, "port"))
+	if !ok || port < 1 || port > 65535 {
+		return 0, "", errors.New("worker NetworkPolicy ports must be numeric values from 1 through 65535")
+	}
+	protocol := stringAt(entry, "protocol")
+	if protocol == "" {
+		protocol = "TCP"
+	}
+	return port, protocol, nil
+}
+
+func verifyStateControlDestinations(rule map[string]any) error {
+	destinations, ok := listAt(rule, "to")
+	if !ok || len(destinations) == 0 {
+		return errors.New("state/control egress must declare explicit private or namespace destinations")
+	}
+	for _, rawDestination := range destinations {
+		destination, ok := asMap(rawDestination)
+		if !ok || len(destination) == 0 {
+			return errors.New("state/control egress destination must be explicit")
+		}
+		if ipBlock, exists := destination["ipBlock"]; exists {
+			block, ok := asMap(ipBlock)
+			if !ok || len(destination) != 1 {
+				return errors.New("state/control ipBlock destination is invalid")
+			}
+			cidr := stringAt(block, "cidr")
+			if !isPrivateStateCIDR(cidr) {
+				return fmt.Errorf("state/control egress CIDR must be private, got %q", cidr)
+			}
+			continue
+		}
+
+		rawNamespaceSelector, exists := destination["namespaceSelector"]
+		if !exists {
+			return errors.New("state/control selector destination must include llmtw.io/state-egress=allowed namespaceSelector")
+		}
+		namespaceSelector, ok := asMap(rawNamespaceSelector)
+		if !ok || !stateEgressNamespaceSelector(namespaceSelector) {
+			return errors.New("state/control namespaceSelector must require llmtw.io/state-egress=allowed")
+		}
+
+		selectorCount := 1
+		if rawSelector, exists := destination["podSelector"]; exists {
+			selectorCount++
+			selector, ok := asMap(rawSelector)
+			if !ok || !positivePodSelector(selector) {
+				return errors.New("state/control podSelector must use positive matchLabels")
+			}
+		}
+		if selectorCount == 0 || selectorCount != len(destination) {
+			return errors.New("state/control egress destination must use an explicit ipBlock or label selector")
+		}
+	}
+	return nil
+}
+
+func stateEgressNamespaceSelector(selector map[string]any) bool {
+	labels, ok := exactMatchLabels(selector)
+	return ok && len(labels) == 1 && labels["llmtw.io/state-egress"] == "allowed"
+}
+
+func positivePodSelector(selector map[string]any) bool {
+	_, ok := exactMatchLabels(selector)
+	return ok
+}
+
+func isPrivateStateCIDR(cidr string) bool {
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(cidr))
+	if err != nil {
+		return false
+	}
+	prefix = prefix.Masked()
+	for _, privateCIDR := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"} {
+		privatePrefix := netip.MustParsePrefix(privateCIDR)
+		if prefix.Addr().BitLen() == privatePrefix.Addr().BitLen() && prefix.Bits() >= privatePrefix.Bits() && privatePrefix.Contains(prefix.Addr()) {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeDocuments(rendered []byte) ([]map[string]any, error) {
