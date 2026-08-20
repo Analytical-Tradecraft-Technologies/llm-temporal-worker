@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openairesponses"
 )
 
@@ -108,6 +111,50 @@ func TestRunWithAdapterPreflightsUnsupportedContinuationBeforeInvocation(t *test
 	}
 	if evidence.Profile != profile.ID || evidence.ContinuationVerified {
 		t.Fatalf("evidence = %#v, want unsupported-continuation facts", evidence)
+	}
+}
+
+func TestRunWithAdapterAllowsTextOnlyAnthropicResponseWithoutContinuation(t *testing.T) {
+	profile := profileForTest(t, "anthropic-direct")
+	const baseURL = "http://127.0.0.1/anthropic-live-contract"
+	responseBody := `{"id":"msg_text_only","type":"message","role":"assistant","model":"claude-3-5-haiku-latest","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1,"service_tier":"standard"}}`
+	invocations := 0
+	client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{
+		BaseURL: baseURL,
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			invocations++
+			if request.URL.Path != "/anthropic-live-contract/v1/messages" {
+				t.Errorf("request path = %q, want Anthropic messages endpoint", request.URL.Path)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}, "Request-Id": []string{"req-text-only"}},
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+				Request:    request,
+			}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatalf("new Anthropic client: %v", err)
+	}
+	providerProfile := anthropicmessages.DefaultProfile(profile.ID)
+	providerProfile.ExpectedBaseURL = baseURL
+	providerProfile.ExpectedModel = profile.Model
+	adapter, err := anthropicmessages.New(client, profile.ID, providerProfile)
+	if err != nil {
+		t.Fatalf("new Anthropic adapter: %v", err)
+	}
+
+	evidence, err := runWithAdapter(context.Background(), adapter, profile)
+	if err != nil {
+		t.Fatalf("run text-only Anthropic profile: %v", err)
+	}
+	if invocations != 1 {
+		t.Fatalf("Anthropic invocations = %d, want 1", invocations)
+	}
+	if evidence.ContinuationVerified {
+		t.Fatalf("continuation verification = %t, want false for the adapter-lifted text-only response", evidence.ContinuationVerified)
 	}
 }
 
@@ -352,6 +399,12 @@ type recordingAdapter struct {
 	callOverride       *provider.Call
 	result             provider.Result
 	events             []string
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }
 
 func (adapter *recordingAdapter) Name() string { return "recording" }

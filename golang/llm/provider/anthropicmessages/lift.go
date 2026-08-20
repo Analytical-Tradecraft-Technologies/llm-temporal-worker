@@ -207,7 +207,7 @@ func rawUsageFacts(response *anthropic.Message) map[string]json.RawMessage {
 }
 
 func continuationForResponse(call provider.Call, response *anthropic.Message, states []llm.ProviderState) *llm.Continuation {
-	if response.ID == "" {
+	if response.ID == "" || len(states) == 0 {
 		return nil
 	}
 	return &llm.Continuation{
