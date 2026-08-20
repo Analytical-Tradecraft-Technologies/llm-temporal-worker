@@ -698,6 +698,49 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	}
 }
 
+func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
+	probe := &mutableRuntimeProbe{}
+	probe.healthy.Store(true)
+	controller := &monitoringWorker{}
+	var builds atomic.Int32
+	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
+	options.V1Runtime = nil
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		return controller, &testRegistry{}, nil
+	}
+	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
+		clients := &testDependencyProbeClientSet{}
+		if builds.Add(1) > 1 {
+			clients.probes = []DependencyProbe{probe}
+		}
+		return testEngine{}, clients, nil
+	})
+	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", 1))
+	runtime, err := New(context.Background(), configuration, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
+		t.Fatalf("initial development runtime state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
+	}
+
+	if err := runtime.App.Reload(context.Background(), configuration); err != nil {
+		t.Fatal(err)
+	}
+	probe.healthy.Store(false)
+	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && controller.stops.Load() >= 1 })
+	if runtime.Health.Live() != true {
+		t.Fatal("reload-introduced dependency failure changed liveness")
+	}
+}
+
 func TestStopDependencyMonitorSignalsCancellationBeforeReadinessHandoff(t *testing.T) {
 	runtime := &Runtime{}
 	runtime.readinessMu.Lock()
@@ -893,6 +936,16 @@ func (probe *mutableRuntimeProbe) Probe(context.Context) ProbeResult {
 		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
 	}
 	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
+}
+
+type testDependencyProbeClientSet struct {
+	probes []DependencyProbe
+}
+
+func (*testDependencyProbeClientSet) Close(context.Context) error { return nil }
+
+func (clients *testDependencyProbeClientSet) DependencyProbes() []DependencyProbe {
+	return append([]DependencyProbe(nil), clients.probes...)
 }
 
 type countingRuntimeProbe struct {

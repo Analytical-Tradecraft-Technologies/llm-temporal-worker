@@ -874,13 +874,9 @@ func (runtime *Runtime) startDependencyMonitor() {
 	if runtime == nil || runtime.readinessProbeInterval <= 0 {
 		return
 	}
-	// A production snapshot may have no explicit dependency probes when the
-	// ClientSet is supplied by an embedding. Still monitor reloads so an
-	// authoritative V1 source disappearing from a later snapshot cannot leave
-	// readiness stuck true indefinitely.
-	if len(runtime.dependencyProbes()) == 0 && !runtime.currentV1RuntimeRequired() {
-		return
-	}
+	// The initial snapshot may have no dependency probes or required V1 source,
+	// but a later reload can introduce either. Keep the low-frequency monitor
+	// alive for the process so readiness always follows the active snapshot.
 	runtime.mu.Lock()
 	if runtime.monitorCancel != nil {
 		runtime.mu.Unlock()
