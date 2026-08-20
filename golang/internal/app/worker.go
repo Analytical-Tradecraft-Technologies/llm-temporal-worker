@@ -207,13 +207,13 @@ func (worker *TemporalWorker) Resume() error {
 func (worker *TemporalWorker) startController(controller WorkerController) error {
 	if controller == nil {
 		if worker.build == nil {
-			worker.finishStartFailure()
+			worker.finishStartFailure(nil)
 			return fmt.Errorf("Temporal worker is not initialized")
 		}
 		var err error
 		controller, err = worker.build()
 		if err != nil {
-			worker.finishStartFailure()
+			worker.finishStartFailure(nil)
 			return err
 		}
 	}
@@ -222,7 +222,7 @@ func (worker *TemporalWorker) startController(controller WorkerController) error
 		return err
 	}
 	if err := controller.Start(); err != nil {
-		worker.finishStartFailure()
+		worker.finishStartFailure(controller)
 		return fmt.Errorf("start Temporal worker: %w", err)
 	}
 	worker.mu.Lock()
@@ -273,9 +273,19 @@ func (worker *TemporalWorker) authorizeStart(controller WorkerController) (bool,
 	return true, nil
 }
 
-func (worker *TemporalWorker) finishStartFailure() {
+// finishStartFailure releases an authorized controller after Start fails.
+// WorkerController ownership transfers at authorizeStart, and remains with the
+// start attempt until cleanup returns so Resume cannot overlap a replacement
+// and Stop waits for that cleanup.
+func (worker *TemporalWorker) finishStartFailure(controller WorkerController) {
 	worker.mu.Lock()
 	worker.setNotReadyLocked()
+	worker.mu.Unlock()
+	if controller != nil {
+		controller.Stop()
+	}
+	worker.mu.Lock()
+	worker.controller = nil
 	worker.finishStartLocked()
 	worker.mu.Unlock()
 }
