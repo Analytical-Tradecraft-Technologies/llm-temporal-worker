@@ -574,9 +574,19 @@ type GenerateRequestV1 struct {
 	Cache         *CachePolicyV1
 }
 
-func marshalRequestContextV1(context RequestContext) (json.RawMessage, error) {
+func validateRequestContextV1(context RequestContext) error {
 	if len(context.Tags) > 0 {
-		return nil, fmt.Errorf("v1 context tags are not supported")
+		return fmt.Errorf("v1 context tags are not supported")
+	}
+	if context.Tenant == "" || context.Project == "" || context.Actor == "" {
+		return fmt.Errorf("v1 context requires tenant, project, and actor")
+	}
+	return nil
+}
+
+func marshalRequestContextV1(context RequestContext) (json.RawMessage, error) {
+	if err := validateRequestContextV1(context); err != nil {
+		return nil, err
 	}
 	data, err := marshalObject(map[string]any{
 		"tenant":  context.Tenant,
@@ -609,7 +619,11 @@ func decodeRequestContextV1(data []byte) (RequestContext, error) {
 	if err != nil {
 		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
 	}
-	return RequestContext{Tenant: tenant, Project: project, Actor: actor}, nil
+	context := RequestContext{Tenant: tenant, Project: project, Actor: actor}
+	if err := validateRequestContextV1(context); err != nil {
+		return RequestContext{}, err
+	}
+	return context, nil
 }
 
 func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {

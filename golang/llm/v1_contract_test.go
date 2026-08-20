@@ -150,6 +150,33 @@ func TestV1RequestContextRoundTripsClosedFields(t *testing.T) {
 	}
 }
 
+func TestCompactV1RequestContextRejectsMissingOrEmptyMembers(t *testing.T) {
+	tests := []struct {
+		name    string
+		context string
+	}{
+		{name: "missing tenant", context: `{"project":"project","actor":"actor"}`},
+		{name: "empty tenant", context: `{"tenant":"","project":"project","actor":"actor"}`},
+		{name: "missing project", context: `{"tenant":"tenant","actor":"actor"}`},
+		{name: "empty project", context: `{"tenant":"tenant","project":"","actor":"actor"}`},
+		{name: "missing actor", context: `{"tenant":"tenant","project":"project"}`},
+		{name: "empty actor", context: `{"tenant":"tenant","project":"project","actor":""}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := fmt.Sprintf(`{"api_version":"llm.temporal/compact/v1","operation_key":"compact","context":%s,"parent":"ckp_v1.parent"}`, test.context)
+			var request llm.CompactRequestV1
+			err := json.Unmarshal([]byte(payload), &request)
+			if err == nil {
+				t.Fatal("incomplete compact context was accepted")
+			}
+			if message := err.Error(); !strings.Contains(message, "context") || !strings.Contains(message, "tenant, project, and actor") {
+				t.Fatalf("error = %q, want clear complete context rejection", message)
+			}
+		})
+	}
+}
+
 func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 	var request llm.GenerateRequestV1
 	if err := json.Unmarshal(readV1Fixture(t, "negative-unknown-field.json"), &request); err == nil {
