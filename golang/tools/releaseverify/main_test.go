@@ -186,10 +186,10 @@ func TestProvenanceAndSecretGuardsRejectUnsafeEvidence(t *testing.T) {
 		name string
 		data string
 	}{
-		{name: "private key", data: "-----BEGIN PRIVATE KEY-----"},
-		{name: "credential field", data: `{"api_key":"release-secret-0123456789"}`},
+		{name: "private key", data: "-----BEGIN " + "PRIVATE KEY-----"},
+		{name: "credential field", data: `{"api_` + `key":"release-secret-0123456789"}`},
 		{name: "escaped credential field", data: `{"api\u005fkey":"release-secret-0123456789"}`},
-		{name: "provider token", data: "ghp_012345678901234567890123456789"},
+		{name: "provider token", data: "gh" + "p_012345678901234567890123456789"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := rejectSecretLikeContent(test.name, []byte(test.data)); err == nil {

@@ -310,6 +310,7 @@ let generate_request_of_json value =
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; append; settings_patch; cache }
 
 let generate_response_to_json (value : generate_response) =
+  let* () = Llm_temporal_response_validation.validate_generate_response value in
   let fields = ["api_version", `String generate_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "operation_id", `String (Operation_id.to_string value.operation_id); "status", response_status_to_json value.status; "output", `List (List.map item_to_json value.output); "checkpoint", checkpoint_to_json value.checkpoint; "cache", cache_disposition_to_json value.cache; "cost", settled_cost_to_json value.cost] in
   let fields = fields @ option_field "route" route_to_v1_json value.route @ option_field "usage" usage_to_json value.usage in
   Ok (`Assoc (fields @ ["diagnostics", `List (List.map diagnostic_to_json value.diagnostics)]))
@@ -328,7 +329,9 @@ let generate_response_of_json value =
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "generate response.usage" value in Ok (Some value) in
   let* cost = required "generate response" "cost" fields >>= settled_cost_of_json "generate response.cost" in
   let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "generate response.diagnostics" value >>= map_result (diagnostic_of_json "generate response.diagnostic") in
-  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; usage; cost; diagnostics }
+  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; usage; cost; diagnostics } in
+  let* () = Llm_temporal_response_validation.validate_generate_response response in
+  Ok response
 
 let encode_generate_request value = let* value = generate_request_to_json value in to_bytes value
 let decode_generate_request bytes = parse_json generate_request_of_json bytes
@@ -376,6 +379,7 @@ let provenance_of_json context value =
   Ok { source; origin_operation_id; policy }
 
 let compaction_response_to_json (value : compaction_response) =
+  let* () = Llm_temporal_response_validation.validate_compaction_response value in
   let fields = ["api_version", `String compact_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "operation_id", `String (Operation_id.to_string value.operation_id); "status", `String "completed"; "checkpoint", checkpoint_to_json value.checkpoint; "cache", cache_disposition_to_json value.cache; "cost", settled_cost_to_json value.cost] in
   let fields = fields @ option_field "provenance" provenance_to_json value.provenance @ option_field "usage" usage_to_json value.usage in
   Ok (`Assoc (fields @ ["diagnostics", `List (List.map diagnostic_to_json value.diagnostics)]))
@@ -389,14 +393,15 @@ let compaction_response_of_json value =
   let* status = required "compact response" "status" fields >>= string "compact response.status" in
   let* () = if status = "completed" then Ok () else Error (errorf "compact response.status must be completed") in
   let* checkpoint = required "compact response" "checkpoint" fields >>= checkpoint_of_json "compact response.checkpoint" in
-  let* () = if checkpoint.kind = Compaction_checkpoint then Ok () else Error (errorf "compact response checkpoint must be compaction") in
   let* cache = required "compact response" "cache" fields >>= cache_disposition_of_json "compact response.cache" in
   let* () = if cache.variant = 0l then Ok () else Error (errorf "compact response cache variant must be zero") in
   let* provenance = match optional "provenance" fields with None | Some `Null -> Ok None | Some value -> let* value = provenance_of_json "compact response.provenance" value in Ok (Some value) in
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "compact response.usage" value in Ok (Some value) in
   let* cost = required "compact response" "cost" fields >>= settled_cost_of_json "compact response.cost" in
   let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "compact response.diagnostics" value >>= map_result (diagnostic_of_json "compact response.diagnostic") in
-  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; checkpoint; cache; provenance; usage; cost; diagnostics }
+  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; checkpoint; cache; provenance; usage; cost; diagnostics } in
+  let* () = Llm_temporal_response_validation.validate_compaction_response response in
+  Ok response
 
 let encode_compact_request value = let* value = compact_request_to_json value in to_bytes value
 let decode_compact_request bytes = parse_json compact_request_of_json bytes
@@ -675,12 +680,27 @@ let query_result_to_json = function
   | Budget_status_result value -> "budget_status", budget_to_json value
   | Spend_summary_result value -> "spend_summary", spend_to_json value
 
+let validate_query_pagination ~kind ~complete ~next_cursor =
+  match kind, complete, next_cursor with
+  | ("provider_status" | "model_inventory" | "credit_status"), true, Some _ ->
+      Error
+        (errorf "query response.%s complete response must not include next_cursor"
+           kind)
+  | ("provider_status" | "model_inventory" | "credit_status"), false, None ->
+      Error
+        (errorf "query response.%s incomplete response requires next_cursor" kind)
+  | ("budget_status" | "spend_summary"), _, Some _ ->
+      Error (errorf "query response.%s must not include next_cursor" kind)
+  | ("budget_status" | "spend_summary"), false, None ->
+      Error (errorf "query response.%s must be complete" kind)
+  | _ -> Ok ()
+
 let query_response_to_json (value : query_response) =
+  let* () = Llm_temporal_response_validation.validate_query_cost value.cost in
   let kind, result = query_result_to_json value.result in
-  let* () = match kind, value.next_cursor with
-    | ("budget_status" | "spend_summary"), Some _ ->
-        Error (errorf "query response.%s must not include next_cursor" kind)
-    | _ -> Ok ()
+  let* () =
+    validate_query_pagination ~kind ~complete:value.complete
+      ~next_cursor:value.next_cursor
   in
   let cost_fields = match value.cost with
     | Exact_cost { actual_cost_usd; method_; catalog_version = _ } -> ["cost_status", `String "exact"; "actual_cost_usd", usd_json actual_cost_usd; "cost_method", `String (match method_ with Provider_reported -> "provider_reported" | Catalog_usage -> "catalog_usage" | Control_query_zero -> "control_query_zero")]
@@ -706,6 +726,7 @@ let query_response_of_json value =
         Error (errorf "query response.%s must not include next_cursor" kind)
     | Some value -> string "query response.next_cursor" value >>= fun value -> validated "query response.next_cursor" (Query_cursor.of_string_for_kind cursor_kind) value >>= fun value -> Ok (Some value)
   in
+  let* () = validate_query_pagination ~kind ~complete ~next_cursor in
   let* result_value = required "query response" "result" fields in
   let* result = match kind with
     | "provider_status" -> provider_page_of_json "query response.provider_status" result_value >>= fun value -> Ok (Provider_status_result value)
@@ -717,10 +738,39 @@ let query_response_of_json value =
   in
   let* cost_status = required "query response" "cost_status" fields >>= string "query response.cost_status" in
   let* cost = match cost_status with
-    | "exact" -> let* actual = required "query response" "actual_cost_usd" fields in let* actual = string "query response.actual_cost_usd" actual in let* actual = match Usd_decimal.of_string actual with Ok value -> Ok value | Error message -> Error (errorf "query response.actual_cost_usd: %s" message) in let* method_ = required "query response" "cost_method" fields >>= string "query response.cost_method" >>= function "provider_reported" -> Ok Provider_reported | "catalog_usage" -> Ok Catalog_usage | "control_query_zero" -> Ok Control_query_zero | _ -> Error (errorf "query response.cost_method is invalid") in Ok (Exact_cost { actual_cost_usd = actual; method_; catalog_version = None })
-    | "unknown" -> let* reason = required "query response" "cost_unknown_reason_code" fields >>= string "query response.cost_unknown_reason_code" >>= function "provider_did_not_report_cost" -> Ok Provider_did_not_report_cost | "catalog_incomplete" -> Ok Catalog_incomplete | "state_unavailable" -> Ok State_unavailable | "ambiguous_dispatch" -> Ok Ambiguous_dispatch | _ -> Error (errorf "query response.cost_unknown_reason_code is invalid") in Ok (Unknown_cost { reason })
+    | "exact" ->
+        let* () =
+          match optional "cost_unknown_reason_code" fields with
+          | None -> Ok ()
+          | Some _ ->
+              Error (errorf
+                       "query response exact cost must not have cost_unknown_reason_code")
+        in
+        let* actual = required "query response" "actual_cost_usd" fields in
+        let* actual = string "query response.actual_cost_usd" actual in
+        let* actual = match Usd_decimal.of_string actual with Ok value -> Ok value | Error message -> Error (errorf "query response.actual_cost_usd: %s" message) in
+        let* method_ = required "query response" "cost_method" fields >>= string "query response.cost_method" >>= function "provider_reported" -> Ok Provider_reported | "catalog_usage" -> Ok Catalog_usage | "control_query_zero" -> Ok Control_query_zero | _ -> Error (errorf "query response.cost_method is invalid") in
+        Ok (Exact_cost { actual_cost_usd = actual; method_; catalog_version = None })
+    | "unknown" ->
+        let* () =
+          match optional "actual_cost_usd" fields with
+          | Some `Null -> Ok ()
+          | None | Some _ ->
+              Error (errorf
+                       "query response unknown cost must have null actual_cost_usd")
+        in
+        let* () =
+          match optional "cost_method" fields with
+          | None -> Ok ()
+          | Some _ ->
+              Error (errorf
+                       "query response unknown cost must not have cost_method")
+        in
+        let* reason = required "query response" "cost_unknown_reason_code" fields >>= string "query response.cost_unknown_reason_code" >>= function "provider_did_not_report_cost" -> Ok Provider_did_not_report_cost | "catalog_incomplete" -> Ok Catalog_incomplete | "state_unavailable" -> Ok State_unavailable | "ambiguous_dispatch" -> Ok Ambiguous_dispatch | _ -> Error (errorf "query response.cost_unknown_reason_code is invalid") in
+        Ok (Unknown_cost { reason })
     | _ -> Error (errorf "query response.cost_status is invalid")
   in
+  let* () = Llm_temporal_response_validation.validate_query_cost cost in
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; query_execution_id = Query_execution_id.of_string query_execution_id; observed_at; source; freshness; complete; next_cursor; result; cost }
 
 let encode_query_response value = let* value = query_response_to_json value in to_bytes value

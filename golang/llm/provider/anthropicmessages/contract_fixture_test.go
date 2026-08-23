@@ -269,7 +269,7 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 		t.Fatal(err)
 	}
 	assertCanonicalAnthropicDirectFixture(t, body, "request.wire.json")
-	if got.URL.Path != "/v1/messages" || got.Header.Get("X-Api-Key") != "anthropic-fixture-key" || got.Header.Get("Authorization") != "" {
+	if got.URL.Path != "/v1/messages" || got.Header.Get("X-Api-Key") != "fixture-anthropic-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("Anthropic direct transport = %s %#v", got.URL, got.Header)
 	}
 	gotSemantic, err := json.Marshal(result.Response)
@@ -286,7 +286,7 @@ func newAnthropicDirectFixtureClient(t *testing.T, transport http.RoundTripper) 
 	}
 	client, err := NewClient(ClientConfig{
 		BaseURL:    "https://api.anthropic.com",
-		APIKey:     "anthropic-fixture-key",
+		APIKey:     "fixture-anthropic-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
 	if err != nil {
@@ -520,7 +520,7 @@ func assertAnthropicDirectFixtureRedaction(t *testing.T) {
 	if !bytes.Contains(redaction, []byte("[REDACTED]")) {
 		t.Fatal("redaction fixture has no explicit marker")
 	}
-	for _, unsafe := range []string{"anthropic-fixture-key", "Bearer sk-", "api-key-real"} {
+	for _, unsafe := range []string{"fixture-anthropic-key", "Bearer sk-", "api-key-real"} {
 		if bytes.Contains(redaction, []byte(unsafe)) {
 			t.Fatalf("redaction fixture contains %q", unsafe)
 		}

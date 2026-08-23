@@ -138,6 +138,15 @@ func TestRequestOmitsServiceClassAndBoundsTheCall(t *testing.T) {
 	}
 }
 
+func TestMessagesProfilesDeclareConditionalReplayStateContinuation(t *testing.T) {
+	for _, id := range []string{"anthropic-direct", "anthropic-aws", "bedrock-anthropic"} {
+		profile := profileForTest(t, id)
+		if string(profile.ContinuationExpectation) != "conditional" {
+			t.Fatalf("%s continuation expectation = %q, want conditional", id, profile.ContinuationExpectation)
+		}
+	}
+}
+
 func TestValidateResponseCapturesReportedLiveFacts(t *testing.T) {
 	profile := Profiles()[0]
 	actual := llm.ServiceClassStandard
@@ -236,6 +245,66 @@ func TestValidateResponseAllowsBedrockConverseWithoutResponseID(t *testing.T) {
 	}
 	if evidence.RequestID != response.Provider.RequestID || evidence.ResponseID != "" {
 		t.Fatalf("evidence provider facts = %#v, want request ID and no response ID", evidence)
+	}
+}
+
+func TestValidateResponseAllowsTextOnlyResponseForConditionalContinuationProfile(t *testing.T) {
+	profile := profileForTest(t, "anthropic-direct")
+	actual := llm.ServiceClassStandard
+	response := llm.Response{
+		Status:   llm.ResponseStatusCompleted,
+		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
+		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
+		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
+	}
+
+	evidence, err := validateResponse(profile, response)
+	if err != nil {
+		t.Fatalf("validate text-only response: %v", err)
+	}
+	if evidence.ContinuationVerified {
+		t.Fatalf("continuation verification = %t, want false", evidence.ContinuationVerified)
+	}
+}
+
+func TestValidateResponseRejectsUnpinnedConditionalContinuation(t *testing.T) {
+	profile := profileForTest(t, "anthropic-direct")
+	actual := llm.ServiceClassStandard
+	response := llm.Response{
+		Status:   llm.ResponseStatusCompleted,
+		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
+		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
+		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
+		Continuation: &llm.Continuation{
+			Handle:     "continuation-123",
+			EndpointID: profile.ID,
+			Model:      profile.Model,
+		},
+	}
+
+	if _, err := validateResponse(profile, response); err == nil || !strings.Contains(err.Error(), "pinned continuation") {
+		t.Fatalf("validate unpinned continuation error = %v, want pinned-continuation rejection", err)
+	}
+}
+
+func TestValidateResponseRejectsEmptyStateConditionalContinuation(t *testing.T) {
+	profile := profileForTest(t, "anthropic-direct")
+	actual := llm.ServiceClassStandard
+	response := llm.Response{
+		Status:   llm.ResponseStatusCompleted,
+		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
+		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
+		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
+		Continuation: &llm.Continuation{
+			Handle:     "continuation-123",
+			EndpointID: profile.ID,
+			Model:      profile.Model,
+			Pinned:     true,
+		},
+	}
+
+	if _, err := validateResponse(profile, response); err == nil || !strings.Contains(err.Error(), "replayable provider state") {
+		t.Fatalf("validate empty-state continuation error = %v, want replayable-provider-state rejection", err)
 	}
 }
 

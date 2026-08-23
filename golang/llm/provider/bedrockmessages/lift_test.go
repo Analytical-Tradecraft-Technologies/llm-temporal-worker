@@ -79,6 +79,48 @@ func TestLiftPreservesThinkingToolOrderUsageAndActualTier(t *testing.T) {
 	}
 }
 
+func TestLiftEmitsContinuationOnlyForReplayableProviderState(t *testing.T) {
+	profile := mustBedrockProfile(t, "")
+	call := provider.Call{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract", OperationKey: "bedrock-continuation", ServiceClass: llm.ServiceClassStandard}
+	for _, test := range []struct {
+		name             string
+		response         string
+		wantContinuation bool
+	}{
+		{
+			name: "text only",
+			response: `{
+				"id":"msg_text", "type":"message", "role":"assistant", "model":"claude-contract",
+				"content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn",
+				"usage":{"input_tokens":1,"output_tokens":1,"service_tier":"default"}
+			}`,
+		},
+		{
+			name: "thinking state",
+			response: `{
+				"id":"msg_thinking", "type":"message", "role":"assistant", "model":"claude-contract",
+				"content":[{"type":"thinking","thinking":"private","signature":"sig-1"}], "stop_reason":"end_turn",
+				"usage":{"input_tokens":1,"output_tokens":1,"service_tier":"default"}
+			}`,
+			wantContinuation: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var response anthropic.Message
+			if err := json.Unmarshal([]byte(test.response), &response); err != nil {
+				t.Fatal(err)
+			}
+			lifted, err := profile.liftResponse(call, &response, "req")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (lifted.Continuation != nil) != test.wantContinuation {
+				t.Fatalf("continuation = %#v, want present=%t", lifted.Continuation, test.wantContinuation)
+			}
+		})
+	}
+}
+
 func TestLiftMapsTerminalReasonsAndRejectsInvalidProviderFacts(t *testing.T) {
 	profile := mustBedrockProfile(t, "")
 	call := provider.Call{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract", OperationKey: "bedrock-status", ServiceClass: llm.ServiceClassStandard}

@@ -146,13 +146,26 @@ type Runtime struct {
 	monitorCancel          context.CancelFunc
 	monitorDone            chan struct{}
 
-	mu      sync.Mutex
-	started bool
+	mu        sync.Mutex
+	state     runtimeState
+	startDone chan struct{}
 	// readinessMu serializes the monitor's cancellation handoff with the
 	// final Pause/Resume transition. Without this handoff, shutdown could
 	// cancel a monitor tick between its probe result and Worker.Resume.
 	readinessMu sync.Mutex
 }
+
+type runtimeState uint8
+
+const (
+	// A failed initial listener bind returns to idle. Once any listener has
+	// started, a later startup failure closes the runtime instead of offering a
+	// retry over resources that net/http cannot safely reuse.
+	runtimeIdle runtimeState = iota
+	runtimeStarting
+	runtimeStarted
+	runtimeClosed
+)
 
 // New validates and composes a runtime. It performs no provider calls when
 // EngineFactory is unavailable; the returned error is safe to show in CLI
@@ -272,11 +285,14 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		_ = application.Close(context.Background())
 		return nil, err
 	}
-	healthServer, err := httpserver.New(httpserver.Options{
+	healthServerOptions := httpserver.Options{
 		Address: configuration.Server.HealthAddress,
 		Health:  health,
-		Metrics: metrics.Handler(),
-	})
+	}
+	if configuration.Server.MetricsAddress == configuration.Server.HealthAddress {
+		healthServerOptions.Metrics = metrics.Handler()
+	}
+	healthServer, err := httpserver.New(healthServerOptions)
 	if err != nil {
 		_ = tracer.Shutdown(context.Background())
 		temporalClient.Close()
@@ -427,24 +443,30 @@ func (runtime *Runtime) Start() error {
 	if runtime == nil || runtime.Worker == nil {
 		return errors.New("runtime is not initialized")
 	}
+	runtime.mu.Lock()
+	if runtime.state != runtimeIdle {
+		runtime.mu.Unlock()
+		return errors.New("runtime is already started")
+	}
+	runtime.state = runtimeStarting
+	runtime.startDone = make(chan struct{})
+	runtime.mu.Unlock()
+
 	if !runtime.v1RuntimeConfigured {
 		if runtime.Health != nil {
 			runtime.Health.SetReady(false)
 		}
+		runtime.finishStart(runtimeIdle)
 		return ErrV1RuntimeUnavailable
 	}
-	runtime.mu.Lock()
-	if runtime.started {
-		runtime.mu.Unlock()
-		return errors.New("runtime is already started")
-	}
-	runtime.mu.Unlock()
 	if err := runtime.HealthServer.Start(); err != nil {
+		runtime.finishStart(runtimeIdle)
 		return err
 	}
 	if runtime.MetricsServer != nil {
 		if err := runtime.MetricsServer.Start(); err != nil {
 			_ = runtime.HealthServer.Shutdown(context.Background())
+			runtime.finishStart(runtimeClosed)
 			return err
 		}
 	}
@@ -453,13 +475,23 @@ func (runtime *Runtime) Start() error {
 		if runtime.MetricsServer != nil {
 			_ = runtime.MetricsServer.Shutdown(context.Background())
 		}
+		runtime.finishStart(runtimeClosed)
 		return err
 	}
-	runtime.mu.Lock()
-	runtime.started = true
-	runtime.mu.Unlock()
 	runtime.startDependencyMonitor()
+	runtime.finishStart(runtimeStarted)
 	return nil
+}
+
+func (runtime *Runtime) finishStart(state runtimeState) {
+	runtime.mu.Lock()
+	runtime.state = state
+	done := runtime.startDone
+	runtime.startDone = nil
+	if done != nil {
+		close(done)
+	}
+	runtime.mu.Unlock()
 }
 
 // Shutdown applies the readiness-first, worker-stop, client-drain, telemetry
@@ -470,6 +502,22 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	for {
+		runtime.mu.Lock()
+		if runtime.state != runtimeStarting {
+			runtime.state = runtimeClosed
+			runtime.mu.Unlock()
+			break
+		}
+		done := runtime.startDone
+		runtime.mu.Unlock()
+		select {
+		case <-done:
+			continue
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	runtime.stopDependencyMonitor(ctx)
 	err := runtime.shutdown.Shutdown(ctx)
@@ -522,7 +570,7 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 				reloads = nil
 				continue
 			}
-			runtime.reloadFromTrigger(reloadPath)
+			runtime.reloadFromTrigger(ctx, reloadPath)
 		case err, ok := <-healthErrors:
 			if !ok {
 				healthErrors = nil
@@ -546,15 +594,18 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 	return runtime.gracefulShutdown()
 }
 
-func (runtime *Runtime) reloadFromTrigger(path string) {
+func (runtime *Runtime) reloadFromTrigger(parent context.Context, path string) {
 	if runtime == nil || path == "" {
 		return
+	}
+	if parent == nil {
+		parent = context.Background()
 	}
 	timeout := runtime.timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	_ = runtime.ReloadFile(ctx, path)
 }
@@ -830,13 +881,9 @@ func (runtime *Runtime) startDependencyMonitor() {
 	if runtime == nil || runtime.readinessProbeInterval <= 0 {
 		return
 	}
-	// A production snapshot may have no explicit dependency probes when the
-	// ClientSet is supplied by an embedding. Still monitor reloads so an
-	// authoritative V1 source disappearing from a later snapshot cannot leave
-	// readiness stuck true indefinitely.
-	if len(runtime.dependencyProbes()) == 0 && !runtime.currentV1RuntimeRequired() {
-		return
-	}
+	// The initial snapshot may have no dependency probes or required V1 source,
+	// but a later reload can introduce either. Keep the low-frequency monitor
+	// alive for the process so readiness always follows the active snapshot.
 	runtime.mu.Lock()
 	if runtime.monitorCancel != nil {
 		runtime.mu.Unlock()

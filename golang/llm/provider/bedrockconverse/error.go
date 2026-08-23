@@ -5,14 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
+
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 // mapError keeps AWS SDK errors out of the provider-neutral response while
-// preserving retry and dispatch certainty. Smithy response errors expose an
-// HTTPStatusCode method without requiring a dependency on generated service
-// error types.
+// preserving retry and dispatch certainty. Smithy response errors expose HTTP
+// status and response details without requiring a dependency on generated
+// service error types.
 func mapError(err error, profileName string) *provider.Error {
 	if err == nil {
 		return nil
@@ -39,7 +42,19 @@ func mapError(err error, profileName string) *provider.Error {
 	}
 	var statusErr interface{ HTTPStatusCode() int }
 	if errors.As(err, &statusErr) {
-		return mapHTTPError(statusErr.HTTPStatusCode(), err, profileName)
+		mapped := mapHTTPError(statusErr.HTTPStatusCode(), err, profileName)
+		var responseErr interface{ HTTPResponse() *smithyhttp.Response }
+		if mapped.Retry == provider.RetryAfter && errors.As(err, &responseErr) {
+			if response := responseErr.HTTPResponse(); response != nil && response.Response != nil {
+				if retryAfter := response.Header.Get("retry-after"); retryAfter != "" {
+					mapped.SafeDetails["retry_after"] = retryAfter
+					if retryDelay, ok := provider.ParseRetryAfter(retryAfter, time.Now()); ok {
+						mapped.RetryAfter = retryDelay
+					}
+				}
+			}
+		}
+		return mapped
 	}
 	return &provider.Error{
 		Code: provider.CodeProviderUnavailable, Phase: provider.PhaseDispatch,

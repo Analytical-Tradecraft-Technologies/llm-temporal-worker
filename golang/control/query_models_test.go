@@ -16,7 +16,7 @@ func TestTypedQueryRequestRoundTrip(t *testing.T) {
 	pageCursor := QueryCursor("cursor")
 	request := QueryRequest{
 		OperationKey: "query-op",
-		Scope:        QueryScope{Tenant: "tenant-a", Project: "project-a", Actor: "actor-a", Tags: map[string]string{"region": "au"}},
+		Scope:        QueryScope{Tenant: "tenant-a", Project: "project-a", Actor: "actor-a"},
 		Kind:         llm.QueryProviderStatus,
 		Filter:       ProviderStatusQuery{Provider: &provider, Endpoint: &endpoint, IncludeHealthy: boolPointer(true), RefreshIfOlderThan: refresh, Page: QueryPage{Size: 25, Cursor: &pageCursor}},
 	}
@@ -39,6 +39,22 @@ func TestTypedQueryRequestRoundTrip(t *testing.T) {
 	filter, ok := decoded.Filter.(ProviderStatusQuery)
 	if !ok || filter.Page.Size != 25 || filter.RefreshIfOlderThan != refresh || filter.Provider == nil || *filter.Provider != provider || filter.Page.Cursor == nil || *filter.Page.Cursor != pageCursor {
 		t.Fatalf("decoded filter lost typed values: %#v", decoded.Filter)
+	}
+}
+
+func TestTypedQueryRequestRejectsTags(t *testing.T) {
+	request := QueryRequest{
+		OperationKey: "query-op",
+		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "actor", Tags: map[string]string{"region": "au"}},
+		Kind:         llm.QueryProviderStatus,
+		Filter:       ProviderStatusQuery{},
+	}
+	_, err := EncodeQueryRequest(request)
+	if err == nil {
+		t.Fatal("typed query request silently dropped context tags")
+	}
+	if message := err.Error(); !strings.Contains(message, "context") || !strings.Contains(message, "tags") {
+		t.Fatalf("error = %q, want clear context tags rejection", message)
 	}
 }
 

@@ -29,8 +29,12 @@ import (
 // TestReadinessIntegrationRedisRecovery exercises the runtime exactly as an
 // operator would: the Make target creates one isolated, pinned Redis daemon,
 // this test explicitly provisions its Function before creating the worker,
-// then stops and restores Redis while the worker is live. No provider adapter
-// is constructed or called by the dependency monitor.
+// then pauses and restores Redis while the worker is live. Pausing preserves
+// the dynamically published loopback endpoint while making Redis unavailable;
+// stopping and restarting a container with an ephemeral published port can
+// assign a different host port and would test a stale address instead of
+// dependency recovery. No provider adapter is constructed or called by the
+// dependency monitor.
 func TestReadinessIntegrationRedisRecovery(t *testing.T) {
 	address := os.Getenv("LLMTW_READINESS_REDIS_ADDR")
 	container := os.Getenv("LLMTW_READINESS_REDIS_CONTAINER")
@@ -90,14 +94,14 @@ func TestReadinessIntegrationRedisRecovery(t *testing.T) {
 		t.Fatalf("initial worker starts = %d, want 1", starts)
 	}
 
-	runReadinessDocker(t, "stop", container)
+	runReadinessDocker(t, "pause", container)
 	waitForReadinessStatus(t, runtime.HealthServer.Addr(), "/health/ready", http.StatusServiceUnavailable)
 	assertReadinessStatus(t, runtime.HealthServer.Addr(), "/health/live", http.StatusOK)
 	if stops := controllers.stops.Load(); stops == 0 {
 		t.Fatal("Redis loss did not stop Temporal polling")
 	}
 
-	runReadinessDocker(t, "start", container)
+	runReadinessDocker(t, "unpause", container)
 	waitForReadinessStatus(t, runtime.HealthServer.Addr(), "/health/ready", http.StatusOK)
 	assertReadinessStatus(t, runtime.HealthServer.Addr(), "/health/live", http.StatusOK)
 	if starts := controllers.starts.Load(); starts < 2 {

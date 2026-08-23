@@ -11,7 +11,7 @@ func TestBuildPoolConfigSetsDurableSessionDefaults(t *testing.T) {
 		Namespace:        Namespace{Database: "llm_worker", Schema: "llm_worker"},
 		Addresses:        []string{"db.internal:5432", "db-replica.internal:5432"},
 		Username:         "worker",
-		Password:         "secret-value",
+		Password:         "test-secret-value",
 		MaxConnections:   10,
 		MinConnections:   2,
 		DialTimeout:      2 * time.Second,
@@ -24,7 +24,7 @@ func TestBuildPoolConfigSetsDurableSessionDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.ConnConfig.Database != "llm_worker" || config.ConnConfig.User != "worker" || config.ConnConfig.Password != "secret-value" {
+	if config.ConnConfig.Database != "llm_worker" || config.ConnConfig.User != "worker" || config.ConnConfig.Password != "test-secret-value" {
 		t.Fatalf("unexpected pool identity: %#v", config.ConnConfig)
 	}
 	if config.ConnConfig.Host != "db.internal" || config.ConnConfig.Port != 5432 || len(config.ConnConfig.Fallbacks) != 1 || config.ConnConfig.Fallbacks[0].Host != "db-replica.internal" {

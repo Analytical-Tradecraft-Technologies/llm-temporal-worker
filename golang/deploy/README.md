@@ -15,11 +15,33 @@ Kubernetes manifests live under `kubernetes/base` and include:
 - ConfigMap-mounted non-secret configuration/catalogs and externally provisioned
   Secret volumes for Redis/TLS/continuation material;
 - an ingress/egress NetworkPolicy that permits only probe/metrics traffic and
-  DNS, Redis, worker PostgreSQL, Temporal, and TLS egress. PostgreSQL is
-  explicitly allowed on TCP 5432 because the durable worker configuration
-  uses it as the authoritative state store;
+  DNS, Redis, worker PostgreSQL, Temporal, and TLS egress. Redis (TCP 6379),
+  PostgreSQL (TCP 5432), and Temporal (TCP 7233) are a separate state/control
+  rule limited to namespaces explicitly labeled `llmtw.io/state-egress=allowed`.
+  General HTTPS remains a separate TCP 443 rule, with the instance-metadata
+  endpoint excluded;
 - AWS and Azure workload-identity examples that opt into service-account token
   mounting only in the selected overlay.
+
+The base intentionally does not permit state/control traffic to an arbitrary
+external address. For in-cluster dependencies, apply the
+`llmtw.io/state-egress=allowed` label only to reviewed dependency namespaces.
+For private managed services, copy the `private-state-egress` example overlay
+and replace its `10.64.0.0/16` placeholder with the narrow RFC 1918 or IPv6 ULA
+CIDR allocated to the Redis, PostgreSQL, and Temporal endpoints. Split the
+state/control rule further when those services occupy different network
+segments. The deployment-policy verifier rejects public/default-route CIDRs,
+empty selectors, all-port rules, and rules that combine state/control ports
+with general TLS. It also requires the NetworkPolicy to share the worker
+Deployment namespace, select exactly that Deployment's pods, and declare the
+`Egress` policy type, so a syntactically valid but non-applying policy cannot
+pass verification.
+
+Cloud provider APIs and workload-identity exchanges on TCP 443 continue to use
+the general TLS rule. A managed state service exposed only through a public IP
+is not compatible with the safe default: provision a private endpoint or route
+it through a reviewed in-cluster gateway rather than widening the sensitive
+ports to `0.0.0.0/0`.
 
 Render and structurally inspect every manifest offline with:
 
@@ -37,7 +59,8 @@ KUBECTL=/path/to/pinned/kubectl make kustomize-verify
 Both commands use only `kubectl kustomize`; neither can apply a resource or
 contact a cluster. The rendered policy rejects root or string identities,
 unbounded writable storage, missing CPU/memory constraints, unsafe service
-account token mounting, and probe paths that diverge from the worker contract.
+account token mounting, unrestricted state/control egress, and probe paths that
+diverge from the worker contract.
 Replace the example image/config/catalog/identity values in a reviewed overlay
 before production use; no credentials belong in this tree.
 

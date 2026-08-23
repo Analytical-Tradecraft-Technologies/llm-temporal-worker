@@ -183,6 +183,57 @@ func TestDependencyVerificationFailureNeverPublishesOrLeaksClients(t *testing.T)
 	}
 }
 
+func TestReloadCannotPublishAfterConcurrentClose(t *testing.T) {
+	created := make(chan *fakeClients, 2)
+	verificationStarted := make(chan struct{})
+	releaseVerification := make(chan struct{})
+	verificationCalls := 0
+	application, err := New(context.Background(), Options{
+		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
+		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) {
+			clients := &fakeClients{}
+			created <- clients
+			return clients, nil
+		},
+		Verify: func(context.Context, *config.Snapshot, ClientSet) error {
+			verificationCalls++
+			if verificationCalls > 1 {
+				close(verificationStarted)
+				<-releaseVerification
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialClients := <-created
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- application.Reload(context.Background(), exampleConfig(t)) }()
+	replacementClients := <-created
+	<-verificationStarted
+
+	if err := application.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if current := application.Current(); current != nil {
+		t.Fatal("Close left an active snapshot")
+	}
+	close(releaseVerification)
+	if err := <-reloaded; err == nil {
+		t.Fatal("reload published a replacement after Close")
+	}
+	if current := application.Current(); current != nil {
+		t.Fatal("reload resurrected the application after Close")
+	}
+	if err := application.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if initialClients.Count() != 1 || replacementClients.Count() != 1 {
+		t.Fatalf("closed counts = %d, %d; want one each", initialClients.Count(), replacementClients.Count())
+	}
+}
+
 func TestInitialDependencyVerificationFailureClosesClients(t *testing.T) {
 	failure := errors.New("required dependency is unavailable")
 	clients := &fakeClients{}

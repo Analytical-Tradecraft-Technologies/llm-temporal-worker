@@ -24,7 +24,7 @@ opam install --yes llm-temporal-ocaml
 ```
 
 Its metadata pins `temporal-sdk` to the latest validated `master` commit
-`936d354807cc5c2ee1e1f81a22125a9cbec1df8e`. Commit an application lock file
+`8c8cf62b7f13bfa262b24df034ecfb899024b8a6`. Commit an application lock file
 after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
@@ -313,8 +313,9 @@ the closed result tag matches the requested constructor and returns a codec
 unchecked JSON cast or `Obj.magic`. `Query.start` returns a workflow-owned
 Temporal future whose successful value is a typed `result` (so protocol-kind
 mismatches stay on the error channel without raising in a workflow callback),
-while `Query.execute_with` is available for deterministic dispatch injection
-in tests.
+while `Query.execute_with` and `Query.start_with` are available for
+deterministic synchronous and asynchronous dispatch injection in tests. Both
+paths revalidate raw filter records before calling the injected dispatcher.
 
 For paginated responses, `Query.next query response` constructs the next page
 with the same GADT result type. It returns `Ok None` for the final page and

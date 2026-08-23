@@ -248,7 +248,7 @@ func TestResponsesContractFixturesStayRedactedAndRespectCoverageBoundary(t *test
 		if !bytes.Contains(redaction, []byte("[REDACTED]")) {
 			t.Fatalf("%s redaction fixture has no explicit marker", profile.id)
 		}
-		for _, unsafe := range []string{"openai-key", "azure-key", "Bearer sk-", "api-key-real"} {
+		for _, unsafe := range []string{"fixture-openai-key", "azure-key", "Bearer sk-", "api-key-real"} {
 			if bytes.Contains(redaction, []byte(unsafe)) {
 				t.Fatalf("%s redaction fixture contains %q", profile.id, unsafe)
 			}
@@ -333,7 +333,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 	var calls int
 	client, err := NewClient(ClientConfig{
 		BaseURL: "http://127.0.0.1/v1",
-		APIKey:  "openai-fixture-key",
+		APIKey:  "fixture-openai-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
 			got = request
@@ -374,7 +374,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 	if got == nil || got.Method != http.MethodPost || got.URL.Path != "/v1/responses" || got.URL.RawQuery != "" {
 		t.Fatalf("OpenAI Responses request = %v", gotURL(got))
 	}
-	if got.Header.Get("Authorization") != "Bearer openai-fixture-key" || got.Header.Get("Api-Key") != "" {
+	if got.Header.Get("Authorization") != "Bearer fixture-openai-key" || got.Header.Get("Api-Key") != "" {
 		t.Fatalf("OpenAI Responses auth headers = %#v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
@@ -397,7 +397,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	client, err := NewAzureClient(AzureClientConfig{
 		Endpoint:   "http://127.0.0.1",
 		APIVersion: "v1",
-		APIKey:     "azure-key",
+		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			got = request
 			return &http.Response{
@@ -434,7 +434,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	if got == nil || got.URL.Path != "/openai/v1/responses" || got.URL.Query().Get("api-version") != "v1" {
 		t.Fatalf("Azure Responses request URL = %v", gotURL(got))
 	}
-	if got.Header.Get("Api-Key") != "azure-key" || got.Header.Get("Authorization") != "" {
+	if got.Header.Get("Api-Key") != "test-azure-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("Azure Responses auth headers = %#v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
@@ -589,7 +589,7 @@ func fixtureAdapterForProfile(t *testing.T, profile responsesFixtureProfile) *Ad
 		client, err := NewAzureClient(AzureClientConfig{
 			Endpoint:   "http://127.0.0.1",
 			APIVersion: "v1",
-			APIKey:     "azure-key",
+			APIKey:     "test-azure-key",
 			HTTPClient: http.DefaultClient,
 		})
 		if err != nil {

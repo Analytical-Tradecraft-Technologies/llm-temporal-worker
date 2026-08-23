@@ -361,6 +361,103 @@ func TestBudgetBoundaryPreflightsDuplicateCompletionIDs(t *testing.T) {
 	}
 }
 
+func TestBudgetBoundaryRequiresOneCompletionPerReservedWindowBucket(t *testing.T) {
+	now := time.Now().UTC()
+	request := boundaryRequest(now)
+	result := boundaryAcceptedResult(request, now)
+	secondReservation := result.Events[0]
+	secondReservation.EventID = "reservation-event-2"
+	secondReservation.WindowID = "window-2"
+	result.Events = append(result.Events, secondReservation)
+
+	tests := []struct {
+		name   string
+		events func() []budget.CompletionEvent
+	}{
+		{
+			name: "missing reserved window",
+			events: func() []budget.CompletionEvent {
+				return []budget.CompletionEvent{boundaryCompletion(request, now)}
+			},
+		},
+		{
+			name: "two completions for one reserved window",
+			events: func() []budget.CompletionEvent {
+				first := boundaryCompletion(request, now)
+				second := first
+				second.EventID = "completion-event-2"
+				return []budget.CompletionEvent{first, second}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			materializer := &boundaryMaterializer{result: result}
+			journal := &boundaryJournal{calls: &materializer.calls}
+			boundary := newBoundary(materializer, journal)
+			lifecycle := newLifecycle(t)
+			reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			advanceDispatched(t, lifecycle)
+
+			err = boundary.Finalize(context.Background(), lifecycle, reservation, test.events())
+			if !errors.Is(err, ErrBudgetBoundaryInvalid) {
+				t.Fatalf("incomplete completion coverage accepted: %v", err)
+			}
+			if len(journal.completions) != 0 {
+				t.Fatalf("invalid completion batch was partially journaled: %#v", journal.completions)
+			}
+			if got := materializer.calls; !reflect.DeepEqual(got, []string{"accept", "reservation:reservation-event-1", "reservation:reservation-event-2"}) {
+				t.Fatalf("invalid completion batch caused a side effect: %#v", got)
+			}
+			if current, _ := lifecycle.Current(); current != PhaseDispatched {
+				t.Fatalf("invalid completion batch phase = %s", current)
+			}
+		})
+	}
+}
+
+func TestBudgetBoundaryDistinguishesBucketTimesOutsideUnixNanoRange(t *testing.T) {
+	now := time.Now().UTC()
+	request := boundaryRequest(now)
+	result := boundaryAcceptedResult(request, now)
+	firstBucket := time.Unix(-30610224000, 0).UTC()
+	secondBucket := time.Unix(firstBucket.Unix()+18446744073, 709551616).UTC()
+	if !firstBucket.Before(secondBucket) || firstBucket.UnixNano() != secondBucket.UnixNano() {
+		t.Fatalf("test timestamps do not exercise a UnixNano collision: %s, %s", firstBucket, secondBucket)
+	}
+	result.Events[0].BucketStart = firstBucket
+	secondReservation := result.Events[0]
+	secondReservation.EventID = "reservation-event-2"
+	secondReservation.BucketStart = secondBucket
+	result.Events = append(result.Events, secondReservation)
+
+	materializer := &boundaryMaterializer{result: result}
+	journal := &boundaryJournal{calls: &materializer.calls}
+	boundary := newBoundary(materializer, journal)
+	lifecycle := newLifecycle(t)
+	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanceDispatched(t, lifecycle)
+	firstCompletion := boundaryCompletion(request, now)
+	firstCompletion.BucketStart = firstBucket
+	secondCompletion := firstCompletion
+	secondCompletion.EventID = "completion-event-2"
+	secondCompletion.BucketStart = secondBucket
+
+	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{firstCompletion, secondCompletion}); err != nil {
+		t.Fatalf("distinct out-of-range buckets rejected: %v", err)
+	}
+	if len(journal.completions) != 2 {
+		t.Fatalf("completion journal = %#v", journal.completions)
+	}
+}
+
 func TestBudgetBoundaryRejectsTypedNilPorts(t *testing.T) {
 	var materializer *boundaryMaterializer
 	var journal *boundaryJournal

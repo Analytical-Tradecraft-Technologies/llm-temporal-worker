@@ -10,9 +10,9 @@ open Llm_temporal_models
 
 module Filter : sig
   (** Validated builders for the five query filters.  Page sizes are bounded
-      to 1..1000, refresh ages to 1..86400 seconds, cursors to their query
-      kind when tagged, and spend intervals/dimensions are checked before the
-      returned filter is wrapped in a GADT constructor. *)
+      to 1..1000, refresh ages to 1..86400 seconds, cursors to 1..512 bytes and
+      their query kind when tagged, and spend intervals/dimensions are checked
+      before the returned filter is wrapped in a GADT constructor. *)
   val provider_status :
     ?provider:Provider_id.t ->
     ?endpoint:Endpoint_id.t ->
@@ -83,12 +83,11 @@ val of_response :
   'a t -> query_response -> ('a response, Temporal.Error.t) result
 
 (** Build the next page from a successful response without losing the GADT's
-    result type.  Snapshot queries return [Ok None]; paginated queries return
-    [Ok (Some query)] when the worker supplies a cursor.  Cursor kind and
-    snapshot invariants are checked again so callers using a custom
-    dispatcher cannot bypass the protocol boundary.  The worker may mark a
-    response complete while still returning a cursor; cursor presence, not the
-    completion flag, determines whether another page is available. *)
+    result type.  Snapshot queries must be complete and cursor-free, and return
+    [Ok None].  Paginated queries return [Ok (Some query)] exactly when they are
+    incomplete and carry a cursor; complete pages must not carry one.  Cursor
+    kind and completion invariants are checked again so callers using a custom
+    dispatcher cannot bypass the protocol boundary. *)
 val next : 'a t -> 'a response -> ('a t option, Temporal.Error.t) result
 
 type dispatcher =
@@ -109,6 +108,21 @@ val execute :
   context:request_context ->
   'a t -> ('a response, Temporal.Error.t) result
 
+type async_dispatcher =
+  ?task_queue:Temporal_task_queue.t ->
+  (query_envelope, query_response) Temporal.Activity.t ->
+  query_envelope -> (query_response, Temporal.Error.t) Temporal.Future.t
+
+(** Asynchronous counterpart to [execute_with] for deterministic workflow
+    tests. Input filters are validated before [dispatch] is called. *)
+val start_with :
+  ?task_queue:Temporal_task_queue.t ->
+  dispatch:async_dispatcher ->
+  operation_key:Operation_key.t ->
+  context:request_context ->
+  'a t ->
+  (('a response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
+
 val start :
   ?task_queue:Temporal_task_queue.t ->
   operation_key:Operation_key.t ->
@@ -116,7 +130,7 @@ val start :
   'a t ->
   (('a response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
-(** [start] keeps response validation in the successful value channel.  In
+(** [start] and [start_with] keep response validation in the successful value channel.  In
     addition to result-tag and cursor checks, the returned operation key must
     equal the requested key; a mismatch is returned as [Error] without
     raising in a workflow callback. *)

@@ -50,6 +50,10 @@ func TestScanContentAllowsExplicitRedactions(t *testing.T) {
 	for _, content := range []string{
 		`{"authorization":"Bearer redacted"}`,
 		`{"api_key":"local-only"}`,
+		`password=local-redis-password-0123456789`,
+		`mock_api_key=mock-api-key-0123456789`,
+		`api_key=test-provider-key-0123456789`,
+		`password=not-configured`,
 	} {
 		finding, err := scanContent([]byte(content))
 		if err != nil {
@@ -57,6 +61,25 @@ func TestScanContentAllowsExplicitRedactions(t *testing.T) {
 		}
 		if finding != nil {
 			t.Fatalf("scanContent rejected explicit redaction: %#v", finding)
+		}
+	}
+}
+
+func TestScanContentRejectsRedactionMarkerSubstringCollisions(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{
+		`api_key=latest-production-credential-0123456789`,
+		`password=contest-secret-value-0123456789`,
+		`access_token=smock-provider-token-0123456789`,
+		`secret_key=dislocal-production-key-0123456789`,
+	} {
+		finding, err := scanContent([]byte(content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if finding == nil {
+			t.Fatal("scanContent accepted a credential containing a marker substring")
 		}
 	}
 }
@@ -130,6 +153,30 @@ func TestVerifyScansSourceFixturesAndTestOutputWithoutLeakingPayload(t *testing.
 			wantLocation: "internal/config.go",
 		},
 		{
+			name:         "Go test source",
+			fixturePath:  "internal/config_test.go",
+			fixtureBytes: []byte(`const authorization = "` + secret + `"`),
+			wantLocation: "internal/config_test.go",
+		},
+		{
+			name:         "Markdown",
+			fixturePath:  "README.md",
+			fixtureBytes: []byte(`authorization = "` + secret + `"`),
+			wantLocation: "README.md",
+		},
+		{
+			name:         "plain text",
+			fixturePath:  "notes.txt",
+			fixtureBytes: []byte(`authorization = "` + secret + `"`),
+			wantLocation: "notes.txt",
+		},
+		{
+			name:         "Dockerfile",
+			fixturePath:  "deploy/Dockerfile.worker",
+			fixtureBytes: []byte(`ENV authorization="` + secret + `"`),
+			wantLocation: "deploy/Dockerfile.worker",
+		},
+		{
 			name:         "repository root workflow",
 			fixturePath:  ".github/workflows/release.yml",
 			fixtureBytes: []byte(`api_key: "` + secret + `"`),
@@ -182,6 +229,210 @@ func TestVerifyScansSourceFixturesAndTestOutputWithoutLeakingPayload(t *testing.
 			}
 			if !strings.Contains(err.Error(), test.wantLocation) {
 				t.Fatalf("verify error %q does not identify %q", err, test.wantLocation)
+			}
+		})
+	}
+}
+
+func TestVerifyDetectsRecognizedCredentialPatternsInCheckedInText(t *testing.T) {
+	t.Parallel()
+
+	patterns := []struct {
+		name  string
+		value string
+	}{
+		{name: "private key", value: "-----BEGIN " + "PRIVATE KEY-----"},
+		{name: "AWS access key", value: "AKIA" + strings.Repeat("A", 16)},
+		{name: "GitHub token", value: "gh" + "p_" + strings.Repeat("a", 24)},
+		{name: "Slack token", value: "xo" + "xb-" + strings.Repeat("a", 12)},
+		{name: "OpenAI token", value: "s" + "k-" + strings.Repeat("a", 24)},
+		{name: "Anthropic token", value: "s" + "k-ant-" + strings.Repeat("a", 24)},
+	}
+
+	for _, pattern := range patterns {
+		t.Run(pattern.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTestFile(t, root, "README.md", []byte("credential: "+pattern.value+"\n"))
+
+			err := verify(root, "")
+			if err == nil {
+				t.Fatal("verify accepted recognized credential-like material")
+			}
+			if strings.Contains(err.Error(), pattern.value) {
+				t.Fatalf("verify leaked credential bytes: %v", err)
+			}
+			if !strings.Contains(err.Error(), "README.md") || !strings.Contains(err.Error(), "credential-like material") {
+				t.Fatalf("verify error %q does not identify the unsafe text file", err)
+			}
+		})
+	}
+}
+
+func TestVerifyScansBoundedTextRegardlessOfExtension(t *testing.T) {
+	t.Parallel()
+
+	privateKey := "-----BEGIN " + "PRIVATE KEY-----"
+	secret := "Bearer " + strings.Repeat("u", 24)
+	configSecret := strings.Repeat("n", 24)
+	tests := []struct {
+		name    string
+		path    string
+		content string
+	}{
+		{name: "PEM", path: "certs/client.pem", content: privateKey},
+		{name: "key file", path: "certs/client.key", content: privateKey},
+		{name: "netrc", path: ".netrc", content: `machine registry.example login build password ` + configSecret},
+		{name: "npmrc", path: ".npmrc", content: `//registry.example/:_authToken=` + configSecret},
+		{name: "environment production variant", path: ".env.production", content: `api_key="` + secret + `"`},
+		{name: "unquoted environment staging variant", path: ".env.staging", content: `api_key=` + secret},
+		{name: "extensionless config", path: "credentials", content: `authorization="` + secret + `"`},
+		{name: "unknown text extension", path: "config.runtime", content: `secret_key="` + secret + `"`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTestFile(t, root, test.path, []byte(test.content))
+			err := verify(root, "")
+			if err == nil {
+				t.Fatal("verify accepted credential-like material in a text file")
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), configSecret) || strings.Contains(err.Error(), privateKey) {
+				t.Fatalf("verify leaked credential bytes: %v", err)
+			}
+			if !strings.Contains(err.Error(), test.path) {
+				t.Fatalf("verify error %q does not identify %q", err, test.path)
+			}
+		})
+	}
+}
+
+func TestVerifyFailsClosedForOversizeTextRegardlessOfExtension(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestFile(t, root, "config.runtime", []byte(strings.Repeat("x", sourceVerifierTestSourceLimit+1)))
+	err := verify(root, "")
+	if err == nil {
+		t.Fatal("verify accepted oversized text with an unrecognized extension")
+	}
+	if !strings.Contains(err.Error(), "config.runtime") {
+		t.Fatalf("verify error %q does not identify the oversized text file", err)
+	}
+}
+
+func TestVerifyDetectsUnquotedCredentialLiteralsInExecutableSource(t *testing.T) {
+	t.Parallel()
+
+	secret := "productioncredential" + strings.Repeat("9", 16)
+	for _, test := range []struct {
+		name    string
+		path    string
+		content string
+	}{
+		{name: "shell", path: "scripts/deploy.sh", content: "API_KEY=" + secret},
+		{name: "Dockerfile", path: "Dockerfile", content: "ENV API_KEY=" + secret},
+		{name: "Dockerfile legacy ENV", path: "Dockerfile.legacy", content: "ENV API_KEY " + secret},
+		{name: "Makefile", path: "Makefile", content: "API_KEY=" + secret},
+		{name: "Makefile immediate assignment", path: "Makefile.immediate", content: "API_KEY := " + secret},
+		{name: "Makefile POSIX immediate assignment", path: "Makefile.posix", content: "API_KEY ::= " + secret},
+		{name: "Makefile escaped immediate assignment", path: "Makefile.escaped", content: "API_KEY :::= " + secret},
+		{name: "Makefile conditional assignment", path: "Makefile.conditional", content: "API_KEY ?= " + secret},
+		{name: "Makefile append assignment", path: "Makefile.append", content: "API_KEY += " + secret},
+		{name: "Makefile shell assignment", path: "Makefile.shell", content: "API_KEY != " + secret},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTestFile(t, root, test.path, []byte(test.content))
+			err := verify(root, "")
+			if err == nil {
+				t.Fatal("verify accepted an unquoted credential literal")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("verify leaked credential bytes: %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyAllowsCredentialVariableWiringInExecutableSource(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		path    string
+		content string
+	}{
+		{path: "scripts/deploy.sh", content: `API_KEY="$API_KEY"`},
+		{path: "Dockerfile", content: "ARG API_KEY\nENV API_KEY $API_KEY"},
+		{path: "Dockerfile.fixture", content: "ENV API_KEY fixture-docker-key"},
+		{path: "Makefile", content: `API_KEY ?= $${API_KEY}`},
+		{path: "Makefile.variable", content: `API_KEY ::= $${API_KEY}`},
+		{path: "Makefile.fixture", content: `API_KEY += fixture-make-key`},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTestFile(t, root, test.path, []byte(test.content))
+			if err := verify(root, ""); err != nil {
+				t.Fatalf("verify rejected credential variable wiring: %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyAllowsDockerInstructionProse(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		content string
+	}{
+		{name: "LABEL", content: `LABEL security="password authentication is disabled"`},
+		{name: "RUN", content: `RUN echo "password authentication is disabled"`},
+		{name: "comment", content: `# password authentication is disabled`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTestFile(t, root, "Dockerfile", []byte(test.content))
+			if err := verify(root, ""); err != nil {
+				t.Fatalf("verify rejected non-ENV Dockerfile prose: %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifySkipsGeneratedBinaryAndVendorArtifacts(t *testing.T) {
+	t.Parallel()
+
+	secret := []byte(`authorization = "Bearer ` + strings.Repeat("g", 24) + `"`)
+	tests := []struct {
+		name    string
+		path    string
+		content []byte
+	}{
+		{name: "build output", path: "build/README.md", content: secret},
+		{name: "distribution output", path: "dist/release.txt", content: secret},
+		{name: "OCaml build output", path: "_build/generated.ml", content: secret},
+		{name: "coverage output", path: "coverage/report.md", content: secret},
+		{name: "release artifacts", path: "release-artifacts/evidence.json", content: secret},
+		{name: "vendored source", path: "vendor/module/README.md", content: secret},
+		{name: "node modules", path: "node_modules/module/README.md", content: secret},
+		{name: "binary content", path: "assets/image.unknown", content: append([]byte{0x00, 0xff, 0x00}, secret...)},
+		{name: "oversized binary content", path: "assets/archive.unknown", content: append([]byte{0x00}, []byte(strings.Repeat("binary", sourceVerifierTestSourceLimit))...)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			writeTestFile(t, root, "safe.go", []byte("package safe\n"))
+			writeTestFile(t, root, test.path, test.content)
+			if err := verify(root, ""); err != nil {
+				t.Fatalf("verify scanned excluded artifact %q: %v", test.path, err)
 			}
 		})
 	}
@@ -349,12 +600,28 @@ func TestSourceScannerIncludesOCamlSourceFiles(t *testing.T) {
 		"ocaml/llm_temporal_worker/lib/client.ml",
 		"ocaml/llm_temporal_worker/lib/client.mli",
 	} {
-		if !shouldScanSource(path) {
-			t.Fatalf("shouldScanSource(%q) = false, want true", path)
-		}
 		if !isSourceCode(path) {
 			t.Fatalf("isSourceCode(%q) = false, want true", path)
 		}
+	}
+}
+
+func TestSourceScannerClassifiesExecutableTextAsSource(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"Dockerfile",
+		"deploy/Dockerfile.worker",
+		"Makefile",
+		"scripts/check.sh",
+		"scripts/check.py",
+	} {
+		if !isSourceCode(path) {
+			t.Fatalf("isSourceCode(%q) = false, want true", path)
+		}
+	}
+	if isSourceCode("README.md") {
+		t.Fatal("isSourceCode(README.md) = true, want false")
 	}
 }
 

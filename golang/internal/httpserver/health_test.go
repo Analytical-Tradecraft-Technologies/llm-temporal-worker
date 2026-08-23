@@ -162,7 +162,6 @@ func TestServerReportsBindFailure(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	defer listener.Close()
 
 	server, err := httpserver.New(httpserver.Options{Address: listener.Addr().String()})
 	if err != nil {
@@ -170,6 +169,15 @@ func TestServerReportsBindFailure(t *testing.T) {
 	}
 	if err := server.Start(); err == nil || !strings.Contains(err.Error(), "listen for health server") {
 		t.Fatalf("Start() error = %v, want wrapped listen error", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start() after failed bind error = %v, want retry to succeed", err)
+	}
+	if err := server.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -67,8 +67,17 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: llmtw-worker
+  namespace: llmtw-system
 spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm-temporal-worker
+      app.kubernetes.io/component: worker
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llm-temporal-worker
+        app.kubernetes.io/component: worker
     spec:
       serviceAccountName: llmtw-worker
       automountServiceAccountToken: false
@@ -126,6 +135,45 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llmtw-worker
+  namespace: llmtw-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llm-temporal-worker
+      app.kubernetes.io/component: worker
+  policyTypes: [Ingress, Egress]
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+    - ports:
+        - port: 6379
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 7233
+          protocol: TCP
+      to:
+        - namespaceSelector:
+            matchLabels:
+              llmtw.io/state-egress: allowed
+    - ports:
+        - port: 443
+          protocol: TCP
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
 ---
 apiVersion: v1
 kind: ConfigMap

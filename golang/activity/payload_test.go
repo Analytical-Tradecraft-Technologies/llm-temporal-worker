@@ -81,6 +81,44 @@ func TestRequestPayloadRejectsOversizeAndMalformedBlob(t *testing.T) {
 	}
 }
 
+func TestRequestPayloadAllowsArbitraryDigestFields(t *testing.T) {
+	payload := GenerateRequest{
+		APIVersion: APIVersion,
+		Request: llm.Request{
+			OperationKey: "opaque-digests",
+			Model:        "model-1",
+			Input: []llm.Item{
+				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"digest":"business-value","nested":{"digest":"tool-nested-value"}}`)},
+				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"digest":"json-part-value","schema":{"digest":"schema-value"}}`)}}},
+			},
+			Extensions: map[string]json.RawMessage{
+				"vendor": json.RawMessage(`{"digest":"extension-value"}`),
+			},
+		},
+	}
+
+	if _, err := MarshalRequest(payload, PayloadLimits{MaxInlineBytes: 16 * 1024}); err != nil {
+		t.Fatalf("MarshalRequest rejected opaque digest fields: %v", err)
+	}
+}
+
+func TestRequestPayloadValidatesDocumentBlobSource(t *testing.T) {
+	document := llm.DocumentPart{
+		Blob:      &llm.BlobRef{Digest: strings.Repeat("a", 64), ByteLength: 1, MediaType: "application/pdf", Locator: "s3://bucket/document"},
+		MediaType: "application/pdf",
+	}
+	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "document-blob", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{document}}}}}
+	if _, err := payload.Validate(16 * 1024); err != nil {
+		t.Fatalf("valid document blob rejected: %v", err)
+	}
+
+	document.Blob.Digest = "bad"
+	payload.Request.Input = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{document}}}
+	if _, err := payload.Validate(16 * 1024); err == nil {
+		t.Fatal("malformed document blob unexpectedly accepted")
+	}
+}
+
 func TestPayloadUnmarshalRejectsOversizeBeforeJSONDecode(t *testing.T) {
 	// This is intentionally malformed as JSON. The size gate must run first so
 	// malformed or adversarial payloads cannot force an unbounded decode before

@@ -24,6 +24,11 @@ var ErrProviderEgressDenied = errors.New("provider egress denied")
 // rejection.
 var ErrProviderPreDispatch = errors.New("provider request failed before dispatch")
 
+// ErrProviderResponseTooLarge marks a provider response body that crossed the
+// centrally enforced transport limit. The marker contains no provider body,
+// URL, header, or configured limit so it is safe to use for classification.
+var ErrProviderResponseTooLarge = errors.New("provider response exceeded configured byte limit")
+
 type Code string
 
 const (
@@ -158,6 +163,15 @@ func NewEgressDeniedError(cause error) *Error {
 func NewPreDispatchUnavailableError(cause error) *Error {
 	mapped := NewError(CodeProviderUnavailable, PhaseDispatch, DispatchNotDispatched, RetryNextRoute, "provider connection failed before dispatch")
 	mapped.Cause = withPreDispatchMarker(cause)
+	return mapped
+}
+
+// NewProviderResponseTooLargeError classifies a response that was received
+// but crossed the transport byte limit. The provider saw the request, so the
+// dispatch is accepted and must not be retried automatically.
+func NewProviderResponseTooLargeError(cause error) *Error {
+	mapped := NewError(CodeProviderInvalidResponse, PhaseDispatch, DispatchAccepted, RetryNever, "provider response exceeded configured byte limit")
+	mapped.Cause = cause
 	return mapped
 }
 

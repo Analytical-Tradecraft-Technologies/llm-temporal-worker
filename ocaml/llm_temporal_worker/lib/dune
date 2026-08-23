@@ -4,5 +4,5 @@
  ;; Identifier/model/decimal interfaces are installed so public aliases retain
  ;; one nominal type identity for downstream packages.  Codec and workflow
  ;; implementation modules remain private behind [Llm_temporal].
- (private_modules llm_temporal_codec llm_temporal_v1_codec llm_temporal_invocation llm_temporal_conversation llm_temporal_query llm_temporal_generate)
+ (private_modules llm_temporal_codec llm_temporal_response_validation llm_temporal_v1_codec llm_temporal_invocation llm_temporal_conversation llm_temporal_query llm_temporal_generate)
  (libraries temporal-sdk yojson base64 ptime))

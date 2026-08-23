@@ -27,13 +27,17 @@ module Filter = struct
     match value with
     | None -> Ok None
     | Some cursor ->
-        (match Query_cursor.kind cursor with
-         | None -> Ok (Some cursor)
-         | Some actual when actual = expected -> Ok (Some cursor)
-         | Some actual ->
-             Error (Printf.sprintf "%s.cursor kind mismatch: expected %s, got %s"
-                      kind (Query_cursor.kind_to_string expected)
-                      (Query_cursor.kind_to_string actual)))
+        let length = String.length (Query_cursor.to_string cursor) in
+        if length < 1 || length > 512 then
+          Error (Printf.sprintf "%s.cursor must be between 1 and 512 bytes" kind)
+        else
+          (match Query_cursor.kind cursor with
+           | None -> Ok (Some cursor)
+           | Some actual when actual = expected -> Ok (Some cursor)
+           | Some actual ->
+               Error (Printf.sprintf "%s.cursor kind mismatch: expected %s, got %s"
+                        kind (Query_cursor.kind_to_string expected)
+                        (Query_cursor.kind_to_string actual)))
 
   let paginated ~kind expected ?page_size ?cursor () f =
     let page_size = Option.value ~default:100 page_size in
@@ -162,6 +166,43 @@ let validate_cursor query =
                             (Query_cursor.kind_to_string (expected_cursor_kind query))
                             (Query_cursor.kind_to_string actual))))
 
+let validate_filter : type a. a t -> (unit, validation_error) result = function
+  | Provider_status filter ->
+      Result.map (fun _ -> ())
+        (Filter.provider_status ?provider:filter.provider ?endpoint:filter.endpoint
+           ?availability:filter.availability
+           ~include_healthy:filter.include_healthy
+           ?refresh_if_older_than_seconds:filter.refresh_if_older_than_seconds
+           ~page_size:filter.page_size ?cursor:filter.cursor ())
+  | Model_inventory filter ->
+      Result.map (fun _ -> ())
+        (Filter.model_inventory ?provider:filter.provider ?endpoint:filter.endpoint
+           ?model_prefix:filter.model_prefix ?lifecycle:filter.lifecycle
+           ?refresh_if_older_than_seconds:filter.refresh_if_older_than_seconds
+           ~page_size:filter.page_size ?cursor:filter.cursor ())
+  | Credit_status filter ->
+      Result.map (fun _ -> ())
+        (Filter.credit_status ?provider:filter.provider ?endpoint:filter.endpoint
+           ~include_ok:filter.include_ok
+           ?refresh_if_older_than_seconds:filter.refresh_if_older_than_seconds
+           ~page_size:filter.page_size ?cursor:filter.cursor ())
+  | Budget_status filter ->
+      Result.map (fun _ -> ())
+        (Filter.budget_status ?policy_key:filter.policy_key ?active_at:filter.active_at
+           ~include_windows:filter.include_windows ())
+  | Spend_summary filter ->
+      Result.map (fun _ -> ())
+        (Filter.spend_summary ~start_time:filter.start_time ~end_time:filter.end_time
+           ~group_by:filter.group_by ~operation_kinds:filter.operation_kinds ())
+
+let validate_query query =
+  match validate_cursor query with
+  | Error error -> Error error
+  | Ok () ->
+      (match validate_filter query with
+       | Ok () -> Ok ()
+       | Error message -> Error (Temporal.Error.codec ~message))
+
 let mismatch expected actual =
   Temporal.Error.codec
     ~message:(Printf.sprintf "query result kind mismatch: expected %s, got %s" expected actual)
@@ -189,6 +230,23 @@ let cursor_forbidden kind =
     ~message:(Printf.sprintf "query response.%s must not include next_cursor"
                 (Query_cursor.kind_to_string kind))
 
+let complete_with_cursor kind =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf
+                "query response.%s complete response must not include next_cursor"
+                (Query_cursor.kind_to_string kind))
+
+let incomplete_without_cursor kind =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf
+                "query response.%s incomplete response requires next_cursor"
+                (Query_cursor.kind_to_string kind))
+
+let snapshot_incomplete kind =
+  Temporal.Error.codec
+    ~message:(Printf.sprintf "query response.%s must be complete"
+                (Query_cursor.kind_to_string kind))
+
 let result_kind = function
   | Provider_status_result _ -> "provider_status"
   | Model_inventory_result _ -> "model_inventory"
@@ -196,20 +254,27 @@ let result_kind = function
   | Budget_status_result _ -> "budget_status"
   | Spend_summary_result _ -> "spend_summary"
 
-let validate_next_cursor : type a. a t -> Query_cursor.t option -> (unit, Temporal.Error.t) result =
-  fun query next_cursor ->
+let validate_response_pagination :
+    type a. a t -> complete:bool -> next_cursor:Query_cursor.t option ->
+    (unit, Temporal.Error.t) result =
+  fun query ~complete ~next_cursor ->
     let expected = expected_cursor_kind query in
-    match query, next_cursor with
-    | (Budget_status _ | Spend_summary _), Some _ -> Error (cursor_forbidden expected)
-    | (_, None) -> Ok ()
-    | (_, Some cursor) ->
+    match query, complete, next_cursor with
+    | (Budget_status _ | Spend_summary _), _, Some _ ->
+        Error (cursor_forbidden expected)
+    | (Budget_status _ | Spend_summary _), false, None ->
+        Error (snapshot_incomplete expected)
+    | (Budget_status _ | Spend_summary _), true, None -> Ok ()
+    | (Provider_status _ | Model_inventory _ | Credit_status _), true, Some _ ->
+        Error (complete_with_cursor expected)
+    | (Provider_status _ | Model_inventory _ | Credit_status _), false, None ->
+        Error (incomplete_without_cursor expected)
+    | (Provider_status _ | Model_inventory _ | Credit_status _), true, None -> Ok ()
+    | (Provider_status _ | Model_inventory _ | Credit_status _), false, Some cursor ->
         (match Query_cursor.kind cursor with
          | Some actual when actual = expected -> Ok ()
          | Some actual -> Error (cursor_mismatch expected actual)
          | None -> Error (cursor_missing_kind expected))
-
-let validate_response_cursor : type a. a t -> query_response -> (unit, Temporal.Error.t) result =
-  fun query response -> validate_next_cursor query response.next_cursor
 
 let response_metadata (response : query_response) value =
   { value;
@@ -223,7 +288,8 @@ let response_metadata (response : query_response) value =
 
 let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
   fun query response ->
-    match validate_next_cursor query response.next_cursor with
+    match validate_response_pagination query ~complete:response.complete
+            ~next_cursor:response.next_cursor with
     | Error error -> Error error
     | Ok () ->
         match response.next_cursor with
@@ -237,20 +303,24 @@ let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
 
 let of_response : type a. a t -> query_response -> (a response, Temporal.Error.t) result =
   fun query response ->
-    match validate_response_cursor query response with
+    match Llm_temporal_response_validation.validate_query_cost response.cost with
     | Error error -> Error error
     | Ok () ->
-        match query, response.result with
-        | Provider_status _, Provider_status_result value -> Ok (response_metadata response value)
-        | Model_inventory _, Model_inventory_result value -> Ok (response_metadata response value)
-        | Credit_status _, Credit_status_result value -> Ok (response_metadata response value)
-        | Budget_status _, Budget_status_result value -> Ok (response_metadata response value)
-        | Spend_summary _, Spend_summary_result value -> Ok (response_metadata response value)
-        | Provider_status _, result -> Error (mismatch "provider_status" (result_kind result))
-        | Model_inventory _, result -> Error (mismatch "model_inventory" (result_kind result))
-        | Credit_status _, result -> Error (mismatch "credit_status" (result_kind result))
-        | Budget_status _, result -> Error (mismatch "budget_status" (result_kind result))
-        | Spend_summary _, result -> Error (mismatch "spend_summary" (result_kind result))
+        match validate_response_pagination query ~complete:response.complete
+                ~next_cursor:response.next_cursor with
+        | Error error -> Error error
+        | Ok () ->
+            match query, response.result with
+            | Provider_status _, Provider_status_result value -> Ok (response_metadata response value)
+            | Model_inventory _, Model_inventory_result value -> Ok (response_metadata response value)
+            | Credit_status _, Credit_status_result value -> Ok (response_metadata response value)
+            | Budget_status _, Budget_status_result value -> Ok (response_metadata response value)
+            | Spend_summary _, Spend_summary_result value -> Ok (response_metadata response value)
+            | Provider_status _, result -> Error (mismatch "provider_status" (result_kind result))
+            | Model_inventory _, result -> Error (mismatch "model_inventory" (result_kind result))
+            | Credit_status _, result -> Error (mismatch "credit_status" (result_kind result))
+            | Budget_status _, result -> Error (mismatch "budget_status" (result_kind result))
+            | Spend_summary _, result -> Error (mismatch "spend_summary" (result_kind result))
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
@@ -258,7 +328,7 @@ type dispatcher =
   query_envelope -> (query_response, Temporal.Error.t) result
 
 let execute_with ?task_queue ~dispatch ~operation_key ~context query =
-  match validate_cursor query with
+  match validate_query query with
   | Error error -> Error error
   | Ok () ->
       let envelope = to_envelope ~operation_key ~context query in
@@ -281,8 +351,13 @@ let activity_dispatch ?task_queue activity input =
 let execute ?task_queue ~operation_key ~context query =
   execute_with ?task_queue ~dispatch:activity_dispatch ~operation_key ~context query
 
-let start ?task_queue ~operation_key ~context query =
-  match validate_cursor query with
+type async_dispatcher =
+  ?task_queue:Temporal_task_queue.t ->
+  (query_envelope, query_response) Temporal.Activity.t ->
+  query_envelope -> (query_response, Temporal.Error.t) Temporal.Future.t
+
+let start_with ?task_queue ~dispatch ~operation_key ~context query =
+  match validate_query query with
   | Error error ->
       (* The public SDK intentionally has no constructor for turning a
          successful Future value into a Future error.  Preserve the same
@@ -292,12 +367,7 @@ let start ?task_queue ~operation_key ~context query =
       Temporal.Future.map (fun _ -> Error error) (Temporal.Future.all [])
   | Ok () ->
       let envelope = to_envelope ~operation_key ~context query in
-      let future =
-        Temporal.Activity.start
-          ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-          ~retry_policy:Llm_temporal_invocation.activity_retry_policy
-          Llm_temporal_invocation.query_v1_activity envelope
-      in
+      let future = dispatch ?task_queue Llm_temporal_invocation.query_v1_activity envelope in
       (* [Temporal.Future.map] preserves the Activity's error channel and
          keeps protocol-kind mismatches in the successful value channel
          rather than raising from a workflow callback. *)
@@ -310,3 +380,11 @@ let start ?task_queue ~operation_key ~context query =
           else Error (operation_key_mismatch ~expected:operation_key
                         ~actual:response.operation_key))
         future
+
+let activity_start_dispatch ?task_queue activity input =
+  Temporal.Activity.start
+    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
+    ~retry_policy:Llm_temporal_invocation.activity_retry_policy activity input
+
+let start ?task_queue ~operation_key ~context query =
+  start_with ?task_queue ~dispatch:activity_start_dispatch ~operation_key ~context query

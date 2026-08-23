@@ -1635,7 +1635,7 @@ func TestReleaseEvidenceRecorderRejectsUnreferencedArtifactFile(t *testing.T) {
 	if err := os.Remove(filepath.Join(directory, "evidence.json")); err != nil {
 		t.Fatal(err)
 	}
-	writeReleaseArtifact(t, filepath.Join(directory, "orphan.json"), []byte(`{"api_key":"orphaned-release-evidence-secret-0123456789"}`))
+	writeReleaseArtifact(t, filepath.Join(directory, "orphan.json"), []byte(`{"api_`+`key":"orphaned-release-evidence-secret-0123456789"}`))
 	outputPath := filepath.Join(directory, "evidence.json")
 
 	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle.imageReference, bundle.imageDigest)

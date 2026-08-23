@@ -134,7 +134,7 @@ func (store *Store) existingObjectMatches(head *s3.HeadObjectOutput, ref blob.Re
 	if head == nil || head.ContentLength == nil || *head.ContentLength != ref.ByteLength {
 		return false
 	}
-	if head.Metadata == nil || strings.ToLower(head.Metadata["llmtw-digest"]) != strings.ToLower(ref.Digest) {
+	if head.Metadata == nil || !strings.EqualFold(head.Metadata["llmtw-digest"], ref.Digest) {
 		return false
 	}
 	if head.Metadata["llmtw-byte-length"] != strconv.FormatInt(ref.ByteLength, 10) {

@@ -29,7 +29,7 @@ func (handler typedQueryHandlerFunc) ExecuteTypedQuery(ctx context.Context, requ
 func queryRequest() llm.QueryRequestV1 {
 	return llm.QueryRequestV1{
 		APIVersion: llm.QueryAPIVersion, OperationKey: "query-1", Kind: llm.QueryProviderStatus,
-		Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "workflow", Tags: map[string]string{"env": "test"}},
+		Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "workflow"},
 		Query:   json.RawMessage(`{"page_size":10}`),
 	}
 }
@@ -96,7 +96,6 @@ func typedProviderRequest() QueryRequest {
 		OperationKey: "query-1",
 		Scope: QueryScope{
 			Tenant: "tenant", Project: "project", Actor: "workflow",
-			Tags: map[string]string{"env": "test"},
 		},
 		Kind:   llm.QueryProviderStatus,
 		Filter: ProviderStatusQuery{Page: QueryPage{Size: 10}},
@@ -115,7 +114,7 @@ func typedBudgetRequest() QueryRequest {
 	policy := PolicyKey("daily")
 	return QueryRequest{
 		OperationKey: "budget-query",
-		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow", Tags: map[string]string{"env": "test"}},
+		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow"},
 		Kind:         llm.QueryBudgetStatus,
 		Filter:       BudgetStatusQuery{PolicyKey: &policy, ActiveAt: &activeAt, IncludeWindows: boolPointer(true)},
 	}
@@ -125,7 +124,7 @@ func typedSpendRequest() QueryRequest {
 	start := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
 	return QueryRequest{
 		OperationKey: "spend-query",
-		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow", Tags: map[string]string{"env": "test"}},
+		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow"},
 		Kind:         llm.QuerySpendSummary,
 		Filter:       SpendSummaryQuery{StartTime: start, EndTime: start.Add(24 * time.Hour), GroupBy: []SpendDimension{SpendByProvider}, OperationKinds: []OperationKind{OperationGenerate}},
 	}
@@ -134,7 +133,7 @@ func typedSpendRequest() QueryRequest {
 func allTypedQueryRequests() []QueryRequest {
 	return []QueryRequest{typedProviderRequest(), typedModelRequest(), {
 		OperationKey: "credit-query",
-		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow", Tags: map[string]string{"env": "test"}},
+		Scope:        QueryScope{Tenant: "tenant", Project: "project", Actor: "workflow"},
 		Kind:         llm.QueryCreditStatus,
 		Filter:       CreditStatusQuery{Page: QueryPage{Size: 10}},
 	}, typedBudgetRequest(), typedSpendRequest()}
@@ -738,9 +737,9 @@ func TestQueryServiceTypedCursorBridgeRejectsInvalidClaims(t *testing.T) {
 	}{
 		{name: "tamper", request: withCursor(valid, mutateToken(validToken)), wantErr: ErrQueryCursor},
 		{name: "scope", request: withCursor(func() QueryRequest { copy := valid; copy.Scope.Tenant = "other"; return copy }(), validToken), wantErr: ErrQueryCursor},
-		{name: "tag", request: withCursor(func() QueryRequest {
+		{name: "actor", request: withCursor(func() QueryRequest {
 			copy := valid
-			copy.Scope.Tags = map[string]string{"env": "production"}
+			copy.Scope.Actor = "other"
 			return copy
 		}(), validToken), wantErr: ErrQueryCursor},
 		{name: "filter", request: withCursor(func() QueryRequest {

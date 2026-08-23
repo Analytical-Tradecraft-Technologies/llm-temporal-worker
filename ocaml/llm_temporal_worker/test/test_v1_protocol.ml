@@ -28,6 +28,24 @@ let omit field bytes =
   let json = match json with `Assoc fields -> `Assoc (List.remove_assoc field fields) | value -> value in
   Bytes.of_string (Yojson.Safe.to_string json)
 
+let map_checkpoint transform bytes =
+  let json = Yojson.Safe.from_string (Bytes.to_string bytes) in
+  let json = match json with
+    | `Assoc fields ->
+        let checkpoint = List.assoc "checkpoint" fields in
+        `Assoc (("checkpoint", transform checkpoint) :: List.remove_assoc "checkpoint" fields)
+    | value -> value
+  in
+  Bytes.of_string (Yojson.Safe.to_string json)
+
+let set_checkpoint_kind kind = function
+  | `Assoc fields -> `Assoc (("kind", `String kind) :: List.remove_assoc "kind" fields)
+  | value -> value
+
+let omit_checkpoint_parent = function
+  | `Assoc fields -> `Assoc (List.remove_assoc "parent" fields)
+  | value -> value
+
 let () =
   let () = match Usd_decimal.of_string "000.0100" with Ok _ -> failwith "leading zero accepted" | Error _ -> () in
   let decimal = match Usd_decimal.of_string "1.2300" with Ok value -> value | Error message -> failwith message in
@@ -46,12 +64,26 @@ let () =
   let generate_bytes = ok (V1_codec.encode_generate_response generate_response) in
   let generate_without_diagnostics = ok (V1_codec.decode_generate_response (omit "diagnostics" generate_bytes)) in
   if generate_without_diagnostics.diagnostics <> [] then failwith "omitted generate diagnostics";
+  error (V1_codec.encode_generate_response
+           { generate_response with
+             checkpoint = { generate_response.checkpoint with kind = Compaction_checkpoint } });
+  error (V1_codec.decode_generate_response
+           (map_checkpoint (set_checkpoint_kind "compaction") generate_bytes));
+  let cache_replay_bytes = ok (V1_codec.encode_generate_response
+      { generate_response with
+        checkpoint = { generate_response.checkpoint with kind = Cache_replay_checkpoint } }) in
+  ignore (ok (V1_codec.decode_generate_response cache_replay_bytes));
   let compact = { api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1"; context; parent = checkpoint "cp-1"; policy = Some { target_tokens = Some 100L; summary_style = Some Concise }; cache = None } in
   ignore (ok (V1_codec.decode_compact_request (ok (V1_codec.encode_compact_request compact))));
   let compact_response = { api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1"; operation_id = Operation_id.of_string "id-2"; checkpoint = { handle = checkpoint "cp-2"; parent = Some (checkpoint "cp-1"); kind = Compaction_checkpoint; depth = 1l }; cache = { disposition = Cache_miss_populated; variant = 0l; entry_age_seconds = None }; provenance = None; usage = None; cost = Unknown_cost { reason = State_unavailable }; diagnostics = [] } in
   let compact_bytes = ok (V1_codec.encode_compaction_response compact_response) in
   let compact_without_diagnostics = ok (V1_codec.decode_compaction_response (omit "diagnostics" compact_bytes)) in
   if compact_without_diagnostics.diagnostics <> [] then failwith "omitted compact diagnostics";
+  error (V1_codec.encode_compaction_response
+           { compact_response with
+             checkpoint = { compact_response.checkpoint with parent = None } });
+  error (V1_codec.decode_compaction_response
+           (map_checkpoint omit_checkpoint_parent compact_bytes));
   let query = Provider_status_request { provider = Some (Provider_id.of_string "openai"); endpoint = None; availability = None; include_healthy = true; refresh_if_older_than_seconds = None; page_size = 20; cursor = None } in
   let envelope = { api_version = V1_codec.query_api_version; operation_key = Operation_key.of_string "query-1"; context; query } in
   let envelope' = ok (V1_codec.decode_query_envelope (ok (V1_codec.encode_query_envelope envelope))) in

@@ -117,6 +117,7 @@ func TestRenderedSecretVolumesAreReadableByWorkerGroup(t *testing.T) {
 	}{
 		{name: "base", path: []string{"base"}, secretNames: []string{"llmtw-worker-secrets"}},
 		{name: "redis TLS", path: []string{"examples", "redis-tls"}, secretNames: []string{"llmtw-worker-secrets", "llmtw-redis-ca"}},
+		{name: "private state egress", path: []string{"examples", "private-state-egress"}, secretNames: []string{"llmtw-worker-secrets"}},
 		{name: "AWS workload identity", path: []string{"examples", "aws-workload-identity"}, secretNames: []string{"llmtw-worker-secrets"}},
 		{name: "Azure workload identity", path: []string{"examples", "azure-workload-identity"}, secretNames: []string{"llmtw-worker-secrets"}},
 	} {

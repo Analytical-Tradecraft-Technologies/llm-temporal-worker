@@ -2,8 +2,10 @@ package provider_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -73,6 +75,31 @@ func TestEgressOutcomeClassifiesPreDispatchAvailabilityAfterSDKContextReplacemen
 	}
 	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, failure) {
 		t.Fatalf("pre-dispatch availability result cause = %v, want retained pre-dispatch marker", mapped)
+	}
+}
+
+func TestEgressOutcomeClassifiesOversizedResponseWithoutUnsafeDiagnostics(t *testing.T) {
+	_, outcome := provider.WithEgressOutcome(context.Background())
+	cause := fmt.Errorf("read https://provider.example/private: raw-provider-body: %w", provider.ErrProviderResponseTooLarge)
+
+	mapped := provider.ClassifyEgressOutcome(outcome, cause)
+	if mapped == nil {
+		t.Fatal("ClassifyEgressOutcome() = nil, want oversized-response result")
+	}
+	if mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever {
+		t.Fatalf("oversized-response result = %#v, want accepted non-retryable invalid response", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderResponseTooLarge) {
+		t.Fatalf("oversized-response cause = %v, want ErrProviderResponseTooLarge", mapped)
+	}
+	encoded, err := json.Marshal(mapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unsafe := range []string{"provider.example", "raw-provider-body"} {
+		if strings.Contains(mapped.Error(), unsafe) || strings.Contains(string(encoded), unsafe) {
+			t.Fatalf("oversized-response diagnostics exposed %q: error=%q json=%s", unsafe, mapped.Error(), encoded)
+		}
 	}
 }
 

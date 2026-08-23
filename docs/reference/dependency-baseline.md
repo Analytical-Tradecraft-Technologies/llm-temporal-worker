@@ -1,6 +1,6 @@
 # Dependency Baseline
 
-Recorded: 2026-07-28
+Recorded: 2026-08-20
 
 This baseline records the toolchain and the direct dependency versions checked
 into `go.mod`. The implementation layers that own these dependencies have
@@ -14,9 +14,9 @@ the `llm` package.
 | Component | Selection | Source and notes |
 | --- | --- | --- |
 | Go module language | `go 1.26` | The module declares the Go 1.26 language/toolchain line. |
-| Current patch at baseline | `go1.26.5` | [Go release history](https://go.dev/doc/devel/release), checked 2026-07-13. |
+| Current patch at baseline | `go1.26.7` | [Go release history](https://go.dev/doc/devel/release), checked 2026-08-20. |
 | Minimum bootstrap for Go 1.26 | `go1.24.6` | [Go 1.26 release notes](https://go.dev/doc/go1.26), checked 2026-07-13. |
-| Local version hint | `.go-version` = `1.26.5` | CI and the container use the reviewed Go 1.26.5 patch through `actions/setup-go`. |
+| Local version hint | `.go-version` = `1.26.7` | CI and the container use the reviewed Go 1.26.7 patch through `actions/setup-go`. |
 
 ## Direct modules
 
@@ -84,17 +84,33 @@ its redacted report: component pass/fail state, direct-module identifiers/count,
 and finding identifiers. It deliberately excludes test output, source paths,
 scanner traces, provider data, and credential-like material.
 
-The source scanner decodes only bounded inputs: each source file is capped at
-1 MiB, test output at 8 MiB, recursion at three decode levels, and queued
-decoded candidates at 1,024 per input. Candidates are deduplicated by decoded
-bytes before the queue bound is applied, and each candidate is inspected before
-the bound is enforced. Go JSON test records and their URL/escape-decoded
-variants are inspected directly but are not recursively queued, which prevents
-a large test stream's unique bookkeeping values from consuming the recursive
-budget; base64 candidates remain recursive for nested encodings. Reaching any
-bound fails closed instead of silently skipping the remaining candidates. This
-keeps URL, escaped JSON, and base64 representations covered without allowing a
-large fixture or log to push an unscanned value past the safety gate.
+The source scanner inspects every bounded UTF-8, NUL-free regular file outside
+known generated-output, cache, dependency-vendor, and virtual-environment
+directories. Coverage therefore does not depend on an extension allowlist: it
+includes implementation and test sources, scripts, Dockerfile and Makefile
+variants, Markdown and plain text, environment variants such as
+`.env.production`, credential dotfiles, PEM/key files, and extensionless
+configuration. Invalid UTF-8 and NUL-containing files are treated as binary and
+skipped. Executable-text checks cover both Docker `ENV key=value` and legacy
+`ENV key value` forms plus Make assignment operators, while allowing credential
+variable references. Test-only credential values use exact safe sentinels or
+explicit `test-`, `mock-`, `fixture-`, `example-`, `placeholder-`, `local-`, or
+`redacted-` prefixes; marker substrings embedded later in a value are not
+exempt. Scanner self-tests construct recognized token sentinels from fragments
+so the repository never contains the contiguous credential-like value it is
+testing.
+
+Every scanned source file is capped at 1 MiB, test output at 8 MiB, recursion
+at three decode levels, and queued decoded candidates at 1,024 per input.
+Candidates are deduplicated by decoded bytes before the queue bound is applied,
+and each candidate is inspected before the bound is enforced. Go JSON test
+records and their URL/escape-decoded variants are inspected directly but are
+not recursively queued, which prevents a large test stream's unique bookkeeping
+values from consuming the recursive budget; base64 candidates remain recursive
+for nested encodings. Reaching any bound fails closed instead of silently
+skipping the remaining candidates. This keeps URL, escaped JSON, and base64
+representations covered without allowing a large fixture or log to push an
+unscanned value past the safety gate.
 
 ### Active vulnerability exceptions
 

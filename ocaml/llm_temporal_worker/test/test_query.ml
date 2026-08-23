@@ -14,6 +14,27 @@ let time value =
   | Ok (value, _, _) -> value
   | Error _ -> failwith "invalid test timestamp"
 
+let usd value =
+  match Usd_decimal.of_string value with
+  | Ok value -> value
+  | Error message -> failwith ("invalid test USD value: " ^ message)
+
+let provider_response_payload cost_fields =
+  Bytes.of_string
+    (Yojson.Safe.to_string
+       (`Assoc
+          ([ "api_version", `String "llm.temporal/query/v1";
+             "operation_key", `String "query-test";
+             "query_execution_id", `String "execution-1";
+             "kind", `String "provider_status";
+             "observed_at", `String "2026-01-01T00:00:00Z";
+             "source", `String "persisted";
+             "freshness", `String "current";
+             "complete", `Bool true;
+             "next_cursor", `Null;
+             "result", `Assoc [ "routes", `List [] ] ]
+           @ cost_fields)))
+
 let context = { tenant = None; project = None; actor = None; tags = [] }
 let operation_key = Operation_key.of_string "query-test"
 
@@ -77,6 +98,85 @@ let filter_ok = function
   | Ok value -> value
   | Error error -> failwith ("unexpected filter validation error: " ^ error)
 
+let expect_execute_validation_error :
+    type a. string -> string -> a Query.t -> unit =
+  fun label expected query ->
+    let dispatch_called = ref false in
+    let should_not_dispatch ?task_queue:_ _activity _envelope =
+      dispatch_called := true;
+      failwith (label ^ " dispatched an invalid query")
+    in
+    (match Query.execute_with ~dispatch:should_not_dispatch ~operation_key ~context query with
+     | Error error when String.equal (Temporal.Error.message error) expected -> ()
+     | Error error ->
+         failf "%s returned unexpected validation error: %s" label
+           (Temporal.Error.message error)
+     | Ok _ -> failwith (label ^ " accepted an invalid direct filter"));
+    if !dispatch_called then failwith (label ^ " called its injected dispatcher")
+
+let expect_start_validation_error :
+    type a. string -> string -> a Query.t -> unit =
+  fun label expected query ->
+    let dispatch_called = ref false in
+    let should_not_dispatch ?task_queue:_ _activity _envelope =
+      dispatch_called := true;
+      failwith (label ^ " called its injected async dispatcher")
+    in
+    let future =
+      Query.start_with ~dispatch:should_not_dispatch ~operation_key ~context query
+    in
+    (match Temporal.Future.peek future with
+    | Some (Ok (Error error)) when String.equal (Temporal.Error.message error) expected -> ()
+    | Some (Ok (Error error)) ->
+        failf "%s returned unexpected start validation error: %s" label
+          (Temporal.Error.message error)
+    | Some (Ok (Ok _)) -> failwith (label ^ " start accepted an invalid direct filter")
+    | Some (Error error) ->
+        failf "%s start scheduled an Activity: %s" label (Temporal.Error.message error)
+    | None -> failwith (label ^ " start did not return a ready validation error"));
+    if !dispatch_called then failwith (label ^ " called its injected async dispatcher")
+
+let expect_response_error :
+    type a. string -> string -> a Query.t -> query_response -> unit =
+  fun label expected query response ->
+    let check_error boundary = function
+      | Error error when String.equal (Temporal.Error.message error) expected -> ()
+      | Error error ->
+          failf "%s %s returned unexpected response error: %s" label boundary
+            (Temporal.Error.message error)
+      | Ok _ -> failwith (label ^ " " ^ boundary ^ " accepted an invalid response")
+    in
+    check_error "of_response" (Query.of_response query response);
+    let sync_dispatch ?task_queue:_ _activity _envelope = Ok response in
+    check_error "execute_with"
+      (Query.execute_with ~dispatch:sync_dispatch ~operation_key ~context query);
+    let async_dispatch ?task_queue:_ _activity _envelope =
+      Temporal.Future.map (fun _ -> response) (Temporal.Future.all [])
+    in
+    match Temporal.Future.peek
+            (Query.start_with ~dispatch:async_dispatch ~operation_key ~context query)
+    with
+    | Some (Ok result) -> check_error "start_with" result
+    | Some (Error error) ->
+        failf "%s start_with returned an Activity error: %s" label
+          (Temporal.Error.message error)
+    | None -> failwith (label ^ " start_with did not return a ready response")
+
+let expect_codec_error label expected = function
+  | Error error when String.equal (Temporal.Error.message error) expected -> ()
+  | Error error ->
+      failf "%s returned unexpected codec error: %s" label
+        (Temporal.Error.message error)
+  | Ok _ -> failwith (label ^ " accepted an invalid response")
+
+let replace_json_field name value bytes =
+  match Yojson.Safe.from_string (Bytes.to_string bytes) with
+  | `Assoc fields ->
+      Bytes.of_string
+        (Yojson.Safe.to_string
+           (`Assoc ((name, value) :: List.remove_assoc name fields)))
+  | _ -> failwith "encoded query response was not an object"
+
 let () =
   (match Budget_stream_id.of_string "not-a-stream-id" with
    | Error _ -> ()
@@ -106,9 +206,15 @@ let () =
    | Ok _ -> failwith "typed pagination dropped the provider cursor"
    | Error error -> failf "unexpected pagination error: %s" (Temporal.Error.message error));
   (match Query.next provider { first_page with complete = true } with
-   | Ok (Some (Query.Provider_status { cursor = Some next; _ })) when next = provider_cursor -> ()
-   | Ok _ -> failwith "complete page dropped its worker-provided cursor"
-   | Error error -> failf "unexpected complete-page pagination error: %s" (Temporal.Error.message error));
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response.provider_status complete response must not include next_cursor" -> ()
+   | Error error -> failf "unexpected complete-page pagination error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "complete page with a cursor exposed another page");
+  (match Query.next provider { (run provider) with complete = false } with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response.provider_status incomplete response requires next_cursor" -> ()
+   | Error error -> failf "unexpected incomplete-page pagination error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "incomplete page without a cursor was accepted");
   (* Pagination keeps the GADT result type for every paginated query, not only
      provider status.  These branches intentionally bind the returned filters
      to their constructor so a future implementation cannot accidentally
@@ -130,6 +236,11 @@ let () =
                          "query response.budget_status must not include next_cursor" -> ()
    | Error error -> failf "unexpected snapshot pagination error: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "snapshot query unexpectedly exposed a next page");
+  (match Query.next budget { (run budget) with complete = false } with
+   | Error error when String.equal (Temporal.Error.message error)
+                          "query response.budget_status must be complete" -> ()
+   | Error error -> failf "unexpected incomplete snapshot error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "incomplete snapshot query response was accepted");
 
   let wrong_kind =
     Query.Model_inventory
@@ -147,16 +258,232 @@ let () =
    | Ok _ -> failwith "mismatched query cursor was accepted");
   if !dispatch_called then failwith "mismatched cursor was dispatched";
 
+  (* The public GADT constructors intentionally continue to accept the raw
+     protocol records for source compatibility.  Every invariant enforced by
+     [Query.Filter] must therefore be checked again at both dispatch seams. *)
+  let invalid_provider_page =
+    Query.Provider_status { (provider_filter ()) with page_size = 0 }
+  in
+  let invalid_model_refresh =
+    Query.Model_inventory
+      { (model_filter ()) with refresh_if_older_than_seconds = Some 0L }
+  in
+  let invalid_provider_cursor =
+    Query.Provider_status
+      (provider_filter ~cursor:(Query_cursor.of_string_exn (String.make 513 'x')) ())
+  in
+  let invalid_credit_page =
+    Query.Credit_status { (credit_filter ()) with page_size = 1001 }
+  in
+  let invalid_spend_interval =
+    Query.Spend_summary
+      { (spend_filter ()) with
+        end_time = time "2026-01-01T00:00:00Z" }
+  in
+  let invalid_spend_groups =
+    Query.Spend_summary
+      { (spend_filter ()) with group_by = [ By_provider; By_provider ] }
+  in
+  let invalid_spend_kinds =
+    Query.Spend_summary
+      { (spend_filter ()) with operation_kinds = [ Generate; Generate ] }
+  in
+  let check_both label expected query =
+    expect_execute_validation_error (label ^ " execute") expected query;
+    expect_start_validation_error (label ^ " start") expected query
+  in
+  check_both "provider page size"
+    "provider_status.page_size must be between 1 and 1000"
+    invalid_provider_page;
+  check_both "model refresh age"
+    "model_inventory.refresh_if_older_than_seconds must be between 1 and 86400"
+    invalid_model_refresh;
+  check_both "provider cursor length"
+    "provider_status.cursor must be between 1 and 512 bytes"
+    invalid_provider_cursor;
+  check_both "credit page size"
+    "credit_status.page_size must be between 1 and 1000"
+    invalid_credit_page;
+  check_both "spend interval"
+    "spend_summary.end_time must be after start_time"
+    invalid_spend_interval;
+  check_both "spend dimensions"
+    "spend_summary.group_by contains duplicate value"
+    invalid_spend_groups;
+  check_both "spend operation kinds"
+    "spend_summary.operation_kinds contains duplicate value"
+    invalid_spend_kinds;
+
+  let async_dispatch_called = ref false in
+  let async_dispatch ?task_queue:_ activity envelope =
+    async_dispatch_called := true;
+    if Temporal.Activity.name activity <> "llm.query.v1" then
+      failwith "Query.start_with used the wrong Activity descriptor";
+    Temporal.Future.map
+      (fun _ -> response_for envelope.query)
+      (Temporal.Future.all [])
+  in
+  (match Temporal.Future.peek
+           (Query.start_with ~dispatch:async_dispatch ~operation_key ~context provider) with
+   | Some (Ok (Ok { value = { routes = [] }; _ })) -> ()
+   | Some (Ok (Ok _)) -> failwith "valid async provider result changed"
+   | Some (Ok (Error error)) ->
+       failf "valid async provider query failed: %s" (Temporal.Error.message error)
+   | Some (Error error) ->
+       failf "valid async dispatcher returned a Temporal error: %s"
+         (Temporal.Error.message error)
+   | None -> failwith "valid injected async dispatcher did not return a ready result");
+  if not !async_dispatch_called then failwith "valid async query was not dispatched";
+
+  (* The in-memory response type makes exact-vs-unknown field combinations
+     structural, but a nonzero [control_query_zero] remains representable.
+     Injected dispatchers bypass the JSON codec, so both facade seams must
+     reject it before returning typed query data. *)
+  let invalid_control_cost_response =
+    { (response_for (Provider_status_request (provider_filter ()))) with
+      cost = Exact_cost { actual_cost_usd = usd "1";
+                          method_ = Control_query_zero;
+                          catalog_version = None } }
+  in
+  let invalid_cost_dispatch ?task_queue:_ _activity _envelope =
+    Ok invalid_control_cost_response
+  in
+  expect_codec_error "injected sync control query cost"
+    "query response control_query_zero requires zero actual_cost_usd"
+    (Query.execute_with ~dispatch:invalid_cost_dispatch ~operation_key ~context
+       provider);
+  let invalid_async_cost_dispatch ?task_queue:_ _activity _envelope =
+    Temporal.Future.map
+      (fun _ -> invalid_control_cost_response)
+      (Temporal.Future.all [])
+  in
+  (match Temporal.Future.peek
+           (Query.start_with ~dispatch:invalid_async_cost_dispatch
+              ~operation_key ~context provider) with
+   | Some (Ok result) ->
+       expect_codec_error "injected async control query cost"
+         "query response control_query_zero requires zero actual_cost_usd"
+         result
+   | Some (Error error) ->
+       failf "invalid injected async cost returned a Temporal error: %s"
+         (Temporal.Error.message error)
+   | None -> failwith "invalid injected async cost did not return a ready result");
+
+  (* Query response cost fields form a closed state machine at the JSON
+     boundary. These hand-written payloads catch each cross-state field leak,
+     including a nonzero control-query amount. *)
+  let reject_cost_payload label expected fields =
+    expect_codec_error label expected
+      (V1_codec.decode_query_response (provider_response_payload fields))
+  in
+  reject_cost_payload "exact cost with unknown reason"
+    "query response exact cost must not have cost_unknown_reason_code"
+    [ "cost_status", `String "exact";
+      "actual_cost_usd", `String "0";
+      "cost_method", `String "control_query_zero";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "unknown cost without amount field"
+    "query response unknown cost must have null actual_cost_usd"
+    [ "cost_status", `String "unknown";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "unknown cost with amount"
+    "query response unknown cost must have null actual_cost_usd"
+    [ "cost_status", `String "unknown";
+      "actual_cost_usd", `String "0";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "unknown cost with method"
+    "query response unknown cost must not have cost_method"
+    [ "cost_status", `String "unknown";
+      "actual_cost_usd", `Null;
+      "cost_method", `String "control_query_zero";
+      "cost_unknown_reason_code", `String "state_unavailable" ];
+  reject_cost_payload "nonzero control query cost"
+    "query response control_query_zero requires zero actual_cost_usd"
+    [ "cost_status", `String "exact";
+      "actual_cost_usd", `String "1";
+      "cost_method", `String "control_query_zero" ];
+
+  let invalid_control_cost_encoding =
+    { (response (Provider_status_result { routes = [] })) with
+      cost = Exact_cost { actual_cost_usd = usd "1";
+                          method_ = Control_query_zero;
+                          catalog_version = None } }
+  in
+  expect_codec_error "nonzero control query cost encoding"
+    "query response control_query_zero requires zero actual_cost_usd"
+    (V1_codec.encode_query_response invalid_control_cost_encoding);
+
+  let exact_json =
+    Yojson.Safe.from_string
+      (Bytes.to_string
+         (ok (V1_codec.encode_query_response
+                (response (Provider_status_result { routes = [] })))))
+  in
+  (match exact_json with
+   | `Assoc fields ->
+       (match List.assoc_opt "actual_cost_usd" fields,
+              List.assoc_opt "cost_method" fields,
+              List.assoc_opt "cost_unknown_reason_code" fields with
+        | Some (`String "0"), Some (`String "control_query_zero"), None -> ()
+        | _ -> failwith "exact query cost encoded an invalid field combination")
+   | _ -> failwith "exact query response did not encode an object");
+  let unknown_response =
+    { (response (Provider_status_result { routes = [] })) with
+      cost = Unknown_cost { reason = State_unavailable } }
+  in
+  let unknown_json =
+    Yojson.Safe.from_string
+      (Bytes.to_string (ok (V1_codec.encode_query_response unknown_response)))
+  in
+  (match unknown_json with
+   | `Assoc fields ->
+       (match List.assoc_opt "actual_cost_usd" fields,
+              List.assoc_opt "cost_method" fields,
+              List.assoc_opt "cost_unknown_reason_code" fields with
+        | Some `Null, None, Some (`String "state_unavailable") -> ()
+        | _ -> failwith "unknown query cost encoded an invalid field combination")
+   | _ -> failwith "unknown query response did not encode an object");
+
   let encoded =
     ok (V1_codec.encode_query_response
           { (response (Provider_status_result { routes = [] })) with
-            next_cursor = Some provider_cursor })
+            complete = false; next_cursor = Some provider_cursor })
   in
   (match V1_codec.decode_query_response encoded with
    | Ok { next_cursor = Some value; _ }
      when Query_cursor.kind value = Some Query_cursor.Provider_status -> ()
    | Ok _ -> failwith "decoded response cursor lost its query kind"
    | Error error -> failf "response cursor failed to round-trip: %s" (Temporal.Error.message error));
+
+  let provider_response = response (Provider_status_result { routes = [] }) in
+  let provider_complete_with_cursor =
+    { provider_response with next_cursor = Some provider_cursor }
+  in
+  let provider_incomplete_without_cursor =
+    { provider_response with complete = false }
+  in
+  expect_codec_error "encode complete provider page with cursor"
+    "query response.provider_status complete response must not include next_cursor"
+    (V1_codec.encode_query_response provider_complete_with_cursor);
+  expect_codec_error "encode incomplete provider page without cursor"
+    "query response.provider_status incomplete response requires next_cursor"
+    (V1_codec.encode_query_response provider_incomplete_without_cursor);
+  let valid_provider_wire = ok (V1_codec.encode_query_response provider_response) in
+  expect_codec_error "decode complete provider page with cursor"
+    "query response.provider_status complete response must not include next_cursor"
+    (V1_codec.decode_query_response
+       (replace_json_field "next_cursor" (`String "page-2") valid_provider_wire));
+  expect_codec_error "decode incomplete provider page without cursor"
+    "query response.provider_status incomplete response requires next_cursor"
+    (V1_codec.decode_query_response
+       (replace_json_field "complete" (`Bool false) valid_provider_wire));
+
+  expect_response_error "complete provider page with cursor"
+    "query response.provider_status complete response must not include next_cursor"
+    provider provider_complete_with_cursor;
+  expect_response_error "incomplete provider page without cursor"
+    "query response.provider_status incomplete response requires next_cursor"
+    provider provider_incomplete_without_cursor;
 
   let reject_non_paginated_cursor kind result =
     let candidate =
@@ -179,6 +506,23 @@ let () =
        start_time = time "2026-01-01T00:00:00Z";
        end_time = time "2026-01-02T00:00:00Z";
        buckets = [] });
+
+  let budget_response = response_for (Budget_status_request (budget_filter ())) in
+  let spend_response = response_for (Spend_summary_request (spend_filter ())) in
+  List.iter
+    (fun (kind, candidate) ->
+      let incomplete = { candidate with complete = false } in
+      let expected = Printf.sprintf "query response.%s must be complete" kind in
+      expect_codec_error ("encode incomplete " ^ kind ^ " snapshot") expected
+        (V1_codec.encode_query_response incomplete);
+      let valid_wire = ok (V1_codec.encode_query_response candidate) in
+      expect_codec_error ("decode incomplete " ^ kind ^ " snapshot") expected
+        (V1_codec.decode_query_response
+           (replace_json_field "complete" (`Bool false) valid_wire)))
+    [ "budget_status", budget_response; "spend_summary", spend_response ];
+  expect_response_error "incomplete budget snapshot"
+    "query response.budget_status must be complete"
+    budget { budget_response with complete = false };
 
   let mismatched =
     { (response (Provider_status_result { routes = [] })) with
@@ -206,6 +550,7 @@ let () =
      JSON codec, so the ergonomic facade validates this boundary as well. *)
   let wrong_response_cursor =
     { (response (Provider_status_result { routes = [] })) with
+      complete = false;
       next_cursor = Some (tagged_cursor Query_cursor.Model_inventory "model-page-2") }
   in
   (match Query.of_response provider wrong_response_cursor with
@@ -216,6 +561,7 @@ let () =
 
   let untagged_response_cursor =
     { (response (Provider_status_result { routes = [] })) with
+      complete = false;
       next_cursor = Some (Query_cursor.of_string_exn "provider:untagged-page-2") }
   in
   (match Query.of_response provider untagged_response_cursor with

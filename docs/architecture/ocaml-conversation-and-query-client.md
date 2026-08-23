@@ -733,12 +733,16 @@ end
 The same module exposes `Query.Filter` builders for natural call sites. They
 return `(filter, validation_error) result` before a filter is wrapped in a
 GADT constructor. A builder applies the protocol's page-size (`1..1000`) and
-refresh-age (`1..86400` seconds) bounds, rejects a tagged cursor belonging to
-another query kind, and checks that a spend interval is strictly increasing
-with unique grouping dimensions and operation kinds. The low-level filter
-records remain available for codec fixtures and generated protocol values;
-application Workflow code should use the builders so invalid queries cannot
-reach Activity scheduling.
+refresh-age (`1..86400` seconds) bounds, rejects cursors longer than 512 bytes
+or a tagged cursor belonging to another query kind, and checks that a spend
+interval is strictly increasing with unique grouping dimensions and operation
+kinds. The low-level filter records remain available for codec fixtures and
+generated protocol values.
+Application Workflow code should use the builders for early validation, and
+the execution facade revalidates the same invariants before calling either a
+synchronous or asynchronous dispatcher. Thus direct GADT construction remains
+source-compatible without allowing an invalid wire query to reach Activity
+scheduling.
 
 ~~~ocaml
 let* provider_filter =
@@ -788,6 +792,9 @@ carry one. This check is deliberately duplicated at the ergonomic boundary so
 tests and custom dispatchers cannot bypass the wire codec's cursor invariant.
 `Query.start` performs the corresponding input check before scheduling an
 Activity and returns the validation error in its typed result value.
+`Query.start_with` exposes the same asynchronous boundary with an injected
+dispatcher for deterministic Workflow tests; validation errors do not call the
+dispatcher.
 
 Pagination remains typed: the cursor can be supplied only to the same query
 constructor/filter digest. The server is authoritative for cursor binding; the

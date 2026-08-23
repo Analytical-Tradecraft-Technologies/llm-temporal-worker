@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const reviewedGoPatch = "1.26.7"
+
 func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
 	if err != nil {
@@ -52,7 +54,7 @@ func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"ARG GO_IMAGE=docker.io/library/golang:1.26.5@sha256:2005724102f45917a63e9d092fc0e4ea56ea575048ce147caad5f5f61502c365",
+		"ARG GO_IMAGE=docker.io/library/golang:" + reviewedGoPatch + "@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac",
 		"FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35",
 		`test "${TARGETOS:-linux}" = "linux"`,
 		`test "${TARGETARCH:-amd64}" = "amd64"`,
@@ -102,6 +104,59 @@ func TestImageBuildContextAndFinalStageExcludeSecretsAndTools(t *testing.T) {
 	for _, want := range []string{".env.*", "*.pem", "*.key", "secrets/", "**/.aws/", "**/.docker/config.json", "**/*credential*", "**/*token*", "release-artifacts/"} {
 		if !strings.Contains(ignore, want) {
 			t.Errorf(".dockerignore does not exclude %q", want)
+		}
+	}
+}
+
+func TestReviewedGoToolchainPinsStayAligned(t *testing.T) {
+	repository := repositoryRoot(t)
+	module := moduleRoot(t)
+
+	versionData, err := os.ReadFile(filepath.Join(module, ".go-version"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(versionData)); got != reviewedGoPatch {
+		t.Fatalf("golang/.go-version = %q, want reviewed patch %q", got, reviewedGoPatch)
+	}
+
+	for _, contract := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "container builder",
+			path: filepath.Join(module, "Dockerfile"),
+			want: "ARG GO_IMAGE=docker.io/library/golang:" + reviewedGoPatch + "@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac",
+		},
+		{
+			name: "security verifier",
+			path: filepath.Join(module, "Makefile"),
+			want: "SECURITY_GO_TOOLCHAIN ?= go" + reviewedGoPatch,
+		},
+		{
+			name: "dependency baseline current patch",
+			path: filepath.Join(repository, "docs", "reference", "dependency-baseline.md"),
+			want: "`go" + reviewedGoPatch + "`",
+		},
+		{
+			name: "dependency baseline local hint",
+			path: filepath.Join(repository, "docs", "reference", "dependency-baseline.md"),
+			want: "`.go-version` = `" + reviewedGoPatch + "`",
+		},
+		{
+			name: "security architecture",
+			path: filepath.Join(repository, "docs", "architecture", "security-and-privacy.md"),
+			want: reviewedGoPatch + " toolchain",
+		},
+	} {
+		data, err := os.ReadFile(contract.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", contract.name, err)
+		}
+		if !strings.Contains(string(data), contract.want) {
+			t.Errorf("%s is not aligned with golang/.go-version %s", contract.name, reviewedGoPatch)
 		}
 	}
 }

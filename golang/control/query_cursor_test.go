@@ -25,7 +25,7 @@ func TestCursorCodecBindsScopeFilterAndHorizon(t *testing.T) {
 	}
 
 	changedScope := query
-	changedScope.Scope.Tags = map[string]string{"region": "us"}
+	changedScope.Scope.Project = "other-project"
 	if _, err := codec.Decode(changedScope, token, now); err == nil {
 		t.Fatal("scope mutation accepted")
 	}

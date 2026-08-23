@@ -23,7 +23,7 @@ func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 		}, nil
 	})
 	endpoint := "http://127.0.0.1"
-	client, err := NewAzureClient(AzureClientConfig{Endpoint: endpoint, APIVersion: "2025-01-01", APIKey: "azure-key", HTTPClient: &http.Client{Transport: transport}})
+	client, err := NewAzureClient(AzureClientConfig{Endpoint: endpoint, APIVersion: "2025-01-01", APIKey: "test-azure-key", HTTPClient: &http.Client{Transport: transport}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 	if got == nil || got.URL.Path != "/openai/deployments/deployment-a/chat/completions" || got.URL.Query().Get("api-version") != "2025-01-01" {
 		t.Fatalf("azure request = %#v", got.URL)
 	}
-	if got.Header.Get("Api-Key") != "azure-key" || got.Header.Get("Authorization") != "" {
+	if got.Header.Get("Api-Key") != "test-azure-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("azure auth headers = %#v", got.Header)
 	}
 	if result.Response.Service.Actual == nil || *result.Response.Service.Actual != llm.ServiceClassStandard {

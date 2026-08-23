@@ -15,6 +15,10 @@ let checkpoint value = Checkpoint.of_string_exn value
 let tool = { kind = Function; name = Tool_name.of_string "lookup"; description = "";
              input_schema = `Assoc []; output_schema = None }
 let output = { max_tokens = Some 32; format = Json_format }
+let malformed_response_failures = ref []
+let require_codec_rejection label = function
+  | Error _ -> ()
+  | Ok _ -> malformed_response_failures := label :: !malformed_response_failures
 
 let response (request : generate_request) ~kind ~handle =
   let parent = request.parent in
@@ -116,6 +120,15 @@ let () =
    | Error error -> failf "unexpected operation key mismatch: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "mismatched Generate operation key was accepted");
 
+  let malformed_generate_dispatch ?task_queue:_ activity (request : generate_request) =
+    if Temporal.Activity.name activity <> "llm.generate.v1" then failwith "wrong Generate descriptor";
+    Ok (response request ~kind:Compaction_checkpoint
+          ~handle:(checkpoint "invalid-generate-checkpoint"))
+  in
+  require_codec_rejection "Conversation.respond_with accepted a compaction checkpoint"
+    (Conversation.respond_with ~dispatch:malformed_generate_dispatch
+       ~operation_key:(operation_key "invalid-generate") ~append:[] parent);
+
   let clear_patch =
     Conversation.Settings.Patch.clear_output
       (Conversation.Settings.Patch.clear_tools Conversation.Settings.Patch.keep)
@@ -142,6 +155,48 @@ let () =
       ~operation_key:(operation_key "compact-invalid") cleared.conversation with
    | Error _ -> ()
    | Ok _ -> failwith "compact accepted a nonzero cache variant");
+
+  let malformed_compact_dispatch ?task_queue:_ activity (request : compact_request) =
+    if Temporal.Activity.name activity <> "llm.compact.v1" then failwith "wrong Compact descriptor";
+    let handle = checkpoint "invalid-compact-checkpoint" in
+    Ok { api_version = V1_codec.compact_api_version; operation_key = request.operation_key;
+         operation_id = Operation_id.of_string "invalid-compact-operation";
+         checkpoint = { handle; parent = None; kind = Compaction_checkpoint; depth = 2l };
+         cache = { disposition = Cache_disabled; variant = 0l; entry_age_seconds = None };
+         provenance = None; usage = None;
+         cost = Exact_cost { actual_cost_usd = Usd_decimal.zero;
+                             method_ = Control_query_zero; catalog_version = None };
+         diagnostics = [] }
+  in
+  require_codec_rejection "Conversation.compact_with accepted a checkpoint without a parent"
+    (Conversation.compact_with ~dispatch:malformed_compact_dispatch
+       ~operation_key:(operation_key "invalid-compact") cleared.conversation);
+
+  (* [compact_with] and [start_compact] both finalize through the same
+     acceptance helper, so this injected synchronous response also protects
+     the future-mapped path from advancing an unrelated branch. *)
+  let wrong_parent_compact_dispatch ?task_queue:_ activity
+      (request : compact_request) =
+    if Temporal.Activity.name activity <> "llm.compact.v1" then
+      failwith "wrong Compact descriptor";
+    let handle = checkpoint "wrong-parent-compact-checkpoint" in
+    Ok { api_version = V1_codec.compact_api_version;
+         operation_key = request.operation_key;
+         operation_id = Operation_id.of_string "wrong-parent-compact-operation";
+         checkpoint = { handle; parent = Some (checkpoint "another-branch");
+                        kind = Compaction_checkpoint; depth = 2l };
+         cache = { disposition = Cache_disabled; variant = 0l;
+                   entry_age_seconds = None };
+         provenance = None; usage = None;
+         cost = Exact_cost { actual_cost_usd = Usd_decimal.zero;
+                             method_ = Control_query_zero;
+                             catalog_version = None };
+         diagnostics = [] }
+  in
+  require_codec_rejection
+    "Conversation compact acceptance advanced a checkpoint from another branch"
+    (Conversation.compact_with ~dispatch:wrong_parent_compact_dispatch
+       ~operation_key:(operation_key "wrong-parent-compact") cleared.conversation);
 
   (* Importing a checkpoint deliberately leaves effective settings unknown.
      Compaction must not materialize [Settings.default] as a destructive
@@ -213,4 +268,7 @@ let () =
    | Some (Error error) -> failf "async compact returned a Temporal error: %s" (Temporal.Error.message error)
    | None -> failwith "invalid async compact did not produce a ready validation result");
   (match Conversation.Cache_policy.variant cache with 1l -> () | _ -> failwith "cache variant lost");
+  (match List.rev !malformed_response_failures with
+   | [] -> ()
+   | failures -> failf "%s" (String.concat "; " failures));
   print_endline "immutable v1 conversation tests passed"

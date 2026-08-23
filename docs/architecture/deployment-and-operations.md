@@ -76,12 +76,12 @@ does not start Temporal polling.
 - Service for health/metrics endpoints;
 - ServiceAccount with automount disabled unless workload identity is configured;
 - PodDisruptionBudget;
-- NetworkPolicy examples;
+- a fail-closed NetworkPolicy that separates general HTTPS from Redis,
+  PostgreSQL, and Temporal egress;
 - Kustomization.
 
-Example overlays demonstrate Redis/TLS, PostgreSQL/TLS, AWS workload identity,
-Azure workload identity, and static secret references without committing
-values.
+Example overlays demonstrate Redis/TLS, a reviewed private state-service CIDR,
+AWS workload identity, and Azure workload identity without committing values.
 
 The base ConfigMap contains an intentionally incomplete production template:
 operators must replace the example image/config/catalog/identity values in a
@@ -92,6 +92,16 @@ username, password, and CA values referenced by the durable base config
 (`postgres-username`, `postgres-password`, and `postgres-ca.pem`).
 Service-account tokens are disabled in the base and enabled only by the
 workload-identity overlays.
+
+State and control traffic is not internet-wide. The base permits TCP 6379,
+5432, and 7233 only to namespaces labeled
+`llmtw.io/state-egress=allowed`; an example overlay shows how an operator can
+replace a placeholder with narrow private endpoint CIDRs. TCP 443 remains a
+separate rule for provider and cloud APIs. Static deployment verification
+rejects public/default-route CIDRs, empty selectors, all-port rules, or a rule
+that mixes sensitive state/control ports with general TLS. It also binds the
+NetworkPolicy namespace, pod selector, and `Egress` policy type to the rendered
+worker Deployment.
 
 ## Probes and shutdown
 

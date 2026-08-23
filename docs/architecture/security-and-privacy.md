@@ -76,6 +76,10 @@ Endpoints are operator-configured and validated:
   limited to 443;
 - automatic redirects and environment proxies are disabled; no v1 endpoint is
   documented as redirecting, so a future exception must revalidate every hop;
+- every success, error, and streaming response body is capped by
+  `limits.provider_response_bytes` (16 MiB by default, with a 64 MiB hard
+  ceiling); oversized declared lengths are rejected before parsing and
+  unknown or misleading lengths are stopped by a one-byte overrun probe;
 - DNS is resolved at dial time, every returned address is rejected if it is
   loopback, private, link-local, multicast, unspecified, carrier-grade NAT,
   benchmarking, deprecated IPv6 site-local (`fec0::/10`), or a known cloud
@@ -160,7 +164,7 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
   credential-like payloads. It also checks every direct `go.mod` requirement
   against the reviewed license/source inventory, and runs the pinned
   `govulncheck` release with the reviewed Go
-  1.26.5 toolchain. It scans the reachable program, including transitive
+  1.26.7 toolchain. It scans the reachable program, including transitive
   dependencies, rather than treating a dependency list as proof of safety.
 - Pull-request CI runs `make security-verify`. Trusted-master failures retain
   only a redacted JSON report containing component status, direct-module

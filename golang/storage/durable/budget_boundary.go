@@ -171,6 +171,24 @@ func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycl
 	if len(events) == 0 {
 		return fmt.Errorf("%w: completion events are required", ErrBudgetBoundaryInvalid)
 	}
+	type reservationKey struct {
+		windowID      string
+		bucketSeconds int64
+		bucketNanos   int
+	}
+	reservedByKey := make(map[reservationKey]budget.ReservationEvent, len(reservation.Result.Events))
+	for index, reserved := range reservation.Result.Events {
+		key := reservationKey{
+			windowID:      reserved.WindowID,
+			bucketSeconds: reserved.BucketStart.Unix(),
+			bucketNanos:   reserved.BucketStart.Nanosecond(),
+		}
+		if _, exists := reservedByKey[key]; exists {
+			return fmt.Errorf("%w: duplicate reservation window and bucket %d", ErrBudgetBoundaryInvalid, index)
+		}
+		reservedByKey[key] = reserved
+	}
+	completedKeys := make(map[reservationKey]struct{}, len(events))
 	for index, event := range events {
 		if err := event.Validate(); err != nil {
 			return fmt.Errorf("%w: completion event %d: %v", ErrBudgetBoundaryInvalid, index, err)
@@ -178,19 +196,25 @@ func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycl
 		if event.OperationID != string(reservation.Result.OperationID) || event.GenerationID != string(reservation.Result.GenerationID) {
 			return fmt.Errorf("%w: completion event %d identity does not match reservation", ErrBudgetBoundaryInvalid, index)
 		}
-		matched := false
-		for _, reserved := range reservation.Result.Events {
-			if event.WindowID == reserved.WindowID && event.BucketStart.Equal(reserved.BucketStart) {
-				if event.ReservationRevision <= reserved.ReservationRevision {
-					return fmt.Errorf("%w: completion event %d revision does not advance reservation", ErrBudgetBoundaryInvalid, index)
-				}
-				matched = true
-				break
-			}
+		key := reservationKey{
+			windowID:      event.WindowID,
+			bucketSeconds: event.BucketStart.Unix(),
+			bucketNanos:   event.BucketStart.Nanosecond(),
 		}
-		if !matched {
+		reserved, matched := reservedByKey[key]
+		if !matched || !event.BucketStart.Equal(reserved.BucketStart) {
 			return fmt.Errorf("%w: completion event %d window and bucket do not match reservation", ErrBudgetBoundaryInvalid, index)
 		}
+		if _, exists := completedKeys[key]; exists {
+			return fmt.Errorf("%w: completion event %d duplicates a reservation window and bucket", ErrBudgetBoundaryInvalid, index)
+		}
+		if event.ReservationRevision <= reserved.ReservationRevision {
+			return fmt.Errorf("%w: completion event %d revision does not advance reservation", ErrBudgetBoundaryInvalid, index)
+		}
+		completedKeys[key] = struct{}{}
+	}
+	if len(completedKeys) != len(reservedByKey) {
+		return fmt.Errorf("%w: completion events do not cover every reservation window and bucket", ErrBudgetBoundaryInvalid)
 	}
 	seenCompletionIDs := make(map[string]struct{}, len(events))
 	for index, event := range events {

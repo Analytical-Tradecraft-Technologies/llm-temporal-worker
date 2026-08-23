@@ -68,12 +68,11 @@ state:
       enabled: true
       server_name: redis.example.internal
       ca_file: /var/run/ca/redis.pem
-    budget_hash_tag: budget
-    budget_mode: function
-    function_library: llmtw_budget_v1
-    budget_version: budget_v1
-    budget_digest: c09e24d73750bebee4aad8cd9b1f05abaa22001528cef0ff6842f2241bb8c20b
-    worker_lease_ttl: 30s
+    admission_hash_tag: admission
+    admission_mode: function
+    function_library: llmtw_admission_v1
+    admission_version: admission_v1
+    admission_digest: 07d910df370ca9522400b8ae15a7bda7e76b1c1badcb7e35cb71e2f6ddaecaf2
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -95,10 +94,12 @@ state:
       enabled: true
       server_name: postgres.example.internal
       ca_file: /var/run/ca/postgres.pem
+    min_connections: 8
     max_connections: 64
     dial_timeout: 2s
     statement_timeout: 30s
     lock_timeout: 2s
+    idle_transaction_timeout: 30s
 
 blob_store:
   kind: s3
@@ -120,6 +121,7 @@ limits:
   continuation_depth: 256
   route_attempts: 6
   provider_timeout: 120s
+  provider_response_bytes: 16777216
   max_output_tokens: 32768
   max_budget_buckets_per_window: 2048
   token_estimate_safety_ratio: "1.35"
@@ -472,8 +474,8 @@ with memory state.
 default of **llmtw**. The optional **LLMTW_REDIS_KEY_PREFIX** environment
 variable overrides only that field. The same validated prefix is injected into
 every worker-owned Redis key constructor; the runtime factory must not hardcode
-**llmtw**. It is distinct from **budget_hash_tag**, which controls Redis
-Cluster co-location rather than the outer data namespace.
+**llmtw**. It is distinct from **state.redis.admission_hash_tag**, which
+controls Redis Cluster co-location rather than the outer data namespace.
 
 When Redis is shared, grant the worker role the configured key pattern
 **~<key-prefix>:*** (for example **~llmtw:***), plus the reviewed command set.
@@ -625,6 +627,17 @@ failures are emitted as a safe endpoint-scoped classification, never as a URL,
 credential, authorization header, request body, continuation value, or raw
 provider response.
 
+`limits.provider_response_bytes` bounds every HTTP response body shared by all
+provider SDKs, including successful JSON, provider error bodies, and streaming
+protocols such as SSE. It defaults to 16 MiB and cannot exceed the 64 MiB hard
+safety cap. A declared `Content-Length` above the configured limit is rejected
+before parsing and the body is closed. Unknown-length, chunked, or incorrectly
+declared bodies are read through a counting wrapper: bytes through the limit
+remain available incrementally, and the next byte returns a content-free
+oversize classification. Configure enough space for the largest legitimate
+single provider response; the limit is cumulative per HTTP response, not per
+stream event.
+
 ## Readiness and Redis budget policy
 
 `server.readiness_probe_interval` and
@@ -638,7 +651,7 @@ transient worker drain the monitor keeps checking dependencies, but it never
 starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
-`noeviction` policy, and configured budget code identity. Durable deployments
+`noeviction` policy, and configured admission code identity. Durable deployments
 also inspect the worker keyspace, active-generation manifest, and enabled
 coordination Stream with bounded read-only checks; malformed or mismatched
 records keep readiness closed. It also checks a bounded PostgreSQL read-only transaction,
@@ -658,13 +671,13 @@ relation in a shared schema), installation fails closed with the colliding names
 it never renames or adopts that relation. A safely isolated schema in the same
 database remains valid.
 
-`state.redis.budget_mode: function` is the preferred Redis 7+ path. Before
+`state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned
-Function library and set `function_library`, `budget_version`, and
-`budget_digest` to its immutable identity. The running worker only verifies
+Function library and set `function_library`, `admission_version`, and
+`admission_digest` to its immutable identity. The running worker only verifies
 and calls that Function; it never loads, replaces, or rewrites shared Redis
-code. `budget_mode: lua` is an explicit compatibility fallback: its
-`budget_digest` must be the SHA-256 of the preloaded Lua source, and
+code. `admission_mode: lua` is an explicit compatibility fallback: its
+`admission_digest` must be the SHA-256 of the preloaded Lua source, and
 readiness requires Redis `SCRIPT EXISTS` for that source. The worker never
 falls back from a missing Lua script to `EVAL` or `SCRIPT LOAD`.
 

@@ -40,6 +40,11 @@ spec:
           protocol: TCP
         - port: 7233
           protocol: TCP
+      to:
+        - namespaceSelector:
+            matchLabels:
+              llmtw.io/state-egress: allowed
+    - ports:
         - port: 443
           protocol: TCP
       to:

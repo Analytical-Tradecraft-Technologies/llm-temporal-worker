@@ -84,6 +84,7 @@ func NewProfile(profile Profile) (Profile, error) {
 	}
 	copy := profile
 	copy.Capabilities = cloneCapabilities(profile.Capabilities)
+	copy.Capabilities.Features[provider.FeatureContinuation] = unsupportedContinuationCapability(copy.Capabilities.Features[provider.FeatureContinuation])
 	copy.Capabilities.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(copy.Capabilities.Features[provider.FeatureStreaming])
 	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
 	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
@@ -145,6 +146,9 @@ func (profile Profile) validate() error {
 	}
 	if streaming := profile.Capabilities.Features[provider.FeatureStreaming]; streaming.State == provider.CapabilityNative || streaming.State == provider.CapabilityEmulated {
 		return fmt.Errorf("openai chat profile %q cannot advertise streaming as %q: adapter does not implement OpenStream", profile.ID, streaming.State)
+	}
+	if continuation := profile.Capabilities.Features[provider.FeatureContinuation]; continuation.State == provider.CapabilityNative || continuation.State == provider.CapabilityEmulated {
+		return fmt.Errorf("openai chat profile %q cannot advertise continuation as %q: adapter does not implement continuation", profile.ID, continuation.State)
 	}
 	if profile.MissingActualServiceClass != "" && !profile.MissingActualServiceClass.Valid() {
 		return fmt.Errorf("openai chat profile %q missing actual service class %q is invalid", profile.ID, profile.MissingActualServiceClass)
@@ -214,6 +218,7 @@ func (profile Profile) capabilities(ctx context.Context, query provider.Capabili
 	}
 	set := cloneCapabilities(profile.Capabilities)
 	set.Version = profile.capabilityVersion()
+	set.Features[provider.FeatureContinuation] = unsupportedContinuationCapability(set.Features[provider.FeatureContinuation])
 	set.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(set.Features[provider.FeatureStreaming])
 	return set, nil
 }
@@ -253,6 +258,15 @@ func unsupportedStreamingCapability(capability provider.Capability) provider.Cap
 	capability.Transform = ""
 	if capability.Reason == "" {
 		capability.Reason = "adapter does not implement OpenStream"
+	}
+	return capability
+}
+
+func unsupportedContinuationCapability(capability provider.Capability) provider.Capability {
+	capability.State = provider.CapabilityUnsupported
+	capability.Transform = ""
+	if capability.Reason == "" {
+		capability.Reason = "adapter does not implement continuation"
 	}
 	return capability
 }

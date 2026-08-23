@@ -3,6 +3,7 @@ package architecturetest
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -47,8 +48,18 @@ func TestReadinessIntegrationProvisionsRedisFunctionsForStorageGate(t *testing.T
 		t.Fatal(err)
 	}
 	target := makeTarget(t, string(makefile), "readiness-integration:\n", "\n\n# Runs the black-box StoreFactory contract")
+	if strings.Contains(string(makefile), "READINESS_REDIS_PORT") {
+		t.Fatal("Makefile must not retain a fixed readiness Redis port setting")
+	}
+	if regexp.MustCompile(`--publish 127\.0\.0\.1:[^:]`).MatchString(target) {
+		t.Fatal("readiness-integration must not publish Redis on a fixed host port")
+	}
 	for _, required := range []string{
-		`LLMTW_REDIS_ADDR="127.0.0.1:$(READINESS_REDIS_PORT)"`,
+		`--publish 127.0.0.1::6379`,
+		`port="$$(docker inspect --format '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}' "$$container")"`,
+		`''|*[!0-9]*) echo "readiness-integration could not discover its loopback Redis port" >&2; exit 1 ;;`,
+		`LLMTW_READINESS_REDIS_ADDR="127.0.0.1:$$port"`,
+		`LLMTW_REDIS_ADDR="127.0.0.1:$$port"`,
 		`LLMTW_REDIS_CONTAINER="$$container"`,
 		`LLMTW_REDIS_CONTAINER_PREFIX="$(READINESS_REDIS_CONTAINER_PREFIX)"`,
 		"LLMTW_REDIS_TEST_PROVISION=1",
