@@ -6,12 +6,12 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0
 	github.com/anthropics/anthropic-sdk-go v1.66.0
-	github.com/aws/aws-sdk-go-v2 v1.43.7
+	github.com/aws/aws-sdk-go-v2 v1.44.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.38
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.37
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.57.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.3
-	github.com/aws/smithy-go v1.28.0
+	github.com/aws/smithy-go v1.28.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/openai/openai-go/v3 v3.52.0
