@@ -395,7 +395,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	responseBody := readContractFixture(t, profile.id, "response.completed.json")
 	var got *http.Request
 	client, err := NewAzureClient(AzureClientConfig{
-		Endpoint:   "http://127.0.0.1",
+		Endpoint:   "https://127.0.0.1",
 		APIVersion: "v1",
 		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
