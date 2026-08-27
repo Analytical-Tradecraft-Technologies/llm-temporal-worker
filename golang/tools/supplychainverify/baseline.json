@@ -27,7 +27,7 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2",
-      "version": "v1.43.7",
+      "version": "v1.44.0",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
@@ -57,7 +57,7 @@
     },
     {
       "path": "github.com/aws/smithy-go",
-      "version": "v1.28.0",
+      "version": "v1.28.1",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/smithy-go"
     },
