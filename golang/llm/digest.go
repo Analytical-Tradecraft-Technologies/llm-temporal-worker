@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"math"
 )
 
 const requestDigestDomain = "llmtw/request/v1\x00"
@@ -34,7 +36,12 @@ func RequestDigest(request Request) ([32]byte, error) {
 	if err != nil {
 		return zero, err
 	}
-	input := make([]byte, 0, len(requestDigestDomain)+len(canonical))
+	domainLen := len(requestDigestDomain)
+	if len(canonical) > math.MaxInt-domainLen {
+		return zero, fmt.Errorf("request digest input too large")
+	}
+	inputCap := domainLen + len(canonical)
+	input := make([]byte, 0, inputCap)
 	input = append(input, requestDigestDomain...)
 	input = append(input, canonical...)
 	return sha256.Sum256(input), nil
