@@ -27,7 +27,7 @@ require (
 	go.temporal.io/api v1.63.5
 	go.temporal.io/sdk v1.48.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 )
 
 require (
