@@ -15,7 +15,7 @@
     },
     {
       "path": "github.com/Azure/azure-sdk-for-go/sdk/azidentity",
-      "version": "v1.14.0",
+      "version": "v1.14.1",
       "license": "MIT",
       "source": "https://github.com/Azure/azure-sdk-for-go"
     },
