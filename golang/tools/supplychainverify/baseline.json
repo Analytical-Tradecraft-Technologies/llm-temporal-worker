@@ -87,7 +87,7 @@
     },
     {
       "path": "github.com/prometheus/client_model",
-      "version": "v0.6.2",
+      "version": "v0.6.3",
       "license": "Apache-2.0",
       "source": "https://github.com/prometheus/client_model"
     },
