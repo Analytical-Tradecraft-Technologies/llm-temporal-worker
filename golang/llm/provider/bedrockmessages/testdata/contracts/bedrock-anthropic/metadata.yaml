@@ -1,7 +1,7 @@
 profile: bedrock-anthropic
 upstream_url: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages.html
 upstream_date: "2026-07-14"
-sdk_version: github.com/anthropics/anthropic-sdk-go@v1.69.0
+sdk_version: github.com/anthropics/anthropic-sdk-go@v1.70.1
 provenance: synthetic
 redactions:
   - credentials
