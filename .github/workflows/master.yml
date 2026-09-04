@@ -327,23 +327,6 @@ jobs:
         working-directory: golang
         run: make redis-benchmark-compile
 
-      - name: Verify source safety and supply chain
-        id: security_verify
-        if: steps.go.outputs.present == 'true'
-        working-directory: golang
-        run: |
-          mkdir -p security-artifacts
-          SECURITY_REPORT=security-artifacts/security-verify.json make security-verify
-
-      - name: Upload redacted security verification report
-        if: failure() && steps.security_verify.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: security-verify-report
-          path: golang/security-artifacts/security-verify.json
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Run trusted Redis shared-state conformance
         if: steps.go.outputs.present == 'true'
         working-directory: golang
@@ -508,7 +491,6 @@ jobs:
             -artifact compose_log=compose-log.json \
             -artifact rendered_manifests=rendered-manifests.json \
             -artifact dependency_license=dependencies.json \
-            -artifact vulnerability_results=vulnerabilities.json \
             -artifact sbom=sbom.cdx.json \
             -artifact image_scan=image-scan.json \
             ${worker_error_artifact_args[@]:+"${worker_error_artifact_args[@]}"}

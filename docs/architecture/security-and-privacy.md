@@ -157,19 +157,19 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
   updated through reviewed PRs.
 - Official provider SDKs are preferred; raw HTTP requires an ADR, scoped package,
   wire fixtures, and a migration/removal condition.
-- `make security-verify` runs bounded source/fixture/test-output redaction
-  checks from the repository root. This covers Go worker code, root workflows
-  and release files, and OCaml `.ml`/`.mli` package sources; Go `_test.go`
-  files remain excluded while checked-in fixtures remain included. It never prints
-  credential-like payloads. It also checks every direct `go.mod` requirement
-  against the reviewed license/source inventory, and runs the pinned
-  `govulncheck` release with the reviewed Go
-  1.26.7 toolchain. It scans the reachable program, including transitive
-  dependencies, rather than treating a dependency list as proof of safety.
-- Pull-request CI runs `make security-verify`. Trusted-master failures retain
-  only a redacted JSON report containing component status, direct-module
-  identifiers/count, and vulnerability identifiers; it never contains scanner
-  traces, test output, source paths, request content, or secret-like bytes.
+- The race job captures test output and scans it before printing failures. This
+  preserves the project-specific provider-payload leakage gate without running
+  the Go suite a second time. GitHub secret scanning covers generic checked-in
+  secrets for this public repository.
+- Pull-request CI uses GitHub dependency review plus `make
+  security-pr-verify`. Direct modules must fall under reviewed ATT-owned or
+  well-known module roots. `govulncheck` scans both base and head with the same
+  pinned v1.7.0 tool on the reviewed 1.26.7 toolchain and blocks only new
+  findings or new reachable traces.
+- A dedicated scheduled workflow runs `make security-verify` against current
+  `master`, including transitive dependencies, and enforces the complete
+  vulnerability-exception inventory. Routine master verification does not
+  repeat this scan; guarded release preflight retains it.
 - License inventory and vulnerability exceptions are explicit, reviewed files;
   an exception requires an owner, future expiry, remediation reference, and
   trace scope. A module-only exception cannot suppress a later reachable

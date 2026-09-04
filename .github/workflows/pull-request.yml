@@ -189,16 +189,42 @@ jobs:
       - name: Test with race detector
         if: steps.go.outputs.present == 'true'
         working-directory: golang
-        run: go test -race ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(mktemp)"
+          trap 'rm -f "$output"' EXIT
+          test_status=0
+          go test -race ./... -json >"$output" 2>&1 || test_status=$?
+          go run ./tools/sourceverify -test-output "$output"
+          if (( test_status != 0 )); then
+            cat "$output"
+            exit "$test_status"
+          fi
 
   security:
-    name: Verify source safety and supply chain
+    name: Review dependency changes
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Review changed dependencies
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          show-openssf-scorecard: true
+          warn-on-openssf-scorecard-level: 5
+          show-patched-versions: true
+
+      - name: Check out pull-request base
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: security-base
+          persist-credentials: false
 
       - name: Detect Go implementation
         id: go
@@ -218,10 +244,12 @@ jobs:
           cache: true
           cache-dependency-path: golang/go.sum
 
-      - name: Verify source safety and supply chain
+      - name: Compare base and head vulnerabilities
         if: steps.go.outputs.present == 'true'
         working-directory: golang
-        run: make security-verify
+        env:
+          SECURITY_BASE_DIR: ${{ github.workspace }}/security-base/golang
+        run: make security-pr-verify
 
   verify:
     name: Verify
