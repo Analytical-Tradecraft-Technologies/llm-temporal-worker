@@ -1,7 +1,7 @@
 profile: azure-responses
 upstream_url: https://learn.microsoft.com/azure/ai-foundry/openai/how-to/responses
 upstream_date: "2026-07-14"
-sdk_version: github.com/openai/openai-go/v3@v3.55.0
+sdk_version: github.com/openai/openai-go/v3@v3.56.0
 provenance: synthetic
 redactions:
   - credentials
