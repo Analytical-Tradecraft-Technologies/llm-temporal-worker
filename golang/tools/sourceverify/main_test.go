@@ -561,6 +561,21 @@ func configure(password string) {
 	}
 }
 
+func TestVerifyCanInspectOnlyCapturedTestOutput(t *testing.T) {
+	t.Parallel()
+
+	output := filepath.Join(t.TempDir(), "go-test.json")
+	if err := os.WriteFile(output, []byte(`{"Action":"pass","Package":"example.test/package"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verify("", output); err != nil {
+		t.Fatalf("test-output-only verification failed: %v", err)
+	}
+	if err := verify("", ""); err == nil {
+		t.Fatal("verification accepted no source root and no test output")
+	}
+}
+
 func TestMakefileComposesBoundedSecurityVerify(t *testing.T) {
 	t.Parallel()
 
@@ -577,10 +592,10 @@ func TestMakefileComposesBoundedSecurityVerify(t *testing.T) {
 		"$(GO) test -json ./...",
 		"$(GO) run ./tools/sourceverify",
 		"$(GO) run ./tools/supplychainverify",
-		"golang.org/x/vuln/cmd/govulncheck@v1.6.0",
+		"$(GO) tool govulncheck",
 		"GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN)",
 		"mktemp",
-		"./tools/sourceverify -root ..",
+		"./tools/sourceverify -test-output",
 	} {
 		if !strings.Contains(target, expected) {
 			t.Fatalf("security-verify target does not contain %q", expected)

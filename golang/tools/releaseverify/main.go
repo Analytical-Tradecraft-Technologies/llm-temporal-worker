@@ -67,7 +67,6 @@ var requiredArtifacts = []string{
 	"compose_log",
 	"rendered_manifests",
 	"dependency_license",
-	"vulnerability_results",
 	"sbom",
 	"image_scan",
 }

@@ -52,65 +52,54 @@ recorded date. The table intentionally does not enumerate indirect requirements;
 schema and YAML modules are in active use by the schema and configuration
 packages, while provider SDKs remain outside the provider-neutral `llm` API.
 
-When upgrading a direct module, update this table in the same change and
-re-check the affected source contract, capability/price fixtures, wire
-fixtures, and retry/error/stream/usage assertions.
+This table is a dated explanatory snapshot, not a CI allowlist. Version-only
+updates do not require a matching documentation or policy edit. Re-check the
+affected source contract, capability/price fixtures, wire fixtures, and
+retry/error/stream/usage assertions when an update changes relevant behavior.
 
 ## Verified supply-chain gate
 
 [`golang/tools/supplychainverify/baseline.json`](../../golang/tools/supplychainverify/baseline.json)
-is the machine-readable counterpart to this direct-module table. It records the
-approved SPDX identifiers, source references, and exact versions for every
-direct requirement. `make security-verify` rejects an added, removed, or
-changed direct module until that reviewed inventory is deliberately updated.
+is the machine-readable dependency policy. It records approved module roots,
+SPDX identifiers, and source references without pinning versions. A new direct
+module must be ATT-owned or fall under a reviewed, well-known module root;
+version changes and new submodules from an already reviewed root do not require
+policy churn. Release evidence combines this policy with the current `go.mod`,
+so it still records the exact versions that were built.
 The Go vulnerability scan still analyzes reachable code across the complete
 module graph, including indirect dependencies. A baseline exception does not
 narrow that scanner input; it only limits which already-reported trace may be
 accepted after the scan.
 
-The target pins `govulncheck` at `v1.6.0` and runs it with the current
-`go env GOVERSION` toolchain selected by CI. Its JSON parser retains unique
+The module tracks `govulncheck` at `v1.7.0` as a Go tool and runs it with the
+reviewed Go toolchain selected by CI. Its JSON parser retains unique
 `GO-*` finding identifiers and a fail-closed internal trace scope without
 retaining raw trace data. A `vulnerability_exceptions` entry is valid only when
 it gives an identified finding, owner, future RFC 3339 expiry, HTTPS remediation reference,
 and a `scope` of either `module_only` or `reachable`. A `module_only` exception
 accepts only the single module/version trace frame; a later reachable package or
 function trace fails until the baseline is explicitly reviewed as `reachable`.
-Expired, incomplete, unused, or unlisted exceptions fail the gate, so a
-baseline cannot conceal a new result.
+Expired, incomplete, unused, or unlisted exceptions fail the scheduled full
+gate, so the policy cannot conceal a current result.
 
-The PR workflow runs this target. On a trusted-master failure, CI uploads only
-its redacted report: component pass/fail state, direct-module identifiers/count,
-and finding identifiers. It deliberately excludes test output, source paths,
-scanner traces, provider data, and credential-like material.
+Pull requests run `make security-pr-verify`, scanning the base and head with the
+same pinned tool in one job. Unchanged findings do not block the PR;
+a new finding or a change from module-only to reachable fails unless a reviewed
+exception covers its scope. GitHub's Dependency Review Action independently
+reports changed dependencies, blocks newly added moderate-or-higher advisories,
+and warns when a new dependency has an OpenSSF Scorecard below 5. A separate
+scheduled workflow runs `make security-verify` against current `master` and
+enforces the full exception inventory. Routine master builds do not run either
+PR comparison or the scheduled scan; guarded release preflight retains the full
+gate.
 
-The source scanner inspects every bounded UTF-8, NUL-free regular file outside
-known generated-output, cache, dependency-vendor, and virtual-environment
-directories. Coverage therefore does not depend on an extension allowlist: it
-includes implementation and test sources, scripts, Dockerfile and Makefile
-variants, Markdown and plain text, environment variants such as
-`.env.production`, credential dotfiles, PEM/key files, and extensionless
-configuration. Invalid UTF-8 and NUL-containing files are treated as binary and
-skipped. Executable-text checks cover both Docker `ENV key=value` and legacy
-`ENV key value` forms plus Make assignment operators, while allowing credential
-variable references. Test-only credential values use exact safe sentinels or
-explicit `test-`, `mock-`, `fixture-`, `example-`, `placeholder-`, `local-`, or
-`redacted-` prefixes; marker substrings embedded later in a value are not
-exempt. Scanner self-tests construct recognized token sentinels from fragments
-so the repository never contains the contiguous credential-like value it is
-testing.
-
-Every scanned source file is capped at 1 MiB, test output at 8 MiB, recursion
-at three decode levels, and queued decoded candidates at 1,024 per input.
-Candidates are deduplicated by decoded bytes before the queue bound is applied,
-and each candidate is inspected before the bound is enforced. Go JSON test
-records and their URL/escape-decoded variants are inspected directly but are
-not recursively queued, which prevents a large test stream's unique bookkeeping
-values from consuming the recursive budget; base64 candidates remain recursive
-for nested encodings. Reaching any bound fails closed instead of silently
-skipping the remaining candidates. This keeps URL, escaped JSON, and base64
-representations covered without allowing a large fixture or log to push an
-unscanned value past the safety gate.
+The race job captures Go test output before publishing it and runs the bounded
+test-output scanner against that file. It rejects project-specific provider
+payload leakage and credential-like values; raw output is shown only after the
+scan passes. Generic checked-in secret discovery is delegated to GitHub secret
+scanning, which GitHub enables for public repositories. The local scanner still
+supports an explicit `-root` for focused manual investigation, but CI does not
+maintain a second generic-secret ruleset.
 
 ### Active vulnerability exceptions
 

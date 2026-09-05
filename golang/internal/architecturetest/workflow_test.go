@@ -16,6 +16,9 @@ const (
 	setupGoActionPin      = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
 	githubScriptActionPin = "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
 	cacheActionPin        = "actions/cache@caa296126883cff596d87d8935842f9db880ef25"
+	dependencyReviewPin   = "actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294"
+	securityBaseRef       = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+	securityHeadRef       = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -34,9 +37,36 @@ type releaseMakeInvocation struct {
 }
 
 func TestWorkflowYAMLParses(t *testing.T) {
-	for _, name := range []string{"master.yml", "pull-request.yml", "release.yml"} {
+	for _, name := range []string{"master.yml", "pull-request.yml", "release.yml", "security-scheduled.yml"} {
 		_ = readWorkflow(t, name)
 	}
+}
+
+func TestSecurityRunsDifferentiallyOnPullRequestsAndFullyOnSchedule(t *testing.T) {
+	pullRequest := readWorkflow(t, "pull-request.yml")
+	master := readWorkflow(t, "master.yml")
+	scheduled := readWorkflow(t, "security-scheduled.yml")
+
+	if got := scalarString(t, pullRequest.name, workflowJob(t, pullRequest, "security"), "name"); got != "Verify source safety and supply chain" {
+		t.Fatalf("pull-request security job name = %q, want the required ruleset context", got)
+	}
+	assertJobUsesAction(t, pullRequest, "security", dependencyReviewPin)
+	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "base-ref", securityBaseRef)
+	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "head-ref", securityHeadRef)
+	assertJobNamedStepInput(t, pullRequest, "security", "Check out pull-request base", "ref", securityBaseRef)
+	assertJobHasRunCommand(t, pullRequest, "security", "make security-pr-verify")
+	if jobHasRunCommand(workflowJob(t, pullRequest, "security"), "make security-verify") {
+		t.Fatal("pull-request security job still runs the full current-tree gate")
+	}
+	if strings.Contains(master.raw, "security-verify") {
+		t.Fatal("master workflow still runs security verification on every master build")
+	}
+	collector := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "collect.sh")
+	if strings.Contains(collector, "security-verify") || strings.Contains(collector, "vulnerability-results") {
+		t.Fatal("master release-evidence collection still runs or retains the vulnerability scan")
+	}
+	assertJobHasRunCommand(t, scheduled, "security", "make security-verify")
+	assertScheduledSecurityTriggers(t, scheduled)
 }
 
 func TestWorkflowContract(t *testing.T) {
@@ -62,17 +92,17 @@ func TestWorkflowPullRequestExpensiveVerificationRunsInParallelJobs(t *testing.T
 		command string
 	}{
 		{job: "race", command: "go test -race ./..."},
-		{job: "security", command: "make security-verify"},
+		{job: "security", command: "make security-pr-verify"},
 	} {
 		assertJobUsesAction(t, pullRequest, test.job, checkoutActionPin)
 		assertJobUsesAction(t, pullRequest, test.job, setupGoActionPin)
-		assertJobHasRunCommand(t, pullRequest, test.job, test.command)
+		assertJobRunContains(t, pullRequest, test.job, test.command)
 		if jobHasRunCommand(workflowJob(t, pullRequest, "verify"), test.command) {
 			t.Fatalf("pull-request.yml verify job still runs %q", test.command)
 		}
 	}
 
-	if jobHasRunCommand(workflowJob(t, pullRequest, "race"), "make security-verify") {
+	if jobHasRunCommand(workflowJob(t, pullRequest, "race"), "make security-pr-verify") {
 		t.Fatal("pull-request.yml race job also runs security verification")
 	}
 	if jobHasRunCommand(workflowJob(t, pullRequest, "security"), "go test -race ./...") {
@@ -84,6 +114,7 @@ func TestWorkflowAutomaticallyTriggeredWorkflowsUseOnlyGitHubOwnedActions(t *tes
 	for _, workflow := range []workflowDocument{
 		readWorkflow(t, "pull-request.yml"),
 		readWorkflow(t, "master.yml"),
+		readWorkflow(t, "security-scheduled.yml"),
 	} {
 		for _, reference := range actionReferences(t, workflow) {
 			if !strings.HasPrefix(reference, "actions/") {
@@ -726,6 +757,31 @@ func assertMasterTriggers(t *testing.T, workflow workflowDocument) {
 	}
 }
 
+func assertScheduledSecurityTriggers(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	triggers := workflowMapping(t, workflow, "on")
+	if len(triggers) != 2 {
+		t.Fatalf("%s triggers = %#v, want only workflow_dispatch and schedule", workflow.name, triggers)
+	}
+	if _, ok := triggers["workflow_dispatch"]; !ok {
+		t.Fatalf("%s does not support workflow_dispatch", workflow.name)
+	}
+	schedules, ok := triggers["schedule"].([]any)
+	if !ok || len(schedules) != 1 {
+		t.Fatalf("%s schedule = %#v, want one daily schedule", workflow.name, triggers["schedule"])
+	}
+	schedule, ok := schedules[0].(map[string]any)
+	if !ok {
+		t.Fatalf("%s schedule entry = %#v, want mapping", workflow.name, schedules[0])
+	}
+	if scalarString(t, workflow.name, schedule, "cron") != "30 5 * * *" {
+		t.Fatalf("%s does not retain the 05:30 daily schedule", workflow.name)
+	}
+	if scalarString(t, workflow.name, schedule, "timezone") != "Australia/Sydney" {
+		t.Fatalf("%s does not retain the Australia/Sydney timezone", workflow.name)
+	}
+}
+
 func assertWorkflowControls(t *testing.T, workflow workflowDocument) {
 	t.Helper()
 	if _, ok := workflow.fields["concurrency"].(map[string]any); !ok {
@@ -975,6 +1031,30 @@ func assertJobActionInput(t *testing.T, workflow workflowDocument, jobName, acti
 		return
 	}
 	t.Fatalf("%s job %q does not use %q", workflow.name, jobName, action)
+}
+
+func assertJobNamedStepInput(t *testing.T, workflow workflowDocument, jobName, stepName, input, want string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok || step["name"] != stepName {
+			continue
+		}
+		with, ok := step["with"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s job %q step %q has no inputs", workflow.name, jobName, stepName)
+		}
+		if got, ok := with[input].(string); !ok || got != want {
+			t.Fatalf("%s job %q step %q input %q = %#v, want %q", workflow.name, jobName, stepName, input, with[input], want)
+		}
+		return
+	}
+	t.Fatalf("%s job %q does not contain step %q", workflow.name, jobName, stepName)
 }
 
 func assertJobActionPrecedesRunCommand(t *testing.T, workflow workflowDocument, jobName, action, command string) {

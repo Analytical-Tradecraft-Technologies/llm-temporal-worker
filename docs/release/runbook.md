@@ -57,7 +57,7 @@ assertion for:
 - three redacted boundary-log records derived from actual `docker compose logs`
   output for Redis, Temporal, and the combined stack;
 - rendered Kubernetes manifest digests and object counts;
-- dependency/license inventory and the existing redacted vulnerability result;
+- dependency/license inventory from the current `go.mod` and reviewed roots;
 - the CycloneDX SBOM and matching Trivy scan, each bound to the immutable
   descriptor subject.
 
@@ -163,7 +163,6 @@ bash scripts/release/record.sh \
   -artifact compose_log=compose-log.json \
   -artifact rendered_manifests=rendered-manifests.json \
   -artifact dependency_license=dependencies.json \
-  -artifact vulnerability_results=vulnerabilities.json \
   -artifact sbom=sbom.cdx.json \
   -artifact image_scan=image-scan.json
 ```

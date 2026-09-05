@@ -5,6 +5,7 @@ GO ?= go
 # GOVERSION` default can select an older runner toolchain than the documented
 # baseline and reintroduce fixed standard-library vulnerabilities.
 SECURITY_GO_TOOLCHAIN ?= go1.26.7
+SECURITY_BASE_DIR ?=
 COMPOSE ?= docker compose
 KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
@@ -19,7 +20,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -393,6 +394,23 @@ routing-fuzz:
 	$(GO) test ./routing -run '^$$' -fuzz '^FuzzPlannerNeverSelectsUnauthorizedClasses$$' -fuzztime "$${ROUTING_FUZZ_TIME:-60s}" -parallel=1
 	$(GO) test ./state -run '^$$' -fuzz '^FuzzCanonicalTranscriptNeverPanics$$' -fuzztime "$${ROUTING_FUZZ_TIME:-60s}" -parallel=1
 
+security-pr-verify:
+	@test -n "$(SECURITY_BASE_DIR)" || { echo "SECURITY_BASE_DIR is required" >&2; exit 2; }
+	@workspace="$$(mktemp -d)"; \
+	cleanup() { rm -rf "$$workspace"; }; \
+	trap cleanup EXIT HUP INT TERM; \
+	status=0; \
+	go_mod_status=pass; \
+	vulnerability_status=pass; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) build -o "$$workspace/govulncheck" golang.org/x/vuln/cmd/govulncheck || { status=1; vulnerability_status=fail; }; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) mod edit -json >"$$workspace/go-mod.json" 2>&1 || { status=1; go_mod_status=fail; }; \
+	if [ "$$vulnerability_status" = pass ]; then \
+		(cd "$(SECURITY_BASE_DIR)" && GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) "$$workspace/govulncheck" -format json ./...) >"$$workspace/govulncheck-base.json" 2>"$$workspace/govulncheck-base.stderr" || { status=1; vulnerability_status=fail; }; \
+		GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) "$$workspace/govulncheck" -format json ./... >"$$workspace/govulncheck-head.json" 2>"$$workspace/govulncheck-head.stderr" || { status=1; vulnerability_status=fail; }; \
+	fi; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/supplychainverify -baseline tools/supplychainverify/baseline.json -go-mod "$$workspace/go-mod.json" -base-vulnerability-output "$$workspace/govulncheck-base.json" -vulnerability-output "$$workspace/govulncheck-head.json" -report "$$workspace/security-verify.json" -go-mod-status "$$go_mod_status" -vulnerability-status "$$vulnerability_status" || status=1; \
+	exit "$$status"
+
 security-verify:
 	@workspace="$$(mktemp -d)"; \
 	cleanup() { rm -rf "$$workspace"; }; \
@@ -403,9 +421,9 @@ security-verify:
 	go_mod_status=pass; \
 	vulnerability_status=pass; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) test -json ./... >"$$workspace/test-output.json" 2>&1 || { status=1; test_status=fail; }; \
-	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/sourceverify -root .. -test-output "$$workspace/test-output.json" || { status=1; source_status=fail; }; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/sourceverify -test-output "$$workspace/test-output.json" || { status=1; source_status=fail; }; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) mod edit -json >"$$workspace/go-mod.json" 2>&1 || { status=1; go_mod_status=fail; }; \
-	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run golang.org/x/vuln/cmd/govulncheck@v1.6.0 -format json ./... >"$$workspace/govulncheck.json" 2>"$$workspace/govulncheck.stderr" || { status=1; vulnerability_status=fail; }; \
+	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) tool govulncheck -format json ./... >"$$workspace/govulncheck.json" 2>"$$workspace/govulncheck.stderr" || { status=1; vulnerability_status=fail; }; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/supplychainverify -baseline tools/supplychainverify/baseline.json -go-mod "$$workspace/go-mod.json" -vulnerability-output "$$workspace/govulncheck.json" -report "$$workspace/security-verify.json" -test-status "$$test_status" -source-status "$$source_status" -go-mod-status "$$go_mod_status" -vulnerability-status "$$vulnerability_status" || status=1; \
 	if [ -n "$${SECURITY_REPORT:-}" ] && [ -f "$$workspace/security-verify.json" ]; then \
 		mkdir -p "$$(dirname "$$SECURITY_REPORT")"; \

@@ -56,7 +56,7 @@ type candidate struct {
 }
 
 func main() {
-	root := flag.String("root", ".", "repository root to verify")
+	root := flag.String("root", "", "optional repository root to verify")
 	testOutput := flag.String("test-output", "", "captured go test output to verify")
 	flag.Parse()
 
@@ -68,16 +68,12 @@ func main() {
 }
 
 func verify(root, testOutput string) error {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return fmt.Errorf("source safety verification cannot resolve repository root")
-	}
-	info, err := os.Stat(absRoot)
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("source safety verification repository root is not a directory")
+	if root == "" && testOutput == "" {
+		return fmt.Errorf("source safety verification requires a repository root or captured test output")
 	}
 
 	outputPath := ""
+	var err error
 	if testOutput != "" {
 		outputPath, err = filepath.Abs(testOutput)
 		if err != nil {
@@ -85,51 +81,62 @@ func verify(root, testOutput string) error {
 		}
 	}
 
-	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("source safety verification cannot read a repository path")
+	if root != "" {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return fmt.Errorf("source safety verification cannot resolve repository root")
 		}
-		if entry.IsDir() {
-			if ignoredDirectory(entry.Name()) {
-				return filepath.SkipDir
+		info, err := os.Stat(absRoot)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("source safety verification repository root is not a directory")
+		}
+
+		err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return fmt.Errorf("source safety verification cannot read a repository path")
 			}
-			return nil
-		}
-		if !entry.Type().IsRegular() || path == outputPath {
-			return nil
-		}
-		relative, err := filepath.Rel(absRoot, path)
+			if entry.IsDir() {
+				if ignoredDirectory(entry.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !entry.Type().IsRegular() || path == outputPath {
+				return nil
+			}
+			relative, err := filepath.Rel(absRoot, path)
+			if err != nil {
+				return fmt.Errorf("source safety verification cannot identify a repository path")
+			}
+			data, text, err := readBoundedText(path, maxSourceFileBytes)
+			if err != nil {
+				return fmt.Errorf("source safety verification cannot read %s", filepath.ToSlash(relative))
+			}
+			if !text {
+				return nil
+			}
+			scan := scanContent
+			if strings.EqualFold(filepath.Base(relative), ".netrc") {
+				scan = scanNetrcContent
+			} else if isDockerSource(relative) {
+				scan = scanDockerSourceContent
+			} else if isShellLikeSource(relative) {
+				scan = scanExecutableSourceContent
+			} else if isSourceCode(relative) {
+				scan = scanSourceContent
+			}
+			found, err := scan(data)
+			if err != nil {
+				return fmt.Errorf("source safety verification %s: %w", filepath.ToSlash(relative), err)
+			}
+			if found == nil {
+				return nil
+			}
+			return unsafeFinding(filepath.ToSlash(relative), *found)
+		})
 		if err != nil {
-			return fmt.Errorf("source safety verification cannot identify a repository path")
+			return err
 		}
-		data, text, err := readBoundedText(path, maxSourceFileBytes)
-		if err != nil {
-			return fmt.Errorf("source safety verification cannot read %s", filepath.ToSlash(relative))
-		}
-		if !text {
-			return nil
-		}
-		scan := scanContent
-		if strings.EqualFold(filepath.Base(relative), ".netrc") {
-			scan = scanNetrcContent
-		} else if isDockerSource(relative) {
-			scan = scanDockerSourceContent
-		} else if isShellLikeSource(relative) {
-			scan = scanExecutableSourceContent
-		} else if isSourceCode(relative) {
-			scan = scanSourceContent
-		}
-		found, err := scan(data)
-		if err != nil {
-			return fmt.Errorf("source safety verification %s: %w", filepath.ToSlash(relative), err)
-		}
-		if found == nil {
-			return nil
-		}
-		return unsafeFinding(filepath.ToSlash(relative), *found)
-	})
-	if err != nil {
-		return err
 	}
 
 	if outputPath == "" {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -29,28 +30,26 @@ var requiredReleaseEvidenceArtifacts = []string{
 	"compose_log",
 	"rendered_manifests",
 	"dependency_license",
-	"vulnerability_results",
 	"sbom",
 	"image_scan",
 }
 
 var releaseEvidenceArtifactPaths = map[string]string{
-	"test_summary":          "test-summary.json",
-	"race_summary":          "race-summary.json",
-	"fuzz_summary":          "fuzz-summary.json",
-	"benchmark_summary":     "benchmark-summary.json",
-	"fixture_manifest":      "fixture-manifest.json",
-	"redis_summary":         "redis-summary.json",
-	"temporal_summary":      "temporal-summary.json",
-	"compose_summary":       "compose-summary.json",
-	"redis_log":             "redis-log.json",
-	"temporal_log":          "temporal-log.json",
-	"compose_log":           "compose-log.json",
-	"rendered_manifests":    "rendered-manifests.json",
-	"dependency_license":    "dependencies.json",
-	"vulnerability_results": "vulnerabilities.json",
-	"sbom":                  "sbom.cdx.json",
-	"image_scan":            "image-scan.json",
+	"test_summary":       "test-summary.json",
+	"race_summary":       "race-summary.json",
+	"fuzz_summary":       "fuzz-summary.json",
+	"benchmark_summary":  "benchmark-summary.json",
+	"fixture_manifest":   "fixture-manifest.json",
+	"redis_summary":      "redis-summary.json",
+	"temporal_summary":   "temporal-summary.json",
+	"compose_summary":    "compose-summary.json",
+	"redis_log":          "redis-log.json",
+	"temporal_log":       "temporal-log.json",
+	"compose_log":        "compose-log.json",
+	"rendered_manifests": "rendered-manifests.json",
+	"dependency_license": "dependencies.json",
+	"sbom":               "sbom.cdx.json",
+	"image_scan":         "image-scan.json",
 }
 
 var releaseEvidenceOverlongDNSHostnameURL = "https://" + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + "/path"
@@ -537,11 +536,14 @@ func TestReleaseEvidenceCollectorRejectsUnsafeProvenanceURLs(t *testing.T) {
 	t.Run("dependency basic auth", func(t *testing.T) {
 		directory := t.TempDir()
 		baselinePath := filepath.Join(directory, "baseline.json")
-		writeReleaseArtifact(t, baselinePath, []byte(`{"direct_modules":[{"path":"example.com/module","version":"v1.2.3","license":"Apache-2.0","source":"https://operator:`+sentinel+`@example.invalid/module"}]}`))
+		goModPath := filepath.Join(directory, "go-mod.json")
+		writeReleaseArtifact(t, baselinePath, []byte(`{"trusted_module_roots":[{"path":"example.com/module","license":"Apache-2.0","source":"https://operator:`+sentinel+`@example.invalid/module"}]}`))
+		writeReleaseArtifact(t, goModPath, []byte(`{"Require":[{"Path":"example.com/module","Version":"v1.2.3"}]}`))
 		outputPath := filepath.Join(directory, "dependencies.json")
 		command := exec.Command(
 			"python3", filepath.Join(root, "scripts", "release", "collect.py"), "dependency-license",
 			"--baseline", baselinePath,
+			"--go-mod", goModPath,
 			"--output", outputPath,
 		)
 		command.Dir = root
@@ -599,10 +601,10 @@ func TestReleaseEvidenceCollectorEnforcesCanonicalProvenanceURLPolicy(t *testing
 					command = exec.Command("python3", filepath.Join(root, "scripts", "release", "collect.py"), "fixture-manifest", "--root", directory, "--output", outputPath)
 				case "dependency":
 					baselinePath := filepath.Join(directory, "baseline.json")
+					goModPath := filepath.Join(directory, "go-mod.json")
 					baseline, err := json.Marshal(map[string]any{
-						"direct_modules": []map[string]string{{
+						"trusted_module_roots": []map[string]string{{
 							"path":    "example.com/module",
-							"version": "v1.2.3",
 							"license": "Apache-2.0",
 							"source":  test.url,
 						}},
@@ -611,8 +613,9 @@ func TestReleaseEvidenceCollectorEnforcesCanonicalProvenanceURLPolicy(t *testing
 						t.Fatal(err)
 					}
 					writeReleaseArtifact(t, baselinePath, baseline)
+					writeReleaseArtifact(t, goModPath, []byte(`{"Require":[{"Path":"example.com/module","Version":"v1.2.3"}]}`))
 					outputPath = filepath.Join(directory, "dependencies.json")
-					command = exec.Command("python3", filepath.Join(root, "scripts", "release", "collect.py"), "dependency-license", "--baseline", baselinePath, "--output", outputPath)
+					command = exec.Command("python3", filepath.Join(root, "scripts", "release", "collect.py"), "dependency-license", "--baseline", baselinePath, "--go-mod", goModPath, "--output", outputPath)
 				default:
 					t.Fatalf("unknown provenance kind %q", kind)
 				}
@@ -641,6 +644,45 @@ func TestReleaseEvidenceCollectorEnforcesCanonicalProvenanceURLPolicy(t *testing
 				}
 			})
 		}
+	}
+}
+
+func TestDependencyEvidenceUsesCurrentVersionsUnderTrustedRoots(t *testing.T) {
+	t.Parallel()
+
+	root := repositoryRoot(t)
+	directory := t.TempDir()
+	baselinePath := filepath.Join(directory, "baseline.json")
+	goModPath := filepath.Join(directory, "go-mod.json")
+	outputPath := filepath.Join(directory, "dependencies.json")
+	writeReleaseArtifact(t, baselinePath, []byte(`{"trusted_module_roots":[{"path":"example.com/publisher","license":"Apache-2.0","source":"https://example.com/publisher"}]}`))
+	writeReleaseArtifact(t, goModPath, []byte(`{"Require":[{"Path":"example.com/publisher/module","Version":"v9.8.7"},{"Path":"example.com/indirect","Version":"v1.0.0","Indirect":true}]}`))
+
+	command := exec.Command(
+		"python3", filepath.Join(root, "scripts", "release", "collect.py"), "dependency-license",
+		"--baseline", baselinePath,
+		"--go-mod", goModPath,
+		"--output", outputPath,
+	)
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("dependency collector failed: %v\n%s", err, output)
+	}
+	var evidence struct {
+		DirectModules []map[string]string `json:"direct_modules"`
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	want := []map[string]string{{
+		"path": "example.com/publisher/module", "version": "v9.8.7", "license": "Apache-2.0", "source": "https://example.com/publisher",
+	}}
+	if !reflect.DeepEqual(evidence.DirectModules, want) {
+		t.Fatalf("direct modules = %#v, want %#v", evidence.DirectModules, want)
 	}
 }
 
