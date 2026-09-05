@@ -205,7 +205,7 @@ jobs:
           fi
 
   security:
-    name: Review dependency changes
+    name: Verify source safety and supply chain
     runs-on: ubuntu-latest
     timeout-minutes: 35
 

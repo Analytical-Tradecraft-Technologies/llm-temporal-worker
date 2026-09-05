@@ -47,6 +47,9 @@ func TestSecurityRunsDifferentiallyOnPullRequestsAndFullyOnSchedule(t *testing.T
 	master := readWorkflow(t, "master.yml")
 	scheduled := readWorkflow(t, "security-scheduled.yml")
 
+	if got := scalarString(t, pullRequest.name, workflowJob(t, pullRequest, "security"), "name"); got != "Verify source safety and supply chain" {
+		t.Fatalf("pull-request security job name = %q, want the required ruleset context", got)
+	}
 	assertJobUsesAction(t, pullRequest, "security", dependencyReviewPin)
 	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "base-ref", securityBaseRef)
 	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "head-ref", securityHeadRef)
