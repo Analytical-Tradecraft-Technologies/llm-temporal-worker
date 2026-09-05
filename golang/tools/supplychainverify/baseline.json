@@ -33,13 +33,13 @@
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/config",
-      "version": "v1.33.1",
+      "version": "v1.33.2",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
     {
       "path": "github.com/aws/aws-sdk-go-v2/credentials",
-      "version": "v1.20.1",
+      "version": "v1.20.2",
       "license": "Apache-2.0",
       "source": "https://github.com/aws/aws-sdk-go-v2"
     },
