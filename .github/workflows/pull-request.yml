@@ -1,6 +1,8 @@
 name: Pull Request
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     branches:
       - master
@@ -9,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pr-${{ github.event.pull_request.number }}
+  group: pr-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -57,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            printf 'version=pr-%s-%s\n' "${{ github.event.pull_request.number }}" "$GITHUB_RUN_NUMBER"
+            printf 'version=pr-%s-%s\n' "${{ github.event.pull_request.number || github.run_id }}" "$GITHUB_RUN_NUMBER"
             printf 'revision=%s\n' "$GITHUB_SHA"
             printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             printf 'source=https://github.com/%s\n' "$GITHUB_REPOSITORY"
@@ -70,9 +72,9 @@ jobs:
           set -euo pipefail
           docker buildx build \
             --file ./golang/Dockerfile \
-            --tag llm-temporal-worker:pr-${{ github.event.pull_request.number }}-${{ github.run_number }} \
-            --cache-from type=gha,scope=llmtw-pr-${{ github.event.pull_request.number }},version=2 \
-            --cache-to type=gha,mode=max,scope=llmtw-pr-${{ github.event.pull_request.number }},version=2,ignore-error=true \
+            --tag llm-temporal-worker:pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_number }} \
+            --cache-from type=gha,scope=llmtw-pr-${{ github.event.pull_request.number || github.run_id }},version=2 \
+            --cache-to type=gha,mode=max,scope=llmtw-pr-${{ github.event.pull_request.number || github.run_id }},version=2,ignore-error=true \
             --build-arg VERSION=${{ steps.metadata.outputs.version }} \
             --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
             --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
@@ -119,7 +121,7 @@ jobs:
           path: |
             ${{ runner.temp }}/llmtw-opam-root
             ${{ runner.temp }}/llmtw-xdg-cache
-          key: opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-pr-${{ github.event.pull_request.number }}-opam-2.3.0-ocaml-5.2.0-sandboxed-${{ hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project', 'scripts/ci/setup-opam.sh') }}
+          key: opam-${{ runner.os }}-${{ runner.arch }}-${{ github.repository }}-pr-${{ github.event.pull_request.number || github.run_id }}-opam-2.3.0-ocaml-5.2.0-sandboxed-${{ hashFiles('ocaml/llm_temporal_worker/*.opam', 'ocaml/llm_temporal_worker/dune-project', 'scripts/ci/setup-opam.sh') }}
 
       - name: Set up OCaml
         run: bash scripts/ci/setup-opam.sh
@@ -366,7 +368,7 @@ jobs:
           make mutation-verify
 
       - name: Run authorized Compose lifecycle
-        if: steps.go.outputs.present == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: steps.go.outputs.present == 'true' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)
         working-directory: golang
         run: LLMTW_COMPOSE_LIVE=1 make compose-live-integration
 
