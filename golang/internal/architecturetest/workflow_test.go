@@ -17,6 +17,8 @@ const (
 	githubScriptActionPin = "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
 	cacheActionPin        = "actions/cache@caa296126883cff596d87d8935842f9db880ef25"
 	dependencyReviewPin   = "actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294"
+	securityBaseRef       = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+	securityHeadRef       = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -46,6 +48,9 @@ func TestSecurityRunsDifferentiallyOnPullRequestsAndFullyOnSchedule(t *testing.T
 	scheduled := readWorkflow(t, "security-scheduled.yml")
 
 	assertJobUsesAction(t, pullRequest, "security", dependencyReviewPin)
+	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "base-ref", securityBaseRef)
+	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "head-ref", securityHeadRef)
+	assertJobNamedStepInput(t, pullRequest, "security", "Check out pull-request base", "ref", securityBaseRef)
 	assertJobHasRunCommand(t, pullRequest, "security", "make security-pr-verify")
 	if jobHasRunCommand(workflowJob(t, pullRequest, "security"), "make security-verify") {
 		t.Fatal("pull-request security job still runs the full current-tree gate")
@@ -156,7 +161,7 @@ func TestWorkflowContainerBuildCacheV2BridgeAndIsolation(t *testing.T) {
 		name  string
 		scope string
 	}{
-		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number }}"},
+		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number || github.run_id }}"},
 		{name: "master.yml", scope: "llmtw-master"},
 	} {
 		workflow := readWorkflow(t, test.name)
@@ -183,7 +188,7 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 		name     string
 		identity string
 	}{
-		{name: "pull-request.yml", identity: "pr-${{ github.event.pull_request.number }}"},
+		{name: "pull-request.yml", identity: "pr-${{ github.event.pull_request.number || github.run_id }}"},
 		{name: "master.yml", identity: "master"},
 	} {
 		workflow := readWorkflow(t, test.name)
@@ -356,7 +361,7 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 		name  string
 		scope string
 	}{
-		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number }}"},
+		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number || github.run_id }}"},
 		{name: "master.yml", scope: "llmtw-master"},
 	} {
 		workflow := readWorkflow(t, test.name)
@@ -1023,6 +1028,30 @@ func assertJobActionInput(t *testing.T, workflow workflowDocument, jobName, acti
 		return
 	}
 	t.Fatalf("%s job %q does not use %q", workflow.name, jobName, action)
+}
+
+func assertJobNamedStepInput(t *testing.T, workflow workflowDocument, jobName, stepName, input, want string) {
+	t.Helper()
+	job := workflowJob(t, workflow, jobName)
+	steps, ok := job["steps"].([]any)
+	if !ok {
+		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
+	}
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok || step["name"] != stepName {
+			continue
+		}
+		with, ok := step["with"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s job %q step %q has no inputs", workflow.name, jobName, stepName)
+		}
+		if got, ok := with[input].(string); !ok || got != want {
+			t.Fatalf("%s job %q step %q input %q = %#v, want %q", workflow.name, jobName, stepName, input, with[input], want)
+		}
+		return
+	}
+	t.Fatalf("%s job %q does not contain step %q", workflow.name, jobName, stepName)
 }
 
 func assertJobActionPrecedesRunCommand(t *testing.T, workflow workflowDocument, jobName, action, command string) {
