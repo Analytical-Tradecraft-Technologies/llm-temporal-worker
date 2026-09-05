@@ -133,7 +133,7 @@ func TestWorkflowContainerBuildCacheV2BridgeAndIsolation(t *testing.T) {
 		name  string
 		scope string
 	}{
-		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number }}"},
+		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number || github.run_id }}"},
 		{name: "master.yml", scope: "llmtw-master"},
 	} {
 		workflow := readWorkflow(t, test.name)
@@ -160,7 +160,7 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 		name     string
 		identity string
 	}{
-		{name: "pull-request.yml", identity: "pr-${{ github.event.pull_request.number }}"},
+		{name: "pull-request.yml", identity: "pr-${{ github.event.pull_request.number || github.run_id }}"},
 		{name: "master.yml", identity: "master"},
 	} {
 		workflow := readWorkflow(t, test.name)
@@ -333,7 +333,7 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 		name  string
 		scope string
 	}{
-		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number }}"},
+		{name: "pull-request.yml", scope: "llmtw-pr-${{ github.event.pull_request.number || github.run_id }}"},
 		{name: "master.yml", scope: "llmtw-master"},
 	} {
 		workflow := readWorkflow(t, test.name)
