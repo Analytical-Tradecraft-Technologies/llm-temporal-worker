@@ -7,7 +7,7 @@ tool golang.org/x/vuln/cmd/govulncheck
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
-	github.com/anthropics/anthropic-sdk-go v1.70.1
+	github.com/anthropics/anthropic-sdk-go v1.71.0
 	github.com/aws/aws-sdk-go-v2 v1.46.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.2
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.2
