@@ -95,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes protobuf-compiler bubblewrap
+          sudo apt-get install --yes cargo protobuf-compiler bubblewrap
 
       - name: Enable unprivileged user namespaces for OPAM sandboxing
         if: ${{ runner.environment == 'github-hosted' }}
@@ -133,7 +133,7 @@ jobs:
           opam pin add --yes --no-action --kind=git temporal-sdk \
             'git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#87d61c0639bf232b67e6d5a0f397d990e2468eb4'
           bash ../../scripts/ci/prefetch-temporal-sdk-cargo.sh
-          CARGO_NET_OFFLINE=true opam install --yes --confirm-level=unsafe-yes . --deps-only
+          CARGO_NET_OFFLINE=true opam install --yes . --deps-only
 
       - name: Build and test nested package
         working-directory: ocaml/llm_temporal_worker
