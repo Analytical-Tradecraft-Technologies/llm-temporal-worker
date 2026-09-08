@@ -3,6 +3,8 @@ updates:
   - package-ecosystem: gomod
     directory: /golang
     schedule:
-      interval: daily
+      interval: cron
+      cronjob: "0 7,19 * * *"
+      timezone: Australia/Sydney
     cooldown:
       semver-patch-days: 3
