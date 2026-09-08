@@ -95,7 +95,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes cargo protobuf-compiler bubblewrap
+          sudo apt-get install --yes protobuf-compiler bubblewrap
+          sudo apt-get install --yes cargo
 
       - name: Enable unprivileged user namespaces for OPAM sandboxing
         if: ${{ runner.environment == 'github-hosted' }}
