@@ -1,8 +1,49 @@
+# Check every calendar day at 07:00 Sydney, including daylight saving.
 version: 2
 updates:
-  - package-ecosystem: gomod
-    directory: /golang
-    schedule:
-      interval: daily
-    cooldown:
-      semver-patch-days: 3
+- package-ecosystem: gomod
+  directory: /golang
+  schedule:
+    interval: cron
+    cronjob: 0 7 * * *
+    timezone: Australia/Sydney
+  cooldown:
+    default-days: 3
+  groups:
+    opentelemetry-core:
+      patterns:
+      - go.opentelemetry.io/otel
+      - go.opentelemetry.io/otel/metric
+      - go.opentelemetry.io/otel/trace
+      - go.opentelemetry.io/otel/sdk
+      - go.opentelemetry.io/otel/exporters/otlp/otlptrace
+      - go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
+- package-ecosystem: docker
+  directories:
+  - /golang
+  - /golang/deploy/local/provider-mock
+  schedule:
+    interval: cron
+    cronjob: 0 7 * * *
+    timezone: Australia/Sydney
+  cooldown:
+    default-days: 3
+  groups:
+    shared-dependency:
+      group-by: dependency-name
+- package-ecosystem: docker-compose
+  directory: /golang
+  schedule:
+    interval: cron
+    cronjob: 0 7 * * *
+    timezone: Australia/Sydney
+  cooldown:
+    default-days: 3
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: cron
+    cronjob: 0 7 * * *
+    timezone: Australia/Sydney
+  cooldown:
+    default-days: 3
