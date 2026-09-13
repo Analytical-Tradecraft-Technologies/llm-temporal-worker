@@ -184,16 +184,11 @@ python3 "$collector" rendered-manifests \
   "${manifest_entries[@]}" \
   --output "$artifact_dir/rendered-manifests.json"
 
+go -C "$module_root" mod edit -json >"$temporary/go-mod.json"
 python3 "$collector" dependency-license \
   --baseline "$module_root/tools/supplychainverify/baseline.json" \
+  --go-mod "$temporary/go-mod.json" \
   --output "$artifact_dir/dependencies.json"
-
-if ! SECURITY_REPORT="$temporary/security-verify.json" make -C "$module_root" security-verify >"$temporary/security-verify.output" 2>&1; then
-  fail "security verification failed; inspect the trusted CI step output"
-fi
-python3 "$collector" vulnerability-results \
-  --input "$temporary/security-verify.json" \
-  --output "$artifact_dir/vulnerabilities.json"
 
 if ! IMAGE_VERIFY_OCI_LAYOUT="$image_oci_layout" make -C "$module_root" image-verify >"$temporary/image-verify.output" 2>&1; then
   fail "temporary OCI image verification failed; inspect the trusted CI step output"

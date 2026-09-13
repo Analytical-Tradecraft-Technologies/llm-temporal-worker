@@ -18,18 +18,17 @@ import (
 	"time"
 )
 
-const baselineVersion = 1
+const baselineVersion = 2
 
 type baseline struct {
 	Version                 int                      `json:"version"`
 	AllowedLicenses         []string                 `json:"allowed_licenses"`
-	DirectModules           []moduleRecord           `json:"direct_modules"`
+	TrustedModuleRoots      []moduleRecord           `json:"trusted_module_roots"`
 	VulnerabilityExceptions []vulnerabilityException `json:"vulnerability_exceptions"`
 }
 
 type moduleRecord struct {
 	Path    string `json:"path"`
-	Version string `json:"version"`
 	License string `json:"license"`
 	Source  string `json:"source"`
 }
@@ -48,9 +47,14 @@ type moduleRequirement struct {
 	Indirect bool   `json:"Indirect"`
 }
 
+type moduleTool struct {
+	Path string `json:"Path"`
+}
+
 type goMod struct {
 	Require []moduleRequirement `json:"Require"`
 	Replace []moduleReplacement `json:"Replace"`
+	Tool    []moduleTool        `json:"Tool"`
 }
 
 type moduleReplacement struct {
@@ -71,19 +75,21 @@ type componentStatus struct {
 }
 
 type verificationReport struct {
-	Version           int             `json:"version"`
-	Status            string          `json:"status"`
-	Components        componentStatus `json:"components"`
-	DirectModuleCount int             `json:"direct_module_count"`
-	Findings          []string        `json:"findings"`
-	ApprovedFindings  []string        `json:"approved_findings"`
-	Error             string          `json:"error,omitempty"`
+	Version            int             `json:"version"`
+	Status             string          `json:"status"`
+	Components         componentStatus `json:"components"`
+	DirectModuleCount  int             `json:"direct_module_count"`
+	Findings           []string        `json:"findings"`
+	IntroducedFindings []string        `json:"introduced_findings"`
+	ApprovedFindings   []string        `json:"approved_findings"`
+	Error              string          `json:"error,omitempty"`
 }
 
 func main() {
 	baselinePath := flag.String("baseline", "", "reviewed dependency and vulnerability baseline JSON")
 	goModPath := flag.String("go-mod", "", "go mod edit -json output")
 	vulnerabilityOutputPath := flag.String("vulnerability-output", "", "govulncheck JSON output")
+	baseVulnerabilityOutputPath := flag.String("base-vulnerability-output", "", "optional base-revision govulncheck JSON output for pull-request comparison")
 	reportPath := flag.String("report", "", "redacted report output path")
 	testStatus := flag.String("test-status", "pass", "captured Go test status: pass or fail")
 	sourceStatus := flag.String("source-status", "pass", "source verification status: pass or fail")
@@ -102,7 +108,13 @@ func main() {
 		GoMod:         *goModStatus,
 		Vulnerability: *vulnerabilityStatus,
 	}
-	report, err := execute(*baselinePath, *goModPath, *vulnerabilityOutputPath, components, time.Now().UTC())
+	var report verificationReport
+	var err error
+	if *baseVulnerabilityOutputPath == "" {
+		report, err = execute(*baselinePath, *goModPath, *vulnerabilityOutputPath, components, time.Now().UTC())
+	} else {
+		report, err = executePullRequest(*baselinePath, *goModPath, *baseVulnerabilityOutputPath, *vulnerabilityOutputPath, components, time.Now().UTC())
+	}
 	if writeErr := writeReportFile(*reportPath, report); writeErr != nil {
 		fmt.Fprintln(os.Stderr, "supply chain verification cannot write redacted report")
 		os.Exit(1)
@@ -116,11 +128,12 @@ func main() {
 
 func execute(baselinePath, goModPath, vulnerabilityOutputPath string, components componentStatus, now time.Time) (verificationReport, error) {
 	report := verificationReport{
-		Version:          baselineVersion,
-		Status:           "fail",
-		Components:       components,
-		Findings:         []string{},
-		ApprovedFindings: []string{},
+		Version:            baselineVersion,
+		Status:             "fail",
+		Components:         components,
+		Findings:           []string{},
+		IntroducedFindings: []string{},
+		ApprovedFindings:   []string{},
 	}
 
 	baselineFile, err := os.Open(baselinePath)
@@ -160,6 +173,59 @@ func execute(baselinePath, goModPath, vulnerabilityOutputPath string, components
 	return report, nil
 }
 
+func executePullRequest(baselinePath, goModPath, baseVulnerabilityOutputPath, vulnerabilityOutputPath string, components componentStatus, now time.Time) (verificationReport, error) {
+	report := verificationReport{
+		Version:            baselineVersion,
+		Status:             "fail",
+		Components:         components,
+		Findings:           []string{},
+		IntroducedFindings: []string{},
+		ApprovedFindings:   []string{},
+	}
+
+	baselineFile, err := os.Open(baselinePath)
+	if err != nil {
+		return reportWithError(report, errors.New("supply chain verification cannot read baseline"))
+	}
+	defer baselineFile.Close()
+	var value baseline
+	if err := json.NewDecoder(baselineFile).Decode(&value); err != nil {
+		return reportWithError(report, errors.New("supply chain verification baseline is not valid JSON"))
+	}
+
+	goModFile, err := os.Open(goModPath)
+	if err != nil {
+		return reportWithError(report, errors.New("supply chain verification cannot read go.mod inventory"))
+	}
+	defer goModFile.Close()
+	requirements, err := readGoMod(goModFile)
+	if err != nil {
+		return reportWithError(report, err)
+	}
+
+	baseFile, err := os.Open(baseVulnerabilityOutputPath)
+	if err != nil {
+		return reportWithError(report, errors.New("supply chain verification cannot read base vulnerability output"))
+	}
+	defer baseFile.Close()
+	headFile, err := os.Open(vulnerabilityOutputPath)
+	if err != nil {
+		return reportWithError(report, errors.New("supply chain verification cannot read vulnerability output"))
+	}
+	defer headFile.Close()
+
+	report, err = verifyPullRequest(value, requirements, baseFile, headFile, now)
+	report.Components = components
+	if err != nil {
+		return reportWithError(report, err)
+	}
+	if err := validateComponentStatus(components); err != nil {
+		return reportWithError(report, err)
+	}
+	report.Status = "pass"
+	return report, nil
+}
+
 func reportWithError(report verificationReport, err error) (verificationReport, error) {
 	report.Status = "fail"
 	report.Error = err.Error()
@@ -175,6 +241,7 @@ func readGoMod(reader io.Reader) ([]moduleRequirement, error) {
 		return nil, errors.New("supply chain verification go.mod inventory contains a replacement")
 	}
 	requirements := make([]moduleRequirement, 0, len(decoded.Require))
+	seen := make(map[string]struct{}, len(decoded.Require))
 	for _, requirement := range decoded.Require {
 		if requirement.Indirect {
 			continue
@@ -183,23 +250,47 @@ func readGoMod(reader io.Reader) ([]moduleRequirement, error) {
 			return nil, errors.New("supply chain verification go.mod inventory has an invalid direct module")
 		}
 		requirements = append(requirements, moduleRequirement{Path: requirement.Path, Version: requirement.Version})
+		seen[requirement.Path] = struct{}{}
+	}
+	for _, tool := range decoded.Tool {
+		if strings.TrimSpace(tool.Path) == "" {
+			return nil, errors.New("supply chain verification go.mod inventory has an invalid tool")
+		}
+		var matched moduleRequirement
+		for _, requirement := range decoded.Require {
+			if requirement.Path != tool.Path && !strings.HasPrefix(tool.Path, requirement.Path+"/") {
+				continue
+			}
+			if len(requirement.Path) > len(matched.Path) {
+				matched = requirement
+			}
+		}
+		if strings.TrimSpace(matched.Path) == "" || strings.TrimSpace(matched.Version) == "" {
+			return nil, fmt.Errorf("supply chain verification go.mod tool %q has no versioned module requirement", tool.Path)
+		}
+		if _, ok := seen[matched.Path]; ok {
+			continue
+		}
+		requirements = append(requirements, moduleRequirement{Path: matched.Path, Version: matched.Version})
+		seen[matched.Path] = struct{}{}
 	}
 	return requirements, nil
 }
 
 func verify(value baseline, requirements []moduleRequirement, vulnerabilityOutput io.Reader, now time.Time) (verificationReport, error) {
 	report := verificationReport{
-		Version:           baselineVersion,
-		Status:            "fail",
-		DirectModuleCount: len(requirements),
-		Findings:          []string{},
-		ApprovedFindings:  []string{},
+		Version:            baselineVersion,
+		Status:             "fail",
+		DirectModuleCount:  len(requirements),
+		Findings:           []string{},
+		IntroducedFindings: []string{},
+		ApprovedFindings:   []string{},
 	}
 	exceptions, err := validateBaseline(value, now)
 	if err != nil {
 		return report, err
 	}
-	if err := validateInventory(value.DirectModules, requirements); err != nil {
+	if err := validateInventory(value.TrustedModuleRoots, requirements); err != nil {
 		return report, err
 	}
 	findings, err := readFindings(vulnerabilityOutput)
@@ -231,6 +322,60 @@ func verify(value baseline, requirements []moduleRequirement, vulnerabilityOutpu
 	return report, nil
 }
 
+func verifyPullRequest(value baseline, requirements []moduleRequirement, baseVulnerabilityOutput, vulnerabilityOutput io.Reader, now time.Time) (verificationReport, error) {
+	report := verificationReport{
+		Version:            baselineVersion,
+		Status:             "fail",
+		DirectModuleCount:  len(requirements),
+		Findings:           []string{},
+		IntroducedFindings: []string{},
+		ApprovedFindings:   []string{},
+	}
+	exceptions, err := validateBaseline(value, now)
+	if err != nil {
+		return report, err
+	}
+	if err := validateInventory(value.TrustedModuleRoots, requirements); err != nil {
+		return report, err
+	}
+	baseFindings, err := readFindings(baseVulnerabilityOutput)
+	if err != nil {
+		return report, fmt.Errorf("supply chain verification base vulnerability output is invalid: %w", err)
+	}
+	headFindings, err := readFindings(vulnerabilityOutput)
+	if err != nil {
+		return report, err
+	}
+	report.Findings = findingIDs(headFindings)
+	baseByID := make(map[string]vulnerabilityFinding, len(baseFindings))
+	for _, finding := range baseFindings {
+		baseByID[finding.ID] = finding
+	}
+	introduced := make([]vulnerabilityFinding, 0, len(headFindings))
+	for _, finding := range headFindings {
+		base, existed := baseByID[finding.ID]
+		if !existed || (!base.HasReachableTrace && finding.HasReachableTrace) {
+			introduced = append(introduced, finding)
+		}
+	}
+	report.IntroducedFindings = findingIDs(introduced)
+	approved := make([]string, 0, len(introduced))
+	for _, finding := range introduced {
+		exception, ok := exceptions[finding.ID]
+		if !ok {
+			return report, fmt.Errorf("supply chain verification found newly introduced vulnerability %s", finding.ID)
+		}
+		if finding.HasReachableTrace && exception.Scope != "reachable" {
+			return report, fmt.Errorf("supply chain verification newly introduced vulnerability %s has a reachable trace outside of its reviewed exception scope", finding.ID)
+		}
+		approved = append(approved, finding.ID)
+	}
+	sort.Strings(approved)
+	report.ApprovedFindings = approved
+	report.Status = "pass"
+	return report, nil
+}
+
 func validateBaseline(value baseline, now time.Time) (map[string]vulnerabilityException, error) {
 	if value.Version != baselineVersion {
 		return nil, fmt.Errorf("supply chain verification baseline version must be %d", baselineVersion)
@@ -250,21 +395,24 @@ func validateBaseline(value baseline, now time.Time) (map[string]vulnerabilityEx
 		return nil, errors.New("supply chain verification baseline has no allowed licenses")
 	}
 
-	modulePaths := make(map[string]struct{}, len(value.DirectModules))
-	for _, module := range value.DirectModules {
-		if strings.TrimSpace(module.Path) == "" || strings.TrimSpace(module.Version) == "" {
-			return nil, errors.New("supply chain verification baseline has an incomplete direct module")
+	modulePaths := make(map[string]struct{}, len(value.TrustedModuleRoots))
+	for _, module := range value.TrustedModuleRoots {
+		if strings.TrimSpace(module.Path) == "" {
+			return nil, errors.New("supply chain verification baseline has an incomplete trusted module root")
 		}
 		if _, duplicate := modulePaths[module.Path]; duplicate {
-			return nil, fmt.Errorf("supply chain verification baseline repeats direct module %s", module.Path)
+			return nil, fmt.Errorf("supply chain verification baseline repeats trusted module root %s", module.Path)
 		}
 		modulePaths[module.Path] = struct{}{}
 		if _, allowed := allowedLicenses[module.License]; !allowed {
-			return nil, fmt.Errorf("supply chain verification baseline direct module %s has an unapproved license", module.Path)
+			return nil, fmt.Errorf("supply chain verification baseline trusted module root %s has an unapproved license", module.Path)
 		}
 		if err := validateHTTPSReference(module.Source); err != nil {
-			return nil, fmt.Errorf("supply chain verification baseline direct module %s has an invalid source", module.Path)
+			return nil, fmt.Errorf("supply chain verification baseline trusted module root %s has an invalid source", module.Path)
 		}
+	}
+	if len(modulePaths) == 0 {
+		return nil, errors.New("supply chain verification baseline has no trusted module roots")
 	}
 
 	exceptions := make(map[string]vulnerabilityException, len(value.VulnerabilityExceptions))
@@ -302,27 +450,21 @@ func validateHTTPSReference(raw string) error {
 }
 
 func validateInventory(records []moduleRecord, requirements []moduleRequirement) error {
-	baselineByPath := make(map[string]moduleRecord, len(records))
-	for _, record := range records {
-		baselineByPath[record.Path] = record
-	}
 	actualByPath := make(map[string]moduleRequirement, len(requirements))
 	for _, requirement := range requirements {
 		if _, duplicate := actualByPath[requirement.Path]; duplicate {
 			return fmt.Errorf("supply chain verification go.mod inventory repeats direct module %s", requirement.Path)
 		}
 		actualByPath[requirement.Path] = requirement
-		record, known := baselineByPath[requirement.Path]
-		if !known {
-			return fmt.Errorf("supply chain verification direct module %s is missing from the reviewed baseline", requirement.Path)
+		trusted := false
+		for _, record := range records {
+			if requirement.Path == record.Path || strings.HasPrefix(requirement.Path, record.Path+"/") {
+				trusted = true
+				break
+			}
 		}
-		if record.Version != requirement.Version {
-			return fmt.Errorf("supply chain verification direct module %s version differs from the reviewed baseline", requirement.Path)
-		}
-	}
-	for _, record := range records {
-		if _, present := actualByPath[record.Path]; !present {
-			return fmt.Errorf("supply chain verification baseline direct module %s is not in go.mod", record.Path)
+		if !trusted {
+			return fmt.Errorf("supply chain verification direct module %s is outside the reviewed trusted module roots", requirement.Path)
 		}
 	}
 	return nil

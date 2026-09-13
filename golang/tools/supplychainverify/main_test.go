@@ -194,6 +194,31 @@ func TestReadGoModExcludesIndirectRequirements(t *testing.T) {
 	}
 }
 
+func TestReadGoModIncludesReviewedToolModules(t *testing.T) {
+	t.Parallel()
+
+	requirements, err := readGoMod(strings.NewReader(`{
+		"Require":[{"Path":"golang.org/x/vuln","Version":"v1.7.0","Indirect":true}],
+		"Tool":[{"Path":"golang.org/x/vuln/cmd/govulncheck"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []moduleRequirement{{Path: "golang.org/x/vuln", Version: "v1.7.0"}}
+	if !reflect.DeepEqual(requirements, want) {
+		t.Fatalf("requirements = %#v, want %#v", requirements, want)
+	}
+}
+
+func TestReadGoModRejectsToolWithoutVersionedModule(t *testing.T) {
+	t.Parallel()
+
+	_, err := readGoMod(strings.NewReader(`{"Tool":[{"Path":"example.test/tool/cmd/tool"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "no versioned module requirement") {
+		t.Fatalf("readGoMod error = %v, want missing versioned module requirement", err)
+	}
+}
+
 func TestReadGoModRejectsReplacements(t *testing.T) {
 	t.Parallel()
 
@@ -239,6 +264,78 @@ func TestVerifyRejectsReachableTraceOutsideModuleOnlyException(t *testing.T) {
 	}
 }
 
+func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.T) {
+	t.Parallel()
+
+	policy := testBaseline()
+	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	base := `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`
+
+	report, err := verifyPullRequest(
+		policy,
+		testRequirements(),
+		strings.NewReader(base),
+		strings.NewReader(base),
+		now,
+	)
+	if err != nil {
+		t.Fatalf("unchanged finding failed PR verification: %v", err)
+	}
+	if len(report.IntroducedFindings) != 0 {
+		t.Fatalf("introduced findings = %#v, want none", report.IntroducedFindings)
+	}
+
+	_, err = verifyPullRequest(
+		policy,
+		testRequirements(),
+		strings.NewReader(base),
+		strings.NewReader(base+"\n"+`{"finding":{"osv":"GO-2099-0002"}}`),
+		now,
+	)
+	if err == nil || !strings.Contains(err.Error(), "GO-2099-0002") {
+		t.Fatalf("new finding error = %v, want GO-2099-0002", err)
+	}
+}
+
+func TestPullRequestVerificationRejectsReachabilityEscalation(t *testing.T) {
+	t.Parallel()
+
+	policy := testBaseline()
+	policy.VulnerabilityExceptions = []vulnerabilityException{{
+		ID:          "GO-2099-0001",
+		Owner:       "security@example.test",
+		Expires:     "2099-01-01T00:00:00Z",
+		Remediation: "https://example.test/security/GO-2099-0001",
+		Scope:       "module_only",
+	}}
+	base := `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`
+	head := base + "\n" + `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"},{"package":"example.test/one/vulnerable"}]}}`
+	_, err := verifyPullRequest(
+		policy,
+		testRequirements(),
+		strings.NewReader(base),
+		strings.NewReader(head),
+		time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC),
+	)
+	if err == nil || !strings.Contains(err.Error(), "reachable") {
+		t.Fatalf("reachability escalation error = %v, want reachable", err)
+	}
+}
+
+func TestTrustedModuleRootsAreVersionIndependentAndBoundaryAware(t *testing.T) {
+	t.Parallel()
+
+	roots := []moduleRecord{{Path: "example.test/publisher", License: "MIT", Source: "https://example.test/publisher"}}
+	if err := validateInventory(roots, []moduleRequirement{{Path: "example.test/publisher/module", Version: "v99.0.0"}}); err != nil {
+		t.Fatalf("approved-root version bump failed: %v", err)
+	}
+	for _, path := range []string{"example.test/unreviewed", "example.test/publisher-typosquat/module"} {
+		if err := validateInventory(roots, []moduleRequirement{{Path: path, Version: "v1.0.0"}}); err == nil {
+			t.Fatalf("unapproved module %q passed trusted-root validation", path)
+		}
+	}
+}
+
 func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 	t.Parallel()
 
@@ -249,7 +346,9 @@ func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN)",
-		"golang.org/x/vuln/cmd/govulncheck@v1.6.0",
+		"$(GO) tool govulncheck",
+		"security-pr-verify:",
+		"base-vulnerability-output",
 		"govulncheck.stderr",
 		"$(GO) mod edit -json",
 		"$(GO) run ./tools/supplychainverify",
@@ -264,23 +363,23 @@ func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(pullRequest), "make security-verify") {
-		t.Fatal("PR workflow does not run security-verify")
+	if !strings.Contains(string(pullRequest), "make security-pr-verify") {
+		t.Fatal("PR workflow does not run security-pr-verify")
 	}
 
 	master, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "master.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{
-		"id: security_verify",
-		"SECURITY_REPORT=security-artifacts/security-verify.json make security-verify",
-		"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
-		"steps.security_verify.outcome == 'failure'",
-	} {
-		if !strings.Contains(string(master), expected) {
-			t.Fatalf("master workflow does not contain %q", expected)
-		}
+	if strings.Contains(string(master), "security-verify") {
+		t.Fatal("master workflow still runs security verification")
+	}
+	scheduled, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "security-scheduled.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(scheduled), "make security-verify") {
+		t.Fatal("scheduled workflow does not run security-verify")
 	}
 }
 
@@ -362,14 +461,16 @@ func TestValidateBaselineRejectsSecurityContractDrift(t *testing.T) {
 		mutate func(*baseline)
 		want   string
 	}{
-		{name: "wrong version", mutate: func(value *baseline) { value.Version = 2 }, want: "version"},
+		{name: "wrong version", mutate: func(value *baseline) { value.Version = 1 }, want: "version"},
 		{name: "no allowed licenses", mutate: func(value *baseline) { value.AllowedLicenses = nil }, want: "no allowed licenses"},
 		{name: "empty allowed license", mutate: func(value *baseline) { value.AllowedLicenses[0] = " " }, want: "empty allowed license"},
 		{name: "duplicate allowed license", mutate: func(value *baseline) { value.AllowedLicenses = append(value.AllowedLicenses, "MIT") }, want: "repeats allowed license"},
-		{name: "incomplete module", mutate: func(value *baseline) { value.DirectModules[0].Version = "" }, want: "incomplete direct module"},
-		{name: "duplicate module", mutate: func(value *baseline) { value.DirectModules = append(value.DirectModules, value.DirectModules[0]) }, want: "repeats direct module"},
-		{name: "unapproved license", mutate: func(value *baseline) { value.DirectModules[0].License = "GPL-3.0" }, want: "unapproved license"},
-		{name: "invalid module source", mutate: func(value *baseline) { value.DirectModules[0].Source = "http://example.test/one" }, want: "invalid source"},
+		{name: "incomplete module root", mutate: func(value *baseline) { value.TrustedModuleRoots[0].Path = "" }, want: "incomplete trusted module root"},
+		{name: "duplicate module root", mutate: func(value *baseline) {
+			value.TrustedModuleRoots = append(value.TrustedModuleRoots, value.TrustedModuleRoots[0])
+		}, want: "repeats trusted module root"},
+		{name: "unapproved license", mutate: func(value *baseline) { value.TrustedModuleRoots[0].License = "GPL-3.0" }, want: "unapproved license"},
+		{name: "invalid module source", mutate: func(value *baseline) { value.TrustedModuleRoots[0].Source = "http://example.test/one" }, want: "invalid source"},
 		{name: "invalid exception id", mutate: func(value *baseline) {
 			exception := validException()
 			exception.ID = "CVE-2099-0001"
@@ -407,7 +508,7 @@ func TestValidateBaselineRejectsSecurityContractDrift(t *testing.T) {
 	}
 }
 
-func TestValidateInventoryRejectsEveryDriftShape(t *testing.T) {
+func TestValidateInventoryRejectsDuplicatesAndUntrustedRoots(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -416,14 +517,12 @@ func TestValidateInventoryRejectsEveryDriftShape(t *testing.T) {
 		want         string
 	}{
 		{name: "duplicate direct module", requirements: append(testRequirements(), testRequirements()[0]), want: "repeats direct module"},
-		{name: "module missing from baseline", requirements: append(testRequirements(), moduleRequirement{Path: "example.test/new", Version: "v1.2.3"}), want: "missing from the reviewed baseline"},
-		{name: "version drift", requirements: []moduleRequirement{{Path: "example.test/one", Version: "v9.9.9"}, testRequirements()[1]}, want: "version differs"},
-		{name: "baseline module absent from go.mod", requirements: testRequirements()[:1], want: "is not in go.mod"},
+		{name: "module outside trusted roots", requirements: append(testRequirements(), moduleRequirement{Path: "example.test/new", Version: "v1.2.3"}), want: "outside the reviewed trusted module roots"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if err := validateInventory(testBaseline().DirectModules, test.requirements); err == nil || !strings.Contains(err.Error(), test.want) {
+			if err := validateInventory(testBaseline().TrustedModuleRoots, test.requirements); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateInventory error = %v, want %q", err, test.want)
 			}
 		})
@@ -555,7 +654,7 @@ func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
 		}
 		return path
 	}
-	baselinePath := write("baseline.json", `{"version":1,"allowed_licenses":["MIT"],"direct_modules":[{"path":"example.test/one","version":"v1.2.3","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`)
+	baselinePath := write("baseline.json", `{"version":2,"allowed_licenses":["MIT"],"trusted_module_roots":[{"path":"example.test/one","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`)
 	goModPath := write("go-mod.json", `{"Require":[{"Path":"example.test/one","Version":"v1.2.3"}]}`)
 	vulnerabilityPath := write("vulnerabilities.json", "")
 	components := componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: "pass"}
@@ -596,11 +695,11 @@ func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
 
 func testBaseline() baseline {
 	return baseline{
-		Version:         1,
+		Version:         2,
 		AllowedLicenses: []string{"Apache-2.0", "MIT"},
-		DirectModules: []moduleRecord{
-			{Path: "example.test/one", Version: "v1.2.3", License: "MIT", Source: "https://example.test/one"},
-			{Path: "example.test/two", Version: "v2.3.4", License: "Apache-2.0", Source: "https://example.test/two"},
+		TrustedModuleRoots: []moduleRecord{
+			{Path: "example.test/one", License: "MIT", Source: "https://example.test/one"},
+			{Path: "example.test/two", License: "Apache-2.0", Source: "https://example.test/two"},
 		},
 	}
 }

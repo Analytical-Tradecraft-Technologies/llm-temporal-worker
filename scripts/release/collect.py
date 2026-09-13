@@ -456,20 +456,46 @@ def command_rendered_manifests(args: argparse.Namespace) -> None:
 def command_dependency_license(args: argparse.Namespace) -> None:
     baseline_path = Path(args.baseline)
     baseline = require_mapping(read_json(baseline_path), "dependency baseline")
-    direct_modules = require_list(baseline.get("direct_modules"), "dependency baseline direct_modules")
-    normalized: list[dict[str, str]] = []
-    for module in direct_modules:
-        record = require_mapping(module, "dependency baseline module")
+    trusted_roots = require_list(baseline.get("trusted_module_roots"), "dependency baseline trusted_module_roots")
+    normalized_roots: list[dict[str, str]] = []
+    seen_roots: set[str] = set()
+    for module in trusted_roots:
+        record = require_mapping(module, "dependency baseline trusted module root")
         path = require_string(record.get("path"), "dependency module path")
-        version = require_string(record.get("version"), "dependency module version")
         license_name = require_string(record.get("license"), "dependency module license")
         source = require_string(record.get("source"), "dependency module source")
-        if not SAFE_MODULE.fullmatch(path) or not SAFE_VERSION.fullmatch(version) or not SAFE_LICENSE.fullmatch(license_name):
+        if not SAFE_MODULE.fullmatch(path) or not SAFE_LICENSE.fullmatch(license_name):
             fail(f"dependency module has an invalid allowlisted value: {path}")
+        if path in seen_roots:
+            fail(f"dependency baseline repeats trusted module root: {path}")
+        seen_roots.add(path)
         require_safe_https_url(source, f"dependency module source for {path}")
-        normalized.append({"path": path, "version": version, "license": license_name, "source": source})
+        normalized_roots.append({"path": path, "license": license_name, "source": source})
+    if not normalized_roots:
+        fail("dependency baseline has no trusted module roots")
+
+    go_mod = require_mapping(read_json(Path(args.go_mod)), "go.mod inventory")
+    requirements = require_list(go_mod.get("Require"), "go.mod inventory Require")
+    normalized: list[dict[str, str]] = []
+    seen_modules: set[str] = set()
+    for requirement in requirements:
+        record = require_mapping(requirement, "go.mod requirement")
+        if record.get("Indirect") is True:
+            continue
+        path = require_string(record.get("Path"), "go.mod requirement path")
+        version = require_string(record.get("Version"), "go.mod requirement version")
+        if not SAFE_MODULE.fullmatch(path) or not SAFE_VERSION.fullmatch(version):
+            fail(f"go.mod requirement has an invalid value: {path}")
+        if path in seen_modules:
+            fail(f"go.mod inventory repeats direct module: {path}")
+        seen_modules.add(path)
+        matches = [root for root in normalized_roots if path == root["path"] or path.startswith(root["path"] + "/")]
+        if not matches:
+            fail(f"direct module is outside the reviewed trusted module roots: {path}")
+        trusted = max(matches, key=lambda root: len(root["path"]))
+        normalized.append({"path": path, "version": version, "license": trusted["license"], "source": trusted["source"]})
     if not normalized:
-        fail("dependency baseline has no direct modules")
+        fail("go.mod inventory has no direct modules")
     write_json(
         Path(args.output),
         {
@@ -623,6 +649,7 @@ def parser() -> argparse.ArgumentParser:
 
     dependencies = commands.add_parser("dependency-license")
     dependencies.add_argument("--baseline", required=True)
+    dependencies.add_argument("--go-mod", required=True)
     dependencies.add_argument("--output", required=True)
     dependencies.set_defaults(handler=command_dependency_license)
 

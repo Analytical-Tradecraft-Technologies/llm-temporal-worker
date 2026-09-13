@@ -611,6 +611,14 @@ func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 	if err := os.Remove(filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])); err != nil {
 		t.Fatal(err)
 	}
+	legacyVulnerabilities := []byte(`{"schema_version":1,"kind":"vulnerability_results","status":"pass","components":{"test":"pass","source":"pass","go_mod":"pass","vulnerability":"pass"},"direct_module_count":1,"findings":[],"approved_findings":[],"redacted":true}` + "\n")
+	legacyVulnerabilityPath := filepath.Join(artifactDir, canonicalArtifactPaths["vulnerability_results"])
+	if err := os.WriteFile(legacyVulnerabilityPath, legacyVulnerabilities, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifacts["vulnerability_results"] = map[string]any{
+		"path": canonicalArtifactPaths["vulnerability_results"], "sha256": sha256Hex(legacyVulnerabilities), "bytes": len(legacyVulnerabilities), "redacted": true,
+	}
 	if err := os.WriteFile(evidencePath, append(mustJSON(t, record), '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -673,11 +681,6 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory, imageReference, imag
 		"dependency_license": map[string]any{
 			"schema_version": 1, "kind": "dependency_license", "status": "pass", "baseline_sha256": digest,
 			"direct_modules": []any{map[string]any{"path": "github.com/example/module", "version": "v1.0.0", "license": "MIT", "source": "https://github.com/example/module"}}, "redacted": true,
-		},
-		"vulnerability_results": map[string]any{
-			"schema_version": 1, "kind": "vulnerability_results", "status": "pass",
-			"components":          map[string]string{"test": "pass", "source": "pass", "go_mod": "pass", "vulnerability": "pass"},
-			"direct_module_count": 1, "findings": []string{}, "approved_findings": []string{}, "redacted": true,
 		},
 		"sbom": map[string]any{
 			"bomFormat": "CycloneDX", "specVersion": "1.5",

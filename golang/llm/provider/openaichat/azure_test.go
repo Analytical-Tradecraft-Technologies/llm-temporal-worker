@@ -22,7 +22,7 @@ func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 			Request:    request,
 		}, nil
 	})
-	endpoint := "http://127.0.0.1"
+	endpoint := "https://127.0.0.1"
 	client, err := NewAzureClient(AzureClientConfig{Endpoint: endpoint, APIVersion: "2025-01-01", APIKey: "test-azure-key", HTTPClient: &http.Client{Transport: transport}})
 	if err != nil {
 		t.Fatal(err)

@@ -33,7 +33,7 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 		}, nil
 	})
 	client, err := NewAzureClient(AzureClientConfig{
-		Endpoint:   "http://127.0.0.1",
+		Endpoint:   "https://127.0.0.1",
 		APIVersion: "v1",
 		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: transport},

@@ -3,5 +3,8 @@
 /.github/** @mfow
 /.github/CODEOWNERS @mfow
 
+# Dependency trust and vulnerability exceptions are security policy.
+/golang/tools/supplychainverify/baseline.json @mfow
+
 # Require Michael Fowlie's approval for the repository license.
 /LICENSE @mfow
