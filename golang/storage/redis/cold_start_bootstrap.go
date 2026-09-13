@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -64,14 +65,46 @@ func ValidateBudgetColdStartManifest(manifest BudgetManifest) error {
 }
 
 // Redis scripts are atomic with respect to other clients. The script creates
-// the immutable manifest, active pointer, and first coordination record only
-// when all three keys are absent. Any other shape is accepted only when all
-// bytes match the canonical requested state exactly.
+// the immutable manifest, active pointer, initial coordination record, and
+// budget windows only when the complete key set is absent. Replay preserves
+// the immutable bytes while accepting counters changed by legitimate budget
+// activity and later, schema-valid coordination records for the same active
+// generation.
 const budgetColdStartScript = `
 local function keytype(key)
   local value = redis.call('TYPE', key)
   if type(value) == 'table' then return value.ok end
   return value
+end
+local max_safe = tonumber(ARGV[6])
+local max_event_bytes = tonumber(ARGV[7])
+local function integer(value)
+  if type(value) ~= 'string' or string.match(value, '^0[0-9]') then return nil end
+  local parsed = tonumber(value)
+  if not parsed or parsed < 0 or parsed > max_safe or parsed ~= math.floor(parsed) then return nil end
+  return parsed
+end
+local function digest(value)
+  return type(value) == 'string' and #value == 64 and string.match(value, '^[0-9a-f]+$') ~= nil
+end
+local allowed_kinds = {
+  reserve=true, reconcile=true, release=true, policy_refresh=true,
+  horizon_advance=true, generation_switch=true, denial=true
+}
+local function valid_later_event(payload, generation)
+  if type(payload) ~= 'string' or #payload == 0 or #payload > max_event_bytes then return false end
+  local decoded, event = pcall(cjson.decode, payload)
+  if not decoded or type(event) ~= 'table' or event.schema ~= 'budget-event/v1' or not allowed_kinds[event.kind] then return false end
+  if event.generation_id ~= generation then return false end
+  if type(event.revision) ~= 'number' or event.revision < 0 or event.revision > max_safe or event.revision ~= math.floor(event.revision) then return false end
+  if type(event.nano_delta) ~= 'number' or event.nano_delta < 0 or event.nano_delta > max_safe or event.nano_delta ~= math.floor(event.nano_delta) then return false end
+  if type(event.occurred_at) ~= 'string' or not string.match(event.occurred_at, '^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d') then return false end
+  if event.operation_hash ~= nil and not digest(event.operation_hash) then return false end
+  if event.member_hash ~= nil and not digest(event.member_hash) then return false end
+  if event.kind == 'reserve' or event.kind == 'reconcile' or event.kind == 'release' then
+    if not digest(event.operation_hash) or not digest(event.member_hash) then return false end
+  end
+  return true
 end
 local windows = cjson.decode(ARGV[5])
 if #windows ~= #KEYS - 3 then return 0 end
@@ -93,23 +126,37 @@ if redis.call('GET', KEYS[1]) ~= ARGV[2] or redis.call('GET', KEYS[2]) ~= ARGV[1
 for index, fields in ipairs(windows) do
   local key = KEYS[index + 3]
   if keytype(key) ~= 'hash' or redis.call('HLEN', key) ~= #fields / 2 then return 0 end
+  local mutable = {}
   for field = 1, #fields, 2 do
-    if redis.call('HGET', key, fields[field]) ~= fields[field + 1] then return 0 end
+    local name = fields[field]
+    local actual = redis.call('HGET', key, name)
+    if name == 'reserved_nano_usd' or name == 'accounted_nano_usd' then
+      mutable[name] = integer(actual)
+      if not mutable[name] then return 0 end
+    elseif actual ~= fields[field + 1] then
+      return 0
+    end
   end
+  local limit = integer(redis.call('HGET', key, 'limit_nano_usd'))
+  local reserved = mutable.reserved_nano_usd
+  local accounted = mutable.accounted_nano_usd
+  if not limit or reserved > limit or accounted > limit - reserved then return 0 end
 end
-local info = redis.call('XINFO', 'STREAM', KEYS[3])
-local function info_value(name)
-  for index = 1, #info, 2 do
-    if info[index] == name then return info[index + 1] end
+local bootstrap = redis.call('XRANGE', KEYS[3], ARGV[4], ARGV[4], 'COUNT', 1)
+if #bootstrap ~= 1 or bootstrap[1][1] ~= ARGV[4] then return 0 end
+local bootstrap_fields = bootstrap[1][2]
+if #bootstrap_fields ~= 2 or bootstrap_fields[1] ~= 'event' or bootstrap_fields[2] ~= ARGV[3] then return 0 end
+local pointer = cjson.decode(ARGV[2])
+local cursor = '(' .. ARGV[4]
+while true do
+  local later = redis.call('XRANGE', KEYS[3], cursor, '+', 'COUNT', 256)
+  if #later == 0 then break end
+  for _, row in ipairs(later) do
+    local fields = row[2]
+    if #fields ~= 2 or fields[1] ~= 'event' or not valid_later_event(fields[2], pointer.generation_id) then return 0 end
   end
-  return nil
+  cursor = '(' .. later[#later][1]
 end
-if tonumber(info_value('length')) ~= 1 or tonumber(info_value('entries-added')) ~= 1 or tonumber(info_value('groups')) ~= 0 then return 0 end
-if info_value('last-generated-id') ~= ARGV[4] or info_value('max-deleted-entry-id') ~= '0-0' then return 0 end
-local rows = redis.call('XRANGE', KEYS[3], '-', '+', 'COUNT', 2)
-if #rows ~= 1 or rows[1][1] ~= ARGV[4] then return 0 end
-local fields = rows[1][2]
-if #fields ~= 2 or fields[1] ~= 'event' or fields[2] ~= ARGV[3] then return 0 end
 return 2
 `
 
@@ -138,7 +185,8 @@ func BootstrapBudgetColdStart(ctx context.Context, options BudgetColdStartOption
 		keys = append(keys, options.Keys.BudgetStatusWindowKey(options.Manifest.GenerationID, member))
 	}
 	result, err := options.Client.Eval(ctx, budgetColdStartScript, keys,
-		string(manifestBytes), string(pointerBytes), string(eventBytes), BudgetColdStartStreamID, string(windowBytes)).Int64()
+		string(manifestBytes), string(pointerBytes), string(eventBytes), BudgetColdStartStreamID, string(windowBytes),
+		int64(pricing.NanoUSDSafeLimit), MaxBudgetStreamEventBytes).Int64()
 	if err != nil {
 		return BudgetColdStartReceipt{}, fmt.Errorf("execute budget cold-start transition: %w", err)
 	}

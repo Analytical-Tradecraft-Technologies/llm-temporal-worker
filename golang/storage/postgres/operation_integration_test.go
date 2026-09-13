@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,10 +45,25 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 	repository, ctx, cleanup := operationIntegrationRepository(t)
 	defer cleanup()
 	id := "operation-integration-" + time.Now().UTC().Format("20060102150405.000000000")
-	request := admission.BeginRequest{ID: id, ScopeKey: "integration/project", RequestDigest: admission.Digest([]byte("request")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`)}
+	request := admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "integration/project", RequestDigest: admission.Digest([]byte("request")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`)}
 	first, err := repository.Begin(ctx, request)
 	if err != nil {
 		t.Fatal(err)
+	}
+	operations, err := repository.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identityVersion int
+	var actorHMAC, operationKeyHMAC []byte
+	if err := repository.Pool.QueryRow(ctx, "SELECT operation_identity_version, operation_actor_hmac, operation_key_hmac FROM "+operations+" WHERE operation_id=$1", operationUUID(id)).Scan(&identityVersion, &actorHMAC, &operationKeyHMAC); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("01234567890123456789012345678901")
+	expectedActor := operationHMAC(key, "operation-actor", []byte(request.Actor))
+	expectedKey := operationHMAC(key, "operation-key-v2", []byte(request.Actor+"\x00"+defaultAPIVersion+"\x00"+request.OperationKey))
+	if identityVersion != 2 || !bytes.Equal(actorHMAC, expectedActor[:]) || !bytes.Equal(operationKeyHMAC, expectedKey[:]) {
+		t.Fatalf("strict identity = version %d actor %x key %x", identityVersion, actorHMAC, operationKeyHMAC)
 	}
 	replay, err := repository.Begin(ctx, request)
 	if err != nil || !replay.Existing {
@@ -59,14 +75,44 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 	if replay.Operation.RequestDigest != request.RequestDigest || replay.Operation.ExpiresAt.IsZero() || !replay.Operation.ExpiresAt.Equal(expectedExpiry) || replay.Operation.LeaseUntil.IsZero() || replay.Operation.ReservedCostUSD == nil || replay.Operation.ReservedCostUSD.Cmp(request.ReservationUSD) != 0 {
 		t.Fatalf("replay metadata = %#v, want durable expiry, lease, digest, and reservation", replay.Operation)
 	}
-	request.RequestDigest = admission.Digest([]byte("different"))
-	if _, err := repository.Begin(ctx, request); !errors.Is(err, admission.ErrOperationConflict) {
-		t.Fatalf("conflict=%v", err)
+	otherActor := request
+	otherActor.ID = id + "-other-actor"
+	otherActor.Actor = "other-postgres-test"
+	if distinct, err := repository.Begin(ctx, otherActor); err != nil || distinct.Existing {
+		t.Fatalf("actor-scoped identity collided: %#v, %v", distinct, err)
 	}
+	otherAPI := request
+	otherAPI.ID = id + "-other-api"
+	otherAPI.APIVersion = "llm.generate.v2"
+	if distinct, err := repository.Begin(ctx, otherAPI); err != nil || distinct.Existing {
+		t.Fatalf("API-scoped identity collided: %#v, %v", distinct, err)
+	}
+	request.ImmutableFacts = []byte(`{"generation_id":"generation-1","incarnation_id":"incarnation-1","expires_at":"2026-08-10T13:00:00Z"}`)
+	factsReplay, err := repository.Begin(ctx, request)
+	if err != nil || string(factsReplay.Operation.ImmutableFacts) == "" {
+		t.Fatalf("persist immutable reservation facts: %#v, %v", factsReplay.Operation, err)
+	}
+	request.ImmutableFacts = []byte(`{"generation_id":"generation-2"}`)
+	if _, err := repository.Begin(ctx, request); !errors.Is(err, admission.ErrOperationConflict) {
+		t.Fatalf("immutable reservation facts conflict = %v", err)
+	}
+	request.ImmutableFacts = nil
+	request.RequestDigest = admission.Digest([]byte("different"))
+	request.ID = id + "-different-surrogate"
+	if _, err := repository.Begin(ctx, request); !errors.Is(err, admission.ErrOperationConflict) {
+		t.Fatalf("logical identity accepted a different request digest: %v", err)
+	}
+	request.ID = id
 	request.RequestDigest = admission.Digest([]byte("request"))
 	request.ScopeKey = "other/project"
 	if _, err := repository.Begin(ctx, request); !errors.Is(err, admission.ErrOperationConflict) {
 		t.Fatalf("operation-id conflict=%v", err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{
+		OperationID: id, DispatchToken: first.Operation.DispatchToken,
+		LeaseUntil: time.Now().UTC().Add(-time.Minute),
+	}); !errors.Is(err, admission.ErrInvalidTransition) {
+		t.Fatalf("expired dispatch lease was accepted: %v", err)
 	}
 	request.ScopeKey = "integration/project"
 	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "primary", EndpointID: "test", Provider: "fixture"}}); err != nil {
@@ -98,14 +144,160 @@ func TestOperationReplayConflictAndResult(t *testing.T) {
 	}
 }
 
+func TestOperationPersistsCatalogCostVersion(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	id := "operation-catalog-cost-" + time.Now().UTC().Format("20060102150405.000000000")
+	started, err := repository.Begin(ctx, admission.BeginRequest{
+		ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "integration/catalog-cost",
+		RequestDigest: admission.Digest([]byte("catalog-cost-request")), ReservationUSD: pricing.MustUSD("1"),
+		ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := admission.AttemptFacts{
+		RouteID: "catalog-route", EndpointID: "catalog-endpoint", Provider: "fixture",
+		ResolvedModel: "catalog-model", Dispatch: admission.Accepted, AttemptNumber: 1,
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{
+		OperationID: id, DispatchToken: started.Operation.DispatchToken, Attempt: attempt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := &state.BlobRef{Digest: admission.Digest([]byte("catalog-cost-result")), Size: 1, Media: "application/json"}
+	complete := admission.CompleteRequest{
+		OperationID: id, DispatchToken: started.Operation.DispatchToken, ResultRef: result,
+		ActualCostUSD: pricing.MustUSD("0.125"), CostStatus: "exact", CostMethod: "catalog_usage",
+		Attempt: attempt,
+	}
+	if err := repository.Complete(ctx, complete); err == nil || !strings.Contains(err.Error(), "requires a catalog version") {
+		t.Fatalf("missing catalog version completion error = %v", err)
+	}
+	complete.CostCatalogVersion = "catalog-v1"
+	if err := repository.Complete(ctx, complete); err != nil {
+		t.Fatal(err)
+	}
+
+	operations, err := repository.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := repository.Namespace.Render("operation_attempts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operationCatalog, attemptCatalog string
+	if err := repository.Pool.QueryRow(ctx, "SELECT cost_catalog_version FROM "+operations+" WHERE operation_id=$1", operationUUID(id)).Scan(&operationCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Pool.QueryRow(ctx, "SELECT cost_catalog_version FROM "+attempts+" WHERE operation_id=$1 AND attempt_number=1", operationUUID(id)).Scan(&attemptCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if operationCatalog != complete.CostCatalogVersion || attemptCatalog != complete.CostCatalogVersion {
+		t.Fatalf("catalog versions = operation %q attempt %q, want %q", operationCatalog, attemptCatalog, complete.CostCatalogVersion)
+	}
+
+	failedID := id + "-failed"
+	failed, err := repository.Begin(ctx, admission.BeginRequest{
+		ID: failedID, OperationKey: failedID, Actor: "postgres-test", ScopeKey: "integration/catalog-cost",
+		RequestDigest: admission.Digest([]byte("catalog-cost-failure")), ReservationUSD: pricing.MustUSD("1"),
+		ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.MarkDispatching(ctx, admission.DispatchRequest{
+		OperationID: failedID, DispatchToken: failed.Operation.DispatchToken, Attempt: attempt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failure := admission.FailRequest{
+		OperationID: failedID, DispatchToken: failed.Operation.DispatchToken,
+		Certainty: admission.Accepted, IncurredCostUSD: pricing.MustUSD("0.25"), PostResponse: true,
+		CostStatus: "exact", CostMethod: "catalog_usage", Attempt: attempt, Reason: "post_response_validation_failed",
+	}
+	if err := repository.Fail(ctx, failure); err == nil || !strings.Contains(err.Error(), "requires a catalog version") {
+		t.Fatalf("missing catalog version failure error = %v", err)
+	}
+	failure.CostCatalogVersion = "catalog-v2"
+	if err := repository.Fail(ctx, failure); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Pool.QueryRow(ctx, "SELECT cost_catalog_version FROM "+operations+" WHERE operation_id=$1", operationUUID(failedID)).Scan(&operationCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Pool.QueryRow(ctx, "SELECT cost_catalog_version FROM "+attempts+" WHERE operation_id=$1 AND attempt_number=1", operationUUID(failedID)).Scan(&attemptCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if operationCatalog != failure.CostCatalogVersion || attemptCatalog != failure.CostCatalogVersion {
+		t.Fatalf("failed catalog versions = operation %q attempt %q, want %q", operationCatalog, attemptCatalog, failure.CostCatalogVersion)
+	}
+}
+func TestOperationStoresContentFreeManifestAndEncryptedCanonicalPayload(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	id := "operation-payload-" + time.Now().UTC().Format("20060102150405.000000000")
+	payload := []byte(`{"append":[{"actor":"human","content":[{"text":"prompt-plaintext-secret","type":"text"}]}],"api_version":"llm.temporal/v1","context":{"actor":"actor-secret","project":"project-plaintext-secret","tenant":"tenant-plaintext-secret"},"operation_key":"operation-secret","settings_patch":{"model":{"set":"settings-model-secret"},"tools":{"set":[{"description":"tool-plaintext-secret","input_schema":{"type":"object"},"name":"secret_tool"}]}}}`)
+	digest := admission.Digest(payload)
+	manifest, err := canonicalOperationRequestManifest(payload, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "tenant-plaintext-secret/project-plaintext-secret",
+		RequestDigest: digest, ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().Add(time.Hour),
+		OperationKind: "generate", APIVersion: "llm.temporal/v1", RequestSchemaVersion: 1,
+		RequestManifest: manifest, RequestPayload: payload}
+	if _, err := repository.Begin(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	operations, err := repository.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedManifest string
+	var payloadSHA []byte
+	var payloadBytes int64
+	var payloadReference string
+	var ciphertext []byte
+	var keyID string
+	var scopeID uuid.UUID
+	if err := repository.Pool.QueryRow(ctx, "SELECT request_manifest_jsonb::text, request_payload_sha256, request_payload_byte_length, request_payload_reference, request_inline_ciphertext, request_key_id, scope_id FROM "+operations+" WHERE operation_id=$1", operationUUID(id)).Scan(&persistedManifest, &payloadSHA, &payloadBytes, &payloadReference, &ciphertext, &keyID, &scopeID); err != nil {
+		t.Fatal(err)
+	}
+	for _, plaintext := range []string{"prompt-plaintext-secret", "settings-model-secret", "tool-plaintext-secret", "secret_tool", "tenant-plaintext-secret", "project-plaintext-secret"} {
+		if strings.Contains(persistedManifest, plaintext) {
+			t.Fatalf("request_manifest_jsonb leaked %q: %s", plaintext, persistedManifest)
+		}
+		if !bytes.Contains(payload, []byte(plaintext)) {
+			t.Fatalf("fixture payload does not cover plaintext %q", plaintext)
+		}
+	}
+	if !bytes.Equal(payloadSHA, digest[:]) || payloadBytes != int64(len(payload)) || payloadReference != "inline" {
+		t.Fatalf("content-free request metadata = sha %x bytes %d ref %q", payloadSHA, payloadBytes, payloadReference)
+	}
+	envelopeContext := EnvelopeContext{ScopeID: scopeID, OperationID: operationUUID(id), PayloadKind: "operation-request", Digest: digest}
+	contextHash, err := contextDigest(envelopeContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := repository.Keys.Open(envelopeContext, SealedValue{KeyID: keyID, Ciphertext: ciphertext, ContextHash: contextHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(replayed, payload) {
+		t.Fatalf("decrypted canonical request changed:\n got %s\nwant %s", replayed, payload)
+	}
+}
+
 func TestDispatchingGetHydratesEndpointForRestartRecovery(t *testing.T) {
 	repository, ctx, cleanup := operationIntegrationRepository(t)
 	defer cleanup()
 	id := "operation-dispatching-restart-" + uuid.NewString()
-	started, err := repository.Begin(ctx, admission.BeginRequest{
-		ID: id, ScopeKey: "dispatching-restart/project", RequestDigest: admission.Digest([]byte(id)),
-		ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour),
-	})
+	started, err := repository.Begin(ctx, admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "dispatching-restart/project", RequestDigest: admission.Digest([]byte(id)),
+		ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,10 +330,8 @@ func TestProviderOperationTamperingFailsClosed(t *testing.T) {
 
 	newPending := func(providerID string) string {
 		id := "operation-provider-integrity-" + uuid.NewString()
-		started, err := repository.Begin(ctx, admission.BeginRequest{
-			ID: id, ScopeKey: "provider-integrity/project", RequestDigest: admission.Digest([]byte(id)),
-			ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour),
-		})
+		started, err := repository.Begin(ctx, admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "provider-integrity/project", RequestDigest: admission.Digest([]byte(id)),
+			ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -199,7 +389,7 @@ func TestOperationRetryPersistsEveryAttempt(t *testing.T) {
 	repository, ctx, cleanup := operationIntegrationRepository(t)
 	defer cleanup()
 	id := "operation-retry-" + time.Now().UTC().Format("20060102150405.000000000")
-	request := admission.BeginRequest{ID: id, ScopeKey: "retry/project", RequestDigest: admission.Digest([]byte("retry")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`)}
+	request := admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "retry/project", RequestDigest: admission.Digest([]byte("retry")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`)}
 	first, err := repository.Begin(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -218,13 +408,17 @@ func TestOperationRetryPersistsEveryAttempt(t *testing.T) {
 	if err != nil || len(attempts) != 2 || attempts[0].AttemptNumber != 1 || attempts[1].AttemptNumber != 2 {
 		t.Fatalf("retry attempts=%#v err=%v", attempts, err)
 	}
+	recovered, err := repository.Get(ctx, id)
+	if err != nil || recovered.Attempt.AttemptNumber != 2 || recovered.Attempt.RouteID != "primary" {
+		t.Fatalf("recovered latest attempt=%#v err=%v", recovered.Attempt, err)
+	}
 }
 
 func TestAcceptedFailurePersistsUnknownCost(t *testing.T) {
 	repository, ctx, cleanup := operationIntegrationRepository(t)
 	defer cleanup()
 	id := "operation-accepted-failure-" + time.Now().UTC().Format("20060102150405.000000000")
-	request := admission.BeginRequest{ID: id, ScopeKey: "failure/project", RequestDigest: admission.Digest([]byte("failure")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`)}
+	request := admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "failure/project", RequestDigest: admission.Digest([]byte("failure")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().Add(time.Hour), RequestManifest: []byte(`{"model":"test"}`)}
 	first, err := repository.Begin(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -254,11 +448,11 @@ func TestOperationValidationAndRetryGuards(t *testing.T) {
 		request admission.BeginRequest
 	}{
 		{name: "missing id", request: admission.BeginRequest{ScopeKey: "tenant/project", ExpiresAt: future}},
-		{name: "expired", request: admission.BeginRequest{ID: "expired", ScopeKey: "tenant/project", ExpiresAt: time.Now().UTC().Add(-time.Minute)}},
-		{name: "unsupported operation kind", request: admission.BeginRequest{ID: "unsupported", ScopeKey: "tenant/project", OperationKind: "query", ExpiresAt: future}},
-		{name: "invalid manifest json", request: admission.BeginRequest{ID: "invalid-json", ScopeKey: "tenant/project", RequestManifest: []byte(`{"model":`), ExpiresAt: future}},
-		{name: "non-object manifest", request: admission.BeginRequest{ID: "array-manifest", ScopeKey: "tenant/project", RequestManifest: []byte(`["model"]`), ExpiresAt: future}},
-		{name: "empty scope component", request: admission.BeginRequest{ID: "empty-scope", ScopeKey: "tenant\x00", ExpiresAt: future}},
+		{name: "expired", request: admission.BeginRequest{ID: "expired", OperationKey: "expired", Actor: "postgres-test", ScopeKey: "tenant/project", ExpiresAt: time.Now().UTC().Add(-time.Minute)}},
+		{name: "unsupported operation kind", request: admission.BeginRequest{ID: "unsupported", OperationKey: "unsupported", Actor: "postgres-test", ScopeKey: "tenant/project", OperationKind: "query", ExpiresAt: future}},
+		{name: "invalid manifest json", request: admission.BeginRequest{ID: "invalid-json", OperationKey: "invalid-json", Actor: "postgres-test", ScopeKey: "tenant/project", RequestManifest: []byte(`{"model":`), ExpiresAt: future}},
+		{name: "non-object manifest", request: admission.BeginRequest{ID: "array-manifest", OperationKey: "array-manifest", Actor: "postgres-test", ScopeKey: "tenant/project", RequestManifest: []byte(`["model"]`), ExpiresAt: future}},
+		{name: "empty scope component", request: admission.BeginRequest{ID: "empty-scope", OperationKey: "empty-scope", Actor: "postgres-test", ScopeKey: "tenant\x00", ExpiresAt: future}},
 	}
 	for _, test := range invalid {
 		t.Run(test.name, func(t *testing.T) {
@@ -269,14 +463,11 @@ func TestOperationValidationAndRetryGuards(t *testing.T) {
 	}
 
 	id := "operation-guards-" + time.Now().UTC().Format("20060102150405.000000000")
-	request := admission.BeginRequest{
-		ID:             id,
-		ScopeKey:       "compact-tenant",
+	request := admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "compact-tenant",
 		RequestDigest:  admission.Digest([]byte("compact-request")),
 		ReservationUSD: pricing.MustUSD("1.25"),
 		OperationKind:  "compact",
-		ExpiresAt:      future,
-	}
+		ExpiresAt:      future}
 	started, err := repository.Begin(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -363,7 +554,7 @@ func TestRejectedFailurePersistsExactCostAndSafeReason(t *testing.T) {
 	defer cleanup()
 
 	id := "operation-rejected-failure-" + time.Now().UTC().Format("20060102150405.000000000")
-	request := admission.BeginRequest{ID: id, ScopeKey: "failure/rejected", RequestDigest: admission.Digest([]byte("rejected")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}
+	request := admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "failure/rejected", RequestDigest: admission.Digest([]byte("rejected")), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)}
 	started, err := repository.Begin(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -392,6 +583,136 @@ func TestRejectedFailurePersistsExactCostAndSafeReason(t *testing.T) {
 	}
 }
 
+func TestFailBeforeDispatchAtomicallyPersistsTerminalAttemptAndReplays(t *testing.T) {
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	id := "operation-pre-write-failure-" + uuid.NewString()
+	started, err := repository.Begin(ctx, admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "failure/pre-write", RequestDigest: admission.Digest([]byte(id)),
+		ReservationUSD: pricing.MustUSD("0.25"), ExpiresAt: time.Now().UTC().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := admission.FailRequest{
+		OperationID: id, DispatchToken: started.Operation.DispatchToken,
+		Certainty: admission.NotDispatched, Reason: "provider_dispatch_failed",
+		Attempt: admission.AttemptFacts{
+			RouteID: "route-1", EndpointID: "endpoint-1", Provider: "fixture",
+			ResolvedModel: "model-1", ServiceClass: "priority", Dispatch: admission.NotDispatched,
+		},
+	}
+	invalidToken := failure
+	invalidToken.DispatchToken = "wrong-token"
+	if err := repository.FailBeforeDispatch(ctx, invalidToken); !errors.Is(err, admission.ErrInvalidToken) {
+		t.Fatalf("invalid pre-write failure token = %v", err)
+	}
+	unchanged, err := repository.Get(ctx, id)
+	if err != nil || unchanged.State != admission.StateReserved {
+		t.Fatalf("invalid token changed operation = %#v, %v", unchanged, err)
+	}
+	if attempts, err := repository.Attempts(ctx, id); err != nil || len(attempts) != 0 {
+		t.Fatalf("invalid token persisted attempt = %#v, %v", attempts, err)
+	}
+	if err := repository.FailBeforeDispatch(ctx, failure); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := repository.Get(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.State != admission.StateDefiniteFailed || failed.CompletedAt.IsZero() || failed.CostStatus != "exact" || failed.CostMethod != "worker_cache_zero" || failed.ActualCostUSD == nil || failed.ActualCostUSD.Cmp(pricing.MustUSD("0")) != 0 {
+		t.Fatalf("atomic pre-write failure = %#v", failed)
+	}
+	persistedAttempts, err := repository.Attempts(ctx, id)
+	if err != nil || len(persistedAttempts) != 1 || persistedAttempts[0].AttemptNumber != 1 || persistedAttempts[0].RouteID != failure.Attempt.RouteID || persistedAttempts[0].Dispatch != admission.NotDispatched {
+		t.Fatalf("atomic pre-write attempt = %#v, %v", persistedAttempts, err)
+	}
+	if err := repository.FailBeforeDispatch(ctx, failure); err != nil {
+		t.Fatalf("idempotent replay = %v", err)
+	}
+	replayedAttempts, err := repository.Attempts(ctx, id)
+	if err != nil || len(replayedAttempts) != 1 {
+		t.Fatalf("replay duplicated attempt = %#v, %v", replayedAttempts, err)
+	}
+	conflict := failure
+	conflict.Attempt.EndpointID = "different-endpoint"
+	if err := repository.FailBeforeDispatch(ctx, conflict); !errors.Is(err, admission.ErrOperationConflict) {
+		t.Fatalf("divergent replay = %v, want operation conflict", err)
+	}
+
+	attemptRelation, err := repository.Namespace.Render("operation_attempts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attemptState, attemptMethod string
+	if err := repository.Pool.QueryRow(ctx, "SELECT state, COALESCE(cost_method,'') FROM "+attemptRelation+" WHERE operation_id=$1 AND attempt_number=1", operationUUID(id)).Scan(&attemptState, &attemptMethod); err != nil {
+		t.Fatal(err)
+	}
+	if attemptState != "pre_write_failed" || attemptMethod != "definite_uncharged_zero" {
+		t.Fatalf("atomic attempt terminal facts = %q, %q", attemptState, attemptMethod)
+	}
+
+	noProviderID := "operation-no-provider-failure-" + uuid.NewString()
+	noProvider, err := repository.Begin(ctx, admission.BeginRequest{
+		ID: noProviderID, OperationKey: noProviderID, Actor: "postgres-test",
+		ScopeKey: "failure/no-provider", RequestDigest: admission.Digest([]byte(noProviderID)),
+		ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	noProviderFailure := admission.FailRequest{
+		OperationID: noProviderID, DispatchToken: noProvider.Operation.DispatchToken,
+		Certainty: admission.NotDispatched, Reason: "checkpoint_bounds_exceeded",
+		Attempt: admission.AttemptFacts{Dispatch: admission.NotDispatched},
+	}
+	if err := repository.FailBeforeDispatch(ctx, noProviderFailure); err != nil {
+		t.Fatal(err)
+	}
+	noProviderAttempts, err := repository.Attempts(ctx, noProviderID)
+	if err != nil || len(noProviderAttempts) != 1 {
+		t.Fatalf("no-provider attempt = %#v, %v", noProviderAttempts, err)
+	}
+	noProviderAttempt := noProviderAttempts[0]
+	if noProviderAttempt.RouteID != "" || noProviderAttempt.EndpointID != "" ||
+		noProviderAttempt.Provider != "" || noProviderAttempt.ResolvedModel != "" ||
+		noProviderAttempt.ServiceClass != "" {
+		t.Fatalf("pre-dispatch rejection persisted fallback provider identity: %#v", noProviderAttempt)
+	}
+	var endpointFamily, modelRevision string
+	if err := repository.Pool.QueryRow(ctx,
+		"SELECT endpoint_family, route_model_revision FROM "+attemptRelation+" WHERE operation_id=$1 AND attempt_number=1",
+		operationUUID(noProviderID),
+	).Scan(&endpointFamily, &modelRevision); err != nil {
+		t.Fatal(err)
+	}
+	if endpointFamily != "" || modelRevision != "" {
+		t.Fatalf("pre-dispatch rejection persisted fallback route provenance: %q/%q", endpointFamily, modelRevision)
+	}
+	if err := repository.FailBeforeDispatch(ctx, noProviderFailure); err != nil {
+		t.Fatalf("idempotent no-provider replay = %v", err)
+	}
+	replayedNoProviderAttempts, err := repository.Attempts(ctx, noProviderID)
+	if err != nil || !reflect.DeepEqual(replayedNoProviderAttempts, noProviderAttempts) {
+		t.Fatalf("no-provider replay changed receipt: before=%#v after=%#v err=%v", noProviderAttempts, replayedNoProviderAttempts, err)
+	}
+	var operationRoute, operationEndpoint, operationProvider, operationModel, operationClass string
+	operationRelation, err := repository.Namespace.Render("operations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Pool.QueryRow(ctx,
+		"SELECT COALESCE(route_id,''), COALESCE(endpoint_id,''), COALESCE(provider,''), COALESCE(resolved_model,''), COALESCE(attempted_service_class,'') FROM "+operationRelation+" WHERE operation_id=$1",
+		operationUUID(noProviderID),
+	).Scan(&operationRoute, &operationEndpoint, &operationProvider, &operationModel, &operationClass); err != nil {
+		t.Fatal(err)
+	}
+	if operationRoute != "" || operationEndpoint != "" || operationProvider != "" ||
+		operationModel != "" || operationClass != "" {
+		t.Fatalf("pre-dispatch operation persisted fallback provider identity: %q/%q/%q/%q/%q", operationRoute, operationEndpoint, operationProvider, operationModel, operationClass)
+	}
+}
+
 func TestTerminalOperationClosesItsAttemptWithCostFacts(t *testing.T) {
 	repository, ctx, cleanup := operationIntegrationRepository(t)
 	defer cleanup()
@@ -406,10 +727,8 @@ func TestTerminalOperationClosesItsAttemptWithCostFacts(t *testing.T) {
 	// operation projection so retry/reconciliation tooling can audit every
 	// attempted route.
 	completedID := "operation-attempt-complete-" + uuid.NewString()
-	started, err := repository.Begin(ctx, admission.BeginRequest{
-		ID: completedID, ScopeKey: "attempt-terminal/project", RequestDigest: admission.Digest([]byte(completedID)),
-		ReservationUSD: pricing.MustUSD("1.25"), ExpiresAt: time.Now().UTC().Add(time.Hour),
-	})
+	started, err := repository.Begin(ctx, admission.BeginRequest{ID: completedID, OperationKey: completedID, Actor: "postgres-test", ScopeKey: "attempt-terminal/project", RequestDigest: admission.Digest([]byte(completedID)),
+		ReservationUSD: pricing.MustUSD("1.25"), ExpiresAt: time.Now().UTC().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,10 +748,8 @@ func TestTerminalOperationClosesItsAttemptWithCostFacts(t *testing.T) {
 	// Accepted/ambiguous provider outcomes retain NULL actual cost and a safe
 	// reason at the attempt level; zero is reserved for a proven free outcome.
 	ambiguousID := "operation-attempt-ambiguous-" + uuid.NewString()
-	started, err = repository.Begin(ctx, admission.BeginRequest{
-		ID: ambiguousID, ScopeKey: "attempt-terminal/project", RequestDigest: admission.Digest([]byte(ambiguousID)),
-		ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour),
-	})
+	started, err = repository.Begin(ctx, admission.BeginRequest{ID: ambiguousID, OperationKey: ambiguousID, Actor: "postgres-test", ScopeKey: "attempt-terminal/project", RequestDigest: admission.Digest([]byte(ambiguousID)),
+		ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -207,12 +207,15 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			if source, ok := clients.(dependencyProbeSource); ok {
 				probes = append(probes, source.DependencyProbes()...)
 			}
-			v1Runtime := options.V1Runtime
-			if source, ok := clients.(V1RuntimeSource); ok {
-				// A source is authoritative even when it returns nil. This keeps a
-				// reload from falling back to a runtime that is bound to a previous
-				// snapshot and may already be draining.
-				v1Runtime = source.V1Runtime()
+			var v1Runtime activity.V1Runtime
+			if v1RuntimeRequired(snapshot.Config()) {
+				v1Runtime = options.V1Runtime
+				if source, ok := clients.(V1RuntimeSource); ok {
+					// A durable source is authoritative even when it returns nil. This
+					// keeps reload from falling back to a runtime bound to a previous
+					// snapshot whose state clients may already be draining.
+					v1Runtime = source.V1Runtime()
+				}
 			}
 			queryService, err := composeQueryService(buildContext, snapshot, engineFactory, clients)
 			if err != nil {
@@ -263,7 +266,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	}
 	initialV1Runtime := v1RuntimeForSnapshot(application.Current(), options.V1Runtime)
 	var workerV1Runtime activity.V1Runtime
-	if isV1RuntimeConfigured(initialV1Runtime) {
+	if v1RuntimeRequired(configuration) && isV1RuntimeConfigured(initialV1Runtime) {
 		workerV1Runtime = &snapshotV1Runtime{application: application, fallback: options.V1Runtime}
 	}
 	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, workerV1Runtime, &snapshotQueryService{application: application, fallback: workerV1Runtime})
@@ -344,23 +347,22 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 }
 
 func v1RuntimeRequired(configuration config.Config) bool {
-	// Only the checked-in development composition is allowed to start without
-	// the durable v1 seam. Every other environment, including production and
-	// unknown values, must fail closed before advertising readiness.
-	return configuration.Environment != "development"
+	// Only durable state can satisfy the versioned Generate/Compact contract.
+	// Development memory and Redis-only workers intentionally expose only the
+	// legacy activity surface, regardless of whether their process happens to
+	// receive a reusable V1Runtime implementation.
+	return configuration.State.Kind == config.StateKindDurable
 }
 
 func composeRuntimeActivities(configuration config.Config, engine llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer, v1Runtime activity.V1Runtime, queryService activity.QueryService) *activity.Activities {
 	activities := newRuntimeActivities(configuration, engine, metrics, tracer, queryService)
-	if v1Runtime != nil {
-		activities.V1Runtime = v1Runtime
-	}
-	if !v1RuntimeRequired(configuration) && !isV1RuntimeConfigured(activities.V1Runtime) {
-		// The local Compose profile is a parser/configuration/readiness fixture,
-		// not a v1 worker. Omit all v1 seams so it cannot advertise the versioned
-		// Activity names while no durable implementation is present.
+	if !v1RuntimeRequired(configuration) {
 		activities.V1Runtime = nil
 		activities.QueryService = nil
+		return activities
+	}
+	if v1Runtime != nil {
+		activities.V1Runtime = v1Runtime
 	}
 	return activities
 }
@@ -383,8 +385,9 @@ func isV1RuntimeConfigured(runtime activity.V1Runtime) bool {
 // worker setting, never a provider SDK timeout.
 func newRuntimeActivities(configuration config.Config, dynamic llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer, queryService activity.QueryService) *activity.Activities {
 	return &activity.Activities{
-		Engine:                     dynamic,
-		HeartbeatKeepaliveInterval: time.Duration(configuration.Temporal.Worker.HeartbeatKeepaliveInterval),
+		Engine:                      dynamic,
+		RequireDurableProviderFence: v1RuntimeRequired(configuration),
+		HeartbeatKeepaliveInterval:  time.Duration(configuration.Temporal.Worker.HeartbeatKeepaliveInterval),
 		HeartbeaterFactory: func() activity.Heartbeater {
 			return activity.NewTemporalHeartbeater(activity.TemporalHeartbeaterOptions{Metrics: metrics})
 		},
@@ -953,7 +956,14 @@ func (engine *snapshotEngine) Generate(ctx context.Context, request llm.Request)
 		return llm.Response{}, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime snapshot is unavailable")
 	}
 	defer lease.Release()
-	clients, ok := lease.Snapshot().Clients.(*snapshotClients)
+	snapshot := lease.Snapshot()
+	if snapshot == nil || snapshot.Config == nil {
+		return llm.Response{}, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime snapshot is unavailable")
+	}
+	if v1RuntimeRequired(snapshot.Config.Config()) {
+		return llm.Response{}, provider.NewError(provider.CodeConfiguration, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "legacy Generate cannot dispatch without the durable v1 reservation fence")
+	}
+	clients, ok := snapshot.Clients.(*snapshotClients)
 	if !ok || clients.Engine() == nil {
 		return llm.Response{}, provider.NewError(provider.CodeInternal, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "runtime engine is unavailable")
 	}

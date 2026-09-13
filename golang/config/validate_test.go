@@ -50,6 +50,84 @@ func TestConfigExampleMatchesJSONSchema(t *testing.T) {
 	}
 }
 
+func TestProductionTemporalRequiresTLSAndAPIKeyFile(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*config.Config)
+		want   string
+	}{
+		{
+			name:   "wrong target",
+			mutate: func(value *config.Config) { value.Temporal.Target = "temporal.example.test:7233" },
+			want:   "temporal.target must be",
+		},
+		{
+			name:   "wrong namespace",
+			mutate: func(value *config.Config) { value.Temporal.Namespace = "default" },
+			want:   "temporal.namespace must be",
+		},
+		{
+			name:   "wrong SNI",
+			mutate: func(value *config.Config) { value.Temporal.TLS.ServerName = "temporal.example.test" },
+			want:   "temporal.tls.server_name must be",
+		},
+		{
+			name: "TLS disabled",
+			mutate: func(value *config.Config) {
+				value.Temporal.TLS.Enabled = false
+				value.Temporal.APIKeyFile = ""
+			},
+			want: "temporal.tls.enabled must be true in production",
+		},
+		{
+			name:   "API key missing",
+			mutate: func(value *config.Config) { value.Temporal.APIKeyFile = "" },
+			want:   "temporal.api_key_file is required in production",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := loaded
+			test.mutate(&value)
+			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Temporal production validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestDevelopmentTemporalAllowsExplicitUnauthenticatedTransport(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.Environment = "development"
+	loaded.Temporal.APIKeyFile = ""
+	loaded.Temporal.TLS = config.TLSConfig{}
+	if err := loaded.Validate(); err != nil {
+		t.Fatalf("explicit unauthenticated development Temporal config rejected: %v", err)
+	}
+}
+
+func TestProductionConfigRequiresS3KMSKeyID(t *testing.T) {
+	document := string(exampleYAML(t))
+	loaded, err := config.Load([]byte(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kmsLine := "    kms_key_id: " + loaded.BlobStore.S3.KMSKeyID + "\n"
+	withoutKMS := strings.Replace(document, kmsLine, "", 1)
+	if withoutKMS == document {
+		t.Fatal("production example did not contain the configured S3 KMS key")
+	}
+	if _, err := config.Load([]byte(withoutKMS)); err == nil || !strings.Contains(err.Error(), "blob_store.s3.kms_key_id is required") {
+		t.Fatalf("missing production S3 KMS key validation error = %v", err)
+	}
+}
+
 func TestConfigSchemaAcceptsDevelopmentFileBlobStore(t *testing.T) {
 	loaded, err := config.Load(developmentFileBlobYAML(t))
 	if err != nil {
@@ -377,6 +455,24 @@ func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 		t.Fatal("schema accepted secret auth for an Anthropic AWS gateway endpoint")
 	}
 
+}
+
+func TestProviderAuthAcceptsPrivateFileReferences(t *testing.T) {
+	for _, kind := range []string{"bearer_file", "header_file"} {
+		auth := config.AuthConfig{Kind: kind, Path: "/var/run/secrets/providers/api-key"}
+		if err := auth.Validate("endpoints.provider.auth"); err != nil {
+			t.Fatalf("%s valid file auth error = %v", kind, err)
+		}
+		for _, invalid := range []config.AuthConfig{
+			{Kind: kind, Path: "relative/key"},
+			{Kind: kind, Name: "PROVIDER_KEY", Path: "/var/run/secrets/providers/api-key"},
+			{Kind: kind, Path: "/var/run/secrets/providers/api-key", Audience: "provider"},
+		} {
+			if err := invalid.Validate("endpoints.provider.auth"); err == nil {
+				t.Fatalf("%s accepted invalid file auth %#v", kind, invalid)
+			}
+		}
+	}
 }
 
 func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {

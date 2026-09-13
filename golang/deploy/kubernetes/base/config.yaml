@@ -11,26 +11,85 @@ server:
   inline_payload_bytes: 524288
 
 temporal:
-  target: temporal.example.internal:7233
-  namespace: production
+  target: temporal-frontend.temporal.svc.cluster.local:7233
+  namespace: ai-ach
   task_queue: llm-inference
   identity_prefix: llmtw
   tls:
     enabled: true
-    server_name: temporal.example.internal
+    server_name: temporal-frontend.temporal.svc.cluster.local
     ca_file: /var/run/secrets/llmtw/temporal-ca.pem
+  api_key_file: /var/run/secrets/llmtw/temporal-api-key
   worker:
-    max_concurrent_activities: 64
+    max_concurrent_activities: 96
     max_concurrent_activity_task_polls: 8
     graceful_stop_timeout: 45s
     heartbeat_keepalive_interval: 1s
 
+resource_capacity:
+  manifest_file: /var/run/provenance/resource-capacity.json
+  trust_root_file: /var/run/provenance/release-trust-root.json
+  trust_root_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  manifest_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  artifact_id: replace-with-resource-capacity-artifact-id
+  artifact_locator: s3://replace-with-artifact-bucket/competition/resource-capacity.json
+  generation_id: replace-with-resource-capacity-generation
+  limits:
+    llm_global_max_inflight: 64
+    llm_global_max_requests_per_window: 600
+    llm_global_window_seconds: 60
+    provider_max_inflight:
+      - {route_id: openai-primary, max_inflight: 64, max_requests_per_window: 600, window_seconds: 60}
+    search_fetch_max_inflight: 64
+    python_stage2_max_inflight: 6
+    forecast_event_max_inflight: 2
+    forecast_event_admission_wait_seconds: 5
+    provider_call_execution_overhead_seconds: 30
+    provider_call_queue_seconds: 30
+    provider_call_maximum_attempts: 1
+    stage_two_execution_overhead_seconds: 30
+    stage_two_queue_seconds: 30
+    stage_two_semaphore_wait_seconds: 30
+    stage_two_maximum_attempts: 2
+    close_execution_overhead_seconds: 30
+    close_queue_seconds: 30
+    close_maximum_attempts: 2
+    evidence_collection_execution_overhead_seconds: 30
+    evidence_collection_queue_seconds: 30
+    evidence_collection_maximum_attempts: 1
+    panel_prepare_max_inflight: 8
+    panel_llm_max_inflight: 8
+    inference_artifactize_execution_seconds: 5
+    inference_artifactize_queue_seconds: 5
+    inference_artifactize_maximum_attempts: 2
+    prepare_assessment_execution_seconds: 5
+    prepare_assessment_queue_seconds: 5
+    prepare_assessment_maximum_attempts: 2
+    build_analysis_panel_execution_seconds: 10
+    build_analysis_panel_queue_seconds: 5
+    build_analysis_panel_maximum_attempts: 2
+    assemble_evidence_assessment_execution_seconds: 10
+    assemble_evidence_assessment_queue_seconds: 5
+    assemble_evidence_assessment_maximum_attempts: 2
+    load_analytic_context_execution_seconds: 10
+    load_analytic_context_queue_seconds: 5
+    load_analytic_context_maximum_attempts: 2
+    checkpoint_analysis_frontier_execution_seconds: 10
+    checkpoint_analysis_frontier_queue_seconds: 5
+    checkpoint_analysis_frontier_maximum_attempts: 2
+    load_analysis_frontier_execution_seconds: 10
+    load_analysis_frontier_queue_seconds: 5
+    load_analysis_frontier_maximum_attempts: 2
+    caller_owned_evidence_ingest_execution_seconds: 5
+    caller_owned_evidence_ingest_queue_seconds: 5
+    caller_owned_evidence_ingest_maximum_attempts: 2
+    panel_prepare_activity_max_bytes: 1310720
 state:
   kind: durable
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
-  reservation_lease: 2m
+  reservation_lease: 20m
   redis:
     addresses: [redis.example.internal:6379]
     key_prefix: llmtw
@@ -48,7 +107,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: 07d910df370ca9522400b8ae15a7bda7e76b1c1badcb7e35cb71e2f6ddaecaf2
+    admission_digest: 30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e
     max_connections: 96
     dial_timeout: 2s
     operation_timeout: 3s
@@ -96,6 +155,7 @@ blob_store:
     bucket: replace-with-production-bucket
     region: ap-southeast-2
     prefix: v1
+    kms_key_id: arn:aws:kms:ap-southeast-2:123456789012:key/00000000-0000-0000-0000-000000000000
     auth:
       kind: aws_default_chain
 
@@ -109,7 +169,8 @@ limits:
   continuation_depth: 256
   route_attempts: 6
   provider_timeout: 120s
-  provider_response_bytes: 16777216
+  provider_response_bytes: 524288
+  max_input_tokens: 131072
   max_output_tokens: 32768
   max_budget_buckets_per_window: 2048
   token_estimate_safety_ratio: "1.35"

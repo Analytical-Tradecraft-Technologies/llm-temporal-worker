@@ -392,6 +392,53 @@ func TestLiveRedisAddressForPublishedPort(t *testing.T) {
 	}
 }
 
+func TestLiveRedisColdStartReplayAcceptsActiveBudgetStateAndRejectsImmutableDrift(t *testing.T) {
+	client := openLiveRedis(t)
+	keyOptions := liveKeyOptions("cold-start-replay")
+	cleanupLivePrefix(t, client, keyOptions.Prefix)
+	keys, err := NewBudgetKeySpace(keyOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := coldStartManifest(t)
+	options := BudgetColdStartOptions{Client: client, Keys: keys, Manifest: manifest}
+	receipt, err := BootstrapBudgetColdStart(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	windowKey := keys.BudgetStatusWindowKey(manifest.GenerationID, manifest.Members[0])
+	if err := client.HSet(context.Background(), windowKey, "reserved_nano_usd", "200", "accounted_nano_usd", "300").Err(); err != nil {
+		t.Fatal(err)
+	}
+	event := BudgetStreamEvent{
+		Schema: budgetStreamEventSchema, Kind: BudgetEventReserve, GenerationID: manifest.GenerationID,
+		OperationHash: strings.Repeat("a", 64), MemberHash: strings.Repeat("b", 64),
+		Revision: 1, NanoDelta: 200, OccurredAt: manifest.CoverageStart.Add(time.Nanosecond),
+	}
+	payload, err := event.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.XAdd(context.Background(), &redisclient.XAddArgs{
+		Stream: keys.EventsKey(), Values: map[string]interface{}{"event": string(payload)},
+	}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := BootstrapBudgetColdStart(context.Background(), options)
+	if err != nil {
+		t.Fatalf("replay after live budget activity: %v", err)
+	}
+	if replayed != receipt {
+		t.Fatalf("replay receipt = %#v, want %#v", replayed, receipt)
+	}
+	if err := client.HSet(context.Background(), windowKey, "member_key", "tampered").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BootstrapBudgetColdStart(context.Background(), options); !errors.Is(err, ErrBudgetColdStartStateConflict) {
+		t.Fatalf("immutable window drift error = %v, want conflict", err)
+	}
+}
+
 func isLiveRedisPersistenceContainer(container, configuredPrefix string) bool {
 	return configuredPrefix != "" && strings.HasPrefix(container, configuredPrefix+"-")
 }
@@ -427,7 +474,7 @@ func openLiveRedis(t *testing.T) *redisclient.Client {
 	}
 	client := openLiveRedisAt(t, address)
 	if os.Getenv("LLMTW_REDIS_TEST_PROVISION") == "1" {
-		for _, source := range []string{AdmissionFunctionSource(), ThrottleFunctionSource()} {
+		for _, source := range []string{AdmissionFunctionSource(), ThrottleFunctionSource(), BudgetStatusFunctionLibrarySource()} {
 			if err := client.FunctionLoad(context.Background(), source).Err(); err != nil && !strings.Contains(err.Error(), "already exists") {
 				t.Fatal("could not provision the isolated Redis Function")
 			}

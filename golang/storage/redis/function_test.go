@@ -48,7 +48,9 @@ func TestAdmissionFunctionMetadataIsStableAndVersioned(t *testing.T) {
 		t.Fatalf("unexpected function metadata %#v", metadata)
 	}
 	source := AdmissionFunctionSource()
-	if !strings.Contains(source, "ACTION == 'begin'") || !strings.Contains(source, "ACTION == 'continue'") || !strings.Contains(source, "ACTION == 'complete'") || !strings.Contains(source, "ACTION == 'fail'") {
+	if !strings.Contains(source, "ACTION == 'begin'") || !strings.Contains(source, "ACTION == 'continue'") ||
+		!strings.Contains(source, "ACTION == 'complete'") || !strings.Contains(source, "ACTION == 'fail'") ||
+		!strings.Contains(source, "ACTION == 'durable_fence'") {
 		t.Fatal("admission function is missing a required transition")
 	}
 	if len(AdmissionFunctionDigest()) != 64 || AdmissionFunctionDigest() == "" {
@@ -57,8 +59,9 @@ func TestAdmissionFunctionMetadataIsStableAndVersioned(t *testing.T) {
 	if !strings.Contains(source, "redis.call('TIME')") {
 		t.Fatal("admission function does not use Redis server time")
 	}
-	if !strings.Contains(source, "can_increment_reservations") || !strings.Contains(source, "redis.call('TTL'") {
-		t.Fatal("admission function lacks mutation preflight or monotonic bucket TTL")
+	if !strings.Contains(source, "can_increment_reservations") || !strings.Contains(source, "redis.call('TTL'") ||
+		!strings.Contains(source, "redis.call('PEXPIREAT'") {
+		t.Fatal("admission function lacks mutation preflight or monotonic retention")
 	}
 	if strings.Contains(source, ".. KEYS") || strings.Contains(source, "..ARGV") {
 		t.Fatal("function dynamically interpolates key names")

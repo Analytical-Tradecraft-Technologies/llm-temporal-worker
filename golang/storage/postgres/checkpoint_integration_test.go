@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -27,11 +28,9 @@ func TestCheckpointRepositoryPublishReadAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	operationID := "checkpoint-origin-" + uuid.NewString()
-	origin, err := operations.Begin(ctx, admission.BeginRequest{
-		ID: operationID, ScopeKey: "checkpoint-integration-tenant/checkpoint-integration-project",
+	origin, err := operations.Begin(ctx, admission.BeginRequest{ID: operationID, OperationKey: operationID, Actor: "postgres-test", ScopeKey: "checkpoint-integration-tenant/checkpoint-integration-project",
 		RequestDigest: admission.Digest([]byte(operationID)), ReservationUSD: pricing.MustUSD("0"),
-		ExpiresAt: time.Now().UTC().Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`),
-	})
+		ExpiresAt: time.Now().UTC().Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +91,95 @@ func TestCheckpointRepositoryPublishReadAndRetry(t *testing.T) {
 	}
 }
 
+func TestCheckpointBlobLocatorReuseExtendsAuthenticatedExpiry(t *testing.T) {
+	operations, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+
+	scope, err := operations.Scopes.Ensure(ctx, "checkpoint-locator-expiry-"+uuid.NewString(), "checkpoint-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := BlobRepository{Pool: operations.Pool, Namespace: operations.Namespace, Keys: operations.Keys, NewID: UUIDv7}
+	payload := []byte("checkpoint-locator-expiry")
+	digest := sha256.Sum256(payload)
+	originalExpiry := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	ref := blob.Ref{
+		Store: "checkpoint-expiry-store", Locator: "checkpoint-expiry-object",
+		Digest: blob.Digest(payload), ByteLength: int64(len(payload)),
+		MediaType: "application/json", ExpiresAt: originalExpiry,
+	}
+	encoded, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := llm.CanonicalJSON(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := repository.PutLocator(ctx, scope.ID, "checkpoint", BlobMetadata{
+		StoreID: ref.Store, Digest: digest, ByteLength: ref.ByteLength,
+		MediaType: ref.MediaType, ExpiresAt: &originalExpiry,
+	}, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extendedExpiry := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	ref.ExpiresAt = extendedExpiry
+	writeLocator, err := CheckpointBlobLocatorWriter(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reused, err := writeLocator(ctx, scope.ID.String(), ref)
+	if err != nil {
+		t.Fatalf("reuse checkpoint locator: %v", err)
+	}
+	if reused.ID != state.BlobID(original.BlobID.String()) {
+		t.Fatalf("reuse changed content-addressed blob ID: got %s want %s", reused.ID, original.BlobID)
+	}
+
+	refreshed, err := repository.Get(ctx, scope.ID, original.BlobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.ExpiresAt == nil || !refreshed.ExpiresAt.Equal(extendedExpiry) {
+		t.Fatalf("authoritative expiry = %v, want %v", refreshed.ExpiresAt, extendedExpiry)
+	}
+	resolve := CheckpointBlobLocator(repository)
+	resolved, err := resolve(ctx, scope.ID.String(), reused.ID)
+	if err != nil {
+		t.Fatalf("resolve reused locator after original expiry: %v", err)
+	}
+	if !resolved.ExpiresAt.Equal(extendedExpiry) {
+		t.Fatalf("decrypted locator expiry = %v, want %v", resolved.ExpiresAt, extendedExpiry)
+	}
+
+	relation, err := repository.Namespace.Render("blobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Pool.Exec(ctx,
+		"UPDATE "+relation+" SET locator_ciphertext=$1, locator_key_id=$2, encryption_context_digest=$3 WHERE blob_id=$4",
+		original.Locator.Ciphertext, original.Locator.KeyID, original.Locator.ContextHash[:], original.BlobID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolve(ctx, scope.ID.String(), reused.ID); err == nil {
+		t.Fatal("stale expired locator resolved against extended database expiry")
+	}
+
+	tampered := append([]byte(nil), refreshed.Locator.Ciphertext...)
+	tampered[len(tampered)-1] ^= 0xff
+	if _, err := repository.Pool.Exec(ctx,
+		"UPDATE "+relation+" SET locator_ciphertext=$1, locator_key_id=$2, encryption_context_digest=$3 WHERE blob_id=$4",
+		tampered, refreshed.Locator.KeyID, refreshed.Locator.ContextHash[:], refreshed.BlobID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolve(ctx, scope.ID.String(), reused.ID); err == nil {
+		t.Fatal("tampered checkpoint locator resolved")
+	}
+}
+
 func TestCheckpointRepositoryRejectsCrossScopeCompactionReference(t *testing.T) {
 	operations, ctx, cleanup := operationIntegrationRepository(t)
 	defer cleanup()
@@ -107,10 +195,8 @@ func TestCheckpointRepositoryRejectsCrossScopeCompactionReference(t *testing.T) 
 	blobs := BlobRepository{Pool: operations.Pool, Namespace: operations.Namespace, Keys: operations.Keys, NewID: UUIDv7}
 	makeOrigin := func(scopeKey string) (admission.BeginResult, error) {
 		id := "checkpoint-cross-scope-" + uuid.NewString()
-		return operations.Begin(ctx, admission.BeginRequest{
-			ID: id, ScopeKey: scopeKey, RequestDigest: admission.Digest([]byte(id)), ReservationUSD: pricing.MustUSD("0"),
-			ExpiresAt: time.Now().UTC().Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`),
-		})
+		return operations.Begin(ctx, admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: scopeKey, RequestDigest: admission.Digest([]byte(id)), ReservationUSD: pricing.MustUSD("0"),
+			ExpiresAt: time.Now().UTC().Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`)})
 	}
 	originA, err := makeOrigin("checkpoint-scope-a/checkpoint-project")
 	if err != nil {
@@ -190,6 +276,10 @@ func TestCheckpointRepositoryRestoresForksThroughPostgresAndBlobs(t *testing.T) 
 		t.Fatal(err)
 	}
 	locators := BlobRepository{Pool: operations.Pool, Namespace: operations.Namespace, Keys: operations.Keys, NewID: UUIDv7}
+	writeLocator, err := CheckpointBlobLocatorWriter(locators)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	putBlobs := func(delta, response []llm.Item, patch state.SettingsPatch) ([3]state.CheckpointBlobReference, error) {
 		var references [3]state.CheckpointBlobReference
@@ -210,29 +300,43 @@ func TestCheckpointRepositoryRestoresForksThroughPostgresAndBlobs(t *testing.T) 
 			if putErr != nil {
 				return references, putErr
 			}
-			locator, marshalErr := json.Marshal(ref)
-			if marshalErr != nil {
-				return references, marshalErr
-			}
-			record, putLocatorErr := locators.PutLocator(ctx, scope.ID, "checkpoint", BlobMetadata{
-				StoreID: ref.Store, Digest: sha256.Sum256(data), ByteLength: int64(len(data)), MediaType: ref.MediaType,
-				ExpiresAt: &expiresAt,
-			}, locator)
+			reference, putLocatorErr := writeLocator(ctx, scope.ID.String(), ref)
 			if putLocatorErr != nil {
 				return references, putLocatorErr
 			}
-			references[index] = state.CheckpointBlobReference{ID: state.BlobID(record.BlobID.String()), Digest: sha256.Sum256(data), ByteLength: int64(len(data)), MediaType: ref.MediaType}
+			references[index] = reference
+			blobID, parseErr := uuid.Parse(string(reference.ID))
+			if parseErr != nil {
+				return references, parseErr
+			}
+			record, getErr := locators.Get(ctx, scope.ID, blobID)
+			if getErr != nil {
+				return references, getErr
+			}
+			opened, openErr := locators.OpenLocator(ctx, scope.ID, "checkpoint", record)
+			if openErr != nil {
+				return references, openErr
+			}
+			encoded, marshalErr := json.Marshal(ref)
+			if marshalErr != nil {
+				return references, marshalErr
+			}
+			canonical, canonicalErr := llm.CanonicalJSON(encoded)
+			if canonicalErr != nil {
+				return references, canonicalErr
+			}
+			if !bytes.Equal(opened, canonical) {
+				return references, fmt.Errorf("checkpoint locator is not the canonical full blob reference")
+			}
 		}
 		return references, nil
 	}
 
 	beginOperation := func(name string) (state.OperationID, error) {
 		id := uuid.NewString()
-		result, beginErr := operations.Begin(ctx, admission.BeginRequest{
-			ID: id, ScopeKey: scopeKey,
+		result, beginErr := operations.Begin(ctx, admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: scopeKey,
 			RequestDigest: admission.Digest([]byte(name)), ReservationUSD: pricing.MustUSD("0"),
-			ExpiresAt: expiresAt, RequestManifest: []byte(`{"model":"fixture"}`),
-		})
+			ExpiresAt: expiresAt, RequestManifest: []byte(`{"model":"fixture"}`)})
 		if beginErr != nil {
 			return "", beginErr
 		}
@@ -303,7 +407,7 @@ func TestCheckpointRepositoryRestoresForksThroughPostgresAndBlobs(t *testing.T) 
 	restoredLocators := BlobRepository{Pool: restoredPool, Namespace: operations.Namespace, Keys: operations.Keys, NewID: UUIDv7}
 	reader := state.ScopedBlobReader{
 		Store: restoredStore, MaxBytes: 1 << 20, Now: func() time.Time { return now },
-		Resolve: checkpointRecoveryLocatorResolver(restoredLocators),
+		Resolve: CheckpointBlobLocator(restoredLocators),
 	}
 	materializer := &state.DurableCheckpointMaterializer{
 		Repository: DurableCheckpointRepository{Pool: restoredPool, Namespace: operations.Namespace, Now: func() time.Time { return now }},
@@ -324,6 +428,9 @@ func TestCheckpointRepositoryRestoresForksThroughPostgresAndBlobs(t *testing.T) 
 			t.Fatalf("restored branch %d response = %q", index, gotText)
 		}
 	}
+	if _, err := reader.Read(ctx, uuid.NewString(), rootBlobs[0]); err == nil {
+		t.Fatal("checkpoint blob read succeeded under the wrong opaque scope")
+	}
 }
 
 func checkpointRecoveryRow(id state.CheckpointID, parent *state.CheckpointID, depth int32, scopeID uuid.UUID, operationID state.OperationID, blobs [3]state.CheckpointBlobReference, createdAt, expiresAt time.Time, label string) state.DurableCheckpoint {
@@ -333,38 +440,6 @@ func checkpointRecoveryRow(id state.CheckpointID, parent *state.CheckpointID, de
 		DeltaBlob: blobs[0], ResponseBlob: blobs[1], SettingsPatchBlob: blobs[2],
 		CanonicalLineageDigest: sha256.Sum256([]byte(label + "-lineage")), MaterializedSettingsDigest: sha256.Sum256([]byte(label + "-settings")), ToolFrontierDigest: sha256.Sum256([]byte(label + "-frontier")),
 		SchemaVersion: 1, CompilerEpoch: "checkpoint-restore-v1", CreatedAt: createdAt, ExpiresAt: expiresAt,
-	}
-}
-
-func checkpointRecoveryLocatorResolver(repository BlobRepository) state.BlobLocator {
-	return func(ctx context.Context, scopeID string, blobID state.BlobID) (blob.Ref, error) {
-		scope, err := uuid.Parse(scopeID)
-		if err != nil {
-			return blob.Ref{}, fmt.Errorf("parse checkpoint scope: %w", err)
-		}
-		if scope == uuid.Nil {
-			return blob.Ref{}, fmt.Errorf("checkpoint scope must not be nil")
-		}
-		id, err := uuid.Parse(string(blobID))
-		if err != nil {
-			return blob.Ref{}, fmt.Errorf("parse checkpoint blob ID: %w", err)
-		}
-		if id == uuid.Nil {
-			return blob.Ref{}, fmt.Errorf("checkpoint blob ID must not be nil")
-		}
-		record, err := repository.Get(ctx, scope, id)
-		if err != nil {
-			return blob.Ref{}, err
-		}
-		encoded, err := repository.OpenLocator(ctx, scope, "checkpoint", record)
-		if err != nil {
-			return blob.Ref{}, err
-		}
-		var ref blob.Ref
-		if err := json.Unmarshal(encoded, &ref); err != nil {
-			return blob.Ref{}, fmt.Errorf("decode checkpoint blob locator: %w", err)
-		}
-		return ref, nil
 	}
 }
 

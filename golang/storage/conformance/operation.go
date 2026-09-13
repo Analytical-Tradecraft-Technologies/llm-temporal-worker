@@ -31,7 +31,7 @@ func RunOperation(t *testing.T, store OperationStore, now time.Time) {
 	if store == nil {
 		t.Fatal("operation store is nil")
 	}
-	request := admission.BeginRequest{ID: "operation-conformance", ScopeKey: "tenant/project", RequestDigest: admission.Digest([]byte("request")), ReservationUSD: pricing.MustUSD("0.000000000000000000"), ExpiresAt: now.Add(time.Hour)}
+	request := admission.BeginRequest{ID: "operation-conformance", OperationKey: "operation-conformance", Actor: "postgres-test", ScopeKey: "tenant/project", RequestDigest: admission.Digest([]byte("request")), ReservationUSD: pricing.MustUSD("0.000000000000000000"), ExpiresAt: now.Add(time.Hour)}
 	first, err := store.Begin(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)

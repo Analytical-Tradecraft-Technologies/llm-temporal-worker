@@ -9,6 +9,7 @@ ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 ARG SOURCE=https://github.com/mfow/llm-temporal-worker
 ARG GO_VERSION=unknown
+ARG GO_BUILD_TAGS
 
 FROM ${GO_IMAGE} AS build
 
@@ -19,6 +20,7 @@ ARG REVISION
 ARG BUILD_TIME
 ARG SOURCE
 ARG GO_VERSION
+ARG GO_BUILD_TAGS
 
 WORKDIR /src
 
@@ -47,7 +49,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       go_version="${GO_VERSION}"; \
     fi && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -buildvcs=false \
+    go build -tags="${GO_BUILD_TAGS}" -trimpath -buildvcs=false \
       -ldflags="-s -w \
         -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION} \
         -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Revision=${REVISION} \

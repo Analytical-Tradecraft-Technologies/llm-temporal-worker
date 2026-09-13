@@ -24,6 +24,7 @@ type Snapshot struct {
 	ConfigDigest             [32]byte
 	ConfigEpoch              string
 	Routes                   routing.Catalog
+	EndpointCapabilities     map[string]provider.CapabilitySet
 	Health                   routing.HealthView
 	Prices                   pricing.Resolver
 	BudgetPolicies           []budget.Policy

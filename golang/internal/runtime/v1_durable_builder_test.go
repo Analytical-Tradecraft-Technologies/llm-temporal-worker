@@ -7,21 +7,45 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	blobstore "github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
 func completeDurableBuilderCapabilities(generate GeneratePortsFactory, compact CompactPortsFactory) V1RuntimeCapabilities {
 	capabilities := completeGenerateCapabilities(generate)
+	capabilities.Estimator = budget.Estimator{MaxInput: 1, MaxOutput: 1, MaxReasoning: 1}
 	capabilities.CompactPortsFactory = compact
+	capabilities.Checkpoints.BlobStore = capabilityBlobStoreStub{}
+	capabilities.Checkpoints.WriteLocator = func(context.Context, string, blobstore.Ref) (state.CheckpointBlobReference, error) {
+		return state.CheckpointBlobReference{}, errors.New("unexpected checkpoint locator write")
+	}
+	capabilities.Checkpoints.IssueHandle = func(string, state.CheckpointID) (string, string, [32]byte, error) {
+		return "", "", [32]byte{}, errors.New("unexpected checkpoint handle issue")
+	}
+	capabilities.Checkpoints.VerifyHandle = func(context.Context, string, string) (state.CheckpointID, error) {
+		return "", errors.New("unexpected checkpoint handle verification")
+	}
+	capabilities.ResolveScope = func(context.Context, llm.RequestContext) (string, error) {
+		return "", errors.New("unexpected scope resolution")
+	}
+	capabilities.BudgetGenerationID = "generation-1"
+	capabilities.BudgetIncarnationID = "incarnation-1"
+	capabilities.ReservationLease = time.Minute
+	capabilities.OperationRetention = time.Hour
+	capabilities.CheckpointRetention = time.Hour
+	capabilities.MaxRequestBytes = 1024
+	capabilities.CheckpointLimits = state.MaterializeLimits{MaxDepth: 4, MaxRows: 4, MaxItems: 16, MaxBytes: 1024}
 	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
 		return validCapabilityComposition(), nil
 	}
@@ -471,11 +495,26 @@ func TestV1RuntimeCapabilitiesBuildDurableCompositionUsesSnapshotOwnedPorts(t *t
 	}
 }
 
-// The capability stubs intentionally embed the narrow interfaces. The
+// The capability stubs expose the exact narrow production interfaces. The
 // composition builder validates their presence without invoking a client,
-// which keeps this factory test independent of Redis, PostgreSQL, and any
-// provider credentials.
+// which keeps this factory test independent of Redis, PostgreSQL, object
+// storage, and provider credentials.
+type capabilityBlobStoreStub struct{}
+
+func (capabilityBlobStoreStub) Put(context.Context, blobstore.PutRequest) (blobstore.Ref, error) {
+	return blobstore.Ref{}, errors.New("unexpected checkpoint blob write")
+}
+
+func (capabilityBlobStoreStub) Get(context.Context, string, blobstore.Ref) ([]byte, error) {
+	return nil, errors.New("unexpected checkpoint blob read")
+}
+
 type capabilityAdmissionStub struct{ admission.AdmissionStore }
+
+func (capabilityAdmissionStub) FailBeforeDispatch(context.Context, admission.FailRequest) error {
+	return errors.New("unexpected pre-dispatch failure")
+}
+
 type capabilityContinuationStub struct{ state.ContinuationStore }
 type capabilityCheckpointStub struct {
 	state.CheckpointHandleMaterializer
@@ -483,6 +522,7 @@ type capabilityCheckpointStub struct {
 type capabilityResultStub struct{ durable.ResultStore }
 type capabilityJournalStub struct{ durable.Journal }
 type capabilityMaterializerStub struct{ durable.BudgetMaterializer }
+type capabilityFinalizerStub struct{ durable.AtomicFinalizer }
 
 func validCapabilityComposition() durable.Composition {
 	return durable.Composition{
@@ -497,6 +537,7 @@ func validCapabilityComposition() durable.Composition {
 		Results:       capabilityResultStub{},
 		Journal:       capabilityJournalStub{},
 		Materializer:  capabilityMaterializerStub{},
+		Finalizer:     capabilityFinalizerStub{},
 	}
 }
 
@@ -507,4 +548,6 @@ var (
 	_ durable.ResultStore                = capabilityResultStub{}
 	_ durable.Journal                    = capabilityJournalStub{}
 	_ durable.BudgetMaterializer         = capabilityMaterializerStub{}
+	_ durable.AtomicFinalizer            = capabilityFinalizerStub{}
+	_ blobstore.Store                    = capabilityBlobStoreStub{}
 )

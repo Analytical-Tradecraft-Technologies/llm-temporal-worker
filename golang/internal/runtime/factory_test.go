@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,34 @@ func TestRedisKeyOptionsUseConfiguredPrefix(t *testing.T) {
 	}
 	if _, err := redisstore.NewKeyOptions("bad prefix", "admission", options.KeySecret); err == nil {
 		t.Fatal("invalid Redis key prefix accepted")
+	}
+}
+func TestCheckpointLimitsUseConfiguredItemAndCompleteLineageBounds(t *testing.T) {
+	limits, err := checkpointLimitsForConfig(config.LimitsConfig{
+		RequestBytes:      4096,
+		Items:             7,
+		ContinuationDepth: 12,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limits.MaxItems != 7 {
+		t.Fatalf("checkpoint MaxItems = %d, want configured item limit 7", limits.MaxItems)
+	}
+	if limits.MaxDepth != 12 || limits.MaxRows != 13 {
+		t.Fatalf("checkpoint depth/rows = %d/%d, want depth D and D+1 lineage rows", limits.MaxDepth, limits.MaxRows)
+	}
+	if limits.MaxBytes != 4096 {
+		t.Fatalf("checkpoint MaxBytes = %d, want configured request byte limit 4096", limits.MaxBytes)
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if _, err := checkpointLimitsForConfig(config.LimitsConfig{
+		RequestBytes:      1,
+		Items:             1,
+		ContinuationDepth: maxInt,
+	}); err == nil {
+		t.Fatal("checkpoint limits accepted a depth whose D+1 lineage row count overflows")
 	}
 }
 
@@ -174,7 +203,7 @@ func TestBuildPostgresSkipsRedisOnlyComposition(t *testing.T) {
 }
 
 func TestProductionFactoryAttachesSnapshotV1RuntimeAfterClientConstruction(t *testing.T) {
-	snapshot := &config.Snapshot{}
+	snapshot := durableFactoryTestSnapshot(t)
 	expected := testV1Runtime{}
 	var gotSnapshot *config.Snapshot
 	var gotEngine llm.Engine
@@ -210,7 +239,7 @@ func TestProductionFactoryV1RuntimeBuilderFailureClosesSnapshotClients(t *testin
 		},
 	}}
 	clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
-	_, _, err := factory.attachV1Runtime(context.Background(), &config.Snapshot{}, testEngine{}, clients)
+	_, _, err := factory.attachV1Runtime(context.Background(), durableFactoryTestSnapshot(t), testEngine{}, clients)
 	if err == nil || !strings.Contains(err.Error(), "construct durable v1 runtime") {
 		t.Fatalf("attachV1Runtime() error = %v, want wrapped builder failure", err)
 	}
@@ -228,7 +257,7 @@ func TestProductionFactoryRejectsTypedNilV1RuntimeAndClosesSnapshotClients(t *te
 		},
 	}}
 	clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
-	_, _, err := factory.attachV1Runtime(context.Background(), &config.Snapshot{}, testEngine{}, clients)
+	_, _, err := factory.attachV1Runtime(context.Background(), durableFactoryTestSnapshot(t), testEngine{}, clients)
 	if err == nil || !strings.Contains(err.Error(), "nil runtime") {
 		t.Fatalf("attachV1Runtime() error = %v, want typed-nil runtime rejection", err)
 	}
@@ -238,6 +267,40 @@ func TestProductionFactoryRejectsTypedNilV1RuntimeAndClosesSnapshotClients(t *te
 	if clients.v1Runtime != nil {
 		t.Fatalf("typed-nil runtime was attached: %T", clients.v1Runtime)
 	}
+}
+
+func TestProductionFactorySkipsV1AttachmentForRedisState(t *testing.T) {
+	data := strings.Replace(string(runtimeConfig(t)), "environment: production", "environment: development", 1)
+	data = strings.Replace(data, "kind: durable", "kind: redis", 1)
+	snapshot, err := config.Compile(context.Background(), []byte(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
+			called = true
+			return testV1Runtime{}, nil
+		},
+	}}
+	engineValue := testEngine{}
+	clients := &productionClientSet{}
+	gotEngine, gotClients, err := factory.attachV1Runtime(context.Background(), snapshot, engineValue, clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called || gotEngine != engineValue || gotClients != clients || clients.V1Runtime() != nil {
+		t.Fatalf("Redis state attached durable runtime: called=%v engine=%T clients=%T runtime=%T", called, gotEngine, gotClients, clients.V1Runtime())
+	}
+}
+
+func durableFactoryTestSnapshot(t *testing.T) *config.Snapshot {
+	t.Helper()
+	snapshot, err := config.Compile(context.Background(), runtimeConfig(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
@@ -279,6 +342,29 @@ func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
 	}
 	if err := checkpoints.RequireMaterializer(); err == nil {
 		t.Fatal("partial checkpoint capabilities unexpectedly satisfied materializer requirement")
+	}
+}
+
+func TestCheckpointCapabilitySurfaceDoesNotExposePostgresPoolOrKeys(t *testing.T) {
+	capabilityType := reflect.TypeOf(CheckpointCapabilities{})
+	for index := range capabilityType.NumField() {
+		field := capabilityType.Field(index)
+		rendered := field.Type.String()
+		for _, forbidden := range []string{"postgres.BlobRepository", "pgxpool.Pool", "postgres.Keyring"} {
+			if strings.Contains(rendered, forbidden) {
+				t.Errorf("checkpoint capability %s exposes %s through %s", field.Name, forbidden, rendered)
+			}
+		}
+		if field.Name == "BlobRepository" {
+			t.Fatal("checkpoint capability exposes the concrete blob repository")
+		}
+	}
+	writer, ok := capabilityType.FieldByName("WriteLocator")
+	if !ok {
+		t.Fatal("checkpoint capability omitted the narrow locator writer")
+	}
+	if writer.Type.Kind() != reflect.Func {
+		t.Fatalf("checkpoint locator writer surface = %v, want closure capability", writer.Type)
 	}
 }
 
@@ -745,7 +831,7 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 		Limits:       config.LimitsConfig{RequestBytes: 1024, ContinuationDepth: 4, RouteAttempts: 1, TokenEstimateSafetyRatio: "1", MaxOutputTokens: 16},
 		Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{ID: "key-2026-07", Primary: true, Secret: config.SecretRef{Kind: config.SecretEnv, Name: "CONTINUATION_KEY"}}}},
 	}
-	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.Snapshot{}, nil, nil, [32]byte{})
+	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.Snapshot{}, nil, [32]byte{})
 	if err != nil {
 		t.Fatalf("buildMemory() error = %v", err)
 	}
@@ -767,6 +853,9 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	}
 	if capabilities.Journal != nil {
 		t.Fatal("memory composition exposed a PostgreSQL journal capability")
+	}
+	if capabilities.CompositionFactory != nil || capabilities.GeneratePortsFactory != nil || capabilities.CompactPortsFactory != nil {
+		t.Fatalf("memory composition exposed durable factories: %#v", capabilities)
 	}
 	if err := clients.Close(context.Background()); err != nil {
 		t.Fatalf("memory client close = %v", err)
@@ -805,6 +894,26 @@ func TestProductionFactoryProviderSecretFailsClosed(t *testing.T) {
 	}
 	if called {
 		t.Fatal("unsupported auth attempted secret resolution")
+	}
+}
+
+func TestProductionFactoryProviderSecretResolvesFiles(t *testing.T) {
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+			if ref.Kind != config.SecretFile || ref.Name != "" || ref.Path != "/var/run/secrets/providers/openrouter-api-key" {
+				t.Fatalf("resolved unexpected provider secret reference: %#v", ref)
+			}
+			return []byte("test-openrouter-key"), nil
+		}),
+	}}
+	for _, kind := range []string{"bearer_file", "header_file"} {
+		secret, err := factory.providerSecret(context.Background(), config.AuthConfig{Kind: kind, Path: "/var/run/secrets/providers/openrouter-api-key"}, "openrouter")
+		if err != nil {
+			t.Fatalf("%s providerSecret() error = %v", kind, err)
+		}
+		if string(secret) != "test-openrouter-key" {
+			t.Fatalf("%s providerSecret() = %q", kind, secret)
+		}
 	}
 }
 
@@ -1037,4 +1146,20 @@ func azureOpenAIChatSnapshot() engine.Snapshot {
 	return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "azure-chat", Capabilities: routing.CapabilitySet{Version: "azure-chat/v1"}}}},
 	}}}
+}
+
+func TestProductionFactoryRejectsProviderHostedStateConfiguration(t *testing.T) {
+	value := config.Config{
+		Endpoints: map[string]config.EndpointConfig{
+			"provider-a": {ProviderStorage: config.ProviderStorageConfig{Permitted: true}},
+		},
+	}
+	if err := enforceProviderHostedStateProhibition(value); err == nil || !strings.Contains(err.Error(), "provider_storage.permitted") {
+		t.Fatalf("provider storage policy error = %v", err)
+	}
+	value.Endpoints["provider-a"] = config.EndpointConfig{}
+	value.Continuation.AllowProviderHostedState = true
+	if err := enforceProviderHostedStateProhibition(value); err == nil || !strings.Contains(err.Error(), "allow_provider_hosted_state") {
+		t.Fatalf("hosted continuation policy error = %v", err)
+	}
 }

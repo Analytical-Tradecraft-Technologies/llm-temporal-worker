@@ -14,6 +14,20 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
+func TestMapErrorSanitizesProviderResponseOverflow(t *testing.T) {
+	wrapped := errors.Join(errors.New("SDK diagnostic includes sensitive-provider-body"), provider.NewProviderResponseTooLargeError(provider.ErrProviderResponseTooLarge))
+	mapped := mapError(wrapped)
+	if mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever {
+		t.Fatalf("mapped overflow = %#v, want non-retryable accepted invalid response", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderResponseTooLarge) {
+		t.Fatal("mapped overflow lost ErrProviderResponseTooLarge")
+	}
+	if strings.Contains(mapped.Error(), "sensitive-provider-body") {
+		t.Fatalf("mapped overflow leaked SDK diagnostic: %q", mapped)
+	}
+}
+
 func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
 	apiErr := &openai.Error{
 		Code:       "rate_limit_exceeded",

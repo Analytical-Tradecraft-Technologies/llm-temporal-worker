@@ -19,6 +19,7 @@ temporal:
     enabled: false
     server_name: ""
     ca_file: ""
+  api_key_file: ""
   worker:
     max_concurrent_activities: 4
     max_concurrent_activity_task_polls: 2
@@ -48,7 +49,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: 07d910df370ca9522400b8ae15a7bda7e76b1c1badcb7e35cb71e2f6ddaecaf2
+    admission_digest: 30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e
     max_connections: 16
     dial_timeout: 2s
     operation_timeout: 3s
@@ -71,7 +72,8 @@ limits:
   continuation_depth: 64
   route_attempts: 3
   provider_timeout: 30s
-  provider_response_bytes: 16777216
+  provider_response_bytes: 524288
+  max_input_tokens: 32768
   max_output_tokens: 4096
   max_budget_buckets_per_window: 512
   token_estimate_safety_ratio: "1.35"

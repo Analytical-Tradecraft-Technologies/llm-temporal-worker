@@ -29,6 +29,26 @@ type V1Runtime interface {
 	QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
 }
 
+// ReserveBatchV1Runtime is the optional durable batch-admission capability.
+// Keeping it separate from V1Runtime preserves custom Generate/Compact/Query
+// implementations while the registered Activity still fails closed unless
+// the active snapshot exposes atomic batch admission.
+type ReserveBatchV1Runtime interface {
+	ReserveBatchV1(context.Context, llm.ReserveBatchRequestV1) (llm.ReserveBatchResponseV1, error)
+}
+
+type AllocateBatchGrantsV1Runtime interface {
+	AllocateBatchGrantsV1(context.Context, llm.AllocateBatchGrantsRequestV1) (llm.AllocateBatchGrantsResponseV1, error)
+}
+type CloseBatchV1Runtime interface {
+	CloseBatchV1(context.Context, llm.CloseBatchRequestV1) (llm.CloseBatchResponseV1, error)
+}
+type ResourceCapacityV1Runtime interface {
+	AcquireResourceCapacityV1(context.Context, llm.ResourceCapacityAcquireRequestV1) (llm.ResourceCapacityLeaseV1, error)
+	RenewResourceCapacityV1(context.Context, llm.ResourceCapacityRenewRequestV1) (llm.ResourceCapacityLeaseV1, error)
+	ReleaseResourceCapacityV1(context.Context, llm.ResourceCapacityReleaseRequestV1) (llm.ResourceCapacityReleaseResponseV1, error)
+}
+
 // QueryService is the control-plane implementation used by llm.query.v1.
 // Keeping this interface separate from V1Runtime allows query reads to be
 // deployed before the Generate/Compact durable engine is composed.
@@ -148,6 +168,183 @@ func (activities *Activities) QueryV1(ctx context.Context, request llm.QueryRequ
 	return &response, nil
 }
 
+// ReserveBatchV1 prices and atomically reserves a complete ordered panel
+// before any child Generate Activity can dispatch provider bytes.
+func (activities *Activities) ReserveBatchV1(ctx context.Context, request llm.ReserveBatchRequestV1) (*llm.ReserveBatchResponseV1, error) {
+	if err := validateV1Request(ctx, MarshalReserveBatchV1, request, activities); err != nil {
+		return nil, err
+	}
+	if activities == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	runtime, ok := activities.V1Runtime.(ReserveBatchV1Runtime)
+	if !ok || runtime == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	var response llm.ReserveBatchResponseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = runtime.ReserveBatchV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		_, err = MarshalReserveBatchResponseV1(response, activities.payloadLimits())
+		if err != nil {
+			return v1OutputError("ReserveBatch", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (activities *Activities) AllocateBatchGrantsV1(ctx context.Context, request llm.AllocateBatchGrantsRequestV1) (*llm.AllocateBatchGrantsResponseV1, error) {
+	if err := validateV1Request(ctx, MarshalAllocateBatchGrantsV1, request, activities); err != nil {
+		return nil, err
+	}
+	if activities == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	runtime, ok := activities.V1Runtime.(AllocateBatchGrantsV1Runtime)
+	if !ok || runtime == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	var response llm.AllocateBatchGrantsResponseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = runtime.AllocateBatchGrantsV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		if _, err = MarshalAllocateBatchGrantsResponseV1(response, activities.payloadLimits()); err != nil {
+			return v1OutputError("AllocateBatchGrants", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (activities *Activities) CloseBatchV1(ctx context.Context, request llm.CloseBatchRequestV1) (*llm.CloseBatchResponseV1, error) {
+	if err := validateV1Request(ctx, MarshalCloseBatchV1, request, activities); err != nil {
+		return nil, err
+	}
+	if activities == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	runtime, ok := activities.V1Runtime.(CloseBatchV1Runtime)
+	if !ok || runtime == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	var response llm.CloseBatchResponseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = runtime.CloseBatchV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		if _, err = MarshalCloseBatchResponseV1(response, activities.payloadLimits()); err != nil {
+			return v1OutputError("CloseBatch", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (activities *Activities) AcquireResourceCapacityV1(ctx context.Context, request llm.ResourceCapacityAcquireRequestV1) (*llm.ResourceCapacityLeaseV1, error) {
+	if err := validateV1Request(ctx, MarshalResourceCapacityAcquireV1, request, activities); err != nil {
+		return nil, err
+	}
+	if activities == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	runtime, ok := activities.V1Runtime.(ResourceCapacityV1Runtime)
+	if !ok || runtime == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	var response llm.ResourceCapacityLeaseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = runtime.AcquireResourceCapacityV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		if _, err = MarshalResourceCapacityLeaseV1(response, activities.payloadLimits()); err != nil {
+			return v1OutputError("AcquireResourceCapacity", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (activities *Activities) RenewResourceCapacityV1(ctx context.Context, request llm.ResourceCapacityRenewRequestV1) (*llm.ResourceCapacityLeaseV1, error) {
+	if err := validateV1Request(ctx, MarshalResourceCapacityRenewV1, request, activities); err != nil {
+		return nil, err
+	}
+	if activities == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	runtime, ok := activities.V1Runtime.(ResourceCapacityV1Runtime)
+	if !ok || runtime == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	var response llm.ResourceCapacityLeaseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = runtime.RenewResourceCapacityV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		if _, err = MarshalResourceCapacityLeaseV1(response, activities.payloadLimits()); err != nil {
+			return v1OutputError("RenewResourceCapacity", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (activities *Activities) ReleaseResourceCapacityV1(ctx context.Context, request llm.ResourceCapacityReleaseRequestV1) (*llm.ResourceCapacityReleaseResponseV1, error) {
+	if err := validateV1Request(ctx, MarshalResourceCapacityReleaseV1, request, activities); err != nil {
+		return nil, err
+	}
+	if activities == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	runtime, ok := activities.V1Runtime.(ResourceCapacityV1Runtime)
+	if !ok || runtime == nil {
+		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
+	}
+	var response llm.ResourceCapacityReleaseResponseV1
+	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
+		var err error
+		response, err = runtime.ReleaseResourceCapacityV1(dispatchContext, request)
+		if err != nil {
+			return err
+		}
+		if _, err = MarshalResourceCapacityReleaseResponseV1(response, activities.payloadLimits()); err != nil {
+			return v1OutputError("ReleaseResourceCapacity", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 // runV1 preserves the existing Activity lifecycle around the durable runtime
 // seam. Runtime implementations may block on provider or storage work, so the
 // adapter binds telemetry and sends bounded provider_wait heartbeats exactly as
@@ -194,6 +391,9 @@ func (activities *Activities) runV1(ctx context.Context, dispatch func(context.C
 		}()
 	}
 	rawErr = dispatch(dispatchContext)
+	if rawErr != nil && sdkactivity.IsActivity(ctx) {
+		sdkactivity.GetLogger(ctx).Error("V1 runtime diagnostic", "error", rawErr)
+	}
 	keepaliveErr := keepalive.stop()
 	keepalive = nil
 	if ctxErr := ctx.Err(); ctxErr != nil && !preferV1DispatchError(rawErr, ctxErr) {
@@ -236,7 +436,27 @@ func (activities *Activities) queryV1Temporal(ctx context.Context, request llm.Q
 	return activities.QueryV1(ctx, request)
 }
 
-// RegisterV1 installs the exact three versioned names. It is separate from
+func (activities *Activities) reserveBatchV1Temporal(ctx context.Context, request llm.ReserveBatchRequestV1) (*llm.ReserveBatchResponseV1, error) {
+	return activities.ReserveBatchV1(ctx, request)
+}
+
+func (activities *Activities) allocateBatchGrantsV1Temporal(ctx context.Context, request llm.AllocateBatchGrantsRequestV1) (*llm.AllocateBatchGrantsResponseV1, error) {
+	return activities.AllocateBatchGrantsV1(ctx, request)
+}
+func (activities *Activities) closeBatchV1Temporal(ctx context.Context, request llm.CloseBatchRequestV1) (*llm.CloseBatchResponseV1, error) {
+	return activities.CloseBatchV1(ctx, request)
+}
+func (activities *Activities) acquireResourceCapacityV1Temporal(ctx context.Context, request llm.ResourceCapacityAcquireRequestV1) (*llm.ResourceCapacityLeaseV1, error) {
+	return activities.AcquireResourceCapacityV1(ctx, request)
+}
+func (activities *Activities) renewResourceCapacityV1Temporal(ctx context.Context, request llm.ResourceCapacityRenewRequestV1) (*llm.ResourceCapacityLeaseV1, error) {
+	return activities.RenewResourceCapacityV1(ctx, request)
+}
+func (activities *Activities) releaseResourceCapacityV1Temporal(ctx context.Context, request llm.ResourceCapacityReleaseRequestV1) (*llm.ResourceCapacityReleaseResponseV1, error) {
+	return activities.ReleaseResourceCapacityV1(ctx, request)
+}
+
+// RegisterV1 installs the exact nine versioned names. It is separate from
 // Register so callers that still exercise the pre-release direct helper in a
 // unit test cannot accidentally put that envelope on a production task
 // queue. New production composition calls RegisterV1 through Register when a
@@ -248,6 +468,12 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	registry.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
 	registry.RegisterActivityWithOptions(activities.compactV1Temporal, sdkactivity.RegisterOptions{Name: CompactActivityName})
 	registry.RegisterActivityWithOptions(activities.queryV1Temporal, sdkactivity.RegisterOptions{Name: QueryActivityName})
+	registry.RegisterActivityWithOptions(activities.reserveBatchV1Temporal, sdkactivity.RegisterOptions{Name: ReserveBatchActivityName})
+	registry.RegisterActivityWithOptions(activities.allocateBatchGrantsV1Temporal, sdkactivity.RegisterOptions{Name: llm.AllocateBatchGrantsActivityName})
+	registry.RegisterActivityWithOptions(activities.closeBatchV1Temporal, sdkactivity.RegisterOptions{Name: llm.CloseBatchActivityName})
+	registry.RegisterActivityWithOptions(activities.acquireResourceCapacityV1Temporal, sdkactivity.RegisterOptions{Name: llm.ResourceCapacityAcquireActivityName})
+	registry.RegisterActivityWithOptions(activities.renewResourceCapacityV1Temporal, sdkactivity.RegisterOptions{Name: llm.ResourceCapacityRenewActivityName})
+	registry.RegisterActivityWithOptions(activities.releaseResourceCapacityV1Temporal, sdkactivity.RegisterOptions{Name: llm.ResourceCapacityReleaseActivityName})
 }
 
 func (activities *Activities) payloadLimits() PayloadLimits {

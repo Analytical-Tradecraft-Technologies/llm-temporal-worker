@@ -29,6 +29,7 @@ const (
 	CheckpointResponseBlob CheckpointBlobKind = "response"
 	CheckpointSettingsBlob CheckpointBlobKind = "settings_patch"
 	CheckpointSnapshotBlob CheckpointBlobKind = "materialized_snapshot"
+	CheckpointBundleBlob   CheckpointBlobKind = "checkpoint_bundle"
 )
 
 // CheckpointBlobCodec bounds both the encoded object and canonical JSON depth.
@@ -46,6 +47,23 @@ func (codec CheckpointBlobCodec) withDefaults() CheckpointBlobCodec {
 		codec.MaxDepth = llm.DefaultCanonicalMaxDepth
 	}
 	return codec
+}
+
+// DigestMaterializedSettings hashes the canonical JSON representation used by
+// checkpoint blobs. Raw schema fragments may arrive with arbitrary object-key
+// order, so hashing json.Marshal output directly would make a snapshot change
+// its own settings digest when the blob codec canonicalizes those fragments.
+func (codec CheckpointBlobCodec) DigestMaterializedSettings(settings ModelState) ([32]byte, error) {
+	codec = codec.withDefaults()
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("marshal materialized checkpoint settings: %w", err)
+	}
+	canonical, err := llm.CanonicalJSONWithLimits(encoded, codec.MaxBytes, codec.MaxDepth)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("canonicalize materialized checkpoint settings: %w", err)
+	}
+	return sha256.Sum256(canonical), nil
 }
 
 type checkpointBlobEnvelope struct {
@@ -184,6 +202,125 @@ func (codec CheckpointBlobCodec) DecodeSettingsPatch(data []byte) (SettingsPatch
 		return SettingsPatch{}, err
 	}
 	return patch, nil
+}
+
+// CheckpointBundle stores one checkpoint's three replay components in one
+// versioned object. The section digests preserve independent tamper evidence
+// while avoiding three object-store writes and reads per lineage node.
+type CheckpointBundle struct {
+	Delta         []llm.Item
+	Response      []llm.Item
+	SettingsPatch SettingsPatch
+}
+
+type checkpointBundlePayload struct {
+	Delta          json.RawMessage `json:"delta"`
+	DeltaSHA256    string          `json:"delta_sha256"`
+	Response       json.RawMessage `json:"response"`
+	ResponseSHA256 string          `json:"response_sha256"`
+	Settings       json.RawMessage `json:"settings_patch"`
+	SettingsSHA256 string          `json:"settings_patch_sha256"`
+}
+
+func (codec CheckpointBlobCodec) EncodeBundle(bundle CheckpointBundle) ([]byte, error) {
+	if bundle.Delta == nil {
+		bundle.Delta = []llm.Item{}
+	}
+	if bundle.Response == nil {
+		bundle.Response = []llm.Item{}
+	}
+	if err := validateItemEncoding(appendItems(bundle.Delta, bundle.Response...)); err != nil {
+		return nil, err
+	}
+	if err := bundle.SettingsPatch.Validate(); err != nil {
+		return nil, err
+	}
+	sections := make([]json.RawMessage, 3)
+	values := []any{bundle.Delta, bundle.Response, settingsPatchToWire(bundle.SettingsPatch)}
+	for index, value := range values {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("marshal checkpoint bundle section: %w", err)
+		}
+		canonical, err := llm.CanonicalJSONWithLimits(encoded, codec.withDefaults().MaxBytes, codec.withDefaults().MaxDepth)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize checkpoint bundle section: %w", err)
+		}
+		sections[index] = canonical
+	}
+	deltaDigest := sha256.Sum256(sections[0])
+	responseDigest := sha256.Sum256(sections[1])
+	settingsDigest := sha256.Sum256(sections[2])
+	return codec.encode(CheckpointBundleBlob, checkpointBundlePayload{
+		Delta: sections[0], DeltaSHA256: hex.EncodeToString(deltaDigest[:]),
+		Response: sections[1], ResponseSHA256: hex.EncodeToString(responseDigest[:]),
+		Settings: sections[2], SettingsSHA256: hex.EncodeToString(settingsDigest[:]),
+	})
+}
+
+func (codec CheckpointBlobCodec) DecodeBundle(data []byte) (CheckpointBundle, error) {
+	var raw json.RawMessage
+	if err := codec.decode(CheckpointBundleBlob, data, &raw); err != nil {
+		return CheckpointBundle{}, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return CheckpointBundle{}, fmt.Errorf("decode checkpoint bundle: %w", err)
+	}
+	allowed := map[string]bool{
+		"delta": true, "delta_sha256": true, "response": true,
+		"response_sha256": true, "settings_patch": true, "settings_patch_sha256": true,
+	}
+	for name := range fields {
+		if !allowed[name] {
+			return CheckpointBundle{}, fmt.Errorf("decode checkpoint bundle: unknown field %q", name)
+		}
+	}
+	sections := []struct {
+		name       string
+		payloadKey string
+		digestKey  string
+	}{
+		{"delta", "delta", "delta_sha256"},
+		{"response", "response", "response_sha256"},
+		{"settings patch", "settings_patch", "settings_patch_sha256"},
+	}
+	for _, section := range sections {
+		payload, payloadOK := fields[section.payloadKey]
+		var claimed string
+		digestRaw, digestOK := fields[section.digestKey]
+		if !payloadOK || !digestOK || json.Unmarshal(digestRaw, &claimed) != nil {
+			return CheckpointBundle{}, fmt.Errorf("decode checkpoint bundle: %s fields are required", section.name)
+		}
+		canonical, err := llm.CanonicalJSONWithLimits(payload, codec.withDefaults().MaxBytes, codec.withDefaults().MaxDepth)
+		if err != nil {
+			return CheckpointBundle{}, fmt.Errorf("decode checkpoint bundle %s: %w", section.name, err)
+		}
+		digest := sha256.Sum256(canonical)
+		if claimed != hex.EncodeToString(digest[:]) {
+			return CheckpointBundle{}, fmt.Errorf("checkpoint bundle %s digest mismatch", section.name)
+		}
+	}
+	delta, err := llm.DecodeItems(fields["delta"])
+	if err != nil {
+		return CheckpointBundle{}, fmt.Errorf("decode checkpoint bundle delta: %w", err)
+	}
+	response, err := llm.DecodeItems(fields["response"])
+	if err != nil {
+		return CheckpointBundle{}, fmt.Errorf("decode checkpoint bundle response: %w", err)
+	}
+	var wire llm.SettingsPatchV1
+	if err := json.Unmarshal(fields["settings_patch"], &wire); err != nil {
+		return CheckpointBundle{}, fmt.Errorf("decode checkpoint bundle settings patch: %w", err)
+	}
+	patch, err := settingsPatchFromWire(wire)
+	if err != nil {
+		return CheckpointBundle{}, err
+	}
+	if err := validateItemEncoding(appendItems(delta, response...)); err != nil {
+		return CheckpointBundle{}, err
+	}
+	return CheckpointBundle{Delta: delta, Response: response, SettingsPatch: patch}, nil
 }
 
 type checkpointSnapshotPayload struct {
@@ -378,28 +515,28 @@ func (reader ScopedBlobReader) Read(ctx context.Context, scopeID string, referen
 		return nil, errors.New("checkpoint blob scope is required")
 	}
 	if err := reference.validate("read"); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrInvalidCheckpoint, err)
 	}
 	if reader.MaxBytes > 0 && reference.ByteLength > reader.MaxBytes {
-		return nil, fmt.Errorf("checkpoint blob exceeds reader byte limit")
+		return nil, fmt.Errorf("%w: checkpoint blob exceeds reader byte limit", ErrMaterializeLimit)
 	}
 	ref, err := reader.Resolve(ctx, scopeID, reference.ID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve checkpoint blob %s: %w", reference.ID, err)
 	}
 	if err := ref.Validate(reader.clock()); err != nil {
-		return nil, fmt.Errorf("validate checkpoint blob %s locator: %w", reference.ID, err)
+		return nil, fmt.Errorf("%w: checkpoint blob %s locator: %v", ErrInvalidCheckpoint, reference.ID, err)
 	}
 	wantDigest := hex.EncodeToString(reference.Digest[:])
 	if ref.Digest != wantDigest || ref.ByteLength != reference.ByteLength || ref.MediaType != reference.MediaType {
-		return nil, fmt.Errorf("checkpoint blob %s metadata mismatch", reference.ID)
+		return nil, fmt.Errorf("%w: checkpoint blob %s metadata mismatch", ErrInvalidCheckpoint, reference.ID)
 	}
 	data, err := reader.Store.Get(ctx, scopeID, ref)
 	if err != nil {
 		return nil, fmt.Errorf("read checkpoint blob %s: %w", reference.ID, err)
 	}
 	if int64(len(data)) != reference.ByteLength || sha256.Sum256(data) != reference.Digest {
-		return nil, fmt.Errorf("checkpoint blob %s digest or length mismatch", reference.ID)
+		return nil, fmt.Errorf("%w: checkpoint blob %s digest or length mismatch", ErrInvalidCheckpoint, reference.ID)
 	}
 	return append([]byte(nil), data...), nil
 }

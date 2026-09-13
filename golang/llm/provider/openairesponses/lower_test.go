@@ -32,13 +32,12 @@ func TestLoweringPreservesTypedInputAndControls(t *testing.T) {
 			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 			llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "result"}}},
 		},
-		Tools:        []llm.Tool{{Name: "lookup", Description: "find", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object"}`)}},
-		ToolPolicy:   llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
-		Output:       &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Description: "answer schema", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
-		Sampling:     &llm.SamplingSpec{Temperature: &temperature, TopP: &topP},
-		Reasoning:    &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, Effort: llm.ReasoningEffortHigh, Summary: llm.ReasoningSummaryDetailed},
-		Continuation: &llm.Continuation{Handle: "openai-responses:resp-prev"},
-		Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content"],"store":false,"truncation":"auto"}`)},
+		Tools:      []llm.Tool{{Name: "lookup", Description: "find", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`), OutputSchema: json.RawMessage(`{"type":"object"}`)}},
+		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
+		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Description: "answer schema", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
+		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopP: &topP},
+		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, Effort: llm.ReasoningEffortHigh, Summary: llm.ReasoningSummaryDetailed},
+		Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content"],"store":false,"truncation":"auto"}`)},
 	}
 	params, err := lowerRequest(request, llm.ServiceClassEconomy)
 	if err != nil {
@@ -51,8 +50,8 @@ func TestLoweringPreservesTypedInputAndControls(t *testing.T) {
 	if got := wire["service_tier"]; got != "flex" {
 		t.Fatalf("service_tier = %#v, want flex", got)
 	}
-	if got := wire["previous_response_id"]; got != "resp-prev" {
-		t.Fatalf("previous_response_id = %#v", got)
+	if store, ok := wire["store"].(bool); !ok || store {
+		t.Fatalf("store = %#v, want explicit false", wire["store"])
 	}
 	input, ok := wire["input"].([]any)
 	if !ok || len(input) != 5 {

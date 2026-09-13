@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
@@ -18,11 +19,14 @@ import (
 )
 
 const (
-	operationDomain        = "llmtw/operation/v1\x00"
-	providerHandleMedia    = "application/vnd.llmtw.provider-handle"
-	defaultLease           = time.Minute
-	defaultRetention       = 24 * time.Hour
-	defaultContinuationTTL = 24 * time.Hour
+	operationDomain         = "llmtw/operation/v2\x00"
+	releasedOperationDomain = "llmtw/operation/v1\x00"
+	engineOperationKind     = "generate"
+	engineAPIVersion        = "llm.generate.v1"
+	providerHandleMedia     = "application/vnd.llmtw.provider-handle"
+	defaultLease            = time.Minute
+	defaultRetention        = 24 * time.Hour
+	defaultContinuationTTL  = 24 * time.Hour
 )
 
 type quotedCandidate struct {
@@ -117,7 +121,7 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 	}
 	planSpan.End()
 	ctx = planCtx
-	operationID, scopeKey := operationIdentity(normalized, digest)
+	operationID, scopeKey := operationIdentity(normalized)
 	admissionCtx, admissionSpan := engine.startTrace(ctx, "llmtw.admission", requestTraceAttrs(normalized)...)
 	operation, existing, err := engine.beginOrResume(admissionCtx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
 	if err != nil {
@@ -288,10 +292,13 @@ func (engine *Engine) beginOrResume(ctx context.Context, request llm.Request, sn
 	}
 	reservations := aggregateReservations(quoted.candidates, quoted.maximumUSD)
 	result, err := engine.dependencies.Admission.Begin(ctx, admission.BeginRequest{
-		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest, Reservation: quoted.maximum,
+		ID: operationID, ReleasedID: releasedEngineOperationIdentity(request, digest),
+		OperationKey: request.OperationKey, Actor: request.Context.Actor,
+		ScopeKey: scopeKey, RequestDigest: digest, Reservation: quoted.maximum,
 		ReservationUSD: quoted.maximumUSD,
 		Reservations:   reservations, ConfigVersion: snapshot.Version, PriceVersion: priceVersion(quoted.candidates),
 		LeaseUntil: now.Add(lease), ExpiresAt: now.Add(retention),
+		OperationKind: engineOperationKind, APIVersion: engineAPIVersion,
 	})
 	if err != nil {
 		if errors.Is(err, admission.ErrOperationConflict) {
@@ -375,14 +382,27 @@ func compatibilityActualMicroUSD(exact pricing.USD) (pricing.MicroUSD, error) {
 	return pricing.CeilMicroFromUSD(exact)
 }
 
-func operationIdentity(request llm.Request, digest [32]byte) (string, string) {
-	scope := request.Context.Tenant + "\x00" + request.OperationKey
-	data := make([]byte, 0, len(operationDomain)+len(scope)+len(digest))
+func operationIdentity(request llm.Request) (string, string) {
+	scope := request.Context.Tenant + "\x00" + request.Context.Project
+	components := []string{scope, request.Context.Actor, engineOperationKind, engineAPIVersion, request.OperationKey}
+	data := make([]byte, 0, len(operationDomain)+len(scope)+len(request.Context.Actor)+len(request.OperationKey)+4)
 	data = append(data, operationDomain...)
+	for _, component := range components {
+		data = append(data, component...)
+		data = append(data, 0)
+	}
+	identity := uuid.NewSHA1(uuid.NameSpaceOID, data)
+	return identity.String(), scope
+}
+
+func releasedEngineOperationIdentity(request llm.Request, digest [32]byte) string {
+	scope := request.Context.Tenant + "\x00" + request.OperationKey
+	data := make([]byte, 0, len(releasedOperationDomain)+len(scope)+len(digest))
+	data = append(data, releasedOperationDomain...)
 	data = append(data, scope...)
 	data = append(data, digest[:]...)
 	identity := sha256.Sum256(data)
-	return hex.EncodeToString(identity[:]), scope
+	return hex.EncodeToString(identity[:])
 }
 
 func priceVersion(candidates []quotedCandidate) string {

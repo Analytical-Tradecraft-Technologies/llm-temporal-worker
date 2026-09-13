@@ -142,51 +142,31 @@ func TestInvokeRejectsNullResponseWithoutPanicking(t *testing.T) {
 	}
 }
 
-func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
-	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter := newFixtureAdapter(t, responseBody)
-	first, err := adapter.Compile(context.Background(), provider.CompileInput{
+func TestStrictHostedResponseStateIsRejectedBeforeDispatch(t *testing.T) {
+	adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
+	_, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: llm.Request{
-			OperationKey: "op-first",
+			OperationKey: "op-hosted-state",
 			Model:        "gpt-contract",
-			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "first turn"}}}},
 			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)},
 		},
 		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 		Strict: true,
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "provider-hosted") {
+		t.Fatalf("hosted response storage error = %v", err)
 	}
-	firstResult, err := adapter.Invoke(context.Background(), first, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstResult.Response.Continuation == nil {
-		t.Fatal("stored response did not yield a continuation")
-	}
-	followUp, err := adapter.Compile(context.Background(), provider.CompileInput{
+	_, err = adapter.Compile(context.Background(), provider.CompileInput{
 		Request: llm.Request{
-			OperationKey: "op-follow-up",
+			OperationKey: "op-hosted-continuation",
 			Model:        "gpt-contract",
-			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "second turn"}}}},
-			Continuation: firstResult.Response.Continuation,
+			Continuation: &llm.Continuation{Handle: "openai-responses:resp-1"},
 		},
 		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 		Strict: true,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	params, ok := followUp.SDKParams.(responses.ResponseNewParams)
-	if !ok {
-		t.Fatalf("follow-up SDK params type = %T", followUp.SDKParams)
-	}
-	if got := marshalParams(t, params)["previous_response_id"]; got != "resp-1" {
-		t.Fatalf("previous response ID = %#v, want resp-1", got)
+	if err == nil {
+		t.Fatal("provider-hosted response continuation compiled")
 	}
 }
 

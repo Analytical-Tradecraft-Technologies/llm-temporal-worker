@@ -566,6 +566,176 @@ func decodeTemperaturePatch(raw json.RawMessage) (Patch[DecimalV1], error) {
 	return Patch[DecimalV1]{Set: &canonical}, nil
 }
 
+const (
+	CostAdmissionAPIVersion = "llm.cost_admission/v1"
+	CostAdmissionContextTag = "llm.cost_admission"
+	CostAdmissionForecastV1 = "forecast/v1"
+)
+
+// CostAdmissionV1 binds a caller-owned operation ceiling to one immutable
+// pricing snapshot. It is optional for legacy non-forecast callers; callers
+// that supply it require an exact echo in the terminal response.
+type CostAdmissionV1 struct {
+	APIVersion                        string `json:"api_version"`
+	BudgetID                          string `json:"budget_id"`
+	CustomerID                        string `json:"customer_id"`
+	RunID                             string `json:"run_id"`
+	OperationKey                      string `json:"operation_key"`
+	GatewayAttemptOrdinal             int64  `json:"gateway_attempt_ordinal"`
+	BatchID                           string `json:"batch_id,omitempty"`
+	BatchSHA256                       string `json:"batch_sha256,omitempty"`
+	GrantMaterializationRequestSHA256 string `json:"grant_materialization_request_sha256,omitempty"`
+	GrantID                           string `json:"grant_id,omitempty"`
+	GrantSHA256                       string `json:"grant_sha256,omitempty"`
+	GrantKeyID                        string `json:"grant_key_id,omitempty"`
+	GrantHMACSHA256                   string `json:"grant_hmac_sha256,omitempty"`
+	PricingGenerationID               string `json:"pricing_generation_id"`
+	PricingManifestSHA256             string `json:"pricing_manifest_sha256"`
+	RemainingMaxCostMicrounits        int64  `json:"remaining_max_cost_microunits"`
+}
+
+func (admission CostAdmissionV1) validate(operationKey string) error {
+	if admission.APIVersion != CostAdmissionAPIVersion {
+		return fmt.Errorf("cost_admission api_version %q is unsupported", admission.APIVersion)
+	}
+	for name, value := range map[string]string{
+		"budget_id": admission.BudgetID, "customer_id": admission.CustomerID,
+		"run_id": admission.RunID, "operation_key": admission.OperationKey,
+		"pricing_generation_id": admission.PricingGenerationID,
+	} {
+		if value == "" || len(value) > 256 {
+			return fmt.Errorf("cost_admission %s must contain 1 to 256 characters", name)
+		}
+	}
+	grantIdentity := map[string]string{
+		"batch_id": admission.BatchID, "batch_sha256": admission.BatchSHA256,
+		"grant_materialization_request_sha256": admission.GrantMaterializationRequestSHA256,
+		"grant_id":                             admission.GrantID, "grant_sha256": admission.GrantSHA256,
+		"grant_key_id": admission.GrantKeyID, "grant_hmac_sha256": admission.GrantHMACSHA256,
+	}
+	present := 0
+	for _, value := range grantIdentity {
+		if value != "" {
+			present++
+		}
+	}
+	if present != 0 && present != len(grantIdentity) {
+		return fmt.Errorf("cost_admission batch grant identity must be absent or complete")
+	}
+	if present != 0 {
+		for name, value := range map[string]string{
+			"batch_id": admission.BatchID, "grant_id": admission.GrantID,
+			"grant_key_id": admission.GrantKeyID,
+		} {
+			if value == "" || len(value) > 256 {
+				return fmt.Errorf("cost_admission %s must contain 1 to 256 characters", name)
+			}
+		}
+		for name, value := range map[string]string{
+			"batch_sha256": admission.BatchSHA256, "grant_sha256": admission.GrantSHA256,
+			"grant_materialization_request_sha256": admission.GrantMaterializationRequestSHA256,
+			"grant_hmac_sha256":                    admission.GrantHMACSHA256,
+		} {
+			if err := reserveBatchHash(name, value); err != nil {
+				return fmt.Errorf("cost_admission %w", err)
+			}
+		}
+	}
+	if admission.OperationKey != operationKey {
+		return fmt.Errorf("cost_admission operation_key does not match request")
+	}
+	if err := reserveBatchHash("pricing_manifest_sha256", admission.PricingManifestSHA256); err != nil {
+		return fmt.Errorf("cost_admission %w", err)
+	}
+	if admission.GatewayAttemptOrdinal <= 0 || admission.GatewayAttemptOrdinal > 1_000_000 {
+		return fmt.Errorf("cost_admission gateway_attempt_ordinal must be between 1 and 1000000")
+	}
+	if admission.RemainingMaxCostMicrounits < 0 {
+		return fmt.Errorf("cost_admission remaining_max_cost_microunits must not be negative")
+	}
+	return nil
+}
+
+func (admission *CostAdmissionV1) UnmarshalJSON(data []byte) error {
+	fields, err := decodeObject(data)
+	if err != nil {
+		return fmt.Errorf("cost_admission must be an object")
+	}
+	if err := checkUnknownFields(fields, "api_version", "budget_id", "customer_id", "run_id", "operation_key", "gateway_attempt_ordinal", "batch_id", "batch_sha256", "grant_materialization_request_sha256", "grant_id", "grant_sha256", "grant_key_id", "grant_hmac_sha256", "pricing_generation_id", "pricing_manifest_sha256", "remaining_max_cost_microunits"); err != nil {
+		return err
+	}
+	var decoded CostAdmissionV1
+	for name, target := range map[string]*string{
+		"api_version": &decoded.APIVersion, "budget_id": &decoded.BudgetID,
+		"customer_id": &decoded.CustomerID, "run_id": &decoded.RunID,
+		"operation_key":           &decoded.OperationKey,
+		"pricing_generation_id":   &decoded.PricingGenerationID,
+		"pricing_manifest_sha256": &decoded.PricingManifestSHA256,
+	} {
+		value, err := requiredString(fields, name)
+		if err != nil {
+			return err
+		}
+		*target = value
+	}
+	for name, target := range map[string]*string{
+		"batch_id": &decoded.BatchID, "batch_sha256": &decoded.BatchSHA256,
+		"grant_materialization_request_sha256": &decoded.GrantMaterializationRequestSHA256,
+		"grant_id":                             &decoded.GrantID, "grant_sha256": &decoded.GrantSHA256,
+		"grant_key_id": &decoded.GrantKeyID, "grant_hmac_sha256": &decoded.GrantHMACSHA256,
+	} {
+		value, _, err := optionalString(fields, name)
+		if err != nil {
+			return err
+		}
+		*target = value
+	}
+	raw, err := requireField(fields, "gateway_attempt_ordinal")
+	if err != nil {
+		return err
+	}
+	decoded.GatewayAttemptOrdinal, err = decodeInt64(raw)
+	if err != nil {
+		return err
+	}
+	raw, err = requireField(fields, "remaining_max_cost_microunits")
+	if err != nil {
+		return err
+	}
+	decoded.RemainingMaxCostMicrounits, err = decodeInt64(raw)
+	if err != nil {
+		return err
+	}
+	if err := decoded.validate(decoded.OperationKey); err != nil {
+		return err
+	}
+	*admission = decoded
+	return nil
+}
+
+func (admission CostAdmissionV1) MarshalJSON() ([]byte, error) {
+	if err := admission.validate(admission.OperationKey); err != nil {
+		return nil, err
+	}
+	type plain CostAdmissionV1
+	return json.Marshal(plain(admission))
+}
+
+func validateCostAdmissionRequirement(context RequestContext, admission *CostAdmissionV1) error {
+	tag, tagged := context.Tags[CostAdmissionContextTag]
+	if tagged && tag != CostAdmissionForecastV1 {
+		return fmt.Errorf("context tag %s value %q is unsupported", CostAdmissionContextTag, tag)
+	}
+	required := tagged
+	if required && admission == nil {
+		return fmt.Errorf("forecast request requires cost_admission")
+	}
+	if admission != nil && !required {
+		return fmt.Errorf("cost_admission requires context tag %s=%s", CostAdmissionContextTag, CostAdmissionForecastV1)
+	}
+	return nil
+}
+
 type GenerateRequestV1 struct {
 	APIVersion    string
 	OperationKey  string
@@ -574,11 +744,14 @@ type GenerateRequestV1 struct {
 	Append        []Item
 	SettingsPatch SettingsPatchV1
 	Cache         *CachePolicyV1
+	CostAdmission *CostAdmissionV1
 }
 
 func validateRequestContextV1(context RequestContext) error {
 	if len(context.Tags) > 0 {
-		return fmt.Errorf("v1 context tags are not supported")
+		if len(context.Tags) != 1 || context.Tags[CostAdmissionContextTag] != CostAdmissionForecastV1 {
+			return fmt.Errorf("v1 context tags only support %s=%s", CostAdmissionContextTag, CostAdmissionForecastV1)
+		}
 	}
 	if context.Tenant == "" || context.Project == "" || context.Actor == "" {
 		return fmt.Errorf("v1 context requires tenant, project, and actor")
@@ -590,11 +763,15 @@ func marshalRequestContextV1(context RequestContext) (json.RawMessage, error) {
 	if err := validateRequestContextV1(context); err != nil {
 		return nil, err
 	}
-	data, err := marshalObject(map[string]any{
+	fields := map[string]any{
 		"tenant":  context.Tenant,
 		"project": context.Project,
 		"actor":   context.Actor,
-	})
+	}
+	if len(context.Tags) > 0 {
+		fields["tags"] = context.Tags
+	}
+	data, err := marshalObject(fields)
 	if err != nil {
 		return nil, fmt.Errorf("v1 context: %w", err)
 	}
@@ -606,7 +783,7 @@ func decodeRequestContextV1(data []byte) (RequestContext, error) {
 	if err != nil {
 		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
 	}
-	if err := checkUnknownFields(fields, "tenant", "project", "actor"); err != nil {
+	if err := checkUnknownFields(fields, "tenant", "project", "actor", "tags"); err != nil {
 		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
 	}
 	tenant, _, err := optionalString(fields, "tenant")
@@ -621,7 +798,13 @@ func decodeRequestContextV1(data []byte) (RequestContext, error) {
 	if err != nil {
 		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
 	}
-	context := RequestContext{Tenant: tenant, Project: project, Actor: actor}
+	tags := map[string]string(nil)
+	if raw, ok := fields["tags"]; ok {
+		if err := json.Unmarshal(raw, &tags); err != nil {
+			return RequestContext{}, fmt.Errorf("v1 context tags must be a string map")
+		}
+	}
+	context := RequestContext{Tenant: tenant, Project: project, Actor: actor, Tags: tags}
 	if err := validateRequestContextV1(context); err != nil {
 		return RequestContext{}, err
 	}
@@ -646,6 +829,14 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 	}
+	if request.CostAdmission != nil {
+		if err := request.CostAdmission.validate(request.OperationKey); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateCostAdmissionRequirement(request.Context, request.CostAdmission); err != nil {
+		return nil, err
+	}
 	context, err := marshalRequestContextV1(request.Context)
 	if err != nil {
 		return nil, err
@@ -666,6 +857,9 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 	if request.Cache != nil {
 		fields["cache"] = request.Cache
 	}
+	if request.CostAdmission != nil {
+		fields["cost_admission"] = request.CostAdmission
+	}
 	return marshalObject(fields)
 }
 
@@ -674,7 +868,7 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "append", "settings_patch", "cache"); err != nil {
+	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "append", "settings_patch", "cache", "cost_admission"); err != nil {
 		return err
 	}
 	version, err := requiredString(fields, "api_version")
@@ -730,6 +924,19 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		result.Cache = &policy
+	}
+	if raw, ok := fields["cost_admission"]; ok {
+		var admission CostAdmissionV1
+		if err := json.Unmarshal(raw, &admission); err != nil {
+			return err
+		}
+		if err := admission.validate(result.OperationKey); err != nil {
+			return err
+		}
+		result.CostAdmission = &admission
+	}
+	if err := validateCostAdmissionRequirement(result.Context, result.CostAdmission); err != nil {
+		return err
 	}
 	if err := validateGenerateRequestV1Bounds(result); err != nil {
 		return err
@@ -970,17 +1177,18 @@ func (cost CostV1) validate() error {
 }
 
 type GenerateResponseV1 struct {
-	APIVersion   string
-	OperationKey string
-	OperationID  string
-	Status       ResponseStatus
-	Output       []Item
-	Checkpoint   CheckpointMetadata
-	Cache        CacheDispositionV1
-	Route        *RouteFacts
-	Usage        *Usage
-	Cost         CostV1
-	Diagnostics  []Diagnostic
+	APIVersion    string
+	OperationKey  string
+	OperationID   string
+	Status        ResponseStatus
+	Output        []Item
+	Checkpoint    CheckpointMetadata
+	Cache         CacheDispositionV1
+	Route         *RouteFacts
+	Usage         *Usage
+	Cost          CostV1
+	CostAdmission *CostAdmissionV1
+	Diagnostics   []Diagnostic
 }
 
 func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
@@ -996,6 +1204,14 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 	if err := response.Cost.validate(); err != nil {
 		return nil, err
 	}
+	if response.CostAdmission != nil {
+		if err := response.CostAdmission.validate(response.OperationKey); err != nil {
+			return nil, err
+		}
+		if response.Cost.Status == "exact" && response.Cost.CatalogVersion != response.CostAdmission.PricingGenerationID {
+			return nil, fmt.Errorf("cost catalog_version does not match cost_admission pricing generation")
+		}
+	}
 	output := response.Output
 	if output == nil {
 		output = []Item{}
@@ -1006,6 +1222,9 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 	}
 	if response.Usage != nil {
 		fields["usage"] = response.Usage
+	}
+	if response.CostAdmission != nil {
+		fields["cost_admission"] = response.CostAdmission
 	}
 	if response.Diagnostics != nil {
 		fields["diagnostics"] = response.Diagnostics
@@ -1018,7 +1237,7 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "usage", "cost", "diagnostics"); err != nil {
+	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "usage", "cost", "cost_admission", "diagnostics"); err != nil {
 		return err
 	}
 	version, err := requiredString(fields, "api_version")
@@ -1094,6 +1313,19 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 		}
 		result.Usage = &usage
 	}
+	if raw, ok := fields["cost_admission"]; ok {
+		var admission CostAdmissionV1
+		if err := json.Unmarshal(raw, &admission); err != nil {
+			return err
+		}
+		if err := admission.validate(result.OperationKey); err != nil {
+			return err
+		}
+		if result.Cost.Status == "exact" && result.Cost.CatalogVersion != admission.PricingGenerationID {
+			return fmt.Errorf("cost catalog_version does not match cost_admission pricing generation")
+		}
+		result.CostAdmission = &admission
+	}
 	if raw, ok := fields["diagnostics"]; ok {
 		var err error
 		result.Diagnostics, err = decodeDiagnostics(raw)
@@ -1106,12 +1338,13 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 }
 
 type CompactRequestV1 struct {
-	APIVersion   string
-	OperationKey string
-	Context      RequestContext
-	Parent       CheckpointHandle
-	Policy       json.RawMessage
-	Cache        *CachePolicyV1
+	APIVersion    string
+	OperationKey  string
+	Context       RequestContext
+	Parent        CheckpointHandle
+	Policy        json.RawMessage
+	Cache         *CachePolicyV1
+	CostAdmission *CostAdmissionV1
 }
 
 func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
@@ -1134,6 +1367,14 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 	}
+	if request.CostAdmission != nil {
+		if err := request.CostAdmission.validate(request.OperationKey); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateCostAdmissionRequirement(request.Context, request.CostAdmission); err != nil {
+		return nil, err
+	}
 	context, err := marshalRequestContextV1(request.Context)
 	if err != nil {
 		return nil, err
@@ -1148,6 +1389,9 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 	if request.Cache != nil {
 		fields["cache"] = request.Cache
 	}
+	if request.CostAdmission != nil {
+		fields["cost_admission"] = request.CostAdmission
+	}
 	return marshalObject(fields)
 }
 func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
@@ -1155,7 +1399,7 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "policy", "cache"); err != nil {
+	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "policy", "cache", "cost_admission"); err != nil {
 		return err
 	}
 	version, err := requiredString(fields, "api_version")
@@ -1198,6 +1442,19 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 		}
 		result.Cache = &policy
 	}
+	if raw, ok := fields["cost_admission"]; ok {
+		var admission CostAdmissionV1
+		if err := json.Unmarshal(raw, &admission); err != nil {
+			return err
+		}
+		if err := admission.validate(result.OperationKey); err != nil {
+			return err
+		}
+		result.CostAdmission = &admission
+	}
+	if err := validateCostAdmissionRequirement(result.Context, result.CostAdmission); err != nil {
+		return err
+	}
 	*request = result
 	return nil
 }
@@ -1235,15 +1492,16 @@ func validateCompactPolicy(raw json.RawMessage) error {
 }
 
 type CompactResponseV1 struct {
-	APIVersion   string
-	OperationKey string
-	OperationID  string
-	Checkpoint   CheckpointMetadata
-	Cache        CacheDispositionV1
-	Provenance   json.RawMessage
-	Usage        *Usage
-	Cost         CostV1
-	Diagnostics  []Diagnostic
+	APIVersion    string
+	OperationKey  string
+	OperationID   string
+	Checkpoint    CheckpointMetadata
+	Cache         CacheDispositionV1
+	Provenance    json.RawMessage
+	Usage         *Usage
+	Cost          CostV1
+	CostAdmission *CostAdmissionV1
+	Diagnostics   []Diagnostic
 }
 
 func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
@@ -1262,12 +1520,23 @@ func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
 	if err := response.Cost.validate(); err != nil {
 		return nil, err
 	}
+	if response.CostAdmission != nil {
+		if err := response.CostAdmission.validate(response.OperationKey); err != nil {
+			return nil, err
+		}
+		if response.Cost.Status == "exact" && response.Cost.CatalogVersion != response.CostAdmission.PricingGenerationID {
+			return nil, fmt.Errorf("cost catalog_version does not match cost_admission pricing generation")
+		}
+	}
 	fields := map[string]any{"api_version": CompactAPIVersion, "operation_key": response.OperationKey, "operation_id": response.OperationID, "status": "completed", "checkpoint": response.Checkpoint, "cache": response.Cache, "cost": response.Cost}
 	if len(response.Provenance) > 0 {
 		fields["provenance"] = json.RawMessage(response.Provenance)
 	}
 	if response.Usage != nil {
 		fields["usage"] = response.Usage
+	}
+	if response.CostAdmission != nil {
+		fields["cost_admission"] = response.CostAdmission
 	}
 	if response.Diagnostics != nil {
 		fields["diagnostics"] = response.Diagnostics
@@ -1280,7 +1549,7 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "checkpoint", "cache", "provenance", "usage", "cost", "diagnostics"); err != nil {
+	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "checkpoint", "cache", "provenance", "usage", "cost", "cost_admission", "diagnostics"); err != nil {
 		return err
 	}
 	version, err := requiredString(fields, "api_version")
@@ -1339,6 +1608,19 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		result.Usage = &usage
+	}
+	if raw, ok := fields["cost_admission"]; ok {
+		var admission CostAdmissionV1
+		if err := json.Unmarshal(raw, &admission); err != nil {
+			return err
+		}
+		if err := admission.validate(result.OperationKey); err != nil {
+			return err
+		}
+		if result.Cost.Status == "exact" && result.Cost.CatalogVersion != admission.PricingGenerationID {
+			return fmt.Errorf("cost catalog_version does not match cost_admission pricing generation")
+		}
+		result.CostAdmission = &admission
 	}
 	if raw, ok := fields["diagnostics"]; ok {
 		var err error

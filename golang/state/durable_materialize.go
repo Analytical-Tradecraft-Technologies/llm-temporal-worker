@@ -2,9 +2,12 @@ package state
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -45,10 +48,28 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 	limits = limits.withDefaults()
 	now := materializer.clock()
 	codec := materializer.Codec.withDefaults()
+	blobCache := make(map[CheckpointBlobReference][]byte)
+	blobCacheErrors := make(map[CheckpointBlobReference]error)
+	var blobCacheMu sync.Mutex
+	readBlob := func(reference CheckpointBlobReference) ([]byte, error) {
+		blobCacheMu.Lock()
+		cached, ok := blobCache[reference]
+		cachedErr, failed := blobCacheErrors[reference]
+		blobCacheMu.Unlock()
+		if ok || failed {
+			return cached, cachedErr
+		}
+		value, err := materializer.Blobs.Read(ctx, scopeID, reference)
+		blobCacheMu.Lock()
+		if err != nil {
+			blobCacheErrors[reference] = err
+		} else {
+			blobCache[reference] = value
+		}
+		blobCacheMu.Unlock()
+		return value, err
+	}
 
-	// Collect leaf-to-root rows first. The repository's scoped Get is the only
-	// database capability used here; a cycle, a missing parent, or a depth gap
-	// is rejected before any graph node is exposed to callers.
 	type loaded struct {
 		row      DurableCheckpoint
 		delta    []llm.Item
@@ -56,15 +77,91 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 		patch    SettingsPatch
 		snapshot *CheckpointSnapshot
 	}
-	path := make([]loaded, 0, 8)
+	path := make([]loaded, 0, 16)
+	batched := make(map[CheckpointID]DurableCheckpoint)
+	var batchedRows []DurableCheckpoint
+	if repository, ok := materializer.Repository.(CheckpointLineageRepository); ok {
+		rows, err := repository.GetLineage(ctx, scopeID, checkpointID, limits.MaxRows)
+		if err != nil {
+			return MaterializedState{}, err
+		}
+		for _, row := range rows {
+			if _, duplicate := batched[row.ID]; duplicate {
+				return MaterializedState{}, fmt.Errorf("%w: durable checkpoint lineage batch contains a cycle", ErrInvalidCheckpoint)
+			}
+			batched[row.ID] = row
+			batchedRows = append(batchedRows, row)
+		}
+	}
+	if len(batchedRows) != 0 {
+		seenBatch := make(map[CheckpointID]struct{}, len(batchedRows))
+		references := make(map[CheckpointBlobReference]struct{}, len(batchedRows)+1)
+		for index, row := range batchedRows {
+			if row.ScopeID != scopeID {
+				return MaterializedState{}, ErrTenantMismatch
+			}
+			if err := row.Validate(now); err != nil {
+				return MaterializedState{}, invalidCheckpoint(fmt.Errorf("validate durable checkpoint %s: %w", row.ID, err))
+			}
+			if !now.Before(row.ExpiresAt) {
+				return MaterializedState{}, ErrExpired
+			}
+			if row.Depth > limits.MaxDepth {
+				return MaterializedState{}, fmt.Errorf("%w: checkpoint depth/row count", ErrMaterializeLimit)
+			}
+			if _, duplicate := seenBatch[row.ID]; duplicate {
+				return MaterializedState{}, fmt.Errorf("%w: durable checkpoint lineage batch contains a cycle", ErrInvalidCheckpoint)
+			}
+			seenBatch[row.ID] = struct{}{}
+			if index > 0 {
+				child := batchedRows[index-1]
+				if child.ParentID == nil || *child.ParentID != row.ID || child.Depth != row.Depth+1 {
+					return MaterializedState{}, fmt.Errorf("%w: durable checkpoint %s depth does not match lineage", ErrInvalidCheckpoint, row.ID)
+				}
+			}
+			if row.MaterializedSnapshotBlob != nil {
+				references[*row.MaterializedSnapshotBlob] = struct{}{}
+				continue
+			}
+			references[row.DeltaBlob] = struct{}{}
+			references[row.ResponseBlob] = struct{}{}
+			references[row.SettingsPatchBlob] = struct{}{}
+		}
+		// Object fetch latency is bounded by a small worker pool. Results are
+		// placed in the immutable per-materialization cache and replay order is
+		// still determined solely by validated lineage metadata.
+		jobs := make(chan CheckpointBlobReference)
+		workers := min(8, len(references))
+		var wait sync.WaitGroup
+		wait.Add(workers)
+		for range workers {
+			go func() {
+				defer wait.Done()
+				for reference := range jobs {
+					_, _ = readBlob(reference)
+				}
+			}()
+		}
+		for reference := range references {
+			jobs <- reference
+		}
+		close(jobs)
+		wait.Wait()
+	}
+	getCheckpoint := func(id CheckpointID) (DurableCheckpoint, error) {
+		if row, ok := batched[id]; ok {
+			return row, nil
+		}
+		return materializer.Repository.Get(ctx, scopeID, id)
+	}
 	seen := make(map[CheckpointID]struct{})
 	current := checkpointID
 	for current != "" {
 		if _, exists := seen[current]; exists {
-			return MaterializedState{}, fmt.Errorf("durable checkpoint graph contains a cycle")
+			return MaterializedState{}, fmt.Errorf("%w: durable checkpoint graph contains a cycle", ErrInvalidCheckpoint)
 		}
 		seen[current] = struct{}{}
-		row, err := materializer.Repository.Get(ctx, scopeID, current)
+		row, err := getCheckpoint(current)
 		if err != nil {
 			return MaterializedState{}, err
 		}
@@ -72,89 +169,158 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 			return MaterializedState{}, ErrTenantMismatch
 		}
 		if err := row.Validate(now); err != nil {
-			return MaterializedState{}, fmt.Errorf("validate durable checkpoint %s: %w", current, err)
+			return MaterializedState{}, invalidCheckpoint(fmt.Errorf("validate durable checkpoint %s: %w", current, err))
+		}
+		if !now.Before(row.ExpiresAt) {
+			return MaterializedState{}, ErrExpired
+		}
+		if row.Depth > limits.MaxDepth || len(path)+1 > limits.MaxRows {
+			return MaterializedState{}, fmt.Errorf("%w: checkpoint depth/row count", ErrMaterializeLimit)
 		}
 		if len(path) > 0 && path[len(path)-1].row.Depth != row.Depth+1 {
-			return MaterializedState{}, fmt.Errorf("durable checkpoint %s depth does not match lineage", current)
+			return MaterializedState{}, fmt.Errorf("%w: durable checkpoint %s depth does not match lineage", ErrInvalidCheckpoint, current)
 		}
 		if row.ParentID == nil && row.Depth != 0 {
-			return MaterializedState{}, fmt.Errorf("durable checkpoint %s root depth is not zero", current)
+			return MaterializedState{}, fmt.Errorf("%w: durable checkpoint %s root depth is not zero", ErrInvalidCheckpoint, current)
 		}
-		if int32(len(path)) > limits.MaxDepth || len(path)+1 > limits.MaxRows {
-			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit")
-		}
-		delta, err := materializer.readItems(ctx, scopeID, row.DeltaBlob, codec, CheckpointDeltaBlob)
-		if err != nil {
-			return MaterializedState{}, fmt.Errorf("checkpoint %s delta: %w", current, err)
-		}
-		response, err := materializer.readItems(ctx, scopeID, row.ResponseBlob, codec, CheckpointResponseBlob)
-		if err != nil {
-			return MaterializedState{}, fmt.Errorf("checkpoint %s response: %w", current, err)
-		}
-		patch, err := materializer.readPatch(ctx, scopeID, row.SettingsPatchBlob, codec)
-		if err != nil {
-			return MaterializedState{}, fmt.Errorf("checkpoint %s settings patch: %w", current, err)
-		}
-		var snapshot *CheckpointSnapshot
+
+		// A snapshot is an optimization only. Any unavailable, malformed, or
+		// incorrectly bound snapshot falls back to authoritative parent deltas.
 		if row.MaterializedSnapshotBlob != nil {
-			value, readErr := materializer.Blobs.Read(ctx, scopeID, *row.MaterializedSnapshotBlob)
-			if readErr != nil {
-				return MaterializedState{}, fmt.Errorf("checkpoint %s snapshot: %w", current, readErr)
+			if value, readErr := readBlob(*row.MaterializedSnapshotBlob); readErr == nil {
+				if decoded, decodeErr := codec.DecodeSnapshot(value); decodeErr == nil && validSnapshotBase(row, decoded, limits) {
+					path = append(path, loaded{row: row, snapshot: &decoded})
+					break
+				}
 			}
-			if row.MaterializedSnapshotBlob.MediaType != "application/json" {
-				return MaterializedState{}, fmt.Errorf("checkpoint %s snapshot has unsupported media type", current)
-			}
-			decoded, decodeErr := codec.DecodeSnapshot(value)
-			if decodeErr != nil {
-				return MaterializedState{}, fmt.Errorf("checkpoint %s snapshot: %w", current, decodeErr)
-			}
-			snapshot = &decoded
 		}
-		path = append(path, loaded{row: row, delta: delta, response: response, patch: patch, snapshot: snapshot})
+
+		entry := loaded{row: row}
+		if sameCheckpointBlobReference(row.DeltaBlob, row.ResponseBlob) &&
+			sameCheckpointBlobReference(row.DeltaBlob, row.SettingsPatchBlob) {
+			value, readErr := readBlob(row.DeltaBlob)
+			if readErr != nil {
+				return MaterializedState{}, fmt.Errorf("checkpoint %s bundle: %w", current, readErr)
+			}
+			bundle, decodeErr := codec.DecodeBundle(value)
+			if decodeErr != nil {
+				return MaterializedState{}, fmt.Errorf("checkpoint %s bundle: %w", current, invalidCheckpoint(decodeErr))
+			}
+			entry.delta, entry.response, entry.patch = bundle.Delta, bundle.Response, bundle.SettingsPatch
+		} else {
+			entry.delta, entry.response, entry.patch, err = materializer.readLegacyParts(row, codec, readBlob)
+			if err != nil {
+				return MaterializedState{}, fmt.Errorf("checkpoint %s replay parts: %w", current, err)
+			}
+		}
+		path = append(path, entry)
 		if row.ParentID == nil {
 			break
 		}
 		current = *row.ParentID
 	}
-	if len(path) == 0 || path[len(path)-1].row.ParentID != nil {
-		return MaterializedState{}, fmt.Errorf("durable checkpoint graph has no root")
+	if len(path) == 0 {
+		return MaterializedState{}, fmt.Errorf("%w: durable checkpoint graph has no root", ErrInvalidCheckpoint)
 	}
-
+	base := len(path) - 1
+	result := MaterializedState{Handle: Handle(checkpointID), Tenant: scopeID, Settings: RootModelState("")}
+	if path[base].snapshot != nil {
+		snapshot := path[base].snapshot
+		result.Items = cloneItems(snapshot.Items)
+		result.Settings = snapshot.Settings.Clone()
+		result.Depth = snapshot.Depth
+		result.Lineage = append([]Handle(nil), snapshot.Lineage...)
+		base--
+	} else if path[base].row.ParentID != nil {
+		return MaterializedState{}, fmt.Errorf("%w: durable checkpoint graph has no root", ErrInvalidCheckpoint)
+	}
+	itemCapacity := len(result.Items)
+	for index := base; index >= 0; index-- {
+		count := len(path[index].delta) + len(path[index].response)
+		if count > limits.MaxItems-itemCapacity {
+			return MaterializedState{}, fmt.Errorf("%w: checkpoint item count", ErrMaterializeLimit)
+		}
+		itemCapacity += count
+	}
+	if itemCapacity > len(result.Items) {
+		items := make([]llm.Item, len(result.Items), itemCapacity)
+		copy(items, result.Items)
+		result.Items = items
+	}
+	for index := base; index >= 0; index-- {
+		entry := path[index]
+		var err error
+		result.Settings, err = ApplySettingsPatch(result.Settings, entry.patch)
+		if err != nil {
+			return MaterializedState{}, fmt.Errorf("checkpoint %s settings: %w", entry.row.ID, invalidCheckpoint(err))
+		}
+		result.Items = append(result.Items, entry.delta...)
+		result.Items = append(result.Items, entry.response...)
+		result.Depth = entry.row.Depth
+		result.Lineage = append(result.Lineage, Handle(entry.row.ID))
+	}
 	graph := NewCheckpointGraph(limits)
-	// Repository validation and graph replay must use one clock. Without this,
-	// a test or caller-provided materializer clock can disagree with the graph's
-	// wall clock and incorrectly reject an otherwise live checkpoint.
-	graph.Now = func() time.Time { return now }
-	for index := len(path) - 1; index >= 0; index-- {
-		value := path[index]
-		checkpoint := Checkpoint{
-			Handle:        Handle(value.row.ID),
-			Tenant:        scopeID,
-			OperationKey:  string(value.row.OriginOperationID),
-			Delta:         value.delta,
-			Output:        value.response,
-			SettingsPatch: value.patch,
-			Depth:         value.row.Depth,
-			ExpiresAt:     value.row.ExpiresAt,
-			Snapshot:      value.snapshot,
-		}
-		if value.row.ParentID != nil {
-			parent := Handle(*value.row.ParentID)
-			checkpoint.Parent = &parent
-		}
-		if checkpoint.Parent == nil {
-			if err := graph.PutRoot(checkpoint); err != nil {
-				return MaterializedState{}, fmt.Errorf("publish durable root %s: %w", value.row.ID, err)
-			}
-		} else if err := graph.PutChild(checkpoint); err != nil {
-			return MaterializedState{}, fmt.Errorf("publish durable child %s: %w", value.row.ID, err)
-		}
-	}
-	result, err := graph.Materialize(scopeID, Handle(checkpointID))
-	if err != nil {
+	if err := graph.validateMaterializedLimits(result.Items); err != nil {
 		return MaterializedState{}, err
 	}
+	if result.Settings.Model == "" {
+		return MaterializedState{}, fmt.Errorf("%w: materialized root model is required", ErrInvalidCheckpoint)
+	}
+	pending, err := validateItems(result.Items)
+	if err != nil {
+		return MaterializedState{}, invalidCheckpoint(err)
+	}
+	if sameCheckpointBlobReference(path[0].row.DeltaBlob, path[0].row.ResponseBlob) &&
+		sameCheckpointBlobReference(path[0].row.DeltaBlob, path[0].row.SettingsPatchBlob) {
+		if err := verifyMaterializedCheckpointDigests(path[0].row, result, codec); err != nil {
+			return MaterializedState{}, invalidCheckpoint(err)
+		}
+	}
+	result.Items = cloneItems(result.Items)
+	result.PendingToolCalls = append([]string(nil), pending...)
+	result.Settings = result.Settings.Clone()
 	return result, nil
+}
+
+func sameCheckpointBlobReference(left, right CheckpointBlobReference) bool {
+	return left.ID == right.ID && left.Digest == right.Digest &&
+		left.ByteLength == right.ByteLength && left.MediaType == right.MediaType
+}
+func verifyMaterializedCheckpointDigests(row DurableCheckpoint, materialized MaterializedState, codec CheckpointBlobCodec) error {
+	lineage, err := json.Marshal(materialized.Lineage)
+	if err != nil || sha256.Sum256(lineage) != row.CanonicalLineageDigest {
+		return fmt.Errorf("materialized checkpoint lineage digest mismatch")
+	}
+	settingsDigest, err := codec.DigestMaterializedSettings(materialized.Settings)
+	if err != nil {
+		return err
+	}
+	if settingsDigest != row.MaterializedSettingsDigest {
+		return fmt.Errorf("materialized checkpoint settings digest mismatch")
+	}
+	frontier, err := ValidateTranscript(materialized.Items)
+	if err != nil {
+		return err
+	}
+	encodedFrontier, err := json.Marshal(frontier)
+	if err != nil || sha256.Sum256(encodedFrontier) != row.ToolFrontierDigest {
+		return fmt.Errorf("materialized checkpoint tool frontier digest mismatch")
+	}
+	return nil
+}
+
+func validSnapshotBase(row DurableCheckpoint, snapshot CheckpointSnapshot, limits MaterializeLimits) bool {
+	if snapshot.validate() != nil || snapshot.Depth != row.Depth ||
+		snapshot.Depth > limits.MaxDepth || len(snapshot.Lineage) != int(snapshot.Depth)+1 ||
+		len(snapshot.Lineage) > limits.MaxRows || len(snapshot.Lineage) == 0 ||
+		snapshot.Lineage[len(snapshot.Lineage)-1] != Handle(row.ID) {
+		return false
+	}
+	lineage, err := json.Marshal(snapshot.Lineage)
+	if err != nil {
+		return false
+	}
+	return sha256.Sum256(lineage) == row.CanonicalLineageDigest
 }
 
 func (materializer *DurableCheckpointMaterializer) MaterializeHandle(ctx context.Context, scopeID, handle string, limits MaterializeLimits) (MaterializedState, error) {
@@ -173,6 +339,55 @@ func (materializer *DurableCheckpointMaterializer) MaterializeHandle(ctx context
 	// repository key and must not be substituted into an Activity payload.
 	result.Handle = Handle(handle)
 	return result, nil
+}
+
+func invalidCheckpoint(err error) error {
+	if err == nil || errors.Is(err, ErrMaterializeLimit) || errors.Is(err, ErrInvalidCheckpoint) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrInvalidCheckpoint, err)
+}
+
+func (materializer *DurableCheckpointMaterializer) readLegacyParts(row DurableCheckpoint, codec CheckpointBlobCodec, readBlob func(CheckpointBlobReference) ([]byte, error)) ([]llm.Item, []llm.Item, SettingsPatch, error) {
+	references := []CheckpointBlobReference{row.DeltaBlob, row.ResponseBlob, row.SettingsPatchBlob}
+	unique := make(map[CheckpointBlobReference]struct{}, len(references))
+	for _, reference := range references {
+		unique[reference] = struct{}{}
+	}
+	type result struct {
+		reference CheckpointBlobReference
+		value     []byte
+		err       error
+	}
+	results := make(chan result, len(unique))
+	for reference := range unique {
+		reference := reference
+		go func() {
+			value, err := readBlob(reference)
+			results <- result{reference: reference, value: value, err: err}
+		}()
+	}
+	values := make(map[CheckpointBlobReference][]byte, len(unique))
+	for range unique {
+		read := <-results
+		if read.err != nil {
+			return nil, nil, SettingsPatch{}, read.err
+		}
+		values[read.reference] = read.value
+	}
+	delta, err := codec.DecodeDelta(values[row.DeltaBlob])
+	if err != nil {
+		return nil, nil, SettingsPatch{}, invalidCheckpoint(err)
+	}
+	response, err := codec.DecodeResponse(values[row.ResponseBlob])
+	if err != nil {
+		return nil, nil, SettingsPatch{}, invalidCheckpoint(err)
+	}
+	patch, err := codec.DecodeSettingsPatch(values[row.SettingsPatchBlob])
+	if err != nil {
+		return nil, nil, SettingsPatch{}, invalidCheckpoint(err)
+	}
+	return delta, response, patch, nil
 }
 
 func (materializer *DurableCheckpointMaterializer) readItems(ctx context.Context, scopeID string, reference CheckpointBlobReference, codec CheckpointBlobCodec, kind CheckpointBlobKind) ([]llm.Item, error) {

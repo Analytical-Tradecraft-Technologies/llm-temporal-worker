@@ -42,6 +42,7 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 		"model":        request.Model,
 		"input":        input,
 		"service_tier": providerTier(serviceClass),
+		"store":        false,
 	}
 	if request.Output != nil {
 		output, err := lowerOutput(*request.Output)
@@ -79,12 +80,8 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	}
 	requestMap["tool_choice"] = policy.choice
 	requestMap["parallel_tool_calls"] = policy.parallel
-	continuation, err := lowerContinuation(request.Continuation)
-	if err != nil {
-		return responses.ResponseNewParams{}, err
-	}
-	if continuation != "" {
-		requestMap["previous_response_id"] = continuation
+	if request.Continuation != nil {
+		return responses.ResponseNewParams{}, fmt.Errorf("provider-hosted Responses continuation state is prohibited")
 	}
 	if err := lowerExtensions(request.Extensions, requestMap); err != nil {
 		return responses.ResponseNewParams{}, err
@@ -386,19 +383,15 @@ func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
 	return result, nil
 }
 
-func lowerContinuation(continuation *llm.Continuation) (string, error) {
-	if continuation == nil {
-		return "", nil
+func validateHostedStateExtension(name string, value json.RawMessage) (bool, error) {
+	var enabled bool
+	if err := json.Unmarshal(value, &enabled); err != nil {
+		return false, fmt.Errorf("extension %s must be boolean: %w", name, err)
 	}
-	for _, state := range continuation.ProviderStates {
-		if state.Provider == "openai" && state.EndpointFamily == "responses" && len(state.Opaque) > 0 {
-			return string(state.Opaque), nil
-		}
+	if enabled {
+		return false, fmt.Errorf("extension %s enables prohibited provider-hosted response state", name)
 	}
-	if strings.HasPrefix(continuation.Handle, "openai-responses:") {
-		return strings.TrimPrefix(continuation.Handle, "openai-responses:"), nil
-	}
-	return "", fmt.Errorf("continuation does not contain an OpenAI Responses response ID")
+	return false, nil
 }
 
 func lowerExtensions(extensions map[string]json.RawMessage, target map[string]any) error {
@@ -418,7 +411,13 @@ func lowerExtensions(extensions map[string]json.RawMessage, target map[string]an
 					return fmt.Errorf("extension include: %w", err)
 				}
 				target["include"] = include
-			case "store", "background", "truncation":
+			case "store", "background":
+				disabled, err := validateHostedStateExtension(name, value)
+				if err != nil {
+					return err
+				}
+				target[name] = disabled
+			case "truncation":
 				var decoded any
 				if err := json.Unmarshal(value, &decoded); err != nil {
 					return fmt.Errorf("extension %s: %w", name, err)

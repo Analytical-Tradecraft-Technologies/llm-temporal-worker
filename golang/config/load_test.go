@@ -85,36 +85,6 @@ func TestLoadCompleteExample(t *testing.T) {
 	}
 }
 
-func TestLoadDefaultsAndValidatesProviderResponseBytes(t *testing.T) {
-	withoutSetting := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 16777216\n", "", 1)
-	loaded, err := config.Load([]byte(withoutSetting))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := loaded.Limits.ProviderResponseBytes, int64(16<<20); got != want {
-		t.Fatalf("default provider response bytes = %d, want %d", got, want)
-	}
-
-	configured := strings.Replace(withoutSetting, "  provider_timeout: 120s\n", "  provider_timeout: 120s\n  provider_response_bytes: 8388608\n", 1)
-	loaded, err = config.Load([]byte(configured))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := loaded.Limits.ProviderResponseBytes, int64(8<<20); got != want {
-		t.Fatalf("configured provider response bytes = %d, want %d", got, want)
-	}
-
-	unsafe := strings.Replace(configured, "provider_response_bytes: 8388608", "provider_response_bytes: 67108865", 1)
-	if _, err := config.Load([]byte(unsafe)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes") {
-		t.Fatalf("unsafe provider response bytes error = %v", err)
-	}
-
-	negative := strings.Replace(configured, "provider_response_bytes: 8388608", "provider_response_bytes: -1", 1)
-	if _, err := config.Load([]byte(negative)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes") {
-		t.Fatalf("negative provider response bytes error = %v", err)
-	}
-}
-
 func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
 	withoutSetting := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s\n", "", 1)
 	loaded, err := config.Load([]byte(withoutSetting))
@@ -128,6 +98,44 @@ func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
 	invalid := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s", "    heartbeat_keepalive_interval: -1s", 1)
 	if _, err := config.Load([]byte(invalid)); err == nil || !strings.Contains(err.Error(), "heartbeat_keepalive_interval") {
 		t.Fatalf("invalid heartbeat keepalive interval error = %v", err)
+	}
+}
+
+func TestLoadDefaultsAndValidatesProviderResponseBytes(t *testing.T) {
+	withoutSetting := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 524288\n", "", 1)
+	loaded, err := config.Load([]byte(withoutSetting))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loaded.Limits.ProviderResponseBytes, config.DefaultProviderResponseBytes; got != want {
+		t.Fatalf("default provider response bytes = %d, want %d", got, want)
+	}
+	if loaded.Limits.ProviderResponseBytes > loaded.Server.InlinePayloadBytes {
+		t.Fatalf("provider response bytes = %d, exceeds downstream inline payload bytes %d", loaded.Limits.ProviderResponseBytes, loaded.Server.InlinePayloadBytes)
+	}
+
+	nonPositive := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 524288", "  provider_response_bytes: -1", 1)
+	if _, err := config.Load([]byte(nonPositive)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes must be positive") {
+		t.Fatalf("non-positive provider response bytes error = %v", err)
+	}
+	aboveOutputContract := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 524288", "  provider_response_bytes: 524289", 1)
+	if _, err := config.Load([]byte(aboveOutputContract)); err == nil || !strings.Contains(err.Error(), "must not exceed server.inline_payload_bytes") {
+		t.Fatalf("oversized provider response contract error = %v", err)
+	}
+}
+
+func TestLoadDefaultsAndValidatesMaximumInputTokens(t *testing.T) {
+	withoutSetting := strings.Replace(string(exampleYAML(t)), "  max_input_tokens: 131072\n", "", 1)
+	loaded, err := config.Load([]byte(withoutSetting))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Limits.MaxInputTokens != 131072 {
+		t.Fatalf("default maximum input tokens = %d, want 131072", loaded.Limits.MaxInputTokens)
+	}
+	nonPositive := strings.Replace(string(exampleYAML(t)), "  max_input_tokens: 131072", "  max_input_tokens: -1", 1)
+	if _, err := config.Load([]byte(nonPositive)); err == nil || !strings.Contains(err.Error(), "limits.max_input_tokens must be positive") {
+		t.Fatalf("non-positive maximum input tokens error = %v", err)
 	}
 }
 
@@ -173,6 +181,7 @@ func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
     bucket: acme-llmtw-production
     region: ap-southeast-2
     prefix: v1
+    kms_key_id: arn:aws:kms:ap-southeast-2:123456789012:key/00000000-0000-0000-0000-000000000000
     auth:
       kind: aws_default_chain`, `blob_store:
   kind: file
@@ -211,6 +220,7 @@ func TestLoadRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
     bucket: acme-llmtw-production
     region: ap-southeast-2
     prefix: v1
+    kms_key_id: arn:aws:kms:ap-southeast-2:123456789012:key/00000000-0000-0000-0000-000000000000
     auth:
       kind: aws_default_chain`, `blob_store:
   kind: file
@@ -264,6 +274,7 @@ func developmentFileBlobYAML(t *testing.T) []byte {
     bucket: acme-llmtw-production
     region: ap-southeast-2
     prefix: v1
+    kms_key_id: arn:aws:kms:ap-southeast-2:123456789012:key/00000000-0000-0000-0000-000000000000
     auth:
       kind: aws_default_chain`, `blob_store:
   kind: file
@@ -378,15 +389,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: 07d910df370ca9522400b8ae15a7bda7e76b1c1badcb7e35cb71e2f6ddaecaf2",
-		"admission_digest: 07D910DF370CA9522400B8AE15A7BDA7E76B1C1BADCB7E35CB71E2F6DDAECAF2",
+		"admission_digest: 30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e",
+		"admission_digest: 30E5A5833E844F80559D858605C9FEFE00DA7B2D6A242BC8E01A21CB4666E81E",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "07d910df370ca9522400b8ae15a7bda7e76b1c1badcb7e35cb71e2f6ddaecaf2"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -557,7 +568,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 07d910df370ca9522400b8ae15a7bda7e76b1c1badcb7e35cb71e2f6ddaecaf2", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e", "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),

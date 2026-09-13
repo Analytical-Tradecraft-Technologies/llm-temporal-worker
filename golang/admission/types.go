@@ -6,6 +6,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	blobstore "github.com/mfow/llm-temporal-worker/golang/storage/blob"
 )
 
 type OperationState string
@@ -57,30 +58,40 @@ type AttemptFacts struct {
 }
 
 type Operation struct {
-	ID               string
-	ScopeKey         string
-	RequestDigest    [32]byte
-	State            OperationState
-	ReservedMicroUSD pricing.MicroUSD
-	IncurredMicroUSD pricing.MicroUSD
-	FinalMicroUSD    pricing.MicroUSD
-	ReservedCostUSD  *pricing.USD
-	IncurredCostUSD  *pricing.USD
-	ActualCostUSD    *pricing.USD
-	Reservations     []WindowReservation
-	ConfigVersion    string
-	PriceVersion     string
-	Attempt          AttemptFacts
-	ResultRef        *state.BlobRef
-	DispatchToken    string
-	LeaseUntil       time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	ExpiresAt        time.Time
+	ID                string
+	ScopeKey          string
+	RequestDigest     [32]byte
+	State             OperationState
+	ReservedMicroUSD  pricing.MicroUSD
+	IncurredMicroUSD  pricing.MicroUSD
+	FinalMicroUSD     pricing.MicroUSD
+	ReservedCostUSD   *pricing.USD
+	IncurredCostUSD   *pricing.USD
+	ActualCostUSD     *pricing.USD
+	CostStatus        string
+	CostMethod        string
+	CostUnknownReason string
+	FailureReason     string
+	Reservations      []WindowReservation
+	ConfigVersion     string
+	PriceVersion      string
+	Attempt           AttemptFacts
+	ResultRef         *state.BlobRef
+	// ImmutableFacts is an opaque, canonical JSON object persisted once after
+	// reservation. Durable runtimes use it to recover the original route,
+	// pricing, generation/incarnation, expiry, and budget event facts.
+	ImmutableFacts []byte
+	DispatchToken  string
+	LeaseUntil     time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	CompletedAt    time.Time
+	ExpiresAt      time.Time
 }
 
 func (operation Operation) Clone() Operation {
 	operation.Reservations = append([]WindowReservation(nil), operation.Reservations...)
+	operation.ImmutableFacts = append([]byte(nil), operation.ImmutableFacts...)
 	if operation.ResultRef != nil {
 		copyRef := *operation.ResultRef
 		operation.ResultRef = &copyRef
@@ -89,7 +100,17 @@ func (operation Operation) Clone() Operation {
 }
 
 type BeginRequest struct {
-	ID             string
+	ID string
+	// ReleasedID is the deterministic released-v1 identity for the same
+	// logical request. PostgreSQL may use it once to bind an existing
+	// released row to the current immutable identity; it is never used when
+	// creating a row.
+	ReleasedID string
+	// OperationKey and Actor are caller-owned immutable identity components.
+	// ScopeKey supplies tenant/project; OperationKind, APIVersion, and
+	// RequestDigest complete the durable operation identity.
+	OperationKey   string
+	Actor          string
 	ScopeKey       string
 	RequestDigest  [32]byte
 	Reservation    pricing.MicroUSD
@@ -100,13 +121,18 @@ type BeginRequest struct {
 	LeaseUntil     time.Time
 	ExpiresAt      time.Time
 	// Durable operation metadata. Legacy stores may ignore these optional
-	// fields; the PostgreSQL store persists them as the normalized request
-	// envelope required for replay.
+	// fields. PostgreSQL stores RequestManifest as content-free JSON metadata
+	// and envelope-encrypts RequestPayload as the canonical request used for
+	// exact replay.
 	OperationKind        string
 	APIVersion           string
 	RequestSchemaVersion int
 	RequestManifest      []byte
+	RequestPayload       []byte
 	ConfigDigest         [32]byte
+	// ImmutableFacts may be supplied by a second idempotent Begin after
+	// admission. PostgreSQL persists it only when absent and rejects changes.
+	ImmutableFacts []byte
 }
 
 type BeginResult struct {
@@ -172,15 +198,23 @@ type ContinueResult struct {
 }
 
 type CompleteRequest struct {
-	OperationID   string
-	DispatchToken string
-	Actual        pricing.MicroUSD
-	ActualCostUSD pricing.USD
-	ResultRef     *state.BlobRef
-	Attempt       AttemptFacts
-	CostStatus    string
-	CostMethod    string
-	UnknownReason string
+	OperationID        string
+	DispatchToken      string
+	Actual             pricing.MicroUSD
+	ActualCostUSD      pricing.USD
+	ResultRef          *state.BlobRef
+	Attempt            AttemptFacts
+	CostStatus         string
+	CostMethod         string
+	CostCatalogVersion string
+	UnknownReason      string
+}
+
+type AtomicFinalization struct {
+	ScopeID           string
+	Checkpoint        state.DurableCheckpoint
+	CheckpointObjects []blobstore.Ref
+	Complete          CompleteRequest
 }
 
 type FailRequest struct {
@@ -189,8 +223,16 @@ type FailRequest struct {
 	Certainty       DispatchCertainty
 	Incurred        pricing.MicroUSD
 	IncurredCostUSD pricing.USD
-	Attempt         AttemptFacts
-	Reason          string
+	// PostResponse identifies a terminal worker validation failure after the
+	// provider returned a chargeable response. The provider outcome is known,
+	// so the operation is definite_failed even though dispatch was accepted.
+	PostResponse       bool
+	CostStatus         string
+	CostMethod         string
+	CostCatalogVersion string
+	UnknownReason      string
+	Attempt            AttemptFacts
+	Reason             string
 }
 
 func Digest(value []byte) [32]byte { return sha256.Sum256(value) }

@@ -182,6 +182,12 @@ type compositionMaterializerStub struct{}
 func (compositionMaterializerStub) Accept(context.Context, ReserveRequest) (ReserveResult, error) {
 	return ReserveResult{}, nil
 }
+func (compositionMaterializerStub) Confirm(context.Context, ReserveRequest) (ReserveResult, error) {
+	return ReserveResult{}, nil
+}
+func (compositionMaterializerStub) FenceDispatch(context.Context, DispatchFenceRequest) error {
+	return nil
+}
 func (compositionMaterializerStub) Reconcile(context.Context, ReconcileRequest) error { return nil }
 
 func TestReserveResultRequiresJournalEventsAfterAcceptance(t *testing.T) {

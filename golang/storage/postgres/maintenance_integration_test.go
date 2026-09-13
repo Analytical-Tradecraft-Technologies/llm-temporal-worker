@@ -306,11 +306,9 @@ func TestMaintenanceRetentionPrunesOnlyUnreferencedTerminalOperations(t *testing
 
 	begin := func(id string) admission.BeginResult {
 		t.Helper()
-		started, err := operations.Begin(ctx, admission.BeginRequest{
-			ID: id, ScopeKey: "maintenance-operation-retention/project",
+		started, err := operations.Begin(ctx, admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: "maintenance-operation-retention/project",
 			RequestDigest: admission.Digest([]byte(id)), ReservationUSD: pricing.MustUSD("0"),
-			ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"maintenance"}`),
-		})
+			ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"maintenance"}`)})
 		if err != nil {
 			t.Fatalf("begin operation %q: %v", id, err)
 		}
@@ -416,14 +414,16 @@ func TestMaintenanceRetentionPreservesCacheUsedByActiveOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	consumerID := "cache-retention-active-consumer-" + uuid.NewString()
-	if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
-		ID: consumerID, ScopeKey: "cache-integration-tenant/cache-integration-project",
+	if _, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: consumerID, OperationKey: consumerID, Actor: "postgres-test", ScopeKey: "cache-integration-tenant/cache-integration-project",
 		RequestDigest: admission.Digest([]byte(consumerID)), ReservationUSD: pricing.MustUSD("0"),
-		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"maintenance-retention"}`),
-	}); err != nil {
+		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"maintenance-retention"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if hit, err := fixture.repository.Lookup(fixture.ctx, CacheLookupRequest{Key: key, OperationID: consumerID, MaxAge: time.Hour}); err != nil || !hit.Hit {
+	lookup := fixtureCacheLookup(key, consumerID)
+	lookup.CanonicalRequestJSON = []byte(`{"model":"maintenance-retention"}`)
+	lookup.SemanticProfileVersion = "maintenance-retention"
+	lookup.CacheEpoch = "maintenance-retention"
+	if hit, err := fixture.repository.Lookup(fixture.ctx, lookup); err != nil || !hit.Hit {
 		t.Fatalf("active consumer cache hit=%#v err=%v", hit, err)
 	}
 	entries, err := fixture.operations.Namespace.Render("response_cache_entries")

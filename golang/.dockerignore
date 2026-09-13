@@ -7,6 +7,7 @@
 # Local credentials and runtime state must never enter a build context.
 .env
 .env.*
+.local/
 *.pem
 *.key
 *.crt
@@ -31,3 +32,5 @@ vendor/
 _build/
 *.test
 *.out
+**/__pycache__/
+*.py[cod]

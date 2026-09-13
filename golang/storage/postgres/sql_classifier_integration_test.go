@@ -29,13 +29,11 @@ func TestBudgetJournalIntegrationHasNoBudgetReads(t *testing.T) {
 
 	operationKey := "budget-sql-classifier-" + uuid.NewString()
 	configDigest := sha256.Sum256([]byte(operationKey))
-	started, err := repository.Begin(ctx, admission.BeginRequest{
-		ID: operationKey, ScopeKey: "budget-sql-classifier/fixtures",
+	started, err := repository.Begin(ctx, admission.BeginRequest{ID: operationKey, OperationKey: operationKey, Actor: "postgres-test", ScopeKey: "budget-sql-classifier/fixtures",
 		RequestDigest:  admission.Digest([]byte(operationKey)),
 		ReservationUSD: pricing.MustUSD("0"), ConfigVersion: operationKey,
 		ConfigDigest: configDigest, ExpiresAt: time.Now().UTC().Add(time.Hour),
-		RequestManifest: []byte(`{"model":"fixture"}`),
-	})
+		RequestManifest: []byte(`{"model":"fixture"}`)})
 	if err != nil {
 		t.Fatalf("begin operation: %v", err)
 	}
@@ -107,13 +105,11 @@ func TestOperationLifecycleIntegrationHasNoBudgetReads(t *testing.T) {
 
 	operationKey := "operation-sql-classifier-" + uuid.NewString()
 	configDigest := sha256.Sum256([]byte(operationKey))
-	request := admission.BeginRequest{
-		ID: operationKey, ScopeKey: "operation-sql-classifier/fixtures",
+	request := admission.BeginRequest{ID: operationKey, OperationKey: operationKey, Actor: "postgres-test", ScopeKey: "operation-sql-classifier/fixtures",
 		RequestDigest:  admission.Digest([]byte(operationKey)),
 		ReservationUSD: pricing.MustUSD("0"), ConfigVersion: operationKey,
 		ConfigDigest: configDigest, ExpiresAt: time.Now().UTC().Add(time.Hour),
-		RequestManifest: []byte(`{"model":"fixture"}`),
-	}
+		RequestManifest: []byte(`{"model":"fixture"}`)}
 	started, err := repository.Begin(ctx, request)
 	if err != nil {
 		t.Fatalf("begin operation: %v", err)

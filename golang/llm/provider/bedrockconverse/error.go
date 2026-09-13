@@ -20,6 +20,9 @@ func mapError(err error, profileName string) *provider.Error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, provider.ErrProviderResponseTooLarge) {
+		return provider.NewProviderResponseTooLargeError(provider.ErrProviderResponseTooLarge)
+	}
 	if errors.Is(err, provider.ErrProviderEgressDenied) {
 		mapped := provider.NewEgressDeniedError(err)
 		mapped.SafeDetails = map[string]string{"provider": profileName}

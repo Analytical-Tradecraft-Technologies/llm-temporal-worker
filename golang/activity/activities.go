@@ -27,6 +27,11 @@ type Activities struct {
 	// closed v1 Activity records. Runtime composition supplies this explicitly;
 	// a nil value is rejected before dispatch.
 	V1Runtime V1Runtime
+	// RequireDurableProviderFence disables the legacy Generate surface for a
+	// durable worker. Only GenerateV1 owns the immutable Redis reservation,
+	// PostgreSQL journal, and signed provider-capacity lease required before a
+	// network write. Development helpers leave this false.
+	RequireDurableProviderFence bool
 	// QueryService is an optional control-plane seam for llm.query.v1. It is
 	// independent from Generate/Compact composition so query callers cannot
 	// accidentally dispatch inference work while the durable query handlers
@@ -68,6 +73,9 @@ func (activities *Activities) Generate(ctx context.Context, payload GenerateRequ
 			activities.Metrics.RecordActivityFailure(origin)
 		}
 	}()
+	if activities.RequireDurableProviderFence {
+		return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeConfiguration, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "legacy Generate cannot dispatch without the durable v1 reservation fence"))
+	}
 	if activities.Engine == nil {
 		return GenerateResponse{}, ToTemporalError(provider.NewError(provider.CodeInternal, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetryNever, "Activity engine is unavailable"))
 	}

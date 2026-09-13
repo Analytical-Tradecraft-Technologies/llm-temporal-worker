@@ -17,6 +17,33 @@ const (
 	defaultCapabilityVersion = "openai-chat/v1"
 )
 
+type OutputTokenLimitField string
+
+const (
+	OutputTokenLimitFieldMaxCompletionTokens OutputTokenLimitField = "max_completion_tokens"
+	OutputTokenLimitFieldMaxTokens           OutputTokenLimitField = "max_tokens"
+)
+
+type DefaultFalseFieldSupport string
+
+const (
+	DefaultFalseFieldSupported   DefaultFalseFieldSupport = ""
+	DefaultFalseFieldUnsupported DefaultFalseFieldSupport = "unsupported"
+)
+
+// WireShape describes the small set of Chat Completions wire differences that
+// must be known before lowering. The zero value is the ordinary OpenAI shape.
+// Marking a default-false field unsupported omits it only while false; a
+// request that needs the true value still fails closed.
+type WireShape struct {
+	OutputTokenLimitField OutputTokenLimitField
+	Store                 DefaultFalseFieldSupport
+	ParallelToolCalls     DefaultFalseFieldSupport
+	// OmitServiceTier is valid only when the profile supports exactly one public
+	// service class and maps a missing response tier back to that class.
+	OmitServiceTier bool
+}
+
 // ExtensionSpec describes the fields an endpoint profile permits in one
 // namespaced extension. The map key is the semantic extension field and the
 // value is the provider wire field. A blank wire name preserves the key.
@@ -54,8 +81,9 @@ type Profile struct {
 	// of being silently discarded during JSON union conversion.
 	WireDefaults map[string]json.RawMessage
 	// ReservedWireFields cannot be overridden by caller extensions. Profile
-	// defaults are automatically reserved as well.
+	// defaults and explicit wire-shape decisions are automatically reserved.
 	ReservedWireFields map[string]struct{}
+	WireShape          WireShape
 	// ResponseAugment may add profile-specific facts (for example citations or
 	// provider-reported cost) after the common Chat response has been lifted.
 	ResponseAugment           func(provider.Call, *openai.ChatCompletion, *llm.Response) error
@@ -96,6 +124,16 @@ func NewProfile(profile Profile) (Profile, error) {
 	}
 	for wire := range copy.WireDefaults {
 		copy.ReservedWireFields[wire] = struct{}{}
+	}
+	if copy.WireShape.Store == DefaultFalseFieldUnsupported {
+		copy.ReservedWireFields["store"] = struct{}{}
+	}
+	if copy.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported {
+		copy.ReservedWireFields["parallel_tool_calls"] = struct{}{}
+	}
+	if copy.WireShape.OutputTokenLimitField != "" {
+		copy.ReservedWireFields[string(OutputTokenLimitFieldMaxCompletionTokens)] = struct{}{}
+		copy.ReservedWireFields[string(OutputTokenLimitFieldMaxTokens)] = struct{}{}
 	}
 	return copy, nil
 }
@@ -177,6 +215,46 @@ func (profile Profile) validate() error {
 			}
 		}
 	}
+	if err := profile.WireShape.validate(profile.ID); err != nil {
+		return err
+	}
+	if profile.WireShape.Store == DefaultFalseFieldUnsupported {
+		if _, exists := profile.WireDefaults["store"]; exists {
+			return fmt.Errorf("openai chat profile %q cannot default unsupported wire field %q", profile.ID, "store")
+		}
+	}
+	switch profile.WireShape.OutputTokenLimitField {
+	case OutputTokenLimitFieldMaxCompletionTokens:
+		if _, exists := profile.WireDefaults[string(OutputTokenLimitFieldMaxTokens)]; exists {
+			return fmt.Errorf("openai chat profile %q cannot default incompatible output token field %q", profile.ID, OutputTokenLimitFieldMaxTokens)
+		}
+	case OutputTokenLimitFieldMaxTokens:
+		if _, exists := profile.WireDefaults[string(OutputTokenLimitFieldMaxCompletionTokens)]; exists {
+			return fmt.Errorf("openai chat profile %q cannot default incompatible output token field %q", profile.ID, OutputTokenLimitFieldMaxCompletionTokens)
+		}
+	}
+	if profile.WireShape.OmitServiceTier {
+		var supportedClass llm.ServiceClass
+		supportedCount := 0
+		for _, class := range publicServiceClasses() {
+			if profile.ServiceTiers[class] == "" {
+				continue
+			}
+			supportedClass = class
+			supportedCount++
+		}
+		if supportedCount != 1 {
+			return fmt.Errorf("openai chat profile %q can omit service_tier only with exactly one supported service class", profile.ID)
+		}
+		if profile.MissingActualServiceClass != supportedClass {
+			return fmt.Errorf("openai chat profile %q omitted service_tier must map a missing actual tier to %q", profile.ID, supportedClass)
+		}
+	}
+	if profile.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported {
+		if _, exists := profile.WireDefaults["parallel_tool_calls"]; exists {
+			return fmt.Errorf("openai chat profile %q cannot default unsupported wire field %q", profile.ID, "parallel_tool_calls")
+		}
+	}
 	for wire, raw := range profile.WireDefaults {
 		if wire == "" {
 			return fmt.Errorf("openai chat profile %q contains an empty wire default", profile.ID)
@@ -195,6 +273,25 @@ func (profile Profile) validate() error {
 		if wire == "model" || wire == "messages" || wire == "service_tier" {
 			return fmt.Errorf("openai chat profile %q cannot reserve %q", profile.ID, wire)
 		}
+	}
+	return nil
+}
+
+func (shape WireShape) validate(profileID string) error {
+	switch shape.OutputTokenLimitField {
+	case "", OutputTokenLimitFieldMaxCompletionTokens, OutputTokenLimitFieldMaxTokens:
+	default:
+		return fmt.Errorf("openai chat profile %q output token limit field %q is unsupported", profileID, shape.OutputTokenLimitField)
+	}
+	switch shape.Store {
+	case DefaultFalseFieldSupported, DefaultFalseFieldUnsupported:
+	default:
+		return fmt.Errorf("openai chat profile %q store field support %q is invalid", profileID, shape.Store)
+	}
+	switch shape.ParallelToolCalls {
+	case DefaultFalseFieldSupported, DefaultFalseFieldUnsupported:
+	default:
+		return fmt.Errorf("openai chat profile %q parallel_tool_calls field support %q is invalid", profileID, shape.ParallelToolCalls)
 	}
 	return nil
 }

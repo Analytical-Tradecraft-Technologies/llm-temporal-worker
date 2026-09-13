@@ -43,6 +43,7 @@ temporal:
     enabled: true
     server_name: temporal.example.internal
     ca_file: /var/run/ca/temporal.pem
+  api_key_file: /var/run/secrets/llmtw/temporal-jwt
   worker:
     max_concurrent_activities: 64
     max_concurrent_activity_task_polls: 8
@@ -121,7 +122,7 @@ limits:
   continuation_depth: 256
   route_attempts: 6
   provider_timeout: 120s
-  provider_response_bytes: 16777216
+  provider_response_bytes: 524288
   max_output_tokens: 32768
   max_budget_buckets_per_window: 2048
   token_estimate_safety_ratio: "1.35"
@@ -199,8 +200,8 @@ endpoints:
     base_url: https://openrouter.ai/api/v1
     outbound_hosts: [openrouter.ai]
     auth:
-      kind: bearer_env
-      name: OPENROUTER_API_KEY
+      kind: bearer_file
+      path: /var/run/secrets/providers/openrouter-api-key
     account_region: global
     timeout: 115s
     service_classes:
@@ -383,6 +384,14 @@ telemetry:
     sample_ratio: "0.05"
   content_logging: disabled
 ```
+
+`temporal.api_key_file` contains the raw signed JWT sent as Temporal gRPC
+`authorization: Bearer <token>` metadata. Production requires TLS plus this
+file; an API key, plaintext endpoint, empty token, unreadable file, oversized
+token, or token containing control characters is rejected before the SDK
+client is created. The file is re-read for every RPC so a projected Secret can
+rotate the token without restarting the worker. The token itself is never
+included in config hashes, diagnostics, or logs.
 
 `temporal.worker.heartbeat_keepalive_interval` controls the fixed, redacted
 heartbeat emitted while a one-shot provider call is in flight. It defaults to
@@ -629,14 +638,14 @@ provider response.
 
 `limits.provider_response_bytes` bounds every HTTP response body shared by all
 provider SDKs, including successful JSON, provider error bodies, and streaming
-protocols such as SSE. It defaults to 16 MiB and cannot exceed the 64 MiB hard
-safety cap. A declared `Content-Length` above the configured limit is rejected
-before parsing and the body is closed. Unknown-length, chunked, or incorrectly
-declared bodies are read through a counting wrapper: bytes through the limit
-remain available incrementally, and the next byte returns a content-free
-oversize classification. Configure enough space for the largest legitimate
-single provider response; the limit is cumulative per HTTP response, not per
-stream event.
+protocols such as SSE. It defaults to 512 KiB, cannot exceed
+`server.inline_payload_bytes`, and retains a 64 MiB absolute safety cap. A
+declared `Content-Length` above the configured limit is rejected before parsing
+and the body is closed. Unknown-length, chunked, incorrectly declared, and gzip
+responses are read through counting wrappers that bound both compressed and
+decoded bytes: bytes through the limit remain available incrementally, and the
+next byte returns a content-free oversize classification. The limit is
+cumulative per HTTP response, not per stream event.
 
 ## Readiness and Redis budget policy
 

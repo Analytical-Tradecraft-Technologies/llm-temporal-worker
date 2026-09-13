@@ -16,8 +16,7 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	maintenance := MaintenanceRepository{Pool: fixture.operations.Pool, Namespace: fixture.operations.Namespace}
 	blobs := BlobRepository{Pool: fixture.operations.Pool, Namespace: fixture.operations.Namespace, Keys: fixture.operations.Keys, NewID: UUIDv7}
-	put := func(name string) BlobRecord {
-		payload := []byte("blob-gc-" + name + "-" + uuid.NewString())
+	putPayload := func(name string, payload []byte) BlobRecord {
 		digest := sha256.Sum256(payload)
 		expires := now.Add(-time.Minute)
 		record, err := blobs.PutLocator(fixture.ctx, fixture.scope.ID, "blob-gc-test", BlobMetadata{StoreID: "blob-gc-" + name + "-" + uuid.NewString(), Digest: digest, ByteLength: int64(len(payload)), MediaType: "application/octet-stream", ExpiresAt: &expires}, payload)
@@ -26,8 +25,12 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 		}
 		return record
 	}
+	put := func(name string) BlobRecord {
+		return putPayload(name, []byte("blob-gc-"+name+"-"+uuid.NewString()))
+	}
 	free := put("free")
-	operationBlob := put("operation")
+	operationPayload := []byte(`{"model":"fixture"}`)
+	operationBlob := putPayload("operation", operationPayload)
 	checkpointBlob := put("checkpoint")
 	providerBlob := put("provider")
 	staleFinalizeBlob := put("stale-finalize")
@@ -35,11 +38,10 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	cacheStateBlob := put("cache-state")
 
 	// An active operation request keeps its blob retained.
-	operation, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
-		ID: "blob-gc-operation-" + uuid.NewString(), ScopeKey: "cache-integration-tenant/cache-integration-project",
-		RequestDigest: admission.Digest([]byte("blob-gc-operation")), ReservationUSD: pricing.MustUSD("0"),
-		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`),
-	})
+	operationDigest := sha256.Sum256(operationPayload)
+	operation, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: "blob-gc-operation-" + uuid.NewString(), OperationKey: "blob-gc-operation-" + uuid.NewString(), Actor: "postgres-test", ScopeKey: "cache-integration-tenant/cache-integration-project",
+		RequestDigest: operationDigest, ReservationUSD: pricing.MustUSD("0"),
+		ExpiresAt: now.Add(time.Hour), RequestManifest: operationPayload})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,7 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET request_inline_ciphertext=NULL, request_key_id=NULL, request_blob_id=$1 WHERE operation_id=$2", operationBlob.BlobID, operationUUID(operation.Operation.ID)); err != nil {
+	if tag, err := fixture.operations.Pool.Exec(fixture.ctx, "UPDATE "+operations+" SET request_inline_ciphertext=NULL, request_key_id=NULL, request_blob_id=$1::uuid, request_payload_reference=$1::text, request_manifest_jsonb=jsonb_build_object('schema_version',2,'payload_sha256',encode(request_payload_sha256,'hex'),'payload_bytes',request_payload_byte_length,'payload_reference',$1::text) WHERE operation_id=$2", operationBlob.BlobID, operationUUID(operation.Operation.ID)); err != nil {
 		t.Fatal(err)
 	} else if tag.RowsAffected() != 1 {
 		t.Fatalf("operation blob reference update affected %d rows", tag.RowsAffected())
@@ -117,11 +119,9 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	}
 	// A tombstoned entry may still carry a response blob. Once that blob is
 	// claimed, changing the entry back to ready must be fenced by the database.
-	stateOrigin, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
-		ID: "blob-gc-state-origin-" + uuid.NewString(), ScopeKey: "cache-integration-tenant/cache-integration-project",
+	stateOrigin, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: "blob-gc-state-origin-" + uuid.NewString(), OperationKey: "blob-gc-state-origin-" + uuid.NewString(), Actor: "postgres-test", ScopeKey: "cache-integration-tenant/cache-integration-project",
 		RequestDigest: admission.Digest([]byte("blob-gc-state-origin")), ReservationUSD: pricing.MustUSD("0"),
-		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture-state"}`),
-	})
+		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture-state"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,11 +187,9 @@ func TestBlobGCRechecksRetainedReferencesAndFinalizesIdempotently(t *testing.T) 
 	}
 	// The claim is committed before the object-store call. Database guards must
 	// reject every new direct blob reference during that external-delete window.
-	lateOperation, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{
-		ID: "blob-gc-late-operation-" + uuid.NewString(), ScopeKey: "cache-integration-tenant/cache-integration-project",
+	lateOperation, err := fixture.operations.Begin(fixture.ctx, admission.BeginRequest{ID: "blob-gc-late-operation-" + uuid.NewString(), OperationKey: "blob-gc-late-operation-" + uuid.NewString(), Actor: "postgres-test", ScopeKey: "cache-integration-tenant/cache-integration-project",
 		RequestDigest: admission.Digest([]byte("blob-gc-late-operation")), ReservationUSD: pricing.MustUSD("0"),
-		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`),
-	})
+		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -159,6 +159,9 @@ func applyDefaults(config *Config) {
 	if config.Limits.ProviderResponseBytes == 0 {
 		config.Limits.ProviderResponseBytes = DefaultProviderResponseBytes
 	}
+	if config.Limits.MaxInputTokens == 0 {
+		config.Limits.MaxInputTokens = 131072
+	}
 	if config.Limits.MaxOutputTokens == 0 {
 		config.Limits.MaxOutputTokens = 32768
 	}

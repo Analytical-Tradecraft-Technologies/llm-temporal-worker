@@ -17,16 +17,13 @@ func TestMaintenanceBudgetBucketRetentionFencesReservations(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	operationKey := "budget-bucket-retention-" + uuid.NewString()
 	configDigest := sha256.Sum256([]byte(operationKey))
-	started, err := repository.Begin(ctx, admission.BeginRequest{
-		ID:              operationKey,
-		ScopeKey:        "budget-retention/fixtures",
+	started, err := repository.Begin(ctx, admission.BeginRequest{ID: operationKey, OperationKey: operationKey, Actor: "postgres-test", ScopeKey: "budget-retention/fixtures",
 		RequestDigest:   admission.Digest([]byte(operationKey)),
 		ReservationUSD:  pricing.MustUSD("0"),
 		ConfigVersion:   operationKey,
 		ConfigDigest:    configDigest,
 		ExpiresAt:       now.Add(time.Hour),
-		RequestManifest: []byte(`{"model":"fixture"}`),
-	})
+		RequestManifest: []byte(`{"model":"fixture"}`)})
 	if err != nil || started.Existing {
 		t.Fatalf("begin operation = %#v, %v", started, err)
 	}

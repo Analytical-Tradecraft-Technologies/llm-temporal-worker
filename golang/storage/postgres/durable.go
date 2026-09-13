@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 )
@@ -24,6 +26,7 @@ type DurableRepositories struct {
 	Blobs       BlobRepository
 	Checkpoints DurableCheckpointRepository
 	Journal     BudgetJournalRepository
+	Finalizer   AtomicFinalizationRepository
 }
 
 // DurableRepositoryOptions binds the PostgreSQL namespace, cryptographic
@@ -57,6 +60,7 @@ func NewDurableRepositories(options DurableRepositoryOptions) (DurableRepositori
 	blobs := BlobRepository{Pool: options.Pool, Namespace: options.Namespace, Keys: options.EnvelopeKeys, NewID: UUIDv7}
 	checkpoints := DurableCheckpointRepository{Pool: options.Pool, Namespace: options.Namespace, Now: options.Clock}
 	journal := BudgetJournalRepository{Pool: options.Pool, Namespace: options.Namespace}
+	finalizer := AtomicFinalizationRepository{Blobs: blobs, Checkpoints: checkpoints, Operations: operations, Now: options.Clock}
 	if err := scopes.validate(); err != nil {
 		return DurableRepositories{}, fmt.Errorf("validate durable scope repository: %w", err)
 	}
@@ -66,7 +70,7 @@ func NewDurableRepositories(options DurableRepositoryOptions) (DurableRepositori
 	if err := blobs.validate(); err != nil {
 		return DurableRepositories{}, fmt.Errorf("validate durable blob repository: %w", err)
 	}
-	return DurableRepositories{Scopes: scopes, Operations: operations, Blobs: blobs, Checkpoints: checkpoints, Journal: journal}, nil
+	return DurableRepositories{Scopes: scopes, Operations: operations, Blobs: blobs, Checkpoints: checkpoints, Journal: journal, Finalizer: finalizer}, nil
 }
 
 // CheckpointBlobLocator resolves only metadata belonging to the supplied
@@ -81,9 +85,9 @@ func CheckpointBlobLocator(repository BlobRepository) state.BlobLocator {
 		if err := ctx.Err(); err != nil {
 			return blob.Ref{}, err
 		}
-		scope, err := uuid.Parse(scopeID)
-		if err != nil || scope == uuid.Nil || scope.String() != scopeID {
-			return blob.Ref{}, errors.New("checkpoint blob scope is invalid")
+		scope, err := parseCheckpointScope(scopeID)
+		if err != nil {
+			return blob.Ref{}, err
 		}
 		id, err := uuid.Parse(string(blobID))
 		if err != nil || id == uuid.Nil || id.String() != string(blobID) {
@@ -101,9 +105,79 @@ func CheckpointBlobLocator(repository BlobRepository) state.BlobLocator {
 		if err := json.Unmarshal(locator, &ref); err != nil {
 			return blob.Ref{}, errors.New("checkpoint blob locator is invalid")
 		}
+		if (record.ExpiresAt == nil) != ref.ExpiresAt.IsZero() ||
+			(record.ExpiresAt != nil &&
+				!record.ExpiresAt.UTC().Truncate(time.Microsecond).Equal(ref.ExpiresAt.UTC().Truncate(time.Microsecond))) {
+			return blob.Ref{}, errors.New("checkpoint blob locator is invalid")
+		}
 		if err := ref.Validate(time.Now().UTC()); err != nil {
 			return blob.Ref{}, errors.New("checkpoint blob locator is invalid")
 		}
 		return ref, nil
 	}
+}
+
+// CheckpointBlobLocatorWriter closes over the concrete PostgreSQL repository
+// and exposes only the checkpoint-specific write operation. Callers cannot
+// recover the pool or envelope keyring from the returned closure.
+func CheckpointBlobLocatorWriter(repository BlobRepository) (func(context.Context, string, blob.Ref) (state.CheckpointBlobReference, error), error) {
+	if err := repository.validate(); err != nil {
+		return nil, fmt.Errorf("validate checkpoint blob locator writer: %w", err)
+	}
+	return func(ctx context.Context, scopeID string, ref blob.Ref) (state.CheckpointBlobReference, error) {
+		if ctx == nil {
+			return state.CheckpointBlobReference{}, errors.New("checkpoint blob context is nil")
+		}
+		if err := ctx.Err(); err != nil {
+			return state.CheckpointBlobReference{}, err
+		}
+		scope, err := parseCheckpointScope(scopeID)
+		if err != nil {
+			return state.CheckpointBlobReference{}, err
+		}
+		if err := ref.Validate(time.Now().UTC()); err != nil {
+			return state.CheckpointBlobReference{}, errors.New("checkpoint blob locator is invalid")
+		}
+		if !ref.ExpiresAt.IsZero() {
+			ref.ExpiresAt = ref.ExpiresAt.UTC().Truncate(time.Microsecond)
+		}
+		digestBytes, err := hex.DecodeString(ref.Digest)
+		if err != nil || len(digestBytes) != keyDigestBytes {
+			return state.CheckpointBlobReference{}, errors.New("checkpoint blob digest is invalid")
+		}
+		var digest [keyDigestBytes]byte
+		copy(digest[:], digestBytes)
+		encoded, err := json.Marshal(ref)
+		if err != nil {
+			return state.CheckpointBlobReference{}, errors.New("checkpoint blob locator is invalid")
+		}
+		canonical, err := llm.CanonicalJSON(encoded)
+		if err != nil {
+			return state.CheckpointBlobReference{}, errors.New("checkpoint blob locator is invalid")
+		}
+		var expiresAt *time.Time
+		if !ref.ExpiresAt.IsZero() {
+			expires := ref.ExpiresAt.UTC()
+			expiresAt = &expires
+		}
+		record, err := repository.PutLocator(ctx, scope, "checkpoint", BlobMetadata{
+			StoreID: ref.Store, Digest: digest, ByteLength: ref.ByteLength,
+			MediaType: ref.MediaType, ExpiresAt: expiresAt,
+		}, canonical)
+		if err != nil {
+			return state.CheckpointBlobReference{}, errors.New("checkpoint blob locator is unavailable")
+		}
+		return state.CheckpointBlobReference{
+			ID: state.BlobID(record.BlobID.String()), Digest: digest,
+			ByteLength: record.ByteLength, MediaType: record.MediaType,
+		}, nil
+	}, nil
+}
+
+func parseCheckpointScope(scopeID string) (uuid.UUID, error) {
+	scope, err := uuid.Parse(scopeID)
+	if err != nil || scope == uuid.Nil || scope.String() != scopeID {
+		return uuid.Nil, errors.New("checkpoint blob scope is invalid")
+	}
+	return scope, nil
 }

@@ -13,6 +13,7 @@
     "environment": { "type": "string", "minLength": 1 },
     "server": { "$ref": "#/$defs/server" },
     "temporal": { "$ref": "#/$defs/temporal" },
+    "resource_capacity": { "$ref": "#/$defs/resource_capacity" },
     "state": { "$ref": "#/$defs/state" },
     "blob_store": { "$ref": "#/$defs/blob_store" },
     "limits": { "$ref": "#/$defs/limits" },
@@ -53,7 +54,23 @@
         "required": ["environment"]
       },
       "then": {
+        "required": ["resource_capacity"],
         "properties": {
+          "temporal": {
+            "properties": {
+              "target": { "const": "temporal-frontend.temporal.svc.cluster.local:7233" },
+              "namespace": { "const": "ai-ach" },
+              "api_key_file": { "type": "string", "minLength": 1 },
+              "tls": {
+                "properties": {
+                  "enabled": { "const": true },
+                  "server_name": { "const": "temporal-frontend.temporal.svc.cluster.local" }
+                },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["api_key_file", "tls"]
+          },
           "state": {
             "properties": {
               "redis": {
@@ -72,6 +89,103 @@
   ],
   "$defs": {
     "duration": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)([0-9]+(ns|us|µs|ms|s|m|h|d))*$" },
+    "resource_capacity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["manifest_file", "trust_root_file", "trust_root_sha256", "manifest_sha256", "artifact_id", "artifact_locator", "generation_id", "limits"],
+      "properties": {
+        "manifest_file": { "type": "string", "minLength": 1 },
+        "trust_root_file": { "type": "string", "minLength": 1 },
+        "trust_root_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "artifact_id": { "type": "string", "minLength": 1 },
+        "artifact_locator": { "type": "string", "minLength": 1 },
+        "generation_id": { "type": "string", "minLength": 1 },
+        "limits": {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "llm_global_max_inflight", "llm_global_max_requests_per_window", "llm_global_window_seconds",
+            "provider_max_inflight", "search_fetch_max_inflight", "python_stage2_max_inflight",
+            "forecast_event_max_inflight", "forecast_event_admission_wait_seconds",
+            "provider_call_execution_overhead_seconds", "provider_call_queue_seconds", "provider_call_maximum_attempts",
+            "stage_two_execution_overhead_seconds", "stage_two_queue_seconds", "stage_two_semaphore_wait_seconds", "stage_two_maximum_attempts",
+            "close_execution_overhead_seconds", "close_queue_seconds", "close_maximum_attempts",
+            "evidence_collection_execution_overhead_seconds", "evidence_collection_queue_seconds", "evidence_collection_maximum_attempts",
+            "panel_prepare_max_inflight", "panel_llm_max_inflight",
+            "inference_artifactize_execution_seconds", "inference_artifactize_queue_seconds", "inference_artifactize_maximum_attempts",
+            "prepare_assessment_execution_seconds", "prepare_assessment_queue_seconds", "prepare_assessment_maximum_attempts",
+            "build_analysis_panel_execution_seconds", "build_analysis_panel_queue_seconds", "build_analysis_panel_maximum_attempts",
+            "assemble_evidence_assessment_execution_seconds", "assemble_evidence_assessment_queue_seconds", "assemble_evidence_assessment_maximum_attempts",
+            "load_analytic_context_execution_seconds", "load_analytic_context_queue_seconds", "load_analytic_context_maximum_attempts",
+            "checkpoint_analysis_frontier_execution_seconds", "checkpoint_analysis_frontier_queue_seconds", "checkpoint_analysis_frontier_maximum_attempts",
+            "load_analysis_frontier_execution_seconds", "load_analysis_frontier_queue_seconds", "load_analysis_frontier_maximum_attempts",
+            "caller_owned_evidence_ingest_execution_seconds", "caller_owned_evidence_ingest_queue_seconds", "caller_owned_evidence_ingest_maximum_attempts",
+            "panel_prepare_activity_max_bytes"
+          ],
+          "properties": {
+            "llm_global_max_inflight": { "type": "integer", "minimum": 64, "maximum": 4096 },
+            "llm_global_max_requests_per_window": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "llm_global_window_seconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+            "provider_max_inflight": {
+              "type": "array", "minItems": 1,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["route_id", "max_inflight", "max_requests_per_window", "window_seconds"],
+                "properties": {
+                  "route_id": { "type": "string", "minLength": 1 },
+                  "max_inflight": { "type": "integer", "minimum": 1, "maximum": 4096 },
+                  "max_requests_per_window": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+                  "window_seconds": { "type": "integer", "minimum": 1, "maximum": 3600 }
+                }
+              }
+            },
+            "search_fetch_max_inflight": { "type": "integer", "minimum": 64, "maximum": 4096 },
+            "python_stage2_max_inflight": { "type": "integer", "minimum": 6, "maximum": 4096 },
+            "forecast_event_max_inflight": { "const": 2 },
+            "forecast_event_admission_wait_seconds": { "const": 5 },
+            "provider_call_execution_overhead_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "provider_call_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "provider_call_maximum_attempts": { "const": 1 },
+            "stage_two_execution_overhead_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "stage_two_queue_seconds": { "const": 30 },
+            "stage_two_semaphore_wait_seconds": { "const": 30 },
+            "stage_two_maximum_attempts": { "const": 2 },
+            "close_execution_overhead_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "close_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "close_maximum_attempts": { "const": 2 },
+            "evidence_collection_execution_overhead_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "evidence_collection_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "evidence_collection_maximum_attempts": { "const": 1 },
+            "panel_prepare_max_inflight": { "const": 8 },
+            "panel_llm_max_inflight": { "const": 8 },
+            "inference_artifactize_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "inference_artifactize_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "inference_artifactize_maximum_attempts": { "const": 2 },
+            "prepare_assessment_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "prepare_assessment_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "prepare_assessment_maximum_attempts": { "const": 2 },
+            "build_analysis_panel_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "build_analysis_panel_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "build_analysis_panel_maximum_attempts": { "const": 2 },
+            "assemble_evidence_assessment_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "assemble_evidence_assessment_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "assemble_evidence_assessment_maximum_attempts": { "const": 2 },
+            "load_analytic_context_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "load_analytic_context_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "load_analytic_context_maximum_attempts": { "const": 2 },
+            "checkpoint_analysis_frontier_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "checkpoint_analysis_frontier_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "checkpoint_analysis_frontier_maximum_attempts": { "const": 2 },
+            "load_analysis_frontier_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "load_analysis_frontier_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "load_analysis_frontier_maximum_attempts": { "const": 2 },
+            "caller_owned_evidence_ingest_execution_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+            "caller_owned_evidence_ingest_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+            "caller_owned_evidence_ingest_maximum_attempts": { "const": 2 },
+            "panel_prepare_activity_max_bytes": { "const": 1310720 }
+          }
+        }
+      }
+    },
     "secret": {
       "type": "object", "additionalProperties": false,
       "required": ["kind", "name", "path", "audience"],
@@ -85,7 +199,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["kind", "name", "path", "audience"],
       "properties": {
-        "kind": { "enum": ["bearer_env", "header_env", "azure_default_credential", "aws_default_chain", "workload_identity"] },
+        "kind": { "enum": ["bearer_env", "header_env", "bearer_file", "header_file", "azure_default_credential", "aws_default_chain", "workload_identity"] },
         "name": { "type": "string" }, "path": { "type": "string" },
         "audience": { "type": "string" }
       }
@@ -112,11 +226,12 @@
     },
     "temporal": {
       "type": "object", "additionalProperties": false,
-      "required": ["target", "namespace", "task_queue", "identity_prefix", "tls", "worker"],
+      "required": ["target", "namespace", "task_queue", "identity_prefix", "tls", "api_key_file", "worker"],
       "properties": {
         "target": { "type": "string" }, "namespace": { "type": "string" },
         "task_queue": { "type": "string" }, "identity_prefix": { "type": "string" },
-        "tls": { "$ref": "#/$defs/tls" }, "worker": { "$ref": "#/$defs/worker" }
+        "tls": { "$ref": "#/$defs/tls" }, "api_key_file": { "type": "string" },
+        "worker": { "$ref": "#/$defs/worker" }
       }
     },
     "worker": {
@@ -255,17 +370,20 @@
     },
     "s3": {
       "type": "object", "additionalProperties": false,
-      "required": ["bucket", "region", "prefix", "auth"],
+      "required": ["bucket", "region", "prefix", "kms_key_id", "auth"],
       "properties": {
         "bucket": { "type": "string", "minLength": 1 }, "region": { "type": "string", "minLength": 1 },
-        "prefix": { "type": "string", "minLength": 1 }, "auth": { "$ref": "#/$defs/auth" }
+        "prefix": { "type": "string", "minLength": 1 },
+        "kms_key_id": { "type": "string", "minLength": 1, "pattern": "^\\S+$" },
+        "auth": { "$ref": "#/$defs/auth" }
       }
     },
     "inactive_s3": {
       "type": "object", "additionalProperties": false,
-      "required": ["bucket", "region", "prefix", "auth"],
+      "required": ["bucket", "region", "prefix", "kms_key_id", "auth"],
       "properties": {
         "bucket": { "const": "" }, "region": { "const": "" }, "prefix": { "const": "" },
+        "kms_key_id": { "const": "" },
         "auth": { "$ref": "#/$defs/inactive_auth" }
       }
     },
@@ -278,13 +396,14 @@
     },
     "limits": {
       "type": "object", "additionalProperties": false,
-      "required": ["request_bytes", "items", "parts_per_item", "tools", "schema_bytes", "json_depth", "continuation_depth", "route_attempts", "provider_timeout", "provider_response_bytes", "max_output_tokens", "max_budget_buckets_per_window", "token_estimate_safety_ratio"],
+      "required": ["request_bytes", "items", "parts_per_item", "tools", "schema_bytes", "json_depth", "continuation_depth", "route_attempts", "provider_timeout", "provider_response_bytes", "max_input_tokens", "max_output_tokens", "max_budget_buckets_per_window", "token_estimate_safety_ratio"],
       "properties": {
         "request_bytes": { "type": "integer", "minimum": 1 }, "items": { "type": "integer", "minimum": 1 },
         "parts_per_item": { "type": "integer", "minimum": 1 }, "tools": { "type": "integer", "minimum": 1 },
         "schema_bytes": { "type": "integer", "minimum": 1 }, "json_depth": { "type": "integer", "minimum": 1 },
         "continuation_depth": { "type": "integer", "minimum": 1 }, "route_attempts": { "type": "integer", "minimum": 1 },
         "provider_timeout": { "$ref": "#/$defs/duration" }, "provider_response_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+        "max_input_tokens": { "type": "integer", "minimum": 1 },
         "max_output_tokens": { "type": "integer", "minimum": 1 },
         "max_budget_buckets_per_window": { "type": "integer", "minimum": 1 }, "token_estimate_safety_ratio": { "type": "string" }
       }

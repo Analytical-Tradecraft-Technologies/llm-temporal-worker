@@ -12,4 +12,11 @@ var (
 	ErrTenantMismatch = errors.New("state tenant mismatch")
 	ErrExpired        = errors.New("state record expired")
 	ErrConflict       = errors.New("state record conflict")
+	// ErrMaterializeLimit marks deterministic depth, row, item, or byte
+	// rejection. Callers may terminalize it as a no-dispatch request failure;
+	// storage availability and corruption errors must remain distinguishable.
+	ErrMaterializeLimit = errors.New("checkpoint materialization exceeds configured limit")
+	// ErrInvalidCheckpoint marks durable checkpoint metadata or content that
+	// fails immutable graph, provenance, or transcript validation.
+	ErrInvalidCheckpoint = errors.New("checkpoint is invalid")
 )

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/catalog"
@@ -113,11 +114,11 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 		"z": compiledPriceCatalog(t, "z", "z-v1", []pricing.Entry{testPriceEntry("endpoint-z", "model-z", "standard")}),
 		"a": compiledPriceCatalog(t, "a", "a-v1", []pricing.Entry{testPriceEntry("endpoint-a", "model-a", "standard")}),
 	}}
-	merged, err := mergePricingCatalogs(bundle, "config-v1")
+	merged, err := MergePricingCatalogs(bundle, "config-v1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.Version != "runtime-prices/config-v1" || len(merged.Entries) != 2 {
+	if merged.Version != "runtime-prices:config-v1" || len(merged.Entries) != 2 {
 		t.Fatalf("merged catalog = %#v", merged)
 	}
 	if merged.Entries[0].EndpointID != "endpoint-a" || merged.Entries[1].EndpointID != "endpoint-z" {
@@ -127,7 +128,7 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 		t.Fatal("merged catalog has no digest")
 	}
 
-	if got, err := mergePricingCatalogs(bundle, " "); err != nil || got.Version != "runtime-prices" {
+	if got, err := MergePricingCatalogs(bundle, " "); err != nil || got.Version != "runtime-prices" {
 		t.Fatalf("blank config version = %#v, %v", got, err)
 	}
 	for name, invalid := range map[string]catalog.Bundle{
@@ -140,8 +141,8 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := mergePricingCatalogs(invalid, "config-v1"); err == nil {
-				t.Fatal("mergePricingCatalogs() unexpectedly succeeded")
+			if _, err := MergePricingCatalogs(invalid, "config-v1"); err == nil {
+				t.Fatal("MergePricingCatalogs() unexpectedly succeeded")
 			}
 		})
 	}
@@ -168,6 +169,7 @@ func testRouteInputs(t *testing.T) (config.Config, catalog.Bundle) {
 		Set: provider.CapabilitySet{Version: "cap-v1", Features: map[provider.Feature]provider.Capability{
 			provider.FeatureText:     {State: provider.CapabilityNative},
 			provider.FeatureToolCall: {State: provider.CapabilityEmulated, Transform: "json-tool"},
+			provider.FeatureUsage:    {State: provider.CapabilityNative},
 		}},
 	}
 	return value, catalog.Bundle{
@@ -208,6 +210,22 @@ func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 	}
 	if routes.Version != value.Version || len(route.AllowedTenants) != 1 || route.AllowedTenants[0] != "tenant-a" || route.AllowedRegions[0] != "au" {
 		t.Fatalf("compiled route constraints = %#v", route)
+	}
+}
+
+func TestCompileEndpointCapabilitiesRetainsProviderOnlyFeatures(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	sets, err := compileEndpointCapabilities(value, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, ok := sets["endpoint-a"]
+	if !ok || set.Version != "cap-v1" || set.Features[provider.FeatureUsage].State != provider.CapabilityNative {
+		t.Fatalf("compiled endpoint capabilities = %#v", sets)
+	}
+	set.Features[provider.FeatureUsage] = provider.Capability{State: provider.CapabilityUnsupported}
+	if bundle.Capabilities["profile-a"].Set.Features[provider.FeatureUsage].State != provider.CapabilityNative {
+		t.Fatal("compiled endpoint capabilities alias the verified catalog")
 	}
 }
 
@@ -506,16 +524,19 @@ func TestCompileBudgetPoliciesMapsAndValidatesWindows(t *testing.T) {
 	value := config.Config{Limits: config.LimitsConfig{MaxBudgetBucketsPerWindow: 64}, Budgets: config.BudgetsConfig{Policies: []config.BudgetPolicy{{
 		ID: "tenant-policy", Match: config.BudgetMatch{Tenant: "tenant-a", Project: "project-a", ActorPrefix: "svc-", Environment: "production", LogicalModel: "logical-model", EndpointID: "endpoint-a", ServiceClass: llm.ServiceClassPriority}, Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitMicroUSD: 12345}},
 	}}}}
-	policies, err := compileBudgetPolicies(value)
+	configDigest := [32]byte{1}
+	policies, err := compileBudgetPolicies(value, configDigest)
 	if err != nil || len(policies) != 1 {
 		t.Fatalf("compileBudgetPolicies() = %#v, %v", policies, err)
 	}
-	if policies[0].ID != "tenant-policy" || policies[0].Match.Tenant != "tenant-a" || policies[0].Match.Project != "project-a" || policies[0].Match.ActorPrefix != "svc-" || policies[0].Match.Environment != "production" || policies[0].Match.LogicalModel != "logical-model" || policies[0].Match.EndpointID != "endpoint-a" || policies[0].Match.ServiceClass != llm.ServiceClassPriority || policies[0].Windows[0].ID != "tenant-policy/0" || policies[0].Windows[0].Limit != 12345 {
+	policyID, _ := budget.PolicyIdentity(configDigest, "tenant-policy")
+	windowID, _ := budget.WindowIdentity(policyID, 0)
+	if policies[0].ID != policyID || policies[0].Match.Tenant != "tenant-a" || policies[0].Match.Project != "project-a" || policies[0].Match.ActorPrefix != "svc-" || policies[0].Match.Environment != "production" || policies[0].Match.LogicalModel != "logical-model" || policies[0].Match.EndpointID != "endpoint-a" || policies[0].Match.ServiceClass != llm.ServiceClassPriority || policies[0].Windows[0].ID != windowID || policies[0].Windows[0].Limit != 12345 {
 		t.Fatalf("compiled budget policy = %#v", policies[0])
 	}
 
 	value.Limits.MaxBudgetBucketsPerWindow = 1
-	if _, err := compileBudgetPolicies(value); err == nil || !strings.Contains(err.Error(), "budget policy") {
+	if _, err := compileBudgetPolicies(value, configDigest); err == nil || !strings.Contains(err.Error(), "budget policy") {
 		t.Fatalf("unsafe budget policy error = %v", err)
 	}
 }
@@ -524,7 +545,8 @@ func TestCompileBudgetPoliciesMaterializesExactLimitForLegacyAdmission(t *testin
 	value := config.Config{Limits: config.LimitsConfig{MaxBudgetBucketsPerWindow: 64}, Budgets: config.BudgetsConfig{Policies: []config.BudgetPolicy{{
 		ID: "exact-policy", Match: config.BudgetMatch{Tenant: "tenant-a"}, Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitUSD: pricing.MustUSD("2.000000000000000001")}},
 	}}}}
-	policies, err := compileBudgetPolicies(value)
+	configDigest := [32]byte{1}
+	policies, err := compileBudgetPolicies(value, configDigest)
 	if err != nil {
 		t.Fatalf("compileBudgetPolicies() = %v", err)
 	}
@@ -533,7 +555,7 @@ func TestCompileBudgetPoliciesMaterializesExactLimitForLegacyAdmission(t *testin
 	}
 
 	value.Budgets.Policies[0].Windows[0].LimitUSD = pricing.MustUSD("0.000000000000000001")
-	policies, err = compileBudgetPolicies(value)
+	policies, err = compileBudgetPolicies(value, configDigest)
 	if err != nil {
 		t.Fatalf("compileBudgetPolicies(sub-micro) = %v", err)
 	}

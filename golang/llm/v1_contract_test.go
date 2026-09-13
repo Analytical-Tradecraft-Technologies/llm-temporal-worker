@@ -2,6 +2,8 @@ package llm_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"go.temporal.io/sdk/converter"
 )
 
 func TestV1GenerateAndCompactFixturesRoundTrip(t *testing.T) {
@@ -174,6 +177,51 @@ func TestCompactV1RequestContextRejectsMissingOrEmptyMembers(t *testing.T) {
 				t.Fatalf("error = %q, want clear complete context rejection", message)
 			}
 		})
+	}
+}
+
+func TestVictoriaGoldenPayloadsMatchDurableV1TypesAndTemporalConverter(t *testing.T) {
+	requestGolden := readV1Fixture(t, "victoria-generate-request.json")
+	responseGolden := readV1Fixture(t, "victoria-generate-response.json")
+	assertV1FixtureSHA256(t, requestGolden, "61fd492253522993005d71eaf5b75367a1feaf3b6c10fc9f76286aeeb4d6f4bc")
+	assertV1FixtureSHA256(t, responseGolden, "74a399cea869d62cff483e41db20759a3fb5a76475f3cc39b17303aea7be7594")
+
+	var request llm.GenerateRequestV1
+	if err := json.Unmarshal(requestGolden, &request); err != nil {
+		t.Fatalf("decode Victoria request into llm.GenerateRequestV1: %v", err)
+	}
+	encodedRequest, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal llm.GenerateRequestV1: %v", err)
+	}
+	if !bytes.Equal(encodedRequest, requestGolden) {
+		t.Fatalf("worker request bytes differ from Victoria golden\n got: %s\nwant: %s", encodedRequest, requestGolden)
+	}
+	payloads, err := converter.GetDefaultDataConverter().ToPayloads(request)
+	if err != nil {
+		t.Fatalf("Temporal encode worker request: %v", err)
+	}
+	if len(payloads.Payloads) != 1 || !bytes.Equal(payloads.Payloads[0].Data, requestGolden) {
+		t.Fatalf("Temporal worker request payload differs from Victoria bytes: %#v", payloads.Payloads)
+	}
+
+	var response llm.GenerateResponseV1
+	if err := json.Unmarshal(responseGolden, &response); err != nil {
+		t.Fatalf("decode Victoria response into llm.GenerateResponseV1: %v", err)
+	}
+	encodedResponse, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal llm.GenerateResponseV1: %v", err)
+	}
+	if !bytes.Equal(encodedResponse, responseGolden) {
+		t.Fatalf("worker response bytes differ from Victoria golden\n got: %s\nwant: %s", encodedResponse, responseGolden)
+	}
+	payloads, err = converter.GetDefaultDataConverter().ToPayloads(response)
+	if err != nil {
+		t.Fatalf("Temporal encode worker response: %v", err)
+	}
+	if len(payloads.Payloads) != 1 || !bytes.Equal(payloads.Payloads[0].Data, responseGolden) {
+		t.Fatalf("Temporal worker response payload differs from Victoria bytes: %#v", payloads.Payloads)
 	}
 }
 
@@ -766,4 +814,12 @@ func mustCanonicalJSON(t *testing.T, data []byte) []byte {
 		t.Fatal(err)
 	}
 	return canonical
+}
+
+func assertV1FixtureSHA256(t *testing.T, content []byte, want string) {
+	t.Helper()
+	digest := sha256.Sum256(content)
+	if got := hex.EncodeToString(digest[:]); got != want {
+		t.Fatalf("fixture SHA-256 = %s, want %s", got, want)
+	}
 }

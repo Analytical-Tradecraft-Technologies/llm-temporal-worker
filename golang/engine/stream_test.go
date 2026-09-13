@@ -39,11 +39,7 @@ func TestStreamRejectsAdapterWithoutRealStreamBeforeDispatch(t *testing.T) {
 	if normalizeErr != nil {
 		t.Fatal(normalizeErr)
 	}
-	digest, digestErr := llm.RequestDigest(normalized)
-	if digestErr != nil {
-		t.Fatal(digestErr)
-	}
-	operationID, _ := operationIdentity(normalized, digest)
+	operationID, _ := operationIdentity(normalized)
 	if _, operationErr := harness.admission.Get(context.Background(), operationID); !errors.Is(operationErr, admission.ErrOperationNotFound) {
 		t.Fatalf("admission operation error = %v, want no operation", operationErr)
 	}
@@ -100,7 +96,7 @@ func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationID, scopeKey := operationIdentity(normalized, digest)
+	operationID, scopeKey := operationIdentity(normalized)
 	operation, existing, err := harness.engine.beginOrResume(context.Background(), normalized, snapshot, operationID, scopeKey, digest, filtered, harness.clock)
 	if err != nil {
 		t.Fatal(err)

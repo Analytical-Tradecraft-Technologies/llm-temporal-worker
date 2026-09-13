@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -19,10 +20,10 @@ import (
 )
 
 var (
-	ErrRedisBudgetConflict             = errors.New("Redis durable budget idempotency conflict")
+	ErrRedisBudgetConflict             = fmt.Errorf("%w: Redis durable budget idempotency conflict", durable.ErrBatchMaterializationConflict)
 	ErrRedisBudgetGenerationMismatch   = errors.New("Redis durable budget generation mismatch")
 	ErrRedisBudgetIncarnationMismatch  = errors.New("Redis durable budget incarnation mismatch")
-	ErrRedisBudgetReservationNotFound  = errors.New("Redis durable budget reservation is not known")
+	ErrRedisBudgetReservationNotFound  = fmt.Errorf("%w: Redis durable budget reservation is not known", durable.ErrReservationNotFound)
 	ErrRedisBudgetReservationFinalized = errors.New("Redis durable budget reservation is already finalized")
 )
 
@@ -32,8 +33,9 @@ var (
 // representation. Legacy admission records and micro-USD buckets are never
 // mixed with these records.
 //
-// A materializer instance is bound to one immutable generation/incarnation.
-// Requests from another snapshot fail closed before invoking Redis.
+// New reservations are bound to the materializer's immutable generation and
+// incarnation. Reconciliation is fenced by the identity persisted with the
+// generation-scoped reservation so it remains possible after snapshot rotation.
 type RedisBudgetMaterializer struct {
 	space       keySpace
 	invoke      FunctionInvoker
@@ -101,34 +103,50 @@ func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisB
 }
 
 var _ durable.BudgetMaterializer = (*RedisBudgetMaterializer)(nil)
+var _ durable.BatchBudgetMaterializer = (*RedisBudgetMaterializer)(nil)
+var _ durable.BatchGrantMaterializer = (*RedisBudgetMaterializer)(nil)
+var _ durable.BatchEscrowMaterializer = (*RedisBudgetMaterializer)(nil)
+var _ durable.BatchMaterializationReader = (*RedisBudgetMaterializer)(nil)
+
+// Batch operation keys have a separate bounded allowance; shared budget and
+// expiry keys are deduplicated. Payload and per-operation limits stay unchanged.
+const maxDurableBatchKeys = 1536
+const maxDurableBatchPayloadBytes = 2 * 1024 * 1024
 
 type durableReservation struct {
-	PolicyID      string `json:"policy_id"`
-	WindowID      string `json:"window_id"`
-	Bucket        string `json:"bucket"`
-	AmountNano    string `json:"amount_nano"`
-	LimitNano     string `json:"limit_nano"`
-	BucketNanos   string `json:"bucket_nanos"`
-	DurationNanos string `json:"duration_nanos"`
-	BucketStart   string `json:"bucket_start_nanos"`
-	ExpiresMillis int64  `json:"expires_millis"`
-	EventID       string `json:"event_id"`
-	AmountUSD     string `json:"amount_usd"`
-	LimitUSD      string `json:"limit_usd"`
+	PolicyID       string `json:"policy_id"`
+	WindowID       string `json:"window_id"`
+	Bucket         string `json:"bucket"`
+	AmountNano     string `json:"amount_nano"`
+	LimitNano      string `json:"limit_nano"`
+	BucketNanos    string `json:"bucket_nanos"`
+	DurationNanos  string `json:"duration_nanos"`
+	BucketStart    string `json:"bucket_start_nanos"`
+	ExpiresMillis  int64  `json:"expires_millis"`
+	EventID        string `json:"event_id"`
+	AmountUSD      string `json:"amount_usd"`
+	LimitUSD       string `json:"limit_usd"`
+	BucketKeyIndex int    `json:"bucket_key_index,omitempty"`
+	ExpiryKeyIndex int    `json:"expiry_key_index,omitempty"`
 }
 
 type durableOperation struct {
-	Schema        string               `json:"schema"`
-	OperationID   string               `json:"operation_id"`
-	GenerationID  string               `json:"generation_id"`
-	IncarnationID string               `json:"incarnation_id"`
-	Fingerprint   string               `json:"fingerprint"`
-	Status        string               `json:"status"`
-	OccurredAt    time.Time            `json:"occurred_at"`
-	ExpiresAt     time.Time            `json:"expires_at,omitempty"`
-	Reservations  []durableReservation `json:"reservations"`
-	Events        map[string]string    `json:"events,omitempty"`
-	Denial        *durableDenial       `json:"denial,omitempty"`
+	Schema              string                     `json:"schema"`
+	OperationID         string                     `json:"operation_id"`
+	GenerationID        string                     `json:"generation_id"`
+	IncarnationID       string                     `json:"incarnation_id"`
+	Fingerprint         string                     `json:"fingerprint"`
+	Status              string                     `json:"status"`
+	OccurredAt          time.Time                  `json:"occurred_at"`
+	ExpiresAt           time.Time                  `json:"expires_at,omitempty"`
+	Route               durable.DispatchRouteFacts `json:"route"`
+	Bounds              durable.ReservationBounds  `json:"bounds,omitempty"`
+	LogicalCostNano     string                     `json:"logical_cost_nano"`
+	RemainingEscrowNano string                     `json:"remaining_escrow_nano,omitempty"`
+	Reservations        []durableReservation       `json:"reservations"`
+	Events              map[string]string          `json:"events,omitempty"`
+	RefundNano          string                     `json:"refund_nano,omitempty"`
+	Denial              *durableDenial             `json:"denial,omitempty"`
 }
 
 type durableDenial struct {
@@ -151,6 +169,32 @@ type durableEvent struct {
 	Fingerprint           string `json:"fingerprint"`
 }
 
+type durableBatchOperation struct {
+	OperationKeyIndex int                        `json:"operation_key_index"`
+	OperationID       string                     `json:"operation_id"`
+	Fingerprint       string                     `json:"fingerprint"`
+	OccurredAt        time.Time                  `json:"occurred_at"`
+	ExpiresAt         time.Time                  `json:"expires_at"`
+	Route             durable.DispatchRouteFacts `json:"route"`
+	Bounds            durable.ReservationBounds  `json:"bounds,omitempty"`
+	LogicalCostNano   string                     `json:"logical_cost_nano"`
+	Reservations      []durableReservation       `json:"reservations"`
+}
+
+type durableBatchRecord struct {
+	Schema              string             `json:"schema"`
+	GenerationID        string             `json:"generation_id"`
+	IncarnationID       string             `json:"incarnation_id"`
+	EscrowID            string             `json:"escrow_id,omitempty"`
+	EscrowFingerprint   string             `json:"escrow_fingerprint,omitempty"`
+	AllocationSequence  int64              `json:"allocation_sequence,omitempty"`
+	RemainingEscrowNano string             `json:"remaining_escrow_nano,omitempty"`
+	ContentDigest       string             `json:"content_digest"`
+	Fingerprint         string             `json:"fingerprint"`
+	Status              string             `json:"status"`
+	Operations          []durableOperation `json:"operations"`
+}
+
 func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.ReserveRequest) (durable.ReserveResult, error) {
 	if m == nil {
 		return durable.ReserveResult{}, errors.New("Redis durable budget materializer is nil")
@@ -161,16 +205,31 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 	if err := ctx.Err(); err != nil {
 		return durable.ReserveResult{}, err
 	}
+	now := m.clock().UTC()
+	if request.IncarnationID == "" {
+		request.IncarnationID = m.incarnation
+	}
+	if request.OccurredAt.IsZero() {
+		request.OccurredAt = now
+	}
+	if request.Route != (durable.DispatchRouteFacts{}) {
+		if err := request.Route.Validate(); err != nil {
+			return durable.ReserveResult{}, fmt.Errorf("Redis durable budget route: %w", err)
+		}
+	}
 	if err := request.OperationID.Validate(); err != nil {
 		return durable.ReserveResult{}, err
 	}
 	if request.GenerationID != m.generation {
 		return durable.ReserveResult{}, ErrRedisBudgetGenerationMismatch
 	}
+	if request.IncarnationID != m.incarnation {
+		return durable.ReserveResult{}, ErrRedisBudgetIncarnationMismatch
+	}
 	if len(request.Reservations) == 0 {
 		return durable.ReserveResult{}, errors.New("Redis durable budget reservation list must not be empty")
 	}
-	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, m.clock())
+	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
 	if err != nil {
 		return durable.ReserveResult{}, err
 	}
@@ -185,7 +244,7 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 			m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID),
 			m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
 	}
-	ttl := durableTTLSeconds(request.ExpiresAt, m.clock(), reservations)
+	ttl := durableTTLSeconds(request.ExpiresAt, now, reservations)
 	if ttl <= 0 {
 		return durable.ReserveResult{}, errors.New("Redis durable budget reservation expiry must be in the future")
 	}
@@ -193,9 +252,17 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 	if err != nil {
 		return durable.ReserveResult{}, fmt.Errorf("marshal Redis durable budget reservations: %w", err)
 	}
+	routeWire, err := json.Marshal(request.Route)
+	if err != nil {
+		return durable.ReserveResult{}, fmt.Errorf("marshal Redis durable budget route: %w", err)
+	}
+	logicalNano, err := durableLogicalCostNano(request.LogicalCostUSD, false)
+	if err != nil {
+		return durable.ReserveResult{}, err
+	}
 	result, err := m.invoke.Run(ctx, m.function, keys,
 		"durable_reserve", string(request.GenerationID), string(m.incarnation), operation,
-		fingerprint, strconv.FormatInt(ttl, 10), m.clock().UTC().Format(time.RFC3339Nano), string(wire))
+		fingerprint, strconv.FormatInt(ttl, 10), request.OccurredAt.UTC().Format(time.RFC3339Nano), string(routeWire), string(wire), logicalNano)
 	if err != nil {
 		return durable.ReserveResult{}, resolveMutationError(ctx, err)
 	}
@@ -225,9 +292,744 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 	if record.Status != "accepted" {
 		return durable.ReserveResult{}, fmt.Errorf("invalid Redis durable budget operation status %q", record.Status)
 	}
+	return reserveResultFromRecord(request, record)
+}
+
+func (m *RedisBudgetMaterializer) AcceptBatch(ctx context.Context, contentDigest [32]byte, requests []durable.ReserveRequest) ([]durable.ReserveResult, error) {
+	if m == nil {
+		return nil, errors.New("Redis durable budget materializer is nil")
+	}
+	if ctx == nil {
+		return nil, errors.New("Redis durable budget materializer context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	now := m.clock().UTC()
+	normalized := append([]durable.ReserveRequest(nil), requests...)
+	operations := make([]durableBatchOperation, len(normalized))
+	keys := make([]string, 1, 1+len(normalized))
+	digestHex := hex.EncodeToString(contentDigest[:])
+	keys[0] = m.space.durableBudgetBatchKey(string(m.generation), digestHex)
+	keyIndexes := make(map[string]int)
+	for index := range normalized {
+		normalized[index].Reservations = append([]admission.WindowReservation(nil), normalized[index].Reservations...)
+		if normalized[index].IncarnationID == "" {
+			normalized[index].IncarnationID = m.incarnation
+		}
+		if normalized[index].OccurredAt.IsZero() {
+			normalized[index].OccurredAt = now
+		}
+		keys = append(keys, m.space.durableBudgetOperationKey(string(normalized[index].GenerationID), string(normalized[index].OperationID)))
+	}
+	if err := durable.ValidateBatchReserveRequest(contentDigest, normalized); err != nil {
+		return nil, err
+	}
+	fingerprintHash := sha256.New()
+	_, _ = fingerprintHash.Write(contentDigest[:])
+	ttl := int64(0)
+	for index, request := range normalized {
+		if request.GenerationID != m.generation {
+			return nil, ErrRedisBudgetGenerationMismatch
+		}
+		if request.IncarnationID != m.incarnation {
+			return nil, ErrRedisBudgetIncarnationMismatch
+		}
+		if request.Route != (durable.DispatchRouteFacts{}) {
+			if err := request.Route.Validate(); err != nil {
+				return nil, fmt.Errorf("Redis durable batch route %d: %w", index, err)
+			}
+		}
+		reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
+		if err != nil {
+			return nil, fmt.Errorf("Redis durable batch operation %d: %w", index, err)
+		}
+		requestTTL := durableTTLSeconds(request.ExpiresAt, now, reservations)
+		if requestTTL <= 0 {
+			return nil, fmt.Errorf("Redis durable batch operation %d expiry must be in the future", index)
+		}
+		if requestTTL > ttl {
+			ttl = requestTTL
+		}
+		requestFingerprint, err := durableRequestFingerprint(request, reservations)
+		if err != nil {
+			return nil, err
+		}
+		fingerprintBytes, err := hex.DecodeString(requestFingerprint)
+		if err != nil {
+			return nil, err
+		}
+		_, _ = fingerprintHash.Write(fingerprintBytes)
+		for reservationIndex := range reservations {
+			reservations[reservationIndex].BucketKeyIndex = durableBatchKeyIndex(&keys, keyIndexes, m.space.durableBudgetKey(reservations[reservationIndex].PolicyID, reservations[reservationIndex].WindowID))
+			reservations[reservationIndex].ExpiryKeyIndex = durableBatchKeyIndex(&keys, keyIndexes, m.space.durableBudgetExpiryKey(reservations[reservationIndex].PolicyID, reservations[reservationIndex].WindowID))
+		}
+		logicalNano, err := durableLogicalCostNano(request.LogicalCostUSD, false)
+		if err != nil {
+			return nil, err
+		}
+		operations[index] = durableBatchOperation{
+			OperationKeyIndex: index + 2, OperationID: string(request.OperationID),
+			LogicalCostNano: logicalNano,
+			Fingerprint:     requestFingerprint, OccurredAt: request.OccurredAt.UTC(),
+			ExpiresAt: request.ExpiresAt.UTC(), Route: request.Route, Bounds: request.Bounds, Reservations: reservations,
+		}
+	}
+	if len(keys) > maxDurableBatchKeys {
+		return nil, fmt.Errorf("Redis durable batch needs %d keys; atomic bound is %d", len(keys), maxDurableBatchKeys)
+	}
+	wire, err := json.Marshal(operations)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Redis durable budget batch: %w", err)
+	}
+	if len(wire) > maxDurableBatchPayloadBytes {
+		return nil, fmt.Errorf("Redis durable batch payload is %d bytes; bound is %d", len(wire), maxDurableBatchPayloadBytes)
+	}
+	fingerprint := hex.EncodeToString(fingerprintHash.Sum(nil))
+	result, err := m.invoke.Run(ctx, m.function, keys,
+		"durable_reserve_batch", string(m.generation), string(m.incarnation),
+		digestHex, fingerprint, strconv.FormatInt(ttl, 10), string(wire))
+	if err != nil {
+		return nil, resolveMutationError(ctx, err)
+	}
+	status, recordData, err := durableFunctionRecord(result)
+	if err != nil {
+		return nil, err
+	}
+	if status == "conflict" {
+		return nil, ErrRedisBudgetConflict
+	}
+	if status != "created" && status != "existing" {
+		return nil, mapDurableStatus(status)
+	}
+	var record durableBatchRecord
+	if err := json.Unmarshal([]byte(recordData), &record); err != nil {
+		return nil, fmt.Errorf("decode Redis durable budget batch: %w", err)
+	}
+	if record.ContentDigest != digestHex || record.Fingerprint != fingerprint || len(record.Operations) != len(normalized) {
+		return nil, ErrRedisBudgetConflict
+	}
+	results := make([]durable.ReserveResult, len(normalized))
+	for index := range normalized {
+		if record.Operations[index].OperationID != string(normalized[index].OperationID) {
+			return nil, ErrRedisBudgetConflict
+		}
+		if record.Status == "denied" {
+			results[index], err = durableDeniedResult(normalized[index], record.Operations[index])
+		} else if record.Status == "accepted" {
+			results[index], err = reserveResultFromRecord(normalized[index], record.Operations[index])
+		} else {
+			return nil, fmt.Errorf("invalid Redis durable budget batch status %q", record.Status)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := durable.ValidateBatchReserveResult(normalized, results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (m *RedisBudgetMaterializer) LoadBatchMaterialization(ctx context.Context, contentDigest [32]byte) (durable.BatchMaterialization, bool, error) {
+	if m == nil || ctx == nil || m.reader == nil {
+		return durable.BatchMaterialization{}, false, errors.New("Redis durable batch materialization reader is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return durable.BatchMaterialization{}, false, err
+	}
+	if contentDigest == ([32]byte{}) {
+		return durable.BatchMaterialization{}, false, errors.New("Redis durable batch content digest is required")
+	}
+	digestHex := hex.EncodeToString(contentDigest[:])
+	raw, err := m.reader.Get(ctx, m.space.durableBudgetBatchKey(string(m.generation), digestHex))
+	if errors.Is(err, redisclient.Nil) {
+		return durable.BatchMaterialization{}, false, nil
+	}
+	if err != nil {
+		return durable.BatchMaterialization{}, false, resolveMutationError(ctx, err)
+	}
+	var batch durableBatchRecord
+	if err := json.Unmarshal([]byte(raw), &batch); err != nil {
+		return durable.BatchMaterialization{}, false, fmt.Errorf("decode Redis durable budget batch: %w", err)
+	}
+	if batch.Schema != "durable-budget/v1" || batch.ContentDigest != digestHex || (batch.Status != "accepted" && batch.Status != "denied") || len(batch.Operations) == 0 || len(batch.Operations) > 1024 {
+		return durable.BatchMaterialization{}, false, ErrRedisBudgetConflict
+	}
+	if batch.GenerationID != string(m.generation) {
+		return durable.BatchMaterialization{}, false, ErrRedisBudgetGenerationMismatch
+	}
+	if batch.IncarnationID != string(m.incarnation) {
+		return durable.BatchMaterialization{}, false, ErrRedisBudgetIncarnationMismatch
+	}
+	snapshot := durable.BatchMaterialization{
+		Requests: make([]durable.ReserveRequest, len(batch.Operations)),
+		Results:  make([]durable.ReserveResult, len(batch.Operations)),
+	}
+	hash := sha256.New()
+	_, _ = hash.Write(contentDigest[:])
+	for index, record := range batch.Operations {
+		if record.Schema != batch.Schema || record.GenerationID != batch.GenerationID || record.IncarnationID != batch.IncarnationID || record.Status != batch.Status {
+			return durable.BatchMaterialization{}, false, ErrRedisBudgetConflict
+		}
+		request, err := reserveRequestFromDurableOperation(record)
+		if err != nil {
+			return durable.BatchMaterialization{}, false, err
+		}
+		// Historical reconstruction is anchored to the original occurrence,
+		// never the current clock or the mutable live operation record.
+		reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, request.OccurredAt)
+		if err != nil {
+			return durable.BatchMaterialization{}, false, err
+		}
+		for ri, reservation := range record.Reservations {
+			reservation.BucketKeyIndex, reservation.ExpiryKeyIndex = 0, 0
+			if reservation != reservations[ri] {
+				return durable.BatchMaterialization{}, false, ErrRedisBudgetConflict
+			}
+		}
+		fingerprint, err := durableRequestFingerprint(request, reservations)
+		if err != nil {
+			return durable.BatchMaterialization{}, false, err
+		}
+		if fingerprint != record.Fingerprint {
+			return durable.BatchMaterialization{}, false, ErrRedisBudgetConflict
+		}
+		decoded, _ := hex.DecodeString(fingerprint)
+		_, _ = hash.Write(decoded)
+		snapshot.Requests[index] = request
+		if batch.Status == "accepted" {
+			snapshot.Results[index], err = reserveResultFromRecord(request, record)
+		} else {
+			snapshot.Results[index], err = durableDeniedResult(request, record)
+		}
+		if err != nil {
+			return durable.BatchMaterialization{}, false, err
+		}
+	}
+	if batch.EscrowID != "" {
+		if err := durable.OperationID(batch.EscrowID).Validate(); err != nil || len(batch.EscrowFingerprint) != 64 || batch.AllocationSequence <= 0 || batch.RemainingEscrowNano == "" {
+			return durable.BatchMaterialization{}, false, ErrRedisBudgetConflict
+		}
+		_, _ = fmt.Fprintf(hash, "\x00%s\x00%s\x00%d", batch.EscrowID, batch.EscrowFingerprint, batch.AllocationSequence)
+		remaining, err := parseNanoUSD(batch.RemainingEscrowNano)
+		if err != nil {
+			return durable.BatchMaterialization{}, false, err
+		}
+		snapshot.RemainingEscrowCostUSD, err = pricing.USDFromNano(remaining)
+		if err != nil {
+			return durable.BatchMaterialization{}, false, err
+		}
+	} else if batch.EscrowFingerprint != "" || batch.AllocationSequence != 0 {
+		return durable.BatchMaterialization{}, false, ErrRedisBudgetConflict
+	}
+	if batch.Fingerprint != hex.EncodeToString(hash.Sum(nil)) {
+		return durable.BatchMaterialization{}, false, ErrRedisBudgetConflict
+	}
+	if err := durable.ValidateBatchReserveRequest(contentDigest, snapshot.Requests); err != nil {
+		return durable.BatchMaterialization{}, false, err
+	}
+	if err := durable.ValidateBatchReserveResult(snapshot.Requests, snapshot.Results); err != nil {
+		return durable.BatchMaterialization{}, false, err
+	}
+	return snapshot, true, nil
+}
+
+func (m *RedisBudgetMaterializer) ConfirmBatchGrant(ctx context.Context, contentDigest [32]byte, operationID durable.OperationID) (durable.ReserveRequest, durable.ReserveResult, error) {
+	if m == nil || ctx == nil || m.reader == nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, errors.New("Redis durable batch grant reader is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	if contentDigest == ([32]byte{}) {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, errors.New("Redis durable batch content digest is required")
+	}
+	if err := operationID.Validate(); err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	digestHex := hex.EncodeToString(contentDigest[:])
+	raw, err := m.reader.Get(ctx, m.space.durableBudgetBatchKey(string(m.generation), digestHex))
+	if errors.Is(err, redisclient.Nil) {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, ErrRedisBudgetReservationNotFound
+	}
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, resolveMutationError(ctx, err)
+	}
+	var batch durableBatchRecord
+	if err := json.Unmarshal([]byte(raw), &batch); err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, fmt.Errorf("decode Redis durable budget batch: %w", err)
+	}
+	if batch.ContentDigest != digestHex || batch.Status != "accepted" {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, ErrRedisBudgetReservationNotFound
+	}
+	var batchOperation *durableOperation
+	for index := range batch.Operations {
+		if batch.Operations[index].OperationID == string(operationID) {
+			batchOperation = &batch.Operations[index]
+			break
+		}
+	}
+	if batchOperation == nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, ErrRedisBudgetReservationNotFound
+	}
+	generationID := durable.GenerationID(batchOperation.GenerationID)
+	record, err := m.readDurableOperation(ctx, generationID, operationID)
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	if record.OperationID != batchOperation.OperationID ||
+		record.GenerationID != batchOperation.GenerationID ||
+		record.IncarnationID != batchOperation.IncarnationID ||
+		record.Fingerprint != batchOperation.Fingerprint {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, ErrRedisBudgetConflict
+	}
+	request, err := reserveRequestFromDurableOperation(record)
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	result, err := confirmDurableOperation(request, record, m.clock().UTC())
+	return request, result, err
+}
+
+func reserveRequestFromDurableOperation(record durableOperation) (durable.ReserveRequest, error) {
+	reservations := make([]admission.WindowReservation, len(record.Reservations))
+	for index, value := range record.Reservations {
+		bucket, err := strconv.ParseInt(value.Bucket, 10, 64)
+		if err != nil {
+			return durable.ReserveRequest{}, ErrUnavailable
+		}
+		bucketNanos, err := strconv.ParseInt(value.BucketNanos, 10, 64)
+		if err != nil {
+			return durable.ReserveRequest{}, ErrUnavailable
+		}
+		durationNanos, err := strconv.ParseInt(value.DurationNanos, 10, 64)
+		if err != nil {
+			return durable.ReserveRequest{}, ErrUnavailable
+		}
+		amount, err := pricing.ParseUSD(value.AmountUSD)
+		if err != nil {
+			return durable.ReserveRequest{}, ErrUnavailable
+		}
+		limit, err := pricing.ParseUSD(value.LimitUSD)
+		if err != nil {
+			return durable.ReserveRequest{}, ErrUnavailable
+		}
+		amountMicro, err := pricing.CeilMicroFromUSD(amount)
+		if err != nil {
+			return durable.ReserveRequest{}, ErrUnavailable
+		}
+		limitMicro, err := pricing.MicroFromUSD(limit)
+		if err != nil {
+			return durable.ReserveRequest{}, ErrUnavailable
+		}
+		reservations[index] = admission.WindowReservation{
+			PolicyID: value.PolicyID, WindowID: value.WindowID, Bucket: bucket,
+			Amount: amountMicro, Limit: limitMicro, AmountUSD: amount, LimitUSD: limit,
+			BucketNanos: bucketNanos, DurationNanos: durationNanos,
+		}
+	}
+	logicalNano, err := parseNanoUSD(record.LogicalCostNano)
+	if err != nil {
+		return durable.ReserveRequest{}, err
+	}
+	logicalCost, err := pricing.USDFromNano(logicalNano)
+	if err != nil {
+		return durable.ReserveRequest{}, err
+	}
+	return durable.ReserveRequest{
+		OperationID: durable.OperationID(record.OperationID), GenerationID: durable.GenerationID(record.GenerationID),
+		IncarnationID: durable.IncarnationID(record.IncarnationID), Reservations: reservations,
+		ExpiresAt: record.ExpiresAt, OccurredAt: record.OccurredAt, Route: record.Route, Bounds: record.Bounds,
+		LogicalCostUSD: logicalCost,
+	}, nil
+}
+
+func (m *RedisBudgetMaterializer) readDurableOperation(ctx context.Context, generationID durable.GenerationID, operationID durable.OperationID) (durableOperation, error) {
+	if err := generationID.Validate(); err != nil {
+		return durableOperation{}, err
+	}
+	if err := operationID.Validate(); err != nil {
+		return durableOperation{}, err
+	}
+	raw, err := m.reader.Get(ctx, m.space.durableBudgetOperationKey(string(generationID), string(operationID)))
+	if errors.Is(err, redisclient.Nil) {
+		return durableOperation{}, ErrRedisBudgetReservationNotFound
+	}
+	if err != nil {
+		return durableOperation{}, resolveMutationError(ctx, err)
+	}
+	var record durableOperation
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		return durableOperation{}, fmt.Errorf("decode Redis durable budget operation: %w", err)
+	}
+	return record, nil
+}
+
+func confirmDurableOperation(request durable.ReserveRequest, record durableOperation, now time.Time) (durable.ReserveResult, error) {
+	if err := request.OperationID.Validate(); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if err := request.GenerationID.Validate(); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if err := request.IncarnationID.Validate(); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if !request.ExpiresAt.After(now) {
+		return durable.ReserveResult{}, ErrRedisBudgetReservationNotFound
+	}
+	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
+	if err != nil {
+		return durable.ReserveResult{}, err
+	}
+	fingerprint, err := durableRequestFingerprint(request, reservations)
+	if err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if record.OperationID != string(request.OperationID) || record.Status != "accepted" {
+		return durable.ReserveResult{}, ErrRedisBudgetReservationNotFound
+	}
+	if record.GenerationID != string(request.GenerationID) {
+		return durable.ReserveResult{}, ErrRedisBudgetGenerationMismatch
+	}
+	if record.IncarnationID != string(request.IncarnationID) {
+		return durable.ReserveResult{}, ErrRedisBudgetIncarnationMismatch
+	}
+	if record.Fingerprint != fingerprint {
+		return durable.ReserveResult{}, fmt.Errorf(
+			"%w: operation %s stored fingerprint %s does not match reconstructed %s",
+			ErrRedisBudgetConflict, request.OperationID, record.Fingerprint, fingerprint,
+		)
+	}
+	result, err := reserveResultFromRecord(request, record)
+	if err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if err := durable.ValidatePlannedReserveResult(request, result); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	return result, nil
+}
+
+func (m *RedisBudgetMaterializer) AcceptBatchEscrow(ctx context.Context, contentDigest [32]byte, request durable.ReserveRequest) (durable.ReserveResult, error) {
+	if _, err := durableLogicalCostNano(request.LogicalCostUSD, true); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	results, err := m.AcceptBatch(ctx, contentDigest, []durable.ReserveRequest{request})
+	if err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if len(results) != 1 {
+		return durable.ReserveResult{}, ErrUnavailable
+	}
+	return results[0], nil
+}
+
+func (m *RedisBudgetMaterializer) LoadBatchEscrow(ctx context.Context, contentDigest [32]byte, operationID durable.OperationID) (durable.ReserveRequest, durable.ReserveResult, error) {
+	snapshot, found, err := m.LoadBatchMaterialization(ctx, contentDigest)
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	if !found || len(snapshot.Requests) != 1 || snapshot.Requests[0].OperationID != operationID || !snapshot.Results[0].Accepted {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, ErrRedisBudgetReservationNotFound
+	}
+	request := snapshot.Requests[0]
+	record, err := m.readDurableOperation(ctx, request.GenerationID, operationID)
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, request.OccurredAt)
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	fingerprint, err := durableRequestFingerprint(request, reservations)
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	if record.OperationID != string(operationID) || record.GenerationID != string(request.GenerationID) || record.IncarnationID != string(request.IncarnationID) || record.Fingerprint != fingerprint || (record.Status != "accepted" && record.Status != "closed") {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, ErrRedisBudgetConflict
+	}
+	remaining, err := parseNanoUSD(record.RemainingEscrowNano)
+	if err != nil {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, err
+	}
+	request.RemainingEscrowCostUSD, err = pricing.USDFromNano(remaining)
+	if err != nil || request.RemainingEscrowCostUSD.Cmp(request.LogicalCostUSD) > 0 {
+		return durable.ReserveRequest{}, durable.ReserveResult{}, ErrUnavailable
+	}
+	return request, snapshot.Results[0], nil
+}
+
+func (m *RedisBudgetMaterializer) AllocateBatchGrants(ctx context.Context, contentDigest [32]byte, escrow durable.ReserveRequest, sequence int64, requests []durable.ReserveRequest) ([]durable.ReserveResult, error) {
+	if m == nil || ctx == nil {
+		return nil, errors.New("Redis durable batch escrow materializer is unavailable")
+	}
+	if err := durable.ValidateBatchReserveRequest(contentDigest, requests); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if sequence <= 0 || escrow.GenerationID != m.generation || escrow.IncarnationID != m.incarnation {
+		return nil, ErrRedisBudgetConflict
+	}
+	if _, err := durableLogicalCostNano(escrow.LogicalCostUSD, true); err != nil {
+		return nil, err
+	}
+	now := m.clock().UTC()
+	escrowReservations, err := canonicalDurableReservations(escrow.OperationID, escrow.GenerationID, escrow.Reservations, escrow.ExpiresAt, now)
+	if err != nil {
+		return nil, err
+	}
+	escrowFingerprint, err := durableRequestFingerprint(escrow, escrowReservations)
+	if err != nil {
+		return nil, err
+	}
+	digestHex := hex.EncodeToString(contentDigest[:])
+	keys := []string{m.space.durableBudgetOperationKey(string(escrow.GenerationID), string(escrow.OperationID)), m.space.durableBudgetBatchKey(string(m.generation), digestHex)}
+	keyIndexes := make(map[string]int)
+	normalized := append([]durable.ReserveRequest(nil), requests...)
+	for index := range normalized {
+		keys = append(keys, m.space.durableBudgetOperationKey(string(normalized[index].GenerationID), string(normalized[index].OperationID)))
+	}
+	operations := make([]durableBatchOperation, len(normalized))
+	fingerprintHash := sha256.New()
+	_, _ = fingerprintHash.Write(contentDigest[:])
+	ttl := durableTTLSeconds(escrow.ExpiresAt, now, escrowReservations)
+	for index, request := range normalized {
+		if request.GenerationID != m.generation || request.IncarnationID != m.incarnation {
+			return nil, ErrRedisBudgetGenerationMismatch
+		}
+		reservations, e := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
+		if e != nil {
+			return nil, e
+		}
+		if durableTTLSeconds(request.ExpiresAt, now, reservations) > ttl {
+			return nil, errors.New("allocated grant retention exceeds escrow retention")
+		}
+		fp, e := durableRequestFingerprint(request, reservations)
+		if e != nil {
+			return nil, e
+		}
+		decoded, _ := hex.DecodeString(fp)
+		_, _ = fingerprintHash.Write(decoded)
+		for ri := range reservations {
+			reservations[ri].BucketKeyIndex = durableBatchKeyIndex(&keys, keyIndexes, m.space.durableBudgetKey(reservations[ri].PolicyID, reservations[ri].WindowID))
+			reservations[ri].ExpiryKeyIndex = durableBatchKeyIndex(&keys, keyIndexes, m.space.durableBudgetExpiryKey(reservations[ri].PolicyID, reservations[ri].WindowID))
+		}
+		logicalNano, e := durableLogicalCostNano(request.LogicalCostUSD, true)
+		if e != nil {
+			return nil, e
+		}
+		operations[index] = durableBatchOperation{OperationKeyIndex: index + 3, OperationID: string(request.OperationID), Fingerprint: fp, OccurredAt: request.OccurredAt.UTC(), ExpiresAt: request.ExpiresAt.UTC(), Route: request.Route, Bounds: request.Bounds, LogicalCostNano: logicalNano, Reservations: reservations}
+	}
+	if len(keys) > maxDurableBatchKeys || ttl <= 0 {
+		return nil, fmt.Errorf("Redis durable allocated batch needs %d keys (bound %d) and positive retention (got %d)", len(keys), maxDurableBatchKeys, ttl)
+	}
+	wire, e := json.Marshal(operations)
+	if e != nil {
+		return nil, e
+	}
+	if len(wire) > maxDurableBatchPayloadBytes {
+		return nil, fmt.Errorf("Redis durable allocated batch payload is %d bytes; bound is %d", len(wire), maxDurableBatchPayloadBytes)
+	}
+	_, _ = fmt.Fprintf(fingerprintHash, "\x00%s\x00%s\x00%d", escrow.OperationID, escrowFingerprint, sequence)
+	fingerprint := hex.EncodeToString(fingerprintHash.Sum(nil))
+	result, e := m.invoke.Run(ctx, m.function, keys, "durable_allocate_batch_grants", string(m.generation), string(m.incarnation), string(escrow.OperationID), escrowFingerprint, digestHex, fingerprint, strconv.FormatInt(ttl, 10), string(wire), strconv.FormatInt(sequence, 10))
+	if e != nil {
+		return nil, resolveMutationError(ctx, e)
+	}
+	status, recordData, e := durableFunctionRecord(result)
+	if e != nil {
+		return nil, e
+	}
+	if status == "conflict" {
+		return nil, ErrRedisBudgetConflict
+	}
+	if status != "created" && status != "existing" {
+		return nil, mapDurableStatus(status)
+	}
+	var record durableBatchRecord
+	if e = json.Unmarshal([]byte(recordData), &record); e != nil {
+		return nil, e
+	}
+	if record.ContentDigest != digestHex || record.Fingerprint != fingerprint || record.EscrowID != string(escrow.OperationID) || record.EscrowFingerprint != escrowFingerprint || record.AllocationSequence != sequence || record.Status != "accepted" || len(record.Operations) != len(normalized) {
+		return nil, ErrRedisBudgetConflict
+	}
+	results := make([]durable.ReserveResult, len(normalized))
+	for index := range normalized {
+		if record.Operations[index].OperationID != string(normalized[index].OperationID) || record.Operations[index].Fingerprint != operations[index].Fingerprint {
+			return nil, ErrRedisBudgetConflict
+		}
+		results[index], e = reserveResultFromRecord(normalized[index], record.Operations[index])
+		if e != nil {
+			return nil, e
+		}
+	}
+
+	if e = durable.ValidateBatchReserveResult(normalized, results); e != nil {
+		return nil, e
+	}
+	return results, nil
+}
+func (m *RedisBudgetMaterializer) CloseBatchEscrow(ctx context.Context, contentDigest [32]byte, escrow durable.ReserveRequest, closeDigest [32]byte) (pricing.USD, bool, error) {
+	if m == nil || ctx == nil || contentDigest == ([32]byte{}) || closeDigest == ([32]byte{}) {
+		return pricing.USD{}, false, errors.New("Redis durable escrow close identity is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return pricing.USD{}, false, err
+	}
+	snapshot, found, err := m.LoadBatchMaterialization(ctx, contentDigest)
+	if err != nil {
+		return pricing.USD{}, false, err
+	}
+	if !found || len(snapshot.Requests) != 1 || snapshot.Requests[0].OperationID != escrow.OperationID {
+		return pricing.USD{}, false, ErrRedisBudgetConflict
+	}
+	reservations, err := canonicalDurableReservations(escrow.OperationID, escrow.GenerationID, escrow.Reservations, escrow.ExpiresAt, escrow.OccurredAt)
+	if err != nil {
+		return pricing.USD{}, false, err
+	}
+	fingerprint, err := durableRequestFingerprint(escrow, reservations)
+	if err != nil {
+		return pricing.USD{}, false, err
+	}
+	keys := []string{m.space.durableBudgetOperationKey(string(escrow.GenerationID), string(escrow.OperationID))}
+	for _, reservation := range reservations {
+		keys = append(keys, m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID), m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
+	}
+	result, err := m.invoke.Run(ctx, m.function, keys, "durable_close_batch", string(escrow.GenerationID), string(escrow.IncarnationID), string(escrow.OperationID), fingerprint, hex.EncodeToString(closeDigest[:]))
+	if err != nil {
+		return pricing.USD{}, false, resolveMutationError(ctx, err)
+	}
+	status, raw, err := durableFunctionRecord(result)
+	if err != nil {
+		return pricing.USD{}, false, err
+	}
+	if status == "conflict" {
+		return pricing.USD{}, false, ErrRedisBudgetConflict
+	}
+	if status != "closed" && status != "existing" {
+		return pricing.USD{}, false, mapDurableStatus(status)
+	}
+	var record durableOperation
+	if err = json.Unmarshal([]byte(raw), &record); err != nil {
+		return pricing.USD{}, false, err
+	}
+	nano, err := parseNanoUSD(record.RefundNano)
+	if err != nil {
+		return pricing.USD{}, false, err
+	}
+	refund, err := pricing.USDFromNano(nano)
+	return refund, status == "existing", err
+}
+func (m *RedisBudgetMaterializer) Confirm(ctx context.Context, request durable.ReserveRequest) (durable.ReserveResult, error) {
+	if m == nil {
+		return durable.ReserveResult{}, errors.New("Redis durable budget materializer is nil")
+	}
+	if ctx == nil {
+		return durable.ReserveResult{}, errors.New("Redis durable budget materializer context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if err := request.OperationID.Validate(); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if err := request.GenerationID.Validate(); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	if err := request.IncarnationID.Validate(); err != nil {
+		return durable.ReserveResult{}, err
+	}
+	now := m.clock().UTC()
+	if !request.ExpiresAt.After(now) {
+		return durable.ReserveResult{}, ErrRedisBudgetReservationNotFound
+	}
+	if m.reader == nil {
+		return durable.ReserveResult{}, errors.New("Redis durable budget record reader is required for confirmation")
+	}
+	record, err := m.readDurableOperation(ctx, request.GenerationID, request.OperationID)
+	if err != nil {
+		return durable.ReserveResult{}, err
+	}
+	return confirmDurableOperation(request, record, now)
+}
+
+func (m *RedisBudgetMaterializer) FenceDispatch(ctx context.Context, request durable.DispatchFenceRequest) error {
+	if m == nil {
+		return errors.New("Redis durable budget materializer is nil")
+	}
+	if ctx == nil {
+		return errors.New("Redis durable budget materializer context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	reservationRequest := request.Reservation
+	reservations, err := canonicalDurableReservations(
+		reservationRequest.OperationID,
+		reservationRequest.GenerationID,
+		reservationRequest.Reservations,
+		reservationRequest.ExpiresAt,
+		reservationRequest.OccurredAt,
+	)
+	if err != nil {
+		return err
+	}
+	fingerprint, err := durableRequestFingerprint(reservationRequest, reservations)
+	if err != nil {
+		return err
+	}
+	keys := []string{m.space.durableBudgetOperationKey(string(reservationRequest.GenerationID), string(reservationRequest.OperationID))}
+	for _, reservation := range reservations {
+		keys = append(keys,
+			m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID),
+			m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
+	}
+	routeWire, err := json.Marshal(reservationRequest.Route)
+	if err != nil {
+		return fmt.Errorf("marshal Redis dispatch fence route: %w", err)
+	}
+	reservationsWire, err := json.Marshal(reservations)
+	if err != nil {
+		return fmt.Errorf("marshal Redis dispatch fence reservations: %w", err)
+	}
+	result, err := m.invoke.Run(ctx, m.function, keys,
+		"durable_fence", string(reservationRequest.GenerationID), string(reservationRequest.IncarnationID),
+		string(reservationRequest.OperationID), fingerprint, strconv.FormatInt(request.RetainUntil.UTC().UnixMilli(), 10),
+		string(routeWire), string(reservationsWire))
+	if err != nil {
+		return resolveMutationError(ctx, err)
+	}
+	status, _, err := durableFunctionRecord(result)
+	if err != nil {
+		return err
+	}
+	switch status {
+	case "fenced", "existing":
+		return nil
+	case "conflict":
+		return ErrRedisBudgetConflict
+	case "generation_mismatch":
+		return ErrRedisBudgetGenerationMismatch
+	case "incarnation_mismatch":
+		return ErrRedisBudgetIncarnationMismatch
+	case "expired", "not_found":
+		return ErrRedisBudgetReservationNotFound
+	default:
+		return mapDurableStatus(status)
+	}
+}
+
+func reserveResultFromRecord(request durable.ReserveRequest, record durableOperation) (durable.ReserveResult, error) {
 	reserve := durable.ReserveResult{
 		OperationID: request.OperationID, Accepted: true,
-		GenerationID: request.GenerationID, IncarnationID: m.incarnation,
+		GenerationID: request.GenerationID, IncarnationID: request.IncarnationID,
 		Events: make([]budget.ReservationEvent, 0, len(record.Reservations)),
 	}
 	for _, value := range record.Reservations {
@@ -269,12 +1071,6 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 	if err := request.Validate(); err != nil {
 		return err
 	}
-	if request.GenerationID != m.generation {
-		return ErrRedisBudgetGenerationMismatch
-	}
-	if request.IncarnationID != m.incarnation {
-		return ErrRedisBudgetIncarnationMismatch
-	}
 	operationKey := m.space.durableBudgetOperationKey(string(request.GenerationID), string(request.OperationID))
 	if m.reader == nil {
 		return errors.New("Redis durable budget record reader is required for reconciliation")
@@ -295,6 +1091,9 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 	}
 	if record.IncarnationID != string(request.IncarnationID) {
 		return ErrRedisBudgetIncarnationMismatch
+	}
+	if record.OperationID != string(request.OperationID) {
+		return ErrRedisBudgetReservationNotFound
 	}
 	if record.Status != "accepted" {
 		return ErrRedisBudgetReservationNotFound
@@ -363,6 +1162,9 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 }
 
 func canonicalDurableReservations(operation durable.OperationID, generation durable.GenerationID, values []admission.WindowReservation, expiresAt, now time.Time) ([]durableReservation, error) {
+	if len(values) == 0 || len(values) > 250 {
+		return nil, errors.New("Redis durable operation must contain 1 to 250 reservations")
+	}
 	result := make([]durableReservation, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	seenWindowBucket := make(map[string]struct{}, len(values))
@@ -436,7 +1238,9 @@ func canonicalDurableReservations(operation durable.OperationID, generation dura
 		if result[i].WindowID != result[j].WindowID {
 			return result[i].WindowID < result[j].WindowID
 		}
-		return result[i].Bucket < result[j].Bucket
+		left, _ := strconv.ParseInt(result[i].Bucket, 10, 64)
+		right, _ := strconv.ParseInt(result[j].Bucket, 10, 64)
+		return left < right
 	})
 	return result, nil
 }
@@ -468,17 +1272,44 @@ func durableTTLSeconds(expiresAt, now time.Time, reservations []durableReservati
 
 func durableRequestFingerprint(request durable.ReserveRequest, reservations []durableReservation) (string, error) {
 	wire := struct {
-		OperationID  string               `json:"operation_id"`
-		GenerationID string               `json:"generation_id"`
-		ExpiresAt    time.Time            `json:"expires_at"`
-		Reservations []durableReservation `json:"reservations"`
-	}{string(request.OperationID), string(request.GenerationID), request.ExpiresAt.UTC(), reservations}
+		OperationID, GenerationID, IncarnationID string
+		ExpiresAt, OccurredAt                    time.Time
+		Route                                    durable.DispatchRouteFacts
+		Bounds                                   durable.ReservationBounds
+		LogicalCostUSD                           string
+		Reservations                             []durableReservation
+	}{
+		string(request.OperationID), string(request.GenerationID), string(request.IncarnationID),
+		request.ExpiresAt.UTC(), request.OccurredAt.UTC(), request.Route, request.Bounds, request.LogicalCostUSD.String(), reservations,
+	}
 	data, err := json.Marshal(wire)
 	if err != nil {
 		return "", err
 	}
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func durableBatchKeyIndex(keys *[]string, indexes map[string]int, key string) int {
+	if index, ok := indexes[key]; ok {
+		return index
+	}
+	*keys = append(*keys, key)
+	index := len(*keys)
+	indexes[key] = index
+	return index
+}
+
+func durableLogicalCostNano(cost pricing.USD, required bool) (string, error) {
+	nano, err := pricing.CeilNanoUSD(cost)
+	if err != nil {
+		return "", err
+	}
+	exact, err := pricing.USDFromNano(nano)
+	if err != nil || exact.Cmp(cost) != 0 || (required && nano == 0) {
+		return "", errors.New("logical operation cost must be authoritative, nano-exact, and positive for escrow")
+	}
+	return nano.String(), nil
 }
 
 func durableEventFingerprint(event budget.CompletionEvent) string {
@@ -488,12 +1319,12 @@ func durableEventFingerprint(event budget.CompletionEvent) string {
 }
 
 func durableReservationEventID(operation, generation, policy, window string, bucket int64) string {
-	digest := sha256.Sum256([]byte(operation + "\x00" + generation + "\x00" + policy + "\x00" + window + "\x00" + strconv.FormatInt(bucket, 10) + "\x00revision-1"))
-	return hex.EncodeToString(digest[:])
+	identity := fmt.Sprintf("llmtw/budget-reserve/v1\x00%s\x00%s\x00%s\x00%s\x00%d", operation, generation, policy, window, bucket)
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(identity)).String()
 }
 
 func durableDeniedResult(request durable.ReserveRequest, record durableOperation) (durable.ReserveResult, error) {
-	result := durable.ReserveResult{OperationID: request.OperationID, GenerationID: request.GenerationID, Accepted: false}
+	result := durable.ReserveResult{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID, Accepted: false}
 	if record.Denial != nil {
 		limit, err := parseNanoUSD(record.Denial.LimitNano)
 		if err != nil {

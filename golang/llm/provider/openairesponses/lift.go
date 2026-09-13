@@ -87,7 +87,7 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		Service:      service,
 		Usage:        usage,
 		Provider:     providerFacts,
-		Continuation: continuationForResponse(call, response),
+		Continuation: nil,
 	}
 	return result, nil
 }
@@ -271,37 +271,8 @@ func liftOutput(items []responses.ResponseOutputItemUnion) ([]llm.Item, bool, bo
 	return output, toolCalls, refusal, nil
 }
 
-func continuationForResponse(call provider.Call, response *responses.Response) *llm.Continuation {
-	if response.ID == "" || !statefulContinuationEnabled(call) {
-		return nil
-	}
-	return &llm.Continuation{
-		Handle:     "openai-responses:" + response.ID,
-		EndpointID: call.EndpointID,
-		Model:      string(response.Model),
-		Pinned:     true,
-		ProviderStates: []llm.ProviderState{{
-			Provider:       "openai",
-			EndpointFamily: "responses",
-			MediaType:      "application/vnd.openai.response+json",
-			Opaque:         []byte(response.ID),
-		}},
-	}
-}
-
-func statefulContinuationEnabled(call provider.Call) bool {
-	params, ok := call.SDKParams.(responses.ResponseNewParams)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*responses.ResponseNewParams); pointerOK && pointer != nil {
-			params = *pointer
-			ok = true
-		}
-	}
-	if !ok {
-		return true
-	}
-	return !params.Store.Valid() || params.Store.Value
-}
+// Responses IDs remain provider receipt facts only. They are never promoted
+// into continuation handles or replayable provider state.
 
 func invalidResponseError(call provider.Call, requestID, message string) *provider.Error {
 	mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, message)

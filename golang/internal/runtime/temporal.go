@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -52,9 +53,9 @@ func (function TemporalClientFactoryFunc) New(ctx context.Context, value config.
 	return function(ctx, value)
 }
 
-// DefaultTemporalClientFactory creates an eagerly connected SDK client using
-// only non-secret Temporal configuration. Credentials, if a deployment adds
-// them through the SDK, stay inside the SDK's credential boundary.
+// DefaultTemporalClientFactory creates an eagerly connected SDK client. A
+// production client is authenticated with a compact JWT loaded from a bounded
+// file and may send that credential only over its configured TLS connection.
 type DefaultTemporalClientFactory struct {
 	// Identity overrides the generated worker/client identity. It is useful for
 	// tests and for deployments that already provide a stable identity.
@@ -82,12 +83,34 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 		// path, rather than relying on standalone payload helpers.
 		DataConverter: activity.BoundedDataConverter(activity.PayloadLimits{MaxInlineBytes: value.Server.InlinePayloadBytes}),
 	}
-	if value.Temporal.TLS.Enabled {
-		readFile := factory.ReadFile
-		if readFile == nil {
-			readFile = readBoundedFile
+	if value.Environment == "production" {
+		if !value.Temporal.TLS.Enabled {
+			return nil, errors.New("Temporal TLS is required in production")
 		}
-		tlsConfig, err := loadTLSConfig(value.Temporal.TLS, readFile)
+		if value.Temporal.APIKeyFile == "" {
+			return nil, errors.New("Temporal API key file is required in production")
+		}
+	}
+	if value.Temporal.APIKeyFile != "" && !value.Temporal.TLS.Enabled {
+		return nil, errors.New("Temporal TLS is required when an API key is configured")
+	}
+	apiKeyReadFile := factory.ReadFile
+	if apiKeyReadFile == nil {
+		apiKeyReadFile = readBoundedTemporalAPIKeyFile
+	}
+	if value.Temporal.APIKeyFile != "" {
+		token, err := loadTemporalJWT(value.Temporal.APIKeyFile, apiKeyReadFile)
+		if err != nil {
+			return nil, err
+		}
+		options.Credentials = client.NewAPIKeyStaticCredentials(token)
+	}
+	if value.Temporal.TLS.Enabled {
+		tlsReadFile := factory.ReadFile
+		if tlsReadFile == nil {
+			tlsReadFile = readBoundedFile
+		}
+		tlsConfig, err := loadTLSConfig(value.Temporal.TLS, tlsReadFile)
 		if err != nil {
 			return nil, err
 		}
@@ -214,18 +237,60 @@ func loadTLSConfig(value config.TLSConfig, readFile func(string) ([]byte, error)
 		return nil, errors.New("Temporal TLS CA certificate is invalid")
 	}
 	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
+		MinVersion: tls.VersionTLS13,
 		ServerName: value.ServerName,
 		RootCAs:    pool,
 	}, nil
 }
 
+func loadTemporalJWT(path string, readFile func(string) ([]byte, error)) (string, error) {
+	if path == "" {
+		return "", errors.New("Temporal JWT file is required")
+	}
+	if readFile == nil {
+		return "", errors.New("Temporal JWT reader is unavailable")
+	}
+	encoded, err := readFile(path)
+	if err != nil {
+		return "", errors.New("read Temporal JWT file")
+	}
+	const maxJWTBytes = 16 << 10
+	if len(encoded) == 0 || len(encoded) > maxJWTBytes {
+		return "", errors.New("Temporal JWT is invalid")
+	}
+	token := string(encoded)
+	if strings.TrimSpace(token) != token || strings.HasPrefix(strings.ToLower(token), "bearer ") {
+		return "", errors.New("Temporal JWT is invalid")
+	}
+	segments := strings.Split(token, ".")
+	if len(segments) != 3 {
+		return "", errors.New("Temporal JWT is invalid")
+	}
+	for _, segment := range segments {
+		if segment == "" {
+			return "", errors.New("Temporal JWT is invalid")
+		}
+		if _, err := base64.RawURLEncoding.DecodeString(segment); err != nil {
+			return "", errors.New("Temporal JWT is invalid")
+		}
+	}
+	return token, nil
+}
+
+func readBoundedTemporalAPIKeyFile(path string) ([]byte, error) {
+	return readBoundedFileLimit(path, 16<<10)
+}
+
 func readBoundedFile(path string) ([]byte, error) {
+	return readBoundedFileLimit(path, 1<<20)
+}
+
+func readBoundedFileLimit(path string, maxBytes int64) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("file path is required")
 	}
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
 		return nil, errors.New("file is unavailable")
 	}
 	file, err := os.Open(path)
@@ -233,9 +298,8 @@ func readBoundedFile(path string) ([]byte, error) {
 		return nil, errors.New("file is unavailable")
 	}
 	defer file.Close()
-	const maxBytes = 1 << 20
 	value, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
-	if err != nil || len(value) > maxBytes {
+	if err != nil || int64(len(value)) > maxBytes {
 		return nil, errors.New("file exceeds the safe size limit")
 	}
 	return value, nil

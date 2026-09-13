@@ -13,7 +13,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-func TestLiftCompletedResponsePreservesItemsUsageAndContinuation(t *testing.T) {
+func TestLiftCompletedResponsePreservesItemsAndUsageWithoutHostedContinuation(t *testing.T) {
 	response := loadResponseFixture(t, "response.completed.json")
 	call := provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract", OperationKey: "op-lift", ServiceClass: llm.ServiceClassEconomy}
 	lifted, err := liftResponse(call, &response, "req-1")
@@ -32,8 +32,8 @@ func TestLiftCompletedResponsePreservesItemsUsageAndContinuation(t *testing.T) {
 	if lifted.Provider.ResponseID != "resp-1" || lifted.Provider.RequestID != "req-1" {
 		t.Fatalf("provider facts = %#v", lifted.Provider)
 	}
-	if lifted.Continuation == nil || lifted.Continuation.Handle != "openai-responses:resp-1" {
-		t.Fatalf("continuation = %#v", lifted.Continuation)
+	if lifted.Continuation != nil {
+		t.Fatalf("hosted continuation = %#v, want nil", lifted.Continuation)
 	}
 	if len(lifted.Output) != 3 {
 		t.Fatalf("output length = %d", len(lifted.Output))

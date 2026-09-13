@@ -6,6 +6,11 @@ registry, obtains provider credentials, or calls a live LLM provider. The
 separate protected `release.yml` workflow can publish only the exact digest
 already bound by successful master evidence and a protected release tag.
 
+This bundle proves only the worker revision and boundaries it names. It does not
+prove the joined ATT forecast path, production deployment, or external
+activation; those states are tracked in the dated
+[cross-repository forecast working-status matrix](https://github.com/victoria-hft/victoria-hft/blob/master/docs/research/ai_ach/forecast-competition-status.md).
+
 ## Trusted boundary
 
 The `release-evidence` job runs only after `verify` on a `push` to `master`.

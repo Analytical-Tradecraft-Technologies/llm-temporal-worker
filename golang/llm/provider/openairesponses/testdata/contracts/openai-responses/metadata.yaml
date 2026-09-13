@@ -14,7 +14,7 @@ capability_facts:
   strict_loss: supported
   best_effort: unsupported
   service_class: supported
-  continuation: supported
+  continuation: unsupported
 generated_field_exemptions:
   - provider.request_id
   - provider.response_id

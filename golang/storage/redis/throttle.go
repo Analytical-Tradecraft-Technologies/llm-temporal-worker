@@ -114,6 +114,42 @@ func NewThrottleStore(options ThrottleOptions) (*ThrottleStore, error) {
 }
 
 func (store *ThrottleStore) Acquire(ctx context.Context, id string, limits []ThrottleLimit) (ThrottleAcquireResult, error) {
+	return store.acquire(ctx, "acquire", id, "", 0, limits)
+}
+
+// AcquireFair atomically queues an immutable reservation and grants capacity
+// only to the oldest waiter. The queue is bounded by the caller's context and
+// queueTimeout; cancellation removes the waiter before returning.
+func (store *ThrottleStore) AcquireFair(ctx context.Context, id, queueScope string, queueTimeout, pollInterval time.Duration, limits []ThrottleLimit) (ThrottleAcquireResult, error) {
+	if queueScope == "" || queueTimeout <= 0 || queueTimeout > time.Hour {
+		return ThrottleAcquireResult{}, fmt.Errorf("invalid Redis throttle queue")
+	}
+	if pollInterval <= 0 || pollInterval > queueTimeout {
+		pollInterval = 25 * time.Millisecond
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, queueTimeout)
+	defer cancel()
+	for {
+		acquired, err := store.acquire(waitCtx, "acquire_fair", id, queueScope, queueTimeout, limits)
+		if err == nil {
+			return acquired, nil
+		}
+		if !errors.Is(err, ErrThrottleDenied) {
+			_ = store.cancelFairQueue(context.WithoutCancel(ctx), id, queueScope)
+			return ThrottleAcquireResult{}, err
+		}
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			_ = store.cancelFairQueue(context.WithoutCancel(ctx), id, queueScope)
+			return ThrottleAcquireResult{}, waitCtx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (store *ThrottleStore) acquire(ctx context.Context, action, id, queueScope string, queueTimeout time.Duration, limits []ThrottleLimit) (ThrottleAcquireResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ThrottleAcquireResult{}, err
 	}
@@ -121,7 +157,7 @@ func (store *ThrottleStore) Acquire(ctx context.Context, id string, limits []Thr
 		return ThrottleAcquireResult{}, fmt.Errorf("invalid Redis throttle reservation")
 	}
 	wire := throttleWire{Schema: "throttle/v1", ID: id, Digest: throttleDigest(limits), Limits: make([]throttleWireLimit, len(limits))}
-	keys := make([]string, 1, len(limits)+1)
+	keys := make([]string, 1, len(limits)+2)
 	keys[0] = store.space.throttleReservationKey(id)
 	seen := make(map[string]struct{}, len(limits))
 	ttl := int64(1)
@@ -135,17 +171,27 @@ func (store *ThrottleStore) Acquire(ctx context.Context, id string, limits []Thr
 		}
 		seen[digest] = struct{}{}
 		keys = append(keys, store.space.throttleKey(string(limit.Kind), limit.Scope))
-		wire.Limits[index] = throttleWireLimit{Kind: limit.Kind, KeyDigest: digest, Amount: limit.Amount, Limit: limit.Limit}
 		seconds := int64((limit.Window + time.Second - 1) / time.Second)
+		wire.Limits[index] = throttleWireLimit{Kind: limit.Kind, KeyDigest: digest, Amount: limit.Amount, Limit: limit.Limit, WindowSeconds: seconds}
 		if seconds > ttl {
 			ttl = seconds
 		}
+	}
+	if action == "acquire_fair" {
+		if queueScope == "" {
+			return ThrottleAcquireResult{}, fmt.Errorf("invalid Redis throttle queue")
+		}
+		keys = append(keys, store.space.throttleQueueKey(queueScope), store.space.throttleQueueSequenceKey(queueScope), store.space.throttleQueueDeadlineKey(queueScope))
 	}
 	payload, err := json.Marshal(wire)
 	if err != nil || len(payload) > store.maxRecordBytes {
 		return ThrottleAcquireResult{}, fmt.Errorf("encode Redis throttle reservation")
 	}
-	result, err := store.invoke.Run(ctx, store.function, keys, "acquire", string(payload), strconv.FormatInt(ttl, 10))
+	args := []string{action, string(payload), strconv.FormatInt(ttl, 10)}
+	if action == "acquire_fair" {
+		args = append(args, strconv.FormatInt(int64((queueTimeout+time.Second-1)/time.Second), 10))
+	}
+	result, err := store.invoke.Run(ctx, store.function, keys, args...)
 	if err != nil {
 		return ThrottleAcquireResult{}, resolveMutationError(ctx, err)
 	}
@@ -157,7 +203,7 @@ func (store *ThrottleStore) Acquire(ctx context.Context, id string, limits []Thr
 			return ThrottleAcquireResult{}, ErrUnavailable
 		}
 		return ThrottleAcquireResult{Existing: status == "existing", Reservation: reservation}, nil
-	case "denied":
+	case "denied", "queued":
 		return ThrottleAcquireResult{}, ErrThrottleDenied
 	case "conflict":
 		return ThrottleAcquireResult{}, ErrThrottleConflict
@@ -166,6 +212,18 @@ func (store *ThrottleStore) Acquire(ctx context.Context, id string, limits []Thr
 	default:
 		return ThrottleAcquireResult{}, mapStatus(status)
 	}
+}
+
+func (store *ThrottleStore) cancelFairQueue(ctx context.Context, id, queueScope string) error {
+	result, err := store.invoke.Run(ctx, store.function, []string{store.space.throttleQueueKey(queueScope), store.space.throttleQueueDeadlineKey(queueScope)}, "cancel_fair", id)
+	if err != nil {
+		return resolveMutationError(ctx, err)
+	}
+	status, _ := parseThrottleResult(result)
+	if status == "cancelled" || status == "not_found" {
+		return nil
+	}
+	return mapStatus(status)
 }
 
 // Lookup resolves an ambiguous acquire without mutating Redis.
@@ -184,6 +242,42 @@ func (store *ThrottleStore) Lookup(ctx context.Context, id string) (ThrottleRese
 		return ThrottleReservation{}, ErrUnavailable
 	}
 	return decodeThrottleReservation([]byte(data))
+}
+
+// Renew extends a live concurrency lease without changing request/token
+// windows. A missing lease is fail-closed because its concurrency capacity may
+// already have been granted to another operation.
+func (store *ThrottleStore) Renew(ctx context.Context, reservation ThrottleReservation, lease time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if reservation.ID == "" || reservation.Digest == "" || len(reservation.Limits) == 0 || lease <= 0 {
+		return fmt.Errorf("invalid Redis throttle renewal")
+	}
+	ttl := int64((lease + time.Second - 1) / time.Second)
+	keys := make([]string, 1, len(reservation.Limits)+1)
+	keys[0] = store.space.throttleReservationKey(reservation.ID)
+	for _, limit := range reservation.Limits {
+		if limit.Kind == "" || limit.KeyDigest == "" || limit.Amount <= 0 {
+			return fmt.Errorf("invalid Redis throttle reservation limit")
+		}
+		keys = append(keys, store.space.throttleKeyDigest(string(limit.Kind), limit.KeyDigest))
+	}
+	result, err := store.invoke.Run(ctx, store.function, keys, "renew", reservation.Digest, strconv.FormatInt(ttl, 10))
+	if err != nil {
+		return resolveMutationError(ctx, err)
+	}
+	status, _ := parseThrottleResult(result)
+	if status == "renewed" {
+		return nil
+	}
+	if status == "not_found" {
+		return ErrThrottleNotFound
+	}
+	if status == "conflict" {
+		return ErrThrottleConflict
+	}
+	return mapStatus(status)
 }
 
 // Release is idempotent. A missing reservation means a previous release
@@ -224,10 +318,11 @@ type throttleWire struct {
 }
 
 type throttleWireLimit struct {
-	Kind      ThrottleKind `json:"kind"`
-	KeyDigest string       `json:"key_digest"`
-	Amount    int64        `json:"amount"`
-	Limit     int64        `json:"limit"`
+	Kind          ThrottleKind `json:"kind"`
+	KeyDigest     string       `json:"key_digest"`
+	Amount        int64        `json:"amount"`
+	Limit         int64        `json:"limit"`
+	WindowSeconds int64        `json:"window_seconds"`
 }
 
 func throttleDigest(limits []ThrottleLimit) string {

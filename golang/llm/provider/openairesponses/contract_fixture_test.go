@@ -183,12 +183,12 @@ func TestResponsesContractFixturesCoverUsageClassAndStrictLoss(t *testing.T) {
 	}
 }
 
-func TestResponsesContractFixturesCoverContinuationCompatibility(t *testing.T) {
+func TestResponsesContractFixturesRejectHostedContinuation(t *testing.T) {
 	for _, profile := range responsesFixtureProfiles {
 		t.Run(profile.id, func(t *testing.T) {
 			request := loadContractRequestFixture(t, profile.id, "continuation-compatibility.semantic.json")
 			adapter := fixtureAdapterForProfile(t, profile)
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{
+			_, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: request,
 				Query: provider.CapabilityQuery{
 					EndpointID: profile.endpoint,
@@ -197,17 +197,9 @@ func TestResponsesContractFixturesCoverContinuationCompatibility(t *testing.T) {
 				},
 				Strict: true,
 			})
-			if err != nil {
-				t.Fatal(err)
+			if err == nil {
+				t.Fatal("provider-hosted continuation fixture compiled")
 			}
-			if !call.Metadata.OpaqueStateRequired {
-				t.Fatal("continuation call did not retain opaque-state requirement")
-			}
-			gotWire, err := json.Marshal(call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertCanonicalFixtureJSON(t, gotWire, profile.id, "continuation-compatibility.wire.json")
 		})
 	}
 }
@@ -449,7 +441,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 }
 
-func TestCapabilitiesKeepStreamingUnsupportedAndContinuationNative(t *testing.T) {
+func TestCapabilitiesKeepStreamingAndHostedContinuationUnsupported(t *testing.T) {
 	adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
 	set, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses})
 	if err != nil {
@@ -458,8 +450,8 @@ func TestCapabilitiesKeepStreamingUnsupportedAndContinuationNative(t *testing.T)
 	if capability := set.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported {
 		t.Fatalf("streaming capability = %#v, want unsupported until a streaming adapter dispatches SDK streams", capability)
 	}
-	if capability := set.Features[provider.FeatureContinuation]; capability.State != provider.CapabilityNative {
-		t.Fatalf("continuation capability = %#v, want native for stateful same-endpoint Responses chains", capability)
+	if capability := set.Features[provider.FeatureContinuation]; capability.State != provider.CapabilityUnsupported {
+		t.Fatalf("continuation capability = %#v, want unsupported hosted state", capability)
 	}
 }
 

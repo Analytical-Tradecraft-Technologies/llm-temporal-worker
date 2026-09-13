@@ -22,7 +22,7 @@ func TestSpendSummaryExecutionIntegration(t *testing.T) {
 	}
 	operations := DefaultOperationRepository(pool, namespace, Keyring{Active: "operation-v1", Keys: map[string][]byte{"operation-v1": key}}, scopes)
 	operationID := "spend-integration-" + time.Now().UTC().Format("150405.000000000")
-	begin, err := operations.Begin(ctx, admission.BeginRequest{ID: operationID, ScopeKey: "spend-integration/project", RequestDigest: admission.Digest([]byte(operationID)), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`)})
+	begin, err := operations.Begin(ctx, admission.BeginRequest{ID: operationID, OperationKey: operationID, Actor: "postgres-test", ScopeKey: "spend-integration/project", RequestDigest: admission.Digest([]byte(operationID)), ReservationUSD: pricing.MustUSD("0"), ExpiresAt: time.Now().UTC().Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -58,6 +58,9 @@ func validateSubset(root any) error {
 }
 
 func walkSchema(value any, path string) error {
+	if _, ok := value.(bool); ok {
+		return nil
+	}
 	object, ok := value.(map[string]any)
 	if !ok {
 		return fmt.Errorf("schema at %s must be an object", displayPath(path))

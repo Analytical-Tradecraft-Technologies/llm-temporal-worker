@@ -101,7 +101,7 @@ func TestImageBuildContextAndFinalStageExcludeSecretsAndTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	ignore := string(ignoreData)
-	for _, want := range []string{".env.*", "*.pem", "*.key", "secrets/", "**/.aws/", "**/.docker/config.json", "**/*credential*", "**/*token*", "release-artifacts/"} {
+	for _, want := range []string{".env.*", ".local/", "*.pem", "*.key", "secrets/", "**/.aws/", "**/.docker/config.json", "**/*credential*", "**/*token*", "release-artifacts/"} {
 		if !strings.Contains(ignore, want) {
 			t.Errorf(".dockerignore does not exclude %q", want)
 		}

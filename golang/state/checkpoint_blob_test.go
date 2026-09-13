@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -51,6 +52,19 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	if !reflect.DeepEqual(gotPatch, patch) {
 		t.Fatalf("settings patch round trip = %#v, %v; want %#v", gotPatch, err, patch)
 	}
+	bundleBytes, err := codec.EncodeBundle(CheckpointBundle{
+		Delta: items, Response: gotResponse, SettingsPatch: patch,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := codec.DecodeBundle(bundleBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(bundle.Delta, items) || !reflect.DeepEqual(bundle.Response, gotResponse) {
+		t.Fatalf("bundle round trip = %#v", bundle)
+	}
 	snapshot := CheckpointSnapshot{Items: items, Settings: ModelState{Model: "gpt-test", ServiceClass: llm.ServiceClassStandard, Portability: llm.PortabilityStrict}, Depth: 1, Lineage: []Handle{"root", "child"}}
 	snapshot.Digest = snapshot.digest()
 	encodedSnapshot, err := codec.EncodeSnapshot(snapshot)
@@ -66,6 +80,40 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	}
 	if string(encodedSnapshot) != string(mustCanonical(t, encodedSnapshot)) {
 		t.Fatal("snapshot encoding is not canonical")
+	}
+}
+
+func TestCheckpointBlobCodecMaterializedSettingsDigestSurvivesCanonicalSnapshot(t *testing.T) {
+	codec := CheckpointBlobCodec{}
+	schema := json.RawMessage(`{"type":"object","required":["answer"],"properties":{"answer":{"type":"string"}},"additionalProperties":false}`)
+	settings := RootModelState("gpt-test")
+	settings.Output = &llm.OutputSpec{Format: llm.OutputFormat{
+		Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema,
+	}}
+	before, err := codec.DigestMaterializedSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := NewCheckpointSnapshot(MaterializedState{
+		Items: []llm.Item{}, Settings: settings, Depth: 0, Lineage: []Handle{"root"},
+	})
+	encoded, err := codec.EncodeSnapshot(*snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := codec.DecodeSnapshot(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := codec.DigestMaterializedSettings(decoded.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("materialized settings digest changed across canonical snapshot: before=%x after=%x", before, after)
+	}
+	if string(schema) == string(decoded.Settings.Output.Format.Schema) {
+		t.Fatal("test schema did not exercise raw JSON key reordering")
 	}
 }
 
@@ -145,6 +193,37 @@ func TestCheckpointBlobCodecRejectsVersionKindAndEnvelopeTampering(t *testing.T)
 	}
 	if _, err := codec.DecodeDelta(append(encoded, byte('x'))); err == nil {
 		t.Fatal("DecodeDelta accepted a non-JSON suffix")
+	}
+}
+func TestCheckpointBundleRejectsIndependentSectionDigestTampering(t *testing.T) {
+	codec := CheckpointBlobCodec{}
+	encoded, err := codec.EncodeBundle(CheckpointBundle{
+		Delta:         []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "original"}}}},
+		SettingsPatch: SettingsPatch{Model: SetPatch("gpt-test")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(envelope["payload"], &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["delta"] = json.RawMessage(`[{"actor":"human","content":[{"type":"text","text":"tampered"}],"type":"message"}]`)
+	changedPayload, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope["payload"] = changedPayload
+	tampered, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codec.DecodeBundle(tampered); err == nil || !strings.Contains(err.Error(), "delta digest mismatch") {
+		t.Fatalf("DecodeBundle tamper error = %v", err)
 	}
 }
 

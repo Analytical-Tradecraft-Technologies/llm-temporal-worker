@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -30,6 +31,12 @@ var redisKeyPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}
 
 const maxAdmissionFieldBytes = 256
 
+const (
+	productionTemporalTarget     = "temporal-frontend.temporal.svc.cluster.local:7233"
+	productionTemporalServerName = "temporal-frontend.temporal.svc.cluster.local"
+	productionTemporalNamespace  = "ai-ach"
+)
+
 // Validate checks references, closed enums, safety bounds, and retention
 // inequalities. It never resolves secret values or performs network I/O.
 func (config Config) Validate() error {
@@ -42,8 +49,17 @@ func (config Config) Validate() error {
 	if err := config.Server.validate(); err != nil {
 		return err
 	}
-	if err := config.Temporal.validate(); err != nil {
+	if err := config.Temporal.validate(config.Environment); err != nil {
 		return err
+	}
+	if err := config.ResourceCapacity.validate(config.Environment); err != nil {
+		return err
+	}
+	if config.Environment == "production" && time.Duration(config.State.ReservationLease) < 20*time.Minute {
+		return errors.New("state.reservation_lease must be at least 20m in production to cover a queued Stage2 Activity")
+	}
+	if config.Environment == "production" && config.Temporal.Worker.MaxConcurrentActivities < 96 {
+		return errors.New("temporal.worker.max_concurrent_activities must reserve production capacity-control headroom")
 	}
 	if err := validateShutdownBudget(config.Server, config.Temporal.Worker); err != nil {
 		return err
@@ -59,6 +75,9 @@ func (config Config) Validate() error {
 	}
 	if err := config.Limits.validate(); err != nil {
 		return err
+	}
+	if config.Limits.ProviderResponseBytes > config.Server.InlinePayloadBytes {
+		return fmt.Errorf("limits.provider_response_bytes must not exceed server.inline_payload_bytes")
 	}
 	if len(config.Endpoints) == 0 {
 		return fmt.Errorf("endpoints must not be empty")
@@ -78,6 +97,9 @@ func (config Config) Validate() error {
 		if err := config.Models[name].validate("models."+name, config.Endpoints); err != nil {
 			return err
 		}
+	}
+	if err := config.ResourceCapacity.validateRoutes(config.Models); err != nil {
+		return err
 	}
 	if err := config.Capabilities.validate(); err != nil {
 		return err
@@ -156,7 +178,7 @@ func (server ServerConfig) validate() error {
 	return nil
 }
 
-func (temporal TemporalConfig) validate() error {
+func (temporal TemporalConfig) validate(environment string) error {
 	if strings.TrimSpace(temporal.Target) == "" || strings.ContainsAny(temporal.Target, "\r\n") {
 		return fmt.Errorf("temporal.target must be non-empty")
 	}
@@ -174,6 +196,31 @@ func (temporal TemporalConfig) validate() error {
 	}
 	if temporal.TLS.Enabled && temporal.TLS.ServerName == "" {
 		return fmt.Errorf("temporal.tls.server_name is required when TLS is enabled")
+	}
+	if environment == "production" {
+		if temporal.Target != productionTemporalTarget {
+			return fmt.Errorf("temporal.target must be %q in production", productionTemporalTarget)
+		}
+		if temporal.Namespace != productionTemporalNamespace {
+			return fmt.Errorf("temporal.namespace must be %q in production", productionTemporalNamespace)
+		}
+		if temporal.TLS.ServerName != productionTemporalServerName {
+			return fmt.Errorf("temporal.tls.server_name must be %q in production", productionTemporalServerName)
+		}
+		if !temporal.TLS.Enabled {
+			return fmt.Errorf("temporal.tls.enabled must be true in production")
+		}
+		if temporal.APIKeyFile == "" {
+			return fmt.Errorf("temporal.api_key_file is required in production")
+		}
+	}
+	if temporal.APIKeyFile != "" {
+		if !temporal.TLS.Enabled {
+			return fmt.Errorf("temporal.tls.enabled must be true when temporal.api_key_file is configured")
+		}
+		if strings.TrimSpace(temporal.APIKeyFile) != temporal.APIKeyFile || !filepath.IsAbs(temporal.APIKeyFile) {
+			return fmt.Errorf("temporal.api_key_file must be an absolute path")
+		}
 	}
 	if temporal.Worker.MaxConcurrentActivities <= 0 || temporal.Worker.MaxConcurrentActivityTaskPolls <= 0 {
 		return fmt.Errorf("temporal.worker concurrency values must be positive")
@@ -377,7 +424,7 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		if environment != "development" {
 			return fmt.Errorf("blob_store.kind memory is supported only in development")
 		}
-		if blob.File.Root != "" || blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) {
+		if blob.File.Root != "" || blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.KMSKeyID != "" || blob.S3.Auth != (AuthConfig{}) {
 			return fmt.Errorf("blob_store.file and blob_store.s3 are not valid when blob_store.kind is memory")
 		}
 		return nil
@@ -387,6 +434,9 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		}
 		if blob.S3.Bucket == "" || blob.S3.Region == "" || blob.S3.Prefix == "" {
 			return fmt.Errorf("blob_store.s3 bucket, region, and prefix are required")
+		}
+		if blob.S3.KMSKeyID == "" || strings.ContainsAny(blob.S3.KMSKeyID, " \t\r\n\v\f") {
+			return fmt.Errorf("blob_store.s3.kms_key_id is required and must not contain whitespace")
 		}
 		return blob.S3.Auth.Validate("blob_store.s3.auth")
 	case "file":
@@ -405,7 +455,7 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		if filepath.Clean(root) == string(filepath.Separator) {
 			return fmt.Errorf("blob_store.file.root must not be the filesystem root")
 		}
-		if blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) {
+		if blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.KMSKeyID != "" || blob.S3.Auth != (AuthConfig{}) {
 			return fmt.Errorf("blob_store.s3 is only valid when blob_store.kind is s3")
 		}
 		return nil
@@ -424,6 +474,8 @@ func (limits LimitsConfig) validate() error {
 		"limits.json_depth":                    limits.JSONDepth,
 		"limits.continuation_depth":            limits.ContinuationDepth,
 		"limits.route_attempts":                limits.RouteAttempts,
+		"limits.provider_response_bytes":       limits.ProviderResponseBytes,
+		"limits.max_input_tokens":              limits.MaxInputTokens,
 		"limits.max_output_tokens":             limits.MaxOutputTokens,
 		"limits.max_budget_buckets_per_window": limits.MaxBudgetBucketsPerWindow,
 	}

@@ -1,7 +1,9 @@
 package activity
 
 import (
+	"errors"
 	"fmt"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"strings"
 
 	sdkworker "go.temporal.io/sdk/worker"
@@ -23,15 +25,26 @@ type V1ActivityDescriptor struct {
 }
 
 const (
-	generateV1InputType  = "llm.GenerateRequestV1"
-	generateV1OutputType = "llm.GenerateResponseV1"
-	compactV1InputType   = "llm.CompactRequestV1"
-	compactV1OutputType  = "llm.CompactResponseV1"
-	queryV1InputType     = "llm.QueryRequestV1"
-	queryV1OutputType    = "llm.QueryResponseV1"
+	generateV1InputType                 = "llm.GenerateRequestV1"
+	generateV1OutputType                = "llm.GenerateResponseV1"
+	compactV1InputType                  = "llm.CompactRequestV1"
+	compactV1OutputType                 = "llm.CompactResponseV1"
+	queryV1InputType                    = "llm.QueryRequestV1"
+	queryV1OutputType                   = "llm.QueryResponseV1"
+	reserveBatchV1InputType             = "llm.ReserveBatchRequestV1"
+	reserveBatchV1OutputType            = "llm.ReserveBatchResponseV1"
+	allocateBatchGrantsV1InputType      = "llm.AllocateBatchGrantsRequestV1"
+	allocateBatchGrantsV1OutputType     = "llm.AllocateBatchGrantsResponseV1"
+	closeBatchV1InputType               = "llm.CloseBatchRequestV1"
+	closeBatchV1OutputType              = "llm.CloseBatchResponseV1"
+	resourceCapacityAcquireV1InputType  = "llm.ResourceCapacityAcquireRequestV1"
+	resourceCapacityLeaseV1OutputType   = "llm.ResourceCapacityLeaseV1"
+	resourceCapacityRenewV1InputType    = "llm.ResourceCapacityRenewRequestV1"
+	resourceCapacityReleaseV1InputType  = "llm.ResourceCapacityReleaseRequestV1"
+	resourceCapacityReleaseV1OutputType = "llm.ResourceCapacityReleaseResponseV1"
 )
 
-// V1ActivityDescriptors returns the exact three one-shot Activities exposed
+// V1ActivityDescriptors returns the exact nine one-shot Activities exposed
 // by a production v1 worker. The returned slice is newly allocated and can be
 // safely retained by a registry/introspection endpoint.
 func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
@@ -45,6 +58,12 @@ func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
 		{TaskQueue: taskQueue, Name: GenerateActivityName, InputType: generateV1InputType, OutputType: generateV1OutputType},
 		{TaskQueue: taskQueue, Name: CompactActivityName, InputType: compactV1InputType, OutputType: compactV1OutputType},
 		{TaskQueue: taskQueue, Name: QueryActivityName, InputType: queryV1InputType, OutputType: queryV1OutputType},
+		{TaskQueue: taskQueue, Name: ReserveBatchActivityName, InputType: reserveBatchV1InputType, OutputType: reserveBatchV1OutputType},
+		{TaskQueue: taskQueue, Name: llm.AllocateBatchGrantsActivityName, InputType: allocateBatchGrantsV1InputType, OutputType: allocateBatchGrantsV1OutputType},
+		{TaskQueue: taskQueue, Name: llm.CloseBatchActivityName, InputType: closeBatchV1InputType, OutputType: closeBatchV1OutputType},
+		{TaskQueue: taskQueue, Name: llm.ResourceCapacityAcquireActivityName, InputType: resourceCapacityAcquireV1InputType, OutputType: resourceCapacityLeaseV1OutputType},
+		{TaskQueue: taskQueue, Name: llm.ResourceCapacityRenewActivityName, InputType: resourceCapacityRenewV1InputType, OutputType: resourceCapacityLeaseV1OutputType},
+		{TaskQueue: taskQueue, Name: llm.ResourceCapacityReleaseActivityName, InputType: resourceCapacityReleaseV1InputType, OutputType: resourceCapacityReleaseV1OutputType},
 	}
 	for _, descriptor := range descriptors {
 		if err := descriptor.Validate(); err != nil {
@@ -72,6 +91,30 @@ func (descriptor V1ActivityDescriptor) Validate() error {
 	case QueryActivityName:
 		if descriptor.InputType != queryV1InputType || descriptor.OutputType != queryV1OutputType {
 			return fmt.Errorf("Query v1 Activity descriptor types are invalid")
+		}
+	case ReserveBatchActivityName:
+		if descriptor.InputType != reserveBatchV1InputType || descriptor.OutputType != reserveBatchV1OutputType {
+			return fmt.Errorf("ReserveBatch v1 Activity descriptor types are invalid")
+		}
+	case llm.AllocateBatchGrantsActivityName:
+		if descriptor.InputType != allocateBatchGrantsV1InputType || descriptor.OutputType != allocateBatchGrantsV1OutputType {
+			return fmt.Errorf("AllocateBatchGrants v1 Activity descriptor types are invalid")
+		}
+	case llm.CloseBatchActivityName:
+		if descriptor.InputType != closeBatchV1InputType || descriptor.OutputType != closeBatchV1OutputType {
+			return fmt.Errorf("CloseBatch v1 Activity descriptor types are invalid")
+		}
+	case llm.ResourceCapacityAcquireActivityName:
+		if descriptor.InputType != resourceCapacityAcquireV1InputType || descriptor.OutputType != resourceCapacityLeaseV1OutputType {
+			return errors.New("AcquireResourceCapacity v1 Activity descriptor types are invalid")
+		}
+	case llm.ResourceCapacityRenewActivityName:
+		if descriptor.InputType != resourceCapacityRenewV1InputType || descriptor.OutputType != resourceCapacityLeaseV1OutputType {
+			return errors.New("RenewResourceCapacity v1 Activity descriptor types are invalid")
+		}
+	case llm.ResourceCapacityReleaseActivityName:
+		if descriptor.InputType != resourceCapacityReleaseV1InputType || descriptor.OutputType != resourceCapacityReleaseV1OutputType {
+			return errors.New("ReleaseResourceCapacity v1 Activity descriptor types are invalid")
 		}
 	default:
 		return fmt.Errorf("unknown v1 Activity name %q", descriptor.Name)

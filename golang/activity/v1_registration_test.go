@@ -20,6 +20,12 @@ func TestV1ActivityDescriptorsAreClosedAndTaskQueueBound(t *testing.T) {
 		{TaskQueue: "llm-inference", Name: GenerateActivityName, InputType: generateV1InputType, OutputType: generateV1OutputType},
 		{TaskQueue: "llm-inference", Name: CompactActivityName, InputType: compactV1InputType, OutputType: compactV1OutputType},
 		{TaskQueue: "llm-inference", Name: QueryActivityName, InputType: queryV1InputType, OutputType: queryV1OutputType},
+		{TaskQueue: "llm-inference", Name: ReserveBatchActivityName, InputType: reserveBatchV1InputType, OutputType: reserveBatchV1OutputType},
+		{TaskQueue: "llm-inference", Name: llm.AllocateBatchGrantsActivityName, InputType: allocateBatchGrantsV1InputType, OutputType: allocateBatchGrantsV1OutputType},
+		{TaskQueue: "llm-inference", Name: llm.CloseBatchActivityName, InputType: closeBatchV1InputType, OutputType: closeBatchV1OutputType},
+		{TaskQueue: "llm-inference", Name: llm.ResourceCapacityAcquireActivityName, InputType: resourceCapacityAcquireV1InputType, OutputType: resourceCapacityLeaseV1OutputType},
+		{TaskQueue: "llm-inference", Name: llm.ResourceCapacityRenewActivityName, InputType: resourceCapacityRenewV1InputType, OutputType: resourceCapacityLeaseV1OutputType},
+		{TaskQueue: "llm-inference", Name: llm.ResourceCapacityReleaseActivityName, InputType: resourceCapacityReleaseV1InputType, OutputType: resourceCapacityReleaseV1OutputType},
 	}
 	if !reflect.DeepEqual(descriptors, want) {
 		t.Fatalf("descriptors = %#v, want %#v", descriptors, want)
@@ -47,7 +53,7 @@ func TestRegisterForTaskQueueUsesTheV1SetWhenConfigured(t *testing.T) {
 	if err := activities.RegisterForTaskQueue(registry, "queue-a"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName}
+	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, ReserveBatchActivityName, llm.AllocateBatchGrantsActivityName, llm.CloseBatchActivityName, llm.ResourceCapacityAcquireActivityName, llm.ResourceCapacityRenewActivityName, llm.ResourceCapacityReleaseActivityName}
 	if !reflect.DeepEqual(registry.names, want) {
 		t.Fatalf("registered names = %v, want %v", registry.names, want)
 	}

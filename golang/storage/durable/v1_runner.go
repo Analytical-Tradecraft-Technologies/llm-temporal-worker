@@ -8,9 +8,11 @@ package durable
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -30,13 +32,21 @@ var (
 // phase.  It contains no ancestor transcript in the Activity payload; the
 // materialized view is held only in the worker process.
 type GenerateReplay struct {
-	State     state.MaterializedState
-	Completed *llm.GenerateResponseV1
+	// OperationID is the authoritative persisted identity resolved before any
+	// provider work. It may be a released-v1 identity during a rolling upgrade.
+	OperationID OperationID
+	State       state.MaterializedState
+	Completed   *llm.GenerateResponseV1
 	// ReconciliationPending is populated when PostgreSQL finalization has
 	// committed but the Redis completion event did not. A Temporal retry must
 	// reconcile the committed identities before returning the response; it
 	// must not dispatch the provider a second time.
 	ReconciliationPending *GenerateReconciliation
+	// ImmutableFacts and OperationExpiresAt are loaded from the authoritative
+	// operation row. Production routing uses them to recover the exact original
+	// reservation after a worker/configuration restart.
+	ImmutableFacts     []byte
+	OperationExpiresAt time.Time
 }
 
 // GenerateReconciliation carries the durable identities needed to retry a
@@ -99,19 +109,33 @@ type RouteExecution struct {
 	Price        pricing.Entry
 	Reservations []admission.WindowReservation
 	EstimatedUSD pricing.USD
+	Bounds       ReservationBounds
 }
 
 // RoutePlan carries the public durable identities plus the private execution
 // binding consumed by production ports in the same snapshot.
 type RoutePlan struct {
-	OperationID  OperationID
-	GenerationID GenerationID
-	RouteID      string
-	EndpointID   string
-	Provider     string
-	Model        string
-	PriceVersion string
-	Execution    *RouteExecution
+	OperationID           OperationID
+	GenerationID          GenerationID
+	RouteID               string
+	EndpointID            string
+	Provider              string
+	Model                 string
+	PriceVersion          string
+	PricingGenerationID   string
+	PricingManifestSHA256 string
+	// ResourceCapacityGenerationID and ResourceCapacityManifestSHA256 bind a
+	// provider dispatch to the exact signed capacity policy selected with the
+	// immutable route. A retry under another verified snapshot must fail closed
+	// rather than acquire capacity from a different generation.
+	ResourceCapacityGenerationID   string
+	ResourceCapacityManifestSHA256 string
+	Execution                      *RouteExecution
+	Reservation                    *ReserveResult
+	ReservationExpiresAt           time.Time
+	// ReservationRecovered distinguishes a route loaded from authoritative
+	// immutable facts from one just persisted by this process.
+	ReservationRecovered bool
 }
 
 func (plan RoutePlan) Validate() error {
@@ -127,6 +151,18 @@ func (plan RoutePlan) Validate() error {
 	} {
 		if value == "" {
 			return fmt.Errorf("%s is required", name)
+		}
+	}
+	if (plan.ResourceCapacityGenerationID == "") != (plan.ResourceCapacityManifestSHA256 == "") {
+		return errors.New("resource capacity generation and manifest must be bound together")
+	}
+	if plan.ResourceCapacityGenerationID != "" {
+		if err := validateID(plan.ResourceCapacityGenerationID, "resource capacity generation"); err != nil {
+			return err
+		}
+		manifest, err := hex.DecodeString(plan.ResourceCapacityManifestSHA256)
+		if err != nil || len(manifest) != 32 || hex.EncodeToString(manifest) != plan.ResourceCapacityManifestSHA256 {
+			return errors.New("resource capacity manifest SHA-256 is invalid")
 		}
 	}
 	return nil
@@ -351,6 +387,9 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err := route.Validate(); err != nil {
 		return llm.GenerateResponseV1{}, stageError("route", err)
 	}
+	if err := validateCostAdmissionRoute(request, route); err != nil {
+		return llm.GenerateResponseV1{}, stageError("cost admission", err)
+	}
 	if err := contextErr(ctx); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
@@ -415,6 +454,30 @@ func contextErr(ctx context.Context) error {
 	return ctx.Err()
 }
 
+func validateCostAdmissionRoute(request llm.GenerateRequestV1, route RoutePlan) error {
+	if request.CostAdmission == nil {
+		return nil
+	}
+	admission := request.CostAdmission
+	if route.Execution == nil {
+		return errors.New("cost admission route execution is unavailable")
+	}
+	if admission.OperationKey != request.OperationKey {
+		return errors.New("cost admission operation identity mismatch")
+	}
+	if route.PricingGenerationID != admission.PricingGenerationID ||
+		route.PricingManifestSHA256 != admission.PricingManifestSHA256 {
+		return errors.New("cost admission pricing snapshot does not match resolved route")
+	}
+	maximum, err := pricing.CeilMicroFromUSD(route.Execution.EstimatedUSD)
+	if err != nil {
+		return fmt.Errorf("materialize maximum possible cost: %w", err)
+	}
+	if maximum.Int64() > admission.RemainingMaxCostMicrounits {
+		return fmt.Errorf("maximum possible cost %d exceeds remaining allowance %d", maximum.Int64(), admission.RemainingMaxCostMicrounits)
+	}
+	return nil
+}
 func validateReservationForRequest(request llm.GenerateRequestV1, route RoutePlan, reservation ReserveResult) error {
 	if err := reservation.Validate(ReserveRequest{OperationID: route.OperationID, GenerationID: route.GenerationID}); err != nil {
 		return err
@@ -600,6 +663,18 @@ func validateGenerateResponse(request llm.GenerateRequestV1, expectedOperationID
 	}
 	if _, err := json.Marshal(response); err != nil {
 		return err
+	}
+	if request.CostAdmission == nil {
+		if response.CostAdmission != nil {
+			return errors.New("legacy response unexpectedly contains cost admission")
+		}
+		return nil
+	}
+	if response.CostAdmission == nil || *response.CostAdmission != *request.CostAdmission {
+		return errors.New("finalized response cost admission does not match request")
+	}
+	if response.Cost.Status != "exact" || response.Cost.CatalogVersion != request.CostAdmission.PricingGenerationID {
+		return errors.New("finalized response cost does not match admitted pricing generation")
 	}
 	return nil
 }

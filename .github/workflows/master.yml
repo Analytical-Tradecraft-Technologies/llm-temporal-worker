@@ -429,7 +429,7 @@ jobs:
           RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6
           IMAGE_VERIFY_VERSION: ${{ github.sha }}
           IMAGE_VERIFY_SOURCE: https://github.com/${{ github.repository }}
-          IMAGE_VERIFY_GO_VERSION: go1.26.5
+          IMAGE_VERIFY_GO_VERSION: go1.26.7
         run: |
           bash scripts/release/collect.sh \
             --artifact-dir release-artifacts \

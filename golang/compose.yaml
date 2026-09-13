@@ -2,7 +2,7 @@ name: llmtw
 
 services:
   postgres:
-    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    image: docker.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: ${LLMTW_POSTGRES_PASSWORD:-local-only}
@@ -22,7 +22,7 @@ services:
   # Temporal-owned PostgreSQL service above.
   worker-postgres:
     profiles: [durable]
-    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+    image: docker.io/library/postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
     environment:
       POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}
       POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
@@ -37,7 +37,7 @@ services:
       start_period: 5s
 
   temporal:
-    image: temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
+    image: docker.io/temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,16 +53,17 @@ services:
       - "127.0.0.1:${LLMTW_COMPOSE_TEMPORAL_UI_PORT:-0}:8233"
     healthcheck:
       # Docker healthchecks do not inherit entrypoint exports. Recompute the
-      # address exactly as the pinned image's entrypoint does, then use its
-      # semantic server-readiness predicate.
-      test: ["CMD-SHELL", "BIND_ON_IP=\"$$(getent hosts \"$$(hostname)\" | awk '{print $$1;}')\"; case \"$$BIND_ON_IP\" in *:*) TEMPORAL_ADDRESS=\"[$$BIND_ON_IP]:7233\" ;; *) TEMPORAL_ADDRESS=\"$$BIND_ON_IP:7233\" ;; esac; TEMPORAL_ADDRESS=\"$$TEMPORAL_ADDRESS\" temporal operator cluster health | grep -q SERVING"]
+      # address exactly as the pinned image's entrypoint does, then require the
+      # namespace that every configured client uses, not merely a serving gRPC
+      # frontend while auto-setup is still registering that namespace.
+      test: ["CMD-SHELL", "BIND_ON_IP=\"$$(getent hosts \"$$(hostname)\" | awk '{print $$1;}')\"; case \"$$BIND_ON_IP\" in *:*) TEMPORAL_ADDRESS=\"[$$BIND_ON_IP]:7233\" ;; *) TEMPORAL_ADDRESS=\"$$BIND_ON_IP:7233\" ;; esac; TEMPORAL_ADDRESS=\"$$TEMPORAL_ADDRESS\" temporal operator cluster health | grep -q SERVING && TEMPORAL_ADDRESS=\"$$TEMPORAL_ADDRESS\" temporal operator namespace describe -n default >/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 24
       start_period: 20s
 
   redis:
-    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    image: docker.io/library/redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
     # Generate the ACL before passing control to the image entrypoint. The
     # entrypoint then initializes the mounted /data volume and drops to redis.
     working_dir: /data
@@ -105,7 +106,7 @@ services:
   # readiness will fail closed if a retained local volume has the wrong code.
   redis-function-provisioner:
     profiles: [worker]
-    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    image: docker.io/library/redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
     depends_on:
       redis:
         condition: service_healthy
@@ -137,15 +138,19 @@ services:
         source: ./storage/redis/functions/admission.lua
         target: /opt/llmtw/functions/admission.lua
         read_only: true
+        bind:
+          selinux: z
       - type: bind
         source: ./storage/redis/functions/throttle.lua
         target: /opt/llmtw/functions/throttle.lua
         read_only: true
+        bind:
+          selinux: z
 
   provider-mock:
     build:
       context: ./deploy/local/provider-mock
-    image: ${LLMTW_PROVIDER_MOCK_IMAGE:-llmtw/provider-mock:local}
+    image: ${LLMTW_PROVIDER_MOCK_IMAGE:-localhost/llmtw/provider-mock:local}
     healthcheck:
       test: ["CMD", "python", "-c", "import ssl,urllib.request; urllib.request.urlopen('https://127.0.0.1:8081/health', context=ssl._create_unverified_context())"]
       interval: 5s
@@ -158,7 +163,7 @@ services:
   # writable root before the read-only worker starts.
   blob-volume-provisioner:
     profiles: [worker]
-    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    image: docker.io/library/redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
@@ -188,7 +193,7 @@ services:
         VERSION: local
         REVISION: working-tree
         BUILD_TIME: reproducible-local
-    image: ${LLMTW_WORKER_IMAGE:-llmtw/worker:local}
+    image: ${LLMTW_WORKER_IMAGE:-localhost/llmtw/worker:local}
     command: ["worker", "--config", "/etc/llmtw/config.yaml"]
     depends_on:
       temporal:
@@ -212,17 +217,23 @@ services:
         target: /var/run/secrets/llmtw/continuation-hmac
     volumes:
       - type: bind
-        source: ./deploy/local/config.yaml
+        source: ${LLMTW_COMPOSE_WORKER_CONFIG_FILE:-./deploy/local/config.yaml}
         target: /etc/llmtw/config.yaml
         read_only: true
+        bind:
+          selinux: z
       - type: bind
-        source: ./deploy/local/capabilities.yaml
+        source: ${LLMTW_COMPOSE_WORKER_CAPABILITIES_FILE:-./deploy/local/capabilities.yaml}
         target: /etc/llmtw/capabilities.yaml
         read_only: true
+        bind:
+          selinux: z
       - type: bind
-        source: ./deploy/local/prices.yaml
+        source: ${LLMTW_COMPOSE_WORKER_PRICES_FILE:-./deploy/local/prices.yaml}
         target: /etc/llmtw/prices.yaml
         read_only: true
+        bind:
+          selinux: z
       - blob-data:/var/lib/llmtw/blobs
       - type: tmpfs
         target: /tmp
@@ -256,7 +267,7 @@ services:
         VERSION: local
         REVISION: working-tree
         BUILD_TIME: reproducible-local
-    image: ${LLMTW_WORKER_IMAGE:-llmtw/worker:local}
+    image: ${LLMTW_WORKER_IMAGE:-localhost/llmtw/worker:local}
     command: ["validate-config", "--config", "/etc/llmtw/durable-config.yaml"]
     depends_on:
       worker-postgres:

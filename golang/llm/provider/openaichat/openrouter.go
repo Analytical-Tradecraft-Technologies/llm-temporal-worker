@@ -66,6 +66,7 @@ type OpenRouterProfileConfig struct {
 	AllowFallbacks            bool
 	RequireParameters         bool
 	AllowedExtensions         map[string]ExtensionSpec
+	WireShape                 WireShape
 }
 
 func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
@@ -102,6 +103,7 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 		"order":              order,
 		"allow_fallbacks":    false,
 		"require_parameters": true,
+		"data_collection":    "deny",
 	}
 	providerRaw, err := json.Marshal(providerField)
 	if err != nil {
@@ -132,6 +134,7 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 			"provider": providerRaw,
 		},
 		ReservedWireFields: map[string]struct{}{"provider": {}},
+		WireShape:          config.WireShape,
 		ResponseAugment:    augmentOpenRouter,
 	})
 }
