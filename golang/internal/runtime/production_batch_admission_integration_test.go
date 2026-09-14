@@ -98,6 +98,9 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 				ID: "route-a", EndpointID: entry.EndpointID, Provider: entry.Provider, Family: entry.Family, Region: entry.Region,
 				Model: entry.Model, Classes: []llm.ServiceClass{llm.ServiceClassStandard},
 				ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, PriceAvailable: true,
+				Capabilities: routing.CapabilitySet{Version: "capabilities-v1", Features: map[routing.Feature]routing.Capability{
+					routing.FeatureText: {State: routing.CapabilityNative},
+				}},
 			}}}}}
 			calls := []string{}
 			binding := &productionPhaseBinding{
@@ -124,6 +127,7 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 			}
 			reserve := llm.ReserveBatchRequestV1{APIVersion: llm.ReserveBatchAPIVersion, Context: requestContext, CustomerID: "customer-1", RunID: "run-1", BudgetID: "budget-1", BatchKey: mode,
 				PricingGenerationID: catalog.Version, PricingManifestSHA256: manifest, RemainingMaxCostMicrounits: 100_000_000, Operations: operations}
+			reservedCount := scenario.count
 			if mode != "direct" {
 				reserve.Operations = nil
 				reserve.PhaseKey = mode
@@ -131,12 +135,29 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 				templateCount := scenario.count
 				if templateCount == 1 {
 					templateCount = 3
+					// Leave one grant for a later wave and one for close/refund.
 				}
-				reserve.Templates = []llm.ReserveBatchTemplateV1{{TemplateKey: mode, Count: int32(templateCount), Model: descriptor.Model, ServiceClass: descriptor.ServiceClass, MaxInputTokens: descriptor.MaxInputTokens, MaxOutputTokens: descriptor.MaxOutputTokens}}
+				for remaining := templateCount; remaining > 0; {
+					count := min(remaining, llm.MaxReserveBatchTemplateCount)
+					reserve.Templates = append(reserve.Templates, llm.ReserveBatchTemplateV1{
+						TemplateKey: fmt.Sprintf("%s-%d", mode, len(reserve.Templates)+1), Count: int32(count),
+						Model: descriptor.Model, ServiceClass: descriptor.ServiceClass,
+						MaxInputTokens: descriptor.MaxInputTokens, MaxOutputTokens: descriptor.MaxOutputTokens,
+					})
+					remaining -= count
+				}
+				reservedCount = templateCount
 			}
 			response, err := binding.reserveBatch(ctx, reserve)
 			if err != nil {
 				t.Fatal(err)
+			}
+			expectedMaximum := int64(6144) // 4096 input at $1/M + 1024 output at $2/M.
+			if mode == "fractional-template" {
+				expectedMaximum = 1
+			}
+			if response.ReservedCostMicrounits != int64(reservedCount)*expectedMaximum {
+				t.Fatalf("reserve logical cost = %d, want %d", response.ReservedCostMicrounits, int64(reservedCount)*expectedMaximum)
 			}
 			now = now.Add(2 * time.Minute)
 			reservedReplay, err := binding.reserveBatch(ctx, reserve)
@@ -182,8 +203,26 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 					t.Fatal("wrong-parent allocation accepted")
 				}
 			}
+			if mode == "direct" && response.Status != llm.ReserveBatchStatusReserved {
+				t.Fatalf("direct reserve = %#v", response)
+			}
 			if len(grants) != scenario.count {
 				t.Fatalf("grant count = %d, want %d", len(grants), scenario.count)
+			}
+			var grantedTotal int64
+			for index, granted := range grants {
+				if granted.OperationKey != operations[index].OperationKey || granted.MaxCostMicrounits != expectedMaximum {
+					t.Fatalf("grant %d = %#v, want operation %q ceiling %d", index, granted, operations[index].OperationKey, expectedMaximum)
+				}
+				grantedTotal += granted.MaxCostMicrounits
+			}
+			if mode == "direct" {
+				if grantedTotal != response.ReservedCostMicrounits {
+					t.Fatalf("direct grant total = %d, reserved %d", grantedTotal, response.ReservedCostMicrounits)
+				}
+			} else if grantedTotal != allocated.ReservedCostMicrounits ||
+				grantedTotal+allocated.RemainingEscrowCostMicrounits != response.ReservedCostMicrounits {
+				t.Fatalf("allocation does not conserve escrow: grants=%d allocation=%#v reserve=%#v", grantedTotal, allocated, response)
 			}
 			if scenario.count == 1 && mode != "fractional-template" {
 				originalKey := binding.cap.GrantHMACKey
@@ -232,7 +271,9 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 			if err := json.Unmarshal(encoded, &admitted); err != nil {
 				t.Fatal(err)
 			}
-			generate := llm.GenerateRequestV1{APIVersion: llm.APIVersion, OperationKey: descriptor.OperationKey, Context: requestContext, CostAdmission: &admitted}
+			forecastContext := requestContext
+			forecastContext.Tags = map[string]string{llm.CostAdmissionContextTag: llm.CostAdmissionForecastV1}
+			generate := llm.GenerateRequestV1{APIVersion: llm.APIVersion, OperationKey: descriptor.OperationKey, Context: forecastContext, CostAdmission: &admitted}
 			contentDigest, err := decodeSHA256(materializationSHA)
 			if err != nil {
 				t.Fatal(err)
@@ -248,18 +289,25 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 					t.Fatalf("last grant was not atomically accepted: %#v, %v", lastResult, err)
 				}
 			}
-			candidate := routing.Candidate{RouteID: stored.Route.RouteID, EndpointID: entry.EndpointID, Provider: entry.Provider, Family: entry.Family, Region: entry.Region, Model: entry.Model, RequestedClass: llm.ServiceClassStandard, AttemptedClass: llm.ServiceClassStandard, ProviderTier: "standard"}
+			candidate := routing.Candidate{RouteID: "route-a", EndpointID: entry.EndpointID, Provider: entry.Provider, Family: entry.Family, Region: entry.Region, Model: entry.Model, RequestedClass: llm.ServiceClassStandard, AttemptedClass: llm.ServiceClassStandard, ProviderTier: "standard"}
 			providerRequest := llm.Request{APIVersion: llm.APIVersion, Context: requestContext, OperationKey: descriptor.OperationKey, Model: descriptor.Model, ServiceClass: descriptor.ServiceClass}
+			maximumUSD, err := pricing.USDFromMicro(pricing.MicroUSD(expectedMaximum))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.LogicalCostUSD.Cmp(maximumUSD) != 0 || !original.Accepted {
+				t.Fatalf("confirmed grant maximum/acceptance = %#v, %#v", stored, original)
+			}
 			newRoute := func() durablestore.RoutePlan {
 				// Generate matches configured hour/day order at the current clock;
 				// Redis stores day/hour order at the original escrow bucket.
-				actualReservations := append([]admission.WindowReservation(nil), stored.Reservations...)
-				actualReservations[0], actualReservations[1] = actualReservations[1], actualReservations[0]
-				for index := range actualReservations {
-					actualReservations[index].Bucket = now.Unix() / 60
+				actualReservations := []admission.WindowReservation{
+					{PolicyID: "policy", WindowID: "hour", Bucket: now.Unix() / 60, Amount: pricing.MicroUSD(expectedMaximum), Limit: 100_000_000, AmountUSD: maximumUSD, LimitUSD: pricing.MustUSD("100"), BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour)},
+					{PolicyID: "policy", WindowID: "day", Bucket: now.Unix() / 60, Amount: pricing.MicroUSD(expectedMaximum), Limit: 100_000_000, AmountUSD: maximumUSD, LimitUSD: pricing.MustUSD("100"), BucketNanos: int64(time.Minute), DurationNanos: int64(24 * time.Hour)},
 				}
-				return durablestore.RoutePlan{OperationID: stored.OperationID, GenerationID: stored.GenerationID, RouteID: stored.Route.RouteID, EndpointID: stored.Route.EndpointID, Provider: stored.Route.Provider, Model: stored.Route.ResolvedModel, PriceVersion: stored.Route.PriceVersion,
-					Execution: &durablestore.RouteExecution{Request: providerRequest, Candidate: candidate, Price: entry, Reservations: actualReservations, EstimatedUSD: stored.LogicalCostUSD}}
+				return durablestore.RoutePlan{OperationID: strictOperationIdentity(rawScope(requestContext), requestContext.Actor, "generate", llm.APIVersion, descriptor.OperationKey),
+					GenerationID: "generation-grant", RouteID: "route-a", EndpointID: entry.EndpointID, Provider: entry.Provider, Model: entry.Model, PriceVersion: entry.Version,
+					Execution: &durablestore.RouteExecution{Request: providerRequest, Candidate: candidate, Price: entry, Reservations: actualReservations, EstimatedUSD: maximumUSD}}
 			}
 			for attempt := range 2 {
 				confirmed, err := binding.prepareGrantedReservationRoute(ctx, generate, newRoute())
@@ -309,6 +357,9 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 				}
 				if closed.RefundedCostMicrounits != grant.MaxCostMicrounits {
 					t.Fatalf("multi-window close refund = %d want %d", closed.RefundedCostMicrounits, grant.MaxCostMicrounits)
+				}
+				if grantedTotal+second.ReservedCostMicrounits+closed.RefundedCostMicrounits != response.ReservedCostMicrounits {
+					t.Fatalf("closed escrow does not conserve grants plus refund: first=%d second=%#v close=%#v reserve=%#v", grantedTotal, second, closed, response)
 				}
 				closedReplay, err := binding.closeBatch(ctx, closeRequest)
 				if err != nil || closedReplay.RefundedCostMicrounits != closed.RefundedCostMicrounits || closedReplay.Status != llm.CloseBatchStatusAlreadyClosed {

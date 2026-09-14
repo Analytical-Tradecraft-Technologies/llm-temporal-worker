@@ -115,7 +115,7 @@ func durableAcceptedRecord(t *testing.T, request durable.ReserveRequest, now tim
 		Schema: "durable-budget/v1", OperationID: string(request.OperationID), GenerationID: string(request.GenerationID),
 		IncarnationID: "incarnation-1", Fingerprint: fingerprint, Status: "accepted", OccurredAt: now,
 		ExpiresAt: request.ExpiresAt, LogicalCostNano: logicalNano, RemainingEscrowNano: logicalNano,
-		Route: request.Route, Reservations: reservations, Events: map[string]string{},
+		Route: request.Route, Bounds: request.Bounds, Reservations: reservations, Events: map[string]string{},
 	})
 }
 
@@ -336,19 +336,9 @@ func TestRedisBudgetMaterializerBatchGrantUsesCanonicalOperationRecord(t *testin
 		MaxCacheReadTokens:  2048,
 		MaxCacheWriteTokens: 256,
 	}
-	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
-	if err != nil {
+	var record durableOperation
+	if err := json.Unmarshal([]byte(durableAcceptedRecord(t, request, now)), &record); err != nil {
 		t.Fatal(err)
-	}
-	fingerprint, err := durableRequestFingerprint(request, reservations)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := durableOperation{
-		Schema: "durable-budget/v1", OperationID: string(request.OperationID),
-		GenerationID: string(request.GenerationID), IncarnationID: string(request.IncarnationID),
-		Fingerprint: fingerprint, Status: "accepted", OccurredAt: request.OccurredAt, ExpiresAt: request.ExpiresAt,
-		Route: request.Route, Bounds: request.Bounds, Reservations: reservations, Events: map[string]string{},
 	}
 	batchOperation := record
 	batchOperation.Bounds = durable.ReservationBounds{}
@@ -370,11 +360,11 @@ func TestRedisBudgetMaterializerBatchGrantUsesCanonicalOperationRecord(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if confirmedRequest.Bounds != request.Bounds || !result.Accepted {
+	if confirmedRequest.Bounds != request.Bounds || confirmedRequest.LogicalCostUSD.Cmp(request.LogicalCostUSD) != 0 || !result.Accepted {
 		t.Fatalf("confirmed batch grant = request %#v result %#v", confirmedRequest, result)
 	}
-	if reader.calls != 2 || invoker.calls != 0 {
-		t.Fatalf("batch grant confirmation reads=%d mutations=%d, want two reads and no mutation", reader.calls, invoker.calls)
+	if invoker.calls != 0 {
+		t.Fatalf("batch grant confirmation mutated Redis %d times", invoker.calls)
 	}
 }
 

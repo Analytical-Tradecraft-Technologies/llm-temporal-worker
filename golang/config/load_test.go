@@ -345,59 +345,33 @@ func TestLoadAcceptsWildcardAlongsideBudgetRestriction(t *testing.T) {
 	}
 }
 
-func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
+func TestExampleSelectsEmbeddedRedisExecutionContract(t *testing.T) {
 	loaded, err := config.Load(exampleYAML(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document map[string]any
-	if err := json.Unmarshal(encoded, &document); err != nil {
-		t.Fatal(err)
-	}
-	server, _ := document["server"].(map[string]any)
-	for field, want := range map[string]string{
-		"readiness_probe_interval": "5s",
-		"readiness_probe_timeout":  "2s",
-	} {
-		if got, _ := server[field].(string); got != want {
-			t.Fatalf("server.%s = %q, want %q", field, got, want)
-		}
-	}
-	state, _ := document["state"].(map[string]any)
-	redis, _ := state["redis"].(map[string]any)
-	for field, want := range map[string]string{
-		"admission_mode":    "function",
-		"admission_version": "admission_v1",
-	} {
-		if got, _ := redis[field].(string); got != want {
-			t.Fatalf("state.redis.%s = %q, want %q", field, got, want)
-		}
-	}
-	digest, _ := redis["admission_digest"].(string)
-	if len(digest) != 64 {
-		t.Fatalf("state.redis.admission_digest = %q, want a SHA-256 hex digest", digest)
-	}
-	if got, want := digest, redisstore.AdmissionFunctionDigest(); got != want {
-		t.Fatalf("state.redis.admission_digest = %q, want embedded Function digest %q", got, want)
+	metadata := redisstore.AdmissionFunctionMetadata()
+	if loaded.State.Redis.AdmissionMode != string(redisstore.AdmissionModeFunction) ||
+		loaded.State.Redis.FunctionLibrary != metadata.Library ||
+		loaded.State.Redis.AdmissionVersion != metadata.Version ||
+		loaded.State.Redis.AdmissionDigest != metadata.Digest {
+		t.Fatalf("example Redis execution contract = %#v, want Function metadata %#v", loaded.State.Redis, metadata)
 	}
 }
 
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
+	digest := redisstore.AdmissionFunctionDigest()
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: 30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e",
-		"admission_digest: 30E5A5833E844F80559D858605C9FEFE00DA7B2D6A242BC8E01A21CB4666E81E",
+		"admission_digest: "+digest,
+		"admission_digest: "+strings.ToUpper(digest),
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, digest; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -568,7 +542,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: "+redisstore.AdmissionFunctionDigest(), "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),

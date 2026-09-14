@@ -55,7 +55,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: 30e5a5833e844f80559d858605c9fefe00da7b2d6a242bc8e01a21cb4666e81e
+    admission_digest: c7ab5a848a1f1567d42e9a41c8493836ff16b70efa01e3bb7a3acb06f2cd7e17
     required_persistence: aof_and_rdb
     coordination_stream_enabled: false
   postgres:
