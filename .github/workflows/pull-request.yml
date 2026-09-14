@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up reviewed Go toolchain
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: false
@@ -183,7 +183,7 @@ jobs:
 
       - name: Set up Go
         if: steps.go.outputs.present == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: true
@@ -243,7 +243,7 @@ jobs:
 
       - name: Set up Go
         if: steps.go.outputs.present == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: true
@@ -329,7 +329,7 @@ jobs:
 
       - name: Set up Go
         if: steps.go.outputs.present == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: true
