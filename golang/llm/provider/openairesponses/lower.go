@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/openai/openai-go/v3/responses"
@@ -24,13 +23,7 @@ func providerTier(class llm.ServiceClass) string {
 }
 
 func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	instructionCount := len(request.Instructions)
-	inputCount := len(request.Input)
-	if instructionCount > math.MaxInt-inputCount {
-		return responses.ResponseNewParams{}, fmt.Errorf("request input too large")
-	}
-	totalInputCapacity := instructionCount + inputCount
-	input := make([]any, 0, totalInputCapacity)
+	input := make([]any, 0)
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
 		if err != nil {
