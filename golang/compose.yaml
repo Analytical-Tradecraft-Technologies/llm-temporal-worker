@@ -2,12 +2,12 @@ name: llmtw
 
 services:
   postgres:
-    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: ${LLMTW_POSTGRES_PASSWORD:-local-only}
     volumes:
-      - temporal-postgres-data:/var/lib/postgresql/data
+      - temporal-postgres-data-v18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
       interval: 5s
@@ -22,13 +22,13 @@ services:
   # Temporal-owned PostgreSQL service above.
   worker-postgres:
     profiles: [durable]
-    image: postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+    image: postgres:18.6-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
     environment:
       POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}
       POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
       POSTGRES_DB: ${LLMTW_WORKER_POSTGRES_DATABASE:-llmtw_worker}
     volumes:
-      - worker-postgres-data-v17:/var/lib/postgresql/data
+      - worker-postgres-data-v18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -292,5 +292,5 @@ secrets:
 volumes:
   blob-data:
   redis-data:
-  temporal-postgres-data:
-  worker-postgres-data-v17:
+  temporal-postgres-data-v18:
+  worker-postgres-data-v18:
