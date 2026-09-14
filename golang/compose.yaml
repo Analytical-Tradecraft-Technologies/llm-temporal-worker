@@ -37,7 +37,7 @@ services:
       start_period: 5s
 
   temporal:
-    image: temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
+    image: temporalio/auto-setup:1.29.3@sha256:9be7b8d98f60d00f4f2ff74731c071a17848d8182bbc8429e314a24c94ea105b
     depends_on:
       postgres:
         condition: service_healthy
