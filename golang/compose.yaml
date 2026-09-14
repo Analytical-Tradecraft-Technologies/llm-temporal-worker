@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: ${LLMTW_POSTGRES_PASSWORD:-local-only}
     volumes:
-      - temporal-postgres-data:/var/lib/postgresql/data
+      - temporal-postgres-data-v18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
       interval: 5s
@@ -28,7 +28,7 @@ services:
       POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
       POSTGRES_DB: ${LLMTW_WORKER_POSTGRES_DATABASE:-llmtw_worker}
     volumes:
-      - worker-postgres-data-v17:/var/lib/postgresql/data
+      - worker-postgres-data-v18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -292,5 +292,5 @@ secrets:
 volumes:
   blob-data:
   redis-data:
-  temporal-postgres-data:
-  worker-postgres-data-v17:
+  temporal-postgres-data-v18:
+  worker-postgres-data-v18:
