@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	downloadArtifactActionPin = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
-	uploadArtifactActionPin   = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+	downloadArtifactAction = "actions/download-artifact"
+	uploadArtifactAction   = "actions/upload-artifact"
 )
 
 var fullGitCommitID = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -40,17 +40,17 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 	if _, found := preflight["environment"]; found {
 		t.Fatal("release preflight must not enter the protected publication environment")
 	}
-	for _, action := range []string{setupGoActionPin, downloadArtifactActionPin} {
+	for _, action := range []string{setupGoAction, downloadArtifactAction} {
 		assertJobUsesAction(t, release, "preflight", action)
 	}
 	assertAnonymousFixedPublicCheckout(t, release)
-	assertJobActionInput(t, release, "preflight", setupGoActionPin, "token", "")
-	assertJobActionInput(t, release, "preflight", setupGoActionPin, "cache", "false")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "name", "release-evidence")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "github-token", "${{ github.token }}")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "repository", "${{ github.repository }}")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "run-id", "${{ inputs.evidence_run_id }}")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "path", "release-artifacts")
+	assertJobActionInput(t, release, "preflight", setupGoAction, "token", "")
+	assertJobActionInput(t, release, "preflight", setupGoAction, "cache", "false")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "name", "release-evidence")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "github-token", "${{ github.token }}")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "repository", "${{ github.repository }}")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "run-id", "${{ inputs.evidence_run_id }}")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "path", "release-artifacts")
 
 	for _, command := range []string{
 		"make security-verify",
@@ -507,8 +507,8 @@ func assertTrustedMasterEvidenceArtifactSource(t *testing.T, master workflowDocu
 	if scalarString(t, master.name, job, "needs") != "verify" {
 		t.Fatalf("master release-evidence job must require verified master CI, got %#v", job["needs"])
 	}
-	assertJobUsesAction(t, master, "release-evidence", uploadArtifactActionPin)
-	assertJobActionInput(t, master, "release-evidence", uploadArtifactActionPin, "name", "release-evidence")
+	assertJobUsesAction(t, master, "release-evidence", uploadArtifactAction)
+	assertJobActionInput(t, master, "release-evidence", uploadArtifactAction, "name", "release-evidence")
 
 	artifactStep := artifactUploadStep(t, master, "release-evidence", "release-evidence")
 	if scalarString(t, master.name, artifactStep, "if") != "success()" {
@@ -529,7 +529,7 @@ func assertTrustedMasterEvidenceArtifactSource(t *testing.T, master workflowDocu
 		}
 		for _, rawStep := range workflowSteps(t, master.name, jobName, job) {
 			step, ok := rawStep.(map[string]any)
-			if !ok || step["uses"] != uploadArtifactActionPin {
+			if !ok || actionName(step["uses"]) != uploadArtifactAction {
 				continue
 			}
 			with, ok := step["with"].(map[string]any)
@@ -564,7 +564,7 @@ func assertGitHubTokenIsExclusiveToArtifactDownload(t *testing.T, workflow workf
 					continue
 				}
 				usesToken++
-				if jobName != "preflight" || step["uses"] != downloadArtifactActionPin || input != "github-token" {
+				if jobName != "preflight" || actionName(step["uses"]) != downloadArtifactAction || input != "github-token" {
 					t.Fatalf("%s job %q exposes the GitHub token outside pinned download-artifact", workflow.name, jobName)
 				}
 			}
@@ -771,7 +771,7 @@ func artifactUploadStep(t *testing.T, workflow workflowDocument, jobName, artifa
 	job := workflowJob(t, workflow, jobName)
 	for _, rawStep := range workflowSteps(t, workflow.name, jobName, job) {
 		step, ok := rawStep.(map[string]any)
-		if !ok || step["uses"] != uploadArtifactActionPin {
+		if !ok || actionName(step["uses"]) != uploadArtifactAction {
 			continue
 		}
 		with, ok := step["with"].(map[string]any)
