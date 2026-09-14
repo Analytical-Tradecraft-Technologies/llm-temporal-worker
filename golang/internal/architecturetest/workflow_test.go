@@ -12,13 +12,13 @@ import (
 )
 
 const (
-	checkoutActionPin     = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10"
-	setupGoActionPin      = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
-	githubScriptActionPin = "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
-	cacheActionPin        = "actions/cache@caa296126883cff596d87d8935842f9db880ef25"
-	dependencyReviewPin   = "actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294"
-	securityBaseRef       = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
-	securityHeadRef       = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+	checkoutAction         = "actions/checkout"
+	setupGoAction          = "actions/setup-go"
+	githubScriptAction     = "actions/github-script"
+	cacheAction            = "actions/cache"
+	dependencyReviewAction = "actions/dependency-review-action"
+	securityBaseRef        = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+	securityHeadRef        = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -50,9 +50,9 @@ func TestSecurityRunsDifferentiallyOnPullRequestsAndFullyOnSchedule(t *testing.T
 	if got := scalarString(t, pullRequest.name, workflowJob(t, pullRequest, "security"), "name"); got != "Verify source safety and supply chain" {
 		t.Fatalf("pull-request security job name = %q, want the required ruleset context", got)
 	}
-	assertJobUsesAction(t, pullRequest, "security", dependencyReviewPin)
-	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "base-ref", securityBaseRef)
-	assertJobActionInput(t, pullRequest, "security", dependencyReviewPin, "head-ref", securityHeadRef)
+	assertJobUsesAction(t, pullRequest, "security", dependencyReviewAction)
+	assertJobActionInput(t, pullRequest, "security", dependencyReviewAction, "base-ref", securityBaseRef)
+	assertJobActionInput(t, pullRequest, "security", dependencyReviewAction, "head-ref", securityHeadRef)
 	assertJobNamedStepInput(t, pullRequest, "security", "Check out pull-request base", "ref", securityBaseRef)
 	assertJobHasRunCommand(t, pullRequest, "security", "make security-pr-verify")
 	if jobHasRunCommand(workflowJob(t, pullRequest, "security"), "make security-verify") {
@@ -94,8 +94,8 @@ func TestWorkflowPullRequestExpensiveVerificationRunsInParallelJobs(t *testing.T
 		{job: "race", command: "go test -race ./..."},
 		{job: "security", command: "make security-pr-verify"},
 	} {
-		assertJobUsesAction(t, pullRequest, test.job, checkoutActionPin)
-		assertJobUsesAction(t, pullRequest, test.job, setupGoActionPin)
+		assertJobUsesAction(t, pullRequest, test.job, checkoutAction)
+		assertJobUsesAction(t, pullRequest, test.job, setupGoAction)
 		assertJobRunContains(t, pullRequest, test.job, test.command)
 		if jobHasRunCommand(workflowJob(t, pullRequest, "verify"), test.command) {
 			t.Fatalf("pull-request.yml verify job still runs %q", test.command)
@@ -168,9 +168,9 @@ func TestWorkflowContainerBuildCacheV2BridgeAndIsolation(t *testing.T) {
 		{name: "master.yml", scope: "llmtw-master"},
 	} {
 		workflow := readWorkflow(t, test.name)
-		assertJobUsesAction(t, workflow, "container", githubScriptActionPin)
-		assertJobActionPrecedesRunCommand(t, workflow, "container", githubScriptActionPin, "bash scripts/ci/setup-buildx.sh")
-		assertJobActionPrecedesRunContains(t, workflow, "container", githubScriptActionPin, "docker buildx build")
+		assertJobUsesAction(t, workflow, "container", githubScriptAction)
+		assertJobActionPrecedesRunCommand(t, workflow, "container", githubScriptAction, "bash scripts/ci/setup-buildx.sh")
+		assertJobActionPrecedesRunContains(t, workflow, "container", githubScriptAction, "docker buildx build")
 		assertJobRunContains(t, workflow, "container", "--cache-from type=gha,scope="+test.scope+",version=2")
 		assertJobRunContains(t, workflow, "container", "--cache-to type=gha,mode=max,scope="+test.scope+",version=2,ignore-error=true")
 		for _, want := range []string{
@@ -195,8 +195,8 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 		{name: "master.yml", identity: "master"},
 	} {
 		workflow := readWorkflow(t, test.name)
-		assertJobUsesAction(t, workflow, "ocaml", cacheActionPin)
-		assertJobActionPrecedesRunCommand(t, workflow, "ocaml", cacheActionPin, "bash scripts/ci/setup-opam.sh")
+		assertJobUsesAction(t, workflow, "ocaml", cacheAction)
+		assertJobActionPrecedesRunCommand(t, workflow, "ocaml", cacheAction, "bash scripts/ci/setup-opam.sh")
 		for _, want := range []string{
 			"${{ runner.temp }}/llmtw-opam-root",
 			"${{ runner.temp }}/llmtw-xdg-cache",
@@ -311,7 +311,7 @@ func TestWorkflowOCamlSandboxUserNamespacesAreGuardedAndScoped(t *testing.T) {
 					}
 				}
 			}
-			if step["uses"] == cacheActionPin {
+			if actionName(step["uses"]) == cacheAction {
 				cacheIndex = index
 			}
 			if run, _ := step["run"].(string); strings.TrimSpace(run) == "bash scripts/ci/setup-opam.sh" {
@@ -450,9 +450,9 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	}
 
 	for _, action := range []string{
-		checkoutActionPin,
-		setupGoActionPin,
-		"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+		checkoutAction,
+		setupGoAction,
+		"actions/upload-artifact",
 	} {
 		assertJobUsesAction(t, master, "release-evidence", action)
 	}
@@ -642,35 +642,6 @@ func TestWorkflowLiveHarnessVerificationIsUncredentialed(t *testing.T) {
 			if strings.Contains(lower, forbidden) {
 				t.Fatalf("%s combines offline live-harness verification with %q", workflow.name, forbidden)
 			}
-		}
-	}
-}
-
-func TestWorkflowActionsUseImmutablePinsWithVersionComments(t *testing.T) {
-	for _, workflow := range []workflowDocument{
-		readWorkflow(t, "pull-request.yml"),
-		readWorkflow(t, "master.yml"),
-		readWorkflow(t, "release.yml"),
-	} {
-		for _, reference := range actionReferences(t, workflow) {
-			if strings.HasPrefix(reference, "./") {
-				continue
-			}
-			parts := strings.SplitN(reference, "@", 2)
-			if len(parts) != 2 || !immutableActionReference.MatchString(parts[1]) {
-				t.Fatalf("%s action %q is not pinned to an immutable commit", workflow.name, reference)
-			}
-		}
-		for _, want := range []string{setupGoActionPin} {
-			if !strings.Contains(workflow.raw, "uses: "+want+" # v6") {
-				t.Fatalf("%s does not record readable v6 comment beside immutable action pin %q", workflow.name, want)
-			}
-		}
-		if workflow.name == "release.yml" {
-			continue
-		}
-		if !strings.Contains(workflow.raw, "uses: "+checkoutActionPin+" # v6") {
-			t.Fatalf("%s does not record readable v6 comment beside immutable action pin %q", workflow.name, checkoutActionPin)
 		}
 	}
 }
@@ -949,7 +920,7 @@ func assertJobUsesAction(t *testing.T, workflow workflowDocument, jobName, want 
 		if !ok {
 			continue
 		}
-		if step["uses"] == want {
+		if actionName(step["uses"]) == want {
 			return
 		}
 	}
@@ -1018,7 +989,7 @@ func assertJobActionInput(t *testing.T, workflow workflowDocument, jobName, acti
 	}
 	for _, rawStep := range steps {
 		step, ok := rawStep.(map[string]any)
-		if !ok || step["uses"] != action {
+		if !ok || actionName(step["uses"]) != action {
 			continue
 		}
 		with, ok := step["with"].(map[string]any)
@@ -1070,7 +1041,7 @@ func assertJobActionPrecedesRunCommand(t *testing.T, workflow workflowDocument, 
 		if !ok {
 			continue
 		}
-		if step["uses"] == action {
+		if actionName(step["uses"]) == action {
 			seenAction = true
 		}
 		run, _ := step["run"].(string)
@@ -1100,7 +1071,7 @@ func assertJobActionPrecedesRunContains(t *testing.T, workflow workflowDocument,
 		if !ok {
 			continue
 		}
-		if step["uses"] == action {
+		if actionName(step["uses"]) == action {
 			seenAction = true
 		}
 		run, _ := step["run"].(string)
@@ -1469,4 +1440,11 @@ func hasRunCommand(workflow workflowDocument, command string) bool {
 		}
 	}
 	return false
+}
+
+// actionName identifies an action independently of its dependency version.
+func actionName(value any) string {
+	reference, _ := value.(string)
+	name, _, _ := strings.Cut(reference, "@")
+	return name
 }

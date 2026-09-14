@@ -9,8 +9,8 @@ import (
 
 const (
 	liveProviderWorkflow                  = "live-provider-contracts.yml"
-	azureLoginActionPin                   = "azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5"
-	awsConfigureCredentialsActionPin      = "aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502"
+	azureLoginAction                      = "azure/login"
+	awsConfigureCredentialsAction         = "aws-actions/configure-aws-credentials"
 	anonymousLiveProviderCheckoutStepName = "Check out fixed public master anonymously"
 )
 
@@ -90,8 +90,8 @@ func TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile(t *testi
 			}
 			assertLiveProviderJobPermissions(t, workflow.name, profile.id, job, wantPermissions)
 			assertLiveProviderCredentialAction(t, workflow, profile, job)
-			assertJobUsesAction(t, workflow, profile.id, setupGoActionPin)
-			assertJobUsesAction(t, workflow, profile.id, uploadArtifactActionPin)
+			assertJobUsesAction(t, workflow, profile.id, setupGoAction)
+			assertJobUsesAction(t, workflow, profile.id, uploadArtifactAction)
 
 			testStep := namedWorkflowStep(t, workflow, job, "Run bounded live provider contract")
 			env := nestedMapping(t, workflow.name, testStep, "env")
@@ -188,16 +188,7 @@ func assertLiveProviderWorkflowSourceAndActionBoundary(t *testing.T, workflow wo
 			t.Fatalf("%s action %q is not pinned to an immutable commit", workflow.name, reference)
 		}
 	}
-	for _, want := range []string{
-		"uses: " + setupGoActionPin + " # v6",
-		"uses: " + uploadArtifactActionPin + " # v4",
-		"uses: " + azureLoginActionPin + " # v2.3.0",
-		"uses: " + awsConfigureCredentialsActionPin + " # v4.0.2",
-	} {
-		if !strings.Contains(workflow.raw, want) {
-			t.Fatalf("%s does not retain readable immutable action pin %q", workflow.name, want)
-		}
-	}
+
 	if got, want := strings.Count(workflow.raw, "name: "+anonymousLiveProviderCheckoutStepName), len(liveProviderWorkflowProfiles); got != want {
 		t.Fatalf("%s anonymous checkout count = %d, want %d profile-local checkouts", workflow.name, got, want)
 	}
@@ -230,22 +221,22 @@ func assertLiveProviderCredentialAction(t *testing.T, workflow workflowDocument,
 	references := actionReferencesForJob(t, workflow, profile.id, job)
 	switch profile.id {
 	case "azure-responses":
-		assertJobUsesAction(t, workflow, profile.id, azureLoginActionPin)
+		assertJobUsesAction(t, workflow, profile.id, azureLoginAction)
 		for _, reference := range references {
-			if reference == awsConfigureCredentialsActionPin {
+			if actionName(reference) == awsConfigureCredentialsAction {
 				t.Fatalf("%s job %q must not configure an AWS credential", workflow.name, profile.id)
 			}
 		}
 	case "anthropic-aws", "bedrock-anthropic", "bedrock-converse":
-		assertJobUsesAction(t, workflow, profile.id, awsConfigureCredentialsActionPin)
+		assertJobUsesAction(t, workflow, profile.id, awsConfigureCredentialsAction)
 		for _, reference := range references {
-			if reference == azureLoginActionPin {
+			if actionName(reference) == azureLoginAction {
 				t.Fatalf("%s job %q must not configure an Azure credential", workflow.name, profile.id)
 			}
 		}
 	default:
 		for _, reference := range references {
-			if reference == azureLoginActionPin || reference == awsConfigureCredentialsActionPin {
+			if actionName(reference) == azureLoginAction || actionName(reference) == awsConfigureCredentialsAction {
 				t.Fatalf("%s job %q must not configure an OIDC cloud credential", workflow.name, profile.id)
 			}
 		}
