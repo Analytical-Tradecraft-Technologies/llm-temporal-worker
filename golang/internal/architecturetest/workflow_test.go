@@ -12,13 +12,13 @@ import (
 )
 
 const (
-	checkoutAction      = "actions/checkout"
-	setupGoAction       = "actions/setup-go"
-	githubScriptAction  = "actions/github-script"
-	cacheAction         = "actions/cache"
+	checkoutAction         = "actions/checkout"
+	setupGoAction          = "actions/setup-go"
+	githubScriptAction     = "actions/github-script"
+	cacheAction            = "actions/cache"
 	dependencyReviewAction = "actions/dependency-review-action"
-	securityBaseRef     = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
-	securityHeadRef     = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+	securityBaseRef        = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+	securityHeadRef        = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
 )
 
 var immutableActionReference = regexp.MustCompile(`^[0-9a-f]{40}$`)
