@@ -23,7 +23,7 @@ func providerTier(class llm.ServiceClass) string {
 }
 
 func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	input := make([]any, 0, len(request.Instructions)+len(request.Input))
+	input := make([]any, 0)
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
 		if err != nil {
