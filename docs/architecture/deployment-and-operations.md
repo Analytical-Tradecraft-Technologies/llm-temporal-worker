@@ -471,14 +471,51 @@ vet, race tests, unit/integration tests, build, and Docker build for pull
 requests. It has read-only permissions and no provider credentials.
 
 `master.yml` runs the same gates on master pushes, manual dispatch, and every
-day at 05:00 using the `Australia/Sydney` schedule timezone. Release publishing
-is a later opt-in job; a scheduled validation never deploys automatically.
+day at 05:00 using the `Australia/Sydney` schedule timezone. On the canonical
+master branch, container builds use Docker Build Cloud, including Compose
+lifecycle and hardened-image/release-evidence builds. Tests still execute on
+GitHub runners. After verification, OCaml tests, and fuzz shards pass, the
+container job pushes `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMBER`
+using the UTC build date and `github.run_number`. Push, schedule, and manual
+master runs publish; non-master dispatches cannot enter the Docker environment.
+This publishes a development image and does not deploy or create a signed
+versioned release.
+
+The single image tag is an OCI index containing `linux/amd64` and `linux/arm64`
+images, built on Docker Cloud's native nodes in parallel. The job requests SBOM
+and provenance attestations, verifies both platform descriptors by the published
+digest, and records that digest in the Actions summary. It pushes directly from
+the cloud builder and uses its managed cache; no GitHub image cache round-trip,
+QEMU emulation, or local fallback is used. Runtime smoke tests still load the
+cloud-built test images onto the runner.
+
+Configure the protected `docker_push` GitHub environment with:
+
+- Secret `DOCKER_ACCESS_TOKEN`: an organization access token with cloud-connect,
+  public-repository read access, and image push access scoped to
+  `analyticaltradecraft/llm-temporal-worker` (no delete or unrelated repository
+  access). Token permissions must be verified in Docker's organization settings.
+- Variable `DOCKER_ACCOUNT`: `analyticaltradecraft` for the organization token.
+- Variable `DOCKER_CLOUD_BUILDER`: `analyticaltradecraft/llm-temporal-worker`,
+  provisioned in the Docker Build Cloud dashboard before merging this change.
+
+Keep the environment restricted to master/protected branches. Only the cloud
+setup step receives the token, using password-stdin and a private runner-temporary
+Docker configuration removed by an always-run cleanup. The cloud helper checks
+the canonical repository, master ref, and trusted event before authenticating,
+and verifies the pinned Buildx binary checksum before execution. Missing
+configuration or cloud connectivity fails the job. Pull-request and merge-queue
+builds retain their existing local, uncredentialed builder.
+
+See [Docker Cloud CI credentials](https://docs.docker.com/build-cloud/ci/) and
+[cloud builder selection](https://docs.docker.com/build-cloud/usage/) for the
+upstream authentication, Compose, and multi-platform contracts.
 
 Both workflows use concurrency cancellation, immutable official-action commits
 with readable major-version comments, dependency caching through `setup-go`,
 explicit timeouts, and conditional Go/Docker steps. `make workflow-verify`
 uses pinned `actionlint` syntax validation plus a YAML contract test to keep
-that split, the exact Sydney schedule, and the no-credential/no-deployment
+that split, the exact Sydney schedule, and the restricted-credential/no-deployment
 boundary enforceable from a checkout. This checkout contains the Go
 implementation and Dockerfile, so the full implementation gates run on pull
 requests and master pushes.

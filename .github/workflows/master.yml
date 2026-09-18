@@ -19,6 +19,9 @@ concurrency:
 jobs:
   container:
     name: Container image
+    if: github.ref == 'refs/heads/master'
+    needs: [verify, ocaml, fuzz-shard]
+    environment: docker_push
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -27,33 +30,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-
-      - name: Set up reviewed Go toolchain
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: golang/.go-version
-          cache: false
+          persist-credentials: false
 
-      - name: Export GitHub Actions cache runtime for Buildx API v2
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const required = [
-              "ACTIONS_CACHE_URL",
-              "ACTIONS_RESULTS_URL",
-              "ACTIONS_RUNTIME_TOKEN",
-            ];
-            for (const name of required) {
-              const value = process.env[name];
-              if (!value) {
-                throw new Error(`GitHub Actions cache runtime variable ${name} is unavailable`);
-              }
-              core.exportVariable(name, value);
-            }
-            core.exportVariable("ACTIONS_CACHE_SERVICE_V2", "true");
-
-      - name: Set up Docker Buildx
-        run: bash scripts/ci/setup-buildx.sh
+      - name: Set up Docker Build Cloud
+        env:
+          DOCKER_ACCOUNT: ${{ vars.DOCKER_ACCOUNT }}
+          DOCKER_CLOUD_BUILDER: ${{ vars.DOCKER_CLOUD_BUILDER }}
+          DOCKER_ACCESS_TOKEN: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+        run: bash scripts/ci/setup-build-cloud.sh
 
       - name: Resolve image build metadata
         id: metadata
@@ -61,28 +46,52 @@ jobs:
         run: |
           set -euo pipefail
           {
-            printf 'version=master-%s\n' "$GITHUB_RUN_NUMBER"
+            printf 'version=%s.%s\n' "$(date -u +%Y%m%d)" "$GITHUB_RUN_NUMBER"
             printf 'revision=%s\n' "$GITHUB_SHA"
             printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             printf 'source=https://github.com/%s\n' "$GITHUB_REPOSITORY"
-            printf 'go_version=%s\n' "$(go env GOVERSION)"
+            printf 'go_version=%s\n' "go$(cat golang/.go-version)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build container image
+      - name: Build and push multi-platform image
         shell: bash
         run: |
           set -euo pipefail
           docker buildx build \
             --file ./golang/Dockerfile \
-            --tag llm-temporal-worker:master-${{ github.run_number }} \
-            --cache-from type=gha,scope=llmtw-master,version=2 \
-            --cache-to type=gha,mode=max,scope=llmtw-master,version=2,ignore-error=true \
+            --builder "$BUILDX_BUILDER" \
+            --platform linux/amd64,linux/arm64 \
+            --tag analyticaltradecraft/llm-temporal-worker:${{ steps.metadata.outputs.version }} \
+            --push --pull --provenance=mode=max --sbom=true \
+            --metadata-file "$RUNNER_TEMP/published-image.json" \
             --build-arg VERSION=${{ steps.metadata.outputs.version }} \
             --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
             --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
             --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
             --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
             ./golang
+
+      - name: Verify published architectures and record digest
+        env:
+          IMAGE_TAG: ${{ steps.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="analyticaltradecraft/llm-temporal-worker"
+          digest="$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/published-image.json")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect "$image@$digest" --raw > "$RUNNER_TEMP/published-manifest.json"
+          jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]' \
+            "$RUNNER_TEMP/published-manifest.json"
+          # Literal Markdown backticks in the summary are intentional.
+          # shellcheck disable=SC2016
+          printf 'Published `%s:%s`\n\nDigest: `%s`\n\nPlatforms: `linux/amd64`, `linux/arm64`\n' \
+            "$image" "$IMAGE_TAG" "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove Docker Cloud credentials
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/llmtw-cloud-docker"
 
   ocaml:
     name: OCaml package
@@ -92,6 +101,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
 
       - name: Install Protocol Buffers compiler
         run: |
@@ -176,6 +187,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -190,6 +203,8 @@ jobs:
 
   verify:
     name: Verify
+    if: github.ref == 'refs/heads/master'
+    environment: docker_push
     runs-on: ubuntu-latest
     timeout-minutes: 45
     services:
@@ -208,6 +223,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
 
       - name: Validate documentation
         shell: bash
@@ -338,6 +355,13 @@ jobs:
         working-directory: golang
         run: make readiness-integration
 
+      - name: Set up Docker Build Cloud
+        env:
+          DOCKER_ACCOUNT: ${{ vars.DOCKER_ACCOUNT }}
+          DOCKER_CLOUD_BUILDER: ${{ vars.DOCKER_CLOUD_BUILDER }}
+          DOCKER_ACCESS_TOKEN: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+        run: bash scripts/ci/setup-build-cloud.sh
+
       - name: Run authorized Compose lifecycle
         if: steps.go.outputs.present == 'true'
         working-directory: golang
@@ -372,11 +396,17 @@ jobs:
         # timeout, so repeat the remainder without weakening the primary gate.
         run: go test -race -count=5 -skip '^TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks$' ./...
 
+      - name: Remove Docker Cloud credentials
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/llmtw-cloud-docker"
+
   # This produces a retained, redacted evidence bundle only after the normal
   # master verification job. It is intentionally excluded from manual,
   # scheduled, and pull-request executions, and does not publish or sign.
   release-evidence:
     name: Release evidence
+    environment: docker_push
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: verify
     runs-on: ubuntu-latest
@@ -387,6 +417,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -395,8 +427,12 @@ jobs:
           cache: true
           cache-dependency-path: golang/go.sum
 
-      - name: Set up Docker Buildx
-        run: bash scripts/ci/setup-buildx.sh
+      - name: Set up Docker Build Cloud
+        env:
+          DOCKER_ACCOUNT: ${{ vars.DOCKER_ACCOUNT }}
+          DOCKER_CLOUD_BUILDER: ${{ vars.DOCKER_CLOUD_BUILDER }}
+          DOCKER_ACCESS_TOKEN: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+        run: bash scripts/ci/setup-build-cloud.sh
 
       - name: Set up pinned kubectl for local manifest rendering
         run: bash scripts/ci/setup-kubectl.sh
@@ -510,3 +546,8 @@ jobs:
         if: always()
         shell: bash
         run: rm -rf -- "$RUNNER_TEMP/image.oci"
+
+      - name: Remove Docker Cloud credentials
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/llmtw-cloud-docker"
