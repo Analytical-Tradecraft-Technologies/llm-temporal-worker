@@ -13,13 +13,14 @@ import (
 )
 
 const (
-	APIVersion           = "llm.temporal/v1"
-	GenerateActivityName = "llm.generate.v1"
-	CompactAPIVersion    = llm.CompactAPIVersion
-	QueryAPIVersion      = llm.QueryAPIVersion
-	CompactActivityName  = llm.CompactActivityName
-	QueryActivityName    = llm.QueryActivityName
-	DefaultInlineBytes   = 256 * 1024
+	APIVersion               = "llm.temporal/v1"
+	GenerateActivityName     = "llm.generate.v1"
+	CompactAPIVersion        = llm.CompactAPIVersion
+	QueryAPIVersion          = llm.QueryAPIVersion
+	CompactActivityName      = llm.CompactActivityName
+	QueryActivityName        = llm.QueryActivityName
+	ReserveBatchActivityName = llm.ReserveBatchActivityName
+	DefaultInlineBytes       = 256 * 1024
 )
 
 // GenerateRequest is the Temporal boundary wrapper around the canonical

@@ -73,20 +73,21 @@ func parseDuration(value string) (time.Duration, error) {
 }
 
 type Config struct {
-	Version      string                    `yaml:"version" json:"version"`
-	Environment  string                    `yaml:"environment" json:"environment"`
-	Server       ServerConfig              `yaml:"server" json:"server"`
-	Temporal     TemporalConfig            `yaml:"temporal" json:"temporal"`
-	State        StateConfig               `yaml:"state" json:"state"`
-	BlobStore    BlobStoreConfig           `yaml:"blob_store" json:"blob_store"`
-	Limits       LimitsConfig              `yaml:"limits" json:"limits"`
-	Endpoints    map[string]EndpointConfig `yaml:"endpoints" json:"endpoints"`
-	Models       map[string]ModelConfig    `yaml:"models" json:"models"`
-	Capabilities CapabilityConfig          `yaml:"capabilities" json:"capabilities"`
-	Pricing      PricingConfig             `yaml:"pricing" json:"pricing"`
-	Budgets      BudgetsConfig             `yaml:"budgets" json:"budgets"`
-	Continuation ContinuationConfig        `yaml:"continuation" json:"continuation"`
-	Telemetry    TelemetryConfig           `yaml:"telemetry" json:"telemetry"`
+	Version          string                    `yaml:"version" json:"version"`
+	Environment      string                    `yaml:"environment" json:"environment"`
+	Server           ServerConfig              `yaml:"server" json:"server"`
+	Temporal         TemporalConfig            `yaml:"temporal" json:"temporal"`
+	ResourceCapacity ResourceCapacityConfig    `yaml:"resource_capacity" json:"resource_capacity"`
+	State            StateConfig               `yaml:"state" json:"state"`
+	BlobStore        BlobStoreConfig           `yaml:"blob_store" json:"blob_store"`
+	Limits           LimitsConfig              `yaml:"limits" json:"limits"`
+	Endpoints        map[string]EndpointConfig `yaml:"endpoints" json:"endpoints"`
+	Models           map[string]ModelConfig    `yaml:"models" json:"models"`
+	Capabilities     CapabilityConfig          `yaml:"capabilities" json:"capabilities"`
+	Pricing          PricingConfig             `yaml:"pricing" json:"pricing"`
+	Budgets          BudgetsConfig             `yaml:"budgets" json:"budgets"`
+	Continuation     ContinuationConfig        `yaml:"continuation" json:"continuation"`
+	Telemetry        TelemetryConfig           `yaml:"telemetry" json:"telemetry"`
 }
 
 type ServerConfig struct {
@@ -105,6 +106,7 @@ type TemporalConfig struct {
 	TaskQueue      string               `yaml:"task_queue" json:"task_queue"`
 	IdentityPrefix string               `yaml:"identity_prefix" json:"identity_prefix"`
 	TLS            TLSConfig            `yaml:"tls" json:"tls"`
+	APIKeyFile     string               `yaml:"api_key_file" json:"api_key_file"`
 	Worker         TemporalWorkerConfig `yaml:"worker" json:"worker"`
 }
 
@@ -177,7 +179,12 @@ type PostgresConfig struct {
 	TablePrefix string    `yaml:"table_prefix" json:"table_prefix"`
 	Username    SecretRef `yaml:"username" json:"username"`
 	Password    SecretRef `yaml:"password" json:"password"`
-	TLS         TLSConfig `yaml:"tls" json:"tls"`
+	// EnvelopeKeys encrypt operation manifests and object-store locators.
+	// ScopeKeys HMAC tenant/project identities before PostgreSQL persistence.
+	// Both sets are snapshot-owned and require exactly one primary key.
+	EnvelopeKeys []HandleKey `yaml:"envelope_keys" json:"envelope_keys"`
+	ScopeKeys    []HandleKey `yaml:"scope_keys" json:"scope_keys"`
+	TLS          TLSConfig   `yaml:"tls" json:"tls"`
 	// MinConnections keeps a bounded warm pool without making connection
 	// establishment part of the readiness contract. Zero is valid and lets
 	// pgx grow the pool on demand.
@@ -204,10 +211,11 @@ type FileBlobConfig struct {
 }
 
 type S3Config struct {
-	Bucket string     `yaml:"bucket" json:"bucket"`
-	Region string     `yaml:"region" json:"region"`
-	Prefix string     `yaml:"prefix" json:"prefix"`
-	Auth   AuthConfig `yaml:"auth" json:"auth"`
+	Bucket   string     `yaml:"bucket" json:"bucket"`
+	Region   string     `yaml:"region" json:"region"`
+	Prefix   string     `yaml:"prefix" json:"prefix"`
+	KMSKeyID string     `yaml:"kms_key_id" json:"kms_key_id"`
+	Auth     AuthConfig `yaml:"auth" json:"auth"`
 }
 
 type LimitsConfig struct {
@@ -220,15 +228,16 @@ type LimitsConfig struct {
 	ContinuationDepth         int      `yaml:"continuation_depth" json:"continuation_depth"`
 	RouteAttempts             int      `yaml:"route_attempts" json:"route_attempts"`
 	ProviderTimeout           Duration `yaml:"provider_timeout" json:"provider_timeout"`
-	ProviderResponseBytes     int64    `yaml:"provider_response_bytes" json:"provider_response_bytes"`
+	ProviderResponseBytes     int      `yaml:"provider_response_bytes" json:"provider_response_bytes"`
+	MaxInputTokens            int      `yaml:"max_input_tokens" json:"max_input_tokens"`
 	MaxOutputTokens           int      `yaml:"max_output_tokens" json:"max_output_tokens"`
 	MaxBudgetBucketsPerWindow int      `yaml:"max_budget_buckets_per_window" json:"max_budget_buckets_per_window"`
 	TokenEstimateSafetyRatio  string   `yaml:"token_estimate_safety_ratio" json:"token_estimate_safety_ratio"`
 }
 
 const (
-	DefaultProviderResponseBytes int64 = 16 << 20
-	MaxProviderResponseBytes     int64 = 64 << 20
+	DefaultProviderResponseBytes = 512 << 10
+	MaxProviderResponseBytes     = 64 << 20
 )
 
 type EndpointConfig struct {
@@ -395,6 +404,10 @@ func (auth AuthConfig) Validate(path string) error {
 	case "bearer_env", "header_env":
 		if !envNamePattern.MatchString(auth.Name) || auth.Path != "" || auth.Audience != "" {
 			return fmt.Errorf("%s %s requires a valid environment name", path, auth.Kind)
+		}
+	case "bearer_file", "header_file":
+		if auth.Name != "" || auth.Audience != "" || !filepath.IsAbs(auth.Path) {
+			return fmt.Errorf("%s %s requires an absolute path and no name/audience", path, auth.Kind)
 		}
 	case "azure_default_credential", "aws_default_chain":
 		if auth.Name != "" || auth.Path != "" || auth.Audience != "" {

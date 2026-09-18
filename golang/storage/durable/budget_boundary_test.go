@@ -26,6 +26,16 @@ func (m *boundaryMaterializer) Accept(_ context.Context, _ ReserveRequest) (Rese
 	return m.result, m.acceptErr
 }
 
+func (m *boundaryMaterializer) Confirm(_ context.Context, _ ReserveRequest) (ReserveResult, error) {
+	m.calls = append(m.calls, "confirm")
+	return m.result, m.acceptErr
+}
+
+func (m *boundaryMaterializer) FenceDispatch(_ context.Context, _ DispatchFenceRequest) error {
+	m.calls = append(m.calls, "fence")
+	return m.acceptErr
+}
+
 func (m *boundaryMaterializer) Reconcile(_ context.Context, _ ReconcileRequest) error {
 	m.calls = append(m.calls, "reconcile")
 	return m.reconcileErr

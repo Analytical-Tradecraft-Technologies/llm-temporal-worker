@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +30,219 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (roundTrip roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return roundTrip(request)
+}
+
+type trackingResponseBody struct {
+	io.Reader
+	closed bool
+}
+
+func (body *trackingResponseBody) Close() error {
+	body.closed = true
+	return nil
+}
+
+func TestProviderEgressResponseRejectsDeclaredContentLengthForEveryStatus(t *testing.T) {
+	const (
+		limit  = 64
+		secret = "sensitive-provider-response-body"
+	)
+	for _, status := range []int{http.StatusOK, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			body := &trackingResponseBody{Reader: strings.NewReader(secret)}
+			guard := providerResponseTestGuard(limit, func(request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode:    status,
+					Header:        make(http.Header),
+					Body:          body,
+					ContentLength: limit + 1,
+					Request:       request,
+				}, nil
+			})
+			request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := guard.RoundTrip(request)
+			if response != nil {
+				t.Fatal("RoundTrip returned an over-limit declared response")
+			}
+			assertProviderResponseTooLarge(t, err, secret)
+			if !body.closed {
+				t.Fatal("declared over-limit response body was not closed")
+			}
+		})
+	}
+}
+
+func TestProviderEgressResponseRejectsChunkedOverflowBeforeAccumulation(t *testing.T) {
+	const (
+		limit  = 64
+		secret = "sensitive-provider-response-body"
+	)
+	body := &trackingResponseBody{Reader: strings.NewReader(strings.Repeat("x", limit) + secret)}
+	guard := providerResponseTestGuard(limit, func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        make(http.Header),
+			Body:          body,
+			ContentLength: -1,
+			Request:       request,
+		}, nil
+	})
+	request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := guard.RoundTrip(request)
+	if err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	received, err := io.ReadAll(response.Body)
+	if len(received) != limit {
+		t.Fatalf("SDK-visible response bytes = %d, want exactly limit %d", len(received), limit)
+	}
+	assertProviderResponseTooLarge(t, err, secret)
+	if !body.closed {
+		t.Fatal("chunked overflow did not close the provider body")
+	}
+}
+
+func TestProviderEgressResponseRejectsGzipDecompressionBomb(t *testing.T) {
+	const (
+		limit  = 1024
+		secret = "sensitive-provider-response-body"
+	)
+	var compressed bytes.Buffer
+	encoder := gzip.NewWriter(&compressed)
+	if _, err := io.WriteString(encoder, strings.Repeat(secret, 256)); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if compressed.Len() >= limit {
+		t.Fatalf("compressed fixture = %d bytes, want below limit %d", compressed.Len(), limit)
+	}
+	body := &trackingResponseBody{Reader: bytes.NewReader(compressed.Bytes())}
+	guard := providerResponseTestGuard(limit, func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Header: http.Header{
+				"Content-Encoding": []string{"gzip"},
+				"Content-Length":   []string{strconv.Itoa(compressed.Len())},
+			},
+			Body:          body,
+			ContentLength: int64(compressed.Len()),
+			Request:       request,
+		}, nil
+	})
+	request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := guard.RoundTrip(request)
+	if err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	if !response.Uncompressed || response.ContentLength != -1 || response.Header.Get("Content-Encoding") != "" {
+		t.Fatalf("gzip response metadata was not normalized: uncompressed=%t length=%d headers=%v", response.Uncompressed, response.ContentLength, response.Header)
+	}
+	received, err := io.ReadAll(response.Body)
+	if len(received) != limit {
+		t.Fatalf("SDK-visible decompressed bytes = %d, want exactly limit %d", len(received), limit)
+	}
+	assertProviderResponseTooLarge(t, err, secret)
+	if !body.closed {
+		t.Fatal("gzip overflow did not close the compressed provider body")
+	}
+}
+
+func TestProviderEgressResponseAllowsExactLimitForSuccessAndError(t *testing.T) {
+	const limit = 128
+	for _, test := range []struct {
+		name   string
+		status int
+		gzip   bool
+	}{
+		{name: "success", status: http.StatusOK},
+		{name: "error", status: http.StatusBadRequest},
+		{name: "gzip success", status: http.StatusOK, gzip: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := bytes.Repeat([]byte("x"), limit)
+			wire := want
+			header := make(http.Header)
+			if test.gzip {
+				var compressed bytes.Buffer
+				encoder := gzip.NewWriter(&compressed)
+				if _, err := encoder.Write(want); err != nil {
+					t.Fatal(err)
+				}
+				if err := encoder.Close(); err != nil {
+					t.Fatal(err)
+				}
+				wire = compressed.Bytes()
+				header.Set("Content-Encoding", "gzip")
+			}
+			body := &trackingResponseBody{Reader: bytes.NewReader(wire)}
+			guard := providerResponseTestGuard(limit, func(request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode:    test.status,
+					Header:        header,
+					Body:          body,
+					ContentLength: int64(len(wire)),
+					Request:       request,
+				}, nil
+			})
+			request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := guard.RoundTrip(request)
+			if err != nil {
+				t.Fatalf("RoundTrip() error = %v", err)
+			}
+			got, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatalf("exact-limit ReadAll() error = %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("exact-limit response length = %d, want %d", len(got), len(want))
+			}
+			if err := response.Body.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if !body.closed {
+				t.Fatal("exact-limit response close did not reach provider body")
+			}
+		})
+	}
+}
+
+func providerResponseTestGuard(limit int64, next roundTripperFunc) *providerEgressRoundTripper {
+	return &providerEgressRoundTripper{
+		policy:           &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		next:             next,
+		maxResponseBytes: limit,
+	}
+}
+
+func assertProviderResponseTooLarge(t *testing.T, err error, sensitive string) {
+	t.Helper()
+	if !errors.Is(err, provider.ErrProviderResponseTooLarge) {
+		t.Fatalf("error = %v, want ErrProviderResponseTooLarge", err)
+	}
+	var typed *provider.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("error type = %T, want *provider.Error", err)
+	}
+	if typed.Code != provider.CodeProviderInvalidResponse || typed.Phase != provider.PhaseDispatch || typed.Dispatch != provider.DispatchAccepted || typed.Retry != provider.RetryNever {
+		t.Fatalf("typed response error = %#v, want non-retryable accepted invalid response", typed)
+	}
+	if strings.Contains(err.Error(), sensitive) {
+		t.Fatalf("response overflow error leaked sensitive body: %q", err)
+	}
 }
 
 func TestProviderEgressPolicyRejectsBlockedAddresses(t *testing.T) {
@@ -174,7 +390,7 @@ func TestProviderEgressPolicyBoundsDNSResolution(t *testing.T) {
 
 func TestProviderEgressTransportRecordsCallerDeadlineBeforeDispatch(t *testing.T) {
 	resolver := &blockingEgressResolver{started: make(chan struct{})}
-	client, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), resolver, nil, config.DefaultProviderResponseBytes)
+	client, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), config.DefaultProviderResponseBytes, resolver, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +869,7 @@ func TestProviderEgressTransportDoesNotPoisonCanceledRequestAfterIdleConnectionW
 			return nil, errors.New("unexpected extra egress dial")
 		}
 	}
-	client, err := newProviderEgressHTTPClient(base, endpoint, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP(publicAddress)}}}, dial, config.DefaultProviderResponseBytes)
+	client, err := newProviderEgressHTTPClient(base, endpoint, config.DefaultProviderResponseBytes, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP(publicAddress)}}}, dial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +978,7 @@ func TestProviderEgressTransportRejectsArbitraryRequestURL(t *testing.T) {
 	t.Parallel()
 
 	resolver := &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}
-	client, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), resolver, nil, config.DefaultProviderResponseBytes)
+	client, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), config.DefaultProviderResponseBytes, resolver, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,13 +1044,13 @@ func TestProviderEgressTransportDisablesRedirectsAndKeepsTLS(t *testing.T) {
 	endpoint.BaseURL = "https://example.com/v1"
 	endpoint.OutboundHosts = []string{"example.com"}
 
-	client, err := newProviderEgressHTTPClient(base, endpoint, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}, func(ctx context.Context, network, address string) (net.Conn, error) {
+	client, err := newProviderEgressHTTPClient(base, endpoint, config.DefaultProviderResponseBytes, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}, func(ctx context.Context, network, address string) (net.Conn, error) {
 		connection, err := (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
 		if err != nil {
 			return nil, err
 		}
 		return egressTestConn{Conn: connection, remote: &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 443}}, nil
-	}, config.DefaultProviderResponseBytes)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,7 +1072,7 @@ func TestProviderEgressTransportRejectsInsecureTLSVerification(t *testing.T) {
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // regression test for rejecting unsafe caller transport.
-	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), nil, nil, config.DefaultProviderResponseBytes)
+	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), config.DefaultProviderResponseBytes, nil, nil)
 	if !errors.Is(err, ErrProviderEgressDenied) {
 		t.Fatalf("newProviderEgressHTTPClient() error = %v, want ErrProviderEgressDenied", err)
 	}
@@ -888,7 +1104,7 @@ func TestProviderEgressTransportRejectsTLSHostnameOverride(t *testing.T) {
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{ServerName: "cohosted.example"}
-	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), nil, nil, config.DefaultProviderResponseBytes)
+	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), config.DefaultProviderResponseBytes, nil, nil)
 	if !errors.Is(err, ErrProviderEgressDenied) {
 		t.Fatalf("newProviderEgressHTTPClient() error = %v, want ErrProviderEgressDenied", err)
 	}
@@ -908,7 +1124,7 @@ func TestProviderEgressTransportBoundsConnectAndReadTimeouts(t *testing.T) {
 		return nil, errors.New("must not bypass egress dial policy")
 	}
 	baseTransport.DialTLS = func(string, string) (net.Conn, error) { return nil, errors.New("must not bypass egress dial policy") }
-	client, err := newProviderEgressHTTPClient(&http.Client{Transport: baseTransport}, endpoint, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}, nil, 8<<20)
+	client, err := newProviderEgressHTTPClient(&http.Client{Transport: baseTransport}, endpoint, 8<<20, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -919,7 +1135,7 @@ func TestProviderEgressTransportBoundsConnectAndReadTimeouts(t *testing.T) {
 	if !ok {
 		t.Fatalf("client transport = %T, want provider egress guard", client.Transport)
 	}
-	if got, want := guard.responseByteLimit(), int64(8<<20); got != want {
+	if got, want := guard.maxResponseBytes, int64(8<<20); got != want {
 		t.Fatalf("response byte limit = %d, want %d", got, want)
 	}
 	transport, ok := guard.next.(*http.Transport)
@@ -935,12 +1151,15 @@ func TestProviderEgressTransportBoundsConnectAndReadTimeouts(t *testing.T) {
 	if transport.Proxy != nil || transport.DialTLSContext != nil || transport.DialTLS != nil {
 		t.Fatal("egress transport retained a proxy or TLS dial bypass")
 	}
+	if !transport.DisableCompression {
+		t.Fatal("egress transport left implicit gzip decompression enabled")
+	}
 }
 
 func TestProviderEgressHTTPClientRejectsUnsafeResponseLimit(t *testing.T) {
 	t.Parallel()
 
-	for name, limit := range map[string]int64{
+	for name, limit := range map[string]int{
 		"negative":         -1,
 		"zero":             0,
 		"above safety cap": config.MaxProviderResponseBytes + 1,
@@ -948,7 +1167,7 @@ func TestProviderEgressHTTPClientRejectsUnsafeResponseLimit(t *testing.T) {
 		name, limit := name, limit
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), nil, nil, limit)
+			_, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), limit, nil, nil)
 			if !errors.Is(err, ErrProviderEgressDenied) {
 				t.Fatalf("newProviderEgressHTTPClient(%d) error = %v, want ErrProviderEgressDenied", limit, err)
 			}
@@ -960,7 +1179,7 @@ func TestProviderEgressHTTPClientRejectsUnsafeResponseLimit(t *testing.T) {
 }
 
 func TestNewProviderEgressHTTPClientUsesProductionPolicy(t *testing.T) {
-	client, err := NewProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint())
+	client, err := NewProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), config.DefaultProviderResponseBytes)
 	if err != nil {
 		t.Fatalf("NewProviderEgressHTTPClient() error = %v", err)
 	}
@@ -1007,11 +1226,6 @@ type egressTestConn struct {
 
 func (connection egressTestConn) RemoteAddr() net.Addr { return connection.remote }
 
-type trackingResponseBody struct {
-	io.Reader
-	closed bool
-}
-
 type fragmentedReader struct {
 	data    []byte
 	maximum int
@@ -1025,11 +1239,6 @@ func (reader *fragmentedReader) Read(buffer []byte) (int, error) {
 	read := copy(buffer[:maximum], reader.data[:maximum])
 	reader.data = reader.data[read:]
 	return read, nil
-}
-
-func (body *trackingResponseBody) Close() error {
-	body.closed = true
-	return nil
 }
 
 func newEgressTestConn(remote net.IP) net.Conn {

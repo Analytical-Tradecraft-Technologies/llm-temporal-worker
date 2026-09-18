@@ -15,3 +15,7 @@ by default and fails closed when its configured dependencies are unsupported.
 
 Start with the [documentation index](docs/index.md), then follow the
 [master implementation sequence](docs/superpowers/plans/2026-07-13-master-sequence.md).
+
+The worker is one part of the ATT forecasting system. Before treating a worker
+release as evidence that forecasting is operational, consult the dated
+[cross-repository working-status matrix](https://github.com/victoria-hft/victoria-hft/blob/master/docs/research/ai_ach/forecast-competition-status.md).

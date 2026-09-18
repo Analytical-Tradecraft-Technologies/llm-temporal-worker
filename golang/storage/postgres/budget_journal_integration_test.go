@@ -27,16 +27,13 @@ func TestBudgetJournalAppendReplayAndFinalize(t *testing.T) {
 	// bypassing the operation repository's encrypted request envelope.
 	operationKey := "budget-journal-integration-" + uuid.NewString()
 	configDigest := sha256.Sum256([]byte(operationKey))
-	started, err := repository.Begin(ctx, admission.BeginRequest{
-		ID:              operationKey,
-		ScopeKey:        "budget-journal/fixtures",
+	started, err := repository.Begin(ctx, admission.BeginRequest{ID: operationKey, OperationKey: operationKey, Actor: "postgres-test", ScopeKey: "budget-journal/fixtures",
 		RequestDigest:   admission.Digest([]byte(operationKey)),
 		ReservationUSD:  pricing.MustUSD("0"),
 		ConfigVersion:   operationKey,
 		ConfigDigest:    configDigest,
 		ExpiresAt:       time.Now().UTC().Add(time.Hour),
-		RequestManifest: []byte(`{"model":"fixture"}`),
-	})
+		RequestManifest: []byte(`{"model":"fixture"}`)})
 	if err != nil {
 		t.Fatalf("begin operation: %v", err)
 	}
@@ -128,11 +125,9 @@ func TestBudgetJournalResolveFinalizedUnknown(t *testing.T) {
 	operationKey := "budget-journal-resolve-unknown-" + uuid.NewString()
 	configDigest := sha256.Sum256([]byte(operationKey))
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	started, err := repository.Begin(ctx, admission.BeginRequest{
-		ID: operationKey, ScopeKey: "budget-journal/resolve", RequestDigest: admission.Digest([]byte(operationKey)),
+	started, err := repository.Begin(ctx, admission.BeginRequest{ID: operationKey, OperationKey: operationKey, Actor: "postgres-test", ScopeKey: "budget-journal/resolve", RequestDigest: admission.Digest([]byte(operationKey)),
 		ReservationUSD: pricing.MustUSD("0"), ConfigVersion: operationKey, ConfigDigest: configDigest,
-		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`),
-	})
+		ExpiresAt: now.Add(time.Hour), RequestManifest: []byte(`{"model":"fixture"}`)})
 	if err != nil || started.Existing {
 		t.Fatalf("begin operation = %#v, %v", started, err)
 	}

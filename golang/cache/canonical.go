@@ -11,8 +11,8 @@ import (
 
 const (
 	// CanonicalizerVersion is bumped whenever semantic normalization changes.
-	CanonicalizerVersion = "cache-canonical/v1"
-	SemanticProfile      = "semantic/v1"
+	CanonicalizerVersion = "cache-canonical/v2"
+	SemanticProfile      = "semantic/v2"
 	// MaxManifestBytes bounds the audit manifest and keeps it off the cache
 	// hot path. Callers should use immutable content digests for larger input.
 	MaxManifestBytes = 256 << 10
@@ -33,10 +33,11 @@ type Namespace struct {
 	Project string `json:"project,omitempty"`
 }
 
-// Input is the semantic portion of one cache request. Request fields that are
-// per-call controls (operation key, service class, fallback classes, actor,
-// and tags) are removed by canonicalization. Conversation and opaque provider
-// state are represented by immutable digests rather than raw content.
+// Input is the semantic portion of one cache request. Only operation identity,
+// actor, and observability tags are removed by canonicalization. Every frozen
+// model, tool, service, and cache-policy input remains part of the manifest.
+// Conversation and opaque provider state are represented by immutable digests
+// rather than raw content.
 type Input struct {
 	Operation          OperationKind
 	Namespace          Namespace
@@ -47,7 +48,7 @@ type Input struct {
 	Conversation       ConversationDigest
 	ProviderState      ProviderStateDigest
 	Request            llm.Request
-	Variant            int32
+	Policy             Policy
 }
 
 func (input Input) validate() error {
@@ -66,8 +67,23 @@ func (input Input) validate() error {
 	if err := input.Route.validate(); err != nil {
 		return err
 	}
-	if input.Variant < 0 || (input.Operation == OperationCompact && input.Variant != 0) {
-		return fmt.Errorf("cache variant is invalid")
+	tenant := input.Namespace.Tenant
+	project := input.Namespace.Project
+	if tenant == "" {
+		tenant = input.Request.Context.Tenant
+	}
+	if project == "" {
+		project = input.Request.Context.Project
+	}
+	if tenant == "" || project == "" {
+		return fmt.Errorf("cache namespace requires tenant and project")
+	}
+	effectiveTemperature := (*float64)(nil)
+	if input.Request.Sampling != nil {
+		effectiveTemperature = input.Request.Sampling.Temperature
+	}
+	if err := input.Policy.Validate(input.Operation, effectiveTemperature); err != nil {
+		return fmt.Errorf("cache policy: %w", err)
 	}
 	if input.Request.OperationKey == "" {
 		return fmt.Errorf("request operation key is required before canonicalization")
@@ -115,10 +131,14 @@ func (input Input) Canonical() ([]byte, error) {
 		}
 	}
 	delete(request, "operation_key")
-	delete(request, "service_class")
-	delete(request, "service_class_fallbacks")
+	// Service class and its fallback order are frozen provider policy. They
+	// remain in the manifest so a hit can never cross an admitted request tier.
 	delete(request, "continuation") // represented by conversation/provider-state digests
 	delete(request, "context")
+	maxAgeSeconds, err := input.Policy.MaxAgeSeconds()
+	if err != nil {
+		return nil, fmt.Errorf("cache policy: %w", err)
+	}
 	manifest := map[string]any{
 		"canonicalizer":         CanonicalizerVersion,
 		"semantic_profile":      SemanticProfile,
@@ -130,8 +150,11 @@ func (input Input) Canonical() ([]byte, error) {
 		"cache_epoch":           string(input.Epoch),
 		"conversation_digest":   string(input.Conversation),
 		"provider_state_digest": string(input.ProviderState),
-		"request":               request,
-		"variant":               input.Variant,
+		"cache_policy": map[string]any{
+			"max_age_seconds": maxAgeSeconds,
+			"variant":         input.Policy.Variant,
+		},
+		"request": request,
 	}
 	encoded, err := json.Marshal(manifest)
 	if err != nil {

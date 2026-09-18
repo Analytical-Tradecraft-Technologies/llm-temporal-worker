@@ -34,6 +34,14 @@ func (materializer *unknownCostMaterializer) Accept(context.Context, ReserveRequ
 	return ReserveResult{}, errors.New("not used by unknown-cost resolution")
 }
 
+func (materializer *unknownCostMaterializer) Confirm(context.Context, ReserveRequest) (ReserveResult, error) {
+	return ReserveResult{}, errors.New("not used by unknown-cost resolution")
+}
+
+func (*unknownCostMaterializer) FenceDispatch(context.Context, DispatchFenceRequest) error {
+	return errors.New("not used by unknown-cost resolution")
+}
+
 func (materializer *unknownCostMaterializer) Reconcile(context.Context, ReconcileRequest) error {
 	materializer.calls++
 	return materializer.err

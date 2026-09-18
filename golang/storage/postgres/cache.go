@@ -96,9 +96,15 @@ type CacheEntry struct {
 // entry. OperationID must already exist in the operation ledger so the
 // response_cache_uses foreign key binds the hit to durable operation state.
 type CacheLookupRequest struct {
-	Key         CacheKey
-	OperationID string
-	MaxAge      time.Duration
+	Key                    CacheKey
+	OperationID            string
+	MaxAge                 time.Duration
+	CanonicalRequestJSON   []byte
+	SemanticProfileVersion string
+	CacheEpoch             string
+	Provider               string
+	EndpointID             string
+	ResolvedModel          string
 }
 
 type CacheLookupResult struct {
@@ -231,6 +237,28 @@ func normalizeCacheManifest(raw []byte) ([]byte, error) {
 	return json.Marshal(value)
 }
 
+func validateFrozenCacheIdentity(canonical []byte, semanticProfile, epoch, provider, endpoint, model string) ([keyDigestBytes]byte, error) {
+	if len(canonical) == 0 {
+		return [keyDigestBytes]byte{}, errors.New("response cache canonical request is required")
+	}
+	manifest, err := normalizeCacheManifest(canonical)
+	if err != nil {
+		return [keyDigestBytes]byte{}, err
+	}
+	for name, value := range map[string]string{
+		"semantic profile": semanticProfile,
+		"epoch":            epoch,
+		"provider":         provider,
+		"endpoint":         endpoint,
+		"model":            model,
+	} {
+		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+			return [keyDigestBytes]byte{}, fmt.Errorf("response cache %s is invalid", name)
+		}
+	}
+	return sha256.Sum256(manifest), nil
+}
+
 type cacheEntryScanner interface {
 	Scan(...any) error
 }
@@ -314,6 +342,10 @@ func (repository ResponseCacheRepository) Lookup(ctx context.Context, request Ca
 	if err != nil {
 		return result, err
 	}
+	canonicalDigest, err := validateFrozenCacheIdentity(request.CanonicalRequestJSON, request.SemanticProfileVersion, request.CacheEpoch, request.Provider, request.EndpointID, request.ResolvedModel)
+	if err != nil {
+		return result, err
+	}
 	entries, uses, _, err := repository.relations()
 	if err != nil {
 		return result, err
@@ -324,9 +356,9 @@ func (repository ResponseCacheRepository) Lookup(ctx context.Context, request Ca
 			return redactPostgresError(fmt.Errorf("read PostgreSQL cache time: %w", err))
 		}
 		cutoff := now.Add(-request.MaxAge)
-		query := "SELECT " + cacheEntrySelect + " FROM " + entries + " WHERE scope_id=$1 AND fingerprint_version=$2 AND semantic_fingerprint_hmac=$3 AND variant=$4 AND cache_route_identity_hmac=$5 AND state='ready' AND completed_at >= $6"
+		query := "SELECT " + cacheEntrySelect + " FROM " + entries + " WHERE scope_id=$1 AND fingerprint_version=$2 AND semantic_fingerprint_hmac=$3 AND variant=$4 AND cache_route_identity_hmac=$5 AND canonical_request_digest=$6 AND semantic_profile_version=$7 AND cache_epoch=$8 AND origin_provider=$9 AND origin_endpoint_id=$10 AND origin_resolved_model=$11 AND state='ready' AND completed_at >= $12"
 		var entry CacheEntry
-		row := tx.QueryRow(ctx, query, request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:], cutoff)
+		row := tx.QueryRow(ctx, query, request.Key.ScopeID, request.Key.FingerprintVersion, request.Key.SemanticFingerprintHMAC[:], request.Key.Variant, request.Key.RouteIdentityHMAC[:], canonicalDigest[:], request.SemanticProfileVersion, request.CacheEpoch, request.Provider, request.EndpointID, request.ResolvedModel, cutoff)
 		if entry, err = scanCacheEntry(row); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil

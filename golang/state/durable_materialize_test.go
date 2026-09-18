@@ -3,8 +3,10 @@ package state
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -129,8 +131,8 @@ func TestDurableCheckpointMaterializerFailsClosedOnBlobFaultsAndCycles(t *testin
 	fixture := newDurableMaterializeFixture(t)
 	materializer := &DurableCheckpointMaterializer{Repository: fixture.repository, Blobs: fixture.reader, Now: func() time.Time { return fixture.now }}
 	fixture.reader.fail = errors.New("blob backend unavailable")
-	if _, err := materializer.Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{}); err == nil {
-		t.Fatal("materializer accepted a blob backend fault")
+	if _, err := materializer.Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{}); err == nil || errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("blob backend fault classification = %v, want retryable storage failure", err)
 	}
 	fixture.reader.fail = nil
 	fixture.repository.rows[fixture.childID] = func() DurableCheckpoint {
@@ -140,17 +142,137 @@ func TestDurableCheckpointMaterializerFailsClosedOnBlobFaultsAndCycles(t *testin
 		row.Depth = 1
 		return row
 	}()
-	if _, err := materializer.Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{}); err == nil {
-		t.Fatal("materializer accepted a self-parent cycle")
+	if _, err := materializer.Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{}); err == nil || !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("self-parent cycle classification = %v, want ErrInvalidCheckpoint", err)
 	}
 }
 
+func TestDurableCheckpointMaterializerStopsAtVerifiedPeriodicSnapshot(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	codec := CheckpointBlobCodec{}
+	reader := &durableMaterializeBlobReader{scope: "scope-a", values: make(map[BlobID][]byte)}
+	repository := &durableMaterializeRepository{scope: "scope-a", rows: make(map[CheckpointID]DurableCheckpoint)}
+	lineage := make([]Handle, 0, 256)
+	items := make([]llm.Item, 0, 256)
+	var parent *CheckpointID
+	for depth := int32(0); depth < 256; depth++ {
+		id := CheckpointID(fmt.Sprintf("checkpoint-%03d", depth))
+		lineage = append(lineage, Handle(id))
+		item := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: string(id)}}}
+		items = append(items, item)
+		patch := SettingsPatch{}
+		if depth == 0 {
+			patch.Model = SetPatch("gpt-test")
+		}
+		bundle, err := codec.EncodeBundle(CheckpointBundle{Delta: []llm.Item{item}, SettingsPatch: patch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bundleRef := durableMaterializePutBlob(reader, BlobID("bundle-"+string(id)), bundle)
+		lineageBytes, _ := json.Marshal(lineage)
+		frontier, err := ValidateTranscript(items)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frontierBytes, _ := json.Marshal(frontier)
+		settingsDigest, err := codec.DigestMaterializedSettings(RootModelState("gpt-test"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := DurableCheckpoint{
+			ID: id, ScopeID: "scope-a", PublicIDHMAC: sha256.Sum256([]byte(string(id) + "-public")),
+			HandleKeyID: "key-1", ParentID: parent, Kind: CheckpointGeneration, Depth: depth,
+			OriginOperationID: OperationID("operation-" + string(id)),
+			DeltaBlob:         bundleRef, ResponseBlob: bundleRef, SettingsPatchBlob: bundleRef,
+			CanonicalLineageDigest:     sha256.Sum256(lineageBytes),
+			MaterializedSettingsDigest: settingsDigest,
+			ToolFrontierDigest:         sha256.Sum256(frontierBytes),
+			SchemaVersion:              1, CompilerEpoch: "checkpoint-v1",
+			CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+		}
+		if depth == 240 {
+			snapshot := NewCheckpointSnapshot(MaterializedState{
+				Items: append([]llm.Item(nil), items...), Settings: RootModelState("gpt-test"),
+				Depth: depth, Lineage: append([]Handle(nil), lineage...),
+			})
+			encoded, err := codec.EncodeSnapshot(*snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref := durableMaterializePutBlob(reader, "snapshot-240", encoded)
+			row.MaterializedSnapshotBlob = &ref
+		}
+		repository.rows[id] = row
+		parentValue := id
+		parent = &parentValue
+	}
+	reader.delay = time.Millisecond
+	materializer := &DurableCheckpointMaterializer{
+		Repository: repository, Blobs: reader, Codec: codec, Now: func() time.Time { return now },
+	}
+	got, err := materializer.Materialize(context.Background(), "scope-a", "checkpoint-255", MaterializeLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Depth != 255 || len(got.Items) != 256 || len(got.Lineage) != 256 {
+		t.Fatalf("materialized periodic snapshot = depth %d, items %d, lineage %d", got.Depth, len(got.Items), len(got.Lineage))
+	}
+	if repository.lineageCalls != 1 || repository.getCalls != 0 {
+		t.Fatalf("repository reads = lineage %d, point %d; want one batched lineage read", repository.lineageCalls, repository.getCalls)
+	}
+	if reads := reader.reads.Load(); reads != 16 {
+		t.Fatalf("blob reads = %d, want one snapshot plus 15 suffix bundles", reads)
+	}
+	if peak := reader.peak.Load(); peak < 2 {
+		t.Fatalf("peak concurrent blob reads = %d, want bounded parallel fetch", peak)
+	}
+}
+
+func TestDurableCheckpointMaterializerFallsBackFromMismatchedSnapshot(t *testing.T) {
+	fixture := newDurableMaterializeFixture(t)
+	snapshot := NewCheckpointSnapshot(MaterializedState{
+		Items:    []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "wrong"}}}},
+		Settings: RootModelState("gpt-test"), Depth: 1, Lineage: []Handle{"wrong-root", Handle(fixture.childID)},
+	})
+	encoded, err := fixture.codec.EncodeSnapshot(*snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := durableMaterializePutBlob(fixture.reader, "mismatched-snapshot", encoded)
+	row := fixture.repository.rows[fixture.childID]
+	row.MaterializedSnapshotBlob = &ref
+	fixture.repository.rows[fixture.childID] = row
+	materializer := &DurableCheckpointMaterializer{
+		Repository: fixture.repository, Blobs: fixture.reader, Codec: fixture.codec,
+		Now: func() time.Time { return fixture.now },
+	}
+	got, err := materializer.Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 3 || got.Lineage[0] != Handle(fixture.rootID) {
+		t.Fatalf("fallback materialized state = %#v", got)
+	}
+	if fixture.repository.getCalls != 1 {
+		t.Fatalf("snapshot fallback point reads = %d, want parent fallback", fixture.repository.getCalls)
+	}
+}
+
+func durableMaterializePutBlob(reader *durableMaterializeBlobReader, id BlobID, value []byte) CheckpointBlobReference {
+	digest := sha256.Sum256(value)
+	reader.values[id] = append([]byte(nil), value...)
+	return CheckpointBlobReference{ID: id, Digest: digest, ByteLength: int64(len(value)), MediaType: "application/json"}
+}
+
 type durableMaterializeRepository struct {
-	scope string
-	rows  map[CheckpointID]DurableCheckpoint
+	scope        string
+	rows         map[CheckpointID]DurableCheckpoint
+	getCalls     int
+	lineageCalls int
 }
 
 func (repository *durableMaterializeRepository) Get(_ context.Context, scope string, id CheckpointID) (DurableCheckpoint, error) {
+	repository.getCalls++
 	if scope != repository.scope {
 		return DurableCheckpoint{}, ErrTenantMismatch
 	}
@@ -160,15 +282,39 @@ func (repository *durableMaterializeRepository) Get(_ context.Context, scope str
 	}
 	return row, nil
 }
+func (repository *durableMaterializeRepository) GetLineage(_ context.Context, scope string, id CheckpointID, maxRows int) ([]DurableCheckpoint, error) {
+	repository.lineageCalls++
+	if scope != repository.scope {
+		return nil, ErrTenantMismatch
+	}
+	rows := make([]DurableCheckpoint, 0, min(maxRows, 16))
+	current := id
+	for current != "" && len(rows) < maxRows {
+		row, ok := repository.rows[current]
+		if !ok {
+			return nil, ErrNotFound
+		}
+		rows = append(rows, row)
+		if row.MaterializedSnapshotBlob != nil || row.ParentID == nil {
+			break
+		}
+		current = *row.ParentID
+	}
+	return rows, nil
+}
 
 func (repository *durableMaterializeRepository) BeginCheckpoint(context.Context) (CheckpointUnitOfWork, error) {
 	return nil, errors.New("not implemented in materializer test")
 }
 
 type durableMaterializeBlobReader struct {
-	scope  string
-	values map[BlobID][]byte
-	fail   error
+	scope      string
+	values     map[BlobID][]byte
+	fail       error
+	delay      time.Duration
+	reads      atomic.Int64
+	concurrent atomic.Int64
+	peak       atomic.Int64
 }
 
 type staticCheckpointHandleVerifier struct{ id CheckpointID }
@@ -181,6 +327,24 @@ func (verifier staticCheckpointHandleVerifier) VerifyCheckpointHandle(_ context.
 }
 
 func (reader *durableMaterializeBlobReader) Read(ctx context.Context, scope string, reference CheckpointBlobReference) ([]byte, error) {
+	reader.reads.Add(1)
+	current := reader.concurrent.Add(1)
+	defer reader.concurrent.Add(-1)
+	for {
+		peak := reader.peak.Load()
+		if current <= peak || reader.peak.CompareAndSwap(peak, current) {
+			break
+		}
+	}
+	if reader.delay > 0 {
+		timer := time.NewTimer(reader.delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

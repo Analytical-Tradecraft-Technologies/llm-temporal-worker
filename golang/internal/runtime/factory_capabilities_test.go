@@ -83,6 +83,31 @@ func TestEndpointCapabilitiesAcceptsEquivalentFeatureMaps(t *testing.T) {
 	}
 }
 
+func TestEndpointCapabilitiesUsesCompleteProviderProfile(t *testing.T) {
+	snapshot := engine.Snapshot{EndpointCapabilities: map[string]provider.CapabilitySet{
+		"openai": {
+			Version: "openai/v1",
+			Features: map[provider.Feature]provider.Capability{
+				provider.FeatureText:  {State: provider.CapabilityNative},
+				provider.FeatureUsage: {State: provider.CapabilityNative},
+			},
+		},
+	}}
+	got, err := endpointCapabilities(snapshot, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Features[provider.FeatureUsage].State != provider.CapabilityNative {
+		t.Fatalf("usage capability = %#v", got.Features[provider.FeatureUsage])
+	}
+	if got.Features[provider.FeatureImage].State != provider.CapabilityUnknown {
+		t.Fatalf("undeclared image capability = %#v", got.Features[provider.FeatureImage])
+	}
+	if _, err := endpointCapabilities(snapshot, "missing"); err == nil {
+		t.Fatal("missing endpoint provider profile was accepted")
+	}
+}
+
 func capabilityConflictSnapshot(left, right provider.Capability) engine.Snapshot {
 	return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model-a": {Routes: []routing.Route{{EndpointID: "bedrock", Capabilities: routing.CapabilitySet{Version: "bedrock/v1", Features: map[routing.Feature]routing.Capability{routing.FeatureText: routing.Capability{State: routing.CapabilityState(left.State), Transform: left.Transform, Reason: left.Reason}}}}}},

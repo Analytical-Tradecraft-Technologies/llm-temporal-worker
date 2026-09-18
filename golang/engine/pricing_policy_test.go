@@ -250,11 +250,7 @@ func requireNoOperation(t *testing.T, harness testHarness, request llm.Request) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationID, _ := operationIdentity(normalized, digest)
+	operationID, _ := operationIdentity(normalized)
 	if _, err := harness.admission.Get(context.Background(), operationID); !errors.Is(err, admission.ErrOperationNotFound) {
 		t.Fatalf("admission Get(%q) error = %v, want ErrOperationNotFound", operationID, err)
 	}

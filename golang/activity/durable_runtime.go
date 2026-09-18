@@ -14,6 +14,13 @@ import (
 // cannot accidentally perform inference while serving a control query.
 type QueryV1Func func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
 
+type ReserveBatchV1Func func(context.Context, llm.ReserveBatchRequestV1) (llm.ReserveBatchResponseV1, error)
+type AllocateBatchGrantsV1Func func(context.Context, llm.AllocateBatchGrantsRequestV1) (llm.AllocateBatchGrantsResponseV1, error)
+type CloseBatchV1Func func(context.Context, llm.CloseBatchRequestV1) (llm.CloseBatchResponseV1, error)
+type AcquireResourceCapacityV1Func func(context.Context, llm.ResourceCapacityAcquireRequestV1) (llm.ResourceCapacityLeaseV1, error)
+type RenewResourceCapacityV1Func func(context.Context, llm.ResourceCapacityRenewRequestV1) (llm.ResourceCapacityLeaseV1, error)
+type ReleaseResourceCapacityV1Func func(context.Context, llm.ResourceCapacityReleaseRequestV1) (llm.ResourceCapacityReleaseResponseV1, error)
+
 // DurableV1Runtime adapts the storage-neutral durable phase runners to the
 // Activity boundary. It owns no clients and performs no composition itself;
 // callers must supply all snapshot-scoped ports and a separately authorized
@@ -24,12 +31,22 @@ type QueryV1Func func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1,
 // runner's invalid-port error, while Query returns a configuration error when
 // no query callback is supplied.
 type DurableV1Runtime struct {
-	Generate durable.GeneratePorts
-	Compact  durable.CompactPorts
-	Query    QueryV1Func
+	Generate                durable.GeneratePorts
+	Compact                 durable.CompactPorts
+	Query                   QueryV1Func
+	ReserveBatch            ReserveBatchV1Func
+	AllocateBatchGrants     AllocateBatchGrantsV1Func
+	CloseBatch              CloseBatchV1Func
+	AcquireResourceCapacity AcquireResourceCapacityV1Func
+	RenewResourceCapacity   RenewResourceCapacityV1Func
+	ReleaseResourceCapacity ReleaseResourceCapacityV1Func
 }
 
 var _ V1Runtime = (*DurableV1Runtime)(nil)
+var _ ReserveBatchV1Runtime = (*DurableV1Runtime)(nil)
+var _ AllocateBatchGrantsV1Runtime = (*DurableV1Runtime)(nil)
+var _ CloseBatchV1Runtime = (*DurableV1Runtime)(nil)
+var _ ResourceCapacityV1Runtime = (*DurableV1Runtime)(nil)
 
 // GenerateOnlyV1Runtime adapts the storage-neutral Generate phase runner to
 // the Activity boundary while keeping Compact and Query explicitly
@@ -168,6 +185,48 @@ func (runtime *DurableV1Runtime) CompactV1(ctx context.Context, request llm.Comp
 		return llm.CompactResponseV1{}, durable.ErrV1PortsInvalid
 	}
 	return durable.CompactV1(ctx, request, runtime.Compact)
+}
+
+func (runtime *DurableV1Runtime) ReserveBatchV1(ctx context.Context, request llm.ReserveBatchRequestV1) (llm.ReserveBatchResponseV1, error) {
+	if runtime == nil || runtime.ReserveBatch == nil {
+		return llm.ReserveBatchResponseV1{}, provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "v1 reserve batch runtime is not configured")
+	}
+	return runtime.ReserveBatch(ctx, request)
+}
+
+func (runtime *DurableV1Runtime) AllocateBatchGrantsV1(ctx context.Context, request llm.AllocateBatchGrantsRequestV1) (llm.AllocateBatchGrantsResponseV1, error) {
+	if runtime == nil || runtime.AllocateBatchGrants == nil {
+		return llm.AllocateBatchGrantsResponseV1{}, provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "v1 allocate batch grants runtime is not configured")
+	}
+	return runtime.AllocateBatchGrants(ctx, request)
+}
+
+func (runtime *DurableV1Runtime) CloseBatchV1(ctx context.Context, request llm.CloseBatchRequestV1) (llm.CloseBatchResponseV1, error) {
+	if runtime == nil || runtime.CloseBatch == nil {
+		return llm.CloseBatchResponseV1{}, provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "v1 close batch runtime is not configured")
+	}
+	return runtime.CloseBatch(ctx, request)
+}
+
+func (runtime *DurableV1Runtime) AcquireResourceCapacityV1(ctx context.Context, request llm.ResourceCapacityAcquireRequestV1) (llm.ResourceCapacityLeaseV1, error) {
+	if runtime == nil || runtime.AcquireResourceCapacity == nil {
+		return llm.ResourceCapacityLeaseV1{}, provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "resource capacity runtime is not configured")
+	}
+	return runtime.AcquireResourceCapacity(ctx, request)
+}
+
+func (runtime *DurableV1Runtime) RenewResourceCapacityV1(ctx context.Context, request llm.ResourceCapacityRenewRequestV1) (llm.ResourceCapacityLeaseV1, error) {
+	if runtime == nil || runtime.RenewResourceCapacity == nil {
+		return llm.ResourceCapacityLeaseV1{}, provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "resource capacity runtime is not configured")
+	}
+	return runtime.RenewResourceCapacity(ctx, request)
+}
+
+func (runtime *DurableV1Runtime) ReleaseResourceCapacityV1(ctx context.Context, request llm.ResourceCapacityReleaseRequestV1) (llm.ResourceCapacityReleaseResponseV1, error) {
+	if runtime == nil || runtime.ReleaseResourceCapacity == nil {
+		return llm.ResourceCapacityReleaseResponseV1{}, provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "resource capacity runtime is not configured")
+	}
+	return runtime.ReleaseResourceCapacity(ctx, request)
 }
 
 func (runtime *DurableV1Runtime) QueryV1(ctx context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {

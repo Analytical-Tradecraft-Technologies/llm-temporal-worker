@@ -20,6 +20,10 @@ The effective non-secret configuration is canonicalized and hashed as
 
 This example shows the v1 fields. Names and model identifiers are illustrative;
 they are not claims that a particular deployment currently supports a feature.
+The resource-capacity artifact identifiers and hashes are illustrative too:
+replace them with the signed operator-owned manifest and trust-root identities
+before startup. Production verifies those files; passing the strict loader does
+not authenticate example artifacts.
 
 ```yaml
 version: llm-temporal-worker/v1
@@ -35,26 +39,90 @@ server:
   inline_payload_bytes: 524288
 
 temporal:
-  target: temporal.example.internal:7233
-  namespace: production
+  target: temporal-frontend.temporal.svc.cluster.local:7233
+  namespace: ai-ach
   task_queue: llm-inference
   identity_prefix: llmtw
   tls:
     enabled: true
-    server_name: temporal.example.internal
+    server_name: temporal-frontend.temporal.svc.cluster.local
     ca_file: /var/run/ca/temporal.pem
+  api_key_file: /var/run/secrets/llmtw/temporal-jwt
   worker:
-    max_concurrent_activities: 64
+    max_concurrent_activities: 96
     max_concurrent_activity_task_polls: 8
     graceful_stop_timeout: 30s
     heartbeat_keepalive_interval: 1s
+
+resource_capacity:
+  manifest_file: /var/run/provenance/resource-capacity.json
+  trust_root_file: /var/run/provenance/release-trust-root.json
+  trust_root_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  manifest_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  artifact_id: llm-resource-capacity-2026-08-10
+  artifact_locator: s3://forecast-artifacts/competition/resource-capacity.json
+  generation_id: forecast-capacity-2026-08-10
+  limits:
+    llm_global_max_inflight: 64
+    llm_global_max_requests_per_window: 600
+    llm_global_window_seconds: 60
+    provider_max_inflight:
+      - {route_id: anthropic-aws-secondary, max_inflight: 16, max_requests_per_window: 100, window_seconds: 60}
+      - {route_id: anthropic-secondary, max_inflight: 16, max_requests_per_window: 100, window_seconds: 60}
+      - {route_id: azure-secondary, max_inflight: 16, max_requests_per_window: 100, window_seconds: 60}
+      - {route_id: bedrock-economy, max_inflight: 16, max_requests_per_window: 100, window_seconds: 60}
+      - {route_id: openai-primary, max_inflight: 16, max_requests_per_window: 100, window_seconds: 60}
+    search_fetch_max_inflight: 64
+    python_stage2_max_inflight: 6
+    forecast_event_max_inflight: 2
+    forecast_event_admission_wait_seconds: 5
+    provider_call_execution_overhead_seconds: 30
+    provider_call_queue_seconds: 30
+    provider_call_maximum_attempts: 1
+    stage_two_execution_overhead_seconds: 30
+    stage_two_queue_seconds: 30
+    stage_two_semaphore_wait_seconds: 30
+    stage_two_maximum_attempts: 2
+    close_execution_overhead_seconds: 30
+    close_queue_seconds: 30
+    close_maximum_attempts: 2
+    evidence_collection_execution_overhead_seconds: 30
+    evidence_collection_queue_seconds: 30
+    evidence_collection_maximum_attempts: 1
+    panel_prepare_max_inflight: 8
+    panel_llm_max_inflight: 8
+    inference_artifactize_execution_seconds: 5
+    inference_artifactize_queue_seconds: 5
+    inference_artifactize_maximum_attempts: 2
+    prepare_assessment_execution_seconds: 5
+    prepare_assessment_queue_seconds: 5
+    prepare_assessment_maximum_attempts: 2
+    build_analysis_panel_execution_seconds: 10
+    build_analysis_panel_queue_seconds: 5
+    build_analysis_panel_maximum_attempts: 2
+    assemble_evidence_assessment_execution_seconds: 10
+    assemble_evidence_assessment_queue_seconds: 5
+    assemble_evidence_assessment_maximum_attempts: 2
+    load_analytic_context_execution_seconds: 10
+    load_analytic_context_queue_seconds: 5
+    load_analytic_context_maximum_attempts: 2
+    checkpoint_analysis_frontier_execution_seconds: 10
+    checkpoint_analysis_frontier_queue_seconds: 5
+    checkpoint_analysis_frontier_maximum_attempts: 2
+    load_analysis_frontier_execution_seconds: 10
+    load_analysis_frontier_queue_seconds: 5
+    load_analysis_frontier_maximum_attempts: 2
+    caller_owned_evidence_ingest_execution_seconds: 5
+    caller_owned_evidence_ingest_queue_seconds: 5
+    caller_owned_evidence_ingest_maximum_attempts: 2
+    panel_prepare_activity_max_bytes: 1310720
 
 state:
   kind: durable
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
-  reservation_lease: 2m
+  reservation_lease: 20m
   redis:
     addresses: [redis.example.internal:6379]
     key_prefix: llmtw
@@ -72,7 +140,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: 07d910df370ca9522400b8ae15a7bda7e76b1c1badcb7e35cb71e2f6ddaecaf2
+    admission_digest: c7ab5a848a1f1567d42e9a41c8493836ff16b70efa01e3bb7a3acb06f2cd7e17
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -90,6 +158,18 @@ state:
     password:
       kind: file
       path: /var/run/secrets/llmtw-postgres-password
+    envelope_keys:
+      - id: envelope-v1
+        primary: true
+        secret:
+          kind: file
+          path: /var/run/secrets/postgres-envelope-key
+    scope_keys:
+      - id: scope-v1
+        primary: true
+        secret:
+          kind: file
+          path: /var/run/secrets/postgres-scope-key
     tls:
       enabled: true
       server_name: postgres.example.internal
@@ -108,6 +188,7 @@ blob_store:
     bucket: acme-llmtw-production
     region: ap-southeast-2
     prefix: v1
+    kms_key_id: arn:aws:kms:ap-southeast-2:123456789012:key/00000000-0000-0000-0000-000000000000
     auth:
       kind: aws_default_chain
 
@@ -121,7 +202,7 @@ limits:
   continuation_depth: 256
   route_attempts: 6
   provider_timeout: 120s
-  provider_response_bytes: 16777216
+  provider_response_bytes: 524288
   max_output_tokens: 32768
   max_budget_buckets_per_window: 2048
   token_estimate_safety_ratio: "1.35"
@@ -199,8 +280,8 @@ endpoints:
     base_url: https://openrouter.ai/api/v1
     outbound_hosts: [openrouter.ai]
     auth:
-      kind: bearer_env
-      name: OPENROUTER_API_KEY
+      kind: bearer_file
+      path: /var/run/secrets/providers/openrouter-api-key
     account_region: global
     timeout: 115s
     service_classes:
@@ -383,6 +464,14 @@ telemetry:
     sample_ratio: "0.05"
   content_logging: disabled
 ```
+
+`temporal.api_key_file` contains the raw signed JWT sent as Temporal gRPC
+`authorization: Bearer <token>` metadata. Production requires TLS plus this
+file; an API key, plaintext endpoint, empty token, unreadable file, oversized
+token, or token containing control characters is rejected before the SDK
+client is created. The file is re-read for every RPC so a projected Secret can
+rotate the token without restarting the worker. The token itself is never
+included in config hashes, diagnostics, or logs.
 
 `temporal.worker.heartbeat_keepalive_interval` controls the fixed, redacted
 heartbeat emitted while a one-shot provider call is in flight. It defaults to
@@ -629,14 +718,14 @@ provider response.
 
 `limits.provider_response_bytes` bounds every HTTP response body shared by all
 provider SDKs, including successful JSON, provider error bodies, and streaming
-protocols such as SSE. It defaults to 16 MiB and cannot exceed the 64 MiB hard
-safety cap. A declared `Content-Length` above the configured limit is rejected
-before parsing and the body is closed. Unknown-length, chunked, or incorrectly
-declared bodies are read through a counting wrapper: bytes through the limit
-remain available incrementally, and the next byte returns a content-free
-oversize classification. Configure enough space for the largest legitimate
-single provider response; the limit is cumulative per HTTP response, not per
-stream event.
+protocols such as SSE. It defaults to 512 KiB, cannot exceed
+`server.inline_payload_bytes`, and retains a 64 MiB absolute safety cap. A
+declared `Content-Length` above the configured limit is rejected before parsing
+and the body is closed. Unknown-length, chunked, incorrectly declared, and gzip
+responses are read through counting wrappers that bound both compressed and
+decoded bytes: bytes through the limit remain available incrementally, and the
+next byte returns a content-free oversize classification. The limit is
+cumulative per HTTP response, not per stream event.
 
 ## Readiness and Redis budget policy
 
@@ -674,9 +763,12 @@ database remains valid.
 `state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned
 Function library and set `function_library`, `admission_version`, and
-`admission_digest` to its immutable identity. The running worker only verifies
-and calls that Function; it never loads, replaces, or rewrites shared Redis
-code. `admission_mode: lua` is an explicit compatibility fallback: its
+`admission_digest` to its immutable identity. In Function mode the digest is the
+SHA-256 of `AdmissionFunctionSource()`: the library shebang, function registration,
+embedded Lua body, and wrapper terminator. It is not the raw
+`storage/redis/functions/admission.lua` file digest. The running worker only
+verifies and calls that Function; it never loads, replaces, or rewrites shared
+Redis code. `admission_mode: lua` is an explicit compatibility fallback: its
 `admission_digest` must be the SHA-256 of the preloaded Lua source, and
 readiness requires Redis `SCRIPT EXISTS` for that source. The worker never
 falls back from a missing Lua script to `EVAL` or `SCRIPT LOAD`.

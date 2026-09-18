@@ -311,6 +311,14 @@ type CheckpointRepository interface {
 	BeginCheckpoint(context.Context) (CheckpointUnitOfWork, error)
 }
 
+// CheckpointLineageRepository is an optional read-optimized extension. It
+// returns leaf-to-root scoped metadata in one bounded call and may stop after
+// the nearest snapshot-bearing row. Materializers always retain Get fallback
+// so an invalid snapshot cannot hide authoritative ancestors.
+type CheckpointLineageRepository interface {
+	GetLineage(context.Context, string, CheckpointID, int) ([]DurableCheckpoint, error)
+}
+
 // CheckpointMaterializer resolves a checkpoint graph through a repository.
 // It returns the same state.MaterializedState contract as CheckpointGraph;
 // materialization is intentionally not wired into Generate or Compact here.

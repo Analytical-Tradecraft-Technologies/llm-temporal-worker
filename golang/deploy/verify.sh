@@ -10,12 +10,13 @@ fail() {
   exit 1
 }
 
-# The Dockerfile deliberately follows the current contents of its stable base
-# image tags. Kubernetes publication remains digest-pinned below; this check
-# only guards the boundary so a Dockerfile digest cannot silently reappear.
-if grep -Fq '@sha256:' "$root/Dockerfile"; then
-  fail 'Dockerfile builder/runtime images must use mutable stable tags'
-fi
+# Build and runtime base images are reviewed immutable inputs. The build stage
+# is indirect through GO_IMAGE, so verify both that argument and the concrete
+# runtime stage instead of accepting a digest elsewhere in the Dockerfile.
+grep -Eq '^ARG GO_IMAGE=[^[:space:]]+@sha256:[0-9a-f]{64}$' "$root/Dockerfile" ||
+  fail 'Dockerfile builder image must be digest pinned'
+grep -Eq '^FROM [^[:space:]]+@sha256:[0-9a-f]{64}$' "$root/Dockerfile" ||
+  fail 'Dockerfile runtime image must be digest pinned'
 grep -Fq '@sha256:' "$root/deploy/kubernetes/base/deployment.yaml" || fail 'Kubernetes worker image must be digest pinned'
 grep -Fq 'CGO_ENABLED=0' "$root/Dockerfile" || fail 'worker image must be statically built'
 grep -Fq 'USER 65532:65532' "$root/Dockerfile" || fail 'worker image must use uid 65532'

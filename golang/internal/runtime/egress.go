@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"io"
@@ -52,6 +53,20 @@ type providerEgressRoundTripper struct {
 	policy           *providerEgressPolicy
 	next             http.RoundTripper
 	maxResponseBytes int64
+}
+
+type boundedProviderResponseBody struct {
+	body      io.ReadCloser
+	remaining int64
+	overflow  error
+	closeErr  error
+	closed    bool
+	probe     [1]byte
+}
+
+type providerGzipResponseBody struct {
+	*gzip.Reader
+	compressed io.Closer
 }
 
 type providerEgressCallStateKey struct{}
@@ -201,16 +216,15 @@ func preDispatchProviderFailure(classification string) error {
 	return providerPreDispatchError{classification: classification}
 }
 
-// NewProviderEgressHTTPClient applies the production provider egress policy
-// using the default DNS resolver and dialer. Callers that need deterministic
-// seams for tests use the private constructor below through the runtime
-// factory; all other clients get the same host, address, redirect, and timeout
-// protections as configured production endpoints.
-func NewProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig) (*http.Client, error) {
-	return newProviderEgressHTTPClient(base, endpoint, nil, nil, config.DefaultProviderResponseBytes)
+// newGuardedProviderEgressHTTPClient applies the production provider egress
+// policy using the default DNS resolver and dialer. The public constructor and
+// the normal worker build both use this path; the joined-smoke build has a
+// separately tagged, exact-endpoint fixture transport.
+func NewProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig, maxResponseBytes int) (*http.Client, error) {
+	return newGuardedProviderEgressHTTPClient(base, endpoint, maxResponseBytes, nil, nil)
 }
 
-func newProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig, resolver ProviderEgressResolver, dial ProviderEgressDialContext, maxResponseBytes int64) (*http.Client, error) {
+func newGuardedProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConfig, maxResponseBytes int, resolver ProviderEgressResolver, dial ProviderEgressDialContext) (*http.Client, error) {
 	if maxResponseBytes <= 0 || maxResponseBytes > config.MaxProviderResponseBytes {
 		return nil, deniedProviderEgress("invalid_policy")
 	}
@@ -230,9 +244,10 @@ func newProviderEgressHTTPClient(base *http.Client, endpoint config.EndpointConf
 	transport.TLSHandshakeTimeout = boundedProviderConnectTimeout(timeout)
 	transport.ResponseHeaderTimeout = timeout
 	transport.ExpectContinueTimeout = minDuration(time.Second, boundedProviderConnectTimeout(timeout))
+	transport.DisableCompression = true
 
 	return &http.Client{
-		Transport: &providerEgressRoundTripper{policy: policy, next: transport, maxResponseBytes: maxResponseBytes},
+		Transport: &providerEgressRoundTripper{policy: policy, next: transport, maxResponseBytes: int64(maxResponseBytes)},
 		// This bounds the complete response read. ResponseHeaderTimeout and the
 		// bounded dial/TLS timeouts cover the earlier phases separately.
 		Timeout: timeout,
@@ -361,15 +376,6 @@ func (guard *providerEgressRoundTripper) RoundTrip(request *http.Request) (*http
 		return nil, err
 	}
 	response, err := guard.next.RoundTrip(guardedRequest)
-	if response != nil && response.ContentLength > guard.responseByteLimit() {
-		if response.Body != nil {
-			_ = response.Body.Close()
-		}
-		return nil, provider.ErrProviderResponseTooLarge
-	}
-	if response != nil && response.Body != nil && response.Body != http.NoBody {
-		response.Body = &providerResponseBody{body: response.Body, remaining: guard.responseByteLimit()}
-	}
 	if response == nil {
 		if state.writableConnectionWasAcquired() {
 			if errors.Is(err, ErrProviderEgressDenied) || errors.Is(err, provider.ErrProviderPreDispatch) {
@@ -388,54 +394,109 @@ func (guard *providerEgressRoundTripper) RoundTrip(request *http.Request) (*http
 			}
 		}
 	}
+	if err == nil && response != nil {
+		response, err = boundProviderResponse(response, guard.maxResponseBytes)
+	}
 	return response, err
 }
 
-func (guard *providerEgressRoundTripper) responseByteLimit() int64 {
-	if guard != nil && guard.maxResponseBytes > 0 {
-		return guard.maxResponseBytes
+func boundProviderResponse(response *http.Response, maxResponseBytes int64) (*http.Response, error) {
+	if response == nil {
+		return nil, nil
 	}
-	return config.DefaultProviderResponseBytes
+	if maxResponseBytes <= 0 {
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return nil, errors.New("provider response byte limit must be positive")
+	}
+	if response.ContentLength > maxResponseBytes {
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return nil, provider.NewProviderResponseTooLargeError(provider.ErrProviderResponseTooLarge)
+	}
+	if response.Body == nil {
+		response.Body = http.NoBody
+	}
+	body := response.Body
+	if strings.EqualFold(strings.TrimSpace(response.Header.Get("Content-Encoding")), "gzip") {
+		compressed := &boundedProviderResponseBody{body: body, remaining: maxResponseBytes}
+		decoded, err := gzip.NewReader(compressed)
+		if err != nil {
+			_ = compressed.Close()
+			if errors.Is(err, provider.ErrProviderResponseTooLarge) {
+				return nil, provider.NewProviderResponseTooLargeError(err)
+			}
+			mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider response compression is invalid")
+			mapped.Cause = errors.New("invalid provider response compression")
+			return nil, mapped
+		}
+		body = &providerGzipResponseBody{Reader: decoded, compressed: compressed}
+		response.Header.Del("Content-Encoding")
+		response.Header.Del("Content-Length")
+		response.ContentLength = -1
+		response.Uncompressed = true
+	}
+	response.Body = &boundedProviderResponseBody{body: body, remaining: maxResponseBytes}
+	return response, nil
 }
 
-// providerResponseBody never exposes more than the configured bytes. Once the
-// caller consumes that allowance it probes exactly one additional byte to
-// distinguish an exact-bound response from an oversized response. Close is
-// delegated unchanged so SDK streaming and connection cleanup retain their
-// normal lifecycle.
-type providerResponseBody struct {
-	body      io.ReadCloser
-	remaining int64
-}
-
-func (body *providerResponseBody) Read(buffer []byte) (int, error) {
+// Read never places more than the configured ceiling in the caller's buffer.
+// Once the ceiling is exhausted it probes one byte privately, distinguishing an
+// exact-length response from overflow without letting an SDK accumulate the
+// overflow byte.
+func (body *boundedProviderResponseBody) Read(destination []byte) (int, error) {
 	if body == nil || body.body == nil {
 		return 0, io.EOF
 	}
-	if len(buffer) == 0 {
+	if body.overflow != nil {
+		return 0, body.overflow
+	}
+	if len(destination) == 0 {
 		return 0, nil
 	}
 	if body.remaining > 0 {
-		if int64(len(buffer)) > body.remaining {
-			buffer = buffer[:body.remaining]
+		if int64(len(destination)) > body.remaining {
+			destination = destination[:body.remaining]
 		}
-		read, err := body.body.Read(buffer)
+		read, err := body.body.Read(destination)
 		body.remaining -= int64(read)
 		return read, err
 	}
-	var probe [1]byte
-	read, err := body.body.Read(probe[:])
+	read, err := body.body.Read(body.probe[:])
 	if read > 0 {
-		return 0, provider.ErrProviderResponseTooLarge
+		body.overflow = provider.NewProviderResponseTooLargeError(provider.ErrProviderResponseTooLarge)
+		_ = body.Close()
+		return 0, body.overflow
 	}
 	return 0, err
 }
 
-func (body *providerResponseBody) Close() error {
-	if body == nil || body.body == nil {
+func (body *boundedProviderResponseBody) Close() error {
+	if body == nil || body.body == nil || body.closed {
+		if body == nil {
+			return nil
+		}
+		return body.closeErr
+	}
+	body.closed = true
+	body.closeErr = body.body.Close()
+	return body.closeErr
+}
+
+func (body *providerGzipResponseBody) Close() error {
+	if body == nil {
 		return nil
 	}
-	return body.body.Close()
+	var decodedErr error
+	if body.Reader != nil {
+		decodedErr = body.Reader.Close()
+	}
+	if body.compressed == nil {
+		return decodedErr
+	}
+	return errors.Join(decodedErr, body.compressed.Close())
 }
 
 func recordProviderEgressDenied(request *http.Request, err error) {

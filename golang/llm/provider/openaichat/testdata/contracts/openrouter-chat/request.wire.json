@@ -2,6 +2,7 @@
   "messages": [{"content": [{"text": "fixture openrouter chat", "type": "text"}], "role": "user"}],
   "model": "router-model",
   "parallel_tool_calls": false,
-  "provider": {"allow_fallbacks": false, "order": ["fixture-provider"], "require_parameters": true},
-  "service_tier": "standard"
+  "provider": {"allow_fallbacks": false, "data_collection": "deny", "order": ["fixture-provider"], "require_parameters": true},
+  "service_tier": "standard",
+  "store": false
 }

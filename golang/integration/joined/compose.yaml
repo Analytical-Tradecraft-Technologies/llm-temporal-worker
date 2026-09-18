@@ -1,0 +1,322 @@
+services:
+  redis:
+    environment:
+      REDIS_KEY_PREFIX: joined_smoke
+
+  joined-smoke:
+    build:
+      context: ${VICTORIA_ROOT:?set VICTORIA_ROOT to victoria-hft repository root}
+      dockerfile: research/ai_ach/competition/smoke/Dockerfile
+    environment:
+      SMOKE_TLS_CERT_FILE: /run/smoke/server.pem
+      SMOKE_TLS_KEY_FILE: /run/smoke/server-key.pem
+      SMOKE_TLS_CA_FILE: /run/smoke/ca.pem
+      SMOKE_TEMPORAL_API_KEY_FILE: /run/secrets/temporal-api-key
+      SMOKE_TEMPORAL_UPSTREAM: temporal:7233
+      SMOKE_KMS_KEY_ARN: arn:aws:kms:us-east-1:000000000000:key/00000000-0000-4000-8000-000000000001
+      SMOKE_CONTEXT_FIXTURE: /fixtures/context.json
+      SMOKE_HYPOTHESES_FIXTURE: /fixtures/hypotheses.json
+    volumes:
+      - type: bind
+        source: ./.local/joined-smoke
+        target: /run/smoke
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ./.local/joined-secrets
+        target: /run/secrets
+        read_only: true
+        bind:
+          selinux: z
+    depends_on:
+      temporal: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-qO-", "https://127.0.0.1/readiness"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  schema-install:
+    build:
+      context: .
+      dockerfile: integration/joined/Dockerfile.schema
+    environment:
+      DATABASE_URL: postgres://llmtw_worker:${LLMTW_WORKER_POSTGRES_PASSWORD:-joined-smoke-postgres}@worker-postgres:5432/llmtw_worker?sslmode=disable
+    depends_on:
+      worker-postgres: {condition: service_healthy}
+
+  budget-bootstrap:
+    build:
+      context: .
+      dockerfile: integration/joined/Dockerfile.schema
+    entrypoint: ["/budget-bootstrap"]
+    environment:
+      REDIS_ADDRESS: redis:6379
+      REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
+      REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
+      BUDGET_CONFIG_FILE: /etc/llmtw/config.yaml
+      DATABASE_URL: postgres://llmtw_worker:${LLMTW_WORKER_POSTGRES_PASSWORD:-joined-smoke-postgres}@worker-postgres:5432/llmtw_worker?sslmode=disable
+      WORKER_POSTGRES_SCOPE_KEY: joined-smoke-scope-key-000000001
+      PRICING_IDENTITY_FILE: /run/smoke/pricing-identity.json
+    depends_on:
+      redis-function-provisioner: {condition: service_completed_successfully}
+      schema-install: {condition: service_completed_successfully}
+    volumes:
+      - type: bind
+        source: ${LLMTW_COMPOSE_WORKER_CONFIG_FILE:-./deploy/local/config.yaml}
+        target: /etc/llmtw/config.yaml
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${LLMTW_COMPOSE_WORKER_CAPABILITIES_FILE:-./deploy/local/capabilities.yaml}
+        target: /etc/llmtw/capabilities.yaml
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${LLMTW_COMPOSE_WORKER_PRICES_FILE:-./deploy/local/prices.yaml}
+        target: /etc/llmtw/prices.yaml
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ./.local/joined-smoke
+        target: /run/smoke
+        bind:
+          selinux: z
+
+  worker:
+    build:
+      args:
+        GO_BUILD_TAGS: llmtw_joined_fixture
+    image: localhost/llmtw/worker:joined-smoke
+    command: ["worker", "--config", "/etc/llmtw/config.yaml"]
+    environment:
+      REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
+      REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
+      LLMTW_REDIS_KEY_PREFIX: joined_smoke
+      WORKER_POSTGRES_USERNAME: llmtw_worker
+      WORKER_POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-joined-smoke-postgres}
+      WORKER_POSTGRES_ENVELOPE_KEY: joined-smoke-envelope-key-000001
+      WORKER_POSTGRES_SCOPE_KEY: joined-smoke-scope-key-000000001
+      CONTINUATION_HMAC: joined-smoke-continuation-key-01
+      JOINED_SMOKE_PROVIDER_KEY: joined-smoke-provider-key
+      BTF25_REAL_PROVIDER_API_KEY: ${BTF25_REAL_PROVIDER_API_KEY:-}
+      SSL_CERT_FILE: /run/smoke/ca.pem
+    depends_on:
+      joined-smoke: {condition: service_healthy}
+      schema-install: {condition: service_completed_successfully}
+      redis-function-provisioner: {condition: service_completed_successfully}
+      blob-volume-provisioner: {condition: service_completed_successfully}
+      budget-bootstrap: {condition: service_completed_successfully}
+    volumes:
+      - type: bind
+        source: ./.local/joined-smoke
+        target: /run/smoke
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ./.local/joined-secrets/temporal-api-key
+        target: /run/secrets/temporal-api-key
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/resource-capacity.json
+        target: /run/resource-capacity.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/release-trust-root.json
+        target: /run/release-trust-root.json
+        read_only: true
+        bind:
+          selinux: z
+
+  victoria-worker: &victoria
+    build:
+      context: ${VICTORIA_ROOT:?set VICTORIA_ROOT to victoria-hft repository root}
+      dockerfile: research/ai_ach/image/Dockerfile
+      args:
+        TARGETOS: linux
+        TARGETARCH: amd64
+        TARGETPLATFORM: linux/amd64
+        VERSION: "1"
+        REVISION: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+        CREATED: "2026-08-10T00:00:00Z"
+        SOURCE_DATE_EPOCH: "1786320000"
+    image: localhost/ai-ach/competition-worker:joined-smoke
+    depends_on:
+      joined-smoke: {condition: service_healthy}
+      worker: {condition: service_healthy}
+    environment: &victoria-env
+      TEMPORAL_ADDRESS: joined-smoke:7243
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: ai-ach-competition
+      TEMPORAL_TLS_SERVER_NAME: joined-smoke
+      TEMPORAL_TLS_CA_FILE: /run/smoke/ca.pem
+      TEMPORAL_API_KEY_FILE: /run/secrets/temporal-api-key
+      SSL_CERT_FILE: /run/smoke/ca.pem
+      ATT_INTERNAL_API_URL: https://joined-smoke
+      ATT_INTERNAL_API_PRINCIPAL_ID: competition-worker-1
+      ATT_INTERNAL_API_BEARER_TOKEN_FILE: /run/secrets/att-token
+      AI_ACH_SEARCH_API_URL: https://joined-smoke
+      AI_ACH_SEARCH_ALLOWED_HOSTS: joined-smoke
+      AI_ACH_SEARCH_BEARER_TOKEN_FILE: /run/secrets/search-token
+      METACULUS_API_URL: https://joined-smoke
+      METACULUS_TOKEN_FILE: /run/secrets/metaculus-token
+      AI_ACH_ARTIFACT_BUCKET: artifacts-smoke-bucket
+      AI_ACH_ARTIFACT_PREFIX: joined-smoke
+      AI_ACH_ARTIFACT_REGION: us-east-1
+      AI_ACH_ARTIFACT_KMS_KEY_ARN: arn:aws:kms:us-east-1:000000000000:key/00000000-0000-4000-8000-000000000001
+      AWS_ENDPOINT_URL_S3: https://joined-smoke
+      AWS_CA_BUNDLE: /run/smoke/ca.pem
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: https://joined-smoke/credentials
+      AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE: /run/secrets/aws-token
+      COMPETITION_WORKER_REVISION: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      COMPETITION_WORKER_IMAGE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      COMPETITION_WORKER_RELEASE_VERSION: joined-smoke-2026-08-10
+      COMPETITION_WORKER_SOURCE_SHA256: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+      COMPETITION_WORKER_CONFIG_SHA256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      COMPETITION_WORKER_ENVIRONMENT_SHA256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      COMPETITION_WORKER_RELEASE_ATTESTATION_FILE: /run/release-attestation.json
+      COMPETITION_WORKER_RELEASE_TRUST_ROOT_FILE: /run/release-trust-root.json
+      COMPETITION_WORKER_RELEASE_TRUST_ROOT_SHA256: b0f35989acdf0bcce5a2e177a19eefaa23da6346fcc86028c7d7e24300782c88
+      AI_ACH_RESOURCE_CAPACITY_MANIFEST_FILE: /run/resource-capacity.json
+      AI_ACH_RESOURCE_CAPACITY_ARTIFACT_ID: joined-resource-capacity
+      AI_ACH_RESOURCE_CAPACITY_ARTIFACT_LOCATOR: s3://artifacts-smoke-bucket/joined-smoke/resource-capacity.json
+      AI_ACH_RESOURCE_CAPACITY_MANIFEST_SHA256: 519eba96d3f4a1eedcedf36efc8f35ce324be39d6c311237ef6d676b92f9c45a
+      AI_ACH_PROPHET_PROFILE_FILE: /fixtures/prophet-profile.json
+      AI_ACH_PRICING_IDENTITY_FILE: /run/smoke/pricing-identity.json
+    volumes: &victoria-volumes
+      - type: bind
+        source: ./.local/joined-smoke
+        target: /run/smoke
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ./.local/joined-secrets
+        target: /run/secrets
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/release-attestation.json
+        target: /run/release-attestation.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/release-trust-root.json
+        target: /run/release-trust-root.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/resource-capacity.json
+        target: /run/resource-capacity.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${VICTORIA_ROOT:?set VICTORIA_ROOT}/research/ai_ach/competition/smoke
+        target: /fixtures
+        read_only: true
+        bind:
+          selinux: z
+    user: 65532:65532
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "/opt/venv/bin/python", "-I", "/opt/competition-worker/probe.py", "ready"]
+      interval: 2s
+      timeout: 20s
+      retries: 45
+
+  victoria-engine:
+    <<: *victoria
+    profiles: [engine]
+    entrypoint: ["/opt/ai-ach/bin/prophet-temporal-engine"]
+    depends_on:
+      joined-smoke: {condition: service_healthy}
+      worker: {condition: service_healthy}
+      victoria-worker: {condition: service_healthy}
+    healthcheck: {disable: true}
+
+  victoria-btf25-engine:
+    <<: *victoria
+    profiles: [btf25]
+    entrypoint: ["/opt/ai-ach/bin/btf25-temporal-smoke"]
+    depends_on:
+      joined-smoke: {condition: service_healthy}
+      worker: {condition: service_healthy}
+      victoria-worker: {condition: service_healthy}
+    volumes:
+      - type: bind
+        source: ./.local/joined-smoke
+        target: /run/smoke
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ./.local/joined-secrets
+        target: /run/secrets
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/release-attestation.json
+        target: /run/release-attestation.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/release-trust-root.json
+        target: /run/release-trust-root.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${JOINED_FIXTURE_ROOT:-.}/resource-capacity.json
+        target: /run/resource-capacity.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${VICTORIA_ROOT:?set VICTORIA_ROOT}/research/ai_ach/competition/smoke
+        target: /fixtures
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${BTF25_OUTPUT_ROOT:-./.local/joined-smoke}
+        target: /run/btf25-output
+        bind:
+          selinux: z
+      - type: bind
+        source: ${BTF25_PROFILE_FILE:-${VICTORIA_ROOT}/research/ai_ach/competition/smoke/btf25-profile.json}
+        target: /run/btf25-input/profile.json
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${BTF25_CORPUS_FILE:-./integration/joined/synthetic-no-btf2-corpus}
+        target: /run/btf25-input/corpus.parquet
+        read_only: true
+        bind:
+          selinux: z
+      - type: bind
+        source: ${BTF25_LICENSE_ACK_FILE:-./integration/joined/synthetic-no-btf2-license-ack.json}
+        target: /run/btf25-input/license-ack.json
+        read_only: true
+        bind:
+          selinux: z
+    healthcheck: {disable: true}
+

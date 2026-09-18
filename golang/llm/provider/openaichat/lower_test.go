@@ -33,7 +33,12 @@ func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
 			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
 		},
-		Tools:      []llm.Tool{{Name: "lookup", Description: "look up a place", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)}},
+		Tools: []llm.Tool{{
+			Name:         "lookup",
+			Description:  "look up a place",
+			InputSchema:  json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`),
+			OutputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}`),
+		}},
 		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
 		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Description: "answer object", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
 		Sampling:   &llm.SamplingSpec{Temperature: &temperature, StopSequences: []string{"\n", "END"}},
@@ -84,6 +89,11 @@ func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
 	}
 	if wire["user"] != "pinned" {
 		t.Fatalf("extension = %#v", wire["user"])
+	}
+	tools := wire["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, leaked := function["output_schema"]; leaked {
+		t.Fatalf("caller-owned tool output schema leaked to Chat Completions: %#v", function)
 	}
 }
 

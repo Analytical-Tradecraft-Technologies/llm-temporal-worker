@@ -98,6 +98,9 @@ spec:
             - name: runtime-secrets
               mountPath: /var/run/secrets/llmtw
               readOnly: true
+            - name: resource-capacity-provenance
+              mountPath: /var/run/provenance
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -112,6 +115,22 @@ spec:
               - secret:
                   name: llmtw-worker-secrets
                   optional: false
+        - name: resource-capacity-provenance
+          projected:
+            defaultMode: 0444
+            sources:
+              - configMap:
+                  name: forecast-resource-capacity
+                  optional: false
+                  items:
+                    - key: resource-capacity.json
+                      path: resource-capacity.json
+              - configMap:
+                  name: competition-worker-release-trust-root
+                  optional: false
+                  items:
+                    - key: release-trust-root.json
+                      path: release-trust-root.json
         - name: tmp
           emptyDir:
             medium: Memory

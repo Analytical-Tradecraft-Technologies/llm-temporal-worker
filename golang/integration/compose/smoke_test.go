@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	workerconfig "github.com/mfow/llm-temporal-worker/golang/config"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -26,6 +27,7 @@ type composeService struct {
 	Entrypoint  yaml.Node            `yaml:"entrypoint"`
 	DependsOn   map[string]yaml.Node `yaml:"depends_on"`
 	Command     yaml.Node            `yaml:"command"`
+	Volumes     []yaml.Node          `yaml:"volumes"`
 	ReadOnly    bool                 `yaml:"read_only"`
 	CapDrop     []string             `yaml:"cap_drop"`
 	Healthcheck map[string]yaml.Node `yaml:"healthcheck"`
@@ -120,6 +122,31 @@ func TestComposeFixtureIsOfflineSafe(t *testing.T) {
 	if !strings.Contains(string(raw), "continuation_hmac") ||
 		!strings.Contains(string(raw), "${LLMTW_CONTINUATION_KEY_FILE:-./.local/continuation-hmac}") {
 		t.Error("continuation key must come from an explicit local secret-file override")
+	}
+}
+
+func TestComposeWorkerConfigsUseSupportedStateModes(t *testing.T) {
+	tests := []struct {
+		file string
+		kind string
+	}{
+		{file: "config.yaml", kind: workerconfig.StateKindRedis},
+		{file: "durable-config.yaml", kind: workerconfig.StateKindDurable},
+	}
+	for _, test := range tests {
+		t.Run(test.kind, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "local", test.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := workerconfig.Load(data)
+			if err != nil {
+				t.Fatalf("load %s: %v", test.file, err)
+			}
+			if loaded.State.Kind != test.kind {
+				t.Fatalf("%s state.kind = %q, want %q", test.file, loaded.State.Kind, test.kind)
+			}
+		})
 	}
 }
 
@@ -252,7 +279,7 @@ func TestComposeTemporalHealthcheckUsesEntrypointBoundSemanticReadiness(t *testi
 	if got, want := healthcheckTest.Content[0].Value, "CMD-SHELL"; got != want {
 		t.Fatalf("Temporal healthcheck mode = %q, want %q", got, want)
 	}
-	if got, want := healthcheckTest.Content[1].Value, `BIND_ON_IP="$$(getent hosts "$$(hostname)" | awk '{print $$1;}')"; case "$$BIND_ON_IP" in *:*) TEMPORAL_ADDRESS="[$$BIND_ON_IP]:7233" ;; *) TEMPORAL_ADDRESS="$$BIND_ON_IP:7233" ;; esac; TEMPORAL_ADDRESS="$$TEMPORAL_ADDRESS" temporal operator cluster health | grep -q SERVING`; got != want {
+	if got, want := healthcheckTest.Content[1].Value, `BIND_ON_IP="$$(getent hosts "$$(hostname)" | awk '{print $$1;}')"; case "$$BIND_ON_IP" in *:*) TEMPORAL_ADDRESS="[$$BIND_ON_IP]:7233" ;; *) TEMPORAL_ADDRESS="$$BIND_ON_IP:7233" ;; esac; TEMPORAL_ADDRESS="$$TEMPORAL_ADDRESS" temporal operator cluster health | grep -q SERVING && TEMPORAL_ADDRESS="$$TEMPORAL_ADDRESS" temporal operator namespace describe -n default >/dev/null`; got != want {
 		t.Fatalf("Temporal healthcheck command = %q, want %q", got, want)
 	}
 	for name, required := range map[string]string{
@@ -322,6 +349,43 @@ func TestWorkerComposeProvisionsAdmissionFunctionBeforeStart(t *testing.T) {
 	}
 	if condition.Condition != "service_completed_successfully" {
 		t.Fatalf("worker provisioner condition = %q, want service_completed_successfully", condition.Condition)
+	}
+	expectedFunctionMounts := map[string]string{
+		"./storage/redis/functions/admission.lua": "/opt/llmtw/functions/admission.lua",
+		"./storage/redis/functions/throttle.lua":  "/opt/llmtw/functions/throttle.lua",
+	}
+	seenFunctionMounts := make(map[string]bool, len(expectedFunctionMounts))
+	for _, node := range provisioner.Volumes {
+		var volume struct {
+			Source   string `yaml:"source"`
+			Target   string `yaml:"target"`
+			ReadOnly bool   `yaml:"read_only"`
+			Bind     struct {
+				SELinux string `yaml:"selinux"`
+			} `yaml:"bind"`
+		}
+		if err := node.Decode(&volume); err != nil {
+			t.Fatalf("decode Redis Function mount: %v", err)
+		}
+		target, required := expectedFunctionMounts[volume.Source]
+		if !required {
+			continue
+		}
+		seenFunctionMounts[volume.Source] = true
+		if volume.Target != target {
+			t.Errorf("Redis Function mount %q target = %q, want %q", volume.Source, volume.Target, target)
+		}
+		if !volume.ReadOnly {
+			t.Errorf("Redis Function mount %q must be read-only", volume.Source)
+		}
+		if volume.Bind.SELinux != "z" {
+			t.Errorf("Redis Function mount %q SELinux relabel = %q, want z", volume.Source, volume.Bind.SELinux)
+		}
+	}
+	for source := range expectedFunctionMounts {
+		if !seenFunctionMounts[source] {
+			t.Errorf("Compose fixture is missing Redis Function mount %q", source)
+		}
 	}
 	for _, required := range []string{
 		"FUNCTION LOAD",

@@ -93,6 +93,10 @@ func (space keySpace) durableBudgetOperationKey(generation, operation string) st
 	return space.admissionPrefix() + "durable-budget-operation:" + space.digest("durable-budget-operation", generation, operation)
 }
 
+func (space keySpace) durableBudgetBatchKey(generation, digest string) string {
+	return space.admissionPrefix() + "durable-budget-batch:" + space.digest("durable-budget-batch", generation, digest)
+}
+
 func (space keySpace) throttleDigest(kind, scope string) string {
 	return space.digest("throttle", kind, scope)
 }
@@ -107,6 +111,18 @@ func (space keySpace) throttleKeyDigest(kind, digest string) string {
 
 func (space keySpace) throttleReservationKey(id string) string {
 	return space.admissionKey("throttle-reservation", id)
+}
+
+func (space keySpace) throttleQueueKey(scope string) string {
+	return space.throttleKey("queue", scope)
+}
+
+func (space keySpace) throttleQueueSequenceKey(scope string) string {
+	return space.throttleKey("queue-sequence", scope)
+}
+
+func (space keySpace) throttleQueueDeadlineKey(scope string) string {
+	return space.throttleKey("queue-deadline", scope)
 }
 
 func (space keySpace) digest(purpose string, values ...string) string {

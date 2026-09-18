@@ -1,0 +1,19 @@
+version: llmtw-capabilities/v1
+entries:
+  - id: joined-smoke-v1
+    family: openai_chat
+    model:
+      exact: joined-smoke-2026-08-10
+    verified_at: 2026-08-10T00:00:00Z
+    features:
+      input.text: {level: native}
+      tools.auto: {level: native}
+      tools.required: {level: native}
+      tools.parallel: {level: native}
+      output.json_schema: {level: native}
+      reasoning: {level: native}
+      service.standard: {level: native}
+      usage: {level: native}
+    limits:
+      context_tokens: 131072
+      output_tokens: 4096

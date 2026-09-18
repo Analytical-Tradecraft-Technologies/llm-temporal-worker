@@ -104,6 +104,21 @@ func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	}
 }
 
+func TestGenerateActivityDurableCompositionRejectsLegacyProviderDispatch(t *testing.T) {
+	value := &fakeEngine{}
+	activities := Activities{Engine: value, RequireDurableProviderFence: true}
+	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{
+		OperationKey: "operation-1", Model: "model-1",
+		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+	}}
+	if _, err := activities.Generate(context.Background(), payload); err == nil {
+		t.Fatal("durable composition dispatched the legacy Generate surface")
+	}
+	if len(value.requests) != 0 {
+		t.Fatalf("legacy engine calls = %d, want zero before a durable provider fence", len(value.requests))
+	}
+}
+
 func TestGenerateActivityMapsEngineError(t *testing.T) {
 	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
 	activities := Activities{Engine: &fakeEngine{err: err}}

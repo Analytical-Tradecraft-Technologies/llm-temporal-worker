@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
@@ -84,6 +86,14 @@ type RedisFactory func(context.Context, config.RedisConfig, string, string) (red
 // installation is intentionally not part of this hook: deployment owns
 // provisioning, while workers only verify the immutable contract.
 type PostgresFactory func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error)
+type postgresDurableRepositorySource interface {
+	DurableOperations() admission.AdmissionStore
+	ScopeRepository() postgresstore.ScopeRepository
+	BlobRepository() postgresstore.BlobRepository
+}
+type postgresAtomicFinalizerSource interface {
+	AtomicFinalizer() durablestore.AtomicFinalizer
+}
 type BlobFactory func(context.Context, config.Config) (blob.Store, io.Closer, error)
 type AWSConfigFactory func(context.Context, string) (aws.Config, error)
 type AzureCredentialFactory func(context.Context, config.EndpointConfig) (azcore.TokenCredential, error)
@@ -166,7 +176,11 @@ type ProductionFactoryOptions struct {
 	// storage port and validate the returned Composition before enabling it. The
 	// built-in complete V1RuntimeBuilder requires this factory; a custom explicit
 	// V1RuntimeBuilder remains responsible for an equivalent fail-closed guard.
-	DurableCompositionFactory DurableCompositionFactory
+	// ComposeProductionDurableState enables the built-in PostgreSQL/S3/Redis
+	// state composition. Embeddings with custom phase ports leave it false and
+	// retain full control of their injected composition factory.
+	ComposeProductionDurableState bool
+	DurableCompositionFactory     DurableCompositionFactory
 }
 
 // ProductionEngineFactory composes the full provider-neutral engine from one
@@ -328,6 +342,28 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 
 var _ EngineFactory = (*ProductionEngineFactory)(nil)
 
+func requiresDurableBudgetGeneration(value config.Config, composeProductionDurableState bool) bool {
+	return value.State.Kind == config.StateKindDurable &&
+		(value.Environment == "production" || composeProductionDurableState)
+}
+
+func enforceProviderHostedStateProhibition(value config.Config) error {
+	if value.Continuation.AllowProviderHostedState {
+		return errors.New("continuation.allow_provider_hosted_state must be false")
+	}
+	endpointIDs := make([]string, 0, len(value.Endpoints))
+	for endpointID := range value.Endpoints {
+		endpointIDs = append(endpointIDs, endpointID)
+	}
+	sort.Strings(endpointIDs)
+	for _, endpointID := range endpointIDs {
+		if value.Endpoints[endpointID].ProviderStorage.Permitted {
+			return fmt.Errorf("endpoints.%s.provider_storage.permitted must be false", endpointID)
+		}
+	}
+	return nil
+}
+
 func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *config.Snapshot) (llm.Engine, app.ClientSet, error) {
 	if factory == nil {
 		return nil, nil, fmt.Errorf("%w: factory is nil", ErrProductionFactoryInvalid)
@@ -339,6 +375,9 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	value := snapshot.Config()
+	if err := enforceProviderHostedStateProhibition(value); err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrProductionFactoryInvalid, err)
+	}
 	// A production durable snapshot must never return the legacy engine and
 	// Redis continuation/result stores without an explicit v1 composition
 	// builder. Runtime.Start has a second readiness guard, but rejecting the
@@ -352,6 +391,13 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err != nil {
 		return nil, nil, err
 	}
+	var verifiedResourceCapacity config.VerifiedResourceCapacity
+	if value.ResourceCapacity.ManifestFile != "" {
+		verifiedResourceCapacity, err = config.VerifyResourceCapacity(value.ResourceCapacity)
+		if err != nil {
+			return nil, nil, fmt.Errorf("verify signed resource capacity: %w", err)
+		}
+	}
 	engineSnapshot, err := factory.options.SnapshotLoader.Load(ctx, snapshot)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load engine snapshot: %w", err)
@@ -361,7 +407,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	if value.State.Kind == config.StateKindMemory {
-		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters, precomposed, snapshot.Digest())
+		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters, snapshot.Digest())
 		if err != nil {
 			return nil, nil, err
 		}
@@ -369,7 +415,6 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: memory factory returned an unsupported client set", ErrProductionFactoryInvalid)
 		}
-		set.v1Capabilities.composition = precomposed
 		return factory.attachV1Runtime(ctx, snapshot, engineValue, set)
 	}
 	redisClient, redisOwned, err := factory.buildRedis(ctx, value)
@@ -379,6 +424,17 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	closeOwned := func() {
 		if redisOwned && redisClient != nil {
 			_ = redisClient.Close()
+		}
+	}
+	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+		functionClient, ok := redisClient.(redisstore.BudgetColdStartFunctionClient)
+		if !ok {
+			closeOwned()
+			return nil, nil, fmt.Errorf("%w: Redis client does not support Function identity verification", ErrDependencyUnavailable)
+		}
+		if err := redisstore.VerifyBudgetColdStartFunctions(ctx, functionClient); err != nil {
+			closeOwned()
+			return nil, nil, fmt.Errorf("verify Redis durable Function identities: %w", err)
 		}
 	}
 	keySecret, err := factory.redisKeySecret(ctx, value)
@@ -415,9 +471,24 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis admission store: %w", err)
 	}
+	var capacityLeases *redisstore.ThrottleStore
+	if verifiedResourceCapacity.GenerationID != "" {
+		capacityLeases, err = redisstore.NewThrottleStore(redisstore.ThrottleOptions{
+			Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
+			Keys: keyOptions, MaxRecordBytes: value.Limits.RequestBytes,
+		})
+		if err != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("construct Redis resource capacity leases: %w", err)
+		}
+	}
 	var generationPort redisstore.BudgetGenerationPort
 	streamEnabled := value.State.Redis.CoordinationStreamEnabled != nil && *value.State.Redis.CoordinationStreamEnabled
-	needBudgetKeys := streamEnabled || (value.Environment == "production" && value.State.Kind == config.StateKindDurable)
+	requiresBudgetGeneration := requiresDurableBudgetGeneration(value, factory.options.ComposeProductionDurableState)
+	needBudgetKeys := streamEnabled || requiresBudgetGeneration
 	var budgetKeys redisstore.BudgetKeySpace
 	if needBudgetKeys {
 		budgetKeys, err = redisstore.NewBudgetKeySpace(keyOptions)
@@ -433,7 +504,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if streamEnabled {
 		streamKey = budgetKeys.EventsKey()
 	}
-	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if requiresBudgetGeneration {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
 			if postgresCloser != nil {
@@ -441,6 +512,43 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			}
 			closeOwned()
 			return nil, nil, fmt.Errorf("construct Redis budget generation port: %w", err)
+		}
+	}
+	var budgetMaterializer durablestore.BudgetMaterializer
+	var budgetGenerationID durablestore.GenerationID
+	var budgetIncarnationID durablestore.IncarnationID
+	if generationPort != nil {
+		active, activeErr := generationPort.ActiveGeneration(ctx)
+		if activeErr != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("load active Redis budget generation: %w", activeErr)
+		}
+		manifest, manifestErr := generationPort.LoadManifest(ctx, active)
+		if manifestErr != nil || manifest.Validate() != nil || active.ValidateAgainst(manifest) != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("%w: active Redis budget generation is invalid", ErrDependencyUnavailable)
+		}
+		budgetGenerationID = durablestore.GenerationID(active.GenerationID)
+		budgetIncarnationID = durablestore.IncarnationID(active.IncarnationID)
+		budgetMaterializer, err = redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
+			Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
+			FunctionVersion: value.State.Redis.AdmissionVersion,
+			GenerationID:    durablestore.GenerationID(active.GenerationID),
+			IncarnationID:   durablestore.IncarnationID(active.IncarnationID),
+			Clock:           clock,
+		})
+		if err != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("construct Redis budget materializer: %w", err)
 		}
 	}
 	budgetStatusReader, err := composeBudgetStatusReader(ctx, snapshot, factory.options.Clock, value.State.Redis.AdmissionMode, redisClient, generationPort, budgetKeys, factory.options.BudgetStatusReaderFactory)
@@ -547,6 +655,24 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeAll()
 		return nil, nil, err
 	}
+	var durableOperations admission.AdmissionStore
+	var durableResults durablestore.ResultStore
+	var durableSource postgresDurableRepositorySource
+	var atomicFinalizer durablestore.AtomicFinalizer
+	if source, ok := postgresCloser.(postgresDurableRepositorySource); ok {
+		durableSource = source
+		durableOperations = source.DurableOperations()
+		if !isNilCapability(durableOperations) {
+			durableResults, err = NewBlobResultStore(blobStore, durableOperations, refResolver, clock)
+			if err != nil {
+				closeAll()
+				return nil, nil, fmt.Errorf("construct PostgreSQL-authoritative result store: %w", err)
+			}
+		}
+	}
+	if source, ok := postgresCloser.(postgresAtomicFinalizerSource); ok {
+		atomicFinalizer = source.AtomicFinalizer()
+	}
 	estimator, err := buildEstimator(value)
 	if err != nil {
 		closeAll()
@@ -576,16 +702,96 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
 	}
 	var checkpointBlobReader state.CheckpointBlobReader
-	if factory.options.CheckpointBlobLocator != nil {
+	var checkpointLocatorWriter CheckpointLocatorWriter
+	checkpointLocator := factory.options.CheckpointBlobLocator
+	if durableSource != nil {
+		repository := durableSource.BlobRepository()
+		if repository.Pool != nil {
+			if checkpointLocator == nil {
+				checkpointLocator = postgresstore.CheckpointBlobLocator(repository)
+			}
+			writer, writerErr := postgresstore.CheckpointBlobLocatorWriter(repository)
+			if writerErr != nil {
+				closeAll()
+				return nil, nil, fmt.Errorf("construct checkpoint blob locator writer: %w", writerErr)
+			}
+			checkpointLocatorWriter = writer
+		}
+	}
+	if checkpointLocator != nil {
 		checkpointBlobReader = state.ScopedBlobReader{
-			Store:    blobStore,
-			Resolve:  factory.options.CheckpointBlobLocator,
-			MaxBytes: int64(value.Limits.RequestBytes),
-			Now:      clock,
+			Store: blobStore, Resolve: checkpointLocator,
+			MaxBytes: int64(value.Limits.RequestBytes), Now: clock,
 		}
 	}
 	checkpointCapabilities := checkpointCapabilitiesFromCloserWithBindings(postgresCloser, checkpointBlobReader, keyring, clock)
+	checkpointCapabilities.BlobStore = blobStore
+	if keyring != nil {
+		checkpointCapabilities.IssueHandle = keyring.IssueCheckpointHandleMetadata
+		checkpointCapabilities.VerifyHandle = keyring.VerifyCheckpointHandle
+	}
+	checkpointCapabilities.WriteLocator = checkpointLocatorWriter
 	journal := journalFromCloser(postgresCloser)
+	var durableComposition *durablestore.Composition
+	var resolveScope func(context.Context, llm.RequestContext) (string, error)
+	if durableSource != nil {
+		scopeRepository := durableSource.ScopeRepository()
+		resolveScope = func(ctx context.Context, requestContext llm.RequestContext) (string, error) {
+			scope, err := scopeRepository.Ensure(ctx, requestContext.Tenant, requestContext.Project)
+			if err != nil {
+				return "", err
+			}
+			return scope.ID.String(), nil
+		}
+	}
+	if value.State.Kind == config.StateKindDurable && factory.options.ComposeProductionDurableState && factory.options.DurableCompositionFactory == nil {
+		composition, compositionErr := (durablestore.CompositionBuilder{
+			Identity: durablestore.StateIdentity{
+				Postgres: durablestore.PostgresIdentity{
+					Database: value.State.Postgres.Database, Schema: value.State.Postgres.Schema,
+					TablePrefix: value.State.Postgres.TablePrefix,
+				},
+				Redis: durablestore.RedisIdentity{
+					KeyPrefix: value.State.Redis.KeyPrefix, HashTag: value.State.Redis.AdmissionHashTag,
+				},
+				ConfigDigest: snapshot.Digest(),
+			},
+			Ports: durablestore.CompositionPorts{
+				Operations: durableOperations, Continuations: continuationStore,
+				Checkpoints: checkpointCapabilities.Materializer, Results: durableResults,
+				Journal: journal, Materializer: budgetMaterializer,
+				Finalizer: atomicFinalizer,
+			},
+		}).Build()
+		if compositionErr != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("construct production durable composition: %w", compositionErr)
+		}
+		durableComposition = &composition
+	}
+	compositionFactory := factory.options.DurableCompositionFactory
+	if compositionFactory == nil && durableComposition != nil {
+		ownedComposition := *durableComposition
+		compositionFactory = func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
+			return ownedComposition, nil
+		}
+	}
+	compositionValue := precomposed
+	if durableComposition != nil {
+		compositionValue = durableComposition
+	}
+	var generatePortsFactory GeneratePortsFactory
+	var compactPortsFactory CompactPortsFactory
+	if value.State.Kind == config.StateKindDurable {
+		generatePortsFactory = factory.options.GeneratePortsFactory
+		compactPortsFactory = factory.options.CompactPortsFactory
+	}
+	checkpointLimits, err := checkpointLimitsForConfig(value.Limits)
+	if err != nil {
+		closeAll()
+		return nil, nil, err
+	}
+	grantKeyDigest := sha256.Sum256(keySecret)
 	clients := &productionClientSet{
 		probes:          probes,
 		providerControl: providerControl,
@@ -597,15 +803,28 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			ConfigDigest:           snapshot.Digest(),
 			Snapshot:               snapshotSource,
 			Planner:                planner,
+			Estimator:              estimator,
 			Adapters:               capabilityAdapterRegistry,
 			Checkpoints:            checkpointCapabilities,
 			Journal:                journal,
-			CompositionFactory:     factory.options.DurableCompositionFactory,
-			composition:            precomposed,
+			CompositionFactory:     compositionFactory,
+			BudgetGenerationID:     budgetGenerationID,
+			BudgetIncarnationID:    budgetIncarnationID,
+			ReservationLease:       time.Duration(value.State.ReservationLease),
+			OperationRetention:     time.Duration(value.State.OperationTerminalRetention),
+			CheckpointRetention:    time.Duration(value.State.ContinuationRetention),
+			MaxRequestBytes:        int64(value.Limits.RequestBytes),
+			ResourceCapacity:       verifiedResourceCapacity,
+			CapacityLeases:         capacityLeases,
+			CheckpointLimits:       checkpointLimits,
+			GrantKeyID:             "redis-admission/" + hex.EncodeToString(grantKeyDigest[:8]),
+			GrantHMACKey:           append([]byte(nil), keySecret...),
+			composition:            compositionValue,
 			ProviderStatusRecorder: providerControl,
 			Clock:                  clock,
-			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
-			CompactPortsFactory:    factory.options.CompactPortsFactory,
+			ResolveScope:           resolveScope,
+			GeneratePortsFactory:   generatePortsFactory,
+			CompactPortsFactory:    compactPortsFactory,
 		},
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
@@ -616,6 +835,27 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		},
 	}
 	return factory.attachV1Runtime(ctx, snapshot, engineValue, clients)
+}
+
+func checkpointLimitsForConfig(value config.LimitsConfig) (state.MaterializeLimits, error) {
+	depth := value.ContinuationDepth
+	maxInt := int(^uint(0) >> 1)
+	maxInt32 := int(^uint32(0) >> 1)
+	if depth <= 0 || depth > maxInt32 || depth == maxInt {
+		return state.MaterializeLimits{}, fmt.Errorf("limits.continuation_depth cannot be represented with its root lineage row")
+	}
+	if value.Items <= 0 {
+		return state.MaterializeLimits{}, fmt.Errorf("limits.items must be positive")
+	}
+	if value.RequestBytes <= 0 {
+		return state.MaterializeLimits{}, fmt.Errorf("limits.request_bytes must be positive")
+	}
+	return state.MaterializeLimits{
+		MaxDepth: int32(depth),
+		MaxRows:  depth + 1,
+		MaxItems: value.Items,
+		MaxBytes: int64(value.RequestBytes),
+	}, nil
 }
 
 // preflightAutomaticDurableComposition validates the composition installed by
@@ -631,6 +871,9 @@ func (factory *ProductionEngineFactory) preflightAutomaticDurableComposition(ctx
 	if snapshot == nil {
 		return nil, fmt.Errorf("%w: automatic durable composition requires a configuration snapshot", ErrDurableV1Composition)
 	}
+	if snapshot.Config().State.Kind != config.StateKindDurable {
+		return nil, nil
+	}
 	composition, err := (V1RuntimeCapabilities{ConfigDigest: snapshot.Digest(), CompositionFactory: factory.options.DurableCompositionFactory}).BuildDurableComposition(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: automatic durable composition preflight: %v", ErrDurableV1Composition, err)
@@ -642,8 +885,11 @@ func (factory *ProductionEngineFactory) preflightAutomaticDurableComposition(ctx
 // complete client set has been assembled. A failed builder closes that set so
 // a rejected reload cannot leak provider/state credentials or connections.
 func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, snapshot *config.Snapshot, engineValue llm.Engine, clients *productionClientSet) (llm.Engine, app.ClientSet, error) {
-	if factory == nil || clients == nil {
-		return nil, nil, fmt.Errorf("%w: v1 runtime composition requires factory and clients", ErrProductionFactoryInvalid)
+	if factory == nil || clients == nil || snapshot == nil {
+		return nil, nil, fmt.Errorf("%w: v1 runtime composition requires factory, snapshot, and clients", ErrProductionFactoryInvalid)
+	}
+	if snapshot.Config().State.Kind != config.StateKindDurable {
+		return engineValue, clients, nil
 	}
 	builder := factory.options.V1RuntimeBuilder
 	if builder == nil {
@@ -689,7 +935,7 @@ func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, c
 // blob store; all state is held by the process-local implementations and is
 // lost on restart. Provider adapters are still built normally because memory
 // mode changes state durability, not the provider contract.
-func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter, precomposed *durablestore.Composition, configDigest [32]byte) (llm.Engine, app.ClientSet, error) {
+func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter, configDigest [32]byte) (llm.Engine, app.ClientSet, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -741,15 +987,11 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	}
 	return engineValue, &productionClientSet{
 		v1Capabilities: V1RuntimeCapabilities{
-			ConfigDigest:         configDigest,
-			Snapshot:             snapshotSource,
-			Planner:              planner,
-			Adapters:             capabilityAdapterRegistry,
-			Clock:                clock,
-			CompositionFactory:   factory.options.DurableCompositionFactory,
-			composition:          precomposed,
-			GeneratePortsFactory: factory.options.GeneratePortsFactory,
-			CompactPortsFactory:  factory.options.CompactPortsFactory,
+			ConfigDigest: configDigest,
+			Snapshot:     snapshotSource,
+			Planner:      planner,
+			Adapters:     capabilityAdapterRegistry,
+			Clock:        clock,
 		},
 		close: func(context.Context) error { return nil },
 	}, nil
@@ -790,7 +1032,55 @@ func (factory *ProductionEngineFactory) buildPostgres(ctx context.Context, value
 		}
 		return nil, nil, fmt.Errorf("%w: PostgreSQL factory returned no readiness probe", ErrDependencyUnavailable)
 	}
+	if closerValue, ok := closer.(*postgresPoolCloser); ok {
+		envelopeKeys, scopeKeys, keyErr := factory.resolvePostgresKeyrings(ctx, value.State.Postgres)
+		if keyErr != nil {
+			_ = closerValue.Close()
+			return nil, nil, keyErr
+		}
+		repositories, repositoryErr := postgresstore.NewDurableRepositories(postgresstore.DurableRepositoryOptions{
+			Pool: closerValue.pool, Namespace: namespace, EnvelopeKeys: envelopeKeys,
+			ScopeKeys: scopeKeys, OperationRetention: time.Duration(value.State.OperationTerminalRetention),
+			Clock: factory.options.Clock,
+		})
+		if repositoryErr != nil {
+			_ = closerValue.Close()
+			return nil, nil, fmt.Errorf("construct PostgreSQL durable repositories: %w", repositoryErr)
+		}
+		closerValue.repositories = repositories
+	}
 	return probe, closer, nil
+}
+
+func (factory *ProductionEngineFactory) resolvePostgresKeyrings(ctx context.Context, value config.PostgresConfig) (postgresstore.Keyring, postgresstore.ScopeKeyring, error) {
+	envelope := postgresstore.Keyring{Keys: make(map[string][]byte, len(value.EnvelopeKeys))}
+	scope := postgresstore.ScopeKeyring{Keys: make(map[string][]byte, len(value.ScopeKeys))}
+	resolve := func(keys []config.HandleKey, destination map[string][]byte, primary *string, label string) error {
+		for _, key := range keys {
+			secret, err := factory.options.Resolver.Resolve(ctx, key.Secret)
+			if err != nil {
+				return fmt.Errorf("resolve PostgreSQL %s key %q: %w", label, key.ID, err)
+			}
+			if len(secret) != 32 {
+				return fmt.Errorf("PostgreSQL %s key %q must be exactly 32 bytes", label, key.ID)
+			}
+			destination[key.ID] = append([]byte(nil), secret...)
+			if key.Primary {
+				*primary = key.ID
+			}
+		}
+		if *primary == "" {
+			return fmt.Errorf("PostgreSQL %s keyring has no primary key", label)
+		}
+		return nil
+	}
+	if err := resolve(value.EnvelopeKeys, envelope.Keys, &envelope.Active, "envelope"); err != nil {
+		return postgresstore.Keyring{}, postgresstore.ScopeKeyring{}, err
+	}
+	if err := resolve(value.ScopeKeys, scope.Keys, &scope.ActiveVersion, "scope"); err != nil {
+		return postgresstore.Keyring{}, postgresstore.ScopeKeyring{}, err
+	}
+	return envelope, scope, nil
 }
 
 func redisKeyOptions(value config.Config, keySecret []byte) (redisstore.KeyOptions, error) {
@@ -802,7 +1092,7 @@ func buildEstimator(value config.Config) (budget.Estimator, error) {
 	if !ok || ratio.Sign() <= 0 {
 		return budget.Estimator{}, fmt.Errorf("invalid token estimate safety ratio")
 	}
-	return budget.Estimator{SafetyRatio: ratio, MaxOutput: int64(value.Limits.MaxOutputTokens)}, nil
+	return budget.Estimator{SafetyRatio: ratio, MaxInput: int64(value.Limits.MaxInputTokens), MaxOutput: int64(value.Limits.MaxOutputTokens), MaxReasoning: int64(value.Limits.MaxOutputTokens)}, nil
 }
 
 func (factory *ProductionEngineFactory) buildRedis(ctx context.Context, value config.Config) (redis.UniversalClient, bool, error) {
@@ -904,11 +1194,11 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 	if err != nil {
 		return nil, err
 	}
-	providerResponseBytes := value.Limits.ProviderResponseBytes
-	if providerResponseBytes == 0 {
-		providerResponseBytes = config.DefaultProviderResponseBytes
+	maxResponseBytes := value.Limits.ProviderResponseBytes
+	if maxResponseBytes == 0 {
+		maxResponseBytes = config.DefaultProviderResponseBytes
 	}
-	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, providerResponseBytes)
+	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, maxResponseBytes, factory.options.EgressResolver, factory.options.EgressDial)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %q: provider egress policy: %w", endpointID, err)
 	}
@@ -940,7 +1230,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
 			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version)
-		case "bearer_env", "header_env":
+		case "bearer_env", "header_env", "bearer_file", "header_file":
 			key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 			if err != nil {
 				return nil, err
@@ -1085,6 +1375,12 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 }
 
 func endpointCapabilities(snapshot engine.Snapshot, endpointID string) (provider.CapabilitySet, error) {
+	if capabilities, ok := snapshot.EndpointCapabilities[endpointID]; ok {
+		return completeCapabilities(capabilities), nil
+	}
+	if snapshot.EndpointCapabilities != nil {
+		return provider.CapabilitySet{}, fmt.Errorf("endpoint %q has no provider capability profile", endpointID)
+	}
 	found := provider.CapabilitySet{Features: make(map[provider.Feature]provider.Capability)}
 	for _, model := range snapshot.Routes.Models {
 		for _, route := range model.Routes {
@@ -1353,6 +1649,8 @@ func (factory *ProductionEngineFactory) providerSecret(ctx context.Context, auth
 	switch auth.Kind {
 	case "bearer_env", "header_env":
 		return factory.options.Resolver.Resolve(ctx, config.SecretRef{Kind: config.SecretEnv, Name: auth.Name})
+	case "bearer_file", "header_file":
+		return factory.options.Resolver.Resolve(ctx, config.SecretRef{Kind: config.SecretFile, Path: auth.Path})
 	default:
 		return nil, factory.unsupportedAuth(endpointID, auth.Kind)
 	}
@@ -1397,7 +1695,8 @@ func defaultPostgresFactory(ctx context.Context, value config.PostgresConfig, na
 		pool.Close()
 		return nil, nil, err
 	}
-	return probe, postgresPoolCloser{pool: pool, namespace: namespace}, nil
+	closer := &postgresPoolCloser{pool: pool, namespace: namespace}
+	return probe, closer, nil
 }
 
 // postgresPoolOptions is the one configuration-to-driver projection for the
@@ -1424,12 +1723,40 @@ func postgresPoolOptions(value config.PostgresConfig, namespace postgresstore.Na
 type postgresProbeClient struct{ pool *pgxpool.Pool }
 
 type postgresPoolCloser struct {
-	pool      *pgxpool.Pool
-	namespace postgresstore.Namespace
+	pool         *pgxpool.Pool
+	namespace    postgresstore.Namespace
+	repositories postgresstore.DurableRepositories
 }
 
 func (closer postgresPoolCloser) ProviderStatusRepository() postgresstore.ProviderStatusRepository {
 	return postgresstore.DefaultProviderStatusRepository(closer.pool, closer.namespace)
+}
+func (closer *postgresPoolCloser) DurableOperations() admission.AdmissionStore {
+	if closer == nil || closer.repositories.Operations.Pool == nil {
+		return nil
+	}
+	return closer.repositories.Operations
+}
+
+func (closer *postgresPoolCloser) ScopeRepository() postgresstore.ScopeRepository {
+	if closer == nil {
+		return postgresstore.ScopeRepository{}
+	}
+	return closer.repositories.Scopes
+}
+
+func (closer *postgresPoolCloser) BlobRepository() postgresstore.BlobRepository {
+	if closer == nil {
+		return postgresstore.BlobRepository{}
+	}
+	return closer.repositories.Blobs
+}
+
+func (closer *postgresPoolCloser) AtomicFinalizer() durablestore.AtomicFinalizer {
+	if closer == nil || closer.repositories.Finalizer.Blobs.Pool == nil {
+		return nil
+	}
+	return closer.repositories.Finalizer
 }
 
 func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
@@ -1441,7 +1768,13 @@ func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
 // Journal exposes only the write-only durable journal contract. The runtime
 // wraps it before storing it on the snapshot client set so callers cannot
 // recover this concrete repository or its pool through a type assertion.
-func (closer postgresPoolCloser) Journal() durablestore.Journal {
+func (closer *postgresPoolCloser) Journal() durablestore.Journal {
+	if closer == nil {
+		return nil
+	}
+	if closer.repositories.Journal.Pool != nil {
+		return &closer.repositories.Journal
+	}
 	return &postgresstore.BudgetJournalRepository{Pool: closer.pool, Namespace: closer.namespace}
 }
 
@@ -1449,15 +1782,27 @@ func (closer postgresPoolCloser) Journal() durablestore.Journal {
 // The default factory cannot construct a blob reader because PostgreSQL
 // locator encryption keys and the object-store binding are deployment-owned;
 // custom closers may implement CheckpointBlobReader as well.
-func (closer postgresPoolCloser) CheckpointRepository() state.CheckpointRepository {
-	return snapshotCheckpointRepository{delegate: postgresstore.DurableCheckpointRepository{Pool: closer.pool, Namespace: closer.namespace}}
+func (closer *postgresPoolCloser) CheckpointRepository() state.CheckpointRepository {
+	if closer == nil {
+		return nil
+	}
+	return snapshotCheckpointRepository{delegate: closer.repositories.Checkpoints}
 }
 
-func (closer postgresPoolCloser) CheckpointBlobReader() state.CheckpointBlobReader {
+func (closer *postgresPoolCloser) CheckpointBlobReader() state.CheckpointBlobReader {
 	return nil
 }
 
-func (closer postgresPoolCloser) Close() error {
+func (closer *postgresPoolCloser) Close() error {
+	if closer == nil {
+		return nil
+	}
+	for _, key := range closer.repositories.Operations.Keys.Keys {
+		clear(key)
+	}
+	for _, key := range closer.repositories.Scopes.Keys.Keys {
+		clear(key)
+	}
 	if closer.pool != nil {
 		closer.pool.Close()
 	}
@@ -1491,7 +1836,7 @@ func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, i
 		return nil, nil, err
 	}
 	client := s3.NewFromConfig(awsValue)
-	store, err := s3blob.New(s3blob.Options{Client: client, Bucket: value.BlobStore.S3.Bucket, Prefix: value.BlobStore.S3.Prefix, MaxBytes: int64(value.Limits.RequestBytes)})
+	store, err := s3blob.New(s3blob.Options{Client: client, Bucket: value.BlobStore.S3.Bucket, Prefix: value.BlobStore.S3.Prefix, KMSKeyID: value.BlobStore.S3.KMSKeyID, MaxBytes: int64(value.Limits.RequestBytes)})
 	if err != nil {
 		return nil, nil, err
 	}

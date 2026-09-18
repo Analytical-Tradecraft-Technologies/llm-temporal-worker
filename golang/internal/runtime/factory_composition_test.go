@@ -52,6 +52,28 @@ func TestRequireDurableV1RuntimeBuilderIgnoresNonDurableState(t *testing.T) {
 	}
 }
 
+func TestRequiresDurableBudgetGenerationForProductionOrExplicitComposition(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		environment string
+		state       string
+		compose     bool
+		want        bool
+	}{
+		{name: "production durable", environment: "production", state: config.StateKindDurable, want: true},
+		{name: "development explicit composition", environment: "development", state: config.StateKindDurable, compose: true, want: true},
+		{name: "development without composition", environment: "development", state: config.StateKindDurable, want: false},
+		{name: "non-durable", environment: "production", state: config.StateKindRedis, compose: true, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := config.Config{Environment: test.environment, State: config.StateConfig{Kind: test.state}}
+			if got := requiresDurableBudgetGeneration(value, test.compose); got != test.want {
+				t.Fatalf("requiresDurableBudgetGeneration() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestProductionFactoryRejectsUnconfiguredDurableSnapshotBeforeLoadingEngine(t *testing.T) {
 	data, err := os.ReadFile("../../config.example.yaml")
 	if err != nil {

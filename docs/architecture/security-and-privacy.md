@@ -41,13 +41,14 @@ Configuration contains references, not secret values:
 
 ```yaml
 auth:
-  kind: bearer_env
-  name: OPENAI_API_KEY
+  kind: bearer_file
+  path: /var/run/secrets/providers/openrouter-api-key
 ```
 
-`auth.kind` names the authentication mode (`bearer_env`, `header_env`, or a
-provider workload-identity/default chain). Standalone secret references use
-`kind: env`, `file`, or `workload_identity` instead.
+`auth.kind` names the authentication mode (`bearer_env`, `header_env`,
+`bearer_file`, `header_file`, or a provider workload-identity/default chain).
+Production API credentials use file-backed modes or workload identity;
+standalone secret references use `kind: env`, `file`, or `workload_identity`.
 
 V1 resolvers support environment, mounted file, and platform workload identity
 where the official SDK supports it. Secret values:
@@ -77,9 +78,9 @@ Endpoints are operator-configured and validated:
 - automatic redirects and environment proxies are disabled; no v1 endpoint is
   documented as redirecting, so a future exception must revalidate every hop;
 - every success, error, and streaming response body is capped by
-  `limits.provider_response_bytes` (16 MiB by default, with a 64 MiB hard
-  ceiling); oversized declared lengths are rejected before parsing and
-  unknown or misleading lengths are stopped by a one-byte overrun probe;
+  `limits.provider_response_bytes` (512 KiB by default, no larger than the
+  downstream inline-payload contract, with a 64 MiB absolute ceiling);
+  oversized declared, chunked, and compressed bodies fail content-free;
 - DNS is resolved at dial time, every returned address is rejected if it is
   loopback, private, link-local, multicast, unspecified, carrier-grade NAT,
   benchmarking, deprecated IPv6 site-local (`fec0::/10`), or a known cloud

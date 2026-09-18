@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	ErrCheckpointNotFound = errors.New("checkpoint not found")
-	ErrCheckpointConflict = errors.New("checkpoint already exists with different immutable metadata")
+	ErrCheckpointNotFound       = errors.New("checkpoint not found")
+	ErrCheckpointParentNotFound = errors.New("checkpoint parent does not exist")
+	ErrCheckpointConflict       = errors.New("checkpoint already exists with different immutable metadata")
 )
 
 // DurableCheckpointRepository implements state.CheckpointRepository. Every
@@ -121,7 +122,7 @@ func (repository DurableCheckpointRepository) Get(ctx context.Context, scopeID s
 		&compactedID, &checkpoint.CreatedAt, &checkpoint.ExpiresAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return state.DurableCheckpoint{}, ErrCheckpointNotFound
+			return state.DurableCheckpoint{}, errors.Join(ErrCheckpointNotFound, state.ErrNotFound)
 		}
 		return state.DurableCheckpoint{}, redactPostgresError(fmt.Errorf("get PostgreSQL checkpoint: %w", err))
 	}
@@ -188,6 +189,155 @@ func (repository DurableCheckpointRepository) Get(ctx context.Context, scopeID s
 		return state.DurableCheckpoint{}, fmt.Errorf("validate PostgreSQL checkpoint: %w", err)
 	}
 	return checkpoint, nil
+}
+
+// GetLineage loads the bounded leaf-to-root materialization metadata with one
+// tenant-scoped recursive query. Recursion stops at the nearest snapshot row;
+// DurableCheckpointMaterializer falls back through Get if that optimization
+// later fails cryptographic/content validation.
+func (repository DurableCheckpointRepository) GetLineage(ctx context.Context, scopeID string, id state.CheckpointID, maxRows int) ([]state.DurableCheckpoint, error) {
+	if err := repository.validate(); err != nil {
+		return nil, err
+	}
+	if maxRows <= 0 {
+		return nil, errors.New("checkpoint lineage row bound must be positive")
+	}
+	scope, err := parseScopeUUID(scopeID)
+	if err != nil {
+		return nil, err
+	}
+	checkpointID, err := parseCheckpointUUID(id, "ID")
+	if err != nil {
+		return nil, err
+	}
+	checkpoints, err := repository.relation("conversation_checkpoints")
+	if err != nil {
+		return nil, err
+	}
+	blobs, err := repository.relation("blobs")
+	if err != nil {
+		return nil, err
+	}
+	query := `WITH RECURSIVE lineage AS (
+	SELECT c.*, 0 AS hops
+	FROM ` + checkpoints + ` c
+	WHERE c.checkpoint_id=$1 AND c.scope_id=$2
+	UNION ALL
+	SELECT parent.*, lineage.hops + 1
+	FROM ` + checkpoints + ` parent
+	JOIN lineage ON parent.checkpoint_id=lineage.parent_checkpoint_id
+	WHERE parent.scope_id=$2
+	  AND lineage.materialized_snapshot_blob_id IS NULL
+	  AND lineage.hops + 1 < $3
+)
+SELECT lineage.checkpoint_id, lineage.scope_id, lineage.public_id_hmac,
+	lineage.handle_key_id, lineage.parent_checkpoint_id, lineage.checkpoint_kind,
+	lineage.depth, lineage.origin_operation_id, lineage.origin_cache_entry_id,
+	lineage.delta_blob_id, lineage.response_blob_id, lineage.settings_patch_blob_id,
+	lineage.materialized_snapshot_blob_id, lineage.canonical_lineage_digest,
+	lineage.materialized_settings_digest, lineage.tool_frontier_digest,
+	lineage.schema_version, lineage.compiler_epoch, lineage.compaction_policy_version,
+	lineage.compaction_prompt_version, lineage.compacted_through_checkpoint_id,
+	lineage.created_at, lineage.expires_at,
+	delta.sha256, delta.byte_length, delta.media_type,
+	response.sha256, response.byte_length, response.media_type,
+	settings.sha256, settings.byte_length, settings.media_type,
+	COALESCE(snapshot.sha256, ''::bytea),
+	COALESCE(snapshot.byte_length, 0),
+	COALESCE(snapshot.media_type, '')
+FROM lineage
+JOIN ` + blobs + ` delta ON delta.blob_id=lineage.delta_blob_id AND delta.scope_id=lineage.scope_id
+JOIN ` + blobs + ` response ON response.blob_id=lineage.response_blob_id AND response.scope_id=lineage.scope_id
+JOIN ` + blobs + ` settings ON settings.blob_id=lineage.settings_patch_blob_id AND settings.scope_id=lineage.scope_id
+LEFT JOIN ` + blobs + ` snapshot ON snapshot.blob_id=lineage.materialized_snapshot_blob_id AND snapshot.scope_id=lineage.scope_id
+ORDER BY lineage.hops`
+	rows, err := repository.Pool.Query(ctx, query, checkpointID, scope, maxRows)
+	if err != nil {
+		return nil, redactPostgresError(fmt.Errorf("read PostgreSQL checkpoint lineage: %w", err))
+	}
+	defer rows.Close()
+	result := make([]state.DurableCheckpoint, 0, min(maxRows, 16))
+	for rows.Next() {
+		var checkpoint state.DurableCheckpoint
+		var rowID, rowScope, originOperation, deltaID, responseID, settingsID uuid.UUID
+		var parentID, cacheID, snapshotID, compactedID *uuid.UUID
+		var publicHMAC, lineageDigest, settingsDigest, frontierDigest []byte
+		var deltaDigest, responseDigest, patchDigest, snapshotDigest []byte
+		var deltaLength, responseLength, patchLength, snapshotLength int64
+		var deltaMedia, responseMedia, patchMedia, snapshotMedia string
+		if err := rows.Scan(
+			&rowID, &rowScope, &publicHMAC, &checkpoint.HandleKeyID, &parentID,
+			&checkpoint.Kind, &checkpoint.Depth, &originOperation, &cacheID,
+			&deltaID, &responseID, &settingsID, &snapshotID, &lineageDigest,
+			&settingsDigest, &frontierDigest, &checkpoint.SchemaVersion,
+			&checkpoint.CompilerEpoch, &checkpoint.CompactionPolicyVersion,
+			&checkpoint.CompactionPromptVersion, &compactedID,
+			&checkpoint.CreatedAt, &checkpoint.ExpiresAt,
+			&deltaDigest, &deltaLength, &deltaMedia,
+			&responseDigest, &responseLength, &responseMedia,
+			&patchDigest, &patchLength, &patchMedia,
+			&snapshotDigest, &snapshotLength, &snapshotMedia,
+		); err != nil {
+			return nil, redactPostgresError(fmt.Errorf("scan PostgreSQL checkpoint lineage: %w", err))
+		}
+		if rowScope != scope {
+			return nil, state.ErrTenantMismatch
+		}
+		if len(publicHMAC) != keyDigestBytes || len(lineageDigest) != keyDigestBytes ||
+			len(settingsDigest) != keyDigestBytes || len(frontierDigest) != keyDigestBytes ||
+			len(deltaDigest) != keyDigestBytes || len(responseDigest) != keyDigestBytes ||
+			len(patchDigest) != keyDigestBytes {
+			return nil, errors.New("PostgreSQL checkpoint lineage digest has invalid length")
+		}
+		checkpoint.ID = state.CheckpointID(rowID.String())
+		checkpoint.ScopeID = rowScope.String()
+		checkpoint.OriginOperationID = state.OperationID(originOperation.String())
+		copy(checkpoint.PublicIDHMAC[:], publicHMAC)
+		copy(checkpoint.CanonicalLineageDigest[:], lineageDigest)
+		copy(checkpoint.MaterializedSettingsDigest[:], settingsDigest)
+		copy(checkpoint.ToolFrontierDigest[:], frontierDigest)
+		checkpoint.DeltaBlob = checkpointBlobReference(deltaID, deltaDigest, deltaLength, deltaMedia)
+		checkpoint.ResponseBlob = checkpointBlobReference(responseID, responseDigest, responseLength, responseMedia)
+		checkpoint.SettingsPatchBlob = checkpointBlobReference(settingsID, patchDigest, patchLength, patchMedia)
+		if parentID != nil {
+			value := state.CheckpointID(parentID.String())
+			checkpoint.ParentID = &value
+		}
+		if cacheID != nil {
+			value := state.CacheEntryID(cacheID.String())
+			checkpoint.OriginCacheEntryID = &value
+		}
+		if compactedID != nil {
+			value := state.CheckpointID(compactedID.String())
+			checkpoint.CompactedThroughID = &value
+		}
+		if snapshotID != nil {
+			if len(snapshotDigest) != keyDigestBytes {
+				return nil, errors.New("PostgreSQL checkpoint snapshot digest has invalid length")
+			}
+			value := checkpointBlobReference(*snapshotID, snapshotDigest, snapshotLength, snapshotMedia)
+			checkpoint.MaterializedSnapshotBlob = &value
+		}
+		if err := checkpoint.Validate(repository.clock()); err != nil {
+			return nil, fmt.Errorf("validate PostgreSQL checkpoint lineage: %w", err)
+		}
+		result = append(result, checkpoint)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, redactPostgresError(fmt.Errorf("iterate PostgreSQL checkpoint lineage: %w", err))
+	}
+	if len(result) == 0 {
+		return nil, errors.Join(ErrCheckpointNotFound, state.ErrNotFound)
+	}
+	return result, nil
+}
+
+func checkpointBlobReference(id uuid.UUID, digest []byte, length int64, media string) state.CheckpointBlobReference {
+	reference := state.CheckpointBlobReference{
+		ID: state.BlobID(id.String()), ByteLength: length, MediaType: media,
+	}
+	copy(reference.Digest[:], digest)
+	return reference
 }
 
 func (repository DurableCheckpointRepository) readBlob(ctx context.Context, scope, id uuid.UUID, label string) (state.CheckpointBlobReference, error) {
@@ -485,7 +635,7 @@ func (unit *checkpointUnitOfWork) ensureParent(ctx context.Context, scope, paren
 	var parentDepth int32
 	if err := unit.tx.QueryRow(ctx, "SELECT scope_id, depth FROM "+relation+" WHERE checkpoint_id=$1", parent).Scan(&parentScope, &parentDepth); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return errors.New("checkpoint parent does not exist")
+			return errors.Join(ErrCheckpointParentNotFound, state.ErrNotFound)
 		}
 		return redactPostgresError(fmt.Errorf("check PostgreSQL checkpoint parent: %w", err))
 	}

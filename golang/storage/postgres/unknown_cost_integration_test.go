@@ -21,11 +21,9 @@ func TestUnknownCostQueueIsScopedStableAndExcludesExactOperations(t *testing.T) 
 	create := func(scope, suffix string, completed time.Time, unknown bool) uuid.UUID {
 		t.Helper()
 		id := "unknown-cost-queue-" + suffix + "-" + uuid.NewString()
-		started, err := operations.Begin(ctx, admission.BeginRequest{
-			ID: id, ScopeKey: scope, RequestDigest: admission.Digest([]byte(id)),
+		started, err := operations.Begin(ctx, admission.BeginRequest{ID: id, OperationKey: id, Actor: "postgres-test", ScopeKey: scope, RequestDigest: admission.Digest([]byte(id)),
 			ReservationUSD: pricing.MustUSD("0"), ExpiresAt: base.Add(time.Hour),
-			RequestManifest: []byte(`{"model":"fixture"}`),
-		})
+			RequestManifest: []byte(`{"model":"fixture"}`)})
 		if err != nil {
 			t.Fatalf("begin %s: %v", suffix, err)
 		}

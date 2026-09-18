@@ -7,11 +7,21 @@
 # Local credentials and runtime state must never enter a build context.
 .env
 .env.*
+.local/
 *.pem
 *.key
 *.crt
 secrets/
 tmp/
+**/.aws/
+**/.azure/
+**/.config/gcloud/
+**/.docker/config.json
+**/.kube/
+**/*credential*
+**/*token*
+auth.json
+config.json
 
 # Build/test output.
 bin/
@@ -22,3 +32,5 @@ vendor/
 _build/
 *.test
 *.out
+**/__pycache__/
+*.py[cod]

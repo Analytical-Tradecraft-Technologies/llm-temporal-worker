@@ -125,7 +125,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	metadata.SchemaDigest = digest
 	metadata.CapabilityVersion = set.Version
 	metadata.ProviderTier = string(providerTier(serviceClass))
-	metadata.OpaqueStateRequired = normalized.Continuation != nil
+	metadata.OpaqueStateRequired = false
 	if metadata.EstimatedBytes == 0 {
 		canonical, canonicalErr := canonicalRequestBytes(normalized)
 		if canonicalErr != nil {

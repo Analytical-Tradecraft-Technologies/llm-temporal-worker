@@ -80,6 +80,16 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 		if err != nil {
 			return nil, fmt.Errorf("%w: validate durable ports: %v", ErrDurableV1Composition, err)
 		}
+		binding, err := newProductionPhaseBinding(phaseCapabilities)
+		if err != nil {
+			return nil, fmt.Errorf("%w: construct reserve batch runtime: %v", ErrDurableV1Composition, err)
+		}
+		runtime.ReserveBatch = binding.reserveBatch
+		runtime.AllocateBatchGrants = binding.allocateBatchGrants
+		runtime.CloseBatch = binding.closeBatch
+		runtime.AcquireResourceCapacity = binding.acquireResourceCapacity
+		runtime.RenewResourceCapacity = binding.renewResourceCapacity
+		runtime.ReleaseResourceCapacity = binding.releaseResourceCapacity
 		return runtime, nil
 	}
 }

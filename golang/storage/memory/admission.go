@@ -232,7 +232,7 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 	if err := admission.ValidateOutcome(admission.AttemptOutcome{Certainty: request.Certainty, Incurred: request.Incurred}); err != nil {
 		return err
 	}
-	retain := request.Certainty == admission.Accepted || request.Certainty == admission.Ambiguous
+	retain := !request.PostResponse && (request.Certainty == admission.Accepted || request.Certainty == admission.Ambiguous)
 	if retain {
 		operation.State = admission.StateAmbiguous
 		operation.IncurredMicroUSD = request.Incurred
@@ -248,16 +248,21 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 		operation.State = admission.StateDefiniteFailed
 		operation.IncurredMicroUSD = request.Incurred
 		operation.FinalMicroUSD = request.Incurred
-		if !request.IncurredCostUSD.IsZero() || request.Incurred == 0 {
+		if (!request.PostResponse || request.CostStatus == "exact") && (!request.IncurredCostUSD.IsZero() || request.Incurred == 0) {
 			incurred := request.IncurredCostUSD
 			operation.IncurredCostUSD = &incurred
 			operation.ActualCostUSD = &incurred
 		}
 		operation.ReservedMicroUSD = 0
 	}
+	operation.CostStatus = request.CostStatus
+	operation.CostMethod = request.CostMethod
+	operation.CostUnknownReason = request.UnknownReason
+	operation.FailureReason = request.Reason
 	operation.Attempt = request.Attempt
 	operation.Attempt.Dispatch = request.Certainty
 	operation.UpdatedAt = store.clock()
+	operation.CompletedAt = operation.UpdatedAt
 	store.operations[operation.ID] = operation
 	return nil
 }

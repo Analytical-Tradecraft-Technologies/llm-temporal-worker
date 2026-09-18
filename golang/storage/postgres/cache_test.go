@@ -97,7 +97,12 @@ func TestCacheLookupRejectsInvalidOptInBeforeDatabaseAccess(t *testing.T) {
 	}
 	keyring := Keyring{Active: "cache-v1", Keys: map[string][]byte{"cache-v1": []byte("01234567890123456789012345678901")}}
 	repository := DefaultResponseCacheRepository(nil, namespace, keyring)
-	request := CacheLookupRequest{Key: testCacheKey(), OperationID: "operation", MaxAge: time.Hour}
+	request := CacheLookupRequest{
+		Key: testCacheKey(), OperationID: "operation", MaxAge: time.Hour,
+		CanonicalRequestJSON:   []byte(`{"model":"fixture"}`),
+		SemanticProfileVersion: "profile-v1", CacheEpoch: "epoch-v1",
+		Provider: "fixture", EndpointID: "endpoint", ResolvedModel: "model",
+	}
 	if _, err := repository.Lookup(context.Background(), request); err == nil {
 		t.Fatal("lookup unexpectedly reached a nil database")
 	}
@@ -110,4 +115,33 @@ func TestCacheLookupRejectsInvalidOptInBeforeDatabaseAccess(t *testing.T) {
 		t.Fatal("cache miss should not be represented as a database error")
 	}
 	_ = result
+}
+
+func TestCacheLookupRequiresFrozenRequestAndRouteIdentity(t *testing.T) {
+	namespace, err := NewNamespace("llm_worker", "llm_worker", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := Keyring{Active: "cache-v1", Keys: map[string][]byte{"cache-v1": []byte("01234567890123456789012345678901")}}
+	repository := DefaultResponseCacheRepository(nil, namespace, keyring)
+	valid := CacheLookupRequest{
+		Key: testCacheKey(), OperationID: "operation", MaxAge: time.Hour,
+		CanonicalRequestJSON:   []byte(`{"model":"fixture"}`),
+		SemanticProfileVersion: "profile-v1", CacheEpoch: "epoch-v1",
+		Provider: "fixture", EndpointID: "endpoint", ResolvedModel: "model",
+	}
+	for name, mutate := range map[string]func(*CacheLookupRequest){
+		"canonical request": func(request *CacheLookupRequest) { request.CanonicalRequestJSON = nil },
+		"semantic profile":  func(request *CacheLookupRequest) { request.SemanticProfileVersion = "" },
+		"cache epoch":       func(request *CacheLookupRequest) { request.CacheEpoch = "" },
+		"provider":          func(request *CacheLookupRequest) { request.Provider = "" },
+		"endpoint":          func(request *CacheLookupRequest) { request.EndpointID = "" },
+		"resolved model":    func(request *CacheLookupRequest) { request.ResolvedModel = "" },
+	} {
+		request := valid
+		mutate(&request)
+		if _, err := repository.Lookup(context.Background(), request); err == nil {
+			t.Fatalf("lookup accepted missing %s", name)
+		}
+	}
 }

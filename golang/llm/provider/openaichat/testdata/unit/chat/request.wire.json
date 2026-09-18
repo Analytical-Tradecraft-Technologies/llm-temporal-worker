@@ -6,5 +6,6 @@
     }
   ],
   "model": "chat-contract",
-  "service_tier": "default"
+  "service_tier": "default",
+  "store": false
 }

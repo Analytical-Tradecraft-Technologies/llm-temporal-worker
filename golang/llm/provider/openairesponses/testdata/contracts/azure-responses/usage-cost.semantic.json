@@ -1,6 +1,5 @@
 {
   "api_version": "llm.temporal/v1",
-  "continuation": {"endpoint_id": "azure-fixture", "handle": "openai-responses:azure-resp-usage", "model": "azure-responses/fixture", "pinned": true, "provider_state": [{"endpoint_family": "responses", "kind": "provider_state", "media_type": "application/vnd.openai.response+json", "opaque": "YXp1cmUtcmVzcC11c2FnZQ==", "provider": "openai"}]},
   "cost": {"actual_cost_usd": null, "catalog_version": "", "method": "", "reserved_cost_usd": null},
   "diagnostics": [],
   "operation_key": "fixture-usage-cost",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -36,6 +37,22 @@ func runtimeConfig(t *testing.T) []byte {
 	value := string(data)
 	value = strings.Replace(value, "health_address: 0.0.0.0:8080", "health_address: 127.0.0.1:0", 1)
 	value = strings.Replace(value, "metrics_address: 0.0.0.0:9090", "metrics_address: 127.0.0.1:0", 1)
+	return []byte(value)
+}
+
+func runtimeConfigForState(t *testing.T, kind string) []byte {
+	t.Helper()
+	value := strings.Replace(string(runtimeConfig(t)), "environment: production", "environment: development", 1)
+	value = strings.Replace(value, "kind: durable", "kind: "+kind, 1)
+	if kind == config.StateKindMemory {
+		start := strings.Index(value, "\nblob_store:\n")
+		end := strings.Index(value[start+1:], "\nlimits:\n")
+		if start < 0 || end < 0 {
+			t.Fatal("example blob-store section not found")
+		}
+		end += start + 1
+		value = value[:start] + "\nblob_store:\n  kind: memory\n  inline_bytes: 262144\n" + value[end:]
+	}
 	return []byte(value)
 }
 
@@ -242,25 +259,28 @@ func TestRuntimeStartFailsClosedWithoutV1Runtime(t *testing.T) {
 	}
 }
 
-func TestDevelopmentRuntimeAllowsFailClosedV1Runtime(t *testing.T) {
-	controller := &testWorker{}
-	var closed atomic.Bool
-	options := testRuntimeOptions(t, controller, &closed)
-	options.V1Runtime = nil
-	data := []byte(strings.Replace(string(runtimeConfig(t)), "environment: production", "environment: development", 1))
-	runtime, err := New(context.Background(), data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
-	if !controller.started.Load() || !runtime.Health.Ready() {
-		t.Fatalf("development runtime did not start: started=%v ready=%v", controller.started.Load(), runtime.Health.Ready())
+func TestDevelopmentMemoryAndRedisRuntimesStartWithoutDurableV1(t *testing.T) {
+	for _, kind := range []string{config.StateKindMemory, config.StateKindRedis} {
+		t.Run(kind, func(t *testing.T) {
+			controller := &testWorker{}
+			var closed atomic.Bool
+			options := testRuntimeOptions(t, controller, &closed)
+			options.V1Runtime = nil
+			runtime, err := New(context.Background(), runtimeConfigForState(t, kind), options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.Start(); err != nil {
+				if strings.Contains(err.Error(), "operation not permitted") {
+					t.Skipf("sandbox does not permit loopback listeners: %v", err)
+				}
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+			if !controller.started.Load() || !runtime.Health.Ready() {
+				t.Fatalf("%s runtime did not start: started=%v ready=%v", kind, controller.started.Load(), runtime.Health.Ready())
+			}
+		})
 	}
 }
 
@@ -348,28 +368,37 @@ func TestRuntimeStartCanRetryAfterInitialBindFailure(t *testing.T) {
 	}
 }
 
-func TestDevelopmentRuntimeOmitsV1ActivitiesWithoutRuntime(t *testing.T) {
-	activities := composeRuntimeActivities(config.Config{Environment: "development"}, testEngine{}, nil, nil, nil, &testQueryService{})
-	if activities.V1Runtime != nil || activities.QueryService != nil {
-		t.Fatalf("development fixture retained v1 seams: runtime=%T query=%T", activities.V1Runtime, activities.QueryService)
-	}
-	registry := &testRegistry{}
-	activities.Register(registry)
-	if len(registry.names) != 1 || registry.names[0] != appactivity.GenerateActivityName {
-		t.Fatalf("development fixture registered activities = %v, want only %q", registry.names, appactivity.GenerateActivityName)
+func TestDevelopmentNonDurableModesOmitV1ActivitiesEvenWhenSupplied(t *testing.T) {
+	for _, kind := range []string{config.StateKindMemory, config.StateKindRedis} {
+		activities := composeRuntimeActivities(
+			config.Config{Environment: "development", State: config.StateConfig{Kind: kind}},
+			testEngine{}, nil, nil, testV1Runtime{}, &testQueryService{},
+		)
+		if activities.V1Runtime != nil || activities.QueryService != nil {
+			t.Fatalf("%s fixture retained v1 seams: runtime=%T query=%T", kind, activities.V1Runtime, activities.QueryService)
+		}
+		if activities.RequireDurableProviderFence {
+			t.Fatalf("%s development fixture disabled the legacy Generate helper", kind)
+		}
+		registry := &testRegistry{}
+		activities.Register(registry)
+		if len(registry.names) != 1 || registry.names[0] != appactivity.GenerateActivityName {
+			t.Fatalf("%s fixture registered activities = %v, want only %q", kind, registry.names, appactivity.GenerateActivityName)
+		}
 	}
 }
 
 func TestProductionCompositionDoesNotAdaptLegacyEngineToV1(t *testing.T) {
 	// The legacy engine has one Generate(llm.Request) entry point. It cannot
-	// safely implement the closed Generate/Compact/Query v1 contract: Compact
-	// and Query have different durable state and accounting phases, while
-	// checkpoint-aware Generate requires materialization before dispatch.
-	// Keep this guard close to composition so a future refactor cannot silently
-	// turn the legacy engine into a partial production runtime.
-	activities := composeRuntimeActivities(config.Config{Environment: "production"}, testEngine{}, nil, nil, nil, nil)
+	// safely implement the closed Generate/Compact/Query v1 contract or acquire
+	// the immutable signed-capacity fence. Retain the engine for development
+	// helper composition, but durable production must reject its dispatch path.
+	activities := composeRuntimeActivities(config.Config{Environment: "production", State: config.StateConfig{Kind: config.StateKindDurable}}, testEngine{}, nil, nil, nil, nil)
 	if activities == nil || activities.Engine == nil {
 		t.Fatal("production composition lost the legacy engine used for direct helper tests")
+	}
+	if !activities.RequireDurableProviderFence {
+		t.Fatal("production composition left the unfenced legacy Generate dispatch enabled")
 	}
 	if _, ok := activities.V1Runtime.(appactivity.UnconfiguredV1Runtime); !ok {
 		t.Fatalf("production composition adapted legacy engine to V1Runtime: %T", activities.V1Runtime)
@@ -390,9 +419,14 @@ func TestPhaseOnlyV1RuntimesNeverAdvertiseProductionReadiness(t *testing.T) {
 	}
 }
 
-func TestUnknownEnvironmentStillRequiresV1Runtime(t *testing.T) {
-	if !v1RuntimeRequired(config.Config{Environment: "staging"}) {
-		t.Fatal("staging environment must require durable v1 runtime")
+func TestOnlyDurableStateRequiresV1Runtime(t *testing.T) {
+	if !v1RuntimeRequired(config.Config{Environment: "staging", State: config.StateConfig{Kind: config.StateKindDurable}}) {
+		t.Fatal("durable state must require a v1 runtime")
+	}
+	for _, kind := range []string{config.StateKindMemory, config.StateKindRedis} {
+		if v1RuntimeRequired(config.Config{Environment: "production", State: config.StateConfig{Kind: kind}}) {
+			t.Fatalf("%s state unexpectedly requires a durable v1 runtime", kind)
+		}
 	}
 }
 
@@ -715,7 +749,9 @@ func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
 		}
 		return testEngine{}, clients, nil
 	})
-	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", 1))
+	configuration := runtimeConfigForState(t, config.StateKindMemory)
+	configuration = []byte(strings.Replace(string(configuration), "readiness_probe_interval: 5s", "readiness_probe_interval: 10ms", 1))
+	configuration = []byte(strings.Replace(string(configuration), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 5ms", 1))
 	runtime, err := New(context.Background(), configuration, options)
 	if err != nil {
 		t.Fatal(err)
@@ -1128,6 +1164,9 @@ func TestLoadTLSConfigPinsConfiguredCA(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if tlsConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("minimum TLS version = %#x, want TLS 1.3", tlsConfig.MinVersion)
 	}
 	if tlsConfig.RootCAs == nil {
 		t.Fatal("RootCAs is nil")

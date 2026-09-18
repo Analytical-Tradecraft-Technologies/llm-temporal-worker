@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"embed"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,31 +14,54 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const ContractVersion = "worker_state_v1"
+const (
+	ContractVersion   = "worker_state_v3"
+	contractVersionV1 = "worker_state_v1"
+	contractVersionV2 = "worker_state_v2"
+)
 
-//go:embed schema/000001_worker_state.sql
-var schemaFiles embed.FS
-
-func migrationTemplate() ([]byte, error) {
-	return schemaFiles.ReadFile("schema/000001_worker_state.sql")
+type schemaMigration struct {
+	version string
+	path    string
 }
 
-func RenderMigration(namespace Namespace) (string, error) {
-	if err := namespace.Validate(); err != nil {
-		return "", err
-	}
-	template, err := migrationTemplate()
+var orderedSchemaMigrations = []schemaMigration{
+	{version: contractVersionV1, path: "schema/000001_worker_state.sql"},
+	{version: contractVersionV2, path: "schema/000002_content_free_request_manifest.sql"},
+	{version: ContractVersion, path: "schema/000003_strict_operation_identity.sql"},
+}
+
+//go:embed schema/*.sql
+var schemaFiles embed.FS
+
+func renderSchemaMigration(namespace Namespace, migration schemaMigration) (string, error) {
+	template, err := schemaFiles.ReadFile(migration.path)
 	if err != nil {
-		return "", fmt.Errorf("read PostgreSQL migration: %w", err)
+		return "", fmt.Errorf("read PostgreSQL migration %s: %w", migration.version, err)
 	}
 	// The only interpolated values have passed the strict lower-case
 	// identifier checks above. Everything else remains a static migration.
 	sql := strings.ReplaceAll(string(template), "__SCHEMA__", namespace.Schema)
 	sql = strings.ReplaceAll(sql, "__PREFIX__", namespace.TablePrefix)
 	if strings.Contains(sql, "search_path") || strings.Contains(sql, "__SCHEMA__") || strings.Contains(sql, "__PREFIX__") {
-		return "", fmt.Errorf("rendered migration contains an unsafe placeholder or search_path")
+		return "", fmt.Errorf("rendered migration %s contains an unsafe placeholder or search_path", migration.version)
 	}
 	return sql, nil
+}
+
+func RenderMigration(namespace Namespace) (string, error) {
+	if err := namespace.Validate(); err != nil {
+		return "", err
+	}
+	rendered := make([]string, 0, len(orderedSchemaMigrations))
+	for _, migration := range orderedSchemaMigrations {
+		sql, err := renderSchemaMigration(namespace, migration)
+		if err != nil {
+			return "", err
+		}
+		rendered = append(rendered, sql)
+	}
+	return strings.Join(rendered, "\n"), nil
 }
 
 // Verify checks the immutable schema contract without mutating PostgreSQL.
@@ -57,23 +82,38 @@ func Verify(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error 
 	if err != nil {
 		return err
 	}
-	migration, err := RenderMigration(namespace)
-	if err != nil {
-		return err
+	rendered := make([]string, 0, len(orderedSchemaMigrations))
+	for _, migration := range orderedSchemaMigrations {
+		sql, err := renderSchemaMigration(namespace, migration)
+		if err != nil {
+			return err
+		}
+		rendered = append(rendered, sql)
+		digest := sha256.Sum256([]byte(sql))
+		var version string
+		var stored []byte
+		if err := pool.QueryRow(ctx, "SELECT contract_version, migration_digest FROM "+relation+" WHERE contract_name = $1", migration.version).Scan(&version, &stored); err != nil {
+			return fmt.Errorf("verify PostgreSQL schema contract %s: %w", migration.version, err)
+		}
+		if version != migration.version {
+			return fmt.Errorf("PostgreSQL schema contract version %q is not %q", version, migration.version)
+		}
+		if !hmac.Equal(stored, digest[:]) {
+			return fmt.Errorf("PostgreSQL schema contract digest does not match %s", migration.version)
+		}
 	}
-	digest := sha256.Sum256([]byte(migration))
-	var version string
-	var stored []byte
-	if err := pool.QueryRow(ctx, "SELECT contract_version, migration_digest FROM "+relation+" WHERE contract_name = $1", ContractVersion).Scan(&version, &stored); err != nil {
-		return fmt.Errorf("verify PostgreSQL schema contract: %w", err)
+	knownVersions := make([]string, len(orderedSchemaMigrations))
+	for index, migration := range orderedSchemaMigrations {
+		knownVersions[index] = migration.version
 	}
-	if version != ContractVersion {
-		return fmt.Errorf("PostgreSQL schema contract version %q is not %q", version, ContractVersion)
+	var unknown int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+relation+" WHERE NOT (contract_name = ANY($1::text[]))", knownVersions).Scan(&unknown); err != nil {
+		return fmt.Errorf("verify PostgreSQL schema contract versions: %w", err)
 	}
-	if string(stored) != string(digest[:]) {
-		return fmt.Errorf("PostgreSQL schema contract digest does not match %s", ContractVersion)
+	if unknown != 0 {
+		return fmt.Errorf("PostgreSQL schema contract contains %d unknown version marker(s)", unknown)
 	}
-	if err := verifyReadOnlySchema(ctx, pool, namespace, migration); err != nil {
+	if err := verifyReadOnlySchema(ctx, pool, namespace, strings.Join(rendered, "\n")); err != nil {
 		return err
 	}
 	return nil
@@ -261,9 +301,9 @@ WHERE n.nspname = $1 AND t.relname = ANY($2::text[])
 	return nil
 }
 
-// Install applies the pinned migration exactly once. Startup code should call
-// Verify; this mutating function belongs only to an explicit provisioning or
-// migration step.
+// Install verifies every previously applied checksum and transactionally
+// applies each missing ordered migration. Startup code should call Verify;
+// this mutating function belongs only to explicit provisioning.
 func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error {
 	if ctx == nil {
 		return fmt.Errorf("PostgreSQL install context is nil")
@@ -277,11 +317,20 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 	if err := verifyDatabase(ctx, pool, namespace); err != nil {
 		return err
 	}
-	sql, err := RenderMigration(namespace)
-	if err != nil {
-		return err
+	rendered := make([]string, len(orderedSchemaMigrations))
+	digests := make([][sha256.Size]byte, len(orderedSchemaMigrations))
+	for index, migration := range orderedSchemaMigrations {
+		sql, err := renderSchemaMigration(namespace, migration)
+		if err != nil {
+			return err
+		}
+		rendered[index] = sql
+		digests[index] = sha256.Sum256([]byte(sql))
 	}
-	digest := sha256.Sum256([]byte(sql))
+	if len(orderedSchemaMigrations) == 0 {
+		return fmt.Errorf("PostgreSQL schema has no ordered migrations")
+	}
+
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin PostgreSQL schema install: %w", err)
@@ -291,7 +340,6 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 	if err != nil {
 		return err
 	}
-
 	relation, err := namespace.Render("schema_contract")
 	if err != nil {
 		return err
@@ -300,47 +348,78 @@ func Install(ctx context.Context, pool *pgxpool.Pool, namespace Namespace) error
 	if err := tx.QueryRow(ctx, "SELECT to_regclass($1)::text", relation).Scan(&existing); err != nil {
 		return fmt.Errorf("check PostgreSQL schema contract: %w", err)
 	}
-	if existing == nil || *existing == "" {
-		// A clean install must never claim a relation already owned by Temporal
-		// (or another application) in a shared schema. PostgreSQL would reject
-		// most such collisions later during DDL, but that failure is too late and
-		// can obscure the namespace mistake. Check the complete relation catalog
-		// before applying any worker DDL and fail closed with the exact names.
-		if err := rejectExistingWorkerRelations(ctx, tx, namespace, sql); err != nil {
-			return err
-		}
-	} else {
-		var version string
-		var stored []byte
-		err := tx.QueryRow(ctx, "SELECT contract_version, migration_digest FROM "+relation+" WHERE contract_name = $1", ContractVersion).Scan(&version, &stored)
-		if err != nil {
-			return fmt.Errorf("read PostgreSQL schema contract: %w", err)
-		}
-		if version != ContractVersion || string(stored) != string(digest[:]) {
-			return fmt.Errorf("PostgreSQL schema contract does not match %s", ContractVersion)
-		}
-		// Role grants are deliberately reconciled on every idempotent install.
-		// This repairs a namespace installed by an older worker version without
-		// mutating any schema objects or changing the contract digest.
-		if err := grantRuntimeRoles(ctx, tx, namespace, schemaOwned); err != nil {
-			return err
-		}
-		return tx.Commit(ctx)
-	}
 	if _, err := tx.Exec(ctx, "SET LOCAL TIME ZONE 'UTC'"); err != nil {
 		return fmt.Errorf("set PostgreSQL schema timezone: %w", err)
 	}
-	if _, err := tx.Exec(ctx, sql); err != nil {
-		return fmt.Errorf("apply PostgreSQL schema migration: %w", err)
+
+	if existing == nil || *existing == "" {
+		// A clean install must never claim a relation already owned by Temporal
+		// (or another application) in a shared schema.
+		if err := rejectExistingWorkerRelations(ctx, tx, namespace, strings.Join(rendered, "\n")); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, rendered[0]); err != nil {
+			return fmt.Errorf("apply PostgreSQL schema migration %s: %w", orderedSchemaMigrations[0].version, err)
+		}
+		if err := renameGeneratedConstraints(ctx, tx, namespace, rendered[0]); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO "+relation+" (contract_name, contract_version, migration_digest) VALUES ($1, $1, $2)", orderedSchemaMigrations[0].version, digests[0][:]); err != nil {
+			return fmt.Errorf("record PostgreSQL schema contract %s: %w", orderedSchemaMigrations[0].version, err)
+		}
 	}
-	if err := renameGeneratedConstraints(ctx, tx, namespace, sql); err != nil {
-		return err
+
+	knownVersions := make([]string, len(orderedSchemaMigrations))
+	for index, migration := range orderedSchemaMigrations {
+		knownVersions[index] = migration.version
 	}
+	var unknown int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM "+relation+" WHERE NOT (contract_name = ANY($1::text[]))", knownVersions).Scan(&unknown); err != nil {
+		return fmt.Errorf("read PostgreSQL schema contract versions: %w", err)
+	}
+	if unknown != 0 {
+		return fmt.Errorf("PostgreSQL schema contract contains %d unknown version marker(s)", unknown)
+	}
+
+	for index, migration := range orderedSchemaMigrations {
+		var version string
+		var stored []byte
+		markerErr := tx.QueryRow(ctx, "SELECT contract_version, migration_digest FROM "+relation+" WHERE contract_name=$1 FOR UPDATE", migration.version).Scan(&version, &stored)
+		switch {
+		case markerErr == nil:
+			if version != migration.version || !hmac.Equal(stored, digests[index][:]) {
+				return fmt.Errorf("PostgreSQL schema contract does not match %s", migration.version)
+			}
+		case !errors.Is(markerErr, pgx.ErrNoRows):
+			return fmt.Errorf("read PostgreSQL schema contract %s: %w", migration.version, markerErr)
+		case index == 0:
+			// The contract relation itself is created by migration zero. Its
+			// absence can therefore never be repaired as an additive upgrade.
+			return fmt.Errorf("PostgreSQL schema contract is missing base migration %s", migration.version)
+		default:
+			// Never fill a gap beneath a later marker: that state proves the
+			// ordered ledger was mutated outside this installer.
+			laterVersions := knownVersions[index+1:]
+			if len(laterVersions) != 0 {
+				var later int
+				if err := tx.QueryRow(ctx, "SELECT count(*) FROM "+relation+" WHERE contract_name = ANY($1::text[])", laterVersions).Scan(&later); err != nil {
+					return fmt.Errorf("read later PostgreSQL schema contract versions: %w", err)
+				}
+				if later != 0 {
+					return fmt.Errorf("PostgreSQL schema contract is missing ordered migration %s beneath %d later marker(s)", migration.version, later)
+				}
+			}
+			if _, err := tx.Exec(ctx, rendered[index]); err != nil {
+				return fmt.Errorf("apply PostgreSQL schema migration %s: %w", migration.version, err)
+			}
+			if _, err := tx.Exec(ctx, "INSERT INTO "+relation+" (contract_name, contract_version, migration_digest) VALUES ($1, $1, $2)", migration.version, digests[index][:]); err != nil {
+				return fmt.Errorf("record PostgreSQL schema contract %s: %w", migration.version, err)
+			}
+		}
+	}
+	// Role grants are deliberately reconciled on every idempotent install.
 	if err := grantRuntimeRoles(ctx, tx, namespace, schemaOwned); err != nil {
 		return err
-	}
-	if _, err := tx.Exec(ctx, "INSERT INTO "+relation+" (contract_name, contract_version, migration_digest) VALUES ($1, $2, $3)", ContractVersion, ContractVersion, digest[:]); err != nil {
-		return fmt.Errorf("record PostgreSQL schema contract: %w", err)
 	}
 	return tx.Commit(ctx)
 }
@@ -667,9 +746,10 @@ func renderRoleGrants(namespace Namespace, schemaOwned bool) (string, error) {
 		{table: "scopes", privileges: "UPDATE (deleted_at)"},
 		{table: "configuration_snapshots", privileges: "SELECT, INSERT"},
 		{table: "blobs", privileges: "SELECT, INSERT"},
-		// Blob rows are immutable except for extending retention. Restrict the
-		// runtime update privilege to that one column.
-		{table: "blobs", privileges: "UPDATE (expires_at)"},
+		// Reusing content may extend retention and reseal the authenticated
+		// checkpoint locator under the retained blob ID in the same transaction.
+		// No plaintext locator or content is exposed to PostgreSQL.
+		{table: "blobs", privileges: "UPDATE (expires_at, deletion_state, locator_ciphertext, locator_key_id, encryption_context_digest)"},
 		{table: "operations", privileges: "SELECT, INSERT, UPDATE"},
 		// Terminal operation transitions close the matching attempt in the
 		// same transaction. Keep the mutable surface limited to those facts;

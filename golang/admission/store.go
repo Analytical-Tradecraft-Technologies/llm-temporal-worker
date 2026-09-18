@@ -14,6 +14,14 @@ type AdmissionStore interface {
 	Get(context.Context, string) (Operation, error)
 }
 
+// PreWriteFailureStore atomically records an attempt that is proven not to
+// have written to a provider and closes its reserved operation. Callers must
+// not emulate this boundary with MarkDispatching followed by Fail: a crash
+// between those calls would turn a known no-write outcome into dispatching.
+type PreWriteFailureStore interface {
+	FailBeforeDispatch(context.Context, FailRequest) error
+}
+
 // ProviderPendingStore is an optional extension implemented by durable
 // operation repositories that can persist and recover a provider-owned
 // operation identifier. Engines must never require this extension for

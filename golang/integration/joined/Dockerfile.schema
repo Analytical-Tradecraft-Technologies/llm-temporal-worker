@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1.10
+FROM docker.io/library/golang:1.26.0-alpine@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod CGO_ENABLED=0 GOOS=linux go build -trimpath -o /schema-install ./integration/joined/cmd/schema-install && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -o /budget-bootstrap ./integration/joined/cmd/budget-bootstrap
+FROM scratch
+COPY --from=build /schema-install /schema-install
+COPY --from=build /budget-bootstrap /budget-bootstrap
+ENTRYPOINT ["/schema-install"]

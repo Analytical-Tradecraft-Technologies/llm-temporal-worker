@@ -133,7 +133,7 @@ func (activities *Activities) OpenStream(ctx context.Context) {}
 		},
 		{
 			name:      "runtime does not wire dynamic engine",
-			source:    replaceArchitectureSource(t, runtimeSource, "Engine:                     dynamic", "Engine:                     replacement"),
+			source:    replaceArchitectureSource(t, runtimeSource, "Engine:                      dynamic", "Engine:                      replacement"),
 			validator: validateRuntimeActivityWiring,
 		},
 	} {

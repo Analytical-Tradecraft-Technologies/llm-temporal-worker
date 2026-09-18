@@ -36,6 +36,7 @@ func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 		{name: "temporal.tls.enabled", changed: before.Temporal.TLS.Enabled != after.Temporal.TLS.Enabled},
 		{name: "temporal.tls.server_name", changed: before.Temporal.TLS.ServerName != after.Temporal.TLS.ServerName},
 		{name: "temporal.tls.ca_file", changed: before.Temporal.TLS.CAFile != after.Temporal.TLS.CAFile},
+		{name: "temporal.api_key_file", changed: before.Temporal.APIKeyFile != after.Temporal.APIKeyFile},
 		{name: "temporal.worker.max_concurrent_activities", changed: before.Temporal.Worker.MaxConcurrentActivities != after.Temporal.Worker.MaxConcurrentActivities},
 		{name: "temporal.worker.max_concurrent_activity_task_polls", changed: before.Temporal.Worker.MaxConcurrentActivityTaskPolls != after.Temporal.Worker.MaxConcurrentActivityTaskPolls},
 		{name: "temporal.worker.graceful_stop_timeout", changed: before.Temporal.Worker.GracefulStopTimeout != after.Temporal.Worker.GracefulStopTimeout},

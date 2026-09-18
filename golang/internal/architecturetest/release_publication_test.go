@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	downloadArtifactAction = "actions/download-artifact"
-	uploadArtifactAction   = "actions/upload-artifact"
+	downloadArtifactAction        = "actions/download-artifact"
+	uploadArtifactAction          = "actions/upload-artifact"
+	ecrConfigureCredentialsAction = "aws-actions/configure-aws-credentials"
+	awsECRLoginAction             = "aws-actions/amazon-ecr-login"
+	cosignInstallerAction         = "sigstore/cosign-installer"
 )
 
 var fullGitCommitID = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -86,6 +89,7 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 		t.Fatalf("protected publication job must reject non-master manual dispatches, got %#v", protected["if"])
 	}
 	assertJobPermissions(t, release.name, "protected-signing-publication", protected, map[string]string{
+		"actions":  "read",
 		"contents": "read",
 		"id-token": "write",
 	})
@@ -93,11 +97,95 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 	if scalarString(t, release.name, environment, "name") != "release-publication" {
 		t.Fatalf("protected publication environment = %#v, want release-publication", protected["environment"])
 	}
-	if !strings.Contains(release.raw, "Task 24 stops before external signing, registry publication, tagging, or release creation.") {
-		t.Fatal("protected job must fail closed with a clear external-boundary message")
+	for _, action := range []string{
+		setupGoAction,
+		downloadArtifactAction,
+		ecrConfigureCredentialsAction,
+		awsECRLoginAction,
+		cosignInstallerAction,
+	} {
+		assertJobUsesAction(t, release, "protected-signing-publication", action)
+	}
+	assertJobActionInput(t, release, "protected-signing-publication", setupGoAction, "token", "")
+	assertJobActionInput(t, release, "protected-signing-publication", setupGoAction, "cache", "false")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "name", "release-evidence")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "github-token", "${{ github.token }}")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "repository", "${{ github.repository }}")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "run-id", "${{ inputs.evidence_run_id }}")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "path", "release-artifacts")
+	assertJobActionInput(t, release, "protected-signing-publication", ecrConfigureCredentialsAction, "role-to-assume", "${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}")
+	assertJobActionInput(t, release, "protected-signing-publication", ecrConfigureCredentialsAction, "aws-region", "${{ vars.AWS_REGION }}")
+	assertJobActionInput(t, release, "protected-signing-publication", awsECRLoginAction, "registries", "${{ steps.aws.outputs.aws-account-id }}")
+	assertJobActionInput(t, release, "protected-signing-publication", awsECRLoginAction, "mask-password", "true")
+	assertJobActionInput(t, release, "protected-signing-publication", cosignInstallerAction, "cosign-release", "v3.1.3")
+
+	for _, command := range []string{
+		"bash scripts/release/guard.sh validate-request",
+		"bash scripts/release/guard.sh verify-public-run",
+		"make release-verify",
+		"bash scripts/release/guard.sh verify-evidence",
+		"bash scripts/release/setup-crane.sh",
+		"bash scripts/release/stage-image.sh",
+		"bash scripts/release/publish-ecr.sh",
+		"bash scripts/release/finalize-ecr-tag.sh",
+		"python3 scripts/release/write-provenance.py",
+		"cosign sign",
+		"cosign attest --type cyclonedx",
+		"cosign attest --type slsaprovenance",
+		"cosign verify",
+		"cosign verify-attestation",
+	} {
+		assertJobRunContains(t, release, "protected-signing-publication", command)
 	}
 
-	assertReleaseWorkflowDoesNotPublish(t, release)
+	for _, want := range []string{
+		"bash scripts/release/guard.sh validate-request",
+		"bash scripts/release/guard.sh verify-public-run",
+		"bash scripts/release/guard.sh verify-evidence",
+		"make release-verify",
+		"bash scripts/release/setup-crane.sh",
+		"bash scripts/release/stage-image.sh",
+		"bash scripts/release/publish-ecr.sh",
+		"bash scripts/release/finalize-ecr-tag.sh",
+		"python3 scripts/release/write-provenance.py",
+		"cosign sign \"$PUBLISHED_IMAGE\"",
+		"cosign attest --type cyclonedx",
+		"cosign attest --type slsaprovenance",
+		"cosign verify \"${identity[@]}\" \"$PUBLISHED_IMAGE\"",
+		"cosign verify-attestation \"${identity[@]}\" --type cyclonedx",
+		"cosign verify-attestation \"${identity[@]}\" --type slsaprovenance",
+		"EXPECTED_CERTIFICATE_IDENTITY: https://github.com/mfow/llm-temporal-worker/.github/workflows/release.yml@refs/heads/master",
+		"EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com",
+		"RELEASE_PUBLICATION_IMAGE_REPOSITORY: ${{ vars.RELEASE_PUBLICATION_IMAGE_REPOSITORY }}",
+		"ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}",
+		"AWS_ACCESS_KEY_ID: \"\"",
+		"AWS_SECRET_ACCESS_KEY: \"\"",
+		"AWS_SESSION_TOKEN: \"\"",
+		"STAGED_OCI_LAYOUT: ${{ runner.temp }}/source.oci",
+		`run: rm -rf -- "$STAGED_OCI_LAYOUT"`,
+	} {
+		if !strings.Contains(release.raw, want) {
+			t.Fatalf("protected publication does not retain required contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"Stop before external signing or publication",
+		"Task 24 stops before external signing",
+		"secrets.",
+		":latest",
+		" latest",
+		"docker build",
+		"buildx build",
+		"needs.preflight.outputs",
+		"aws-access-key-id:",
+		"aws-secret-access-key:",
+	} {
+		if strings.Contains(strings.ToLower(release.raw), strings.ToLower(forbidden)) {
+			t.Fatalf("release workflow contains forbidden mutable, static-credential, or trust-bypass contract %q", forbidden)
+		}
+	}
+
+	assertProtectedPublicationContract(t, release)
 	assertNoWorkflowShellTokenReference(t, release)
 	assertManualInputsAreNotInterpolatedInShell(t, release)
 	assertReleaseGuardDoesNotReachExternalSinks(t)
@@ -113,19 +201,143 @@ func TestReleaseRunbookDocumentsExternalAuthorizationBoundary(t *testing.T) {
 		"`release-publication`",
 		"automatic, job-scoped `GITHUB_TOKEN`",
 		"`actions: read`",
-		"credential-free HTTPS `GET`",
-		"fixed unauthenticated HTTPS Git fetch",
+		"credential-free HTTPS",
+		"fixed unauthenticated",
 		"`https://github.com/mfow/llm-temporal-worker.git`",
 		"`github.sha`",
 		"`.github/workflows/master.yml`",
-		"only as the input to GitHub's pinned",
+		"only as the input to GitHub's",
 		"does not create or modify that environment",
-		"does not sign, publish, push, create a tag, or create a release",
-		"fails closed",
+		"`AWS_ECR_PUBLISH_ROLE_ARN`",
+		"`AWS_REGION`",
+		"`ECR_REPOSITORY=llm-temporal-worker`",
+		"`crane pull --format=oci`",
+		"never contacts the source registry",
+		"pushed-reference check and final ECR root digest equality",
+		"`--platform linux/amd64`",
+		"not multi-architecture",
+		"never pushes `latest`",
+		"fails publication",
 	} {
 		if !strings.Contains(runbook, want) {
 			t.Fatalf("release runbook does not document guarded-publication prerequisite %q", want)
 		}
+	}
+}
+
+func TestReleaseImageScriptsStageBeforeCredentialedLocalPush(t *testing.T) {
+	temp := t.TempDir()
+	fakeBin := filepath.Join(temp, "bin")
+	runnerTemp := filepath.Join(temp, "runner")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runnerTemp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	callLog := filepath.Join(temp, "crane.log")
+	writeFakeCommand(t, fakeBin, "crane", `
+printf '%s\n' "$*" >> "$FAKE_CRANE_LOG"
+case "$1" in
+  pull)
+    [[ "$2" == "--format=oci" && "$3" == "$EXPECTED_SOURCE" && "$4" == "$EXPECTED_LAYOUT" ]]
+    mkdir -p "$4"
+    printf '{"imageLayoutVersion":"1.0.0"}\n' > "$4/oci-layout"
+    printf '{"schemaVersion":2,"manifests":[]}\n' > "$4/index.json"
+    ;;
+  push)
+    [[ "$2" == "$EXPECTED_LAYOUT" && "$3" == "$EXPECTED_DESTINATION" ]]
+    printf '%s\n' "$3"
+    ;;
+  tag)
+    [[ "$2" == "$EXPECTED_DESTINATION" && "$3" == "v1.2.3" ]]
+    ;;
+  digest)
+    [[ "$2" == "$EXPECTED_DESTINATION" || "$2" == "$EXPECTED_TAGGED_DESTINATION" ]]
+    printf '%s\n' "$EXPECTED_IMAGE_DIGEST"
+    ;;
+  *)
+    exit 97
+    ;;
+esac
+`)
+	writeFakeCommand(t, fakeBin, "go", `printf '%s\n' "$EXPECTED_IMAGE_DIGEST"`)
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	source := "registry.example/source/llm-temporal-worker@" + digest
+	layout := filepath.Join(runnerTemp, "source.oci")
+	destination := "123456789012.dkr.ecr.us-east-2.amazonaws.com/llm-temporal-worker@" + digest
+	taggedDestination := "123456789012.dkr.ecr.us-east-2.amazonaws.com/llm-temporal-worker:v1.2.3"
+	commonEnvironment := []string{
+		"PATH=" + fakeBin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"FAKE_CRANE_LOG=" + callLog,
+		"EXPECTED_IMAGE_DIGEST=" + digest,
+		"EXPECTED_SOURCE=" + source,
+		"EXPECTED_LAYOUT=" + layout,
+		"EXPECTED_DESTINATION=" + destination,
+		"EXPECTED_TAGGED_DESTINATION=" + taggedDestination,
+		"RUNNER_TEMP=" + runnerTemp,
+	}
+
+	stage := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts", "release", "stage-image.sh"))
+	stage.Env = append(commonEnvironment, "SOURCE_IMAGE_REFERENCE="+source, "STAGED_OCI_LAYOUT="+layout)
+	if output, err := stage.CombinedOutput(); err != nil {
+		t.Fatalf("stage image: %v\n%s", err, output)
+	}
+	calls, err := os.ReadFile(callLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(calls), "pull --format=oci "+source+" "+layout+"\n"; got != want {
+		t.Fatalf("pre-OIDC Crane calls = %q, want %q", got, want)
+	}
+
+	githubOutput := filepath.Join(temp, "github-output")
+	githubSummary := filepath.Join(temp, "github-summary")
+	publish := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts", "release", "publish-ecr.sh"))
+	publish.Env = append(commonEnvironment,
+		"STAGED_OCI_LAYOUT="+layout,
+		"AWS_ECR_PUBLISH_ROLE_ARN=arn:aws:iam::123456789012:role/llmtw-publisher",
+		"AWS_ACCOUNT_ID=123456789012",
+		"AWS_REGION=us-east-2",
+		"ECR_REGISTRY=123456789012.dkr.ecr.us-east-2.amazonaws.com",
+		"ECR_REPOSITORY=llm-temporal-worker",
+		"GITHUB_OUTPUT="+githubOutput,
+		"GITHUB_STEP_SUMMARY="+githubSummary,
+	)
+	if output, err := publish.CombinedOutput(); err != nil {
+		t.Fatalf("publish staged image: %v\n%s", err, output)
+	}
+	finalize := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts", "release", "finalize-ecr-tag.sh"))
+	finalize.Env = append(commonEnvironment,
+		"PUBLISHED_IMAGE="+destination,
+		"RELEASE_REF=refs/tags/v1.2.3",
+		"ECR_REGISTRY=123456789012.dkr.ecr.us-east-2.amazonaws.com",
+		"ECR_REPOSITORY=llm-temporal-worker",
+		"GITHUB_OUTPUT="+githubOutput,
+		"GITHUB_STEP_SUMMARY="+githubSummary,
+	)
+	if output, err := finalize.CombinedOutput(); err != nil {
+		t.Fatalf("finalize immutable tag: %v\n%s", err, output)
+	}
+	calls, err = os.ReadFile(callLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := "pull --format=oci " + source + " " + layout + "\n" +
+		"push " + layout + " " + destination + "\n" +
+		"digest " + destination + "\n" +
+		"tag " + destination + " v1.2.3\n" +
+		"digest " + taggedDestination + "\n"
+	if string(calls) != wantCalls {
+		t.Fatalf("Crane calls = %q, want local-only publication %q", calls, wantCalls)
+	}
+	output, err := os.ReadFile(githubOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(output), "published_image="+destination+"\npublished_tag="+taggedDestination+"\n"; got != want {
+		t.Fatalf("publication output = %q, want %q", got, want)
 	}
 }
 
@@ -475,25 +687,160 @@ func assertJobPermissions(t *testing.T, workflowName, jobName string, job map[st
 	}
 }
 
-func assertReleaseWorkflowDoesNotPublish(t *testing.T, workflow workflowDocument) {
+func assertProtectedPublicationContract(t *testing.T, workflow workflowDocument) {
 	t.Helper()
-	for _, forbidden := range []string{
-		"secrets.",
-		"docker login",
-		"docker push",
-		"cosign sign",
-		"gh release",
-		"oras push",
-		"skopeo copy",
-		"packages: write",
-		"attestations: write",
-		"actions: write",
-		"git push",
-		"git tag",
-		"gh api",
+
+	idTokenJobs := 0
+	for jobName, rawJob := range workflowMapping(t, workflow, "jobs") {
+		job, ok := rawJob.(map[string]any)
+		if !ok {
+			t.Fatalf("%s job %q = %#v, want mapping", workflow.name, jobName, rawJob)
+		}
+		permissions := nestedMapping(t, workflow.name, job, "permissions")
+		if permissions["id-token"] != nil {
+			idTokenJobs++
+			if jobName != "protected-signing-publication" || permissions["id-token"] != "write" {
+				t.Fatalf("%s job %q has unauthorized id-token permission %#v", workflow.name, jobName, permissions["id-token"])
+			}
+		}
+	}
+	if idTokenJobs != 1 {
+		t.Fatalf("%s must grant id-token permission to exactly one protected job, got %d", workflow.name, idTokenJobs)
+	}
+
+	protected := workflowJob(t, workflow, "protected-signing-publication")
+	evidenceIndex, stageIndex, awsIndex, ecrIndex, publishIndex := -1, -1, -1, -1, -1
+	signIndex, verifyIndex, finalizeIndex, cleanupIndex := -1, -1, -1, -1
+	credentialBlankedSteps := make(map[string]map[string]any)
+	var publishStep map[string]any
+	for index, rawStep := range workflowSteps(t, workflow.name, "protected-signing-publication", protected) {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch {
+		case step["name"] == "Reverify complete evidence and exact publication digest":
+			evidenceIndex = index
+		case step["run"] == "bash scripts/release/stage-image.sh":
+			stageIndex = index
+		case actionName(step["uses"]) == ecrConfigureCredentialsAction:
+			awsIndex = index
+		case actionName(step["uses"]) == awsECRLoginAction:
+			ecrIndex = index
+		case step["run"] == "bash scripts/release/publish-ecr.sh":
+			publishIndex = index
+			publishStep = step
+			credentialBlankedSteps["publisher"] = step
+		case step["name"] == "Keyless-sign image, SBOM, and SLSA provenance":
+			signIndex = index
+			credentialBlankedSteps["signer"] = step
+		case step["name"] == "Verify exact GitHub workflow identity and every signed subject":
+			verifyIndex = index
+			credentialBlankedSteps["signature verifier"] = step
+		case step["run"] == "bash scripts/release/finalize-ecr-tag.sh":
+			finalizeIndex = index
+			credentialBlankedSteps["tag finalizer"] = step
+		case step["name"] == "Remove staged OCI layout":
+			cleanupIndex = index
+			credentialBlankedSteps["cleanup"] = step
+		}
+	}
+	if evidenceIndex < 0 || stageIndex <= evidenceIndex || awsIndex != stageIndex+1 ||
+		ecrIndex != awsIndex+1 || publishIndex != ecrIndex+1 ||
+		signIndex != publishIndex+1 || verifyIndex != signIndex+1 ||
+		finalizeIndex != verifyIndex+1 || cleanupIndex != finalizeIndex+1 {
+		t.Fatalf("protected publication must stage verified source before consecutive OIDC, ECR login, digest publication, signing, identity verification, immutable tagging, and cleanup steps")
+	}
+	for stepName, step := range credentialBlankedSteps {
+		stepEnv := stepEnvironment(t, workflow.name, "protected-signing-publication", step)
+		for _, name := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+			if value, found := stepEnv[name]; !found || value != "" {
+				t.Fatalf("protected publication %s shell must blank %s, got %#v", stepName, name, value)
+			}
+		}
+	}
+	publishEnv := stepEnvironment(t, workflow.name, "protected-signing-publication", publishStep)
+	if _, found := publishEnv["SOURCE_IMAGE_REFERENCE"]; found {
+		t.Fatal("credentialed publisher must not receive the source registry reference")
+	}
+
+	setup := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "setup-crane.sh")
+	for _, want := range []string{
+		`readonly crane_version="v0.20.3"`,
+		`readonly crane_archive_sha256="36c67a932f489b3f2724b64af90b599a8ef2aa7b004872597373c0ad694dc059"`,
+		`sha256sum --check --status`,
 	} {
-		if strings.Contains(strings.ToLower(workflow.raw), forbidden) {
-			t.Fatalf("%s contains forbidden signing, publication, or external-write command %q", workflow.name, forbidden)
+		if !strings.Contains(setup, want) {
+			t.Fatalf("pinned Crane setup is missing %q", want)
+		}
+	}
+
+	stager := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "stage-image.sh")
+	for _, want := range []string{
+		`[[ "${SOURCE_IMAGE_REFERENCE}" == *@"${EXPECTED_IMAGE_DIGEST}" ]]`,
+		`[[ "${STAGED_OCI_LAYOUT}" == "${runner_temp}/source.oci" ]]`,
+		`crane pull --format=oci "${SOURCE_IMAGE_REFERENCE}" "${STAGED_OCI_LAYOUT}"`,
+		`layout-digest -layout "${STAGED_OCI_LAYOUT}"`,
+		`[[ "${staged_digest}" == "${EXPECTED_IMAGE_DIGEST}" ]]`,
+		"every child",
+	} {
+		if !strings.Contains(stager, want) {
+			t.Fatalf("pre-OIDC OCI stager is missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"--platform", "--index", "ECR_REGISTRY", "AWS_ACCOUNT_ID", "crane push"} {
+		if strings.Contains(stager, forbidden) {
+			t.Fatalf("pre-OIDC OCI stager contains forbidden selection, credential, or destination operation %q", forbidden)
+		}
+	}
+
+	publisher := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "publish-ecr.sh")
+	for _, want := range []string{
+		`[[ "${STAGED_OCI_LAYOUT}" == "${runner_temp}/source.oci" ]]`,
+		`[[ "${ECR_REPOSITORY}" == "llm-temporal-worker" ]]`,
+		`expected_registry="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"`,
+		`staged_digest="$(go -C "${root}/golang" run ./tools/releaseverify layout-digest -layout "${STAGED_OCI_LAYOUT}")"`,
+		`destination="${ECR_REGISTRY}/${ECR_REPOSITORY}@${EXPECTED_IMAGE_DIGEST}"`,
+		`pushed_reference="$(crane push "${STAGED_OCI_LAYOUT}" "${destination}")"`,
+		`[[ "${pushed_reference}" == "${destination}" ]]`,
+		`[[ "${pushed_digest}" == "${EXPECTED_IMAGE_DIGEST}" ]]`,
+		`destination_digest="$(crane digest "${destination}")"`,
+		`[[ "${destination_digest}" == "${staged_digest}" ]]`,
+		`[[ "${destination_digest}" == "${pushed_digest}" ]]`,
+		`printf 'published_image=%s\n' "${destination}"`,
+	} {
+		if !strings.Contains(publisher, want) {
+			t.Fatalf("local-layout ECR publisher is missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		":latest",
+		"--platform",
+		"--index",
+		"docker push",
+		"aws ecr",
+		"git push",
+		"SOURCE_IMAGE_REFERENCE",
+		"crane pull",
+		"crane copy",
+		"--remote",
+	} {
+		if strings.Contains(publisher, forbidden) {
+			t.Fatalf("local-layout ECR publisher contains forbidden source, mutable, or broad operation %q", forbidden)
+		}
+	}
+
+	finalizer := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "finalize-ecr-tag.sh")
+	for _, want := range []string{
+		`[[ "${RELEASE_REF}" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]`,
+		`[[ "${PUBLISHED_IMAGE}" == "${ECR_REGISTRY}/${ECR_REPOSITORY}@${EXPECTED_IMAGE_DIGEST}" ]]`,
+		`crane tag "${PUBLISHED_IMAGE}" "${release_tag}"`,
+		`tagged_digest="$(crane digest "${tagged_destination}")"`,
+		`[[ "${tagged_digest}" == "${EXPECTED_IMAGE_DIGEST}" ]]`,
+		`printf 'published_tag=%s\n' "${tagged_destination}"`,
+	} {
+		if !strings.Contains(finalizer, want) {
+			t.Fatalf("immutable ECR tag finalizer is missing %q", want)
 		}
 	}
 }
@@ -543,8 +890,8 @@ func assertTrustedMasterEvidenceArtifactSource(t *testing.T, master workflowDocu
 func assertGitHubTokenIsExclusiveToArtifactDownload(t *testing.T, workflow workflowDocument) {
 	t.Helper()
 	const tokenExpression = "${{ github.token }}"
-	if strings.Count(workflow.raw, tokenExpression) != 1 {
-		t.Fatalf("%s must contain exactly one explicit GitHub token expression", workflow.name)
+	if strings.Count(workflow.raw, tokenExpression) != 2 {
+		t.Fatalf("%s must contain exactly two explicit GitHub token expressions, one per independent artifact download", workflow.name)
 	}
 
 	usesToken := 0
@@ -564,14 +911,15 @@ func assertGitHubTokenIsExclusiveToArtifactDownload(t *testing.T, workflow workf
 					continue
 				}
 				usesToken++
-				if jobName != "preflight" || actionName(step["uses"]) != downloadArtifactAction || input != "github-token" {
+				if (jobName != "preflight" && jobName != "protected-signing-publication") ||
+					actionName(step["uses"]) != downloadArtifactAction || input != "github-token" {
 					t.Fatalf("%s job %q exposes the GitHub token outside pinned download-artifact", workflow.name, jobName)
 				}
 			}
 		}
 	}
-	if usesToken != 1 {
-		t.Fatalf("%s passes the GitHub token %d times, want once", workflow.name, usesToken)
+	if usesToken != 2 {
+		t.Fatalf("%s passes the GitHub token %d times, want once per independent evidence boundary", workflow.name, usesToken)
 	}
 }
 
@@ -581,75 +929,77 @@ func assertAnonymousFixedPublicCheckout(t *testing.T, workflow workflowDocument)
 		t.Fatalf("%s must not give actions/checkout a GitHub token when the public anonymous bootstrap is required", workflow.name)
 	}
 
-	preflight := workflowJob(t, workflow, "preflight")
-	steps := workflowSteps(t, workflow.name, "preflight", preflight)
-	shapeIndex := -1
-	checkoutIndex := -1
-	var shapeStep map[string]any
-	var checkoutStep map[string]any
-	for index, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok {
-			continue
+	for _, jobName := range []string{"preflight", "protected-signing-publication"} {
+		job := workflowJob(t, workflow, jobName)
+		steps := workflowSteps(t, workflow.name, jobName, job)
+		shapeIndex := -1
+		checkoutIndex := -1
+		var shapeStep map[string]any
+		var checkoutStep map[string]any
+		for index, rawStep := range steps {
+			step, ok := rawStep.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch step["name"] {
+			case "Validate release reference before anonymous fetch":
+				shapeIndex = index
+				shapeStep = step
+			case "Check out fixed public master anonymously":
+				checkoutIndex = index
+				checkoutStep = step
+			}
 		}
-		switch step["name"] {
-		case "Validate release reference before anonymous fetch":
-			shapeIndex = index
-			shapeStep = step
-		case "Check out fixed public master anonymously":
-			checkoutIndex = index
-			checkoutStep = step
+		if shapeIndex < 0 || checkoutIndex < 0 || shapeIndex >= checkoutIndex {
+			t.Fatalf("%s job %q must validate the manual release ref before its anonymous public checkout", workflow.name, jobName)
 		}
-	}
-	if shapeIndex < 0 || checkoutIndex < 0 || shapeIndex >= checkoutIndex {
-		t.Fatalf("%s must validate the manual release ref before its anonymous public checkout", workflow.name)
-	}
 
-	shapeEnv := stepEnvironment(t, workflow.name, "preflight", shapeStep)
-	if got := scalarString(t, workflow.name, shapeEnv, "RELEASE_REF"); got != "${{ inputs.release_ref }}" {
-		t.Fatalf("%s release-ref shape step input = %q, want explicit environment binding", workflow.name, got)
-	}
-	shapeRun := scalarString(t, workflow.name, shapeStep, "run")
-	for _, want := range []string{
-		`[[ "$RELEASE_REF" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]`,
-		`printf 'release_ref=%s\n' "$RELEASE_REF" >> "$GITHUB_OUTPUT"`,
-	} {
-		if !strings.Contains(shapeRun, want) {
-			t.Fatalf("%s release-ref shape step does not retain %q", workflow.name, want)
+		shapeEnv := stepEnvironment(t, workflow.name, jobName, shapeStep)
+		if got := scalarString(t, workflow.name, shapeEnv, "RELEASE_REF"); got != "${{ inputs.release_ref }}" {
+			t.Fatalf("%s job %q release-ref shape step input = %q, want explicit environment binding", workflow.name, jobName, got)
 		}
-	}
-	if strings.Contains(strings.ToLower(shapeRun), "git ") {
-		t.Fatalf("%s release-ref shape step must not fetch or execute a manual ref", workflow.name)
-	}
+		shapeRun := scalarString(t, workflow.name, shapeStep, "run")
+		for _, want := range []string{
+			`[[ "$RELEASE_REF" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]`,
+			`printf 'release_ref=%s\n' "$RELEASE_REF" >> "$GITHUB_OUTPUT"`,
+		} {
+			if !strings.Contains(shapeRun, want) {
+				t.Fatalf("%s job %q release-ref shape step does not retain %q", workflow.name, jobName, want)
+			}
+		}
+		if strings.Contains(strings.ToLower(shapeRun), "git ") {
+			t.Fatalf("%s job %q release-ref shape step must not fetch or execute a manual ref", workflow.name, jobName)
+		}
 
-	checkoutEnv := stepEnvironment(t, workflow.name, "preflight", checkoutStep)
-	if got := scalarString(t, workflow.name, checkoutEnv, "RELEASE_REF"); got != "${{ steps.release-ref.outputs.release_ref }}" {
-		t.Fatalf("%s anonymous checkout must use only the validated release ref, got %q", workflow.name, got)
-	}
-	if got := scalarString(t, workflow.name, checkoutEnv, "TRUSTED_MASTER_SHA"); got != "${{ github.sha }}" {
-		t.Fatalf("%s anonymous checkout must bind the protected workflow revision, got %q", workflow.name, got)
-	}
-	checkoutRun := scalarString(t, workflow.name, checkoutStep, "run")
-	for _, want := range []string{
-		`test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"`,
-		`export GIT_CONFIG_NOSYSTEM=1`,
-		`export GIT_TERMINAL_PROMPT=0`,
-		`export GIT_ASKPASS=/bin/false`,
-		`git init --quiet "$GITHUB_WORKSPACE"`,
-		`git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git`,
-		`git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin`,
-		`+refs/heads/master:refs/remotes/origin/master`,
-		`"$RELEASE_REF:$RELEASE_REF"`,
-		`git -C "$GITHUB_WORKSPACE" checkout --detach --force "$TRUSTED_MASTER_SHA"`,
-		`git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master`,
-	} {
-		if !strings.Contains(checkoutRun, want) {
-			t.Fatalf("%s anonymous checkout does not retain %q", workflow.name, want)
+		checkoutEnv := stepEnvironment(t, workflow.name, jobName, checkoutStep)
+		if got := scalarString(t, workflow.name, checkoutEnv, "RELEASE_REF"); got != "${{ steps.release-ref.outputs.release_ref }}" {
+			t.Fatalf("%s job %q anonymous checkout must use only the validated release ref, got %q", workflow.name, jobName, got)
 		}
-	}
-	for _, forbidden := range []string{"github.token", "github_token", "gh_token", "actions/checkout"} {
-		if strings.Contains(strings.ToLower(checkoutRun), forbidden) {
-			t.Fatalf("%s anonymous checkout exposes a credentialed checkout path %q", workflow.name, forbidden)
+		if got := scalarString(t, workflow.name, checkoutEnv, "TRUSTED_MASTER_SHA"); got != "${{ github.sha }}" {
+			t.Fatalf("%s job %q anonymous checkout must bind the protected workflow revision, got %q", workflow.name, jobName, got)
+		}
+		checkoutRun := scalarString(t, workflow.name, checkoutStep, "run")
+		for _, want := range []string{
+			`test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"`,
+			`export GIT_CONFIG_NOSYSTEM=1`,
+			`export GIT_TERMINAL_PROMPT=0`,
+			`export GIT_ASKPASS=/bin/false`,
+			`git init --quiet "$GITHUB_WORKSPACE"`,
+			`git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git`,
+			`git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin`,
+			`+refs/heads/master:refs/remotes/origin/master`,
+			`"$RELEASE_REF:$RELEASE_REF"`,
+			`git -C "$GITHUB_WORKSPACE" checkout --detach --force "$TRUSTED_MASTER_SHA"`,
+			`git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master`,
+		} {
+			if !strings.Contains(checkoutRun, want) {
+				t.Fatalf("%s job %q anonymous checkout does not retain %q", workflow.name, jobName, want)
+			}
+		}
+		for _, forbidden := range []string{"github.token", "github_token", "gh_token", "actions/checkout"} {
+			if strings.Contains(strings.ToLower(checkoutRun), forbidden) {
+				t.Fatalf("%s job %q anonymous checkout exposes a credentialed checkout path %q", workflow.name, jobName, forbidden)
+			}
 		}
 	}
 }

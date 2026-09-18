@@ -39,7 +39,18 @@ func TestLiveRedisThrottleAcquireReplayDenialAndRelease(t *testing.T) {
 	if err := store.Release(context.Background(), first.Reservation); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Acquire(context.Background(), "live-throttle-3", limits); err != nil {
-		t.Fatalf("live throttle after release = %v", err)
+	if _, err := store.Acquire(context.Background(), "live-throttle-3", limits); !errors.Is(err, ErrThrottleDenied) {
+		t.Fatalf("released request quota did not persist for its signed window: %v", err)
+	}
+	concurrency := []ThrottleLimit{{Kind: ThrottleConcurrency, Scope: "provider-a", Amount: 1, Limit: 1, Window: time.Minute}}
+	lease, err := store.Acquire(context.Background(), "live-concurrency-1", concurrency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Release(context.Background(), lease.Reservation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Acquire(context.Background(), "live-concurrency-2", concurrency); err != nil {
+		t.Fatalf("released concurrency remained occupied: %v", err)
 	}
 }

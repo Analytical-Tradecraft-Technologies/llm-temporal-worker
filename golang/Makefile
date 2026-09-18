@@ -20,7 +20,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration joined-forecast-smoke btf25-timeout-plan-test joined-btf25-temporal-smoke joined-btf25-temporal-smoke-real deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -222,7 +222,7 @@ image-verify:
 			tar -xf "$$archive" -C "$$layout"; \
 			docker image inspect "$(IMAGE_VERIFY_TAG)" >/dev/null; \
 		else \
-			docker build --tag "$(IMAGE_VERIFY_TAG)" \
+			docker build --platform linux/amd64 --tag "$(IMAGE_VERIFY_TAG)" \
 				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
 				--build-arg REVISION="$$revision" \
 				--build-arg BUILD_TIME="$$build_time" \
@@ -237,6 +237,18 @@ image-verify:
 		LLMTW_IMAGE_SOURCE="$(IMAGE_VERIFY_SOURCE)" \
 		LLMTW_IMAGE_GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
 		$(GO) test -count=1 -tags=imageintegration ./integration -run '^TestHardenedImageRuntimeAndMetadata$$'
+
+joined-forecast-smoke:
+	@./scripts/joined-forecast-smoke.sh
+
+btf25-timeout-plan-test:
+	@PYTHONPATH=scripts python3 -m unittest scripts/btf25_timeout_plan_test.py
+
+joined-btf25-temporal-smoke: btf25-timeout-plan-test
+	@./scripts/joined-btf25-temporal-smoke.sh
+
+joined-btf25-temporal-smoke-real: btf25-timeout-plan-test
+	@BTF25_PROVIDER_MODE=real ./scripts/joined-btf25-temporal-smoke.sh
 
 compose-smoke:
 	@command -v "$(firstword $(COMPOSE))" >/dev/null 2>&1 || { \

@@ -52,6 +52,17 @@ func TestPostgresIntegrationConfiguration(t *testing.T) {
 	if err := Verify(ctx, pool, ns); err != nil {
 		t.Fatalf("contract verification: %v", err)
 	}
+	var markerCount int
+	contracts, err := ns.Render("schema_contract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+contracts).Scan(&markerCount); err != nil {
+		t.Fatal(err)
+	}
+	if markerCount != len(orderedSchemaMigrations) {
+		t.Fatalf("fresh install marker count = %d, want %d", markerCount, len(orderedSchemaMigrations))
+	}
 	var tableCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind = 'r'`, ns.Schema).Scan(&tableCount); err != nil {
 		t.Fatal(err)

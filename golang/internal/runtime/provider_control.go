@@ -10,13 +10,17 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	blobstore "github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
+	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
 // providerStatusRepositorySource is implemented by a PostgreSQL client set
@@ -54,6 +58,11 @@ type PostgresQueryRepositoriesSource interface {
 	QueryRepositories() PostgresQueryRepositories
 }
 
+// CheckpointLocatorWriter is the only PostgreSQL locator-write capability
+// exposed to runtime composition. Its implementation is a closure so callers
+// cannot type-assert it back to a repository containing a pgx pool or keys.
+type CheckpointLocatorWriter func(context.Context, string, blobstore.Ref) (state.CheckpointBlobReference, error)
+
 // CheckpointCapabilities is the storage-neutral checkpoint bundle owned by
 // one immutable runtime snapshot. The interfaces deliberately hide pgx pools,
 // encryption keys, and object-store locators from Activity composition.
@@ -64,6 +73,10 @@ type CheckpointCapabilities struct {
 	Repository   state.CheckpointRepository
 	Blobs        state.CheckpointBlobReader
 	Materializer state.CheckpointHandleMaterializer
+	BlobStore    blobstore.Store
+	WriteLocator CheckpointLocatorWriter
+	IssueHandle  func(string, state.CheckpointID) (string, string, [32]byte, error)
+	VerifyHandle func(context.Context, string, string) (state.CheckpointID, error)
 }
 
 // Validate checks the optional checkpoint bundle's capability relationships.
@@ -100,6 +113,25 @@ func (capabilities CheckpointCapabilities) RequireMaterializer() error {
 	}
 	if isNilCapability(capabilities.Repository) || isNilCapability(capabilities.Blobs) || isNilCapability(capabilities.Materializer) {
 		return errors.New("complete checkpoint materializer capability is not configured")
+	}
+	return nil
+}
+
+// RequirePublication is the fail-closed check for checkpoint creation. It
+// validates every narrow capability used to upload an object, persist its
+// encrypted locator, publish the checkpoint, and issue or verify its handle.
+func (capabilities CheckpointCapabilities) RequirePublication() error {
+	if err := capabilities.RequireMaterializer(); err != nil {
+		return err
+	}
+	if isNilCapability(capabilities.BlobStore) {
+		return errors.New("checkpoint blob-store capability is not configured")
+	}
+	if capabilities.WriteLocator == nil {
+		return errors.New("checkpoint locator-writer capability is not configured")
+	}
+	if capabilities.IssueHandle == nil || capabilities.VerifyHandle == nil {
+		return errors.New("checkpoint handle capabilities are not configured")
 	}
 	return nil
 }
@@ -193,6 +225,7 @@ type V1RuntimeCapabilities struct {
 	ConfigDigest [32]byte
 	Snapshot     engine.SnapshotSource
 	Planner      routing.Planner
+	Estimator    budget.Estimator
 	Adapters     engine.AdapterRegistry
 	Checkpoints  CheckpointCapabilities
 	// Journal is the optional write-only PostgreSQL budget journal. It is
@@ -212,6 +245,24 @@ type V1RuntimeCapabilities struct {
 	composition            *durablestore.Composition
 	ProviderStatusRecorder engine.ProviderStatusRecorder
 	Clock                  func() time.Time
+	// ResolveScope maps authenticated tenant/project values to the opaque
+	// PostgreSQL scope owned by this snapshot. It may create the scope row but
+	// never returns raw identifiers to durable checkpoint records.
+	ResolveScope        func(context.Context, llm.RequestContext) (string, error)
+	BudgetGenerationID  durablestore.GenerationID
+	BudgetIncarnationID durablestore.IncarnationID
+	ReservationLease    time.Duration
+	OperationRetention  time.Duration
+	CheckpointRetention time.Duration
+	MaxRequestBytes     int64
+	ResourceCapacity    config.VerifiedResourceCapacity
+	CapacityLeases      *redisstore.ThrottleStore
+	CheckpointLimits    state.MaterializeLimits
+	// GrantKeyID and GrantHMACKey authenticate reserve-batch grants at the
+	// Generate boundary. Key material is snapshot-owned, never serialized, and
+	// must be at least 32 bytes when batch admission is enabled.
+	GrantKeyID   string
+	GrantHMACKey []byte
 	// GeneratePortsFactory is a per-snapshot constructor for the storage-
 	// neutral durable Generate phase. It must close over only the immutable
 	// adapters and stores represented by this capability bundle; a nil value is

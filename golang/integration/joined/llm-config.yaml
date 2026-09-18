@@ -1,0 +1,178 @@
+version: llm-temporal-worker/v1
+environment: development
+server:
+  health_address: 0.0.0.0:8080
+  metrics_address: 0.0.0.0:9090
+  shutdown_timeout: 45s
+  finalization_timeout: 10s
+  readiness_probe_interval: 2s
+  readiness_probe_timeout: 2s
+  inline_payload_bytes: 524288
+temporal:
+  target: joined-smoke:7243
+  namespace: default
+  task_queue: llm-inference
+  identity_prefix: joined-smoke-llm
+  tls:
+    enabled: true
+    server_name: joined-smoke
+    ca_file: /run/smoke/ca.pem
+  api_key_file: /run/secrets/temporal-api-key
+  worker:
+    max_concurrent_activities: 96
+    max_concurrent_activity_task_polls: 8
+    graceful_stop_timeout: 30s
+    heartbeat_keepalive_interval: 1s
+resource_capacity:
+  manifest_file: /run/resource-capacity.json
+  trust_root_file: /run/release-trust-root.json
+  trust_root_sha256: b0f35989acdf0bcce5a2e177a19eefaa23da6346fcc86028c7d7e24300782c88
+  manifest_sha256: 519eba96d3f4a1eedcedf36efc8f35ce324be39d6c311237ef6d676b92f9c45a
+  artifact_id: joined-resource-capacity
+  artifact_locator: s3://artifacts-smoke-bucket/joined-smoke/resource-capacity.json
+  generation_id: joined-capacity-2026-08-10
+  limits:
+    llm_global_max_inflight: 64
+    llm_global_max_requests_per_window: 4096
+    llm_global_window_seconds: 60
+    provider_max_inflight:
+      - {route_id: joined-smoke, max_inflight: 64, max_requests_per_window: 4096, window_seconds: 60}
+    search_fetch_max_inflight: 64
+    python_stage2_max_inflight: 6
+    forecast_event_max_inflight: 2
+    forecast_event_admission_wait_seconds: 5
+    provider_call_execution_overhead_seconds: 30
+    provider_call_queue_seconds: 30
+    provider_call_maximum_attempts: 1
+    stage_two_execution_overhead_seconds: 30
+    stage_two_queue_seconds: 30
+    stage_two_semaphore_wait_seconds: 30
+    stage_two_maximum_attempts: 2
+    close_execution_overhead_seconds: 30
+    close_queue_seconds: 30
+    close_maximum_attempts: 2
+    evidence_collection_execution_overhead_seconds: 30
+    evidence_collection_queue_seconds: 30
+    evidence_collection_maximum_attempts: 1
+    panel_prepare_max_inflight: 8
+    panel_llm_max_inflight: 8
+    inference_artifactize_execution_seconds: 5
+    inference_artifactize_queue_seconds: 5
+    inference_artifactize_maximum_attempts: 2
+    prepare_assessment_execution_seconds: 5
+    prepare_assessment_queue_seconds: 5
+    prepare_assessment_maximum_attempts: 2
+    build_analysis_panel_execution_seconds: 10
+    build_analysis_panel_queue_seconds: 5
+    build_analysis_panel_maximum_attempts: 2
+    assemble_evidence_assessment_execution_seconds: 10
+    assemble_evidence_assessment_queue_seconds: 5
+    assemble_evidence_assessment_maximum_attempts: 2
+    load_analytic_context_execution_seconds: 10
+    load_analytic_context_queue_seconds: 5
+    load_analytic_context_maximum_attempts: 2
+    checkpoint_analysis_frontier_execution_seconds: 10
+    checkpoint_analysis_frontier_queue_seconds: 5
+    checkpoint_analysis_frontier_maximum_attempts: 2
+    load_analysis_frontier_execution_seconds: 10
+    load_analysis_frontier_queue_seconds: 5
+    load_analysis_frontier_maximum_attempts: 2
+    caller_owned_evidence_ingest_execution_seconds: 5
+    caller_owned_evidence_ingest_queue_seconds: 5
+    caller_owned_evidence_ingest_maximum_attempts: 2
+    panel_prepare_activity_max_bytes: 1310720
+state:
+  kind: durable
+  operation_terminal_retention: 45d
+  ambiguous_retention: 90d
+  continuation_retention: 30d
+  reservation_lease: 20m
+  redis:
+    addresses: ["redis:6379"]
+    key_prefix: joined_smoke
+    username: {kind: env, name: REDIS_USERNAME}
+    password: {kind: env, name: REDIS_PASSWORD}
+    tls: {enabled: false, server_name: "", ca_file: ""}
+    max_connections: 16
+    dial_timeout: 2s
+    operation_timeout: 3s
+    admission_hash_tag: admission
+    admission_mode: function
+    function_library: llmtw_admission_v1
+    admission_version: admission_v1
+    admission_digest: c7ab5a848a1f1567d42e9a41c8493836ff16b70efa01e3bb7a3acb06f2cd7e17
+    required_persistence: aof_and_rdb
+    coordination_stream_enabled: false
+  postgres:
+    addresses: ["worker-postgres:5432"]
+    database: llmtw_worker
+    schema: llmtw_state
+    table_prefix: llmtw_
+    username: {kind: env, name: WORKER_POSTGRES_USERNAME}
+    password: {kind: env, name: WORKER_POSTGRES_PASSWORD}
+    envelope_keys:
+      - {id: envelope-v1, primary: true, secret: {kind: env, name: WORKER_POSTGRES_ENVELOPE_KEY}}
+    scope_keys:
+      - {id: scope-v1, primary: true, secret: {kind: env, name: WORKER_POSTGRES_SCOPE_KEY}}
+blob_store:
+  kind: file
+  inline_bytes: 262144
+  file: {root: /var/lib/llmtw/blobs}
+limits:
+  request_bytes: 1048576
+  items: 128
+  parts_per_item: 32
+  tools: 32
+  schema_bytes: 131072
+  json_depth: 32
+  continuation_depth: 64
+  route_attempts: 1
+  provider_timeout: 30s
+  provider_response_bytes: 524288
+  max_input_tokens: 131072
+  max_output_tokens: 4096
+  max_budget_buckets_per_window: 512
+  token_estimate_safety_ratio: "1.35"
+endpoints:
+  joined-smoke:
+    family: openai_chat
+    base_url: https://joined-smoke/v1
+    outbound_hosts: [joined-smoke]
+    auth: {kind: bearer_env, name: JOINED_SMOKE_PROVIDER_KEY}
+    account_region: local
+    timeout: 25s
+    service_classes: {standard: {provider_value: standard}}
+    capability_profile: joined-smoke-v1
+    price_catalog: local-v1
+    provider_storage: {permitted: false}
+models:
+  demo-model:
+    allowed_tenants: [att]
+    data_regions: [local]
+    routes:
+      - {id: joined-smoke, endpoint: joined-smoke, model: joined-smoke-2026-08-10, classes: [standard]}
+capabilities:
+  catalogs:
+    - {file: /etc/llmtw/capabilities.yaml, sha256: bec4ffb59f36ae6b921dc0e9cd6ff692cbce8636963e9257c2021972db010c03}
+  unknown_in_strict_mode: reject
+pricing:
+  catalogs:
+    - {file: /etc/llmtw/prices.yaml, sha256: 4508084fd6d9f2593a548b656bed5c03fea5537ea358fc4e1ad75ffed3d71f46}
+  require_price_when_budgeted: true
+budgets:
+  require_match: true
+  policies:
+    - id: joined-smoke
+      match: {tenant: att, project: competition, environment: development}
+      windows:
+        - {duration: 1h, bucket: 1m, limit_micro_usd: 5000000}
+continuation:
+  handle_keys:
+    - {id: joined-smoke-v1, primary: true, secret: {kind: env, name: CONTINUATION_HMAC}}
+  retain_canonical_transcript: true
+  allow_provider_hosted_state: false
+telemetry:
+  logs: {format: json, level: info}
+  metrics: {enabled: true}
+  tracing: {enabled: false, otlp_endpoint: "", sample_ratio: "0"}
+  content_logging: disabled

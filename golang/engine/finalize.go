@@ -90,7 +90,7 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		copyRef := resultRef
 		ref = &copyRef
 	}
-	if err := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual.MicroUSD, ActualCostUSD: actual.USD, ResultRef: ref, Attempt: attempt, CostStatus: string(response.Cost.Status), CostMethod: response.Cost.Method}); err != nil {
+	if err := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual.MicroUSD, ActualCostUSD: actual.USD, ResultRef: ref, Attempt: attempt, CostStatus: string(response.Cost.Status), CostMethod: response.Cost.Method, CostCatalogVersion: response.Cost.CatalogVersion}); err != nil {
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "operation completion failed", err)
 	}
 	recordCompletion(ctx, response)

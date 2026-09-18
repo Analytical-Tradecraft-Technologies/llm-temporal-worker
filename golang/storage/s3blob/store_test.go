@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 )
+
+const testKMSKeyID = "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
 
 type fakeS3 struct {
 	putInput        *s3.PutObjectInput
@@ -24,9 +27,6 @@ type fakeS3 struct {
 	getOutput       *s3.GetObjectOutput
 	getNilOutput    bool
 	bucketHeadErr   error
-	headErr         error
-	headOutput      *s3.HeadObjectOutput
-	headCalls       int
 	bucketHeadCalls int
 	data            []byte
 }
@@ -47,15 +47,7 @@ func (fake *fakeS3) GetObject(_ context.Context, input *s3.GetObjectInput, _ ...
 	if fake.getOutput != nil {
 		return fake.getOutput, nil
 	}
-	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(fake.data)), ContentLength: int64Ptr(int64(len(fake.data))), ContentType: stringPtr("text/plain")}, nil
-}
-
-func (fake *fakeS3) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
-	fake.headCalls++
-	if fake.headErr != nil {
-		return nil, fake.headErr
-	}
-	return fake.headOutput, nil
+	return trustedGetOutput(io.NopCloser(bytes.NewReader(fake.data)), int64Ptr(int64(len(fake.data))), stringPtr("text/plain")), nil
 }
 
 func (fake *fakeS3) HeadBucket(_ context.Context, input *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
@@ -67,6 +59,16 @@ func (fake *fakeS3) HeadBucket(_ context.Context, input *s3.HeadBucketInput, _ .
 func int64Ptr(value int64) *int64 { return &value }
 
 func stringPtr(value string) *string { return &value }
+
+func trustedGetOutput(body io.ReadCloser, contentLength *int64, contentType *string) *s3.GetObjectOutput {
+	return &s3.GetObjectOutput{
+		Body:                 body,
+		ContentLength:        contentLength,
+		ContentType:          contentType,
+		ServerSideEncryption: types.ServerSideEncryptionAwsKms,
+		SSEKMSKeyId:          stringPtr(testKMSKeyID),
+	}
+}
 
 type apiOnlyS3 struct {
 	fake *fakeS3
@@ -103,6 +105,7 @@ func testStore(t *testing.T, client API, now time.Time, maxBytes int64) *Store {
 		Client:   client,
 		Bucket:   "bucket",
 		Prefix:   "v1",
+		KMSKeyID: testKMSKeyID,
 		MaxBytes: maxBytes,
 		Clock:    func() time.Time { return now },
 	})
@@ -133,13 +136,15 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 		options Options
 		want    string
 	}{
-		{name: "missing client", options: Options{Bucket: "bucket", Prefix: "v1", MaxBytes: 1}, want: "S3 client is required"},
-		{name: "missing bucket", options: Options{Client: &fakeS3{}, Prefix: "v1", MaxBytes: 1}, want: "S3 bucket is required"},
-		{name: "missing prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", MaxBytes: 1}, want: "S3 prefix is unsafe"},
-		{name: "backslash prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: `v1\\objects`, MaxBytes: 1}, want: "S3 prefix is unsafe"},
-		{name: "newline prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1\nobjects", MaxBytes: 1}, want: "S3 prefix is unsafe"},
-		{name: "traversal prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1/../objects", MaxBytes: 1}, want: "S3 prefix is unsafe"},
-		{name: "zero max bytes", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1", MaxBytes: 0}, want: "S3 max bytes must be positive"},
+		{name: "missing client", options: Options{Bucket: "bucket", Prefix: "v1", KMSKeyID: testKMSKeyID, MaxBytes: 1}, want: "S3 client is required"},
+		{name: "missing bucket", options: Options{Client: &fakeS3{}, Prefix: "v1", KMSKeyID: testKMSKeyID, MaxBytes: 1}, want: "S3 bucket is required"},
+		{name: "missing prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", KMSKeyID: testKMSKeyID, MaxBytes: 1}, want: "S3 prefix is unsafe"},
+		{name: "backslash prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: `v1\\objects`, KMSKeyID: testKMSKeyID, MaxBytes: 1}, want: "S3 prefix is unsafe"},
+		{name: "newline prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1\nobjects", KMSKeyID: testKMSKeyID, MaxBytes: 1}, want: "S3 prefix is unsafe"},
+		{name: "traversal prefix", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1/../objects", KMSKeyID: testKMSKeyID, MaxBytes: 1}, want: "S3 prefix is unsafe"},
+		{name: "missing KMS key ID", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1", MaxBytes: 1}, want: "S3 KMS key ID is required"},
+		{name: "KMS key ID with whitespace", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1", KMSKeyID: " " + testKMSKeyID, MaxBytes: 1}, want: "S3 KMS key ID is required"},
+		{name: "zero max bytes", options: Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "v1", KMSKeyID: testKMSKeyID, MaxBytes: 0}, want: "S3 max bytes must be positive"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -149,7 +154,7 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 		})
 	}
 
-	store, err := New(Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "/v1/", MaxBytes: 1})
+	store, err := New(Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "/v1/", KMSKeyID: testKMSKeyID, MaxBytes: 1})
 	if err != nil {
 		t.Fatalf("New(normalized prefix) = %v", err)
 	}
@@ -215,7 +220,8 @@ func TestPutRejectsInvalidRequestsBeforeS3(t *testing.T) {
 
 func TestPutClassifiesS3WriteFailures(t *testing.T) {
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
-	request := blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("data"), ExpiresAt: now.Add(time.Hour)}
+	data := []byte("data")
+	request := blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: data, ExpiresAt: now.Add(time.Hour)}
 
 	t.Run("provider failure is wrapped", func(t *testing.T) {
 		fake := &fakeS3{putErr: errors.New("provider unavailable")}
@@ -225,52 +231,93 @@ func TestPutClassifiesS3WriteFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("precondition conflict without head support", func(t *testing.T) {
-		fake := &fakeS3{putErr: &smithy.GenericAPIError{Code: "ConditionalRequestConflict", Message: "exists"}}
-		store := testStore(t, &apiOnlyS3{fake: fake}, now, 100)
-		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-			t.Fatalf("Put() = %v, want ErrConflict", err)
+	matchingOutput := func(body []byte) *s3.GetObjectOutput {
+		output := trustedGetOutput(io.NopCloser(bytes.NewReader(body)), int64Ptr(int64(len(data))), stringPtr(request.MediaType))
+		output.Metadata = map[string]string{
+			"llmtw-digest":      blob.Digest(data),
+			"llmtw-byte-length": strconv.Itoa(len(data)),
 		}
-	})
+		return output
+	}
 
-	t.Run("precondition conflict with failed head is rejected", func(t *testing.T) {
-		fake := &fakeS3{
-			putErr:  &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
-			headErr: errors.New("head unavailable"),
-		}
-		store := testStore(t, fake, now, 100)
-		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-			t.Fatalf("Put() = %v, want ErrConflict", err)
-		}
-		if fake.headCalls != 1 {
-			t.Fatalf("HeadObject calls = %d, want 1", fake.headCalls)
-		}
-	})
-
-	t.Run("precondition conflict with unverified head is rejected", func(t *testing.T) {
-		fake := &fakeS3{
-			putErr:     &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
-			headOutput: &s3.HeadObjectOutput{ContentLength: int64Ptr(4), ContentType: stringPtr("text/plain")},
-		}
-		store := testStore(t, fake, now, 100)
-		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-			t.Fatalf("Put() = %v, want ErrConflict", err)
-		}
-	})
-
-	t.Run("precondition conflict with matching head is idempotent", func(t *testing.T) {
-		data := []byte("data")
-		digest := blob.Digest(data)
+	t.Run("precondition conflict with failed verification read is rejected", func(t *testing.T) {
 		fake := &fakeS3{
 			putErr: &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
-			headOutput: &s3.HeadObjectOutput{
-				ContentLength: int64Ptr(int64(len(data))),
-				ContentType:   stringPtr("text/plain"),
-				Metadata: map[string]string{
-					"llmtw-digest":      digest,
-					"llmtw-byte-length": strconv.Itoa(len(data)),
-				},
+			getErr: errors.New("get unavailable"),
+		}
+		store := testStore(t, fake, now, 100)
+		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
+			t.Fatalf("Put() = %v, want ErrConflict", err)
+		}
+	})
+
+	tests := []struct {
+		name      string
+		configure func(*s3.GetObjectOutput)
+		body      []byte
+	}{
+		{
+			name: "precondition conflict with missing identity metadata is rejected",
+			configure: func(output *s3.GetObjectOutput) {
+				output.Metadata = nil
 			},
+		},
+		{
+			name: "precondition conflict with forged digest metadata is rejected",
+			configure: func(output *s3.GetObjectOutput) {
+				output.Metadata["llmtw-digest"] = blob.Digest([]byte("else"))
+			},
+		},
+		{
+			name: "precondition conflict with different bytes is rejected",
+			body: []byte("evil"),
+		},
+		{
+			name: "precondition conflict with no encryption is rejected",
+			configure: func(output *s3.GetObjectOutput) {
+				output.ServerSideEncryption = ""
+				output.SSEKMSKeyId = nil
+			},
+		},
+		{
+			name: "precondition conflict with SSE-S3 is rejected",
+			configure: func(output *s3.GetObjectOutput) {
+				output.ServerSideEncryption = types.ServerSideEncryptionAes256
+				output.SSEKMSKeyId = nil
+			},
+		},
+		{
+			name: "precondition conflict with wrong KMS key is rejected",
+			configure: func(output *s3.GetObjectOutput) {
+				output.SSEKMSKeyId = stringPtr("arn:aws:kms:us-east-2:123456789012:key/11111111-1111-1111-1111-111111111111")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := test.body
+			if body == nil {
+				body = data
+			}
+			output := matchingOutput(body)
+			if test.configure != nil {
+				test.configure(output)
+			}
+			fake := &fakeS3{
+				putErr:    &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
+				getOutput: output,
+			}
+			store := testStore(t, fake, now, 100)
+			if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
+				t.Fatalf("Put() = %v, want ErrConflict", err)
+			}
+		})
+	}
+
+	t.Run("precondition conflict with matching content and KMS policy is idempotent", func(t *testing.T) {
+		fake := &fakeS3{
+			putErr:    &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
+			getOutput: matchingOutput(data),
 		}
 		store := testStore(t, fake, now, 100)
 		if _, err := store.Put(context.Background(), request); err != nil {
@@ -291,20 +338,29 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 		{name: "provider failure", configure: func(fake *fakeS3, _ blob.Ref) { fake.getErr = errors.New("provider unavailable") }, want: "get blob: provider unavailable"},
 		{name: "nil result", configure: func(fake *fakeS3, _ blob.Ref) { fake.getNilOutput = true }, is: blob.ErrNotFound},
 		{name: "nil body", configure: func(fake *fakeS3, _ blob.Ref) { fake.getOutput = &s3.GetObjectOutput{} }, is: blob.ErrNotFound},
+		{name: "missing SSE-KMS provenance", configure: func(fake *fakeS3, ref blob.Ref) {
+			fake.getOutput = trustedGetOutput(io.NopCloser(bytes.NewReader(payload)), int64Ptr(ref.ByteLength), stringPtr(ref.MediaType))
+			fake.getOutput.ServerSideEncryption = ""
+			fake.getOutput.SSEKMSKeyId = nil
+		}, is: blob.ErrDigestMismatch},
+		{name: "wrong KMS key", configure: func(fake *fakeS3, ref blob.Ref) {
+			fake.getOutput = trustedGetOutput(io.NopCloser(bytes.NewReader(payload)), int64Ptr(ref.ByteLength), stringPtr(ref.MediaType))
+			fake.getOutput.SSEKMSKeyId = stringPtr("arn:aws:kms:us-east-2:123456789012:key/ffffffff-ffff-ffff-ffff-ffffffffffff")
+		}, is: blob.ErrDigestMismatch},
 		{name: "content length mismatch", configure: func(fake *fakeS3, ref blob.Ref) {
-			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64Ptr(ref.ByteLength + 1)}
+			fake.getOutput = trustedGetOutput(io.NopCloser(bytes.NewReader(payload)), int64Ptr(ref.ByteLength+1), nil)
 		}, is: blob.ErrDigestMismatch},
 		{name: "content type mismatch", configure: func(fake *fakeS3, ref blob.Ref) {
-			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr("application/octet-stream")}
+			fake.getOutput = trustedGetOutput(io.NopCloser(bytes.NewReader(payload)), int64Ptr(ref.ByteLength), stringPtr("application/octet-stream"))
 		}, is: blob.ErrDigestMismatch},
 		{name: "missing content type", configure: func(fake *fakeS3, ref blob.Ref) {
-			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64Ptr(ref.ByteLength)}
+			fake.getOutput = trustedGetOutput(io.NopCloser(bytes.NewReader(payload)), int64Ptr(ref.ByteLength), nil)
 		}, is: blob.ErrDigestMismatch},
 		{name: "digest mismatch", configure: func(fake *fakeS3, ref blob.Ref) {
-			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("baddata"))), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr(ref.MediaType)}
+			fake.getOutput = trustedGetOutput(io.NopCloser(bytes.NewReader([]byte("baddata"))), int64Ptr(ref.ByteLength), stringPtr(ref.MediaType))
 		}, is: blob.ErrDigestMismatch},
 		{name: "read failure", configure: func(fake *fakeS3, ref blob.Ref) {
-			fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(errorReader{}), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr(ref.MediaType)}
+			fake.getOutput = trustedGetOutput(io.NopCloser(errorReader{}), int64Ptr(ref.ByteLength), stringPtr(ref.MediaType))
 		}, want: "read blob: read failed"},
 	}
 	for _, test := range tests {
@@ -325,7 +381,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 	}
 
 	t.Run("response larger than limit is rejected", func(t *testing.T) {
-		fake := &fakeS3{getOutput: &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("12345"))), ContentLength: int64Ptr(4), ContentType: stringPtr("text/plain")}}
+		fake := &fakeS3{getOutput: trustedGetOutput(io.NopCloser(bytes.NewReader([]byte("12345"))), int64Ptr(4), stringPtr("text/plain"))}
 		store := testStore(t, fake, now, 4)
 		ref := testRef(store, now, "tenant", []byte("1234"))
 		if _, err := store.Get(context.Background(), "tenant", ref); !errors.Is(err, blob.ErrDigestMismatch) {
@@ -338,7 +394,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 		fake := &fakeS3{}
 		store := testStore(t, fake, now, 100)
 		ref := testRef(store, now, "tenant", payload)
-		fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(&cancelOnReadReader{reader: bytes.NewReader(payload), cancel: cancel}), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr(ref.MediaType)}
+		fake.getOutput = trustedGetOutput(io.NopCloser(&cancelOnReadReader{reader: bytes.NewReader(payload), cancel: cancel}), int64Ptr(ref.ByteLength), stringPtr(ref.MediaType))
 		if _, err := store.Get(ctx, "tenant", ref); !errors.Is(err, context.Canceled) {
 			t.Fatalf("Get() = %v, want context.Canceled", err)
 		}
@@ -391,7 +447,7 @@ func TestProbeBucketFailsClosedForUnsupportedAndUnavailableClients(t *testing.T)
 func TestStoreUsesContentAddressedConditionalS3Object(t *testing.T) {
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	fake := &fakeS3{data: []byte("payload")}
-	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", MaxBytes: 100, Clock: func() time.Time { return now }})
+	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", KMSKeyID: testKMSKeyID, MaxBytes: 100, Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,6 +458,12 @@ func TestStoreUsesContentAddressedConditionalS3Object(t *testing.T) {
 	if fake.putInput == nil || fake.putInput.IfNoneMatch == nil || *fake.putInput.IfNoneMatch != "*" {
 		t.Fatal("PutObject did not request create-if-absent")
 	}
+	if fake.putInput.ServerSideEncryption != types.ServerSideEncryptionAwsKms {
+		t.Fatalf("PutObject ServerSideEncryption = %q, want %q", fake.putInput.ServerSideEncryption, types.ServerSideEncryptionAwsKms)
+	}
+	if fake.putInput.SSEKMSKeyId == nil || *fake.putInput.SSEKMSKeyId != testKMSKeyID {
+		t.Fatalf("PutObject SSEKMSKeyId = %v, want %q", fake.putInput.SSEKMSKeyId, testKMSKeyID)
+	}
 	got, err := store.Get(context.Background(), "tenant", ref)
 	if err != nil || string(got) != "payload" {
 		t.Fatalf("get = %q, %v", got, err)
@@ -409,29 +471,35 @@ func TestStoreUsesContentAddressedConditionalS3Object(t *testing.T) {
 	if fake.getInput == nil || *fake.getInput.Key != ref.Locator {
 		t.Fatal("GetObject used an unexpected key")
 	}
+	got[0] = 'X'
+	again, err := store.Get(context.Background(), "tenant", ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != "payload" || string(fake.data) != "payload" {
+		t.Fatalf("mutating Get result changed stored bytes: again=%q stored=%q", again, fake.data)
+	}
 }
 
 func TestStoreHandlesExistingAndDigestMismatch(t *testing.T) {
 	now := time.Now().UTC()
 	data := []byte("payload")
-	fake := &fakeS3{
-		putErr: &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
-		headOutput: &s3.HeadObjectOutput{
-			ContentLength: int64Ptr(int64(len(data))),
-			ContentType:   stringPtr("text/plain"),
-			Metadata: map[string]string{
-				"llmtw-digest":      blob.Digest(data),
-				"llmtw-byte-length": strconv.Itoa(len(data)),
-			},
-		},
+	existing := trustedGetOutput(io.NopCloser(bytes.NewReader(data)), int64Ptr(int64(len(data))), stringPtr("text/plain"))
+	existing.Metadata = map[string]string{
+		"llmtw-digest":      blob.Digest(data),
+		"llmtw-byte-length": strconv.Itoa(len(data)),
 	}
-	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", MaxBytes: 100, Clock: func() time.Time { return now }})
+	fake := &fakeS3{
+		putErr:    &smithy.GenericAPIError{Code: "PreconditionFailed", Message: "exists"},
+		getOutput: existing,
+	}
+	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", KMSKeyID: testKMSKeyID, MaxBytes: 100, Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: data, ExpiresAt: now.Add(time.Hour)})
-	if err != nil || fake.headCalls != 1 {
-		t.Fatalf("existing put = %v, head calls %d", err, fake.headCalls)
+	if err != nil || fake.getInput == nil {
+		t.Fatalf("existing put = %v, verification get = %#v", err, fake.getInput)
 	}
 	fake.data = []byte("other")
 	ref := blob.Ref{Store: "s3", Locator: "v1/" + "bad", Digest: blob.Digest([]byte("payload")), ByteLength: 7, MediaType: "text/plain", ExpiresAt: now.Add(time.Hour)}
@@ -442,7 +510,7 @@ func TestStoreHandlesExistingAndDigestMismatch(t *testing.T) {
 
 func TestProbeBucketUsesOnlyBucketMetadata(t *testing.T) {
 	fake := &fakeS3{}
-	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", MaxBytes: 100})
+	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", KMSKeyID: testKMSKeyID, MaxBytes: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +520,7 @@ func TestProbeBucketUsesOnlyBucketMetadata(t *testing.T) {
 	if fake.bucketHeadCalls != 1 || fake.bucketHeadInput == nil || fake.bucketHeadInput.Bucket == nil || *fake.bucketHeadInput.Bucket != "bucket" {
 		t.Fatalf("HeadBucket calls/input = %d/%#v", fake.bucketHeadCalls, fake.bucketHeadInput)
 	}
-	if fake.putInput != nil || fake.getInput != nil || fake.headCalls != 0 {
+	if fake.putInput != nil || fake.getInput != nil {
 		t.Fatal("bucket probe accessed tenant object content")
 	}
 }

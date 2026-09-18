@@ -18,7 +18,14 @@ import (
 // errors deliberately do not use this sentinel and remain hard failures.
 var ErrUnusablePrice = errors.New("candidate price is unusable")
 
+// ErrTokenLimit marks a deterministic request rejection against the active
+// snapshot's input, output, or reasoning-token ceiling. It is distinct from a
+// pricing failure so orchestration can durably terminalize the operation
+// without trying another provider or acquiring a budget reservation.
+var ErrTokenLimit = errors.New("request exceeds configured token limit")
+
 type Estimator struct {
+	MaxInput     int64
 	SafetyRatio  *big.Rat
 	MaxOutput    int64
 	MaxReasoning int64
@@ -38,17 +45,51 @@ type Estimate struct {
 	InputTokens      int64
 	OutputTokens     int64
 	ReasoningTokens  int64
+	CacheReadTokens  int64
 	CacheWriteTokens int64
-	MicroUSD         pricing.MicroUSD
+
+	MicroUSD pricing.MicroUSD
 	// CostUSD is the exact fixed-scale reservation used by new callers.
 	CostUSD        pricing.USD
 	CatalogVersion string
+}
+
+// ValidateCandidateTokenLimits proves that a candidate-specific provider
+// request fits the snapshot's hard token ceilings without pricing it or
+// performing provider I/O.
+func (estimator Estimator) ValidateCandidateTokenLimits(request llm.Request, candidate routing.Candidate) error {
+	inputTokens, err := estimator.estimateInput(request, candidate)
+	if err != nil {
+		return err
+	}
+	if estimator.MaxInput > 0 && inputTokens > estimator.MaxInput {
+		return fmt.Errorf("%w: input tokens %d exceed %d", ErrTokenLimit, inputTokens, estimator.MaxInput)
+	}
+	if request.Output != nil && request.Output.MaxTokens != nil {
+		outputTokens := int64(*request.Output.MaxTokens)
+		if outputTokens < 0 {
+			return fmt.Errorf("output token limit is negative")
+		}
+		if estimator.MaxOutput > 0 && outputTokens > estimator.MaxOutput {
+			return fmt.Errorf("%w: output tokens %d exceed %d", ErrTokenLimit, outputTokens, estimator.MaxOutput)
+		}
+	}
+	if request.Reasoning != nil && request.Reasoning.TokenBudget != nil {
+		reasoningTokens := int64(*request.Reasoning.TokenBudget)
+		if estimator.MaxReasoning > 0 && reasoningTokens > estimator.MaxReasoning {
+			return fmt.Errorf("%w: reasoning tokens %d exceed %d", ErrTokenLimit, reasoningTokens, estimator.MaxReasoning)
+		}
+	}
+	return nil
 }
 
 func (estimator Estimator) EstimateCandidate(request llm.Request, candidate routing.Candidate, entry pricing.Entry) (Estimate, error) {
 	inputTokens, err := estimator.estimateInput(request, candidate)
 	if err != nil {
 		return Estimate{}, err
+	}
+	if estimator.MaxInput > 0 && inputTokens > estimator.MaxInput {
+		return Estimate{}, fmt.Errorf("%w: input tokens %d exceed %d", ErrTokenLimit, inputTokens, estimator.MaxInput)
 	}
 	outputTokens := estimator.MaxOutput
 	if outputTokens <= 0 {
@@ -60,14 +101,24 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	if outputTokens < 0 {
 		return Estimate{}, fmt.Errorf("output token limit is negative")
 	}
-	reasoningTokens := int64(0)
+	if estimator.MaxOutput > 0 && outputTokens > estimator.MaxOutput {
+		return Estimate{}, fmt.Errorf("%w: output tokens %d exceed %d", ErrTokenLimit, outputTokens, estimator.MaxOutput)
+	}
+	reasoningTokens := estimator.MaxReasoning
 	if request.Reasoning != nil && request.Reasoning.TokenBudget != nil {
 		reasoningTokens = int64(*request.Reasoning.TokenBudget)
+		if estimator.MaxReasoning > 0 && reasoningTokens > estimator.MaxReasoning {
+			return Estimate{}, fmt.Errorf("%w: reasoning tokens %d exceed %d", ErrTokenLimit, reasoningTokens, estimator.MaxReasoning)
+		}
 	}
-	if estimator.MaxReasoning > reasoningTokens {
-		reasoningTokens = estimator.MaxReasoning
+	cacheRead := int64(0)
+	if entry.ComponentUnknown(pricing.PriceComponentCacheRead) || entry.Prices.CacheReadPerMillion.CanonicalString() != "0" {
+		cacheRead = inputTokens
 	}
-	cacheWrite := inputTokens
+	cacheWrite := int64(0)
+	if entry.ComponentUnknown(pricing.PriceComponentCacheWrite) || entry.Prices.CacheWritePerMillion.CanonicalString() != "0" {
+		cacheWrite = inputTokens
+	}
 	components := []struct {
 		component     pricing.PriceComponent
 		price         pricing.DecimalUSD
@@ -76,6 +127,7 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		name          string
 	}{
 		{pricing.PriceComponentInput, entry.Prices.InputPerMillion, inputTokens, 1_000_000, "input"},
+		{pricing.PriceComponentCacheRead, entry.Prices.CacheReadPerMillion, cacheRead, 1_000_000, "cache_read"},
 		{pricing.PriceComponentOutput, entry.Prices.OutputPerMillion, outputTokens, 1_000_000, "output"},
 		{pricing.PriceComponentReasoning, entry.Prices.ReasoningPerMillion, reasoningTokens, 1_000_000, "reasoning"},
 		{pricing.PriceComponentCacheWrite, entry.Prices.CacheWritePerMillion, cacheWrite, 1_000_000, "cache_write"},
@@ -122,7 +174,7 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 			return Estimate{}, fmt.Errorf("%w: estimate microUSD compatibility multiplier: %w", ErrUnusablePrice, err)
 		}
 	}
-	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, CatalogVersion: entry.Version}, nil
+	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, CatalogVersion: entry.Version}, nil
 }
 
 func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, entries map[string]pricing.Entry) (Estimate, error) {
@@ -164,9 +216,11 @@ func (estimator Estimator) estimateInput(request llm.Request, candidate routing.
 	if err != nil {
 		return 0, err
 	}
-	// UTF-8 bytes / 4 is a conservative provider-independent baseline for
-	// ordinary text. Structural overhead is bounded by the serialized request.
-	input := int64((len(data) + 3) / 4)
+	// Without an exact tokenizer, one token per canonical UTF-8 byte is the
+	// fail-closed upper bound. A bytes/4 heuristic is useful for typical-cost
+	// estimates but cannot enforce a hard token ceiling before provider
+	// dispatch because punctuation and other inputs can tokenize more densely.
+	input := int64(len(data))
 	if input < 1 {
 		input = 1
 	}

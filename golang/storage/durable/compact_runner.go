@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -22,12 +23,17 @@ import (
 // A completed response is returned before cache lookup or any admission work
 // so Temporal retries cannot create a second child for one operation key.
 type CompactReplay struct {
-	State     state.MaterializedState
-	Completed *llm.CompactResponseV1
+	// OperationID is the authoritative persisted identity resolved before any
+	// provider work. It may be a released-v1 identity during a rolling upgrade.
+	OperationID OperationID
+	State       state.MaterializedState
+	Completed   *llm.CompactResponseV1
 	// ReconciliationPending is populated when finalization committed but the
 	// Redis completion event did not. A retry must run Reconcile before it can
 	// return the completed response.
 	ReconciliationPending *CompactReconciliation
+	ImmutableFacts        []byte
+	OperationExpiresAt    time.Time
 }
 
 // CompactReconciliation carries the durable identities required to retry the
@@ -96,6 +102,12 @@ type CompactPorts struct {
 	Finalize      func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, ReserveResult, CompactDispatchResult) (CompactFinalization, error)
 	FinalizeCache func(context.Context, llm.CompactRequestV1, CompactReplay, CompactCacheDecision) (CompactFinalization, error)
 	Reconcile     func(context.Context, llm.CompactRequestV1, RoutePlan, ReserveResult, CompactFinalization) error
+	// Abort terminalizes a caller cancellation/deadline that occurs after
+	// Replay created the operation but before provider dispatch. When a Redis
+	// reservation was accepted, the callback must reconcile it idempotently.
+	// It is optional for storage-neutral test/custom ports; production
+	// composition always supplies it.
+	Abort func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, *ReserveResult, error) error
 }
 
 func (ports CompactPorts) validate() error {
@@ -148,7 +160,7 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		return llm.CompactResponseV1{}, stageError("compact replay", err)
 	}
 	if err := contextErr(ctx); err != nil {
-		return llm.CompactResponseV1{}, err
+		return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, RoutePlan{}, nil, err)
 	}
 	if replay.ReconciliationPending != nil {
 		pending := replay.ReconciliationPending
@@ -178,13 +190,16 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 
 	cache, err := ports.CacheLookup(ctx, request, replay)
 	if err != nil {
+		if compactCallerTermination(ctx, err) != nil {
+			return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, RoutePlan{}, nil, err)
+		}
 		return llm.CompactResponseV1{}, stageError("compact cache lookup", err)
 	}
 	if err := cache.Validate(); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact cache decision", err)
 	}
 	if err := contextErr(ctx); err != nil {
-		return llm.CompactResponseV1{}, err
+		return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, RoutePlan{}, nil, err)
 	}
 	if cache.Disposition == CacheHit {
 		finalization, err := ports.FinalizeCache(ctx, request, replay, cache)
@@ -213,23 +228,32 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	}
 
 	if err := contextErr(ctx); err != nil {
-		return llm.CompactResponseV1{}, err
+		return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, RoutePlan{}, nil, err)
 	}
 	route, err := ports.Route(ctx, request, replay)
 	if err != nil {
+		if compactCallerTermination(ctx, err) != nil {
+			return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, RoutePlan{}, nil, err)
+		}
 		return llm.CompactResponseV1{}, stageError("compact route", err)
 	}
 	if err := contextErr(ctx); err != nil {
-		return llm.CompactResponseV1{}, err
+		return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, route, nil, err)
 	}
 	if err := route.Validate(); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact route", err)
 	}
+	if err := validateCostAdmissionRoute(llm.GenerateRequestV1{OperationKey: request.OperationKey, CostAdmission: request.CostAdmission}, route); err != nil {
+		return llm.CompactResponseV1{}, stageError("compact cost admission", err)
+	}
 	if err := contextErr(ctx); err != nil {
-		return llm.CompactResponseV1{}, err
+		return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, route, nil, err)
 	}
 	reservation, err := ports.Reserve(ctx, request, route)
 	if err != nil {
+		if compactCallerTermination(ctx, err) != nil {
+			return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, route, nil, err)
+		}
 		return llm.CompactResponseV1{}, stageError("compact Redis reservation", err)
 	}
 	if err := validateCompactReservation(request, route, reservation); err != nil {
@@ -241,16 +265,28 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		mapped.RetryAfter = reservation.RetryAfter
 		return llm.CompactResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, route, &reservation, err)
+	}
 
 	journal, err := ports.Journal(ctx, request, route, reservation)
 	if err != nil {
+		if compactCallerTermination(ctx, err) != nil {
+			return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, route, &reservation, err)
+		}
 		return llm.CompactResponseV1{}, stageError("compact PostgreSQL journal", err)
 	}
 	if err := validateCompactJournal(reservation, journal); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact PostgreSQL journal", err)
 	}
+	if err := contextErr(ctx); err != nil {
+		return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, route, &reservation, err)
+	}
 	dispatch, err := ports.Dispatch(ctx, request, replay, route, journal)
 	if err != nil {
+		if compactCallerTermination(ctx, err) != nil {
+			return llm.CompactResponseV1{}, abortCompact(ctx, ports, request, replay, route, &reservation, err)
+		}
 		return llm.CompactResponseV1{}, stageError("compact provider dispatch", err)
 	}
 	finalization, err := ports.Finalize(ctx, request, replay, route, reservation, dispatch)
@@ -267,6 +303,26 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		return llm.CompactResponseV1{}, compactReconciliationError(route, err)
 	}
 	return finalization.Response, nil
+}
+
+func abortCompact(ctx context.Context, ports CompactPorts, request llm.CompactRequestV1, replay CompactReplay, route RoutePlan, reservation *ReserveResult, cause error) error {
+	if ports.Abort == nil {
+		return cause
+	}
+	return ports.Abort(context.WithoutCancel(ctx), request, replay, route, reservation, cause)
+}
+
+func compactCallerTermination(ctx context.Context, err error) error {
+	if cause := contextErr(ctx); cause != nil {
+		return cause
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return nil
 }
 
 func validateCompactReservation(_ llm.CompactRequestV1, route RoutePlan, reservation ReserveResult) error {
@@ -344,6 +400,18 @@ func validateCompactResponse(request llm.CompactRequestV1, expectedOperationID O
 	}
 	if _, err := json.Marshal(response); err != nil {
 		return err
+	}
+	if request.CostAdmission == nil {
+		if response.CostAdmission != nil {
+			return errors.New("legacy compact response unexpectedly contains cost admission")
+		}
+		return nil
+	}
+	if response.CostAdmission == nil || *response.CostAdmission != *request.CostAdmission {
+		return errors.New("compact response cost admission does not match request")
+	}
+	if response.Cost.Status != "exact" || response.Cost.CatalogVersion != request.CostAdmission.PricingGenerationID {
+		return errors.New("compact response cost does not match admitted pricing generation")
 	}
 	return nil
 }

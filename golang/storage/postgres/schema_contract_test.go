@@ -1,6 +1,8 @@
 package postgres
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -92,6 +94,65 @@ func TestMigrationTemplateContract(t *testing.T) {
 	}
 }
 
+func TestReleasedV1MigrationChecksumAndOrderedUpgradeContract(t *testing.T) {
+	v1, err := schemaFiles.ReadFile("schema/000001_worker_state.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprintf("%x", sha256.Sum256(v1)), "41b5f956983a8c44f613dc38190557f8f8de6c1da79f5018d9a4568a278cdaa5"; got != want {
+		t.Fatalf("released v1 migration checksum = %s, want %s", got, want)
+	}
+	if len(orderedSchemaMigrations) != 3 ||
+		orderedSchemaMigrations[0].version != contractVersionV1 ||
+		orderedSchemaMigrations[1].version != contractVersionV2 ||
+		orderedSchemaMigrations[2].version != ContractVersion {
+		t.Fatalf("ordered schema migrations = %#v", orderedSchemaMigrations)
+	}
+	v2, err := schemaFiles.ReadFile("schema/000002_content_free_request_manifest.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"request_payload_sha256",
+		"request_payload_byte_length",
+		"request_payload_reference",
+		"request_manifest_jsonb = jsonb_build_object",
+		"ADD COLUMN immutable_reservation_facts",
+		"ADD COLUMN failure_reason_code",
+	} {
+		if !strings.Contains(string(v2), required) {
+			t.Fatalf("v2 migration missing %q", required)
+		}
+	}
+	v3, err := schemaFiles.ReadFile("schema/000003_strict_operation_identity.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"operation_actor_hmac",
+		"operation_identity_version",
+		"operations_strict_identity_idx",
+		"operations_strict_request_idx",
+		"SET DEFAULT 2",
+	} {
+		if !strings.Contains(string(v3), required) {
+			t.Fatalf("v3 migration missing %q", required)
+		}
+	}
+	upgradeSQL := strings.ToUpper(string(v2) + "\n" + string(v3))
+	for _, destructive := range []string{
+		"CREATE TABLE",
+		"DROP TABLE",
+		"DROP COLUMN",
+		"TRUNCATE ",
+		"DELETE FROM",
+	} {
+		if strings.Contains(upgradeSQL, destructive) {
+			t.Fatalf("additive upgrade contains destructive table operation %q", destructive)
+		}
+	}
+}
+
 func TestResponseCacheStorageIdentityIncludesRoute(t *testing.T) {
 	data, err := schemaFiles.ReadFile("schema/000001_worker_state.sql")
 	if err != nil {
@@ -129,8 +190,8 @@ func TestMigrationObjectNamesCoverTablesAndIndexes(t *testing.T) {
 	if len(tables) != 26 {
 		t.Fatalf("migration table count = %d, want 26: %v", len(tables), tables)
 	}
-	if len(indexes) != 72 {
-		t.Fatalf("migration index count = %d, want 72", len(indexes))
+	if len(indexes) != 75 {
+		t.Fatalf("migration index count = %d, want 75", len(indexes))
 	}
 	if got := migrationConstraintIndexCount(migration); got != 46 {
 		t.Fatalf("constraint-backed index count = %d, want 46", got)
@@ -148,7 +209,8 @@ func TestMigrationObjectNamesCoverTablesAndIndexes(t *testing.T) {
 	}
 	for _, name := range []string{
 		"tenant_operations_poll_due_idx", "tenant_response_cache_reusable_key_uidx",
-		"tenant_query_executions_unknown_cost_idx",
+		"tenant_query_executions_unknown_cost_idx", "tenant_operations_strict_identity_idx",
+		"tenant_operations_strict_request_idx",
 	} {
 		if !containsString(indexes, name) {
 			t.Fatalf("required index %q was not derived from migration", name)

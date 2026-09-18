@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 )
@@ -24,10 +26,6 @@ import (
 type API interface {
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
-}
-
-type HeadAPI interface {
-	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 }
 
 // BucketHeadAPI is deliberately separate from tenant object access. Runtime
@@ -41,6 +39,7 @@ type Options struct {
 	Client   API
 	Bucket   string
 	Prefix   string
+	KMSKeyID string
 	MaxBytes int64
 	Clock    func() time.Time
 }
@@ -49,6 +48,7 @@ type Store struct {
 	client   API
 	bucket   string
 	prefix   string
+	kmsKeyID string
 	maxBytes int64
 	clock    func() time.Time
 }
@@ -63,13 +63,16 @@ func New(options Options) (*Store, error) {
 	if strings.TrimSpace(options.Prefix) == "" || strings.ContainsAny(options.Prefix, "\\\r\n") || strings.Contains(options.Prefix, "..") {
 		return nil, fmt.Errorf("S3 prefix is unsafe")
 	}
+	if options.KMSKeyID == "" || strings.ContainsAny(options.KMSKeyID, " \t\r\n\v\f") {
+		return nil, fmt.Errorf("S3 KMS key ID is required and must not contain whitespace")
+	}
 	if options.MaxBytes <= 0 {
 		return nil, fmt.Errorf("S3 max bytes must be positive")
 	}
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
-	return &Store{client: options.Client, bucket: options.Bucket, prefix: strings.Trim(options.Prefix, "/"), maxBytes: options.MaxBytes, clock: options.Clock}, nil
+	return &Store{client: options.Client, bucket: options.Bucket, prefix: strings.Trim(options.Prefix, "/"), kmsKeyID: options.KMSKeyID, maxBytes: options.MaxBytes, clock: options.Clock}, nil
 }
 
 func (store *Store) Put(ctx context.Context, request blob.PutRequest) (blob.Ref, error) {
@@ -100,13 +103,15 @@ func (store *Store) Put(ctx context.Context, request blob.PutRequest) (blob.Ref,
 	}
 	digestBytes := sha256.Sum256(request.Data)
 	_, err = store.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:         aws.String(store.bucket),
-		Key:            aws.String(key),
-		Body:           bytes.NewReader(request.Data),
-		ContentLength:  aws.Int64(int64(len(request.Data))),
-		ContentType:    aws.String(request.MediaType),
-		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(digestBytes[:])),
-		IfNoneMatch:    aws.String("*"),
+		Bucket:               aws.String(store.bucket),
+		Key:                  aws.String(key),
+		Body:                 bytes.NewReader(request.Data),
+		ContentLength:        aws.Int64(int64(len(request.Data))),
+		ContentType:          aws.String(request.MediaType),
+		ChecksumSHA256:       aws.String(base64.StdEncoding.EncodeToString(digestBytes[:])),
+		ServerSideEncryption: types.ServerSideEncryptionAwsKms,
+		SSEKMSKeyId:          aws.String(store.kmsKeyID),
+		IfNoneMatch:          aws.String("*"),
 		Metadata: map[string]string{
 			"llmtw-digest":      digest,
 			"llmtw-byte-length": strconv.FormatInt(int64(len(request.Data)), 10),
@@ -118,29 +123,68 @@ func (store *Store) Put(ctx context.Context, request blob.PutRequest) (blob.Ref,
 	if !isPreconditionFailure(err) {
 		return blob.Ref{}, fmt.Errorf("put blob: %w", err)
 	}
-	if head, ok := store.client.(HeadAPI); ok {
-		if existing, headErr := head.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(store.bucket), Key: aws.String(key)}); headErr == nil && store.existingObjectMatches(existing, ref) {
-			return ref, nil
-		}
+	if err := store.verifyExistingObject(ctx, key, ref); err != nil {
+		return blob.Ref{}, err
 	}
-	return blob.Ref{}, blob.ErrConflict
+	return ref, nil
 }
 
-// existingObjectMatches proves that a conditional-write conflict is the
-// idempotent write of the same immutable object. A successful HEAD alone is
-// not enough: a stale or manually replaced key must not be reported as a
-// successful Put with a reference whose digest and metadata are unverified.
-func (store *Store) existingObjectMatches(head *s3.HeadObjectOutput, ref blob.Ref) bool {
-	if head == nil || head.ContentLength == nil || *head.ContentLength != ref.ByteLength {
-		return false
+// verifyExistingObject proves that a conditional-write conflict is the
+// idempotent write of the same immutable object. Object metadata is not
+// trusted as proof of content: the response body is hashed and checked against
+// the content-addressed reference as well.
+func (store *Store) verifyExistingObject(ctx context.Context, key string, ref blob.Ref) error {
+	existing, err := store.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(store.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("%w: read existing S3 object: %w", blob.ErrConflict, err)
 	}
-	if head.Metadata == nil || !strings.EqualFold(head.Metadata["llmtw-digest"], ref.Digest) {
-		return false
+	if existing == nil || existing.Body == nil {
+		return fmt.Errorf("%w: existing S3 object has no body", blob.ErrConflict)
 	}
-	if head.Metadata["llmtw-byte-length"] != strconv.FormatInt(ref.ByteLength, 10) {
-		return false
+	defer existing.Body.Close()
+
+	if existing.ContentLength == nil || *existing.ContentLength != ref.ByteLength {
+		return fmt.Errorf("%w: existing S3 object has different length", blob.ErrConflict)
 	}
-	return head.ContentType != nil && *head.ContentType == ref.MediaType
+	if existing.ContentType == nil || *existing.ContentType != ref.MediaType {
+		return fmt.Errorf("%w: existing S3 object has different media type", blob.ErrConflict)
+	}
+	if !store.encryptionMatches(existing.ServerSideEncryption, existing.SSEKMSKeyId) {
+		return fmt.Errorf("%w: existing S3 object does not match required SSE-KMS policy", blob.ErrConflict)
+	}
+	if existing.Metadata == nil ||
+		existing.Metadata["llmtw-digest"] != ref.Digest ||
+		existing.Metadata["llmtw-byte-length"] != strconv.FormatInt(ref.ByteLength, 10) {
+		return fmt.Errorf("%w: existing S3 object has different identity metadata", blob.ErrConflict)
+	}
+
+	hasher := sha256.New()
+	length, err := io.Copy(hasher, io.LimitReader(existing.Body, store.maxBytes+1))
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("%w: hash existing S3 object: %w", blob.ErrConflict, err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if length != ref.ByteLength || hex.EncodeToString(hasher.Sum(nil)) != ref.Digest {
+		return fmt.Errorf("%w: existing S3 object has different content", blob.ErrConflict)
+	}
+	return nil
+}
+
+func (store *Store) encryptionMatches(encryption types.ServerSideEncryption, kmsKeyID *string) bool {
+	return encryption == types.ServerSideEncryptionAwsKms &&
+		kmsKeyID != nil &&
+		*kmsKeyID == store.kmsKeyID
 }
 
 func (store *Store) Get(ctx context.Context, tenant string, ref blob.Ref) ([]byte, error) {
@@ -168,6 +212,9 @@ func (store *Store) Get(ctx context.Context, tenant string, ref blob.Ref) ([]byt
 		return nil, blob.ErrNotFound
 	}
 	defer result.Body.Close()
+	if !store.encryptionMatches(result.ServerSideEncryption, result.SSEKMSKeyId) {
+		return nil, blob.ErrDigestMismatch
+	}
 	if result.ContentLength != nil && *result.ContentLength != ref.ByteLength {
 		return nil, blob.ErrDigestMismatch
 	}
@@ -187,7 +234,7 @@ func (store *Store) Get(ctx context.Context, tenant string, ref blob.Ref) ([]byt
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return append([]byte(nil), data...), nil
+	return data, nil
 }
 
 // ProbeBucket checks access to the configured bucket without inspecting a

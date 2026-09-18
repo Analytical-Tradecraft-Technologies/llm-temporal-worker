@@ -333,7 +333,7 @@ func TestGenerateRecoversDispatchingOperationWithoutResubmitting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationID, scopeKey := operationIdentity(normalized, digest)
+	operationID, scopeKey := operationIdentity(normalized)
 	started, err := harness.admission.Begin(context.Background(), admission.BeginRequest{
 		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest,
 		ExpiresAt: harness.clock.Add(time.Hour),
@@ -378,7 +378,7 @@ func TestGenerateFailsClosedForDispatchingAdapterWithoutRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operationID, scopeKey := operationIdentity(normalized, digest)
+	operationID, scopeKey := operationIdentity(normalized)
 	started, err := harness.admission.Begin(context.Background(), admission.BeginRequest{
 		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest,
 		ExpiresAt: harness.clock.Add(time.Hour),
@@ -419,10 +419,6 @@ func operationIDForTest(t *testing.T, request llm.Request) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, _ := operationIdentity(normalized, digest)
+	id, _ := operationIdentity(normalized)
 	return id
 }

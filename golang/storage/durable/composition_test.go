@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
 func completeCompositionPorts(materializer BudgetMaterializer, journal Journal) CompositionPorts {
 	return CompositionPorts{
 		Operations:    compositionAdmissionStub{},
 		Continuations: compositionContinuationStub{},
+		Checkpoints:   compositionCheckpointStub{},
 		Results:       compositionResultStub{},
 		Journal:       journal,
 		Materializer:  materializer,
@@ -123,4 +125,14 @@ func TestCompositionBuilderBindsBudgetOrderingAndRecovery(t *testing.T) {
 	if got, want := len(journal.completions), 1; got != want {
 		t.Fatalf("completion journal count = %d, want %d", got, want)
 	}
+}
+
+type compositionCheckpointStub struct{}
+
+func (compositionCheckpointStub) Materialize(context.Context, string, state.CheckpointID, state.MaterializeLimits) (state.MaterializedState, error) {
+	return state.MaterializedState{}, nil
+}
+
+func (compositionCheckpointStub) MaterializeHandle(context.Context, string, string, state.MaterializeLimits) (state.MaterializedState, error) {
+	return state.MaterializedState{}, nil
 }

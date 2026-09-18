@@ -1,10 +1,15 @@
 # Release evidence runbook
 
-Task 23 produces a local, machine-readable release-evidence bundle. It is a
-nonpublishing validation and retention step: the workflow never signs an
-image, sends an image to a registry, creates a release, obtains provider
-credentials, or calls a live LLM provider. Publication controls remain a
-separate task.
+Task 23 produces a local, machine-readable release-evidence bundle. The
+`master.yml` evidence job remains nonpublishing: it never sends an image to a
+registry, obtains provider credentials, or calls a live LLM provider. The
+separate protected `release.yml` workflow can publish only the exact digest
+already bound by successful master evidence and a protected release tag.
+
+This bundle proves only the worker revision and boundaries it names. It does not
+prove the joined ATT forecast path, production deployment, or external
+activation; those states are tracked in the dated
+[cross-repository forecast working-status matrix](https://github.com/victoria-hft/victoria-hft/blob/master/docs/research/ai_ach/forecast-competition-status.md).
 
 ## Trusted boundary
 
@@ -34,6 +39,27 @@ multi-exporter capability requirement without a second build. Trusted CI uses
 explicit Syft `v1.44.0` and Trivy `v0.72.0` inputs, with the checked-in
 [Trivy configuration](../../scripts/release/trivy.yaml) applied to that
 temporary directory.
+
+Both Dockerfile roots retain readable reviewed versions and immutable manifest
+digests. The build rejects any platform other than `linux/amd64`, compiles a
+static Go binary with `CGO_ENABLED=0`, and copies only that binary into the
+digest-pinned distroless final stage. The final image has numeric
+`USER 65532:65532`, no shell, package manager, or Go toolchain, and a native
+JSON `ENTRYPOINT`. Version, full source revision, credential-free source URL,
+commit timestamp, and reviewed Go version are explicit build inputs and OCI
+labels. The master container job loads that exact image, then
+`scripts/release/smoke-image.sh` runs its real `worker --config` process under
+the read-only Compose security contract and exercises `/health/live` and
+`/health/ready`. The fixture builds only a loopback provider mock and requires
+no live provider credential or request.
+
+Trivy reports only actionable `HIGH` and `CRITICAL` fixed vulnerabilities, and
+the release verifier fails closed if any are present. Go/package findings use
+the repository-standard reviewed exceptions in
+`golang/tools/supplychainverify/baseline.json`: every exception requires an
+owner, future expiry, remediation URL, and trace scope; stale, unused, newly
+reported, or scope-widened findings fail. Final-image findings are not silently
+suppressed by that source exception list.
 
 Before compact manifest collection, trusted CI installs `kubectl v1.32.6` with
 the immutable `azure/setup-kubectl` `v4.0.1` action commit. The collector
@@ -272,65 +298,146 @@ completed v1 requirement or claim a live provider or publication run.
 
 ## Guarded manual publication boundary
 
-Task 24 adds `.github/workflows/release.yml` as a deliberately incomplete
-publication control. It has only a `workflow_dispatch` trigger, and both jobs
-reject a dispatch that is not started from `master`. A human must provide all
-three immutable inputs:
+Task 24 enables `.github/workflows/release.yml` as a fail-closed publication
+control. It has only a `workflow_dispatch` trigger, and both jobs reject a
+dispatch that is not started from `master`. A human must provide all three
+immutable inputs:
 
 - a strict protected tag reference in the form
   `refs/tags/vMAJOR.MINOR.PATCH` (lightweight and annotated tags both resolve
   to their one target commit);
-- a fully qualified `registry/repository@sha256:...` image reference; and
+- a fully qualified `registry/repository@sha256:...` source image reference;
+  and
 - the numeric workflow run ID for the successful master `release-evidence`
   bundle that proves that exact tag commit and digest.
 
-There is intentionally no default registry. Before any manual run, an
-administrator must configure the non-secret repository variable
-`RELEASE_PUBLICATION_IMAGE_REPOSITORY` with the exact trusted registry and
-repository path. The guard rejects a missing, malformed, tag-based, or
-different image reference; it also rejects a branch ref, a malformed tag, a
+There is intentionally no default source registry. An administrator must
+configure the non-secret repository variable
+`RELEASE_PUBLICATION_IMAGE_REPOSITORY` with the exact trusted source registry
+and repository path. The guard rejects a missing, malformed, tag-based, or
+different source reference; it also rejects a branch ref, a malformed tag, a
 tag that is not reachable from protected master, a non-numeric run ID, an
 unavailable or untrusted evidence run, an unavailable artifact, or any
 evidence revision/digest mismatch.
 
-The preflight receives only `contents: read` and `actions: read`. It uses the
-automatic, job-scoped `GITHUB_TOKEN` only as the input to GitHub's pinned
-`actions/download-artifact` action; the token is never placed in a shell
+The unprotected preflight receives only `contents: read` and `actions: read`.
+It uses the automatic, job-scoped `GITHUB_TOKEN` only as the input to GitHub's
+pinned `actions/download-artifact` action; the token is never placed in a shell
 environment, logged, or passed to another action. This short-lived read token
 is not a provider, registry, or OIDC credential.
 
 Because `actions/checkout` v6 requires a token input even for public
-repositories, the preflight does not use it. Before it passes a manual ref to
-Git, it validates the tag's strict `refs/tags/vMAJOR.MINOR.PATCH` shape in a
-shell environment. It then performs a fixed unauthenticated HTTPS Git fetch
-from `https://github.com/mfow/llm-temporal-worker.git`, with an empty temporary
-Git home, no system Git configuration, disabled prompting, and no credential
-helper. The checkout fails closed if the workspace is not empty, the exact tag
-cannot be fetched, or fetched `master` is not the protected workflow's
-`github.sha`; it checks out that master SHA only, never the manual tag. Thus no
-manual ref can select code that runs before the normal protected-master and
-tag-ancestry guards below.
+repositories, neither release job uses it. Before either job passes a manual
+ref to Git, it validates the tag's strict `refs/tags/vMAJOR.MINOR.PATCH` shape
+in a shell environment. Each job then performs its own fixed unauthenticated
+HTTPS Git fetch from `https://github.com/mfow/llm-temporal-worker.git`, with an
+empty temporary Git home, no system Git configuration, disabled prompting,
+and no credential helper. Each checkout fails closed if its fresh workspace
+is not empty, the exact tag cannot be fetched, or fetched `master` is not the
+protected workflow's `github.sha`; it checks out that master SHA only, never
+the manual tag. Thus neither a manual ref nor an unprotected-job workspace or
+output can select code that runs inside the protected publication boundary.
 
-This repository is public, so before that download the local guard makes a
-credential-free HTTPS `GET` to the public GitHub Actions run endpoint. It
-fails closed on network, API, rate-limit, size, or JSON errors and requires the
-returned run to name this repository, use `.github/workflows/master.yml`, be a
-completed successful `push` to `master`, and have the exact commit resolved
-from the release tag. The only job that can retain the `release-evidence`
-artifact is the `release-evidence` job in that workflow; its contract requires
-a successful master verification before upload. The downloader then requests
-that exact artifact name from the validated run, and local Task 23 verification
-requires its complete evidence bundle to bind the same revision and image
-digest. If the repository ever becomes private, this public lookup must remain
-fail-closed until a separately authorized design supplies an equivalent trust
-boundary without widening the token's scope.
+This repository is public, so each job makes its own credential-free HTTPS
+`GET` to the public GitHub Actions run endpoint before downloading evidence.
+The lookup fails closed on network, API, rate-limit, size, or JSON errors and
+requires the returned run to name this repository, use
+`.github/workflows/master.yml`, be a completed successful `push` to `master`,
+and have the exact commit resolved from the release tag. The only job that can
+retain the `release-evidence` artifact is the `release-evidence` job in that
+workflow; its contract requires successful master verification before upload.
+Each downloader requests that exact artifact name from the validated run. The
+protected job does not trust the preflight's artifact or outputs: after
+environment approval it independently repeats the checkout, request guard,
+public-run verification, artifact download, complete Task 23 verification,
+and tag/revision/digest binding. If the repository ever becomes private, this
+public lookup must remain fail-closed until a separately authorized design
+supplies an equivalent trust boundary without widening the token's scope.
 
 The downstream job names the `release-publication` protected environment and
 is the only job with `id-token: write`. Repository administrators must create
-and protect that environment before enabling an actual publication capability:
-configure required human approvals, protected tag policy, and the cloud
-identity trust subject/audience for that environment. This repository change
-does not create or modify that environment, configure a registry, establish an
-OIDC trust relationship, or add credentials.
+and protect that environment with required human approvals. This repository
+workflow does not create or modify that environment. Infrastructure supplies
+the non-secret Actions variables `AWS_ECR_PUBLISH_ROLE_ARN`, `AWS_REGION`, and
+`ECR_REPOSITORY=llm-temporal-worker`; its role trust limits GitHub OIDC to this
+repository's protected `master`, and its ECR policy limits writes to that one
+repository. No static AWS access key or GitHub secret is accepted.
 
-The protected job always exits nonzero after preflight. It does not sign, publish, push, create a tag, or create a release. Consequently an unavailable or unconfigured registry fails closed rather than becoming a silent skip or a claimed release. Do not treat a successful preflight, an environment approval, or this workflow definition as evidence that any image was signed or published; a separately authorized follow-up must implement those irreversible operations.
+Only after all evidence checks succeed does the protected job use the
+SHA-pinned official `aws-actions/configure-aws-credentials` action to exchange
+GitHub OIDC for a 15-minute role session, followed immediately by the
+SHA-pinned official `aws-actions/amazon-ecr-login` action for the selected
+account registry. The reviewed publication shell receives empty
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` values;
+the OIDC-derived AWS session is not exposed to arbitrary shell. The publisher
+parses the configured role account, verifies the action-reported account,
+requires the ECR registry to equal
+`ACCOUNT.dkr.ecr.REGION.amazonaws.com`, and requires the repository to equal
+`llm-temporal-worker`.
+
+The source is always the input's exact digest reference; neither a source tag
+nor an unpinned source is accepted. Before requesting an OIDC token, the
+checksum-pinned Crane binary runs `crane pull --format=oci` without a platform
+override. It materializes the source image or complete index and every child in
+the fixed `$RUNNER_TEMP/source.oci` layout. The trusted release verifier then
+requires that layout's one top descriptor to equal the evidence digest. A
+missing, corrupt, or changing source therefore fails before AWS authentication
+or any destination mutation. Publication after ECR login reads only that local
+layout and never contacts the source registry.
+
+The publisher revalidates the fixed path, real-directory shape, OCI files, and
+root digest before mutation. `crane push` is invoked on the layout without its
+index-wrapping `--index` flag: with one top descriptor Crane auto-loads the
+exact image or index, while wrapping the layout would create a different
+digest.
+The ECR destination is first addressed by the evidence digest and never pushes `latest`. The publisher requires Crane's pushed reference, an ECR digest
+lookup, the staged digest, and the evidence digest all to agree. Only after
+keyless signature and attestation verification does the separate finalizer
+create the protected semantic version tag from
+`refs/tags/vMAJOR.MINOR.PATCH`; the infrastructure-managed repository's
+immutable-tag policy prevents that tag from ever moving, and a final lookup
+must equal the signed digest. The workflow emits both
+`ACCOUNT.dkr.ecr.REGION.amazonaws.com/llm-temporal-worker@sha256:...` and its
+immutable `:vMAJOR.MINOR.PATCH` alias. It does not rebuild the image, move a Git
+tag, or create a GitHub release. The staged layout is removed on success or
+failure by a final credential-blanked cleanup step.
+
+Registry uploads are not transactional. A destination-side upload or ECR
+failure can retain content-addressed layers or child manifests already pushed.
+Crane writes every dependency before the evidence root manifest, however, so
+that failure cannot emit a successful release. The immutable tag is created
+only after digest publication, signature, attestation, and verification pass.
+Such unreferenced partial content is not release evidence; the pushed-reference check and final ECR root digest equality, plus tag-to-digest equality, are the
+publication success boundary.
+
+Before AWS authentication, the SHA-pinned Cosign installer selects Cosign
+`v3.1.3`, and a closed SLSA v1 predicate records the semantic version, revision,
+source, commit timestamp, Linux AMD64 platform, Dockerfile, both base-image
+digests, evidence run, publication run, and immutable image digest. After the
+digest checks, the protected job uses GitHub's keyless OIDC identity to sign
+the digest and attest both the evidence-bound CycloneDX SBOM and SLSA predicate.
+It immediately verifies the signature and both attestations before tagging,
+using issuer `https://token.actions.githubusercontent.com` and exact certificate
+identity
+`https://github.com/mfow/llm-temporal-worker/.github/workflows/release.yml@refs/heads/master`.
+Regex or repository-wide identity matches are not accepted.
+
+External prerequisites are: a protected `release-publication` GitHub
+environment with required reviewers; non-secret repository variables
+`RELEASE_PUBLICATION_IMAGE_REPOSITORY`, `AWS_ECR_PUBLISH_ROLE_ARN`,
+`AWS_REGION`, and `ECR_REPOSITORY=llm-temporal-worker`; GitHub OIDC trust
+restricted to this repository, workflow, protected `master` ref, and
+environment; ECR immutable tags and scan-on-push; and a publisher role limited
+to layer upload, manifest/tag write, and readback in that one repository.
+Consumers and EKS nodes need pull/readback only. ECR must support OCI 1.1
+signature and attestation referrers, and the job needs outbound HTTPS to AWS
+ECR, Fulcio, Rekor, and GitHub's OIDC endpoint.
+
+Current Task 23 image evidence is not multi-architecture. `image-verify` uses
+one Buildx solve with `--platform linux/amd64`; publication therefore preserves
+that verified Linux AMD64 manifest exactly. Do not describe the ECR result as
+multi-architecture until master evidence itself produces and verifies an OCI
+index. Because master evidence does not itself publish or retain its raw OCI
+layout, the trusted source registry must already contain that exact
+public/readable digest; missing source content or any registry/authentication
+error fails publication closed.

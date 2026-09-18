@@ -1,0 +1,14 @@
+version: local-v1
+entries:
+  - endpoint: joined-smoke
+    family: openai_chat
+    region: local
+    model: joined-smoke-2026-08-10
+    service_class: standard
+    provider_tier: standard
+    input_per_million: "1"
+    output_per_million: "2"
+    cache_read_per_million: "0"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0.001"

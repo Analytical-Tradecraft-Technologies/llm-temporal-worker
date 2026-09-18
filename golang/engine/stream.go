@@ -129,7 +129,7 @@ func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (s
 		return streamSetup{}, engineError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "no eligible adapter implements provider streaming", nil)
 	}
 	planSpan.End()
-	operationID, scopeKey := operationIdentity(normalized, digest)
+	operationID, scopeKey := operationIdentity(normalized)
 	admissionCtx, admissionSpan := engine.startTrace(planCtx, "llmtw.admission", requestTraceAttrs(normalized)...)
 	operation, existing, err := engine.beginOrResume(admissionCtx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
 	if err != nil {

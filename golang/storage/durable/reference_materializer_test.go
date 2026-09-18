@@ -106,6 +106,67 @@ func TestReferenceMaterializerExpiryRemovesReservedAndAccounted(t *testing.T) {
 	}
 }
 
+func TestReferenceDispatchFenceIsAtomicIdempotentAndRetainsReconciliation(t *testing.T) {
+	now := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	m := newReferenceMaterializer(t, func() time.Time { return now })
+	reservation := referenceTestReservation(now, 0, "0.40")
+	request := ReserveRequest{
+		OperationID: "op-fenced", GenerationID: "gen-1", IncarnationID: "inc-1",
+		ExpiresAt: now.Add(time.Minute), OccurredAt: now,
+		Route: DispatchRouteFacts{
+			RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1",
+			ResolvedModel: "model-1", ServiceClass: "standard", PriceVersion: "prices-1",
+		},
+		Reservations: []admission.WindowReservation{reservation},
+	}
+	if result, err := m.Accept(context.Background(), request); err != nil || !result.Accepted {
+		t.Fatalf("acceptance = %#v, %v", result, err)
+	}
+	retainUntil := now.Add(time.Hour)
+	now = request.ExpiresAt.Add(-time.Nanosecond)
+	fence := DispatchFenceRequest{Reservation: request, RetainUntil: retainUntil}
+	if err := m.FenceDispatch(context.Background(), fence); err != nil {
+		t.Fatalf("near-expiry fence = %v", err)
+	}
+	now = request.ExpiresAt.Add(time.Minute)
+	if err := m.FenceDispatch(context.Background(), fence); err != nil {
+		t.Fatalf("fence retry after original lease expiry = %v", err)
+	}
+	completion := exactCompletion("completion-fenced", request.OperationID, request.GenerationID, reservation, 2, "0.20")
+	if err := m.Reconcile(context.Background(), ReconcileRequest{
+		OperationID: request.OperationID, GenerationID: request.GenerationID,
+		IncarnationID: request.IncarnationID, Events: []budget.CompletionEvent{completion},
+	}); err != nil {
+		t.Fatalf("terminal reconciliation after original lease expiry = %v", err)
+	}
+}
+
+func TestReferenceDispatchFenceRejectsExpiredAndStaleFacts(t *testing.T) {
+	now := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	m := newReferenceMaterializer(t, func() time.Time { return now })
+	request := ReserveRequest{
+		OperationID: "op-fence-reject", GenerationID: "gen-1", IncarnationID: "inc-1",
+		ExpiresAt: now.Add(time.Minute), OccurredAt: now,
+		Route: DispatchRouteFacts{
+			RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1",
+			ResolvedModel: "model-1", ServiceClass: "standard", PriceVersion: "prices-1",
+		},
+		Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "0.40")},
+	}
+	if result, err := m.Accept(context.Background(), request); err != nil || !result.Accepted {
+		t.Fatalf("acceptance = %#v, %v", result, err)
+	}
+	stale := request
+	stale.Route.RouteID = "route-stale"
+	if err := m.FenceDispatch(context.Background(), DispatchFenceRequest{Reservation: stale, RetainUntil: now.Add(time.Hour)}); !errors.Is(err, ErrReferenceMaterializerConflict) {
+		t.Fatalf("stale fence error = %v, want conflict", err)
+	}
+	now = request.ExpiresAt
+	if err := m.FenceDispatch(context.Background(), DispatchFenceRequest{Reservation: request, RetainUntil: now.Add(time.Hour)}); !errors.Is(err, ErrReferenceReservationNotFound) {
+		t.Fatalf("expired fence error = %v, want reservation not found", err)
+	}
+}
+
 func newReferenceMaterializer(t *testing.T, now func() time.Time) *ReferenceBudgetMaterializer {
 	t.Helper()
 	m, err := NewReferenceBudgetMaterializer("gen-1", "inc-1", now)

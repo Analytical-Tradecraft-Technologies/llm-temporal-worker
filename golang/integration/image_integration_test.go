@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,10 +27,14 @@ const (
 )
 
 type imageInspection struct {
-	Config struct {
-		User   string            `json:"User"`
-		Labels map[string]string `json:"Labels"`
-		Env    []string          `json:"Env"`
+	Architecture string `json:"Architecture"`
+	OS           string `json:"Os"`
+	Config       struct {
+		User       string            `json:"User"`
+		Labels     map[string]string `json:"Labels"`
+		Env        []string          `json:"Env"`
+		Entrypoint []string          `json:"Entrypoint"`
+		Cmd        []string          `json:"Cmd"`
 	} `json:"Config"`
 }
 
@@ -59,6 +64,17 @@ func TestHardenedImageRuntimeAndMetadata(t *testing.T) {
 	if inspected.Config.User != imageVerifyUser {
 		t.Fatalf("image user = %q, want numeric non-root %q", inspected.Config.User, imageVerifyUser)
 	}
+	if inspected.Architecture != "amd64" || inspected.OS != "linux" {
+		t.Fatalf("image platform = %s/%s, want linux/amd64", inspected.OS, inspected.Architecture)
+	}
+	if len(inspected.Config.Entrypoint) != 1 || inspected.Config.Entrypoint[0] != "/usr/local/bin/llm-temporal-worker" {
+		t.Fatalf("image entrypoint = %#v, want native worker binary", inspected.Config.Entrypoint)
+	}
+	if len(inspected.Config.Cmd) != 0 {
+		t.Fatalf("image command = %#v, want deployment-supplied production command", inspected.Config.Cmd)
+	}
+	assertNoSecretEnvironment(t, inspected.Config.Env)
+	assertRuntimeToolsAbsent(t, image)
 	assertImageLabels(t, inspected.Config.Labels, expected)
 	assertImageEnvironment(t, inspected.Config.Env, expected)
 	if got := imageVersion(t, image); got != expected {
@@ -73,8 +89,8 @@ func TestHardenedImageRuntimeAndMetadata(t *testing.T) {
 	if !inspectedContainer.HostConfig.ReadonlyRootfs {
 		t.Fatal("container root filesystem is writable")
 	}
-	if len(inspectedContainer.HostConfig.Tmpfs) != 1 || inspectedContainer.HostConfig.Tmpfs["/tmp"] != "rw,nosuid,nodev,noexec,size=64m" {
-		t.Fatalf("container writable mounts = %#v, want only /tmp=%q", inspectedContainer.HostConfig.Tmpfs, "rw,nosuid,nodev,noexec,size=64m")
+	if err := validateHardenedTmpfsOptions(inspectedContainer.HostConfig.Tmpfs); err != nil {
+		t.Fatalf("container writable mounts = %#v: %v", inspectedContainer.HostConfig.Tmpfs, err)
 	}
 	bindings := inspectedContainer.NetworkSettings.Ports[imageHealthPort]
 	if len(bindings) != 1 || bindings[0].HostPort == "" {
@@ -143,6 +159,31 @@ func assertImageEnvironment(t *testing.T, environment []string, metadata buildin
 	} {
 		if got := values[name]; got != want {
 			t.Errorf("image environment %s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func assertNoSecretEnvironment(t *testing.T, environment []string) {
+	t.Helper()
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		upper := strings.ToUpper(name)
+		for _, forbidden := range []string{"SECRET", "TOKEN", "PASSWORD", "CREDENTIAL", "API_KEY", "MODEL", "PROMPT"} {
+			if strings.Contains(upper, forbidden) {
+				t.Errorf("final image contains forbidden secret/provider environment name %q", name)
+			}
+		}
+	}
+}
+
+func assertRuntimeToolsAbsent(t *testing.T, image string) {
+	t.Helper()
+	for _, tool := range []string{"/bin/sh", "/bin/bash", "/bin/busybox", "/usr/bin/apt-get", "/usr/bin/apk", "/usr/local/go/bin/go"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		output, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--entrypoint", tool, image, "--version").CombinedOutput()
+		cancel()
+		if err == nil {
+			t.Errorf("final image unexpectedly executed %s (%s)", tool, strings.TrimSpace(string(output)))
 		}
 	}
 }
@@ -237,9 +278,22 @@ func runImageCommand(t *testing.T, name string, arguments ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, name, arguments...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s %s: %v (%s)", name, strings.Join(arguments, " "), err, strings.TrimSpace(string(output)))
+	command := exec.CommandContext(ctx, name, arguments...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("%s %s: %v (stdout=%q stderr=%q)", name, strings.Join(arguments, " "), err, boundedImageCommandDiagnostic(stdout.String()), boundedImageCommandDiagnostic(stderr.String()))
 	}
-	return string(output)
+	return stdout.String()
+}
+
+func boundedImageCommandDiagnostic(value string) string {
+	const limit = 4096
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "...[truncated]"
 }

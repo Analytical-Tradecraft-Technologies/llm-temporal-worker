@@ -260,7 +260,7 @@ type azureAdapterDependencies struct {
 func defaultAzureAdapterDependencies() azureAdapterDependencies {
 	return azureAdapterDependencies{
 		newAzureEgressHTTPClient: func(endpoint config.EndpointConfig) (*http.Client, error) {
-			return runtime.NewProviderEgressHTTPClient(&http.Client{Timeout: liveHTTPTimeout}, endpoint)
+			return runtime.NewProviderEgressHTTPClient(&http.Client{Timeout: liveHTTPTimeout}, endpoint, config.DefaultProviderResponseBytes)
 		},
 		newAzureCredential: func() (azcore.TokenCredential, error) {
 			return azidentity.NewDefaultAzureCredential(nil)

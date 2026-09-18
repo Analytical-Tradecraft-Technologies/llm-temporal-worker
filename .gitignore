@@ -17,6 +17,10 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# Python helper/test bytecode
+__pycache__/
+*.py[cod]
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
@@ -36,6 +40,9 @@ release-artifacts/
 
 # env file
 .env
+
+# Local Compose smoke credentials and transient results
+golang/.local/
 
 # Editor/IDE
 # .idea/

@@ -115,7 +115,7 @@ func TestEstimateCandidateUsesExactCandidateAwareTokenizer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !called || estimate.InputTokens != 17 || estimate.CacheWriteTokens != 17 || estimate.CandidateID != candidate.ID {
+	if !called || estimate.InputTokens != 17 || estimate.CacheReadTokens != 0 || estimate.CacheWriteTokens != 17 || estimate.CandidateID != candidate.ID {
 		t.Fatalf("exact tokenizer estimate = %#v, called=%t", estimate, called)
 	}
 }
@@ -133,6 +133,33 @@ func TestEstimateCandidateRejectsInvalidExactTokenizerResult(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := (Estimator{Tokenizer: test.fn}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, entry); err == nil {
 				t.Fatal("invalid exact tokenizer result was accepted")
+			}
+		})
+	}
+}
+
+func TestEstimateCandidateRejectsConfiguredTokenCeilings(t *testing.T) {
+	output := 9
+	reasoning := 7
+	request := llm.Request{
+		OperationKey: "estimate-token-limits",
+		Model:        "logical",
+		Output:       &llm.OutputSpec{MaxTokens: &output},
+		Reasoning:    &llm.ReasoningSpec{TokenBudget: &reasoning},
+	}
+	entry := pricing.Entry{Prices: pricing.UnitPrices{}}
+	tests := []struct {
+		name      string
+		estimator Estimator
+	}{
+		{name: "input", estimator: Estimator{MaxInput: 4, MaxOutput: 9, MaxReasoning: 7, Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return 5, nil }}},
+		{name: "output", estimator: Estimator{MaxInput: 5, MaxOutput: 8, MaxReasoning: 7, Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return 5, nil }}},
+		{name: "reasoning", estimator: Estimator{MaxInput: 5, MaxOutput: 9, MaxReasoning: 6, Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return 5, nil }}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := test.estimator.EstimateCandidate(request, routing.Candidate{ID: "candidate"}, entry); !errors.Is(err, ErrTokenLimit) {
+				t.Fatalf("token ceiling error = %v, want %v", err, ErrTokenLimit)
 			}
 		})
 	}

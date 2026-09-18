@@ -18,7 +18,7 @@ func TestOperationConcurrentBeginReplay(t *testing.T) {
 		attempts = 8
 	)
 	for attempt := 0; attempt < attempts; attempt++ {
-		request := admission.BeginRequest{ID: fmt.Sprintf("operation-concurrent-%d-%d", time.Now().UTC().UnixNano(), attempt), ScopeKey: "concurrency/project", RequestDigest: admission.Digest([]byte("same")), ReservationUSD: pricing.MustUSD("0"), RequestManifest: []byte(`{}`)}
+		request := admission.BeginRequest{ID: fmt.Sprintf("operation-concurrent-%d-%d", time.Now().UTC().UnixNano(), attempt), OperationKey: fmt.Sprintf("operation-concurrent-%d-%d", time.Now().UTC().UnixNano(), attempt), Actor: "postgres-test", ScopeKey: "concurrency/project", RequestDigest: admission.Digest([]byte("same")), ReservationUSD: pricing.MustUSD("0"), RequestManifest: []byte(`{}`)}
 		results := make(chan admission.BeginResult, workers)
 		errs := make(chan error, workers)
 		start := make(chan struct{})

@@ -56,7 +56,7 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 		return engine.Snapshot{}, fmt.Errorf("load verified catalogs: %w", err)
 	}
 	now := clock()
-	price, err := mergePricingCatalogs(bundle, snapshot.ConfigVersion())
+	price, err := MergePricingCatalogs(bundle, snapshot.ConfigVersion())
 	if err != nil {
 		return engine.Snapshot{}, err
 	}
@@ -64,7 +64,11 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 	if err != nil {
 		return engine.Snapshot{}, err
 	}
-	policies, err := compileBudgetPolicies(value)
+	endpointCapabilities, err := compileEndpointCapabilities(value, bundle)
+	if err != nil {
+		return engine.Snapshot{}, err
+	}
+	policies, err := compileBudgetPolicies(value, snapshot.Digest())
 	if err != nil {
 		return engine.Snapshot{}, err
 	}
@@ -73,6 +77,7 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 		ConfigDigest:             snapshot.Digest(),
 		ConfigEpoch:              snapshot.ConfigVersion(),
 		Routes:                   routes,
+		EndpointCapabilities:     endpointCapabilities,
 		Health:                   routing.HealthView{},
 		Prices:                   pricing.NewResolver(price),
 		BudgetPolicies:           policies,
@@ -85,7 +90,7 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 	}, nil
 }
 
-func mergePricingCatalogs(bundle catalog.Bundle, configVersion string) (pricing.Catalog, error) {
+func MergePricingCatalogs(bundle catalog.Bundle, configVersion string) (pricing.Catalog, error) {
 	ids := make([]string, 0, len(bundle.Pricing))
 	for id := range bundle.Pricing {
 		ids = append(ids, id)
@@ -104,7 +109,7 @@ func mergePricingCatalogs(bundle catalog.Bundle, configVersion string) (pricing.
 	}
 	version := "runtime-prices"
 	if strings.TrimSpace(configVersion) != "" {
-		version += "/" + configVersion
+		version += ":" + configVersion
 	}
 	merged, err := pricing.CompileUSD(version, entries)
 	if err != nil {
@@ -286,10 +291,14 @@ func routeCatalogIdentity(entries []pricing.Entry, endpointID string, endpoint c
 	return providerName, routeRegion, nil
 }
 
-func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {
+func compileBudgetPolicies(value config.Config, configDigest [32]byte) ([]budget.Policy, error) {
 	policies := make([]budget.Policy, 0, len(value.Budgets.Policies))
 	for _, policyValue := range value.Budgets.Policies {
-		policy := budget.Policy{ID: policyValue.ID, Match: budget.Matcher{
+		policyID, err := budget.PolicyIdentity(configDigest, policyValue.ID)
+		if err != nil {
+			return nil, fmt.Errorf("budget policy %q identity: %w", policyValue.ID, err)
+		}
+		policy := budget.Policy{ID: policyID, Match: budget.Matcher{
 			Tenant:       policyValue.Match.Tenant,
 			Project:      policyValue.Match.Project,
 			ActorPrefix:  policyValue.Match.ActorPrefix,
@@ -304,7 +313,11 @@ func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {
 			if err != nil {
 				return nil, fmt.Errorf("budget policy %q window %d: %w", policyValue.ID, index, err)
 			}
-			policy.Windows = append(policy.Windows, budget.Window{ID: fmt.Sprintf("%s/%d", policyValue.ID, index), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), LimitUSD: windowValue.LimitUSD, Limit: legacyLimit})
+			windowID, err := budget.WindowIdentity(policyID, index)
+			if err != nil {
+				return nil, fmt.Errorf("budget policy %q window %d identity: %w", policyValue.ID, index, err)
+			}
+			policy.Windows = append(policy.Windows, budget.Window{ID: windowID, Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), LimitUSD: windowValue.LimitUSD, Limit: legacyLimit})
 		}
 		if err := policy.Validate(value.Limits.MaxBudgetBucketsPerWindow); err != nil {
 			return nil, fmt.Errorf("budget policy %q: %w", policy.ID, err)
@@ -368,4 +381,29 @@ func routingCapabilities(value provider.CapabilitySet) routing.CapabilitySet {
 		}
 	}
 	return result
+}
+
+func compileEndpointCapabilities(value config.Config, bundle catalog.Bundle) (map[string]provider.CapabilitySet, error) {
+	endpointIDs := make([]string, 0, len(value.Endpoints))
+	for endpointID := range value.Endpoints {
+		endpointIDs = append(endpointIDs, endpointID)
+	}
+	sort.Strings(endpointIDs)
+	sets := make(map[string]provider.CapabilitySet, len(endpointIDs))
+	for _, endpointID := range endpointIDs {
+		endpoint := value.Endpoints[endpointID]
+		profile, ok := bundle.Capabilities[endpoint.CapabilityProfile]
+		if !ok {
+			return nil, fmt.Errorf("endpoint %q capability profile %q is unavailable", endpointID, endpoint.CapabilityProfile)
+		}
+		if family := endpointFamily(endpoint.Family); profile.Family != family {
+			return nil, fmt.Errorf("endpoint %q capability family %q does not match %q", endpointID, profile.Family, family)
+		}
+		features := make(map[provider.Feature]provider.Capability, len(profile.Set.Features))
+		for feature, capability := range profile.Set.Features {
+			features[feature] = capability
+		}
+		sets[endpointID] = provider.CapabilitySet{Version: profile.Set.Version, Features: features}
+	}
+	return sets, nil
 }

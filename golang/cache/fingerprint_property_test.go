@@ -2,6 +2,7 @@ package cache
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -27,6 +28,11 @@ func TestFingerprintRouteIdentityFieldsNeverShare(t *testing.T) {
 		{"capability", func(input *Input) { input.CapabilityLowering = "cap/v2" }},
 		{"epoch", func(input *Input) { input.Epoch = "epoch-2" }},
 		{"conversation", func(input *Input) { input.Conversation = "sha256:other" }},
+		{"cache maximum age", func(input *Input) { input.Policy.MaxAge = 10 * time.Minute }},
+		{"cache variant", func(input *Input) { input.Policy.Variant++ }},
+		{"service class", func(input *Input) { input.Request.ServiceClass = llm.ServiceClassPriority }},
+		{"service fallbacks", func(input *Input) { input.Request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassEconomy} }},
+		{"tool policy", func(input *Input) { input.Request.ToolPolicy = llm.ToolPolicy{Mode: llm.ToolChoiceRequired} }},
 		{"output", func(input *Input) {
 			input.Request.Input = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "different"}}}}
 		}},

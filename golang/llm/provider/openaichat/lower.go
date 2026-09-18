@@ -37,11 +37,11 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		}
 		requestMap[wire] = value
 	}
-	if serviceTier != "" {
+	if serviceTier != "" && !profile.WireShape.OmitServiceTier {
 		requestMap["service_tier"] = serviceTier
 	}
 	if request.Output != nil {
-		if err := lowerOutput(*request.Output, requestMap); err != nil {
+		if err := lowerOutput(*request.Output, profile.WireShape, requestMap); err != nil {
 			return openai.ChatCompletionNewParams{}, err
 		}
 	}
@@ -70,13 +70,33 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		requestMap["tool_choice"] = policy
 	}
 	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
-		requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
+		if profile.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported {
+			if request.ToolPolicy.Parallel {
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("profile %q does not support parallel_tool_calls", profile.ID)
+			}
+		} else {
+			requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
+		}
 	}
 	if request.Continuation != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("continuation is not representable by Chat Completions")
 	}
 	if err := lowerExtensions(profile, request.Extensions, requestMap); err != nil {
 		return openai.ChatCompletionNewParams{}, err
+	}
+	if configured, ok := requestMap["store"]; ok {
+		store, valid := configured.(bool)
+		if !valid {
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("chat store policy must be boolean")
+		}
+		if store {
+			return openai.ChatCompletionNewParams{}, fmt.Errorf("provider-hosted Chat response storage is prohibited")
+		}
+	}
+	if profile.WireShape.Store == DefaultFalseFieldUnsupported {
+		delete(requestMap, "store")
+	} else {
+		requestMap["store"] = false
 	}
 	encoded, err := json.Marshal(requestMap)
 	if err != nil {
@@ -323,11 +343,10 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
 			return nil, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
 		}
-		if len(tool.OutputSchema) > 0 {
-			// Chat tool definitions have no output-schema slot. Dropping it would
-			// make the semantic contract misleading, so reject it explicitly.
-			return nil, fmt.Errorf("tool %q output schema is not representable by Chat Completions", tool.Name)
-		}
+		// OutputSchema is the caller-owned contract for validating a tool
+		// result. Chat Completions has no wire slot for it, and the provider
+		// does not execute or validate caller-owned tools, so it remains in the
+		// durable request without being sent to the provider.
 		function := map[string]any{
 			"name":        tool.Name,
 			"description": tool.Description,
@@ -364,12 +383,19 @@ func lowerToolPolicy(policy llm.ToolPolicy, hasTools bool) (any, error) {
 	}
 }
 
-func lowerOutput(output llm.OutputSpec, target map[string]any) error {
+func lowerOutput(output llm.OutputSpec, shape WireShape, target map[string]any) error {
 	if output.MaxTokens != nil {
 		if *output.MaxTokens < 0 {
 			return fmt.Errorf("output max_tokens must not be negative")
 		}
-		target["max_completion_tokens"] = *output.MaxTokens
+		switch shape.OutputTokenLimitField {
+		case "", OutputTokenLimitFieldMaxCompletionTokens:
+			target[string(OutputTokenLimitFieldMaxCompletionTokens)] = *output.MaxTokens
+		case OutputTokenLimitFieldMaxTokens:
+			target[string(OutputTokenLimitFieldMaxTokens)] = *output.MaxTokens
+		default:
+			return fmt.Errorf("output token limit field %q is unsupported", shape.OutputTokenLimitField)
+		}
 	}
 	switch output.Format.Kind {
 	case "", llm.OutputKindText:

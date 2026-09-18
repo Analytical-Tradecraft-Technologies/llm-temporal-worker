@@ -23,6 +23,7 @@ func TestDefaultBlobFactoryBuildsDevelopmentFileStore(t *testing.T) {
     bucket: acme-llmtw-production
     region: ap-southeast-2
     prefix: v1
+    kms_key_id: arn:aws:kms:ap-southeast-2:123456789012:key/00000000-0000-0000-0000-000000000000
     auth:
       kind: aws_default_chain`, `blob_store:
   kind: file
