@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
@@ -377,7 +378,12 @@ func compatibilityActualMicroUSD(exact pricing.USD) (pricing.MicroUSD, error) {
 
 func operationIdentity(request llm.Request, digest [32]byte) (string, string) {
 	scope := request.Context.Tenant + "\x00" + request.OperationKey
-	data := make([]byte, 0, len(operationDomain)+len(scope)+len(digest))
+	prefixLen := len(operationDomain) + len(digest)
+	if len(scope) > math.MaxInt-prefixLen {
+		identity := sha256.Sum256(digest[:])
+		return hex.EncodeToString(identity[:]), scope
+	}
+	data := make([]byte, 0, prefixLen+len(scope))
 	data = append(data, operationDomain...)
 	data = append(data, scope...)
 	data = append(data, digest[:]...)
