@@ -13,11 +13,6 @@ ARG GO_VERSION=unknown
 FROM ${GO_IMAGE} AS build
 
 ARG TARGETARCH
-ARG VERSION
-ARG REVISION
-ARG BUILD_TIME
-ARG SOURCE
-ARG GO_VERSION
 
 WORKDIR /src
 
@@ -30,6 +25,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY . .
+
+ARG VERSION
+ARG REVISION
+ARG BUILD_TIME
+ARG SOURCE
+ARG GO_VERSION
+
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     actual_go_version="$(go env GOVERSION)" && \
