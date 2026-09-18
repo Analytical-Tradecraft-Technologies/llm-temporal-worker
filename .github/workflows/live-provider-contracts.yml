@@ -152,7 +152,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-openai-responses-evidence
           path: |
@@ -210,7 +210,7 @@ jobs:
           cache: "false"
 
       - name: Acquire Azure workload identity
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.LLMTW_LIVE_AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.LLMTW_LIVE_AZURE_TENANT_ID }}
@@ -265,7 +265,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-azure-responses-evidence
           path: |
@@ -369,7 +369,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-openai-chat-evidence
           path: |
@@ -473,7 +473,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-openrouter-chat-evidence
           path: |
@@ -577,7 +577,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-exa-chat-evidence
           path: |
@@ -681,7 +681,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-anthropic-direct-evidence
           path: |
@@ -739,7 +739,7 @@ jobs:
           cache: "false"
 
       - name: Acquire AWS workload identity
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ vars.LLMTW_LIVE_AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -793,7 +793,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-anthropic-aws-evidence
           path: |
@@ -851,7 +851,7 @@ jobs:
           cache: "false"
 
       - name: Acquire AWS workload identity
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ vars.LLMTW_LIVE_AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -904,7 +904,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-bedrock-anthropic-evidence
           path: |
@@ -962,7 +962,7 @@ jobs:
           cache: "false"
 
       - name: Acquire AWS workload identity
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
         with:
           role-to-assume: ${{ vars.LLMTW_LIVE_AWS_ROLE_ARN }}
           aws-region: us-east-1
@@ -1015,7 +1015,7 @@ jobs:
               --source-revision "${{ github.sha }}"
 
       - name: Upload redacted live-provider evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: live-provider-contract-bedrock-converse-evidence
           path: |
