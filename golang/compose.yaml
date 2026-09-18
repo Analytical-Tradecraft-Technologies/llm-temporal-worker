@@ -2,12 +2,12 @@ name: llmtw
 
 services:
   postgres:
-    image: docker.io/library/postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    image: docker.io/library/postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: ${LLMTW_POSTGRES_PASSWORD:-local-only}
     volumes:
-      - temporal-postgres-data:/var/lib/postgresql/data
+      - temporal-postgres-data-v18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
       interval: 5s
@@ -22,13 +22,13 @@ services:
   # Temporal-owned PostgreSQL service above.
   worker-postgres:
     profiles: [durable]
-    image: docker.io/library/postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
+    image: docker.io/library/postgres:18.6-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
     environment:
       POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}
       POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
       POSTGRES_DB: ${LLMTW_WORKER_POSTGRES_DATABASE:-llmtw_worker}
     volumes:
-      - worker-postgres-data-v17:/var/lib/postgresql/data
+      - worker-postgres-data-v18:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -37,7 +37,7 @@ services:
       start_period: 5s
 
   temporal:
-    image: docker.io/temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a
+    image: docker.io/temporalio/auto-setup:1.29.3@sha256:9be7b8d98f60d00f4f2ff74731c071a17848d8182bbc8429e314a24c94ea105b
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,7 +63,7 @@ services:
       start_period: 20s
 
   redis:
-    image: docker.io/library/redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    image: docker.io/library/redis:8.10.1-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     # Generate the ACL before passing control to the image entrypoint. The
     # entrypoint then initializes the mounted /data volume and drops to redis.
     working_dir: /data
@@ -106,7 +106,7 @@ services:
   # readiness will fail closed if a retained local volume has the wrong code.
   redis-function-provisioner:
     profiles: [worker]
-    image: docker.io/library/redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    image: docker.io/library/redis:8.10.1-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     depends_on:
       redis:
         condition: service_healthy
@@ -163,7 +163,7 @@ services:
   # writable root before the read-only worker starts.
   blob-volume-provisioner:
     profiles: [worker]
-    image: docker.io/library/redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
+    image: docker.io/library/redis:8.10.1-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
@@ -303,5 +303,5 @@ secrets:
 volumes:
   blob-data:
   redis-data:
-  temporal-postgres-data:
-  worker-postgres-data-v17:
+  temporal-postgres-data-v18:
+  worker-postgres-data-v18:

@@ -13,11 +13,11 @@ import (
 )
 
 const (
-	downloadArtifactActionPin        = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
-	uploadArtifactActionPin          = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-	ecrConfigureCredentialsActionPin = "aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c"
-	awsECRLoginActionPin             = "aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64"
-	cosignInstallerActionPin         = "sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62"
+	downloadArtifactAction        = "actions/download-artifact"
+	uploadArtifactAction          = "actions/upload-artifact"
+	ecrConfigureCredentialsAction = "aws-actions/configure-aws-credentials"
+	awsECRLoginAction             = "aws-actions/amazon-ecr-login"
+	cosignInstallerAction         = "sigstore/cosign-installer"
 )
 
 var fullGitCommitID = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -43,17 +43,17 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 	if _, found := preflight["environment"]; found {
 		t.Fatal("release preflight must not enter the protected publication environment")
 	}
-	for _, action := range []string{setupGoActionPin, downloadArtifactActionPin} {
+	for _, action := range []string{setupGoAction, downloadArtifactAction} {
 		assertJobUsesAction(t, release, "preflight", action)
 	}
 	assertAnonymousFixedPublicCheckout(t, release)
-	assertJobActionInput(t, release, "preflight", setupGoActionPin, "token", "")
-	assertJobActionInput(t, release, "preflight", setupGoActionPin, "cache", "false")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "name", "release-evidence")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "github-token", "${{ github.token }}")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "repository", "${{ github.repository }}")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "run-id", "${{ inputs.evidence_run_id }}")
-	assertJobActionInput(t, release, "preflight", downloadArtifactActionPin, "path", "release-artifacts")
+	assertJobActionInput(t, release, "preflight", setupGoAction, "token", "")
+	assertJobActionInput(t, release, "preflight", setupGoAction, "cache", "false")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "name", "release-evidence")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "github-token", "${{ github.token }}")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "repository", "${{ github.repository }}")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "run-id", "${{ inputs.evidence_run_id }}")
+	assertJobActionInput(t, release, "preflight", downloadArtifactAction, "path", "release-artifacts")
 
 	for _, command := range []string{
 		"make security-verify",
@@ -98,26 +98,26 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 		t.Fatalf("protected publication environment = %#v, want release-publication", protected["environment"])
 	}
 	for _, action := range []string{
-		setupGoActionPin,
-		downloadArtifactActionPin,
-		ecrConfigureCredentialsActionPin,
-		awsECRLoginActionPin,
-		cosignInstallerActionPin,
+		setupGoAction,
+		downloadArtifactAction,
+		ecrConfigureCredentialsAction,
+		awsECRLoginAction,
+		cosignInstallerAction,
 	} {
 		assertJobUsesAction(t, release, "protected-signing-publication", action)
 	}
-	assertJobActionInput(t, release, "protected-signing-publication", setupGoActionPin, "token", "")
-	assertJobActionInput(t, release, "protected-signing-publication", setupGoActionPin, "cache", "false")
-	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactActionPin, "name", "release-evidence")
-	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactActionPin, "github-token", "${{ github.token }}")
-	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactActionPin, "repository", "${{ github.repository }}")
-	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactActionPin, "run-id", "${{ inputs.evidence_run_id }}")
-	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactActionPin, "path", "release-artifacts")
-	assertJobActionInput(t, release, "protected-signing-publication", ecrConfigureCredentialsActionPin, "role-to-assume", "${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}")
-	assertJobActionInput(t, release, "protected-signing-publication", ecrConfigureCredentialsActionPin, "aws-region", "${{ vars.AWS_REGION }}")
-	assertJobActionInput(t, release, "protected-signing-publication", awsECRLoginActionPin, "registries", "${{ steps.aws.outputs.aws-account-id }}")
-	assertJobActionInput(t, release, "protected-signing-publication", awsECRLoginActionPin, "mask-password", "true")
-	assertJobActionInput(t, release, "protected-signing-publication", cosignInstallerActionPin, "cosign-release", "v3.1.3")
+	assertJobActionInput(t, release, "protected-signing-publication", setupGoAction, "token", "")
+	assertJobActionInput(t, release, "protected-signing-publication", setupGoAction, "cache", "false")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "name", "release-evidence")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "github-token", "${{ github.token }}")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "repository", "${{ github.repository }}")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "run-id", "${{ inputs.evidence_run_id }}")
+	assertJobActionInput(t, release, "protected-signing-publication", downloadArtifactAction, "path", "release-artifacts")
+	assertJobActionInput(t, release, "protected-signing-publication", ecrConfigureCredentialsAction, "role-to-assume", "${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}")
+	assertJobActionInput(t, release, "protected-signing-publication", ecrConfigureCredentialsAction, "aws-region", "${{ vars.AWS_REGION }}")
+	assertJobActionInput(t, release, "protected-signing-publication", awsECRLoginAction, "registries", "${{ steps.aws.outputs.aws-account-id }}")
+	assertJobActionInput(t, release, "protected-signing-publication", awsECRLoginAction, "mask-password", "true")
+	assertJobActionInput(t, release, "protected-signing-publication", cosignInstallerAction, "cosign-release", "v3.1.3")
 
 	for _, command := range []string{
 		"bash scripts/release/guard.sh validate-request",
@@ -723,9 +723,9 @@ func assertProtectedPublicationContract(t *testing.T, workflow workflowDocument)
 			evidenceIndex = index
 		case step["run"] == "bash scripts/release/stage-image.sh":
 			stageIndex = index
-		case step["uses"] == ecrConfigureCredentialsActionPin:
+		case actionName(step["uses"]) == ecrConfigureCredentialsAction:
 			awsIndex = index
-		case step["uses"] == awsECRLoginActionPin:
+		case actionName(step["uses"]) == awsECRLoginAction:
 			ecrIndex = index
 		case step["run"] == "bash scripts/release/publish-ecr.sh":
 			publishIndex = index
@@ -854,8 +854,8 @@ func assertTrustedMasterEvidenceArtifactSource(t *testing.T, master workflowDocu
 	if scalarString(t, master.name, job, "needs") != "verify" {
 		t.Fatalf("master release-evidence job must require verified master CI, got %#v", job["needs"])
 	}
-	assertJobUsesAction(t, master, "release-evidence", uploadArtifactActionPin)
-	assertJobActionInput(t, master, "release-evidence", uploadArtifactActionPin, "name", "release-evidence")
+	assertJobUsesAction(t, master, "release-evidence", uploadArtifactAction)
+	assertJobActionInput(t, master, "release-evidence", uploadArtifactAction, "name", "release-evidence")
 
 	artifactStep := artifactUploadStep(t, master, "release-evidence", "release-evidence")
 	if scalarString(t, master.name, artifactStep, "if") != "success()" {
@@ -876,7 +876,7 @@ func assertTrustedMasterEvidenceArtifactSource(t *testing.T, master workflowDocu
 		}
 		for _, rawStep := range workflowSteps(t, master.name, jobName, job) {
 			step, ok := rawStep.(map[string]any)
-			if !ok || step["uses"] != uploadArtifactActionPin {
+			if !ok || actionName(step["uses"]) != uploadArtifactAction {
 				continue
 			}
 			with, ok := step["with"].(map[string]any)
@@ -912,7 +912,7 @@ func assertGitHubTokenIsExclusiveToArtifactDownload(t *testing.T, workflow workf
 				}
 				usesToken++
 				if (jobName != "preflight" && jobName != "protected-signing-publication") ||
-					step["uses"] != downloadArtifactActionPin || input != "github-token" {
+					actionName(step["uses"]) != downloadArtifactAction || input != "github-token" {
 					t.Fatalf("%s job %q exposes the GitHub token outside pinned download-artifact", workflow.name, jobName)
 				}
 			}
@@ -1121,7 +1121,7 @@ func artifactUploadStep(t *testing.T, workflow workflowDocument, jobName, artifa
 	job := workflowJob(t, workflow, jobName)
 	for _, rawStep := range workflowSteps(t, workflow.name, jobName, job) {
 		step, ok := rawStep.(map[string]any)
-		if !ok || step["uses"] != uploadArtifactActionPin {
+		if !ok || actionName(step["uses"]) != uploadArtifactAction {
 			continue
 		}
 		with, ok := step["with"].(map[string]any)

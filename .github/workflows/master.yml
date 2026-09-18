@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up reviewed Go toolchain
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: false
@@ -105,6 +105,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install --yes protobuf-compiler bubblewrap
+          sudo apt-get install --yes cargo
 
       - name: Enable unprivileged user namespaces for OPAM sandboxing
         if: ${{ runner.environment == 'github-hosted' }}
@@ -140,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           opam pin add --yes --no-action --kind=git temporal-sdk \
-            'git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#8c8cf62b7f13bfa262b24df034ecfb899024b8a6'
+            'git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#87d61c0639bf232b67e6d5a0f397d990e2468eb4'
           bash ../../scripts/ci/prefetch-temporal-sdk-cargo.sh
           CARGO_NET_OFFLINE=true opam install --yes . --deps-only
 
@@ -184,7 +185,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: true
@@ -267,7 +268,7 @@ jobs:
 
       - name: Set up Go
         if: steps.go.outputs.present == 'true'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: true
@@ -395,7 +396,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: golang/.go-version
           cache: true
