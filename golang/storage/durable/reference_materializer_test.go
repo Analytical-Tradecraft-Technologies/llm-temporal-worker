@@ -52,8 +52,8 @@ func TestReferenceMaterializerIsIdempotentAndAtomic(t *testing.T) {
 func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 	now := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
 	m := newReferenceMaterializer(t, func() time.Time { return now })
-	first := referenceTestReservation(now, 0, "0.60")
-	second := referenceTestReservation(now, 1, "0.60")
+	first := referenceTestReservation(now, 0, "0.40")
+	second := referenceTestReservation(now, 1, "0.40")
 	request := ReserveRequest{OperationID: "op-multi", GenerationID: "gen-1", Reservations: []admission.WindowReservation{first, second}}
 	accepted, err := m.Accept(context.Background(), request)
 	if err != nil || !accepted.Accepted {
@@ -75,9 +75,9 @@ func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 		t.Fatalf("changed completion error = %v, want conflict", err)
 	}
 
-	// The completion above targeted only bucket 1. Bucket 0 remains at 0.60,
+	// The completion above targeted only bucket 1. Bucket 0 remains at 0.40,
 	// while bucket 1 has only 0.10 accounted cost.
-	firstFollowup := ReserveRequest{OperationID: "op-first-followup", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "0.50")}}
+	firstFollowup := ReserveRequest{OperationID: "op-first-followup", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "0.60")}}
 	if result, err := m.Accept(context.Background(), firstFollowup); err != nil || result.Accepted {
 		t.Fatalf("bucket 0 was reconciled accidentally: %#v, %v", result, err)
 	}

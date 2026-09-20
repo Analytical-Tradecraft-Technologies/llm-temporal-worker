@@ -163,23 +163,34 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 
 	// Check every window before changing any state. This is the atomic
 	// multi-window admission property that the Redis Function must preserve.
+	type windowKey struct{ policy, window string }
+	activeByWindow := make(map[windowKey]pricing.USD)
+	limitByWindow := make(map[windowKey]pricing.USD)
 	for _, reservation := range reservations {
-		key := referenceBucketKey{policy: reservation.policyID, window: reservation.windowID, bucket: reservation.bucket}
-		bucket := materializer.buckets[key]
-		active := pricing.MustUSD("0")
-		if bucket != nil {
-			if bucket.limit.Cmp(reservation.limitUSD) != 0 {
+		key := windowKey{reservation.policyID, reservation.windowID}
+		active, staged := activeByWindow[key]
+		if staged {
+			if limitByWindow[key].Cmp(reservation.limitUSD) != 0 {
 				return ReserveResult{}, ErrReferenceMaterializerConflict
 			}
-			active, err = bucket.reserved.Add(bucket.accounted)
-			if err != nil {
-				return ReserveResult{}, err
+		} else {
+			active = pricing.MustUSD("0")
+			for bucketKey, bucket := range materializer.buckets {
+				if bucketKey.policy != key.policy || bucketKey.window != key.window {
+					continue
+				}
+				if bucket.limit.Cmp(reservation.limitUSD) != 0 {
+					return ReserveResult{}, ErrReferenceMaterializerConflict
+				}
+				for _, amount := range []pricing.USD{bucket.reserved, bucket.accounted} {
+					active, err = active.Add(amount)
+					if err != nil {
+						return ReserveResult{}, err
+					}
+				}
 			}
 		}
-		remaining, err := reservation.limitUSD.Sub(active)
-		if err != nil {
-			return ReserveResult{}, err
-		}
+		remaining := reservation.limitUSD.SubOrZero(active)
 		if reservation.amountUSD.Cmp(remaining) > 0 {
 			result := ReserveResult{
 				OperationID:  request.OperationID,
@@ -196,6 +207,12 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 			materializer.operations[request.OperationID] = referenceOperation{fingerprint: fingerprint, result: cloneReserveResult(result), reservations: make(map[referenceReservationKey]referenceReservation), events: make(map[string][32]byte)}
 			return result, nil
 		}
+		// Stage this request's earlier buckets without publishing partial state.
+		activeByWindow[key], err = active.Add(reservation.amountUSD)
+		if err != nil {
+			return ReserveResult{}, err
+		}
+		limitByWindow[key] = reservation.limitUSD
 	}
 
 	result := ReserveResult{OperationID: request.OperationID, Accepted: true, GenerationID: request.GenerationID, IncarnationID: materializer.incarnation, Events: make([]budget.ReservationEvent, 0, len(reservations))}

@@ -11,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/storage/conformance"
 	durable "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -133,5 +134,32 @@ func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
 	}
 	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first}}); err != nil {
 		t.Fatalf("first completion after rejected batch = %v", err)
+	}
+}
+
+func TestLiveRedisRollingBudget(t *testing.T) {
+	client := openLiveRedis(t)
+	if err := client.ScriptLoad(context.Background(), AdmissionLuaSource()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if liveRedisLuaScriptCleanupAllowed() {
+			if err := client.ScriptFlush(context.Background()).Err(); err != nil {
+				t.Errorf("flush isolated Redis Lua script cache: %v", err)
+			}
+		}
+	})
+	for _, mode := range []AdmissionMode{AdmissionModeFunction, AdmissionModeLua} {
+		t.Run(string(mode), func(t *testing.T) {
+			conformance.RunDurableRollingBudget(t, func(t *testing.T) (durable.BudgetMaterializer, func() time.Time, func(time.Duration)) {
+				keys := liveKeyOptions("rolling-budget")
+				cleanupLivePrefix(t, client, keys.Prefix)
+				m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: keys, GenerationID: "rolling-gen", IncarnationID: "rolling-inc", Clock: time.Now})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return m, time.Now, time.Sleep
+			})
+		})
 	}
 }
