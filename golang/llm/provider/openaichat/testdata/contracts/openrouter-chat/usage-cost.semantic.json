@@ -44,9 +44,10 @@
   "usage": {
     "cache_read_tokens": 5,
     "cache_write_tokens": 2,
-    "input_tokens": 21,
+    "input_tokens": 14,
     "output_tokens": 13,
     "provider_raw": {
+      "prompt_tokens": 21,
       "openrouter_cost": 0.00000456,
       "openrouter_cost_details": {"upstream_inference_cost": 0.00000456},
       "openrouter_usage": {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	usageutil "github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/usage"
 	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -54,7 +55,12 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 		encoded, _ := json.Marshal(choice.Index)
 		providerRaw["choice_index"] = encoded
 	}
-	usage := liftUsage(response.Usage)
+	usage, err := liftUsage(response.Usage)
+	if err != nil {
+		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped.Provider.ResponseID = response.ID
+		return llm.Response{}, mapped
+	}
 	providerFacts := llm.ProviderFacts{
 		ResponseID:   response.ID,
 		RequestID:    requestID,
@@ -222,17 +228,26 @@ func liftStatus(finishReason string, hasToolCalls, hasRefusal bool) (llm.Respons
 	}
 }
 
-func liftUsage(usage openai.CompletionUsage) llm.Usage {
+func liftUsage(usage openai.CompletionUsage) (llm.Usage, error) {
+	input, err := usageutil.OrdinaryInput(usage.PromptTokens, usage.PromptTokensDetails.CachedTokens, usage.PromptTokensDetails.CacheWriteTokens)
+	if err != nil {
+		return llm.Usage{}, err
+	}
 	result := llm.Usage{
-		InputTokens:      usage.PromptTokens,
+		InputTokens:      input,
 		OutputTokens:     usage.CompletionTokens,
 		ReasoningTokens:  usage.CompletionTokensDetails.ReasoningTokens,
 		CacheReadTokens:  usage.PromptTokensDetails.CachedTokens,
 		CacheWriteTokens: usage.PromptTokensDetails.CacheWriteTokens,
 	}
+	result.ProviderRaw = make(map[string]json.RawMessage)
+	if usage.PromptTokens > 0 {
+		encodedInput, _ := json.Marshal(usage.PromptTokens)
+		result.ProviderRaw["prompt_tokens"] = encodedInput
+	}
 	if usage.TotalTokens > 0 {
 		encoded, _ := json.Marshal(usage.TotalTokens)
-		result.ProviderRaw = map[string]json.RawMessage{"total_tokens": encoded}
+		result.ProviderRaw["total_tokens"] = encoded
 	}
-	return result
+	return result, nil
 }

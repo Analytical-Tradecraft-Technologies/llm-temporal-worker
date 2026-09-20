@@ -9,5 +9,5 @@
   "route": {"api_family": "openai_responses", "endpoint_id": "azure-fixture", "requested_model": "azure-responses/fixture", "resolved_model": "azure-responses/fixture"},
   "service": {"actual": "standard", "attempted": "standard", "fallback_index": 0, "provider_value": "default", "requested": "standard"},
   "status": "completed",
-  "usage": {"cache_read_tokens": 7, "cache_write_tokens": 2, "input_tokens": 31, "output_tokens": 17, "provider_raw": {"total_tokens": 48}, "reasoning_tokens": 4}
+  "usage": {"cache_read_tokens": 7, "cache_write_tokens": 2, "input_tokens": 22, "output_tokens": 17, "provider_raw": {"input_tokens": 31, "total_tokens": 48}, "reasoning_tokens": 4}
 }

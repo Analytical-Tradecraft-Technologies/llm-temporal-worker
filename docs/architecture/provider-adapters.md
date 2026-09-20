@@ -171,6 +171,13 @@ Usage distinguishes:
 - provider tier value and mapped actual public class;
 - request, response, and generation identifiers.
 
+OpenAI Chat and Responses report inclusive input totals. Their adapters subtract
+cache-read and cache-write tokens before exposing ordinary `input_tokens` for
+catalog pricing; each input token is charged in exactly one component. The
+inclusive provider count remains in `usage.provider_raw` as `prompt_tokens`
+(Chat) or `input_tokens` (Responses). Negative counts or cache subsets exceeding
+the total are rejected as invalid provider responses.
+
 An unrecognized actual provider tier maps to no public class and returns a
 diagnostic. It must not be mislabeled as `standard`.
 
