@@ -9,5 +9,5 @@
   "route": {"api_family": "openai_responses", "endpoint_id": "openai-fixture", "requested_model": "gpt-contract", "resolved_model": "gpt-contract"},
   "service": {"actual": "standard", "attempted": "standard", "fallback_index": 0, "provider_value": "default", "requested": "standard"},
   "status": "completed",
-  "usage": {"cache_read_tokens": 5, "cache_write_tokens": 2, "input_tokens": 21, "output_tokens": 13, "provider_raw": {"total_tokens": 34}, "reasoning_tokens": 3}
+  "usage": {"cache_read_tokens": 5, "cache_write_tokens": 2, "input_tokens": 14, "output_tokens": 13, "provider_raw": {"input_tokens": 21, "total_tokens": 34}, "reasoning_tokens": 3}
 }

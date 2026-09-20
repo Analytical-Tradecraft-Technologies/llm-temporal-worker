@@ -46,7 +46,7 @@ func TestLiftCompletedToolResponsePreservesUsageAndIDs(t *testing.T) {
 	if lifted.Provider.ResponseID != "chatcmpl-1" || lifted.Provider.RequestID != "req-1" || lifted.Route.ResolvedModel != "chat-model-resolved" {
 		t.Fatalf("identity = %#v %#v", lifted.Provider, lifted.Route)
 	}
-	if lifted.Usage.InputTokens != 10 || lifted.Usage.OutputTokens != 7 || lifted.Usage.ReasoningTokens != 2 || lifted.Usage.CacheReadTokens != 3 || lifted.Usage.CacheWriteTokens != 1 {
+	if lifted.Usage.InputTokens != 6 || lifted.Usage.OutputTokens != 7 || lifted.Usage.ReasoningTokens != 2 || lifted.Usage.CacheReadTokens != 3 || lifted.Usage.CacheWriteTokens != 1 {
 		t.Fatalf("usage = %#v", lifted.Usage)
 	}
 	if len(lifted.Output) != 2 {

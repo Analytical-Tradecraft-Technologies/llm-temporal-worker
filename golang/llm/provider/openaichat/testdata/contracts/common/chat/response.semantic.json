@@ -29,9 +29,9 @@
   "usage": {
     "cache_read_tokens": 3,
     "cache_write_tokens": 1,
-    "input_tokens": 10,
+    "input_tokens": 6,
     "output_tokens": 7,
-    "provider_raw": {"total_tokens": 17},
+    "provider_raw": {"prompt_tokens": 10, "total_tokens": 17},
     "reasoning_tokens": 2
   }
 }

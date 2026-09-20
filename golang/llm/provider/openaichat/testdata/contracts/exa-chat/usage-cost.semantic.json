@@ -36,9 +36,9 @@
   "usage": {
     "cache_read_tokens": 5,
     "cache_write_tokens": 2,
-    "input_tokens": 21,
+    "input_tokens": 14,
     "output_tokens": 13,
-    "provider_raw": {"costDollars": {"total": "0.00000456"}, "exa_cost_dollars": "0.00000456", "total_tokens": 34},
+    "provider_raw": {"prompt_tokens": 21, "costDollars": {"total": "0.00000456"}, "exa_cost_dollars": "0.00000456", "total_tokens": 34},
     "reasoning_tokens": 3
   }
 }
