@@ -12,7 +12,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/control"
 )
 
-func providerControlIntegrationPool(t *testing.T) (context.Context, Namespace, *pgxpool.Pool, func()) {
+func providerControlIntegrationPool(t *testing.T, configure ...func(*PoolOptions)) (context.Context, Namespace, *pgxpool.Pool, func()) {
 	t.Helper()
 	addr := os.Getenv("LLMTW_POSTGRES_ADDR")
 	if addr == "" {
@@ -22,7 +22,7 @@ func providerControlIntegrationPool(t *testing.T) (context.Context, Namespace, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool, err := NewPool(context.Background(), PoolOptions{
+	options := PoolOptions{
 		Namespace:        namespace,
 		Addresses:        []string{addr},
 		Username:         valueOr("LLMTW_POSTGRES_USER", "llmtw"),
@@ -33,7 +33,11 @@ func providerControlIntegrationPool(t *testing.T) (context.Context, Namespace, *
 		StatementTimeout: 5 * time.Second,
 		LockTimeout:      time.Second,
 		IdleTxTimeout:    5 * time.Second,
-	})
+	}
+	for _, apply := range configure {
+		apply(&options)
+	}
+	pool, err := NewPool(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +131,16 @@ func TestProviderControlPersistenceIntegration(t *testing.T) {
 }
 
 func TestProviderControlFirstProjectionConcurrencyIntegration(t *testing.T) {
-	ctx, namespace, pool, cleanup := providerControlIntegrationPool(t)
+	ctx, namespace, pool, cleanup := providerControlIntegrationPool(t, func(options *PoolOptions) {
+		// This test deliberately parks open transactions at barriers. Let its
+		// context bound the wait instead of racing short server-side timeouts.
+		options.StatementTimeout = 30 * time.Second
+		options.LockTimeout = 30 * time.Second
+		options.IdleTxTimeout = 30 * time.Second
+	})
 	defer cleanup()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	configDigest := sha256.Sum256([]byte("provider-control-first-projection-race-" + time.Now().UTC().Format(time.RFC3339Nano)))
 	configs, err := namespace.Render("configuration_snapshots")
 	if err != nil {
@@ -177,23 +189,54 @@ func TestProviderControlFirstProjectionConcurrencyIntegration(t *testing.T) {
 		beforeRouteLock: func(event control.StatusEvent) {
 			ready <- struct{}{}
 			if event.EventDigest == first.EventDigest {
-				<-allowFirst
+				select {
+				case <-allowFirst:
+				case <-ctx.Done():
+				}
 				return
 			}
-			<-firstRead
+			select {
+			case <-firstRead:
+			case <-ctx.Done():
+			}
 		},
 		afterProjectionRead: func(event control.StatusEvent, _ bool) {
 			if event.EventDigest == first.EventDigest {
 				close(firstRead)
-				<-releaseFirst
+				select {
+				case <-releaseFirst:
+				case <-ctx.Done():
+				}
 				return
 			}
 			close(secondRead)
-			<-releaseSecond
+			select {
+			case <-releaseSecond:
+			case <-ctx.Done():
+			}
 		},
 	}
 	errs := make(chan error, 2)
 	var group sync.WaitGroup
+	defer func() {
+		cancel()
+		group.Wait()
+	}()
+	wait := func(stage string, signal <-chan struct{}) {
+		t.Helper()
+		for {
+			select {
+			case <-signal:
+				return
+			case err := <-errs:
+				if err != nil {
+					t.Fatalf("%s: persist status event: %v", stage, err)
+				}
+			case <-ctx.Done():
+				t.Fatalf("%s: %v", stage, ctx.Err())
+			}
+		}
+	}
 	group.Add(1)
 	go func() {
 		defer group.Done()
@@ -206,17 +249,40 @@ func TestProviderControlFirstProjectionConcurrencyIntegration(t *testing.T) {
 		_, err := repository.persistStatusEvent(ctx, second, hooks)
 		errs <- err
 	}()
-	<-ready
-	<-ready
+	wait("first worker ready", ready)
+	wait("second worker ready", ready)
 	close(allowFirst)
-	<-firstRead
-	select {
-	case <-secondRead:
-		t.Fatal("second projection was read while first transaction held the route barrier")
-	case <-time.After(100 * time.Millisecond):
+	wait("first projection read", firstRead)
+	// Observe the second transaction waiting on the actual advisory lock.
+	// Sleeping cannot prove it reached the lock, and can overshoot lock_timeout
+	// when the runner is descheduled.
+	lockKey := uint64(providerRouteAdvisoryLockKey(namespace, configDigest, base.RouteID))
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		err := pool.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 1
+		)`, int64(lockKey>>32), int64(lockKey&0xffffffff)).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("observe second transaction waiting on route lock: %v", err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case <-secondRead:
+			t.Fatal("second projection was read while first transaction held the route barrier")
+		case err := <-errs:
+			t.Fatalf("transaction exited before route lock contention was observed: %v", err)
+		case <-ctx.Done():
+			t.Fatalf("wait for route lock contention: %v", ctx.Err())
+		case <-ticker.C:
+		}
 	}
 	close(releaseFirst)
-	<-secondRead
+	wait("second projection read", secondRead)
 	close(releaseSecond)
 	group.Wait()
 	close(errs)
