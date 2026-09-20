@@ -373,7 +373,7 @@ func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
 	case llm.ReasoningSummaryAuto, llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed:
 		result["summary"] = string(reasoning.Summary)
 	case llm.ReasoningSummaryNone:
-		result["effort"] = "none"
+		// Omitting summary suppresses it without changing the requested effort.
 	default:
 		return nil, fmt.Errorf("reasoning summary %q is not supported", reasoning.Summary)
 	}
