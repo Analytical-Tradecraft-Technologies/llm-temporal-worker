@@ -6,13 +6,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -221,22 +221,8 @@ func loadTLSConfig(value config.TLSConfig, readFile func(string) ([]byte, error)
 }
 
 func readBoundedFile(path string) ([]byte, error) {
-	if path == "" {
-		return nil, errors.New("file path is required")
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("file is unavailable")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, errors.New("file is unavailable")
-	}
-	defer file.Close()
+	// Kubernetes projected Secrets use symlinks. The shared reader follows
+	// them and validates the opened target while keeping reads bounded.
 	const maxBytes = 1 << 20
-	value, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
-	if err != nil || len(value) > maxBytes {
-		return nil, errors.New("file exceeds the safe size limit")
-	}
-	return value, nil
+	return secrets.ReadSecretFile(context.Background(), path, maxBytes)
 }
