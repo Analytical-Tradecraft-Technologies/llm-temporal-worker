@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/control"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
 
 type budgetStatusGenerationFake struct {
@@ -223,4 +224,55 @@ func budgetStatusResultForManifest(t *testing.T, manifest BudgetManifest, highWa
 		t.Fatal(err)
 	}
 	return []any{"ok", string(data)}
+}
+
+func TestRedisBudgetStatusReaderEncodesWindowSelection(t *testing.T) {
+	include, exclude := true, false
+	for _, test := range []struct {
+		name        string
+		include     *bool
+		wantWindows int
+	}{
+		{name: "default", wantWindows: 1},
+		{name: "included", include: &include, wantWindows: 1},
+		{name: "excluded", include: &exclude, wantWindows: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invoker := &budgetStatusInvokerFake{}
+			reader, manifest, activeAt := testBudgetStatusReader(t, invoker)
+			invoker.result = budgetStatusResultForManifest(t, manifest, "1-4")
+			result, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{IncludeWindows: test.include}, activeAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			zero := control.DecimalUSD("0")
+			wire, err := control.EncodeQueryResponse(control.QueryResponse{
+				OperationKey: "budget-status", ExecutionID: "execution", Kind: llm.QueryBudgetStatus,
+				Provenance: control.QueryProvenance{Source: control.QuerySourcePersisted, Freshness: control.QueryFreshCurrent, ObservedAt: activeAt},
+				Complete:   true, Result: result,
+				Cost: control.QueryCost{Status: control.QueryCostExact, ActualUSD: &zero, Method: control.QueryCostControlZero},
+			})
+			if err != nil {
+				t.Fatalf("encode budget status: %v", err)
+			}
+			data, err := json.Marshal(wire.Result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded control.BudgetStatusResult
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Windows == nil || len(decoded.Windows) != test.wantWindows {
+				t.Fatalf("windows = %s, want array with %d entries", data, test.wantWindows)
+			}
+			digest, err := manifest.ManifestDigestHex()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !decoded.ActiveAt.Equal(activeAt) || decoded.GenerationID != control.BudgetGenerationID(manifest.GenerationID) || decoded.ManifestDigest != control.ManifestDigest(digest) || decoded.StreamHighWaterMark != "1-4" {
+				t.Fatalf("snapshot metadata changed: %#v", decoded)
+			}
+		})
+	}
 }
