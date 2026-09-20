@@ -191,6 +191,13 @@ python3 "$collector" dependency-license \
   --output "$artifact_dir/dependencies.json"
 
 if ! IMAGE_VERIFY_OCI_LAYOUT="$image_oci_layout" make -C "$module_root" image-verify >"$temporary/image-verify.output" 2>&1; then
-  fail "temporary OCI image verification failed; inspect the trusted CI step output"
+  # Print only fixed stage names, never raw build/runtime output or credentials.
+  for stage in "OCI export" "OCI import (requires the containerd image store)" \
+    "OCI extraction" "imported image lookup" "runtime checks"; do
+    if grep -Fqx -- "image-verify: failed at $stage" "$temporary/image-verify.output"; then
+      printf 'image-verify: failed at %s\n' "$stage" >&2
+    fi
+  done
+  fail "temporary OCI image verification failed; raw command output was discarded"
 fi
 [[ -d "$image_oci_layout" && ! -L "$image_oci_layout" && -f "$image_oci_layout/oci-layout" && -f "$image_oci_layout/index.json" ]] || fail "image verification did not create a temporary OCI directory"

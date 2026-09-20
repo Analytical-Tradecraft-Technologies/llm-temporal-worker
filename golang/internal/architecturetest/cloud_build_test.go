@@ -52,6 +52,7 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	assertJobRunPrecedesRunContains(t, master, "verify", "bash scripts/ci/setup-build-cloud.sh", "make compose-live-integration")
 	assertJobRunPrecedesRunContains(t, master, "verify", "bash scripts/ci/setup-build-cloud.sh", "make image-verify")
 	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-build-cloud.sh", "bash scripts/release/collect.sh")
+	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-containerd-image-store.sh", "bash scripts/ci/setup-build-cloud.sh")
 	for _, want := range []string{
 		"--builder \"$BUILDX_BUILDER\"", "--platform linux/amd64,linux/arm64",
 		"--tag analyticaltradecraft/llm-temporal-worker:", "--push --pull --provenance=mode=max --sbom=true",
@@ -70,6 +71,9 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 		}
 	}
 	pr := readWorkflow(t, "pull-request.yml")
+	assertJobRunPrecedesRunContains(t, pr, "container", "bash scripts/ci/setup-containerd-image-store.sh", "bash scripts/ci/setup-buildx.sh")
+	assertJobHasRunCommand(t, pr, "container", "make image-verify")
+	assertJobRunContains(t, pr, "container", "go run ./tools/releaseverify layout-digest")
 	if strings.Contains(pr.raw, "docker_push") || strings.Contains(pr.raw, "DOCKER_ACCESS_TOKEN") || strings.Contains(pr.raw, "setup-build-cloud.sh") {
 		t.Fatal("PR and merge-queue builds must remain uncredentialed and local")
 	}
