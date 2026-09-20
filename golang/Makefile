@@ -377,6 +377,9 @@ compose-live-integration:
 			LLMTW_LOG_REDACT_CONTINUATION_HMAC="$$continuation_hmac" \
 			sh ./scripts/redact-compose-logs.sh >&2 || true; \
 		exit 1; \
+	fi; \
+	if [ -n "$${RELEASE_COMPOSE_EVIDENCE_DIR:-}" ]; then \
+		bash ../scripts/release/collect-compose.sh "$$project" "$$RELEASE_COMPOSE_EVIDENCE_DIR"; \
 	fi
 
 deployment-policy-verify:

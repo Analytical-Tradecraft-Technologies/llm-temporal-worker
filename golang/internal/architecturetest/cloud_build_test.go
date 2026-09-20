@@ -10,10 +10,10 @@ import (
 
 func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	master := readWorkflow(t, "master.yml")
-	if strings.Count(master.raw, "${{ secrets.DOCKER_ACCESS_TOKEN }}") != 3 {
-		t.Fatal("registry token must appear only in the three protected cloud setup steps")
+	if strings.Count(master.raw, "${{ secrets.DOCKER_ACCESS_TOKEN }}") != 2 {
+		t.Fatal("registry token must appear only in the two protected cloud setup steps")
 	}
-	for _, jobName := range []string{"container", "verify", "release-evidence"} {
+	for _, jobName := range []string{"container", "verify"} {
 		job := workflowJob(t, master, jobName)
 		if job["environment"] != "docker_push" || !strings.Contains(scalarString(t, master.name, job, "if"), "github.ref == 'refs/heads/master'") {
 			t.Fatalf("%s must require master and docker_push", jobName)
@@ -51,8 +51,8 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	}
 	assertJobRunPrecedesRunContains(t, master, "verify", "bash scripts/ci/setup-build-cloud.sh", "make compose-live-integration")
 	assertJobRunPrecedesRunContains(t, master, "verify", "bash scripts/ci/setup-build-cloud.sh", "make image-verify")
-	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-build-cloud.sh", "bash scripts/release/collect.sh")
-	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-containerd-image-store.sh", "bash scripts/ci/setup-build-cloud.sh")
+	assertJobRunContains(t, master, "release-evidence", "skopeo --command-timeout 5m copy --preserve-digests")
+	assertJobRunContains(t, master, "release-evidence", `[[ "$digest" == "$PUBLISHED_DIGEST" ]]`)
 	for _, want := range []string{
 		"--builder \"$BUILDX_BUILDER\"", "--platform linux/amd64,linux/arm64",
 		"--tag analyticaltradecraft/llm-temporal-worker:", "--push --pull --provenance=mode=max --sbom=true",

@@ -443,7 +443,7 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	if scalarString(t, master.name, job, "if") != "github.event_name == 'push' && github.ref == 'refs/heads/master'" {
 		t.Fatalf("release-evidence job must run only on a master push, got %#v", job["if"])
 	}
-	if scalarString(t, master.name, job, "needs") != "verify" {
+	if fmt.Sprint(job["needs"]) != "[verify fuzz-shard container]" {
 		t.Fatalf("release-evidence job must follow verify, got %#v", job["needs"])
 	}
 	if _, ok := workflowMapping(t, pullRequest, "jobs")["release-evidence"]; ok {
@@ -457,7 +457,7 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	} {
 		assertJobUsesAction(t, master, "release-evidence", action)
 	}
-	assertJobHasRunCommand(t, master, "release-evidence", "bash scripts/ci/setup-build-cloud.sh")
+	assertJobRunContains(t, master, "release-evidence", "skopeo --command-timeout 5m copy --preserve-digests")
 	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-kubectl.sh", "--image-oci-layout \"$RUNNER_TEMP/image.oci\"")
 	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-syft.sh", "syft oci-dir:\"$RUNNER_TEMP/image.oci\"")
 	assertJobRunPrecedesRunContains(t, master, "release-evidence", "bash scripts/ci/setup-trivy.sh", "trivy image")
