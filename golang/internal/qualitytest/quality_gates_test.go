@@ -163,7 +163,7 @@ func TestQualityGatesAreWiredIntoMakeCIAndTestingStrategy(t *testing.T) {
 func TestMasterFuzzShardsUseFixedExecutionBudget(t *testing.T) {
 	root := repositoryRoot(t)
 	master := readFile(t, filepath.Join(root, ".github", "workflows", "master.yml"))
-	if !strings.Contains(master, "FUZZ_TIME=250000x bash scripts/run-fuzz.sh shard") {
+	if !strings.Contains(master, `FUZZ_TIME=250000x bash ../scripts/release/run-gate.sh fuzz_summary "$RUNNER_TEMP/fuzz-evidence/fuzz-${{ matrix.shard }}.json" bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"`) {
 		t.Fatal("master fuzz shards must use the fixed 250000x execution budget")
 	}
 	if strings.Contains(master, "FUZZ_TIME=45s") {
