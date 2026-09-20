@@ -12,5 +12,5 @@
   "route": {"api_family": "openai_responses", "endpoint_id": "azure-fixture", "requested_model": "azure-responses/fixture", "resolved_model": "azure-responses/fixture"},
   "service": {"actual": "priority", "attempted": "priority", "fallback_index": 0, "provider_value": "priority", "requested": "priority"},
   "status": "tool_calls",
-  "usage": {"cache_read_tokens": 4, "cache_write_tokens": 1, "input_tokens": 12, "output_tokens": 9, "provider_raw": {"total_tokens": 21}, "reasoning_tokens": 3}
+  "usage": {"cache_read_tokens": 4, "cache_write_tokens": 1, "input_tokens": 7, "output_tokens": 9, "provider_raw": {"input_tokens": 12, "total_tokens": 21}, "reasoning_tokens": 3}
 }

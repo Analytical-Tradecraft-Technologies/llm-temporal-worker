@@ -26,7 +26,7 @@ func TestLiftCompletedResponsePreservesItemsUsageAndContinuation(t *testing.T) {
 	if lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassEconomy || lifted.Service.ProviderValue != "flex" {
 		t.Fatalf("service facts = %#v", lifted.Service)
 	}
-	if lifted.Usage.InputTokens != 10 || lifted.Usage.OutputTokens != 7 || lifted.Usage.ReasoningTokens != 2 || lifted.Usage.CacheReadTokens != 3 || lifted.Usage.CacheWriteTokens != 1 {
+	if lifted.Usage.InputTokens != 6 || lifted.Usage.OutputTokens != 7 || lifted.Usage.ReasoningTokens != 2 || lifted.Usage.CacheReadTokens != 3 || lifted.Usage.CacheWriteTokens != 1 {
 		t.Fatalf("usage = %#v", lifted.Usage)
 	}
 	if lifted.Provider.ResponseID != "resp-1" || lifted.Provider.RequestID != "req-1" {

@@ -12,5 +12,5 @@
   "route": {"api_family": "openai_responses", "endpoint_id": "openai-fixture", "requested_model": "gpt-contract", "resolved_model": "gpt-contract"},
   "service": {"actual": "economy", "attempted": "priority", "fallback_index": 0, "provider_value": "flex", "requested": "priority"},
   "status": "tool_calls",
-  "usage": {"cache_read_tokens": 3, "cache_write_tokens": 1, "input_tokens": 10, "output_tokens": 7, "provider_raw": {"total_tokens": 17}, "reasoning_tokens": 2}
+  "usage": {"cache_read_tokens": 3, "cache_write_tokens": 1, "input_tokens": 6, "output_tokens": 7, "provider_raw": {"input_tokens": 10, "total_tokens": 17}, "reasoning_tokens": 2}
 }
