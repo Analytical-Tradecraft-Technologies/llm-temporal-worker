@@ -682,6 +682,7 @@ if ACTION == 'durable_reserve' then
     if not now_seconds or not now_micros then return {'state_unavailable', ''} end
     local now_millis = now_seconds * 1000 + math.floor(now_micros / 1000)
     local seen = {}
+    local windows = {}
     for index, reservation in ipairs(reservations) do
         if type(reservation) ~= 'table' or not bounded_string(reservation.policy_id, 128, true) or
             not bounded_string(reservation.window_id, 128, true) or not bounded_string(reservation.bucket, 64, true) or
@@ -701,12 +702,28 @@ if ACTION == 'durable_reserve' then
         seen[identity] = true
         local bucket_key = KEYS[1 + (index - 1) * 2 + 1]
         local expiry_key = KEYS[1 + (index - 1) * 2 + 2]
-        if not durable_cleanup(bucket_key, expiry_key, now_millis) then return {'state_unavailable', ''} end
-        local limit_field = durable_limit_field(reservation.bucket)
-        local prior_limit = redis.call('HGET', bucket_key, limit_field)
-        if prior_limit and prior_limit ~= reservation.limit_nano then return {'conflict', ''} end
-        local active = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(reservation.bucket)) or '0')
-        if not active then return {'state_unavailable', ''} end
+        local window = windows[bucket_key]
+        if not window then
+            if not durable_cleanup(bucket_key, expiry_key, now_millis) then return {'state_unavailable', ''} end
+            -- The hash holds all live buckets for this policy/window, including
+            -- reconciled cost. Sum once, inside the atomic admission command.
+            local fields = redis.call('HGETALL', bucket_key)
+            window = {active = 0, limit = reservation.limit_nano}
+            for field = 1, #fields, 2 do
+                if string.sub(fields[field], 1, 4) == 'sum:' then
+                    local amount_in_bucket = durable_int(fields[field + 1])
+                    if not amount_in_bucket or amount_in_bucket < 0 or amount_in_bucket > MAX_SAFE - window.active then
+                        return {'state_unavailable', ''}
+                    end
+                    window.active = window.active + amount_in_bucket
+                elseif string.sub(fields[field], 1, 6) == 'limit:' and fields[field + 1] ~= reservation.limit_nano then
+                    return {'conflict', ''}
+                end
+            end
+            windows[bucket_key] = window
+        end
+        if window.limit ~= reservation.limit_nano then return {'conflict', ''} end
+        local active = window.active
         if active > limit or amount > limit - active then
             local denial = {
                 schema = DURABLE_SCHEMA, operation_id = operation_id, generation_id = generation,
@@ -720,6 +737,8 @@ if ACTION == 'durable_reserve' then
             redis.call('SET', KEYS[1], encoded_denial, 'EX', tostring(ttl))
             return {'created', encoded_denial}
         end
+        -- Include earlier buckets in this request without mutating shared state.
+        window.active = active + amount
     end
     local record = {
         schema = DURABLE_SCHEMA, operation_id = operation_id, generation_id = generation,
