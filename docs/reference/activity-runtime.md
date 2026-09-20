@@ -1,12 +1,13 @@
 # v1 Activity runtime boundary
 
-The worker registers three exact names on its configured Temporal task queue:
+The worker registers four exact names on its configured Temporal task queue:
 
 | Name | Input | Output |
 | --- | --- | --- |
 | `llm.generate.v1` | `llm.GenerateRequestV1` | `llm.GenerateResponseV1` |
 | `llm.compact.v1` | `llm.CompactRequestV1` | `llm.CompactResponseV1` |
 | `llm.query.v1` | `llm.QueryRequestV1` | `llm.QueryResponseV1` |
+| `llm.poll.v1` | `llm.PollRequestV1` | `llm.PollResponseV1` |
 
 The Go adapter exposes these same bindings through
 `activity.V1ActivityDescriptors(taskQueue)`. Each descriptor carries the
@@ -17,7 +18,7 @@ Temporal worker or adding any handler to its registry. The registry is still
 bound to one queue by
 the Temporal worker itself, so descriptors are an inspection and startup
 guard rather than a second payload codec. A configured v1 runtime registers
-all three descriptors in Generate/Compact/Query order; the checked-in
+all four descriptors in Generate/Compact/Query/Poll order; the checked-in
 development fixture may retain only the legacy Generate helper while the
 durable runtime is intentionally absent.
 
@@ -257,3 +258,5 @@ response sizes can grow only by the decimal digit count of that depth, never by
 the ancestor transcript length. The materialized transcript therefore stays in
 the worker's state store rather than growing Temporal history or Activity
 arguments with conversation depth.
+
+See [background submission and polling](background-polling.md) for pending results, one-check polling, and Redis budget settlement.

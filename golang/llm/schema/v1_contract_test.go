@@ -149,3 +149,28 @@ func readV1Fixture(t *testing.T, name string) []byte {
 	}
 	return data
 }
+
+func TestPollAndPendingSchemas(t *testing.T) {
+	handle := `{"operation_id":"op","kind":"generate","provider":"openai","endpoint_id":"endpoint","provider_operation_id":"resp_1"}`
+	cases := []struct{ name, payload string }{
+		{"generate-response.schema.json", `{"api_version":"llm.temporal/v1","operation_key":"key","operation_id":"op","status":"pending","pending":` + handle + `}`},
+		{"poll-request.schema.json", `{"api_version":"llm.temporal/poll/v1","context":{"tenant":"t","project":"p","actor":"a"},"pending":` + handle + `}`},
+		{"poll-response.schema.json", `{"api_version":"llm.temporal/poll/v1","status":"pending","pending":` + handle + `}`},
+		{"poll-response.schema.json", `{"api_version":"llm.temporal/poll/v1","status":"failed","failure":{"code":"provider_failed","cost_unknown":true},"pending":` + handle + `}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", c.name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := schema.Parse(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = compiled.Validate([]byte(c.payload)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

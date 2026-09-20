@@ -81,7 +81,7 @@ func TestRegisterIncludesQueryActivityForQueryOnlyService(t *testing.T) {
 	registry := &v1Registry{}
 	activities := &Activities{QueryService: &queryServiceStub{}}
 	activities.Register(registry)
-	if len(registry.names) != 3 || registry.names[2] != QueryActivityName {
+	if len(registry.names) != 4 || registry.names[2] != QueryActivityName {
 		t.Fatalf("registered names = %v, want v1 activities including %q", registry.names, QueryActivityName)
 	}
 }

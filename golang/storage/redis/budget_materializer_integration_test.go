@@ -163,3 +163,53 @@ func TestLiveRedisRollingBudget(t *testing.T) {
 		})
 	}
 }
+
+// Concurrent terminal polls and retries after lost acknowledgements all reuse
+// one event. Prove the resulting budget by admitting the exact remaining amount.
+func TestLiveRedisPollSettlementOnce(t *testing.T) {
+	client := openLiveRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	keys := liveKeyOptions("poll-settlement")
+	cleanupLivePrefix(t, client, keys.Prefix)
+	now := time.Now().UTC().Truncate(time.Second)
+	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{Client: client, Mode: AdmissionModeFunction, Keys: keys, GenerationID: "generation-poll", IncarnationID: "incarnation-poll", Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := admission.WindowReservation{PolicyID: "poll-policy", WindowID: "hour", Bucket: now.Unix() / 3600, AmountUSD: pricing.MustUSD("0.01"), LimitUSD: pricing.MustUSD("0.02"), BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour)}
+	request := durable.ReserveRequest{OperationID: "poll-operation", GenerationID: "generation-poll", ExpiresAt: now.Add(time.Hour), Reservations: []admission.WindowReservation{window}}
+	reservation, err := materializer.Accept(ctx, request)
+	if err != nil || !reservation.Accepted {
+		t.Fatalf("reserve: %v %v", reservation, err)
+	}
+	actual := pricing.MustUSD("0.003")
+	results := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		go func() { results <- durable.ReconcilePollBudget(ctx, materializer, reservation, &actual, now) }()
+	}
+	for i := 0; i < 16; i++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Different content under the same settlement ID must never silently win.
+	conflicting := pricing.MustUSD("0.002")
+	if err := durable.ReconcilePollBudget(ctx, materializer, reservation, &conflicting, now); err == nil {
+		t.Fatal("conflicting settlement accepted")
+	}
+	request.OperationID = "remaining-budget"
+	window.AmountUSD = pricing.MustUSD("0.017")
+	request.Reservations = []admission.WindowReservation{window}
+	remaining, err := materializer.Accept(ctx, request)
+	if err != nil || !remaining.Accepted {
+		t.Fatalf("exact remaining budget unavailable: %v %v", remaining, err)
+	}
+	request.OperationID = "over-budget"
+	window.AmountUSD = pricing.MustUSD("0.000001")
+	request.Reservations = []admission.WindowReservation{window}
+	excess, err := materializer.Accept(ctx, request)
+	if err != nil || excess.Accepted {
+		t.Fatalf("budget over-released: %v %v", excess, err)
+	}
+}

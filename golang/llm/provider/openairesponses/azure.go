@@ -109,8 +109,8 @@ func validateAzureConfig(rawEndpoint, apiVersion string, httpClient *http.Client
 // /responses. The Responses API uses the Azure v1 path and keeps the model
 // deployment in the JSON body, so no model or request fields are rewritten.
 func azureResponsesPathMiddleware(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	if request != nil && request.URL != nil && request.URL.Path == "/openai/responses" {
-		request.URL.Path = "/openai/v1/responses"
+	if request != nil && request.URL != nil && (request.URL.Path == "/openai/responses" || strings.HasPrefix(request.URL.Path, "/openai/responses/")) {
+		request.URL.Path = strings.Replace(request.URL.Path, "/openai/responses", "/openai/v1/responses", 1)
 		request.URL.RawPath = ""
 	}
 	return next(request)
@@ -119,8 +119,12 @@ func azureResponsesPathMiddleware(request *http.Request, next option.MiddlewareN
 // NewAzureAdapter constructs an adapter for one Azure Responses endpoint.
 // Endpoint and capability identity remain provider-neutral at the adapter
 // boundary; only the client construction uses Azure-specific middleware.
-func NewAzureAdapter(client *Client, endpointID, capabilityVersion string) (*Adapter, error) {
-	return New(client, endpointID, capabilityVersion)
+func NewAzureAdapter(client *Client, endpointID, capabilityVersion string) (*BackgroundAdapter, error) {
+	base, err := New(client, endpointID, capabilityVersion)
+	if err != nil {
+		return nil, err
+	}
+	return &BackgroundAdapter{base}, nil
 }
 
 // Explicit aliases keep the provider name visible at call sites that compose
@@ -133,6 +137,6 @@ func NewAzureOpenAITokenClient(config AzureTokenClientConfig) (*Client, error) {
 	return NewAzureTokenClient(config)
 }
 
-func NewAzureOpenAIAdapter(client *Client, endpointID, capabilityVersion string) (*Adapter, error) {
+func NewAzureOpenAIAdapter(client *Client, endpointID, capabilityVersion string) (*BackgroundAdapter, error) {
 	return NewAzureAdapter(client, endpointID, capabilityVersion)
 }

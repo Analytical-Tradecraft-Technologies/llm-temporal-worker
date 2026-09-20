@@ -599,7 +599,7 @@ func fixtureAdapterForProfile(t *testing.T, profile responsesFixtureProfile) *Ad
 		if err != nil {
 			t.Fatal(err)
 		}
-		return adapter
+		return adapter.Adapter
 	}
 	adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
 	adapter.endpointID = profile.endpoint

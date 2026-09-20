@@ -217,6 +217,7 @@ type V1RuntimeCapabilities struct {
 	// adapters and stores represented by this capability bundle; a nil value is
 	// deliberately unconfigured and never falls back to the legacy engine.
 	GeneratePortsFactory GeneratePortsFactory
+	PollPortsFactory     func(context.Context, V1RuntimeCapabilities) (durablestore.PollPorts, error)
 	// CompactPortsFactory is the per-snapshot constructor for the storage-
 	// neutral durable Compact phase. It is intentionally independent from
 	// GeneratePortsFactory so composition can validate each phase without

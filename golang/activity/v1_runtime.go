@@ -236,7 +236,7 @@ func (activities *Activities) queryV1Temporal(ctx context.Context, request llm.Q
 	return activities.QueryV1(ctx, request)
 }
 
-// RegisterV1 installs the exact three versioned names. It is separate from
+// RegisterV1 installs the four versioned names. It is separate from
 // Register so callers that still exercise the pre-release direct helper in a
 // unit test cannot accidentally put that envelope on a production task
 // queue. New production composition calls RegisterV1 through Register when a
@@ -248,6 +248,7 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	registry.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
 	registry.RegisterActivityWithOptions(activities.compactV1Temporal, sdkactivity.RegisterOptions{Name: CompactActivityName})
 	registry.RegisterActivityWithOptions(activities.queryV1Temporal, sdkactivity.RegisterOptions{Name: QueryActivityName})
+	registry.RegisterActivityWithOptions(activities.PollV1, sdkactivity.RegisterOptions{Name: PollActivityName})
 }
 
 func (activities *Activities) payloadLimits() PayloadLimits {

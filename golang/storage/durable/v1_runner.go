@@ -27,6 +27,7 @@ var (
 // phase.  It contains no ancestor transcript in the Activity payload; the
 // materialized view is held only in the worker process.
 type GenerateReplay struct {
+	Pending   *llm.PendingOperationV1
 	State     state.MaterializedState
 	Completed *llm.GenerateResponseV1
 	// ReconciliationPending is populated when PostgreSQL finalization has
@@ -91,6 +92,8 @@ type CompactionDecision struct {
 // attach route identity and pricing in an unexported wrapper while the runner
 // only carries the immutable plan between typed ports.
 type RoutePlan struct {
+	// Background requires durable pending persistence and the poll runtime.
+	Background   bool
 	OperationID  OperationID
 	GenerationID GenerationID
 	RouteID      string
@@ -147,6 +150,7 @@ func (receipt JournalReceipt) Validate(reservation ReserveResult) error {
 // Provider adapters own wire decoding and must return a normalized response;
 // no token/event stream is exposed by this contract.
 type DispatchResult struct {
+	Pending  *llm.PendingOperationV1
 	Response llm.Response
 }
 
@@ -165,6 +169,11 @@ type GenerateFinalization struct {
 // Every callback must be idempotent for Temporal Activity retries.  The runner
 // does not log or serialize values passed between phases.
 type GeneratePorts struct {
+	// Suspend must durably bind the provider handle to the original request,
+	// route and reservation before returning it to Temporal. A replay must
+	// return that handle without reserving or submitting again.
+	Suspend func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) error
+
 	Replay             func(context.Context, llm.GenerateRequestV1) (GenerateReplay, error)
 	CacheLookup        func(context.Context, llm.GenerateRequestV1, GenerateReplay) (CacheDecision, error)
 	CompactionDecision func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error)
@@ -238,13 +247,22 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	// admission so a malformed tool-result delta cannot reach a provider port.
 	// Completed/reconciliation replays do not need the transcript because their
 	// response is already authoritative and is validated below.
-	if replay.Completed == nil && replay.ReconciliationPending == nil {
+	if replay.Completed == nil && replay.ReconciliationPending == nil && replay.Pending == nil {
 		if err := validateGenerateReplayBinding(request, replay); err != nil {
 			return llm.GenerateResponseV1{}, stageError("replay", err)
 		}
 		if err := validateGenerateReplayFrontier(request, replay, request.Parent != nil); err != nil {
 			return llm.GenerateResponseV1{}, stageError("replay", err)
 		}
+	}
+	if replay.Pending != nil {
+		if replay.Completed != nil || replay.ReconciliationPending != nil {
+			return llm.GenerateResponseV1{}, stageError("replay", errors.New("conflicting replay states"))
+		}
+		if err := replay.Pending.Validate(); err != nil || replay.Pending.Kind != "generate" {
+			return llm.GenerateResponseV1{}, stageError("replay", errors.New("invalid pending handle"))
+		}
+		return llm.GenerateResponseV1{OperationKey: request.OperationKey, OperationID: replay.Pending.OperationID, Pending: replay.Pending}, nil
 	}
 	if replay.ReconciliationPending != nil {
 		pending := replay.ReconciliationPending
@@ -340,6 +358,9 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err := contextErr(ctx); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
+	if route.Background && ports.Suspend == nil {
+		return llm.GenerateResponseV1{}, stageError("route", errors.New("background route requires pending persistence"))
+	}
 	reservation, err := ports.Reserve(ctx, request, route)
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("Redis reservation", err)
@@ -363,6 +384,18 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	dispatch, err := ports.Dispatch(ctx, request, replay, route, journal)
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("provider dispatch", err)
+	}
+	if dispatch.Pending != nil {
+		if err := validatePendingDispatch(dispatch.Pending, route, "generate"); err != nil {
+			return llm.GenerateResponseV1{}, err
+		}
+		if ports.Suspend == nil {
+			return llm.GenerateResponseV1{}, stageError("suspend", errors.New("pending persistence port is required"))
+		}
+		if err := ports.Suspend(ctx, request, replay, route, reservation, dispatch); err != nil {
+			return llm.GenerateResponseV1{}, stageError("suspend", err)
+		}
+		return llm.GenerateResponseV1{OperationKey: request.OperationKey, OperationID: string(route.OperationID), Pending: dispatch.Pending}, nil
 	}
 	finalization, err := ports.Finalize(ctx, request, replay, route, reservation, dispatch)
 	if err != nil {
@@ -575,6 +608,9 @@ func exactZeroCost(cost llm.CostV1) bool {
 }
 
 func validateGenerateResponse(request llm.GenerateRequestV1, expectedOperationID OperationID, response llm.GenerateResponseV1) error {
+	if response.Pending != nil {
+		return errors.New("finalization must be terminal")
+	}
 	if response.OperationKey != request.OperationKey {
 		return errors.New("finalized response operation key does not match request")
 	}

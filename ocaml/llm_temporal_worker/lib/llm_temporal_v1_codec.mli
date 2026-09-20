@@ -16,3 +16,6 @@ val encode_query_envelope : Llm_temporal_models.query_envelope -> (bytes, Tempor
 val decode_query_envelope : bytes -> (Llm_temporal_models.query_envelope, Temporal.Error.t) result
 val encode_query_response : Llm_temporal_models.query_response -> (bytes, Temporal.Error.t) result
 val decode_query_response : bytes -> (Llm_temporal_models.query_response, Temporal.Error.t) result
+
+val context_to_v1_json : Llm_temporal_models.request_context -> (Yojson.Safe.t, Temporal.Error.t) result
+val context_of_v1_json : Yojson.Safe.t -> (Llm_temporal_models.request_context, Temporal.Error.t) result

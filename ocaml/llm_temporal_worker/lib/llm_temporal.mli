@@ -30,3 +30,5 @@ end
 
 type tool = function_tool
 type output_config = output_spec
+
+module Poll : module type of Llm_temporal_poll

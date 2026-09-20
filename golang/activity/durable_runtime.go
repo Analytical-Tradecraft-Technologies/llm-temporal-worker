@@ -24,6 +24,7 @@ type QueryV1Func func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1,
 // runner's invalid-port error, while Query returns a configuration error when
 // no query callback is supplied.
 type DurableV1Runtime struct {
+	Poll     durable.PollPorts
 	Generate durable.GeneratePorts
 	Compact  durable.CompactPorts
 	Query    QueryV1Func
@@ -182,4 +183,11 @@ func (runtime *DurableV1Runtime) QueryV1(ctx context.Context, request llm.QueryR
 		return llm.QueryResponseV1{}, fmt.Errorf("v1 query response identity does not match request")
 	}
 	return response, nil
+}
+
+func (runtime *DurableV1Runtime) PollV1(ctx context.Context, request llm.PollRequestV1) (llm.PollResponseV1, error) {
+	if runtime == nil || runtime.Poll.Load == nil {
+		return llm.PollResponseV1{}, provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "v1 poll runtime is not configured")
+	}
+	return durable.PollV1(ctx, request, runtime.Poll)
 }
