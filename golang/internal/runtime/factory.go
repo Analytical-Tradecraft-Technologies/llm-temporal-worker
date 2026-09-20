@@ -1233,7 +1233,10 @@ func (factory *ProductionEngineFactory) anthropicProfile(endpointID string, endp
 		copy := *supplied.Anthropic
 		return &copy, nil
 	}
-	tiers, actual := endpointTiers(endpoint)
+	tiers, _ := endpointTiers(endpoint)
+	// Anthropic accepts standard_only/auto on requests but reports
+	// standard/priority on responses. Keep those mappings independent.
+	actual := anthropicmessages.DefaultProfile(endpointID).ActualServiceClasses
 	priority := endpoint.ServiceClasses[llm.ServiceClassPriority]
 	value, err := anthropicmessages.NewProfile(anthropicmessages.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: anthropicExtensionSpecs(endpoint), ExpectedBaseURL: endpoint.BaseURL, PriorityCapacity: priority.ProviderValue == "auto" || priority.RequiresCapability != ""})
 	if err != nil {
