@@ -27,10 +27,16 @@ truth. The retained CycloneDX SBOM and Trivy JSON scan are both bound to the
 same `reference` and `digest`; the verifier rejects stale or mismatched
 subjects. The raw OCI layout directory is CI-temporary only: the descriptor,
 Syft, and Trivy consume that exact directory; it is never recorded or uploaded
-and is removed after artifact upload. The Buildx action explicitly pins Buildx
-`v0.16.2` and BuildKit `v0.16.0` by immutable image digest, so its two
-same-solve exporters (`type=oci,tar=false` and `--load`) meet Docker's
-multi-exporter capability requirement without a second build. Trusted CI uses
+and is removed after artifact upload. Master uses the pinned Buildx Cloud helper
+and a single `type=oci,tar=true` exporter; the Cloud driver does not support
+explicit `type=docker` archive exports. The job enables Docker's containerd
+image store before starting any containers, loads the temporary OCI archive for
+runtime tests, and extracts that same archive for scanning. The archive is
+removed on success or failure. PR and merge-queue container jobs exercise this
+archive import and descriptor verification with the uncredentialed local builder.
+For local collection, enable the containerd image store in Docker first.
+Failures report a fixed image-verification stage; raw command output remains
+private and is discarded. Trusted CI uses
 explicit Syft `v1.44.0` and Trivy `v0.72.0` inputs, with the checked-in
 [Trivy configuration](../../scripts/release/trivy.yaml) applied to that
 temporary directory.
@@ -186,8 +192,9 @@ bash scripts/release/verify.sh \
 
 After successful verification the master-push job retains the redacted bundle
 for 14 days and removes `$RUNNER_TEMP/image.oci`. It never produces or
-retains `image.oci.tar`, never uses `oci-archive:`, and never uses
-`docker load --input`; the unretained directory is the only raw OCI subject.
+retains `image.oci.tar` or uses `oci-archive:` for scanning; the extracted,
+unretained directory is the scanner subject. A separate temporary archive is
+used only to load and extract the image, then deleted.
 `release-artifacts/` is ignored by Git and excluded from the Docker build
 context.
 

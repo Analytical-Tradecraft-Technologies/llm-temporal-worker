@@ -206,20 +206,29 @@ image-verify:
 			test ! -e "$$layout" && test ! -L "$$layout" || { echo "image-verify OCI layout already exists: $$layout" >&2; exit 2; }; \
 			archive_directory="$$(mktemp -d "$${TMPDIR:-/tmp}/llmtw-image-verify.XXXXXX")"; \
 			archive="$$archive_directory/image.tar"; \
-			cleanup_archive() { rm -rf -- "$$archive_directory"; }; \
-			trap cleanup_archive EXIT HUP INT TERM; \
+			stage="OCI export"; \
+			cleanup_archive() { \
+				status=$$?; \
+				rm -rf -- "$$archive_directory"; \
+				if [ "$$status" -ne 0 ]; then printf 'image-verify: failed at %s\n' "$$stage" >&2; fi; \
+			}; \
+			trap cleanup_archive EXIT; \
+			trap 'exit 1' HUP INT TERM; \
 			docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
 				--tag "$(IMAGE_VERIFY_TAG)" \
-				--output "type=docker,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)" \
+				--output "type=oci,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)" \
 				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
 				--build-arg REVISION="$$revision" \
 				--build-arg BUILD_TIME="$$build_time" \
 				--build-arg SOURCE="$(IMAGE_VERIFY_SOURCE)" \
 				--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
 				.; \
+			stage="OCI import (requires the containerd image store)"; \
 			docker image load --input "$$archive" >/dev/null; \
+			stage="OCI extraction"; \
 			mkdir "$$layout"; \
 			tar -xf "$$archive" -C "$$layout"; \
+			stage="imported image lookup"; \
 			docker image inspect "$(IMAGE_VERIFY_TAG)" >/dev/null; \
 		else \
 			docker build --tag "$(IMAGE_VERIFY_TAG)" \
@@ -230,6 +239,7 @@ image-verify:
 				--build-arg GO_VERSION="$(IMAGE_VERIFY_GO_VERSION)" \
 				.; \
 		fi; \
+		stage="runtime checks"; \
 		LLMTW_IMAGE="$(IMAGE_VERIFY_TAG)" \
 		LLMTW_IMAGE_VERSION="$(IMAGE_VERIFY_VERSION)" \
 		LLMTW_IMAGE_REVISION="$$revision" \

@@ -427,6 +427,9 @@ jobs:
           cache: true
           cache-dependency-path: golang/go.sum
 
+      - name: Enable OCI image import
+        run: bash scripts/ci/setup-containerd-image-store.sh
+
       - name: Set up Docker Build Cloud
         env:
           DOCKER_ACCOUNT: ${{ vars.DOCKER_ACCOUNT }}

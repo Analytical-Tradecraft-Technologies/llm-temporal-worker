@@ -50,6 +50,9 @@ jobs:
             }
             core.exportVariable("ACTIONS_CACHE_SERVICE_V2", "true");
 
+      - name: Enable OCI image import
+        run: bash scripts/ci/setup-containerd-image-store.sh
+
       - name: Set up Docker Buildx
         run: bash scripts/ci/setup-buildx.sh
 
@@ -81,6 +84,18 @@ jobs:
             --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
             --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
             ./golang
+
+      - name: Verify exported OCI image
+        working-directory: golang
+        env:
+          IMAGE_VERIFY_OCI_LAYOUT: ${{ runner.temp }}/image.oci
+        run: |
+          make image-verify
+          go run ./tools/releaseverify layout-digest -layout "$IMAGE_VERIFY_OCI_LAYOUT"
+
+      - name: Remove temporary OCI image
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/image.oci"
 
   ocaml:
     name: OCaml package

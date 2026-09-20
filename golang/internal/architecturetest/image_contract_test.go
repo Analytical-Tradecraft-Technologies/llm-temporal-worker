@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -178,13 +179,13 @@ func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 
 	for _, want := range []string{
 		"docker buildx build --platform linux/amd64 --provenance=false --sbom=false",
-		`--output "type=docker,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)"`,
+		`--output "type=oci,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)"`,
 		`archive_directory="$$(mktemp -d "$${TMPDIR:-/tmp}/llmtw-image-verify.XXXXXX")"`,
-		`cleanup_archive() { rm -rf -- "$$archive_directory"; };`,
+		`rm -rf -- "$$archive_directory";`,
 		`docker image load --input "$$archive"`,
 		`tar -xf "$$archive" -C "$$layout"`,
 		`docker image inspect "$(IMAGE_VERIFY_TAG)"`,
-		"trap cleanup_archive EXIT HUP INT TERM",
+		"trap cleanup_archive EXIT",
 	} {
 		if !strings.Contains(branch, want) {
 			t.Fatalf("OCI layout image-verify branch is missing %q", want)
@@ -199,7 +200,7 @@ func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 	for _, forbidden := range []string{
 		"--load",
 		`docker image load --input "$$layout"`,
-		`--output "type=oci,`,
+		`--output "type=docker,`,
 		`rm -rf -- "$$layout"`,
 	} {
 		if strings.Contains(branch, forbidden) {
@@ -211,5 +212,56 @@ func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 	extract := strings.Index(branch, `tar -xf "$$archive" -C "$$layout"`)
 	if build < 0 || load <= build || extract <= load {
 		t.Fatalf("OCI archive must be built once, then loaded and extracted from that exact artifact: %q", branch)
+	}
+}
+
+func TestImageVerifyOCIArchiveFailureReportsStageAndCleansArchive(t *testing.T) {
+	for _, scenario := range []struct{ failAt, stage string }{
+		{"export", "OCI export"},
+		{"import", "OCI import (requires the containerd image store)"},
+		{"runtime", "runtime checks"},
+	} {
+		t.Run(scenario.failAt, func(t *testing.T) {
+			dir := t.TempDir()
+			fake := func(name, body string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nset -eu\n"+body), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fake("docker", `case "$1 ${2:-}" in
+  "info ") exit 0 ;;
+  "buildx build")
+    [ "$FAIL_AT" != export ] || exit 1
+    while [ "$1" != --output ]; do shift; done
+    case "$2" in type=oci,*) ;; *) exit 2 ;; esac
+    archive=${2#*dest=}; archive=${archive%%,*}
+    mkdir "$TMPDIR/payload"
+    printf '{"imageLayoutVersion":"1.0.0"}' > "$TMPDIR/payload/oci-layout"
+    tar -cf "$archive" -C "$TMPDIR/payload" oci-layout ;;
+  "image load")
+    [ "$FAIL_AT" != import ] || exit 1
+    test -f "$4" ;;
+  "image inspect") test -f "$IMAGE_VERIFY_OCI_LAYOUT/oci-layout" ;;
+  *) exit 2 ;;
+esac
+`)
+			fake("fake-go", `test "$1" = test
+test -f "$IMAGE_VERIFY_OCI_LAYOUT/oci-layout"
+test -n "$LLMTW_IMAGE"
+exit 1
+`)
+			cmd := exec.Command("make", "image-verify", "GO="+filepath.Join(dir, "fake-go"), "IMAGE_VERIFY_GO_VERSION=go1.26.7")
+			cmd.Dir = moduleRoot(t)
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TMPDIR="+dir, "FAIL_AT="+scenario.failAt, "IMAGE_VERIFY_OCI_LAYOUT="+filepath.Join(dir, "image.oci"))
+			output, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "image-verify: failed at "+scenario.stage+"\n") {
+				t.Fatalf("wrong failure diagnostic: %v\n%s", err, output)
+			}
+			archives, err := filepath.Glob(filepath.Join(dir, "llmtw-image-verify.*"))
+			if err != nil || len(archives) != 0 {
+				t.Fatalf("failed verification retained temporary archives: %v, %v", archives, err)
+			}
+		})
 	}
 }
