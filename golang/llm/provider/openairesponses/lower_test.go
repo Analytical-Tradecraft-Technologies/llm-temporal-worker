@@ -140,3 +140,47 @@ func mustJSON(t *testing.T, params responses.ResponseNewParams) []byte {
 	}
 	return encoded
 }
+
+func TestLoweringReasoningSummaryPreservesEffort(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		mode        llm.ReasoningMode
+		effort      llm.ReasoningEffort
+		summary     llm.ReasoningSummary
+		wantEffort  string
+		wantSummary string
+	}{
+		{name: "none", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryNone, wantEffort: "high"},
+		{name: "omitted", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, wantEffort: "high"},
+		{name: "provider default", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryProviderDefault, wantEffort: "high"},
+		{name: "auto", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryAuto, wantEffort: "high", wantSummary: "auto"},
+		{name: "concise", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryConcise, wantEffort: "high", wantSummary: "concise"},
+		{name: "detailed", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryDetailed, wantEffort: "high", wantSummary: "detailed"},
+		{name: "disabled", mode: llm.ReasoningModeDisabled, summary: llm.ReasoningSummaryNone, wantEffort: "none"},
+		{name: "default effort", mode: llm.ReasoningModeEnabled, summary: llm.ReasoningSummaryNone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := lowerRequest(llm.Request{
+				Model: "gpt", OperationKey: "op",
+				Reasoning: &llm.ReasoningSpec{Mode: test.mode, Effort: test.effort, Summary: test.summary},
+			}, llm.ServiceClassStandard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reasoning, ok := marshalParams(t, params)["reasoning"].(map[string]any)
+			if !ok {
+				t.Fatal("missing reasoning configuration")
+			}
+			for field, want := range map[string]string{"effort": test.wantEffort, "summary": test.wantSummary} {
+				got, present := reasoning[field]
+				if want == "" {
+					if present {
+						t.Errorf("%s = %#v, want omitted", field, got)
+					}
+				} else if got != want {
+					t.Errorf("%s = %#v, want %q", field, got, want)
+				}
+			}
+		})
+	}
+}
