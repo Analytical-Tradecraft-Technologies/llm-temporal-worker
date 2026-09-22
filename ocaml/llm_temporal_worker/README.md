@@ -24,7 +24,7 @@ opam install --yes llm-temporal-ocaml
 ```
 
 Its metadata pins `temporal-sdk` to the latest validated `master` commit
-`87d61c0639bf232b67e6d5a0f397d990e2468eb4`. Commit an application lock file
+`dad11b28c56b3a378e9415e36b325c69a8fdb269`. Commit an application lock file
 after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
