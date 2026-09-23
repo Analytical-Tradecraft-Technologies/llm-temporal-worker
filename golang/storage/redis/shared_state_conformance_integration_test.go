@@ -18,6 +18,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/conformance"
@@ -386,9 +387,51 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	providerOptions := ProviderStateOptions{Client: client, Keys: keys}
+	providers, err := NewProviderStateStore(providerOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	incident := providerTestEvent(t, now, "restart-route", func(o *control.StatusObservation) {
+		o.Credit = control.CreditExhausted
+		o.ProviderCode = "insufficient_quota"
+	})
+	if _, err := providers.PersistStatusEvent(ctx, incident); err != nil {
+		t.Fatal(err)
+	}
+	inventory := providerTestInventory(now)
+	inventory.Complete, inventory.NextCursor = false, "restart-private-cursor"
+	if _, err := providers.PersistInventorySnapshot(ctx, inventory); err != nil {
+		t.Fatal(err)
+	}
+
 	runLiveRedisDocker(t, "restart", container)
 	restartedClient := reopenLiveRedisAfterRestart(t, container)
 	cleanupLivePrefix(t, restartedClient, keys.Prefix)
+
+	providerOptions.Client = restartedClient
+	providers, err = NewProviderStateStore(providerOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID)
+	if err != nil || status.Credit != control.CreditExhausted {
+		t.Fatalf("provider incident after restart: %#v %v", status, err)
+	}
+	listing, err := providers.GetInventorySnapshot(context.Background(), inventory.ConfigDigest, inventory.Provider, inventory.EndpointID, inventory.EndpointAccountHMAC)
+	if err != nil || listing.NextCursor != inventory.NextCursor {
+		t.Fatalf("inventory after restart: %#v %v", listing, err)
+	}
+	// Redis script caches may disappear on restart; the embedded script must
+	// still accept a new observation without a SQL fallback or manual preload.
+	updated := providerTestEvent(t, now.Add(time.Second), "restart-route", nil)
+	if _, err := providers.PersistStatusEvent(context.Background(), updated); err != nil {
+		t.Fatal(err)
+	}
+	status, err = providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID)
+	if err != nil || status.Credit != control.CreditExhausted {
+		t.Fatalf("sticky incident after restart/update: %#v %v", status, err)
+	}
 
 	budgetOptions.Client = restartedClient
 	recovered, err := NewRedisBudgetMaterializer(budgetOptions)

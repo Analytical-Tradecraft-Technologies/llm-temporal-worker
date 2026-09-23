@@ -42,6 +42,7 @@ targets=(
   "./storage/redis FuzzBudgetManifestMemberOrder"
   "./storage/redis FuzzParseBudgetStatusNano"
   "./storage/redis FuzzOperationCodecRoundTrip"
+  "./storage/redis FuzzProviderStatusDecode"
 )
 
 # Balanced using median target durations from three successful master runs.

@@ -1,15 +1,16 @@
 # Persisted control-plane query composition
 
 The runtime now exposes an explicit `runtime.NewPersistedQueryService`
-composition for the PostgreSQL-backed provider-status, model-inventory,
-credit-status, and spend-summary query families, plus an explicitly supplied
-Redis budget-status reader. It binds every page to the immutable
+composition for Redis-backed provider-status, model-inventory, and credit-status,
+the remaining PostgreSQL spend-summary reader, and an explicitly supplied
+Redis budget-status reader. See [provider control](provider-control.md) for
+atomic updates, last-known inventory, and query-view retention. It binds every page to the immutable
 configuration snapshot digest and uses the storage pages only after the
 control layer has authenticated the tenant scope and signed cursor.
 The typed response boundary additionally rejects duplicate or out-of-order
 page keys before signing a continuation or emitting query audit metadata.
 This protects the same keyset invariant for deployment-owned handlers as for
-the built-in PostgreSQL readers.
+the built-in storage readers.
 
 Optional string filters (`provider`, `endpoint`, `model_prefix`, and
 `policy_key`) are omitted when unset; JSON `null` is not an alternate spelling
@@ -74,7 +75,7 @@ PostgreSQL. For the same reload-safety reason, spend summary obtains its
 scope resolver from `PostgresQueryRepositories.ScopeResolver`, not from
 process-lifetime builder options.
 
-The PostgreSQL composition is persisted-only. Refresh requests are rejected
+The storage composition is persisted-only. Refresh requests are rejected
 until an explicit management refresh adapter is supplied. Budget status
 remains fail-closed until the deployment explicitly composes the built-in
 versioned Redis generation/window reader through `BudgetStatus`. The storage

@@ -238,28 +238,18 @@ func TestProductionFactoryRejectsTypedNilV1RuntimeAndClosesSnapshotClients(t *te
 	}
 }
 
-func TestPostgresCloserExposesStatusRepositoryFromSamePool(t *testing.T) {
+func TestPostgresCloserOnlyExposesRemainingSQLRepositories(t *testing.T) {
 	namespace, err := postgresstore.NewNamespace("worker", "state", "tenant_")
 	if err != nil {
 		t.Fatal(err)
 	}
 	closer := postgresPoolCloser{namespace: namespace}
-	repository := closer.ProviderStatusRepository()
-	if repository.Pool != closer.pool {
-		t.Fatalf("status repository pool = %p, want %p", repository.Pool, closer.pool)
-	}
-	if repository.Namespace != namespace {
-		t.Fatalf("status repository namespace = %v, want %v", repository.Namespace, namespace)
-	}
-	if recorder := newPostgresProviderStatusRecorder(closer); recorder == nil {
-		t.Fatal("same-pool status recorder was not composed")
-	}
 	repositories := queryRepositoriesFromCloser(closer)
-	if repositories.ProviderStatus == nil || repositories.ProviderStatus.Pool != closer.pool {
-		t.Fatalf("query repository bundle = %#v, want same-pool provider status repository", repositories)
+	if repositories.ProviderStatus != nil || repositories.Inventory != nil || repositories.QueryAudit != nil {
+		t.Fatal("SQL closer exposed migrated provider state")
 	}
-	if repositories.Inventory != nil || repositories.QueryAudit != nil {
-		t.Fatal("default closer exposed unconfigured inventory or query-audit repositories")
+	if repositories.SpendSummary == nil {
+		t.Fatal("SQL spend reader missing")
 	}
 	checkpoints := checkpointCapabilitiesFromCloser(closer)
 	checkpointRepository, ok := checkpoints.Repository.(snapshotCheckpointRepository)

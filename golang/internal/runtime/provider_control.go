@@ -18,40 +18,22 @@ import (
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
-// providerStatusRepositorySource is implemented by a PostgreSQL client set
-// that owns the same pool used for durable state. Keeping this optional avoids
-// changing the public PostgresFactory signature or opening a second pool.
-type providerStatusRepositorySource interface {
-	ProviderStatusRepository() postgresstore.ProviderStatusRepository
-}
-
-// PostgresQueryRepositories is the optional query bundle owned by one durable
-// PostgreSQL pool. Repositories are pointers because deployments may roll out
-// only the query slices whose key material and schema are available. A missing
-// repository must remain an explicit fail-closed result rather than being
-// replaced with an in-memory answer.
-type PostgresQueryRepositories struct {
-	ProviderStatus *postgresstore.ProviderStatusRepository
-	Inventory      *postgresstore.InventoryRepository
+// QueryRepositories holds snapshot-owned capabilities. Provider state and inventory
+// use Redis; the remaining spend reader still uses SQL during the staged migration.
+type QueryRepositories struct {
+	ProviderStatus control.ProviderStatusReader
+	Inventory      control.InventoryReader
 	SpendSummary   *postgresstore.SpendSummaryRepository
-	// QueryAudit is a legacy capability, unused by the query service builder.
-	QueryAudit    *postgresstore.QueryExecutionRepository
-	ScopeResolver QueryScopeResolver
-	// BudgetStatus is the snapshot-owned Redis reader for budget_status. It is
-	// kept beside the query repository bundle only because this bundle is the
-	// existing per-snapshot query composition handoff. It is never read from
-	// PostgreSQL and remains nil unless production composition explicitly
-	// constructs a Redis generation reader.
-	BudgetStatus BudgetStatusReader
+	QueryAudit     *postgresstore.QueryExecutionRepository
+	ScopeResolver  QueryScopeResolver
+	BudgetStatus   BudgetStatusReader
 }
 
-// PostgresQueryRepositoriesSource is implemented by PostgreSQL closers that
-// construct snapshot-owned query repositories and supporting capabilities
-// alongside their pool. The runtime copies this bundle into the immutable
-// production client set so a reload cannot accidentally point a query Activity
-// at a closed or newer pool.
+// PostgresQueryRepositories is retained for existing composition builders.
+type PostgresQueryRepositories = QueryRepositories
+
 type PostgresQueryRepositoriesSource interface {
-	QueryRepositories() PostgresQueryRepositories
+	QueryRepositories() QueryRepositories
 }
 
 // CheckpointCapabilities is the storage-neutral checkpoint bundle owned by
@@ -198,7 +180,9 @@ type V1RuntimeCapabilities struct {
 	// callbacks.
 	composition            *durablestore.Composition
 	ProviderStatusRecorder engine.ProviderStatusRecorder
-	Clock                  func() time.Time
+	// ProviderInventory caches model listings using the same snapshot-owned Redis client.
+	ProviderInventory control.InventoryStore
+	Clock             func() time.Time
 	// GeneratePortsFactory is a per-snapshot constructor for the storage-
 	// neutral durable Generate phase. It must close over only the immutable
 	// adapters and stores represented by this capability bundle; a nil value is
@@ -435,10 +419,6 @@ func queryRepositoriesFromCloser(closer io.Closer) PostgresQueryRepositories {
 	if source, ok := closer.(PostgresQueryRepositoriesSource); ok {
 		return source.QueryRepositories()
 	}
-	if source, ok := closer.(providerStatusRepositorySource); ok {
-		repository := source.ProviderStatusRepository()
-		return PostgresQueryRepositories{ProviderStatus: &repository}
-	}
 	return PostgresQueryRepositories{}
 }
 
@@ -501,30 +481,4 @@ func checkpointCapabilitiesFromCloserWithBindings(closer io.Closer, reader state
 		return CheckpointCapabilities{}
 	}
 	return capabilities
-}
-
-type postgresProviderStatusRecorder struct {
-	repository postgresstore.ProviderStatusRepository
-}
-
-var _ engine.ProviderStatusRecorder = (*postgresProviderStatusRecorder)(nil)
-
-func newPostgresProviderStatusRecorder(source providerStatusRepositorySource) engine.ProviderStatusRecorder {
-	if source == nil {
-		return nil
-	}
-	repository := source.ProviderStatusRepository()
-	return &postgresProviderStatusRecorder{repository: repository}
-}
-
-func (recorder *postgresProviderStatusRecorder) RecordProviderStatus(ctx context.Context, observation control.StatusObservation) error {
-	if recorder == nil {
-		return fmt.Errorf("provider status recorder is nil")
-	}
-	event, err := control.NewStatusEvent(observation)
-	if err != nil {
-		return err
-	}
-	_, err = recorder.repository.PersistStatusEvent(ctx, event)
-	return err
 }
