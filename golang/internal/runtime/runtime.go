@@ -233,9 +233,15 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		return nil, err
 	}
 	configuration := application.Current().Config.Config()
+	logger, err := newRuntimeLogger(configuration, options)
+	if err != nil {
+		_ = application.Close(context.Background())
+		return nil, err
+	}
+	options.Logger = logger
 	temporalFactory := options.TemporalFactory
 	if temporalFactory == nil {
-		temporalFactory = DefaultTemporalClientFactory{Identity: options.Identity}
+		temporalFactory = DefaultTemporalClientFactory{Identity: options.Identity, Logger: logger}
 	}
 	temporalClient, err := temporalFactory.New(ctx, configuration)
 	if err != nil {
