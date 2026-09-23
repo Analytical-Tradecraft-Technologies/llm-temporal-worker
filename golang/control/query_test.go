@@ -271,16 +271,18 @@ func TestQueryServiceAuditsValidatedResponseBeforeReturning(t *testing.T) {
 	}
 }
 
-func TestQueryServiceAuditFailureBlocksResponseAsRetryableStateError(t *testing.T) {
-	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-		return queryResponse(request), nil
-	}), func(context.Context, Authorization) error { return nil })
-	service.Audit = func(context.Context, QueryAuditRecord) error { return errors.New("postgres unavailable") }
+func TestQueryServiceAuditFailureDoesNotFailSuccessfulRead(t *testing.T) {
+	for _, auditErr := range []error{errors.New("audit unavailable"), context.DeadlineExceeded} {
+		service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+			return queryResponse(request), nil
+		}), func(context.Context, Authorization) error { return nil })
+		calls := 0
+		service.Audit = func(context.Context, QueryAuditRecord) error { calls++; return auditErr }
 
-	_, err := service.Execute(context.Background(), queryRequest())
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeStateUnavailable || providerErr.Phase != provider.PhaseFinalize || providerErr.Retry != provider.RetrySameOperation {
-		t.Fatalf("audit failure = %v, want retryable finalize state error", err)
+		response, err := service.Execute(context.Background(), queryRequest())
+		if err != nil || response.OperationKey != queryRequest().OperationKey || calls != 1 {
+			t.Fatalf("audit failure changed result: response=%+v err=%v calls=%d", response, err, calls)
+		}
 	}
 }
 

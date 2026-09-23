@@ -154,8 +154,8 @@ func TestActivityRuntimeReferencesCurrentQueryPlan(t *testing.T) {
 	if strings.Contains(text, "Task 14 of the v1 plan") {
 		t.Fatalf("%s contains the stale v1-plan Task 14 reference", path)
 	}
-	if !strings.Contains(text, "[query execution audit ledger](query-audit-ledger.md)") {
-		t.Fatalf("%s must link the query execution audit ledger", path)
+	if !strings.Contains(text, "[query audit logging](query-audit-ledger.md)") {
+		t.Fatalf("%s must link the query audit logging reference", path)
 	}
 }
 

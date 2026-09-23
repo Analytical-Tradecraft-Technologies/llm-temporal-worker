@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/control"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
@@ -379,11 +381,17 @@ func TestNewPersistedQueryServiceBuilderRequiresDeploymentSecurityInputs(t *test
 	}
 }
 
-func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *testing.T) {
+func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
 	authorize := func(context.Context, control.Authorization) error { return nil }
 	cursorKey := []byte("query-builder-key")
 	builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
 		Authorize: authorize,
+		Logger:    logger,
 		Cursor:    &control.CursorCodec{Key: cursorKey, TTL: time.Hour},
 	})
 	if err != nil {
@@ -391,12 +399,8 @@ func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *
 	}
 	cursorKey[0] = 'X'
 
-	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{}); err == nil || !strings.Contains(err.Error(), "audit repository") {
+	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{}); err != nil {
 		t.Fatalf("builder without audit repository error = %v", err)
-	}
-	var nilAudit *postgresstore.QueryExecutionRepository
-	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{QueryAudit: nilAudit}); err == nil || !strings.Contains(err.Error(), "audit repository") {
-		t.Fatalf("builder with typed-nil audit repository error = %v", err)
 	}
 
 	audit := &postgresstore.QueryExecutionRepository{}
@@ -414,8 +418,11 @@ func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *
 	if !ok {
 		t.Fatalf("query service = %T, want *control.QueryService", service)
 	}
-	if err := queryService.Audit(context.Background(), control.QueryAuditRecord{}); err == nil || !strings.Contains(err.Error(), "query audit request JSON") {
-		t.Fatalf("bound PostgreSQL audit adapter error = %v, want request validation", err)
+	if err := queryService.Audit(context.Background(), control.QueryAuditRecord{Kind: llm.QueryBudgetStatus}); err != nil {
+		t.Fatalf("log audit: %v", err)
+	}
+	if !strings.Contains(output.String(), `"query_kind":"budget_status"`) {
+		t.Fatalf("audit was not logged: %s", output.String())
 	}
 	handler := queryService.TypedHandler.(*persistedQueryHandler)
 	if got, err := handler.resolveScope(context.Background(), control.QueryScope{Tenant: "tenant", Project: "project"}); err != nil || got != scopeID {

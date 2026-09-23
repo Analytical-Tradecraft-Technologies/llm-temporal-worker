@@ -73,7 +73,7 @@ is the single status/authority index:
 - [AWS Bedrock Converse provider](reference/provider-bedrock-converse.md)
 - [Generic compaction safeguards](reference/generic-compaction.md)
 - [v1 Activity runtime boundary](reference/activity-runtime.md)
-- [Query execution audit ledger](reference/query-audit-ledger.md)
+- [Query audit logging](reference/query-audit-ledger.md)
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)

@@ -209,16 +209,10 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 	}
 	if service.Audit != nil {
 		audit, err := buildQueryAudit(request, requestJSON, response, now, service.now())
-		if err != nil {
-			return llm.QueryResponseV1{}, fmt.Errorf("query audit: %w", err)
-		}
-		if err := service.Audit(ctx, audit); err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return llm.QueryResponseV1{}, ctxErr
-			}
-			mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetrySameOperation, "query audit state is unavailable")
-			mapped.Cause = err
-			return llm.QueryResponseV1{}, mapped
+		if err == nil {
+			// Audit encoding and sink failures must not turn a successful read
+			// into a retry. In particular, logging is not a persistence boundary.
+			_ = service.Audit(ctx, audit)
 		}
 	}
 	return response, nil
