@@ -1,3 +1,11 @@
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/eventsourcing v0.1.0 h1:Yv67dTzeCOUZRatZVQMVTdsuQwxemytsiiLd0PXSUIw=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/eventsourcing v0.1.0/go.mod h1:BwwPkJNmyz2qnGHfW1+M/+fuAmYcqELNzIOEseQYBRA=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts v0.1.0 h1:NAcMzk32dIK6SR/3vSWNt/aPD/r0MHgikTUOWBZK7gg=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts v0.1.0/go.mod h1:6jxA+uXCVn5gd2xbbBP78haMqmaqSvbDCwVHoHYxZHI=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.0 h1:plqH/ohhRlgAjafwxwbpkuXegY+6beOQDIcWc5kizCk=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.0/go.mod h1:n7JA1QKWWAbAqJpgJfhWpDUc2twJC/B/9iweJHJMvcg=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.0 h1:/x1Yb95VHllqvE2Qa2pXf1V5QhhT4rEvr7sL2hqnTtc=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.0/go.mod h1:qOovlFbZYVMWqKuUQGlLl32LWCCYjRFyUEIDafLnvUQ=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1 h1:zvXfGJCWvywnCA814d8ZiVyt+fm9nnTE8xSb99zRyfo=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1/go.mod h1:iptorS+VYKFL2N6PnebpS91dubG35eAOEERnT4PJbQU=
 github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1 h1:u93s+zU2JD62im61Bm5CZIc1ZrOJaIAWEg0WOrMVkEo=
@@ -30,10 +38,14 @@ github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.3 h1:fuSCw4Z2qfRCztMPO3GXJNSiEp6W
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.3/go.mod h1:6SxcHheD1pPR5+kWm1wGvjlL/YqUsh267sAfEmN4K7A=
 github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.0 h1:0YDtf7baintcPG68AG0sMdAVoV1Iej6eXIBh38sd1m4=
 github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.0/go.mod h1:7P+JIqwRqUIlzGn7Ba0qbSbPV/zsdZk7VkJTEFO6Z3U=
+github.com/aws/aws-sdk-go-v2/service/dynamodb v1.69.0 h1:JapCBy1C76JRQRw++NmoQVPdkt5PolQ9HZFEI1r9A4Y=
+github.com/aws/aws-sdk-go-v2/service/dynamodb v1.69.0/go.mod h1:d7bRXj2c3K52qdd62I1c0o+ua/44QScJFj6EP0ufZeI=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19 h1:bAdDl/HkGCcGPoe25ToSHEw23VIxt6CT5fLcg111BKg=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19/go.mod h1:KaUzbLxv4CeSxh6ZCl9B4m7CuFenS8kUEaDs+f/DQr4=
 github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.3 h1:BHKCSX4QXERe8So8rbWqaM7owqOmDJxATXgJwGng22A=
 github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.3/go.mod h1:GqWeeKfYfezihA2KfFL9l7ohEdZWe1tuFWh3GfyNSnE=
+github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.13.3 h1:76FYKEDB9AzQzOaERx6TKaKKS1fxjswzO/cfestdWnI=
+github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.13.3/go.mod h1:BH5hXFPEK6XdipZfv99bfbjV44tKwyjImyOaB3gIzts=
 github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.3 h1:bON1rJf67TSTDCKg816AAIE4xSTtoo9tl0XRkO72R+I=
 github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.3/go.mod h1:c5BBpjJcQXpfeq9iASyVKA3T6vX6B6LEXY4mL/gklDY=
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.3 h1:L8vIOxylma91TcR96NFTEC07G3JDwSl+CvK2b+IODms=
