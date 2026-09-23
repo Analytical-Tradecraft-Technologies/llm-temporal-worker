@@ -79,11 +79,11 @@ func testGeneratePorts(events *[]string, failStage string) GeneratePorts {
 			*events = append(*events, "reserve")
 			return reservation, fail("reserve")
 		},
-		Journal: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error) {
-			*events = append(*events, "journal")
-			return JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, fail("journal")
+		Claim: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (ClaimReceipt, error) {
+			*events = append(*events, "claim")
+			return ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation-id"}, fail("claim")
 		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, JournalReceipt) (DispatchResult, error) {
+		Dispatch: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ClaimReceipt) (DispatchResult, error) {
 			*events = append(*events, "dispatch")
 			return DispatchResult{}, fail("dispatch")
 		},
@@ -113,7 +113,7 @@ func TestGenerateV1RunsDurablePhasesInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateV1 error = %v", err)
 	}
-	if got, want := events, []string{"replay", "cache", "compaction", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"replay", "cache", "compaction", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
 	if response.OperationKey != "operation-1" || response.Checkpoint.Kind != "generation" {
@@ -158,7 +158,7 @@ func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 		routeHandle = replay.State.Handle
 		return testRoutePlan(), nil
 	}
-	ports.Dispatch = func(_ context.Context, _ llm.GenerateRequestV1, replay GenerateReplay, _ RoutePlan, _ JournalReceipt) (DispatchResult, error) {
+	ports.Dispatch = func(_ context.Context, _ llm.GenerateRequestV1, replay GenerateReplay, _ RoutePlan, _ ClaimReceipt) (DispatchResult, error) {
 		events = append(events, "dispatch")
 		dispatchHandle = replay.State.Handle
 		return DispatchResult{}, nil
@@ -173,7 +173,7 @@ func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != "compacted" {
 		t.Fatalf("response checkpoint parent = %v, want compacted", response.Checkpoint.Parent)
 	}
-	if got, want := events, []string{"replay", "cache", "compaction", "compact", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"replay", "cache", "compaction", "compact", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
 }
@@ -282,7 +282,7 @@ func TestGenerateV1AllowsScopedPostCompactionParentReplacement(t *testing.T) {
 	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != llm.CheckpointHandle(compacted) {
 		t.Fatalf("response checkpoint parent = %v, want %q", response.Checkpoint.Parent, compacted)
 	}
-	if got, want := events, []string{"replay", "cache", "compaction", "compact", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"replay", "cache", "compaction", "compact", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
 }
@@ -338,7 +338,7 @@ func TestGenerateV1RejectsToolResultDeltaOutsideReplayedFrontier(t *testing.T) {
 }
 
 func TestGenerateV1FailsClosedBeforeDispatchWhenPreDispatchPhaseFails(t *testing.T) {
-	for _, failStage := range []string{"replay", "cache", "compaction", "route", "reserve", "journal"} {
+	for _, failStage := range []string{"replay", "cache", "compaction", "route", "reserve", "claim"} {
 		t.Run(failStage, func(t *testing.T) {
 			events := []string{}
 			_, err := GenerateV1(context.Background(), testGenerateRequest(), testGeneratePorts(&events, failStage))
@@ -509,7 +509,7 @@ func TestGenerateV1ReconciliationFailureIsRetryableAfterFinalization(t *testing.
 	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Retry != provider.RetrySameOperation {
 		t.Fatalf("provider error = %#v", providerErr)
 	}
-	if got, want := events, []string{"replay", "cache", "compaction", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"replay", "cache", "compaction", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
 }
@@ -661,18 +661,35 @@ func TestGenerateV1RejectsInvalidCacheHitFinalization(t *testing.T) {
 	}
 }
 
-func TestGenerateV1RejectsMismatchedJournalIdentity(t *testing.T) {
-	events := []string{}
-	ports := testGeneratePorts(&events, "")
-	ports.Journal = func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error) {
-		return JournalReceipt{OperationID: "other-operation", GenerationID: "generation-id"}, nil
+func claimIdentityMutations() map[string]func(*ClaimReceipt) {
+	return map[string]func(*ClaimReceipt){
+		"wrong operation":     func(r *ClaimReceipt) { r.OperationID = "other-operation" },
+		"wrong generation":    func(r *ClaimReceipt) { r.GenerationID = "other-generation" },
+		"wrong incarnation":   func(r *ClaimReceipt) { r.IncarnationID = "other-incarnation" },
+		"missing operation":   func(r *ClaimReceipt) { r.OperationID = "" },
+		"missing generation":  func(r *ClaimReceipt) { r.GenerationID = "" },
+		"missing incarnation": func(r *ClaimReceipt) { r.IncarnationID = "" },
 	}
-	_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
-	if err == nil || !errors.Is(err, ErrV1Stage) {
-		t.Fatalf("error = %v, want journal identity failure", err)
-	}
-	if contains(events, "dispatch") {
-		t.Fatalf("mismatched journal reached dispatch: %v", events)
+}
+
+func TestGenerateV1RejectsMismatchedClaimIdentity(t *testing.T) {
+	for name, mutate := range claimIdentityMutations() {
+		t.Run(name, func(t *testing.T) {
+			events := []string{}
+			ports := testGeneratePorts(&events, "")
+			ports.Claim = func(_ context.Context, _ llm.GenerateRequestV1, _ RoutePlan, reservation ReserveResult) (ClaimReceipt, error) {
+				receipt := ClaimReceipt{OperationID: reservation.OperationID, GenerationID: reservation.GenerationID, IncarnationID: reservation.IncarnationID}
+				mutate(&receipt)
+				return receipt, nil
+			}
+			_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
+			if err == nil || !errors.Is(err, ErrV1Stage) {
+				t.Fatalf("error = %v, want claim identity failure", err)
+			}
+			if contains(events, "dispatch") {
+				t.Fatalf("mismatched claim reached dispatch: %v", events)
+			}
+		})
 	}
 }
 

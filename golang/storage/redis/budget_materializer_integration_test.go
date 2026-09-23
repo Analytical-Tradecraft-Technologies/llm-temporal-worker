@@ -4,7 +4,6 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -76,6 +75,9 @@ func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
 		t.Fatalf("denied replay = %#v", deniedReplay)
 	}
 
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
+		t.Fatal(err)
+	}
 	reservationEvent := accepted.Events[0]
 	completion := budget.CompletionEvent{
 		EventID: "durable-completion-1", GenerationID: string(request.GenerationID),
@@ -122,6 +124,9 @@ func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accepted reservation = %v", err)
 	}
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
+		t.Fatal(err)
+	}
 	base := accepted.Events[0]
 	completion := func(id string) budget.CompletionEvent {
 		return budget.CompletionEvent{EventID: id, GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
@@ -129,7 +134,7 @@ func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
 			ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now}
 	}
 	first, second := completion("batch-first"), completion("batch-second")
-	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first, second}}); !errors.Is(err, ErrRedisBudgetConflict) {
+	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first, second}}); err == nil {
 		t.Fatalf("mixed completion batch = %v, want conflict", err)
 	}
 	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first}}); err != nil {

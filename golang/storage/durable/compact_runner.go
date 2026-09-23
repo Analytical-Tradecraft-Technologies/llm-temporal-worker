@@ -83,7 +83,7 @@ type CompactFinalization struct {
 
 // CompactPorts are the snapshot-bound production composition ports for one
 // Compact operation. The order is intentionally distinct from Generate:
-// replay -> exact cache -> route -> Redis reservation -> PostgreSQL journal
+// replay -> exact cache -> route -> Redis reservation -> Redis budget claim
 // -> one-shot summarizer dispatch -> PostgreSQL finalization -> reconciliation.
 // Every callback must be idempotent across Temporal Activity retries.
 type CompactPorts struct {
@@ -91,8 +91,8 @@ type CompactPorts struct {
 	CacheLookup   func(context.Context, llm.CompactRequestV1, CompactReplay) (CompactCacheDecision, error)
 	Route         func(context.Context, llm.CompactRequestV1, CompactReplay) (RoutePlan, error)
 	Reserve       func(context.Context, llm.CompactRequestV1, RoutePlan) (ReserveResult, error)
-	Journal       func(context.Context, llm.CompactRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error)
-	Dispatch      func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, JournalReceipt) (CompactDispatchResult, error)
+	Claim         func(context.Context, llm.CompactRequestV1, RoutePlan, ReserveResult) (ClaimReceipt, error)
+	Dispatch      func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, ClaimReceipt) (CompactDispatchResult, error)
 	Finalize      func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, ReserveResult, CompactDispatchResult) (CompactFinalization, error)
 	FinalizeCache func(context.Context, llm.CompactRequestV1, CompactReplay, CompactCacheDecision) (CompactFinalization, error)
 	Reconcile     func(context.Context, llm.CompactRequestV1, RoutePlan, ReserveResult, CompactFinalization) error
@@ -105,7 +105,7 @@ func (ports CompactPorts) validate() error {
 	}{
 		{"replay", ports.Replay}, {"cache lookup", ports.CacheLookup},
 		{"route", ports.Route}, {"reserve", ports.Reserve},
-		{"journal", ports.Journal}, {"dispatch", ports.Dispatch},
+		{"claim", ports.Claim}, {"dispatch", ports.Dispatch},
 		{"finalize", ports.Finalize}, {"finalize cache", ports.FinalizeCache},
 		{"reconcile", ports.Reconcile},
 	}
@@ -242,14 +242,14 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		return llm.CompactResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
 	}
 
-	journal, err := ports.Journal(ctx, request, route, reservation)
+	claim, err := ports.Claim(ctx, request, route, reservation)
 	if err != nil {
-		return llm.CompactResponseV1{}, stageError("compact PostgreSQL journal", err)
+		return llm.CompactResponseV1{}, stageError("compact Redis budget claim", err)
 	}
-	if err := validateCompactJournal(reservation, journal); err != nil {
-		return llm.CompactResponseV1{}, stageError("compact PostgreSQL journal", err)
+	if err := validateCompactClaim(reservation, claim); err != nil {
+		return llm.CompactResponseV1{}, stageError("compact Redis budget claim", err)
 	}
-	dispatch, err := ports.Dispatch(ctx, request, replay, route, journal)
+	dispatch, err := ports.Dispatch(ctx, request, replay, route, claim)
 	if err != nil {
 		return llm.CompactResponseV1{}, stageError("compact provider dispatch", err)
 	}
@@ -319,11 +319,11 @@ func compactReconciliationError(route RoutePlan, cause error) error {
 	return fmt.Errorf("%w: %w", ErrReconcilePending, mapped)
 }
 
-func validateCompactJournal(reservation ReserveResult, journal JournalReceipt) error {
-	if journal.OperationID == "" || journal.GenerationID == "" {
-		return errors.New("compact journal receipt identities are required")
+func validateCompactClaim(reservation ReserveResult, claim ClaimReceipt) error {
+	if claim.OperationID == "" || claim.GenerationID == "" {
+		return errors.New("compact claim receipt identities are required")
 	}
-	return journal.Validate(reservation)
+	return claim.Validate(reservation)
 }
 
 func validateCompactResponse(request llm.CompactRequestV1, expectedOperationID OperationID, response llm.CompactResponseV1) error {

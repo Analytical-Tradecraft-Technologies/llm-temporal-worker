@@ -1,5 +1,10 @@
 # Redis Budget Generation Recovery
 
+> **Budget design superseded:** Redis now owns budget leases and settlement;
+> the SQL budget journal writer has been removed. The SQL budget rebuild and
+> automatic Stream broadcast described below are not the current runtime. See
+> [Redis budget leases](../reference/redis-budget-leases.md) for the implemented contract.
+
 > **Design-time runbook:** the recovery commands, metric names, and deployment
 > controls do not exist yet. The implementation must replace every named
 > placeholder below with tested, environment-specific commands before enabling

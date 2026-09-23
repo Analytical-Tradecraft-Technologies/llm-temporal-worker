@@ -110,11 +110,11 @@ func (store *generateCrashRecoveryStore) ports() GeneratePorts {
 			store.reserveCalls++
 			return store.reservation, nil
 		},
-		Journal: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error) {
+		Claim: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (ClaimReceipt, error) {
 			store.journalCalls++
-			return JournalReceipt{OperationID: store.route.OperationID, GenerationID: store.route.GenerationID}, nil
+			return ClaimReceipt{OperationID: store.route.OperationID, GenerationID: store.route.GenerationID, IncarnationID: "incarnation-id"}, nil
 		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, JournalReceipt) (DispatchResult, error) {
+		Dispatch: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ClaimReceipt) (DispatchResult, error) {
 			store.dispatchCalls++
 			return DispatchResult{}, nil
 		},

@@ -100,21 +100,22 @@ func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisB
 	}, nil
 }
 
-var _ durable.BudgetMaterializer = (*RedisBudgetMaterializer)(nil)
+var _ durable.BudgetLeaser = (*RedisBudgetMaterializer)(nil)
 
 type durableReservation struct {
-	PolicyID      string `json:"policy_id"`
-	WindowID      string `json:"window_id"`
-	Bucket        string `json:"bucket"`
-	AmountNano    string `json:"amount_nano"`
-	LimitNano     string `json:"limit_nano"`
-	BucketNanos   string `json:"bucket_nanos"`
-	DurationNanos string `json:"duration_nanos"`
-	BucketStart   string `json:"bucket_start_nanos"`
-	ExpiresMillis int64  `json:"expires_millis"`
-	EventID       string `json:"event_id"`
-	AmountUSD     string `json:"amount_usd"`
-	LimitUSD      string `json:"limit_usd"`
+	PolicyID            string `json:"policy_id"`
+	WindowID            string `json:"window_id"`
+	Bucket              string `json:"bucket"`
+	AmountNano          string `json:"amount_nano"`
+	LimitNano           string `json:"limit_nano"`
+	BucketNanos         string `json:"bucket_nanos"`
+	DurationNanos       string `json:"duration_nanos"`
+	BucketStart         string `json:"bucket_start_nanos"`
+	WindowExpiresMillis int64  `json:"window_expires_millis"`
+	ExpiresMillis       int64  `json:"expires_millis"`
+	EventID             string `json:"event_id"`
+	AmountUSD           string `json:"amount_usd"`
+	LimitUSD            string `json:"limit_usd"`
 }
 
 type durableOperation struct {
@@ -125,6 +126,8 @@ type durableOperation struct {
 	Fingerprint   string               `json:"fingerprint"`
 	Status        string               `json:"status"`
 	OccurredAt    time.Time            `json:"occurred_at"`
+	StartByMillis int64                `json:"start_by_millis"`
+	Claimed       bool                 `json:"claimed"`
 	ExpiresAt     time.Time            `json:"expires_at,omitempty"`
 	Reservations  []durableReservation `json:"reservations"`
 	Events        map[string]string    `json:"events,omitempty"`
@@ -187,8 +190,8 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 	}
 	ttl := durableTTLSeconds(request.ExpiresAt, m.clock(), reservations)
 	if ttl <= 0 {
-		return durable.ReserveResult{}, errors.New("Redis durable budget reservation expiry must be in the future")
-	}
+		ttl = 1
+	} // Redis checks new leases; expired replay stays idempotent.
 	wire, err := json.Marshal(reservations)
 	if err != nil {
 		return durable.ReserveResult{}, fmt.Errorf("marshal Redis durable budget reservations: %w", err)
@@ -254,6 +257,60 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 		return durable.ReserveResult{}, err
 	}
 	return reserve, nil
+}
+
+// Claim consumes the lease exactly once. ErrAlreadyClaimed on replay is a
+// recovery signal, never authorization for another chargeable HTTP submission.
+func (m *RedisBudgetMaterializer) Claim(ctx context.Context, request durable.ClaimRequest) (durable.ClaimReceipt, error) {
+	if m == nil || ctx == nil || m.reader == nil {
+		return durable.ClaimReceipt{}, errors.New("Redis budget claim dependencies are missing")
+	}
+	if err := ctx.Err(); err != nil {
+		return durable.ClaimReceipt{}, err
+	}
+	if err := request.Validate(); err != nil {
+		return durable.ClaimReceipt{}, err
+	}
+	if request.GenerationID != m.generation {
+		return durable.ClaimReceipt{}, ErrRedisBudgetGenerationMismatch
+	}
+	if request.IncarnationID != m.incarnation {
+		return durable.ClaimReceipt{}, ErrRedisBudgetIncarnationMismatch
+	}
+	key := m.space.durableBudgetOperationKey(string(request.GenerationID), string(request.OperationID))
+	raw, err := m.reader.Get(ctx, key)
+	if errors.Is(err, redisclient.Nil) {
+		return durable.ClaimReceipt{}, ErrRedisBudgetReservationNotFound
+	}
+	if err != nil {
+		return durable.ClaimReceipt{}, resolveMutationError(ctx, err)
+	}
+	var record durableOperation
+	if err := json.Unmarshal([]byte(raw), &record); err != nil {
+		return durable.ClaimReceipt{}, err
+	}
+	keys := []string{key}
+	for _, reservation := range record.Reservations {
+		keys = append(keys, m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID), m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
+	}
+	result, err := m.invoke.Run(ctx, m.function, keys, "durable_claim", string(request.GenerationID), string(request.IncarnationID), string(request.OperationID))
+	if err != nil {
+		return durable.ClaimReceipt{}, resolveMutationError(ctx, err)
+	}
+	status, _, err := durableFunctionRecord(result)
+	if err != nil {
+		return durable.ClaimReceipt{}, err
+	}
+	switch status {
+	case "claimed":
+		return durable.ClaimReceipt{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}, nil
+	case "already_claimed":
+		return durable.ClaimReceipt{}, durable.ErrAlreadyClaimed
+	case "expired":
+		return durable.ClaimReceipt{}, durable.ErrLeaseExpired
+	default:
+		return durable.ClaimReceipt{}, mapDurableStatus(status)
+	}
 }
 
 func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable.ReconcileRequest) error {
@@ -353,6 +410,8 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 		return ErrRedisBudgetGenerationMismatch
 	case "incarnation_mismatch":
 		return ErrRedisBudgetIncarnationMismatch
+	case "not_claimed":
+		return durable.ErrClaimRequired
 	case "not_found":
 		return ErrRedisBudgetReservationNotFound
 	case "finalized":
@@ -384,9 +443,9 @@ func canonicalDurableReservations(operation durable.OperationID, generation dura
 			return nil, fmt.Errorf("reservation %d amount: %w", index, err)
 		}
 		limit, err := durableUSD(value.LimitUSD, value.Limit)
-		if err != nil || limit.IsZero() || amount.Cmp(limit) > 0 {
+		if err != nil || limit.IsZero() {
 			if err == nil {
-				err = errors.New("limit must be positive and no less than amount")
+				err = errors.New("limit must be positive")
 			}
 			return nil, fmt.Errorf("reservation %d limit: %w", index, err)
 		}
@@ -395,20 +454,17 @@ func canonicalDurableReservations(operation durable.OperationID, generation dura
 			return nil, fmt.Errorf("reservation %d amount materialization: %w", index, err)
 		}
 		limitNano, err := pricing.FloorNanoUSD(limit)
-		if err != nil || amountNano > limitNano {
+		if err != nil || limitNano <= 0 {
 			if err == nil {
-				err = errors.New("conservative materialization makes amount exceed limit")
+				err = errors.New("limit rounds down to zero")
 			}
 			return nil, fmt.Errorf("reservation %d limit materialization: %w", index, err)
 		}
 		bucketStart := value.Bucket * value.BucketNanos
-		windowExpiry := time.Unix(0, bucketStart).Add(time.Duration(value.DurationNanos)).UTC()
-		reservationExpiry := windowExpiry
-		if !expiresAt.IsZero() && expiresAt.Before(reservationExpiry) {
+		windowExpiry := time.Unix(0, bucketStart).Add(time.Duration(value.DurationNanos)).Add(time.Duration(value.BucketNanos)).UTC()
+		reservationExpiry := now.Add(durable.BudgetStartLease)
+		if !expiresAt.IsZero() {
 			reservationExpiry = expiresAt.UTC()
-		}
-		if !reservationExpiry.After(now.UTC()) {
-			return nil, fmt.Errorf("reservation %d expiry must be in the future", index)
 		}
 		bucketKey := value.WindowID + "\x00" + strconv.FormatInt(bucketStart, 10)
 		if _, ok := seenWindowBucket[bucketKey]; ok {
@@ -424,7 +480,7 @@ func canonicalDurableReservations(operation durable.OperationID, generation dura
 			PolicyID: value.PolicyID, WindowID: value.WindowID,
 			Bucket: strconv.FormatInt(value.Bucket, 10), AmountNano: amountNano.String(), LimitNano: limitNano.String(),
 			BucketNanos: strconv.FormatInt(value.BucketNanos, 10), DurationNanos: strconv.FormatInt(value.DurationNanos, 10),
-			BucketStart: strconv.FormatInt(bucketStart, 10), ExpiresMillis: reservationExpiry.UnixMilli(),
+			BucketStart: strconv.FormatInt(bucketStart, 10), WindowExpiresMillis: windowExpiry.UnixMilli(), ExpiresMillis: reservationExpiry.UnixMilli(),
 			EventID:   durableReservationEventID(string(operation), string(generation), value.PolicyID, value.WindowID, bucketStart),
 			AmountUSD: amount.String(), LimitUSD: limit.String(),
 		})
@@ -467,6 +523,11 @@ func durableTTLSeconds(expiresAt, now time.Time, reservations []durableReservati
 }
 
 func durableRequestFingerprint(request durable.ReserveRequest, reservations []durableReservation) (string, error) {
+	reservations = append([]durableReservation(nil), reservations...)
+	for i := range reservations {
+		reservations[i].ExpiresMillis = 0
+	}
+
 	wire := struct {
 		OperationID  string               `json:"operation_id"`
 		GenerationID string               `json:"generation_id"`
@@ -493,7 +554,7 @@ func durableReservationEventID(operation, generation, policy, window string, buc
 }
 
 func durableDeniedResult(request durable.ReserveRequest, record durableOperation) (durable.ReserveResult, error) {
-	result := durable.ReserveResult{OperationID: request.OperationID, GenerationID: request.GenerationID, Accepted: false}
+	result := durable.ReserveResult{OperationID: request.OperationID, GenerationID: request.GenerationID, Accepted: false, RetryAfter: time.Second}
 	if record.Denial != nil {
 		limit, err := parseNanoUSD(record.Denial.LimitNano)
 		if err != nil {
@@ -576,6 +637,8 @@ func mapDurableStatus(status string) error {
 		return ErrRedisBudgetGenerationMismatch
 	case "incarnation_mismatch":
 		return ErrRedisBudgetIncarnationMismatch
+	case "not_claimed":
+		return durable.ErrClaimRequired
 	case "not_found":
 		return ErrRedisBudgetReservationNotFound
 	case "finalized":

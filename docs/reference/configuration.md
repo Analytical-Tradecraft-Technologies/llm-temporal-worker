@@ -54,7 +54,7 @@ state:
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
-  reservation_lease: 2m
+  reservation_lease: 15m
   redis:
     addresses: [redis.example.internal:6379]
     key_prefix: llmtw
@@ -72,7 +72,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: 847c652e3f1255d1e1d89737de4ad3033d75d2a3448455025668149dbb7a4d9f
+    admission_digest: 311bccc51d07fc36631e3f919b5d0d2ca572f363095f12c7aa6dbe566f303999
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -457,7 +457,7 @@ state:
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
-  reservation_lease: 2m
+  reservation_lease: 15m
 blob_store:
   kind: memory
   inline_bytes: 262144
@@ -574,6 +574,28 @@ Run `make postgres-integration` from `golang/` to exercise the namespace and
 contract gates against the pinned PostgreSQL service image.
 
 ## Pricing and budget matching
+
+Budget policies can be supplied as a JSON object in the worker setting
+`budgets_json`, instead of the existing `budgets` YAML object:
+
+```yaml
+budgets_json: |
+  {
+    "require_match": true,
+    "policies": [{
+      "id": "acme-production",
+      "match": {"tenant": "acme", "environment": "production"},
+      "windows": [{"duration": "1h", "bucket": "1m", "limit_usd": "25.000000000000000000"}]
+    }]
+  }
+```
+
+Both forms share strict field and policy validation. JSON must be one object,
+at most 4 MiB, with no unknown or duplicate fields. Nonempty `budgets` and
+`budgets_json` cannot be combined. The effective policy values enter the
+configuration digest, so equivalent JSON and YAML produce the same snapshot.
+No SQL budget configuration is read. See [Redis budget leases](redis-budget-leases.md)
+for the 15-minute start deadline and persistent paid-work accounting.
 
 `pricing.require_price_when_budgeted` controls the explicit unpriced policy.
 When it is `true`, a route without a current catalog quote is eligible only if
@@ -719,15 +741,12 @@ storage-neutral and does not itself publish a Redis pointer or run an atomic
 budget Function; deployment wiring must still perform those operations under
 the recovery procedure below.
 
-Workers keep leases and broadcast cursors in the configured Redis budget
-namespace. Joining an existing live lease set, restarting one worker, handling
-a Stream gap, checking readiness, and serving `budget_status` read budget state
-only from Redis. The service may read PostgreSQL budget tables only when the
-Redis lease set proves a zero-live-worker cold bootstrap or the Redis generation
-is missing/incomplete under a verified new Redis process/dataset incarnation
-after persistence loss. Same-incarnation partial corruption fails closed and
-does not read PostgreSQL. There is no config switch
-that enables a routine PostgreSQL fallback.
+The generation/Stream contracts above remain available for deployment assembly;
+they do not automatically publish budget events or start worker tailers. The
+current durable budget leaser uses shared atomic Redis state directly and has
+no SQL budget journal or SQL rebuild fallback. See
+[Redis budget leases](redis-budget-leases.md) for the active contract and the
+remaining recovery and cleanup work.
 
 ## Service-class rules
 

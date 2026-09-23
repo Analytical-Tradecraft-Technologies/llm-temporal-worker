@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
-	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -146,21 +145,9 @@ type CheckpointCapabilitiesSource interface {
 	CheckpointCapabilities() CheckpointCapabilities
 }
 
-// PostgresJournalSource is implemented by a PostgreSQL client closer that
-// exposes only the write-only durable budget journal. It deliberately returns
-// the storage-neutral durable.Journal contract instead of a pool or concrete
-// repository so a future V1 composition cannot read budget projections during
-// normal admission.
-type PostgresJournalSource interface {
-	Journal() durablestore.Journal
-}
-
-// JournalSource is the optional snapshot-client capability consumed by a
-// future durable V1 builder. The journal is owned by the same immutable client
-// set and is closed with that set; nil means PostgreSQL journal composition is
-// not configured.
-type JournalSource interface {
-	Journal() durablestore.Journal
+// BudgetSource exposes the snapshot-owned Redis reservation/claim/settlement port.
+type BudgetSource interface {
+	Budgets() durablestore.BudgetLeaser
 }
 
 // DurableCompositionFactory constructs the complete storage-neutral
@@ -176,11 +163,10 @@ type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (dur
 
 // V1RuntimeCapabilities is the preparatory storage- and provider-neutral
 // dependency bundle owned by one immutable configuration snapshot. It exposes
-// only the snapshot/planning/adapter contracts, checkpoint capability, and
-// optional write-only journal that are safe to carry into the future durable
-// composition. It deliberately
+// snapshot/planning/adapter contracts, checkpoints and Redis budgets for
+// durable composition. It deliberately
 // omits the legacy Redis admission, continuation, and blob-result stores:
-// Task 19 must supply PostgreSQL durable operations, BudgetMaterializer/Journal,
+// Deployment composition must supply durable operations
 // and the corresponding result/continuation ports before the V1 runtime can
 // compose them. Adapters own provider credentials. A nil optional recorder or
 // clock is an unconfigured capability; callers must not fall back to a legacy
@@ -196,9 +182,9 @@ type V1RuntimeCapabilities struct {
 	Planner      routing.Planner
 	Adapters     engine.AdapterRegistry
 	Checkpoints  CheckpointCapabilities
-	// Journal is the optional write-only PostgreSQL budget journal. It is
-	// preparatory input for Task 19 and does not activate V1 composition.
-	Journal durablestore.Journal
+	// Budgets is the Redis authority for reserve, claim and settlement.
+	// Exposing it does not by itself activate V1 composition.
+	Budgets durablestore.BudgetLeaser
 	// CompositionFactory is the Task 19 seam for the snapshot-owned
 	// PostgreSQL/Redis responsibility split. It is optional while deployments
 	// still use the preparatory phase factories. The complete durable builder
@@ -314,8 +300,8 @@ func (capabilities V1RuntimeCapabilities) ValidateGenerate() error {
 	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
 		return fmt.Errorf("v1 Generate checkpoint capabilities: %w", err)
 	}
-	if isNilCapability(capabilities.Journal) {
-		return errors.New("v1 Generate PostgreSQL journal is not configured")
+	if isNilCapability(capabilities.Budgets) {
+		return errors.New("v1 Generate Redis budgets are not configured")
 	}
 	if capabilities.Clock == nil {
 		return errors.New("v1 Generate clock is not configured")
@@ -344,8 +330,8 @@ func (capabilities V1RuntimeCapabilities) ValidateCompact() error {
 	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
 		return fmt.Errorf("v1 Compact checkpoint capabilities: %w", err)
 	}
-	if isNilCapability(capabilities.Journal) {
-		return errors.New("v1 Compact PostgreSQL journal is not configured")
+	if isNilCapability(capabilities.Budgets) {
+		return errors.New("v1 Compact Redis budgets are not configured")
 	}
 	if capabilities.Clock == nil {
 		return errors.New("v1 Compact clock is not configured")
@@ -437,23 +423,6 @@ func (materializer snapshotCheckpointMaterializer) MaterializeHandle(ctx context
 	return materializer.delegate.MaterializeHandle(ctx, scopeID, handle, limits)
 }
 
-// snapshotJournal erases the concrete PostgreSQL repository before it enters
-// the client set. It preserves the write-only durable.Journal contract while
-// preventing callers from reaching into a pgx pool through a type assertion.
-type snapshotJournal struct {
-	delegate durablestore.Journal
-}
-
-var _ durablestore.Journal = snapshotJournal{}
-
-func (journal snapshotJournal) AppendReservation(ctx context.Context, event budget.ReservationEvent) (postgresstore.JournalRecord, error) {
-	return journal.delegate.AppendReservation(ctx, event)
-}
-
-func (journal snapshotJournal) AppendCompletion(ctx context.Context, event budget.CompletionEvent) (postgresstore.JournalRecord, error) {
-	return journal.delegate.AppendCompletion(ctx, event)
-}
-
 // queryServiceSource lets an embedding supply the typed control-plane query
 // implementation from the same PostgreSQL pool. It is deliberately optional:
 // until handlers for a query kind are composed, QueryService remains nil and
@@ -532,17 +501,6 @@ func checkpointCapabilitiesFromCloserWithBindings(closer io.Closer, reader state
 		return CheckpointCapabilities{}
 	}
 	return capabilities
-}
-
-func journalFromCloser(closer io.Closer) durablestore.Journal {
-	if source, ok := closer.(PostgresJournalSource); ok {
-		journal := source.Journal()
-		if journal == nil {
-			return nil
-		}
-		return snapshotJournal{delegate: journal}
-	}
-	return nil
 }
 
 type postgresProviderStatusRecorder struct {

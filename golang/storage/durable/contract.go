@@ -23,7 +23,9 @@ import (
 var (
 	ErrInvalidIdentity  = errors.New("invalid durable state identity")
 	ErrInvalidPhase     = errors.New("invalid durable lifecycle phase")
-	ErrJournalRequired  = errors.New("postgres journal is required before dispatch")
+	ErrClaimRequired    = errors.New("Redis budget claim is required before dispatch")
+	ErrLeaseExpired     = errors.New("budget lease expired before dispatch")
+	ErrAlreadyClaimed   = errors.New("budget lease already claimed; recover the attempt or acquire fresh budget")
 	ErrReconcilePending = errors.New("redis reconciliation is pending")
 )
 
@@ -62,6 +64,11 @@ func (identity StateIdentity) Validate() error {
 	if _, err := identity.Postgres.Namespace(); err != nil {
 		return fmt.Errorf("%w: postgres namespace: %v", ErrInvalidIdentity, err)
 	}
+	return identity.ValidateBudget()
+}
+
+// ValidateBudget does not require a SQL namespace.
+func (identity StateIdentity) ValidateBudget() error {
 	if !redisPrefixPattern.MatchString(identity.Redis.KeyPrefix) {
 		return fmt.Errorf("%w: Redis key prefix is invalid", ErrInvalidIdentity)
 	}
@@ -91,9 +98,8 @@ func (id OperationID) Validate() error   { return validateID(string(id), "operat
 func (id GenerationID) Validate() error  { return validateID(string(id), "generation id") }
 func (id IncarnationID) Validate() error { return validateID(string(id), "incarnation id") }
 
-// BudgetMaterializer is the Redis-only active budget port. It has no
-// PostgreSQL read capability by design: PostgreSQL receives the write-ahead
-// journal after acceptance and is consulted only by an explicit cold rebuild.
+// BudgetMaterializer is the authoritative Redis accounting port. Reservations
+// and completions are atomic and idempotent; no SQL journal is involved.
 type BudgetMaterializer interface {
 	Accept(context.Context, ReserveRequest) (ReserveResult, error)
 	Reconcile(context.Context, ReconcileRequest) error
@@ -107,7 +113,7 @@ type ReserveRequest struct {
 }
 
 type ReserveResult struct {
-	// OperationID is echoed by Redis so the journal cannot be bound to a
+	// OperationID is echoed by Redis so a lease cannot be bound to a
 	// different caller operation during a retry or snapshot swap.
 	OperationID   OperationID
 	Accepted      bool
@@ -142,10 +148,10 @@ func (result ReserveResult) Validate(request ReserveRequest) error {
 			return err
 		}
 		if len(result.Events) == 0 {
-			return errors.New("Redis accepted a reservation without journal events")
+			return errors.New("Redis accepted a reservation without reservation events")
 		}
 	} else if len(result.Events) != 0 {
-		return errors.New("denied reservation must not produce journal events")
+		return errors.New("denied reservation must not produce reservation events")
 	}
 	for _, event := range result.Events {
 		if err := event.Validate(); err != nil {
@@ -178,7 +184,14 @@ func (request ReconcileRequest) Validate() error {
 	if len(request.Events) == 0 {
 		return errors.New("Redis reconciliation requires at least one completion event")
 	}
+	seenIDs := make(map[string]bool, len(request.Events))
+	seenWindows := make(map[string]bool, len(request.Events))
 	for _, event := range request.Events {
+		identity := event.WindowID + "\x00" + event.BucketStart.UTC().Format(time.RFC3339Nano)
+		if seenIDs[event.EventID] || seenWindows[identity] {
+			return errors.New("duplicate completion event or window/bucket")
+		}
+		seenIDs[event.EventID], seenWindows[identity] = true, true
 		if err := event.Validate(); err != nil {
 			return fmt.Errorf("completion event: %w", err)
 		}
@@ -189,25 +202,41 @@ func (request ReconcileRequest) Validate() error {
 	return nil
 }
 
-// Journal is the write-only PostgreSQL budget journal capability. Keeping this
-// narrow prevents normal admission from accidentally reading PostgreSQL
-// budget projections.
-type Journal interface {
-	AppendReservation(context.Context, budget.ReservationEvent) (postgresstore.JournalRecord, error)
-	AppendCompletion(context.Context, budget.CompletionEvent) (postgresstore.JournalRecord, error)
+// BudgetLeaser adds the one-time authorization to start paid work. A successful
+// claim is never automatically refunded. Retrying a lost claim reply returns
+// ErrAlreadyClaimed: it cannot authorize another provider submission.
+type BudgetLeaser interface {
+	BudgetMaterializer
+	Claim(context.Context, ClaimRequest) (ClaimReceipt, error)
+}
+
+const BudgetStartLease = 15 * time.Minute
+
+type ClaimRequest struct {
+	OperationID   OperationID
+	GenerationID  GenerationID
+	IncarnationID IncarnationID
+}
+
+func (request ClaimRequest) Validate() error {
+	if err := request.OperationID.Validate(); err != nil {
+		return err
+	}
+	if err := request.GenerationID.Validate(); err != nil {
+		return err
+	}
+	return request.IncarnationID.Validate()
 }
 
 // Composition is the snapshot-owned seam consumed by a runtime factory when
-// the durable split is wired. Operation/continuation/result state is
-// authoritative in PostgreSQL; active budget admission is provided by Redis;
-// the journal is append-only PostgreSQL state between those two operations.
+// the durable split is wired. Operation/continuation/result state
+// currently uses PostgreSQL; Redis owns budget reservations, claims and settlement.
 type Composition struct {
 	Identity      StateIdentity
 	Operations    admission.AdmissionStore
 	Continuations state.ContinuationStore
 	Results       ResultStore
-	Journal       Journal
-	Materializer  BudgetMaterializer
+	Materializer  BudgetLeaser
 }
 
 // ResultStore mirrors engine.ResultStore without importing the engine package,
@@ -230,15 +259,12 @@ func (composition Composition) Validate() error {
 	if isNilPort(composition.Results) {
 		return errors.New("durable result store is required")
 	}
-	if isNilPort(composition.Journal) {
-		return errors.New("durable PostgreSQL journal is required")
-	}
 	if isNilPort(composition.Materializer) {
 		return errors.New("durable Redis budget materializer is required")
 	}
-	// Validate the cross-store handoff as part of the composition so callers
+	// Validate the budget boundary as part of the composition so callers
 	// cannot validate the operation ports while silently carrying a different
-	// snapshot identity into the Redis/PostgreSQL budget path.
+	// snapshot identity into the Redis budget path.
 	if err := composition.BudgetBoundary().Validate(); err != nil {
 		return err
 	}
@@ -261,17 +287,16 @@ func isNilPort(value any) bool {
 	}
 }
 
-// Phase is the only legal new-operation order. A journal failure must stop
-// before Dispatch; after Dispatch, PostgreSQL finalization is authoritative and
-// Redis reconciliation is retried independently (it never rolls back a result).
+// Phase is the legal new-operation order. A failed claim stops dispatch.
+// Settlement retries never repeat provider work or undo a finalized result.
 type Phase uint8
 
 const (
 	PhaseOperationReplay Phase = iota
 	PhaseRedisAccepted
-	PhasePostgresJournaled
+	PhaseRedisClaimed
 	PhaseDispatched
-	PhasePostgresFinalized
+	PhaseResultFinalized
 	PhaseRedisReconciled
 )
 
@@ -281,12 +306,12 @@ func (phase Phase) String() string {
 		return "operation_replay"
 	case PhaseRedisAccepted:
 		return "redis_accepted"
-	case PhasePostgresJournaled:
-		return "postgres_journaled"
+	case PhaseRedisClaimed:
+		return "redis_claimed"
 	case PhaseDispatched:
 		return "dispatched"
-	case PhasePostgresFinalized:
-		return "postgres_finalized"
+	case PhaseResultFinalized:
+		return "result_finalized"
 	case PhaseRedisReconciled:
 		return "redis_reconciled"
 	default:
@@ -299,14 +324,13 @@ func (phase Phase) String() string {
 type Lifecycle struct {
 	phases []Phase
 	// Reservation identity is bound when Redis first accepts. It prevents a
-	// reload/retry from journaling a result from another incarnation.
+	// reload/retry from settling a result from another incarnation.
 	reservationOperation     OperationID
 	reservationGeneration    GenerationID
 	reservationIncarnation   IncarnationID
 	reservationIdentityBound bool
 	completionDigest         [32]byte
 	completionDigestBound    bool
-	reservationAborted       bool
 }
 
 func (l *Lifecycle) Advance(next Phase) error {
@@ -321,8 +345,8 @@ func (l *Lifecycle) Advance(next Phase) error {
 		want = l.phases[len(l.phases)-1] + 1
 	}
 	if next != want {
-		if next == PhaseDispatched && want <= PhasePostgresJournaled {
-			return ErrJournalRequired
+		if next == PhaseDispatched && want <= PhaseRedisClaimed {
+			return ErrClaimRequired
 		}
 		return fmt.Errorf("%w: got %s, want %s", ErrInvalidPhase, next, want)
 	}
@@ -339,15 +363,15 @@ func (l Lifecycle) Current() (Phase, bool) {
 }
 
 // ReconcileFailure makes the post-finalization failure policy explicit. The
-// caller should persist/retry this error; it must not undo the PostgreSQL
+// caller should persist/retry this error; it must not undo the finalized
 // result or create new budget capacity while Redis is unavailable.
 func (l Lifecycle) ReconcileFailure(err error) error {
 	if err == nil {
 		return nil
 	}
 	current, ok := l.Current()
-	if !ok || current != PhasePostgresFinalized {
-		return fmt.Errorf("%w: reconciliation is only valid after PostgreSQL finalization", ErrInvalidPhase)
+	if !ok || current != PhaseResultFinalized {
+		return fmt.Errorf("%w: reconciliation is only valid after result finalization", ErrInvalidPhase)
 	}
 	return fmt.Errorf("%w: %v", ErrReconcilePending, err)
 }
@@ -367,12 +391,6 @@ func (l *Lifecycle) bindReservationIdentity(result ReserveResult) error {
 	l.reservationIncarnation = result.IncarnationID
 	l.reservationIdentityBound = true
 	return nil
-}
-
-func (l *Lifecycle) markReservationAborted() {
-	if l != nil {
-		l.reservationAborted = true
-	}
 }
 
 func (l *Lifecycle) bindCompletionDigest(digest [32]byte) error {

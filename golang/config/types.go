@@ -84,6 +84,7 @@ type Config struct {
 	Models       map[string]ModelConfig    `yaml:"models" json:"models"`
 	Capabilities CapabilityConfig          `yaml:"capabilities" json:"capabilities"`
 	Pricing      PricingConfig             `yaml:"pricing" json:"pricing"`
+	BudgetsJSON  string                    `yaml:"budgets_json,omitempty" json:"-"`
 	Budgets      BudgetsConfig             `yaml:"budgets" json:"budgets"`
 	Continuation ContinuationConfig        `yaml:"continuation" json:"continuation"`
 	Telemetry    TelemetryConfig           `yaml:"telemetry" json:"telemetry"`

@@ -23,8 +23,7 @@ type CompositionPorts struct {
 	Operations    admission.AdmissionStore
 	Continuations state.ContinuationStore
 	Results       ResultStore
-	Journal       Journal
-	Materializer  BudgetMaterializer
+	Materializer  BudgetLeaser
 }
 
 // CompositionBuilder constructs one snapshot-owned Composition. It does not
@@ -46,7 +45,6 @@ func (builder CompositionBuilder) Build() (Composition, error) {
 		Operations:    builder.Ports.Operations,
 		Continuations: builder.Ports.Continuations,
 		Results:       builder.Ports.Results,
-		Journal:       builder.Ports.Journal,
 		Materializer:  builder.Ports.Materializer,
 	}
 	if err := composition.Validate(); err != nil {
@@ -55,13 +53,12 @@ func (builder CompositionBuilder) Build() (Composition, error) {
 	return composition, nil
 }
 
-// BudgetBoundary returns the Redis/PostgreSQL handoff for this composition.
+// BudgetBoundary returns the Redis budget boundary for this composition.
 // The boundary is reconstructed from the composition's immutable ports so it
-// cannot accidentally use a journal or materializer from another snapshot.
+// cannot accidentally use a materializer from another snapshot.
 func (composition Composition) BudgetBoundary() BudgetBoundary {
 	return BudgetBoundary{
 		Identity:     composition.Identity,
-		Journal:      composition.Journal,
 		Materializer: composition.Materializer,
 	}
 }

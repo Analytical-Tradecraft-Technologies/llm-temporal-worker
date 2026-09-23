@@ -42,10 +42,10 @@ func TestNewDurableV1RuntimeAllowsIndependentQueryComposition(t *testing.T) {
 		Reserve: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
 			return durable.ReserveResult{}, nil
 		},
-		Journal: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.JournalReceipt, error) {
-			return durable.JournalReceipt{}, nil
+		Claim: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			return durable.ClaimReceipt{}, nil
 		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.JournalReceipt) (durable.DispatchResult, error) {
+		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.DispatchResult, error) {
 			return durable.DispatchResult{}, nil
 		},
 		Finalize: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ReserveResult, durable.DispatchResult) (durable.GenerateFinalization, error) {
@@ -71,10 +71,10 @@ func TestNewDurableV1RuntimeAllowsIndependentQueryComposition(t *testing.T) {
 		Reserve: func(context.Context, llm.CompactRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
 			return durable.ReserveResult{}, nil
 		},
-		Journal: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.JournalReceipt, error) {
-			return durable.JournalReceipt{}, nil
+		Claim: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			return durable.ClaimReceipt{}, nil
 		},
-		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.JournalReceipt) (durable.CompactDispatchResult, error) {
+		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.CompactDispatchResult, error) {
 			return durable.CompactDispatchResult{}, nil
 		},
 		Finalize: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ReserveResult, durable.CompactDispatchResult) (durable.CompactFinalization, error) {

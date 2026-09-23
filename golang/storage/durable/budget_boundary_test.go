@@ -11,12 +11,12 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
 type boundaryMaterializer struct {
 	result       ReserveResult
 	acceptErr    error
+	claimErr     error
 	reconcileErr error
 	calls        []string
 }
@@ -31,30 +31,9 @@ func (m *boundaryMaterializer) Reconcile(_ context.Context, _ ReconcileRequest) 
 	return m.reconcileErr
 }
 
-type boundaryJournal struct {
-	reservations []budget.ReservationEvent
-	completions  []budget.CompletionEvent
-	failReserve  int
-	failComplete int
-	calls        *[]string
-}
-
-func (j *boundaryJournal) AppendReservation(_ context.Context, event budget.ReservationEvent) (postgresstore.JournalRecord, error) {
-	*j.calls = append(*j.calls, "reservation:"+event.EventID)
-	j.reservations = append(j.reservations, event)
-	if j.failReserve > 0 && len(j.reservations) == j.failReserve {
-		return postgresstore.JournalRecord{}, errors.New("reservation journal unavailable")
-	}
-	return postgresstore.JournalRecord{JournalID: int64(len(j.reservations))}, nil
-}
-
-func (j *boundaryJournal) AppendCompletion(_ context.Context, event budget.CompletionEvent) (postgresstore.JournalRecord, error) {
-	*j.calls = append(*j.calls, "completion:"+event.EventID)
-	j.completions = append(j.completions, event)
-	if j.failComplete > 0 && len(j.completions) == j.failComplete {
-		return postgresstore.JournalRecord{}, errors.New("completion journal unavailable")
-	}
-	return postgresstore.JournalRecord{JournalID: int64(len(j.completions))}, nil
+func (m *boundaryMaterializer) Claim(_ context.Context, request ClaimRequest) (ClaimReceipt, error) {
+	m.calls = append(m.calls, "claim")
+	return ClaimReceipt{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}, m.claimErr
 }
 
 func boundaryRequest(now time.Time) ReserveRequest {
@@ -92,14 +71,14 @@ func boundaryCompletion(request ReserveRequest, now time.Time) budget.Completion
 	}
 }
 
-func newBoundary(materializer BudgetMaterializer, journal Journal) BudgetBoundary {
+func newBoundary(materializer BudgetLeaser) BudgetBoundary {
 	return BudgetBoundary{
 		Identity: StateIdentity{
 			Postgres:     PostgresIdentity{Database: "llmtw", Schema: "worker", TablePrefix: "prod_"},
 			Redis:        RedisIdentity{KeyPrefix: "llmtw", HashTag: "admission"},
 			ConfigDigest: sha256.Sum256([]byte("snapshot")),
 		},
-		Materializer: materializer, Journal: journal,
+		Materializer: materializer,
 	}
 }
 
@@ -121,54 +100,37 @@ func advanceDispatched(t *testing.T, lifecycle *Lifecycle) {
 	}
 }
 
-func TestBudgetBoundaryOrdersJournalBeforeDispatchAndReconcile(t *testing.T) {
+func TestBudgetBoundaryOrdersClaimBeforeDispatchAndReconcile(t *testing.T) {
 	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	request := boundaryRequest(now)
 	calls := []string{}
 	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), calls: calls}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
+
+	boundary := newBoundary(materializer)
 	lifecycle := newLifecycle(t)
 	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if err != nil || !reservation.DispatchReady() {
+	if err != nil || reservation.DispatchReady() {
 		t.Fatalf("reserve = %#v, %v", reservation, err)
 	}
-	if current, _ := lifecycle.Current(); current != PhasePostgresJournaled {
+	if current, _ := lifecycle.Current(); current != PhaseRedisAccepted {
 		t.Fatalf("reserve phase = %s", current)
 	}
-	if !reflect.DeepEqual(materializer.calls, []string{"accept", "reservation:reservation-event-1"}) {
+	if !reflect.DeepEqual(materializer.calls, []string{"accept"}) {
 		t.Fatalf("reserve ordering = %#v", materializer.calls)
 	}
 
+	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
+		t.Fatal(err)
+	}
 	advanceDispatched(t, lifecycle)
 	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)}); err != nil {
 		t.Fatalf("finalize = %v", err)
 	}
-	if got := materializer.calls; !reflect.DeepEqual(got, []string{"accept", "reservation:reservation-event-1", "completion:completion-event-1", "reconcile"}) {
+	if got := materializer.calls; !reflect.DeepEqual(got, []string{"accept", "claim", "reconcile"}) {
 		t.Fatalf("finalize ordering = %#v", got)
 	}
 	if current, _ := lifecycle.Current(); current != PhaseRedisReconciled {
 		t.Fatalf("finalize phase = %s", current)
-	}
-}
-
-func TestBudgetBoundaryJournalsEveryAcceptedEventInOrder(t *testing.T) {
-	now := time.Now().UTC()
-	request := boundaryRequest(now)
-	result := boundaryAcceptedResult(request, now)
-	second := result.Events[0]
-	second.EventID = "reservation-event-2"
-	second.WindowID = "window-2"
-	result.Events = append(result.Events, second)
-	materializer := &boundaryMaterializer{result: result}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
-	reservation, err := boundary.Reserve(context.Background(), newLifecycle(t), request)
-	if err != nil || !reservation.DispatchReady() {
-		t.Fatalf("multi-event reserve = %#v, %v", reservation, err)
-	}
-	if !reflect.DeepEqual(materializer.calls, []string{"accept", "reservation:reservation-event-1", "reservation:reservation-event-2"}) {
-		t.Fatalf("multi-event ordering = %#v", materializer.calls)
 	}
 }
 
@@ -179,38 +141,21 @@ func TestBudgetBoundaryPreflightsDuplicateReservationIDs(t *testing.T) {
 	duplicate := result.Events[0]
 	result.Events = append(result.Events, duplicate)
 	materializer := &boundaryMaterializer{result: result}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
+
+	boundary := newBoundary(materializer)
 	reservation, err := boundary.Reserve(context.Background(), newLifecycle(t), request)
-	if !errors.Is(err, ErrJournalPending) || len(journal.reservations) != 0 || reservation.PostgresRecoveryRequired {
-		t.Fatalf("duplicate reservation preflight = %#v, %v, journal=%#v", reservation, err, journal.reservations)
+	if !errors.Is(err, ErrBudgetBoundaryInvalid) || reservation.DispatchReady() {
+		t.Fatalf("duplicate reservation: %v", err)
 	}
 }
 
-func TestBudgetBoundaryMarksPartialPostgresJournalRecovery(t *testing.T) {
-	now := time.Now().UTC()
-	request := boundaryRequest(now)
-	result := boundaryAcceptedResult(request, now)
-	second := result.Events[0]
-	second.EventID = "reservation-event-2"
-	second.WindowID = "window-2"
-	result.Events = append(result.Events, second)
-	materializer := &boundaryMaterializer{result: result}
-	journal := &boundaryJournal{failReserve: 2, calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
-	reservation, err := boundary.Reserve(context.Background(), newLifecycle(t), request)
-	if !errors.Is(err, ErrJournalPending) || !reservation.PostgresRecoveryRequired || len(reservation.JournalRecords) != 1 || reservation.DispatchReady() {
-		t.Fatalf("partial journal state = %#v, %v", reservation, err)
-	}
-}
-
-func TestBudgetBoundaryDenialDoesNotJournal(t *testing.T) {
+func TestBudgetBoundaryWaitDoesNotClaim(t *testing.T) {
 	now := time.Now().UTC()
 	request := boundaryRequest(now)
 	calls := []string{}
 	materializer := &boundaryMaterializer{result: ReserveResult{OperationID: request.OperationID, GenerationID: request.GenerationID}, calls: calls}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
+
+	boundary := newBoundary(materializer)
 	reservation, err := boundary.Reserve(context.Background(), newLifecycle(t), request)
 	if err != nil || reservation.DispatchReady() {
 		t.Fatalf("denial = %#v, %v", reservation, err)
@@ -220,66 +165,18 @@ func TestBudgetBoundaryDenialDoesNotJournal(t *testing.T) {
 	}
 }
 
-func TestBudgetBoundaryStopsOnReservationJournalFailure(t *testing.T) {
+func TestBudgetBoundaryReconcileFailureIsRetryableAfterFinalization(t *testing.T) {
 	now := time.Now().UTC()
 	request := boundaryRequest(now)
-	calls := []string{}
-	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), calls: calls}
-	journal := &boundaryJournal{failReserve: 1, calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
-	lifecycle := newLifecycle(t)
-	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if !errors.Is(err, ErrJournalPending) || reservation.DispatchReady() {
-		t.Fatalf("journal failure = %#v, %v", reservation, err)
-	}
-	if len(materializer.calls) != 3 || materializer.calls[1] != "reservation:reservation-event-1" || materializer.calls[2] != "reconcile" {
-		t.Fatalf("journal ordering = %#v", materializer.calls)
-	}
-	if _, ok := lifecycle.Current(); !ok {
-		t.Fatal("lifecycle did not retain Redis acceptance phase")
-	} else if current, _ := lifecycle.Current(); current != PhaseRedisAccepted {
-		t.Fatalf("journal failure phase = %s", current)
-	}
-	journal.failReserve = 0
-	if _, err := boundary.Reserve(context.Background(), lifecycle, request); !errors.Is(err, ErrInvalidPhase) {
-		t.Fatalf("reservation retry after cleanup = %v", err)
-	}
-}
+	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), reconcileErr: errors.New("Redis unavailable")}
 
-func TestBudgetBoundaryCompletionJournalFailurePreventsReconcile(t *testing.T) {
-	now := time.Now().UTC()
-	request := boundaryRequest(now)
-	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now)}
-	calls := &materializer.calls
-	journal := &boundaryJournal{failComplete: 1, calls: calls}
-	boundary := newBoundary(materializer, journal)
+	boundary := newBoundary(materializer)
 	lifecycle := newLifecycle(t)
 	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	advanceDispatched(t, lifecycle)
-	err = boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)})
-	if !errors.Is(err, ErrJournalPending) {
-		t.Fatalf("completion journal error = %v", err)
-	}
-	if current, _ := lifecycle.Current(); current != PhaseDispatched {
-		t.Fatalf("completion journal phase = %s", current)
-	}
-	if len(materializer.calls) != 3 || materializer.calls[2] != "completion:completion-event-1" {
-		t.Fatalf("reconcile was called after completion journal failure: %#v", materializer.calls)
-	}
-}
-
-func TestBudgetBoundaryReconcileFailureIsRetryableAfterPostgres(t *testing.T) {
-	now := time.Now().UTC()
-	request := boundaryRequest(now)
-	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), reconcileErr: errors.New("Redis unavailable")}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
-	lifecycle := newLifecycle(t)
-	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if err != nil {
+	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
 		t.Fatal(err)
 	}
 	advanceDispatched(t, lifecycle)
@@ -287,7 +184,7 @@ func TestBudgetBoundaryReconcileFailureIsRetryableAfterPostgres(t *testing.T) {
 	if !errors.Is(err, ErrReconcilePending) {
 		t.Fatalf("reconcile error = %v", err)
 	}
-	if current, _ := lifecycle.Current(); current != PhasePostgresFinalized {
+	if current, _ := lifecycle.Current(); current != PhaseResultFinalized {
 		t.Fatalf("reconcile failure phase = %s", current)
 	}
 	changed := boundaryCompletion(request, now)
@@ -301,32 +198,20 @@ func TestBudgetBoundaryReconcileFailureIsRetryableAfterPostgres(t *testing.T) {
 	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)}); err != nil {
 		t.Fatalf("reconciliation retry = %v", err)
 	}
-	if len(journal.completions) != 1 {
-		t.Fatalf("reconciliation retry duplicated completion journal: %#v", journal.completions)
-	}
-}
-
-func TestBudgetBoundaryReportsReleaseCleanupPending(t *testing.T) {
-	now := time.Now().UTC()
-	request := boundaryRequest(now)
-	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), reconcileErr: errors.New("Redis unavailable")}
-	journal := &boundaryJournal{failReserve: 1, calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
-	reservation, err := boundary.Reserve(context.Background(), newLifecycle(t), request)
-	if !errors.Is(err, ErrJournalPending) || !reservation.ReleasePending || len(reservation.ReleaseEvents) != 1 || reservation.DispatchReady() {
-		t.Fatalf("release cleanup result = %#v, %v", reservation, err)
-	}
 }
 
 func TestBudgetBoundaryRejectsCompletionIdentityMismatch(t *testing.T) {
 	now := time.Now().UTC()
 	request := boundaryRequest(now)
 	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now)}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
+
+	boundary := newBoundary(materializer)
 	lifecycle := newLifecycle(t)
 	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
 		t.Fatal(err)
 	}
 	advanceDispatched(t, lifecycle)
@@ -335,29 +220,26 @@ func TestBudgetBoundaryRejectsCompletionIdentityMismatch(t *testing.T) {
 	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{completion}); err == nil {
 		t.Fatal("identity-mismatched completion accepted")
 	}
-	if len(journal.completions) != 0 || len(materializer.calls) != 2 {
-		t.Fatalf("mismatched completion side effects: journal=%#v calls=%#v", journal.completions, materializer.calls)
-	}
 }
 
 func TestBudgetBoundaryPreflightsDuplicateCompletionIDs(t *testing.T) {
 	now := time.Now().UTC()
 	request := boundaryRequest(now)
 	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now)}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
+
+	boundary := newBoundary(materializer)
 	lifecycle := newLifecycle(t)
 	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
 		t.Fatal(err)
 	}
 	advanceDispatched(t, lifecycle)
 	completion := boundaryCompletion(request, now)
 	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{completion, completion}); !errors.Is(err, ErrBudgetBoundaryInvalid) {
 		t.Fatalf("duplicate completion accepted: %v", err)
-	}
-	if len(journal.completions) != 0 {
-		t.Fatalf("duplicate completion was partially journaled: %#v", journal.completions)
 	}
 }
 
@@ -394,11 +276,14 @@ func TestBudgetBoundaryRequiresOneCompletionPerReservedWindowBucket(t *testing.T
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			materializer := &boundaryMaterializer{result: result}
-			journal := &boundaryJournal{calls: &materializer.calls}
-			boundary := newBoundary(materializer, journal)
+
+			boundary := newBoundary(materializer)
 			lifecycle := newLifecycle(t)
 			reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
 			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
 				t.Fatal(err)
 			}
 			advanceDispatched(t, lifecycle)
@@ -407,10 +292,7 @@ func TestBudgetBoundaryRequiresOneCompletionPerReservedWindowBucket(t *testing.T
 			if !errors.Is(err, ErrBudgetBoundaryInvalid) {
 				t.Fatalf("incomplete completion coverage accepted: %v", err)
 			}
-			if len(journal.completions) != 0 {
-				t.Fatalf("invalid completion batch was partially journaled: %#v", journal.completions)
-			}
-			if got := materializer.calls; !reflect.DeepEqual(got, []string{"accept", "reservation:reservation-event-1", "reservation:reservation-event-2"}) {
+			if got := materializer.calls; !reflect.DeepEqual(got, []string{"accept", "claim"}) {
 				t.Fatalf("invalid completion batch caused a side effect: %#v", got)
 			}
 			if current, _ := lifecycle.Current(); current != PhaseDispatched {
@@ -436,11 +318,14 @@ func TestBudgetBoundaryDistinguishesBucketTimesOutsideUnixNanoRange(t *testing.T
 	result.Events = append(result.Events, secondReservation)
 
 	materializer := &boundaryMaterializer{result: result}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
+
+	boundary := newBoundary(materializer)
 	lifecycle := newLifecycle(t)
 	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
 		t.Fatal(err)
 	}
 	advanceDispatched(t, lifecycle)
@@ -453,56 +338,42 @@ func TestBudgetBoundaryDistinguishesBucketTimesOutsideUnixNanoRange(t *testing.T
 	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{firstCompletion, secondCompletion}); err != nil {
 		t.Fatalf("distinct out-of-range buckets rejected: %v", err)
 	}
-	if len(journal.completions) != 2 {
-		t.Fatalf("completion journal = %#v", journal.completions)
-	}
 }
 
 func TestBudgetBoundaryRejectsTypedNilPorts(t *testing.T) {
 	var materializer *boundaryMaterializer
-	var journal *boundaryJournal
-	boundary := newBoundary(materializer, journal)
+
+	boundary := newBoundary(materializer)
 	if err := boundary.Validate(); !errors.Is(err, ErrBudgetBoundaryInvalid) {
 		t.Fatalf("typed nil ports accepted: %v", err)
 	}
 }
 
-func TestBudgetBoundaryRejectsWrongAcceptanceIdentityAndPhase(t *testing.T) {
+func TestBudgetBoundaryClaimFailurePreventsDispatchWithoutSQL(t *testing.T) {
 	now := time.Now().UTC()
 	request := boundaryRequest(now)
-	result := boundaryAcceptedResult(request, now)
-	result.GenerationID = "other-generation"
-	materializer := &boundaryMaterializer{result: result}
-	journal := &boundaryJournal{calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
-	if _, err := boundary.Reserve(context.Background(), newLifecycle(t), request); err == nil {
-		t.Fatal("acceptance from another generation accepted")
-	}
-	// A reload must use a fresh lifecycle; a boundary cannot apply a second
-	// acceptance to a lifecycle that already crossed the Redis handoff.
-	materializer.result = boundaryAcceptedResult(request, now)
-	lifecycle := newLifecycle(t)
-	if _, err := boundary.Reserve(context.Background(), lifecycle, request); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := boundary.Reserve(context.Background(), lifecycle, request); !errors.Is(err, ErrInvalidPhase) {
-		t.Fatalf("second acceptance phase error = %v", err)
-	}
-}
-
-func TestBudgetBoundaryBindsIncarnationAcrossReservationRetry(t *testing.T) {
-	now := time.Now().UTC()
-	request := boundaryRequest(now)
-	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now)}
-	journal := &boundaryJournal{failReserve: 1, calls: &materializer.calls}
-	boundary := newBoundary(materializer, journal)
-	lifecycle := newLifecycle(t)
-	if _, err := boundary.Reserve(context.Background(), lifecycle, request); !errors.Is(err, ErrJournalPending) {
-		t.Fatalf("initial journal failure = %v", err)
-	}
-	journal.failReserve = 0
-	materializer.result.IncarnationID = "different-incarnation"
-	if _, err := boundary.Reserve(context.Background(), lifecycle, request); !errors.Is(err, ErrInvalidPhase) {
-		t.Fatalf("reservation retry after cleanup = %v", err)
+	for _, claimError := range []error{ErrLeaseExpired, ErrAlreadyClaimed, errors.New("Redis unavailable")} {
+		t.Run(claimError.Error(), func(t *testing.T) {
+			materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), claimErr: claimError}
+			boundary := newBoundary(materializer)
+			boundary.Identity.Postgres = PostgresIdentity{}
+			lifecycle := newLifecycle(t)
+			reserved, err := boundary.Reserve(context.Background(), lifecycle, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reserved.DispatchReady() {
+				t.Fatal("unclaimed lease permits dispatch")
+			}
+			if _, err := boundary.Claim(context.Background(), lifecycle, &reserved); !errors.Is(err, claimError) {
+				t.Fatal(err)
+			}
+			if reserved.DispatchReady() {
+				t.Fatal("failed claim permits dispatch")
+			}
+			if err := lifecycle.Advance(PhaseDispatched); !errors.Is(err, ErrClaimRequired) {
+				t.Fatalf("dispatch phase after failed claim: %v", err)
+			}
+		})
 	}
 }

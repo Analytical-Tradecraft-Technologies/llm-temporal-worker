@@ -9,8 +9,8 @@ independent control-plane implementation through `Activities.QueryService`.
 The bounded production composition exposes a complete builder:
 `runtime.NewDurableV1RuntimeBuilder`. It requires the client set to expose
 `V1RuntimeCapabilitiesSource`, and then requires a complete snapshot-owned
-source, planner, adapter registry, checkpoint materializer, write-only
-PostgreSQL journal, clock, and both `GeneratePortsFactory` and
+source, planner, adapter registry, checkpoint materializer, Redis budget
+leaser, clock, and both `GeneratePortsFactory` and
 `CompactPortsFactory` callbacks. Each callback receives the same copied
 capability bundle and must construct every durable phase callback from those
 immutable adapters and stores. No missing callback is synthesized, and the
@@ -63,12 +63,12 @@ PostgreSQL, Redis, or provider contract execution.
 ## Snapshot-owned Task 19 state boundary
 
 The storage-neutral `durable.CompositionBuilder` is the narrow Task 19 seam
-for assembling the PostgreSQL operation/continuation/result ports, the
-write-only budget journal, and the Redis budget materializer from one immutable
+for assembling the PostgreSQL operation/continuation/result ports and the
+Redis budget leaser from one immutable
 snapshot. `Build` performs only local validation and returns a value bound to
 one `StateIdentity`; it never creates clients, reads PostgreSQL budget state,
 or dispatches a provider request. `Composition.BudgetBoundary()` and
-`Composition.NewLifecycle()` expose the existing Redis/PostgreSQL ordering and
+`Composition.NewLifecycle()` expose the reserve/claim/dispatch/settlement ordering and
 recovery helpers without allowing a reload to mix stores from another
 snapshot.
 
@@ -92,3 +92,8 @@ closed instead of being attached to the new Activity runtime. A custom
 `V1RuntimeBuilder` may use the same helper explicitly;
 supplying a composition factory alone still does not install a v1 runtime or
 relax the production readiness guard.
+
+Budget acquisition and claim use Redis directly; there is no SQL budget journal
+phase. `GeneratePorts.Claim` and `CompactPorts.Claim` must return the matching
+single-use claim receipt before dispatch. See [Redis budget leases](redis-budget-leases.md)
+for expiration, retry, settlement, and persistence behavior.

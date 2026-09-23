@@ -1,5 +1,10 @@
 # PostgreSQL State, Cache, Accounting, and Control Plane
 
+> **Budget design superseded:** Redis now owns budget leases and settlement;
+> the SQL budget journal writer has been removed. The SQL budget rebuild and
+> automatic Stream broadcast described below are not the current runtime. See
+> [Redis budget leases](../reference/redis-budget-leases.md) for the implemented contract.
+
 ## Status and database boundary
 
 This document is the normative home for the PostgreSQL/Redis responsibility
