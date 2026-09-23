@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/conformance"
+	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -349,9 +351,63 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	if result, err := store.Begin(ctx, request); err != nil || result.Denied != nil {
 		t.Fatalf("write before Redis restart = %#v, %v", result, err)
 	}
+
+	// The Redis-only budget authority must survive the same durable restart.
+	budgetOptions := RedisBudgetMaterializerOptions{Client: client, Mode: AdmissionModeFunction, Keys: keys, GenerationID: "restart-gen", IncarnationID: "restart-inc"}
+	budgets, err := NewRedisBudgetMaterializer(budgetOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetRequest := durable.ReserveRequest{OperationID: "paid-before-restart", GenerationID: "restart-gen", Reservations: []admission.WindowReservation{{PolicyID: "restart-budget", WindowID: "hour", Bucket: now.Unix() / 60, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour), AmountUSD: pricing.MustUSD("1"), LimitUSD: pricing.MustUSD("1")}}}
+	accepted, err := budgets.Accept(ctx, budgetRequest)
+	if err != nil || !accepted.Accepted {
+		t.Fatalf("reserve before restart: %#v %v", accepted, err)
+	}
+	claimRequest := durable.ClaimRequest{OperationID: accepted.OperationID, GenerationID: accepted.GenerationID, IncarnationID: accepted.IncarnationID}
+	if _, err := budgets.Claim(ctx, claimRequest); err != nil {
+		t.Fatal(err)
+	}
+	reserveEvent := accepted.Events[0]
+	cost := pricing.MustUSD("0.4")
+	completion := durable.ReconcileRequest{OperationID: accepted.OperationID, GenerationID: accepted.GenerationID, IncarnationID: accepted.IncarnationID, Events: []budget.CompletionEvent{{EventID: "settled-before-restart", OperationID: string(accepted.OperationID), GenerationID: string(accepted.GenerationID), WindowID: reserveEvent.WindowID, BucketStart: reserveEvent.BucketStart, ReservationRevision: 2, Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: reserveEvent.AmountUSD, AccountedIncreaseUSD: cost, ActualCostUSD: &cost, CostStatus: budget.CostExact, OccurredAt: now}}}
+	if err := budgets.Reconcile(ctx, completion); err != nil {
+		t.Fatal(err)
+	}
+	pendingRequest := budgetRequest
+	pendingRequest.OperationID = "pending-before-restart"
+	pendingRequest.Reservations = append([]admission.WindowReservation(nil), budgetRequest.Reservations...)
+	pendingRequest.Reservations[0].AmountUSD = pricing.MustUSD("0.6")
+	pending, err := budgets.Accept(ctx, pendingRequest)
+	if err != nil || !pending.Accepted {
+		t.Fatalf("pending before restart: %#v %v", pending, err)
+	}
+	pendingClaim := durable.ClaimRequest{OperationID: pending.OperationID, GenerationID: pending.GenerationID, IncarnationID: pending.IncarnationID}
+	if _, err := budgets.Claim(ctx, pendingClaim); err != nil {
+		t.Fatal(err)
+	}
+
 	runLiveRedisDocker(t, "restart", container)
 	restartedClient := reopenLiveRedisAfterRestart(t, container)
 	cleanupLivePrefix(t, restartedClient, keys.Prefix)
+
+	budgetOptions.Client = restartedClient
+	recovered, err := NewRedisBudgetMaterializer(budgetOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recovered.Claim(context.Background(), pendingClaim); !errors.Is(err, durable.ErrAlreadyClaimed) {
+		t.Fatalf("pending claim after restart: %v", err)
+	}
+	if err := recovered.Reconcile(context.Background(), completion); err != nil {
+		t.Fatal(err)
+	}
+	extra := budgetRequest
+	extra.OperationID = "blocked-after-restart"
+	denied, err := recovered.Accept(context.Background(), extra)
+	if err != nil || denied.Accepted || denied.Denial == nil || denied.Denial.ActiveUSD.Cmp(pricing.MustUSD("1")) != 0 {
+		t.Fatalf("budget accounting lost on restart: %#v %v", denied, err)
+	}
+
 	restartedStore, err := NewAdmissionStore(AdmissionOptions{
 		Client: restartedClient,
 		Mode:   AdmissionModeFunction,

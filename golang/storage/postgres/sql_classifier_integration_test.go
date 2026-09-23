@@ -11,89 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mfow/llm-temporal-worker/golang/admission"
-	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
-
-// TestBudgetJournalIntegrationHasNoBudgetReads runs the real durable journal
-// append/finalize path through a traced PostgreSQL pool. The classifier is an
-// execution allowlist: every statement that names a budget relation must be
-// INSERT or UPDATE. This proves the write-only journal boundary, while
-// deliberately leaving Redis admission and runtime composition to their own
-// future integration gates.
-func TestBudgetJournalIntegrationHasNoBudgetReads(t *testing.T) {
-	recorder := &SQLTraceRecorder{}
-	repository, ctx, cleanup := tracedOperationIntegrationRepository(t, recorder)
-	defer cleanup()
-
-	operationKey := "budget-sql-classifier-" + uuid.NewString()
-	configDigest := sha256.Sum256([]byte(operationKey))
-	started, err := repository.Begin(ctx, admission.BeginRequest{
-		ID: operationKey, ScopeKey: "budget-sql-classifier/fixtures",
-		RequestDigest:  admission.Digest([]byte(operationKey)),
-		ReservationUSD: pricing.MustUSD("0"), ConfigVersion: operationKey,
-		ConfigDigest: configDigest, ExpiresAt: time.Now().UTC().Add(time.Hour),
-		RequestManifest: []byte(`{"model":"fixture"}`),
-	})
-	if err != nil {
-		t.Fatalf("begin operation: %v", err)
-	}
-	if started.Existing {
-		t.Fatal("new integration operation unexpectedly replayed")
-	}
-	scope, err := repository.Scopes.Ensure(ctx, "budget-sql-classifier", "fixtures")
-	if err != nil {
-		t.Fatalf("ensure scope: %v", err)
-	}
-	generationID, policyID, windowID := uuid.New(), uuid.New(), uuid.New()
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	if err := insertBudgetJournalFixtures(ctx, repository, scope.ID, generationID, policyID, windowID, configDigest, sha256.Sum256([]byte(operationKey+":selector")), now); err != nil {
-		t.Fatalf("insert fixtures: %v", err)
-	}
-	bucketStart := now.Truncate(time.Hour)
-	reserve := budget.ReservationEvent{
-		EventID: uuid.NewString(), GenerationID: generationID.String(),
-		OperationID: operationUUID(operationKey).String(), WindowID: windowID.String(),
-		BucketStart: bucketStart, ReservationRevision: 1,
-		AmountUSD: pricing.MustUSD("1.250000000000000000"), OccurredAt: now,
-	}
-	journal := &BudgetJournalRepository{Pool: repository.Pool, Namespace: repository.Namespace}
-	first, err := journal.AppendReservation(ctx, reserve)
-	if err != nil {
-		t.Fatalf("append reservation: %v", err)
-	}
-	if first.JournalID == 0 {
-		t.Fatal("append reservation returned no journal ID")
-	}
-	actual := pricing.MustUSD("0.250000000000000000")
-	completion := budget.CompletionEvent{
-		EventID: uuid.NewString(), GenerationID: reserve.GenerationID,
-		OperationID: reserve.OperationID, WindowID: reserve.WindowID,
-		BucketStart: bucketStart, ReservationRevision: 2,
-		Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: reserve.AmountUSD,
-		AccountedIncreaseUSD: actual, ActualCostUSD: &actual,
-		CostStatus: budget.CostExact, OccurredAt: now.Add(time.Second),
-	}
-	if _, err := journal.AppendCompletion(ctx, completion); err != nil {
-		t.Fatalf("append completion: %v", err)
-	}
-
-	var budgetStatements []ClassifiedSQL
-	for _, statement := range recorder.Snapshot() {
-		if statement.BudgetTable {
-			budgetStatements = append(budgetStatements, statement)
-		}
-	}
-	if len(budgetStatements) == 0 {
-		t.Fatal("tracer captured no budget statements")
-	}
-	for _, statement := range budgetStatements {
-		if statement.BudgetRead || (statement.Kind != SQLStatementInsert && statement.Kind != SQLStatementUpdate) {
-			t.Fatalf("budget statement was not an allowed write: kind=%d read=%v sql=%q", statement.Kind, statement.BudgetRead, statement.StatementSQL)
-		}
-	}
-}
 
 // TestOperationLifecycleIntegrationHasNoBudgetReads traces the normal durable
 // operation admission/dispatch/finalization path. Budget admission is owned by

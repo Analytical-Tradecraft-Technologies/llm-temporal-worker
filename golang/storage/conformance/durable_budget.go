@@ -36,6 +36,9 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 			case "reserved", "accounted":
 				first := accept("first", true, reservation(-1, "0.60"))
 				if scenario == "accounted" {
+					if _, err := m.(durable.BudgetLeaser).Claim(ctx, durable.ClaimRequest{OperationID: "first", GenerationID: "rolling-gen", IncarnationID: "rolling-inc"}); err != nil {
+						t.Fatal(err)
+					}
 					event := first.Events[0]
 					cost := pricing.MustUSD("0.60")
 					err := m.Reconcile(ctx, durable.ReconcileRequest{OperationID: "first", GenerationID: "rolling-gen", IncarnationID: "rolling-inc", Events: []budget.CompletionEvent{{EventID: "completion", OperationID: "first", GenerationID: "rolling-gen", WindowID: event.WindowID, BucketStart: event.BucketStart, ReservationRevision: event.ReservationRevision + 1, Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: cost, AccountedIncreaseUSD: cost, ActualCostUSD: &cost, CostStatus: budget.CostExact, OccurredAt: now}}})

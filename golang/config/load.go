@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,17 @@ func Load(data []byte) (Config, error) {
 	var config Config
 	if err := yaml.Load(data, &config, yaml.WithV4Defaults(), yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
 		return Config{}, fmt.Errorf("configuration YAML: %w", err)
+	}
+	if config.BudgetsJSON != "" {
+		if config.Budgets.RequireMatch || config.Budgets.Policies != nil {
+			return Config{}, fmt.Errorf("use only one of budgets_json or budgets")
+		}
+		budgets, err := ParseBudgetsJSON([]byte(config.BudgetsJSON))
+		if err != nil {
+			return Config{}, err
+		}
+		config.Budgets = budgets
+		config.BudgetsJSON = "" // The effective parsed policies participate in snapshot hashing.
 	}
 	applyDefaults(&config)
 	applyPostgresEnvOverrides(&config)
@@ -87,7 +99,7 @@ func applyDefaults(config *Config) {
 		config.State.ContinuationRetention = Duration(30 * 24 * time.Hour)
 	}
 	if config.State.ReservationLease == 0 {
-		config.State.ReservationLease = Duration(2 * time.Minute)
+		config.State.ReservationLease = Duration(15 * time.Minute)
 	}
 	if config.State.Postgres.Database == "" {
 		config.State.Postgres.Database = "llm_worker"
@@ -234,4 +246,21 @@ func DecodeYAML(data []byte, out any) error {
 		return fmt.Errorf("configuration YAML: %w", err)
 	}
 	return nil
+}
+
+// ParseBudgetsJSON decodes a strict JSON object using the same types and
+// validation as worker settings. Unknown and duplicate fields are rejected.
+func ParseBudgetsJSON(data []byte) (BudgetsConfig, error) {
+	var budgets BudgetsConfig
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || len(data) > maxConfigBytes || data[0] != '{' || !json.Valid(data) {
+		return budgets, fmt.Errorf("budgets_json must be a JSON object of at most %d bytes", maxConfigBytes)
+	}
+	if err := yaml.Load(data, &budgets, yaml.WithV4Defaults(), yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
+		return budgets, fmt.Errorf("budgets_json: %w", err)
+	}
+	if err := budgets.validate(); err != nil {
+		return budgets, err
+	}
+	return budgets, nil
 }

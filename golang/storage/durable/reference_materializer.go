@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -72,6 +73,8 @@ const (
 )
 
 type referenceOperation struct {
+	claimed      bool
+	startBy      time.Time
 	fingerprint  [32]byte
 	result       ReserveResult
 	reservations map[referenceReservationKey]referenceReservation
@@ -90,6 +93,7 @@ type referenceReservation struct {
 	limit            pricing.USD
 	bucketStartNanos int64
 	expiresAt        time.Time
+	windowExpiresAt  time.Time
 	revision         int
 }
 
@@ -114,7 +118,7 @@ func NewReferenceBudgetMaterializer(generation GenerationID, incarnation Incarna
 	}, nil
 }
 
-var _ BudgetMaterializer = (*ReferenceBudgetMaterializer)(nil)
+var _ BudgetLeaser = (*ReferenceBudgetMaterializer)(nil)
 
 func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, request ReserveRequest) (ReserveResult, error) {
 	if materializer == nil {
@@ -143,9 +147,6 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 	if len(reservations) == 0 {
 		return ReserveResult{}, errors.New("reference budget reservation list must not be empty")
 	}
-	if !request.ExpiresAt.IsZero() && !request.ExpiresAt.After(now) {
-		return ReserveResult{}, errors.New("reference budget reservation expiry must be in the future")
-	}
 	fingerprint, err := referenceRequestFingerprint(request, reservations)
 	if err != nil {
 		return ReserveResult{}, err
@@ -159,6 +160,10 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 			return ReserveResult{}, ErrReferenceMaterializerConflict
 		}
 		return cloneReserveResult(existing.result), nil
+	}
+
+	if !request.ExpiresAt.IsZero() && !request.ExpiresAt.After(now) {
+		return ReserveResult{}, ErrLeaseExpired
 	}
 
 	// Check every window before changing any state. This is the atomic
@@ -178,9 +183,6 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 			for bucketKey, bucket := range materializer.buckets {
 				if bucketKey.policy != key.policy || bucketKey.window != key.window {
 					continue
-				}
-				if bucket.limit.Cmp(reservation.limitUSD) != 0 {
-					return ReserveResult{}, ErrReferenceMaterializerConflict
 				}
 				for _, amount := range []pricing.USD{bucket.reserved, bucket.accounted} {
 					active, err = active.Add(amount)
@@ -204,7 +206,7 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 					RequestedUSD: reservation.amountUSD,
 				},
 			}
-			materializer.operations[request.OperationID] = referenceOperation{fingerprint: fingerprint, result: cloneReserveResult(result), reservations: make(map[referenceReservationKey]referenceReservation), events: make(map[string][32]byte)}
+			result.RetryAfter = time.Second
 			return result, nil
 		}
 		// Stage this request's earlier buckets without publishing partial state.
@@ -216,7 +218,7 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 	}
 
 	result := ReserveResult{OperationID: request.OperationID, Accepted: true, GenerationID: request.GenerationID, IncarnationID: materializer.incarnation, Events: make([]budget.ReservationEvent, 0, len(reservations))}
-	operation := referenceOperation{fingerprint: fingerprint, result: result, reservations: make(map[referenceReservationKey]referenceReservation, len(reservations)), events: make(map[string][32]byte)}
+	operation := referenceOperation{startBy: now.Add(BudgetStartLease), fingerprint: fingerprint, result: result, reservations: make(map[referenceReservationKey]referenceReservation, len(reservations)), events: make(map[string][32]byte)}
 	for _, reservation := range reservations {
 		key := referenceReservationKey{policy: reservation.policyID, window: reservation.windowID, bucket: reservation.bucket}
 		bucketKey := referenceBucketKey(key)
@@ -224,9 +226,6 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 		if bucket == nil {
 			bucket = &referenceBucket{limit: reservation.limitUSD, amounts: make(map[OperationID]pricing.USD), entries: make(map[OperationID]referenceEntry)}
 			materializer.buckets[bucketKey] = bucket
-		}
-		if bucket.limit.Cmp(reservation.limitUSD) != 0 {
-			return ReserveResult{}, ErrReferenceMaterializerConflict
 		}
 		event := budget.ReservationEvent{
 			EventID:             referenceEventID(request.OperationID, request.GenerationID, key, 1),
@@ -249,12 +248,13 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 		if err != nil {
 			return ReserveResult{}, err
 		}
-		expiresAt := request.ExpiresAt
-		if expiresAt.IsZero() || reservation.windowExpiresAt.Before(expiresAt) {
-			expiresAt = reservation.windowExpiresAt
+		expiresAt := operation.startBy
+		if !request.ExpiresAt.IsZero() && request.ExpiresAt.Before(expiresAt) {
+			expiresAt = request.ExpiresAt
 		}
+		operation.startBy = expiresAt
 		bucket.entries[request.OperationID] = referenceEntry{reserved: reservation.amountUSD, expiresAt: expiresAt, status: referenceReserved, lastRevision: 1}
-		operation.reservations[key] = referenceReservation{key: key, amount: reservation.amountUSD, limit: reservation.limitUSD, bucketStartNanos: reservation.bucketStartNanos, expiresAt: expiresAt, revision: 1}
+		operation.reservations[key] = referenceReservation{key: key, amount: reservation.amountUSD, limit: reservation.limitUSD, bucketStartNanos: reservation.bucketStartNanos, expiresAt: expiresAt, windowExpiresAt: reservation.windowExpiresAt, revision: 1}
 		operation.result.Events = append(operation.result.Events, event)
 	}
 	operation.result = cloneReserveResult(operation.result)
@@ -287,6 +287,11 @@ func (materializer *ReferenceBudgetMaterializer) Reconcile(ctx context.Context, 
 	if !ok || !operation.result.Accepted {
 		return ErrReferenceReservationNotFound
 	}
+	operation.events = maps.Clone(operation.events)
+	operation.reservations = maps.Clone(operation.reservations)
+	stagedBuckets := make(map[referenceBucketKey]*referenceBucket)
+	seen := make(map[referenceReservationKey]bool)
+	materializer.expire(materializer.clock())
 	for _, event := range request.Events {
 		fingerprint := referenceEventFingerprint(event)
 		if existing, seen := operation.events[event.EventID]; seen {
@@ -310,17 +315,36 @@ func (materializer *ReferenceBudgetMaterializer) Reconcile(ctx context.Context, 
 		if !found {
 			return ErrReferenceReservationNotFound
 		}
+		if seen[reservationKey] {
+			return ErrReferenceMaterializerConflict
+		}
+		seen[reservationKey] = true
 		reservation := operation.reservations[reservationKey]
 		if event.ReservationRevision <= reservation.revision {
 			return ErrReferenceMaterializerConflict
 		}
-		bucket := materializer.buckets[referenceBucketKey(reservationKey)]
+		bucketKey := referenceBucketKey(reservationKey)
+		bucket := stagedBuckets[bucketKey]
 		if bucket == nil {
-			return ErrReferenceReservationNotFound
+			original := materializer.buckets[bucketKey]
+			if original == nil {
+				return ErrReferenceReservationNotFound
+			}
+			copyBucket := *original
+			copyBucket.entries = maps.Clone(original.entries)
+			copyBucket.amounts = maps.Clone(original.amounts)
+			bucket = &copyBucket
+			stagedBuckets[bucketKey] = bucket
 		}
 		entry, ok := bucket.entries[request.OperationID]
 		if !ok {
 			return ErrReferenceReservationNotFound
+		}
+		if event.Kind != budget.JournalRelease && !operation.claimed {
+			return ErrClaimRequired
+		}
+		if event.Kind == budget.JournalRelease && operation.claimed {
+			return ErrReferenceMaterializerConflict
 		}
 		if entry.status == referenceFinalized {
 			return ErrReferenceReservationFinalized
@@ -331,20 +355,31 @@ func (materializer *ReferenceBudgetMaterializer) Reconcile(ctx context.Context, 
 		if entry.status == referenceReserved && event.Kind == budget.JournalResolveUnknownExact {
 			return ErrReferenceMaterializerConflict
 		}
+		if event.Kind != budget.JournalRetainAmbiguous && (event.ReservedDecreaseUSD.Cmp(entry.reserved) != 0 || event.AccountedDecreaseUSD.Cmp(entry.accounted) != 0) {
+			return ErrReferenceMaterializerConflict
+		}
 		if err := applyReferenceCompletion(bucket, request.OperationID, &entry, event); err != nil {
 			return err
 		}
 		switch event.Kind {
 		case budget.JournalRetainAmbiguous:
 			entry.status = referenceAmbiguous
-		case budget.JournalResolveUnknownExact, budget.JournalFinalizeExact, budget.JournalFinalizeUnknown, budget.JournalRelease:
+			entry.expiresAt = time.Time{}
+		case budget.JournalFinalizeUnknown:
+			entry.status = referenceAmbiguous
+			entry.expiresAt = reservation.windowExpiresAt
+		case budget.JournalResolveUnknownExact, budget.JournalFinalizeExact, budget.JournalRelease:
 			entry.status = referenceFinalized
+			entry.expiresAt = reservation.windowExpiresAt
 		}
 		entry.lastRevision = event.ReservationRevision
 		bucket.entries[request.OperationID] = entry
 		reservation.revision = event.ReservationRevision
 		operation.reservations[reservationKey] = reservation
 		operation.events[event.EventID] = fingerprint
+	}
+	for key, bucket := range stagedBuckets {
+		materializer.buckets[key] = bucket
 	}
 	materializer.operations[request.OperationID] = operation
 	return nil
@@ -457,8 +492,8 @@ func canonicalReferenceReservations(values []admission.WindowReservation) ([]can
 			}
 			return nil, fmt.Errorf("reservation %d limit: %w", index, err)
 		}
-		if amount.IsZero() || amount.Cmp(limit) > 0 {
-			return nil, fmt.Errorf("reservation %d amount must be positive and no greater than limit", index)
+		if amount.IsZero() {
+			return nil, fmt.Errorf("reservation %d amount must be positive", index)
 		}
 		key := referenceReservationKey{policy: value.PolicyID, window: value.WindowID, bucket: value.Bucket}
 		if _, exists := seen[key]; exists {
@@ -479,7 +514,7 @@ func canonicalReferenceReservations(values []admission.WindowReservation) ([]can
 			return nil, fmt.Errorf("reservation %d duplicates window/bucket start", index)
 		}
 		seenStarts[startKey] = struct{}{}
-		windowExpires := time.Unix(0, bucketStart).Add(time.Duration(value.DurationNanos)).UTC()
+		windowExpires := time.Unix(0, bucketStart).Add(time.Duration(value.DurationNanos)).Add(time.Duration(value.BucketNanos)).UTC()
 		result = append(result, canonicalReferenceReservation{policyID: value.PolicyID, windowID: value.WindowID, bucket: value.Bucket, amountUSD: amount, limitUSD: limit, bucketNanos: value.BucketNanos, durationNanos: value.DurationNanos, bucketStartNanos: bucketStart, windowExpiresAt: windowExpires})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -547,4 +582,53 @@ func cloneReserveResult(result ReserveResult) ReserveResult {
 		result.Denial = &denial
 	}
 	return result
+}
+
+func (materializer *ReferenceBudgetMaterializer) Claim(ctx context.Context, request ClaimRequest) (ClaimReceipt, error) {
+	if materializer == nil || ctx == nil {
+		return ClaimReceipt{}, ErrBudgetBoundaryInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return ClaimReceipt{}, err
+	}
+	if err := request.Validate(); err != nil {
+		return ClaimReceipt{}, err
+	}
+	materializer.mu.Lock()
+	defer materializer.mu.Unlock()
+	if request.GenerationID != materializer.generation {
+		return ClaimReceipt{}, ErrReferenceGenerationMismatch
+	}
+	if request.IncarnationID != materializer.incarnation {
+		return ClaimReceipt{}, ErrReferenceIncarnationMismatch
+	}
+	operation, ok := materializer.operations[request.OperationID]
+	if !ok || !operation.result.Accepted {
+		return ClaimReceipt{}, ErrReferenceReservationNotFound
+	}
+	if operation.claimed {
+		return ClaimReceipt{}, ErrAlreadyClaimed
+	}
+	if !materializer.clock().Before(operation.startBy) {
+		return ClaimReceipt{}, ErrLeaseExpired
+	}
+	for key := range operation.reservations {
+		bucket := materializer.buckets[referenceBucketKey(key)]
+		if bucket == nil {
+			return ClaimReceipt{}, ErrReferenceReservationFinalized
+		}
+		entry, exists := bucket.entries[request.OperationID]
+		if !exists || entry.status != referenceReserved {
+			return ClaimReceipt{}, ErrReferenceReservationFinalized
+		}
+	}
+	for key := range operation.reservations {
+		bucket := materializer.buckets[referenceBucketKey(key)]
+		entry := bucket.entries[request.OperationID]
+		entry.expiresAt = time.Time{}
+		bucket.entries[request.OperationID] = entry
+	}
+	operation.claimed = true
+	materializer.operations[request.OperationID] = operation
+	return ClaimReceipt{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}, nil
 }

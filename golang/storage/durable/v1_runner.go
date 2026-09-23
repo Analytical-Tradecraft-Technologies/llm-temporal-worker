@@ -118,16 +118,18 @@ func (plan RoutePlan) Validate() error {
 	return nil
 }
 
-// JournalReceipt proves that the PostgreSQL write-ahead journal committed
-// before provider dispatch.  Keeping operation and generation IDs typed and
-// bound here prevents a stage implementation from accidentally journaling a
-// different reservation.
-type JournalReceipt struct {
-	OperationID  OperationID
-	GenerationID GenerationID
+// ClaimReceipt authorizes exactly one provider submission. Only a fresh Redis
+// claim returns this receipt; replaying an already claimed lease returns an error.
+type ClaimReceipt struct {
+	IncarnationID IncarnationID
+	OperationID   OperationID
+	GenerationID  GenerationID
 }
 
-func (receipt JournalReceipt) Validate(reservation ReserveResult) error {
+func (receipt ClaimReceipt) Validate(reservation ReserveResult) error {
+	if receipt.IncarnationID != reservation.IncarnationID {
+		return errors.New("claim incarnation does not match reservation")
+	}
 	if err := receipt.OperationID.Validate(); err != nil {
 		return err
 	}
@@ -135,10 +137,10 @@ func (receipt JournalReceipt) Validate(reservation ReserveResult) error {
 		return err
 	}
 	if receipt.OperationID != reservation.OperationID {
-		return errors.New("journal operation identity does not match reservation")
+		return errors.New("claim operation identity does not match reservation")
 	}
 	if receipt.GenerationID != reservation.GenerationID {
-		return errors.New("journal generation identity does not match reservation")
+		return errors.New("claim generation identity does not match reservation")
 	}
 	return nil
 }
@@ -159,7 +161,7 @@ type GenerateFinalization struct {
 // GeneratePorts are the production composition ports for one snapshot.  The
 // callbacks are intentionally explicit and ordered by the runner below:
 // replay -> route-isolated cache -> compaction decision -> route/affinity ->
-// Redis reservation -> PostgreSQL journal -> provider state machine ->
+// Redis reservation -> Redis budget claim -> provider state machine ->
 // PostgreSQL finalization -> Redis reconciliation.
 //
 // Every callback must be idempotent for Temporal Activity retries.  The runner
@@ -174,8 +176,8 @@ type GeneratePorts struct {
 	Compact       func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error)
 	Route         func(context.Context, llm.GenerateRequestV1, GenerateReplay, CompactionDecision) (RoutePlan, error)
 	Reserve       func(context.Context, llm.GenerateRequestV1, RoutePlan) (ReserveResult, error)
-	Journal       func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error)
-	Dispatch      func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, JournalReceipt) (DispatchResult, error)
+	Claim         func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (ClaimReceipt, error)
+	Dispatch      func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ClaimReceipt) (DispatchResult, error)
 	Finalize      func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ReserveResult, DispatchResult) (GenerateFinalization, error)
 	FinalizeCache func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (GenerateFinalization, error)
 	Reconcile     func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult, GenerateFinalization) error
@@ -188,7 +190,7 @@ func (ports GeneratePorts) validate() error {
 	}{
 		{"replay", ports.Replay}, {"cache lookup", ports.CacheLookup},
 		{"compaction decision", ports.CompactionDecision}, {"route", ports.Route},
-		{"reserve", ports.Reserve}, {"journal", ports.Journal},
+		{"reserve", ports.Reserve}, {"claim", ports.Claim},
 		{"dispatch", ports.Dispatch}, {"finalize", ports.Finalize},
 		{"finalize cache", ports.FinalizeCache}, {"reconcile", ports.Reconcile},
 	}
@@ -208,8 +210,8 @@ func (ports GeneratePorts) Validate() error {
 }
 
 // GenerateV1 executes one complete durable Generate composition.  It performs
-// no provider work if replay, cache, route, Redis reservation, or PostgreSQL
-// journaling fails.  Reconciliation is deliberately last: after finalization
+// no provider work if replay, cache, route, Redis reservation, or Redis
+// claiming fails.  Reconciliation is deliberately last: after finalization
 // it returns ErrReconcilePending so Temporal retries the reconciliation path
 // without re-running provider dispatch.
 func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports GeneratePorts) (llm.GenerateResponseV1, error) {
@@ -353,14 +355,14 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		mapped.RetryAfter = reservation.RetryAfter
 		return llm.GenerateResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
 	}
-	journal, err := ports.Journal(ctx, request, route, reservation)
+	claim, err := ports.Claim(ctx, request, route, reservation)
 	if err != nil {
-		return llm.GenerateResponseV1{}, stageError("PostgreSQL journal", err)
+		return llm.GenerateResponseV1{}, stageError("Redis budget claim", err)
 	}
-	if err := validateJournalForRequest(request, reservation, journal); err != nil {
-		return llm.GenerateResponseV1{}, stageError("PostgreSQL journal", err)
+	if err := validateClaimForRequest(request, reservation, claim); err != nil {
+		return llm.GenerateResponseV1{}, stageError("Redis budget claim", err)
 	}
-	dispatch, err := ports.Dispatch(ctx, request, replay, route, journal)
+	dispatch, err := ports.Dispatch(ctx, request, replay, route, claim)
 	if err != nil {
 		return llm.GenerateResponseV1{}, stageError("provider dispatch", err)
 	}
@@ -413,7 +415,7 @@ func validateReservationForRequest(request llm.GenerateRequestV1, route RoutePla
 			return err
 		}
 		if len(reservation.Events) == 0 {
-			return errors.New("accepted reservation has no journal events")
+			return errors.New("accepted reservation has no reservation events")
 		}
 	}
 	if reservation.OperationID != route.OperationID {
@@ -428,11 +430,11 @@ func validateReservationForRequest(request llm.GenerateRequestV1, route RoutePla
 	return nil
 }
 
-func validateJournalForRequest(_ llm.GenerateRequestV1, reservation ReserveResult, journal JournalReceipt) error {
-	if journal.OperationID == "" || journal.GenerationID == "" {
-		return errors.New("journal receipt identities are required")
+func validateClaimForRequest(_ llm.GenerateRequestV1, reservation ReserveResult, claim ClaimReceipt) error {
+	if claim.OperationID == "" || claim.GenerationID == "" {
+		return errors.New("claim receipt identities are required")
 	}
-	if err := journal.Validate(reservation); err != nil {
+	if err := claim.Validate(reservation); err != nil {
 		return err
 	}
 	return nil

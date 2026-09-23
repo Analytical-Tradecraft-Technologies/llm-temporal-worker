@@ -33,15 +33,15 @@ flowchart LR
     C --> R["Router"]
     R --> P["Price resolver"]
     P --> B["Redis exact budget admission"]
-    B --> J["PostgreSQL operation and budget journal"]
+    B --> J["Redis single-use budget claim"]
     J --> L["Provider adapter"]
     L --> S["Official provider SDK"]
     S --> X["External LLM endpoint"]
     X --> L
     L --> E
     E --> T["Checkpoint and cache store"]
-    B --> D[("Redis budget generation and Stream")]
-    J --> Q[("Worker PostgreSQL namespace")]
+    B --> D[("Redis budget authority")]
+    E --> Q[("Worker PostgreSQL operation namespace")]
     T --> Q
     E --> O["Logs, metrics, traces"]
 ```
@@ -65,10 +65,9 @@ flowchart LR
 5. **Estimate and admit.** The estimator computes the maximum single-attempt
    bound across the authorized plan. After PostgreSQL operation replay checks,
    one Redis Function atomically reserves the exact amount against every
-   matching active window and publishes the budget Stream event. The worker
-   then appends the idempotent PostgreSQL budget journal/projection writes; it
-   does not read PostgreSQL budget state. Dispatch is forbidden until that
-   durable write commits.
+   matching active window. A separate single-use Redis claim must succeed within
+   15 minutes, immediately before dispatch. No SQL budget journal is written.
+   An insufficient budget returns wait; a workflow timer can schedule a retry.
 6. **Lower.** The selected adapter converts semantic items to official SDK
    parameter types. Provider extensions are applied only after namespaced
    allow-list validation.
@@ -83,11 +82,11 @@ flowchart LR
    pinned exact catalog. If neither establishes the real charge, actual cost is
    NULL with an explicit unknown reason; reservations/bounds remain separate.
    If a definitely charged failure permits safe fallback, PostgreSQL durably
-   records the attempt/journal transition before Redis atomically reconciles
-   the active windows and reserves the remaining plan before another dispatch.
+   records the attempt transition. Redis reconciles the active windows; another
+   paid attempt requires another reservation and claim.
 10. **Commit result.** The engine atomically records the completed result,
-    child checkpoint, exact-or-unknown cost, and budget journal/projection in
-    PostgreSQL, then idempotently reconciles the Redis reservation. A repeated
+    child checkpoint, and exact-or-unknown cost in PostgreSQL, then idempotently
+    reconciles the Redis reservation. A repeated
     operation key returns the recorded result without another budget charge.
 
 If a dispatch outcome is ambiguous, step 10 records `ambiguous` and keeps the
@@ -129,11 +128,6 @@ type BudgetStore interface {
 	Reconcile(context.Context, budget.ReconcileRequest) error
 }
 
-type BudgetJournal interface {
-	AppendReservation(context.Context, budget.ReservationEvent) error
-	AppendCompletion(context.Context, budget.CompletionEvent) error
-}
-
 type CheckpointStore interface {
 	Get(context.Context, state.Handle) (state.Checkpoint, error)
 	PutChild(context.Context, state.PutChildRequest) (state.Handle, error)
@@ -145,22 +139,17 @@ Activity invokes it once for each Activity execution and returns the final
 normalized response. Residual streaming types or decoders are unsupported in
 v1 and must not be wired into the Temporal runtime.
 
-`BudgetStore` is implemented by the atomic Redis Function and is the only live
-active-window read path. `BudgetJournal` performs PostgreSQL writes before
-dispatch but normal service never calls its read methods; the exceptional
-cold-bootstrap reader is a separate recovery interface available only after
-the fleet/Redis-loss fence. Pricing, policy matching, estimation, and window
-semantics remain reusable packages outside the stores.
+The durable `BudgetLeaser` port exposes `Accept`, `Claim`, and `Reconcile`.
+Redis owns reservations, single-use authorization, and idempotent settlement.
+Pricing, policy matching, estimation, and window semantics remain reusable
+packages outside the stores. The `budget` event types are settlement vocabulary;
+they no longer imply SQL journal writes. See
+[Redis budget leases](../reference/redis-budget-leases.md).
 
-The first Phase B foundation slice keeps that split explicit in code. The
-`budget` package owns validated `ReservationEvent` and `CompletionEvent`
-records, `storage/postgres.BudgetJournal` exposes write-only append methods,
-and `storage/redis.BudgetGenerationPort`/`BudgetEventPort` expose generation
-adoption and broadcast Stream boundaries. These ports do not compose the
-runtime yet: Redis acceptance, the PostgreSQL append, and provider dispatch
-remain a deliberately sequenced Task 19 change. The Redis event port is
-coordination-only; every authorization still goes through the atomic Redis
-Function.
+Redis generation and Stream publisher/tailer contracts remain available, but
+normal durable budget mutations do not publish those Stream events and the
+runtime does not automatically start tailers. Shared atomic Redis accounting
+already coordinates authorizations across workers.
 
 The bounded v1 composition exposes `runtime.NewDurableV1RuntimeBuilder` for
 the complete one-shot Generate and Compact boundary. It accepts a complete

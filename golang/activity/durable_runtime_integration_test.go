@@ -48,11 +48,11 @@ func TestDurableV1RuntimeGenerateActivityRunsEveryPhaseInOrder(t *testing.T) {
 			events = append(events, "reserve")
 			return reservation, nil
 		},
-		Journal: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.JournalReceipt, error) {
-			events = append(events, "journal")
-			return durable.JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, nil
+		Claim: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			events = append(events, "claim")
+			return durable.ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation"}, nil
 		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.JournalReceipt) (durable.DispatchResult, error) {
+		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.DispatchResult, error) {
 			events = append(events, "dispatch")
 			return durable.DispatchResult{}, nil
 		},
@@ -77,7 +77,7 @@ func TestDurableV1RuntimeGenerateActivityRunsEveryPhaseInOrder(t *testing.T) {
 	if response == nil || response.OperationID != string(route.OperationID) {
 		t.Fatalf("GenerateV1 response = %#v", response)
 	}
-	want := []string{"replay", "cache", "compaction", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}
+	want := []string{"replay", "cache", "compaction", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("GenerateV1 phase order = %v, want %v", events, want)
 	}
@@ -108,11 +108,11 @@ func TestDurableV1RuntimeCompactActivityUsesDistinctCompactionPath(t *testing.T)
 			events = append(events, "reserve")
 			return reservation, nil
 		},
-		Journal: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.JournalReceipt, error) {
-			events = append(events, "journal")
-			return durable.JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, nil
+		Claim: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			events = append(events, "claim")
+			return durable.ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation"}, nil
 		},
-		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.JournalReceipt) (durable.CompactDispatchResult, error) {
+		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.CompactDispatchResult, error) {
 			events = append(events, "dispatch")
 			return durable.CompactDispatchResult{}, nil
 		},
@@ -137,7 +137,7 @@ func TestDurableV1RuntimeCompactActivityUsesDistinctCompactionPath(t *testing.T)
 	if response == nil || response.Checkpoint.Kind != "compaction" || response.OperationID != string(route.OperationID) {
 		t.Fatalf("CompactV1 response = %#v", response)
 	}
-	want := []string{"replay", "cache", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}
+	want := []string{"replay", "cache", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("CompactV1 phase order = %v, want %v", events, want)
 	}

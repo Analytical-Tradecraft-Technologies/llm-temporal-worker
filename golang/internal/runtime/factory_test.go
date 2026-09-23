@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
-	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
@@ -22,7 +21,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
-	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
@@ -509,86 +507,14 @@ func TestCheckpointCapabilitiesBindSnapshotBlobReaderAndHandleKeyring(t *testing
 	}
 }
 
-func TestPostgresCloserExposesPrivateWriteOnlyJournal(t *testing.T) {
-	namespace, err := postgresstore.NewNamespace("worker", "state", "tenant_")
-	if err != nil {
-		t.Fatal(err)
+func TestBudgetCapabilityBelongsToSnapshot(t *testing.T) {
+	budgets := builderBudgets{}
+	set := &productionClientSet{budgets: budgets, v1Capabilities: V1RuntimeCapabilities{Budgets: budgets}}
+	if set.Budgets() != budgets || set.V1RuntimeCapabilities().Budgets != budgets {
+		t.Fatal("budget capability changed")
 	}
-	closer := postgresPoolCloser{namespace: namespace}
-	raw := closer.Journal()
-	repository, ok := raw.(*postgresstore.BudgetJournalRepository)
-	if !ok {
-		t.Fatalf("postgres closer journal = %T, want concrete repository before wrapping", raw)
-	}
-	if repository.Pool != closer.pool || repository.Namespace != namespace {
-		t.Fatalf("postgres journal repository = %#v, want same pool/namespace", repository)
-	}
-
-	journal := journalFromCloser(closer)
-	wrapped, ok := journal.(snapshotJournal)
-	if !ok {
-		t.Fatalf("snapshot journal = %T, want private wrapper", journal)
-	}
-	delegate, ok := wrapped.delegate.(*postgresstore.BudgetJournalRepository)
-	if !ok || delegate.Pool != closer.pool || delegate.Namespace != namespace {
-		t.Fatalf("snapshot journal delegate = %#v, want same pool/namespace", wrapped.delegate)
-	}
-	if _, leaked := journal.(*postgresstore.BudgetJournalRepository); leaked {
-		t.Fatal("snapshot client journal leaked concrete PostgreSQL repository")
-	}
-
-	set := &productionClientSet{journal: journal, v1Capabilities: V1RuntimeCapabilities{Journal: journal}}
-	if set.Journal() != journal {
-		t.Fatal("snapshot client set did not retain journal capability")
-	}
-	if set.V1RuntimeCapabilities().Journal != journal {
-		t.Fatal("snapshot v1 capability bundle did not retain journal capability")
-	}
-	if (&productionClientSet{}).Journal() != nil || (*productionClientSet)(nil).Journal() != nil {
-		t.Fatal("empty snapshot client set exposed a journal capability")
-	}
-}
-
-type journalStub struct{}
-
-func (journalStub) AppendReservation(context.Context, budget.ReservationEvent) (postgresstore.JournalRecord, error) {
-	return postgresstore.JournalRecord{}, nil
-}
-
-func (journalStub) AppendCompletion(context.Context, budget.CompletionEvent) (postgresstore.JournalRecord, error) {
-	return postgresstore.JournalRecord{}, nil
-}
-
-type journalClosingCloser struct {
-	journal durablestore.Journal
-	closed  bool
-}
-
-func (closer *journalClosingCloser) Journal() durablestore.Journal { return closer.journal }
-
-func (closer *journalClosingCloser) Close() error {
-	closer.closed = true
-	return nil
-}
-
-func TestJournalCapabilityClosesWithSnapshotClientSet(t *testing.T) {
-	closer := &journalClosingCloser{journal: journalStub{}}
-	journal := journalFromCloser(closer)
-	if journal == nil {
-		t.Fatal("journal source returned nil capability")
-	}
-	set := &productionClientSet{
-		journal: journal,
-		close:   func(context.Context) error { return closer.Close() },
-	}
-	if err := set.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if !closer.closed {
-		t.Fatal("snapshot client close did not close journal owner")
-	}
-	if set.Journal() != journal {
-		t.Fatal("snapshot client journal capability changed after owner close")
+	if (&productionClientSet{}).Budgets() != nil || (*productionClientSet)(nil).Budgets() != nil {
+		t.Fatal("empty set exposed budget capability")
 	}
 }
 
@@ -636,7 +562,7 @@ func TestProductionClientSetReturnsSnapshotOwnedV1CapabilitiesWithoutFallback(t 
 	// A client set with only the legacy v1 runtime must not synthesize a
 	// capability bundle from that process-level value.
 	empty := (&productionClientSet{v1Runtime: testV1Runtime{}}).V1RuntimeCapabilities()
-	if empty.Snapshot != nil || empty.Planner != nil || empty.Adapters != nil || empty.Journal != nil || empty.ProviderStatusRecorder != nil || empty.Clock != nil {
+	if empty.Snapshot != nil || empty.Planner != nil || empty.Adapters != nil || empty.Budgets != nil || empty.ProviderStatusRecorder != nil || empty.Clock != nil {
 		t.Fatalf("legacy runtime leaked into empty capability bundle: %#v", empty)
 	}
 	if empty.Checkpoints.Repository != nil || empty.Checkpoints.Blobs != nil || empty.Checkpoints.Materializer != nil {
@@ -765,7 +691,7 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	if capabilities.Snapshot == nil || capabilities.Planner == nil || capabilities.Adapters == nil || capabilities.Clock == nil {
 		t.Fatalf("memory composition omitted v1 capability: %#v", capabilities)
 	}
-	if capabilities.Journal != nil {
+	if capabilities.Budgets != nil {
 		t.Fatal("memory composition exposed a PostgreSQL journal capability")
 	}
 	if err := clients.Close(context.Background()); err != nil {

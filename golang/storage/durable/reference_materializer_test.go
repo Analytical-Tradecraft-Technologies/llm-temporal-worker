@@ -60,6 +60,9 @@ func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 		t.Fatalf("acceptance = %#v, %v", accepted, err)
 	}
 
+	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
+		t.Fatal(err)
+	}
 	completion := exactCompletion("completion-second", request.OperationID, request.GenerationID, second, 2, "0.10")
 	reconcile := ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: []budget.CompletionEvent{completion}}
 	if err := m.Reconcile(context.Background(), reconcile); err != nil {
@@ -95,11 +98,19 @@ func TestReferenceMaterializerExpiryRemovesReservedAndAccounted(t *testing.T) {
 	if result, err := m.Accept(context.Background(), request); err != nil || !result.Accepted {
 		t.Fatalf("acceptance = %#v, %v", result, err)
 	}
+	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
+		t.Fatal(err)
+	}
 	completion := exactCompletion("completion-expiring", request.OperationID, request.GenerationID, reservation, 2, "0.20")
 	if err := m.Reconcile(context.Background(), ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: []budget.CompletionEvent{completion}}); err != nil {
 		t.Fatalf("reconcile = %v", err)
 	}
 	now = now.Add(2 * time.Minute)
+	stillActive := ReserveRequest{OperationID: "still-accounted", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "1.00")}}
+	if result, err := m.Accept(context.Background(), stillActive); err != nil || result.Accepted {
+		t.Fatalf("start deadline refunded accounted cost: %#v, %v", result, err)
+	}
+	now = now.Add(3 * time.Hour)
 	newRequest := ReserveRequest{OperationID: "op-after-expiry", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "1.00")}}
 	if result, err := m.Accept(context.Background(), newRequest); err != nil || !result.Accepted {
 		t.Fatalf("expired reserved/accounted values still consume capacity: %#v, %v", result, err)

@@ -51,25 +51,3 @@ func TestClassifySQLMatchesRenderedPrefixedRelations(t *testing.T) {
 		t.Fatalf("prefixed budget read classified as %#v", classified)
 	}
 }
-
-func TestBudgetJournalSQLIsWriteOnly(t *testing.T) {
-	for name, statement := range map[string]string{
-		"journal append":         journalAppendSQL(`"private"."budget_journal_events"`),
-		"bucket projection":      budgetBucketUpsertSQL(`"private"."budget_buckets"`),
-		"reservation append":     reservationAppendSQL(`"private"."operation_budget_reservations"`),
-		"reservation completion": reservationCompletionSQL(`"private"."operation_budget_reservations"`, "finalize_exact"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			classified := ClassifySQL(statement)
-			if !classified.BudgetTable {
-				t.Fatal("budget relation was not identified")
-			}
-			if classified.Kind != SQLStatementInsert && classified.Kind != SQLStatementUpdate {
-				t.Fatalf("budget statement kind=%d, want INSERT or UPDATE", classified.Kind)
-			}
-			if classified.BudgetRead {
-				t.Fatalf("budget statement unexpectedly reads a budget relation: %q", classified.StatementSQL)
-			}
-		})
-	}
-}

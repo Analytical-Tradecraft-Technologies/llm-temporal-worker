@@ -8,22 +8,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
-
-type unknownCostJournal struct {
-	records []postgresstore.JournalRecord
-	err     error
-	calls   int
-}
-
-func (journal *unknownCostJournal) ResolveUnknownExact(_ context.Context, _ []budget.CompletionEvent) ([]postgresstore.JournalRecord, error) {
-	journal.calls++
-	if journal.err != nil {
-		return nil, journal.err
-	}
-	return append([]postgresstore.JournalRecord(nil), journal.records...), nil
-}
 
 type unknownCostMaterializer struct {
 	err   error
@@ -42,7 +27,6 @@ func (materializer *unknownCostMaterializer) Reconcile(context.Context, Reconcil
 func unknownCostBoundary() UnknownCostBoundary {
 	return UnknownCostBoundary{
 		Identity:     validIdentity(),
-		Journal:      &unknownCostJournal{records: []postgresstore.JournalRecord{{JournalID: 7}}},
 		Materializer: &unknownCostMaterializer{},
 	}
 }
@@ -71,20 +55,6 @@ func unknownCostResolution(amount string) UnknownCostResolution {
 	}
 }
 
-func TestUnknownCostBoundaryPostgresFailureDoesNotReconcileRedis(t *testing.T) {
-	journalErr := errors.New("postgres unavailable")
-	boundary := unknownCostBoundary()
-	boundary.Journal = &unknownCostJournal{err: journalErr}
-	materializer := boundary.Materializer.(*unknownCostMaterializer)
-	_, err := boundary.Resolve(context.Background(), unknownCostResolution("0.25"))
-	if !errors.Is(err, journalErr) {
-		t.Fatalf("postgres error = %v, want %v", err, journalErr)
-	}
-	if materializer.calls != 0 {
-		t.Fatalf("Redis reconciliation calls = %d, want 0", materializer.calls)
-	}
-}
-
 func TestUnknownCostBoundaryRedisFailureReturnsAuthoritativeReceipt(t *testing.T) {
 	boundary := unknownCostBoundary()
 	materializer := &unknownCostMaterializer{err: errors.New("redis unavailable")}
@@ -93,7 +63,7 @@ func TestUnknownCostBoundaryRedisFailureReturnsAuthoritativeReceipt(t *testing.T
 	if !errors.Is(err, ErrReconcilePending) {
 		t.Fatalf("Redis error = %v, want ErrReconcilePending", err)
 	}
-	if !result.ReconcilePending || result.Reconciled || len(result.JournalRecords) != 1 {
+	if !result.ReconcilePending || result.Reconciled {
 		t.Fatalf("pending result = %+v, want receipt and pending reconciliation", result)
 	}
 	if materializer.calls != 1 {
@@ -106,19 +76,17 @@ func TestUnknownCostBoundaryRetriesIdempotentlyAfterRedisRecovery(t *testing.T) 
 	materializer := boundary.Materializer.(*unknownCostMaterializer)
 	resolution := unknownCostResolution("0.25")
 	first, err := boundary.Resolve(context.Background(), resolution)
-	if err != nil || !first.Reconciled || len(first.JournalRecords) != 1 {
+	if err != nil || !first.Reconciled {
 		t.Fatalf("first resolution = %+v, %v", first, err)
 	}
 	second, err := boundary.Resolve(context.Background(), resolution)
-	if err != nil || !second.Reconciled || len(second.JournalRecords) != 1 {
+	if err != nil || !second.Reconciled {
 		t.Fatalf("idempotent replay = %+v, %v", second, err)
 	}
 	if materializer.calls != 2 {
 		t.Fatalf("Redis reconciliation calls = %d, want one per safe retry", materializer.calls)
 	}
-	if boundary.Journal.(*unknownCostJournal).calls != 2 {
-		t.Fatalf("PostgreSQL journal calls = %d, want one per idempotent replay", boundary.Journal.(*unknownCostJournal).calls)
-	}
+
 }
 
 func TestUnknownCostResolutionRejectsIdentityAndAmountDrift(t *testing.T) {
@@ -145,14 +113,9 @@ func TestUnknownCostResolutionRejectsIdentityAndAmountDrift(t *testing.T) {
 }
 
 func TestUnknownCostBoundaryRejectsTypedNilPorts(t *testing.T) {
-	var journal *unknownCostJournal
 	var materializer *unknownCostMaterializer
-	boundary := UnknownCostBoundary{Identity: validIdentity(), Journal: journal, Materializer: materializer}
+	boundary := UnknownCostBoundary{Identity: validIdentity(), Materializer: materializer}
 	if err := boundary.Validate(); err == nil {
-		t.Fatal("typed nil ports were accepted")
-	}
-	boundary.Journal = &unknownCostJournal{}
-	if err := boundary.Validate(); err == nil {
-		t.Fatal("typed nil materializer was accepted")
+		t.Fatal("typed nil materializer accepted")
 	}
 }

@@ -6,19 +6,9 @@ import (
 	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
-// UnknownCostJournal is the PostgreSQL side of the authoritative billing
-// handoff. Implementations must append resolve_unknown_exact events and update
-// the operation and budget projections in one idempotent transaction.
-type UnknownCostJournal interface {
-	ResolveUnknownExact(context.Context, []budget.CompletionEvent) ([]postgresstore.JournalRecord, error)
-}
-
-// UnknownCostResolution identifies one authoritative billing correction. The
-// exact events are committed to PostgreSQL before they are reconciled to the
-// Redis materialization.
+// UnknownCostResolution identifies one exact billing correction to Redis accounting.
 type UnknownCostResolution struct {
 	OperationID   OperationID
 	GenerationID  GenerationID
@@ -65,32 +55,23 @@ func (resolution UnknownCostResolution) Validate() error {
 	return nil
 }
 
-// UnknownCostResolutionResult exposes the committed PostgreSQL receipt even
-// when Redis reconciliation is pending. A caller can retry Resolve with the
-// same event payload; PostgreSQL replay is idempotent and Redis reconciliation
-// remains fenced by the generation/incarnation identity.
+// UnknownCostResolutionResult tells callers whether to retry the same event
+// payload after a Redis failure. Event identity makes retries idempotent.
 type UnknownCostResolutionResult struct {
-	JournalRecords   []postgresstore.JournalRecord
 	ReconcilePending bool
 	Reconciled       bool
 }
 
-// UnknownCostBoundary composes the authoritative PostgreSQL correction with
-// the active Redis budget materializer. It never treats the two writes as a
-// cross-store transaction: PostgreSQL commits first, then Redis is retried
-// independently while its conservative bound remains in force.
+// UnknownCostBoundary applies exact corrections through the same Redis budget
+// authority that retains the conservative charge while the cost is unknown.
 type UnknownCostBoundary struct {
 	Identity     StateIdentity
-	Journal      UnknownCostJournal
 	Materializer BudgetMaterializer
 }
 
 func (boundary UnknownCostBoundary) Validate() error {
-	if err := boundary.Identity.Validate(); err != nil {
+	if err := boundary.Identity.ValidateBudget(); err != nil {
 		return fmt.Errorf("%w: identity: %v", ErrBudgetBoundaryInvalid, err)
-	}
-	if isNilPort(boundary.Journal) {
-		return fmt.Errorf("%w: PostgreSQL unknown-cost journal is required", ErrBudgetBoundaryInvalid)
 	}
 	if isNilPort(boundary.Materializer) {
 		return fmt.Errorf("%w: Redis budget materializer is required", ErrBudgetBoundaryInvalid)
@@ -98,10 +79,8 @@ func (boundary UnknownCostBoundary) Validate() error {
 	return nil
 }
 
-// Resolve commits the exact correction to PostgreSQL and only then asks Redis
-// to reconcile. A PostgreSQL failure never invokes Redis. If Redis fails after
-// the commit, the returned receipt is authoritative and ErrReconcilePending
-// tells the caller to retry without weakening the prior conservative bound.
+// Resolve atomically applies an exact correction in Redis. ErrReconcilePending
+// tells the caller to retry the identical payload without dispatching again.
 func (boundary UnknownCostBoundary) Resolve(ctx context.Context, resolution UnknownCostResolution) (UnknownCostResolutionResult, error) {
 	var result UnknownCostResolutionResult
 	if ctx == nil {
@@ -113,11 +92,6 @@ func (boundary UnknownCostBoundary) Resolve(ctx context.Context, resolution Unkn
 	if err := resolution.Validate(); err != nil {
 		return result, fmt.Errorf("%w: %v", ErrBudgetBoundaryInvalid, err)
 	}
-	records, err := boundary.Journal.ResolveUnknownExact(ctx, resolution.Events)
-	if err != nil {
-		return result, err
-	}
-	result.JournalRecords = append([]postgresstore.JournalRecord(nil), records...)
 	reconcile := ReconcileRequest{
 		OperationID:   resolution.OperationID,
 		GenerationID:  resolution.GenerationID,

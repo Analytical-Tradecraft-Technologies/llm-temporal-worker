@@ -187,14 +187,14 @@ type productionClientSet struct {
 	queryRepos      PostgresQueryRepositories
 	queryService    activity.QueryService
 	checkpoints     CheckpointCapabilities
-	journal         durablestore.Journal
+	budgets         durablestore.BudgetLeaser
 	v1Capabilities  V1RuntimeCapabilities
 	v1Runtime       activity.V1Runtime
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
 var _ CheckpointCapabilitiesSource = (*productionClientSet)(nil)
-var _ JournalSource = (*productionClientSet)(nil)
+var _ BudgetSource = (*productionClientSet)(nil)
 var _ V1RuntimeCapabilitiesSource = (*productionClientSet)(nil)
 
 func (set *productionClientSet) Close(ctx context.Context) error {
@@ -252,14 +252,13 @@ func (set *productionClientSet) CheckpointCapabilities() CheckpointCapabilities 
 	return set.checkpoints
 }
 
-// Journal returns the optional write-only PostgreSQL budget journal owned by
-// this immutable snapshot. It is not active-budget state and must not be used
-// for normal admission reads. A nil value is an explicit unconfigured seam.
-func (set *productionClientSet) Journal() durablestore.Journal {
+// Budgets returns the Redis budget authority owned by this snapshot. A nil
+// value is an explicit unconfigured capability.
+func (set *productionClientSet) Budgets() durablestore.BudgetLeaser {
 	if set == nil {
 		return nil
 	}
-	return set.journal
+	return set.budgets
 }
 
 // V1RuntimeCapabilities returns the preparatory typed dependency bundle owned
@@ -585,21 +584,30 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		}
 	}
 	checkpointCapabilities := checkpointCapabilitiesFromCloserWithBindings(postgresCloser, checkpointBlobReader, keyring, clock)
-	journal := journalFromCloser(postgresCloser)
+	// Stable identities across configuration reloads: Redis is authoritative.
+	// Policy limits change without replacing the accounting namespace.
+	budgets, err := redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
+		Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
+		FunctionVersion: value.State.Redis.AdmissionVersion, GenerationID: "redis-budget-v1", IncarnationID: "redis-budget-v1", Clock: clock,
+	})
+	if err != nil {
+		closeAll()
+		return nil, nil, fmt.Errorf("construct Redis budgets: %w", err)
+	}
 	clients := &productionClientSet{
 		probes:          probes,
 		providerControl: providerControl,
 		queryRepos:      queryRepos,
 		queryService:    queryService,
 		checkpoints:     checkpointCapabilities,
-		journal:         journal,
+		budgets:         budgets,
 		v1Capabilities: V1RuntimeCapabilities{
 			ConfigDigest:           snapshot.Digest(),
 			Snapshot:               snapshotSource,
 			Planner:                planner,
 			Adapters:               capabilityAdapterRegistry,
 			Checkpoints:            checkpointCapabilities,
-			Journal:                journal,
+			Budgets:                budgets,
 			CompositionFactory:     factory.options.DurableCompositionFactory,
 			composition:            precomposed,
 			ProviderStatusRecorder: providerControl,
@@ -1439,13 +1447,6 @@ func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
 	repository := closer.ProviderStatusRepository()
 	spend := postgresstore.SpendSummaryRepository{Pool: closer.pool, Namespace: closer.namespace}
 	return PostgresQueryRepositories{ProviderStatus: &repository, SpendSummary: &spend}
-}
-
-// Journal exposes only the write-only durable journal contract. The runtime
-// wraps it before storing it on the snapshot client set so callers cannot
-// recover this concrete repository or its pool through a type assertion.
-func (closer postgresPoolCloser) Journal() durablestore.Journal {
-	return &postgresstore.BudgetJournalRepository{Pool: closer.pool, Namespace: closer.namespace}
 }
 
 // CheckpointRepository exposes only the storage-neutral repository contract.

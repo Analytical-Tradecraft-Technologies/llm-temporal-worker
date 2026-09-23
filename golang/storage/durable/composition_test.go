@@ -10,22 +10,20 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 )
 
-func completeCompositionPorts(materializer BudgetMaterializer, journal Journal) CompositionPorts {
+func completeCompositionPorts(materializer BudgetLeaser) CompositionPorts {
 	return CompositionPorts{
 		Operations:    compositionAdmissionStub{},
 		Continuations: compositionContinuationStub{},
 		Results:       compositionResultStub{},
-		Journal:       journal,
 		Materializer:  materializer,
 	}
 }
 
 func TestCompositionBuilderCopiesAndValidatesSnapshotPorts(t *testing.T) {
 	materializer := compositionMaterializerStub{}
-	journal := compositionJournalStub{}
 	builder := CompositionBuilder{
 		Identity: validIdentity(),
-		Ports:    completeCompositionPorts(materializer, journal),
+		Ports:    completeCompositionPorts(materializer),
 	}
 	composition, err := builder.Build()
 	if err != nil {
@@ -56,12 +54,11 @@ func TestCompositionBuilderFailsClosedBeforeCallingAnyPort(t *testing.T) {
 		{name: "operations", mutate: func(ports *CompositionPorts) { ports.Operations = nil }},
 		{name: "continuations", mutate: func(ports *CompositionPorts) { ports.Continuations = nil }},
 		{name: "results", mutate: func(ports *CompositionPorts) { ports.Results = nil }},
-		{name: "journal", mutate: func(ports *CompositionPorts) { ports.Journal = nil }},
 		{name: "materializer", mutate: func(ports *CompositionPorts) { ports.Materializer = nil }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			ports := completeCompositionPorts(compositionMaterializerStub{}, compositionJournalStub{})
+			ports := completeCompositionPorts(compositionMaterializerStub{})
 			test.mutate(&ports)
 			if _, err := (CompositionBuilder{Identity: validIdentity(), Ports: ports}).Build(); err == nil {
 				t.Fatal("incomplete ports were accepted")
@@ -80,10 +77,9 @@ func TestCompositionBuilderBindsBudgetOrderingAndRecovery(t *testing.T) {
 		result: boundaryAcceptedResult(request, now),
 		calls:  calls,
 	}
-	journal := &boundaryJournal{calls: &materializer.calls}
 	composition, err := (CompositionBuilder{
 		Identity: validIdentity(),
-		Ports:    completeCompositionPorts(materializer, journal),
+		Ports:    completeCompositionPorts(materializer),
 	}).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -94,10 +90,13 @@ func TestCompositionBuilderBindsBudgetOrderingAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	reservation, err := composition.BudgetBoundary().Reserve(context.Background(), &lifecycle, request)
-	if err != nil || !reservation.DispatchReady() {
+	if err != nil || reservation.DispatchReady() {
 		t.Fatalf("reserve = %#v, %v", reservation, err)
 	}
-	if got, want := materializer.calls, []string{"accept", "reservation:reservation-event-1"}; !reflect.DeepEqual(got, want) {
+	if _, err := composition.BudgetBoundary().Claim(context.Background(), &lifecycle, &reservation); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := materializer.calls, []string{"accept", "claim"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pre-dispatch ordering = %v, want %v", got, want)
 	}
 	if err := lifecycle.Advance(PhaseDispatched); err != nil {
@@ -110,7 +109,7 @@ func TestCompositionBuilderBindsBudgetOrderingAndRecovery(t *testing.T) {
 	if err := boundary.Finalize(context.Background(), &lifecycle, reservation, []budget.CompletionEvent{completion}); !errors.Is(err, ErrReconcilePending) {
 		t.Fatalf("first finalization = %v, want ErrReconcilePending", err)
 	}
-	if current, _ := lifecycle.Current(); current != PhasePostgresFinalized {
+	if current, _ := lifecycle.Current(); current != PhaseResultFinalized {
 		t.Fatalf("recovery lifecycle phase = %s, want postgres_finalized", current)
 	}
 	materializer.reconcileErr = nil
@@ -119,8 +118,5 @@ func TestCompositionBuilderBindsBudgetOrderingAndRecovery(t *testing.T) {
 	}
 	if current, _ := lifecycle.Current(); current != PhaseRedisReconciled {
 		t.Fatalf("final lifecycle phase = %s, want redis_reconciled", current)
-	}
-	if got, want := len(journal.completions), 1; got != want {
-		t.Fatalf("completion journal count = %d, want %d", got, want)
 	}
 }

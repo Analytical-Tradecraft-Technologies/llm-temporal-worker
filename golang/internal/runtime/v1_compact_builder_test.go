@@ -29,10 +29,10 @@ func validCompactPorts() durable.CompactPorts {
 		Reserve: func(context.Context, llm.CompactRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
 			return durable.ReserveResult{}, nil
 		},
-		Journal: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.JournalReceipt, error) {
-			return durable.JournalReceipt{}, nil
+		Claim: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			return durable.ClaimReceipt{}, nil
 		},
-		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.JournalReceipt) (durable.CompactDispatchResult, error) {
+		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.CompactDispatchResult, error) {
 			return durable.CompactDispatchResult{}, nil
 		},
 		Finalize: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ReserveResult, durable.CompactDispatchResult) (durable.CompactFinalization, error) {
@@ -52,7 +52,7 @@ func completeCompactCapabilities(factory CompactPortsFactory) V1RuntimeCapabilit
 		Snapshot: engine.StaticSnapshot{Value: engine.Snapshot{Version: "snapshot-1"}},
 		Planner:  routing.DeterministicPlanner{}, Adapters: engine.AdapterMap{},
 		Checkpoints: CheckpointCapabilities{Repository: builderCheckpointRepository{}, Blobs: builderCheckpointBlobReader{}, Materializer: builderCheckpointMaterializer{}},
-		Journal:     builderJournal{}, Clock: time.Now, CompactPortsFactory: factory,
+		Budgets:     builderBudgets{}, Clock: time.Now, CompactPortsFactory: factory,
 	}
 }
 
