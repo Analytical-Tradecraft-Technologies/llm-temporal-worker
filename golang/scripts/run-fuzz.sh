@@ -47,7 +47,7 @@ targets=(
 
 # Balanced using median target durations from three successful master runs.
 # Keep this assignment aligned with targets; smoke mode still replays all seeds.
-target_shards=(2 1 1 1 1 1 2 2 2 0 2 1 0 0 2 2 2 1 1 1 2)
+target_shards=(2 1 1 1 1 1 2 2 2 0 2 1 0 0 2 2 2 1 1 1 2 0)
 if (( ${#target_shards[@]} != ${#targets[@]} )); then
   echo "fuzz target/shard assignment length mismatch" >&2
   exit 64
