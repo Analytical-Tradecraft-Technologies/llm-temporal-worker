@@ -99,19 +99,14 @@ Remaining
 complete Activity composition work is tracked in
 [Task 14, typed Query service and Temporal Activity, of the forkable
 conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
-`QueryService.Audit` is the storage-neutral seam for the audit requirement: it
+`QueryService.Audit` is the storage-neutral seam for audit observation: it
 receives canonical redacted request/response envelopes, SHA-256 request and
 response digests, and exact-or-unknown cost metadata after all response and
-cursor checks. A configured sink must persist the record before `Execute`
-returns; a sink error becomes retryable state-unavailable/finalize failure.
-`NewPersistedQueryServiceBuilder` connects this hook to the snapshot-owned
-`PostgresQueryRepositories.QueryAudit` capability and rejects snapshot
-construction when the durable audit repository is absent. Authorization,
-cursor key material, and construction of the keyed audit repository remain
-deployment-owned. The helper deliberately leaves budget status fail-closed
-until production composition exposes a snapshot-owned Redis reader; it never
-captures a reader across reloads. See the repository-only
-[query execution audit ledger](query-audit-ledger.md).
+cursor checks. The hook is best effort: encoding or sink errors do not fail an otherwise
+successful response. `NewPersistedQueryServiceBuilder` uses normal structured
+logs and needs no `PostgresQueryRepositories.QueryAudit` capability.
+Authorization and cursor keys remain deployment-owned. Missing budget readers
+still leave budget status unsupported. See [query audit logging](query-audit-ledger.md).
 
 ### Query failure classification
 
@@ -124,9 +119,7 @@ Provider-classified errors are preserved so their authorization, provider, or
 other retry semantics remain intact. If the caller's Activity context is
 canceled or reaches its deadline, that terminal context result is preserved
 instead of being retried as a state outage. Response/encoding and cursor
-contract violations remain validation failures. An audit sink failure is the
-separate retryable `state_unavailable`/`finalize` case described above, and the
-response is not returned until the audit callback succeeds.
+contract violations remain validation failures. Audit sink failures do not alter the validated query response or trigger retries.
 
 ## Query service snapshot composition
 

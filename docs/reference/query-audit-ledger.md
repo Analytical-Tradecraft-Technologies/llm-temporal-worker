@@ -1,16 +1,42 @@
-# Query execution audit ledger
+# Query audit logging
 
-`postgres.QueryExecutionRepository` is the persistence boundary for the
-`llm.query.v1` audit record. It is intentionally usable before the Activity is
-composed: callers pass already validated, redacted control JSON and the
-repository enforces the storage invariants.
+Completed `llm.query.v1` reads emit best-effort audit events through normal
+worker logs. `control.QueryService.Audit` remains the observation hook for
+future audit sinks, but neither audit encoding nor a sink error can turn a
+successful query into a failure or a retry. Implementations must return promptly.
+There is no durable delivery, replay, or exactly-once guarantee for log events.
+
+`runtime.NewPersistedQueryServiceBuilder` requires authorization and cursor
+keys, but no audit repository. It uses the optional supplied `Logger`, or a
+logger configured from the snapshot's log format and level writing to stderr.
+The low-level constructor also accepts an optional custom `Audit` callback;
+when omitted it uses the same log behavior.
+
+The `observability.Logger.QueryAudit` function emits an info-level
+`control query completed` event with the query kind, API version, source,
+request/response digests, timestamps, duration, and exact-or-unknown cost.
+Tenant, project, and operation keys are hashed. Request/response JSON, prompts,
+credentials, and raw provider payloads are never passed to the log handler.
+Log levels apply normally, and an unavailable log destination does not fail
+the query. Only validated successful responses reach the hook; these events
+are not a complete security or access log.
+
+This does not change the durable lifecycle or cost records for paid generation
+and compaction attempts. Normal query reads no longer add entries to the SQL
+query-execution ledger or its historical spend totals.
+
+## Legacy SQL repository
+
+`postgres.QueryExecutionRepository` remains available for direct callers until
+the SQL persistence migration removes it. It is not bound by the runtime audit
+builder. The following describes that legacy repository only.
 
 Each row stores bounded, canonicalized request and response JSON, a SHA-256
 digest over the canonical response bytes,
 the closed query kind and source, exact-or-unknown cost metadata, and UTC
 timestamps. Prompts, model output, credentials, provider bodies, and raw tool
-payloads are rejected recursively. Scope and operation values are never stored
-in the row; keyed HMACs bind the row to the configured namespace key.
+payloads are rejected recursively. Lookup columns use keyed HMACs; request JSON may still contain scope and
+operation values. These rows are not anonymous.
 
 Rows are idempotent on `(scope_id, operation_key_hmac)`. Repeating an operation
 with the same request fingerprint returns the persisted record. Reusing the
@@ -49,32 +75,14 @@ refreshes or implement query-specific read/index plans.
 ## Runtime composition
 
 The reloadable runtime keeps the query service on the same immutable snapshot
-as the engine. An `EngineFactory` that owns the durable query repositories may
-implement the optional `runtime.QueryServiceFactory` seam and return a fresh
-`activity.QueryService` from `BuildQueryService` for each snapshot. A custom
-client set may instead expose the service through `runtime.QueryServiceSource`.
-The Activity acquires a snapshot lease before dispatch, so reload closes the
-old query repository only after in-flight query work releases its lease.
-
-`runtime.NewPersistedQueryServiceBuilder` is the production composition seam:
-it requires deployment-owned authorization and cursor key material and binds
-`PostgresQueryRepositories.QueryAudit.RecordAudit` from the same immutable
-client set as the read repositories. A snapshot without that audit capability
-is rejected before worker polling.
-
-If neither seam is supplied, the worker remains fail-closed: `llm.query.v1`
-returns a configuration error and does not perform a provider or storage read.
-This is deliberate until a deployment composes the PostgreSQL query handlers,
-authorization policy, and `RecordAudit` callback together; wiring a query
-service must never silently bypass the dedicated audit ledger.
+as the engine. Missing read repositories remain unsupported capabilities;
+authorization and cursor validation remain mandatory. If no query service is
+composed, `llm.query.v1` still returns a configuration error rather than an empty
+answer. Audit logging does not add a database readiness requirement.
 
 Focused checks:
 
 ```sh
 cd golang
-go test ./storage/postgres
+go test ./control ./internal/runtime ./internal/observability
 ```
-
-The optional PostgreSQL integration test runs when `LLMTW_POSTGRES_ADDR` points
-at a disposable database and verifies HMAC-only storage, exact-cost precision,
-and idempotent replay.

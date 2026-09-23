@@ -32,6 +32,10 @@ var allowedLogAttrs = map[string]struct{}{
 	"task_queue": {}, "endpoint": {}, "model": {}, "service_class": {},
 	"outcome": {}, "duration_ms": {}, "command": {}, "dispatch": {},
 	"retry": {}, "provider": {},
+	"project_hash": {}, "operation_key_hash": {}, "query_kind": {}, "api_version": {},
+	"request_fingerprint": {}, "response_digest": {}, "source": {},
+	"actual_cost_usd": {}, "cost_status": {}, "cost_method": {}, "cost_unknown_reason": {},
+	"started_at": {}, "completed_at": {},
 }
 
 var unsafeMessageWords = []string{

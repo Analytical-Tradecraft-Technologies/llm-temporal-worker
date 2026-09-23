@@ -7,7 +7,7 @@ Redis budget-status reader. It binds every page to the immutable
 configuration snapshot digest and uses the storage pages only after the
 control layer has authenticated the tenant scope and signed cursor.
 The typed response boundary additionally rejects duplicate or out-of-order
-page keys before signing a continuation or committing query audit evidence.
+page keys before signing a continuation or emitting query audit metadata.
 This protects the same keyset invariant for deployment-owned handlers as for
 the built-in PostgreSQL readers.
 
@@ -17,16 +17,16 @@ for omission. The v1 decoder rejects `null` before authorization or storage
 access so a malformed request cannot silently become a broader unfiltered
 query.
 
-The low-level `NewPersistedQueryService` constructor requires the three
-security/observability seams below; a fourth budget-status seam is required
-only when that query kind is enabled:
+The low-level `NewPersistedQueryService` constructor requires
+`control.AuthorizeFunc` for tenant/project/actor authorization and a keyed
+`control.CursorCodec` for scope/filter/horizon-bound cursors. Its optional
+`control.AuditFunc` observes completed queries on a best-effort basis. When
+omitted, it logs metadata with the supplied logger or the snapshot's configured
+log format and level on stderr. Audit encoding and logging failures never
+fail a successful read. A budget-status reader is required only when that
+query kind is enabled.
 
-- `control.AuthorizeFunc` for tenant/project/actor authorization;
-- a keyed `control.CursorCodec` for scope/filter/horizon-bound cursors; and
-- a `control.AuditFunc` that records the completed query before the Activity
-  returns.
-
-`PersistedQueryOptions.BudgetStatus` is the fourth, deliberately explicit
+`PersistedQueryOptions.BudgetStatus` is the explicit
 composition seam. Its `runtime.BudgetStatusReader` receives the typed budget
 filter and requested instant and must read the active Redis generation only.
 The reader is responsible for validating the active pointer and manifest,
@@ -54,13 +54,12 @@ The production factory accepts these choices through
 `ProductionFactoryOptions.QueryServiceBuilder`. Use
 `runtime.NewPersistedQueryServiceBuilder` for the production persisted-query
 contract. It requires deployment-owned authorization and cursor key material,
-then binds `PostgresQueryRepositories.QueryAudit.RecordAudit` from the same
-immutable client set as the read repositories. It fails snapshot construction
-when that PostgreSQL audit repository is absent, rather than accepting a
-separate callback at this production composition boundary. A PostgreSQL
-closer may expose the query capabilities through
-`PostgresQueryRepositoriesSource`; missing read repositories remain a
-permanent unsupported-capability response rather than an empty result.
+then logs completed queries through the optional supplied logger or normal
+snapshot-configured logs. It does not require or use
+`PostgresQueryRepositories.QueryAudit`. A PostgreSQL closer may expose read
+capabilities through `PostgresQueryRepositoriesSource`; missing read
+repositories remain a permanent unsupported-capability response rather than
+an empty result.
 
 Budget status is composed through the separate
 `ProductionFactoryOptions.BudgetStatusReaderFactory` seam. The factory invokes
@@ -230,8 +229,5 @@ factory, _ := runtime.NewProductionEngineFactory(runtime.ProductionFactoryOption
 The builder receives the same immutable snapshot used to construct the worker;
 it must not resolve credentials or mutate that snapshot. The budget reader
 factory receives that snapshot's Redis capabilities independently and must not
-retain them after the reader is drained. The deployment's
-`PostgresQueryRepositoriesSource` must provide `QueryAudit`; the default
-PostgreSQL closer deliberately does not invent the HMAC keyrings and scope
-repository required to construct that ledger. A deployment that enables spend
-summary must also expose a same-snapshot `ScopeResolver` in that bundle.
+retain them after the reader is drained. A deployment that enables spend summary must expose a same-snapshot
+`ScopeResolver` in the repository bundle. No `QueryAudit` repository is needed.
