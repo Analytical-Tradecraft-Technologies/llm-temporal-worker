@@ -1,31 +1,27 @@
 # Provider control observations
 
-The provider-control domain (`golang/control`) is the boundary between an
-adapter observation and the durable PostgreSQL projections described in the
-[control-plane design](../architecture/postgresql-state-cache-and-control-plane.md#provider-status-credit-state-and-inventory).
-It is intentionally independent of provider SDKs and database clients. The
-PostgreSQL hand-off is implemented by `storage/postgres.ProviderStatusRepository`
-and `storage/postgres.InventoryRepository`; provider adapters and query
-Activities remain separate integration layers.
-
-This package remains the normalization and projection-invariant slice of Task
-13. The domain package itself does not open a database, call a provider
-management API, or register a query Activity. The PostgreSQL repositories
-described below are the separate durable boundary; keeping that boundary
-explicit prevents an in-memory `RouteStatus` or `InventorySnapshot` from being
-mistaken for persisted production state.
+The provider-control domain (`golang/control`) defines storage-neutral status,
+credit, and inventory models. Production runtime snapshots use
+`storage/redis.ProviderStateStore` for these records and their query readers.
+The previous `storage/postgres.ProviderStatusRepository` and
+`storage/postgres.InventoryRepository` remain legacy adapters during the
+staged SQL removal; production no longer selects them for provider state.
+No existing SQL data is migrated.
 
 ## Runtime composition
 
-Production snapshots bind provider outcomes to a snapshot-scoped recorder. The
-recorder receives the immutable configuration digest/epoch and route/endpoint
-identity, constructs a bounded `control.StatusEvent`, and persists it through
-the `ProviderStatusRepository` from the same PostgreSQL client set. It never
-stores prompts, outputs, credentials, raw provider bodies, or unbounded
-provider text. Recorder failures are reported as control-plane telemetry and
-do not alter the provider result; provider-control persistence is not a
-process-readiness gate. Memory-mode snapshots do not construct a PostgreSQL
-recorder.
+Production snapshots bind inference outcomes to the same Redis client and key
+namespace used by the worker. The recorder constructs a validated
+`control.StatusEvent`, then atomically updates the route projection. It stores
+safe codes and digests, never prompts, outputs, credentials, or raw provider
+bodies. Recorder failures remain control-plane telemetry and do not replace a
+provider result. Memory-mode snapshots do not create external stores.
+
+`QueryRepositories.ProviderStatus` and `.Inventory` expose storage-neutral
+read interfaces. `V1RuntimeCapabilities.ProviderInventory` exposes
+`control.InventoryStore` to deployment-owned refresh scheduling. Authorized
+query service composition still requires explicit authorization and cursor
+keys. This change does not add automatic model refreshes or provider API calls.
 
 ## Status and credit
 
@@ -33,7 +29,7 @@ Adapters convert inference, startup, management, and operator observations to
 `control.StatusObservation` and call `NewStatusEvent`. The constructor rejects
 missing identity/evidence digests, unknown enum values, invalid observation
 intervals, and unbounded or unsafe provider text. Only the resulting
-`StatusEvent` is suitable for an append-only event ledger; raw response bodies
+`StatusEvent` is suitable for persistence; raw response bodies
 and credentials are never part of the event.
 
 Credit classification is conservative. A generic HTTP 429 is a rate/capacity
@@ -55,7 +51,7 @@ For bounded reads that need to rebuild this domain projection, see the
 [status replay reference](status-replay.md). Replay follows persisted
 `EventID` order, applies an inclusive observation horizon, and reports whether
 the storage read was complete; it is not a public cursor or a replacement for
-the PostgreSQL projection.
+the current Redis projection. Redis does not retain a status-event history.
 
 ## Model inventory
 
@@ -94,82 +90,67 @@ models. Compatible OpenAI endpoints (including Azure) remain explicitly
 unsupported until they have a provider-specific management contract; a
 deployment must not infer inventory from inference responses. A deployment
 still owns refresh scheduling and must persist each page through
-`InventoryRepository`; when no supported lister is configured, the existing
+`ProviderStateStore.PersistInventorySnapshot`; when no supported lister is configured, the existing
 `configured_only` or `unsupported` inventory sources remain the honest result.
 
-## Persistence hand-off
+## Redis persistence and retention
 
-`ProviderStatusRepository.PersistStatusEvent` consumes a validated
-`StatusEvent` in one transaction. It appends the event (with its deterministic
-digest as an idempotency key), takes a transaction-scoped advisory lock for the
-configuration/route identity (including when the projection row does not yet
-exist), locks the route projection, applies the domain sticky-incident rules,
-and commits the current projection. Stale observations
-remain in the append-only ledger but do not replace the current projection.
-`GetRouteStatus` reads only the projection and never returns raw provider
-response data.
+`PersistStatusEvent` uses optimistic compare-and-swap to apply `RouteStatus.Apply`
+atomically. Concurrent workers recompute the transition if another worker wins;
+older or duplicate observations cannot replace a newer projection. Separate
+credit and billing evidence survives ordinary successful inference. Explicit
+management/operator clearance and configuration epoch changes retain the
+existing domain rules. Failure counters are updated once per applied event.
+There is no SQL journal or dual write on this path.
 
-`InventoryRepository.PersistSnapshot` validates the deterministic inventory
-digest, writes one immutable snapshot and all normalized model rows in one
-transaction, and treats a repeated observation/digest as an idempotent replay.
-Continuation cursors are envelope-encrypted with authenticated context bound
-to the configuration, endpoint account, snapshot identity, and inventory
-digest; plaintext cursors are never stored. `GetSnapshot` revalidates the
-loaded rows and `OpenCursor` authenticates the cursor before returning it.
+Current status and inventory use one bounded hash per configuration and record
+kind. Keys and field identities are HMAC-derived, scoped to the configured
+prefix, secret, and Redis Cluster hash tag. Each record is limited to 4 MiB;
+each hash is limited to 4,096 records and 32 MiB of record payloads. Capacity,
+corruption, and Redis failures return errors rather than partial state.
 
-The repositories do not register provider management adapters or a query
-Activity. Runtime composition supplies the inference/status recorder
-separately; direct OpenAI adapters can provide normalized management pages,
-while refresh scheduling, query integration, and unsupported provider profiles
-remain explicit deployment work. Discovered models remain informational rather
-than routable, and configured-only/unsupported inventory is valid when no
-supported management adapter exists.
+Latest records deliberately have no key TTL. `StaleAfter` and `ExpiresAt`
+determine freshness. Expiry must not clear sticky credit/billing incidents,
+allow older observations to win, or discard a last-known listing after a
+failed refresh. Configuration digests isolate reloads; cleanup of retired
+configuration hashes is a later maintenance task. Persistence uses the same
+HA/AOF/no-eviction Redis deployment as the worker's other shared state.
 
-### Persisted status pages
+`PersistInventorySnapshot` validates the model digest and atomically replaces
+only an older listing for the same provider, endpoint, and account identity.
+Duplicate writes are no-ops; different observations at the same timestamp are
+rejected. `GetInventorySnapshot` returns the last known listing, including its
+freshness and completeness. Provider pagination cursors use AES-GCM with a
+random nonce and authenticated configuration/endpoint/account/snapshot context;
+the encryption key is domain-separated from the Redis namespace key secret.
+The cursor is decrypted only when reading a validated inventory record.
 
-`ProviderStatusRepository.ListRouteStatuses` is the bounded query-side
-repository method for a provider-status query. It reads the current
-`provider_route_status` projection
-with one set-based SQL statement, applies provider/endpoint/availability
-filters, excludes healthy routes unless requested, and returns deterministic
-`route_id` keyset pages. The returned `NextRouteID` is an unsigned storage
-position, not a public cursor: the query service must bind its signed cursor
-to the authorized scope, tag, filter, and snapshot horizon before reusing it.
+## Query pages
 
-The page contains only normalized projection fields. It never scans the
-append-only event ledger, invokes a provider API, or exposes raw provider
-responses and credentials. Staleness is represented by the persisted
-`stale_after` timestamp so the query layer can report current versus stale
-provenance without changing the stored projection.
+`ListRouteStatuses`, `ListCreditStatuses`, and `ListInventoryModels` implement
+the neutral `control` page contracts with the existing filters and limits
+(default 100, maximum 1,000). Credit queries select the newest route projection
+per provider/endpoint with route ID as the tie breaker, then apply the healthy
+filter. Inventory remains informational and cannot change routing.
 
-### Persisted model inventory pages
+The first read captures the bounded configuration hash with one atomic
+`HGETALL`. A temporary view pins that data for subsequent pages, including
+safe incident evidence and encrypted inventory cursors. Views are shared at
+the existing public cursor's one-second horizon resolution; queries in the
+same second reuse that view. Direct current-record reads do not use views.
+A newer listing or status observation cannot remove or replace rows midway
+through pagination. Filters and the keyset position are applied to the pinned
+view; public scope/filter authentication stays in `control.CursorCodec`.
 
-`InventoryRepository.ListInventoryModels` is the bounded query-side repository
-method for a model-inventory query. It selects the newest immutable snapshot for each
-matching provider/endpoint, then reads normalized model rows in deterministic
-`provider, endpoint, provider_model_id` order. Provider, endpoint, model-prefix,
-and lifecycle filters are applied in PostgreSQL; the page limit is bounded to
-1..1000 and the read never invokes inference or a provider management API.
+Views expire 15 minutes after creation, independently of observation freshness.
+An expired continuation returns `control.ErrProviderViewExpired`; callers must
+restart pagination. It never silently reconstructs a continuation from newer
+state, even when a deployment gives its signed cursor a longer lifetime.
+These views are temporary query snapshots, not a historical event ledger.
 
-The first page discovers a `SnapshotHorizon`, the maximum observation time of
-the selected latest snapshots. A continuation must pass that horizon and the
-returned keyset position (`provider`, `endpoint`, snapshot identity, and
-`provider_model_id`). Reads run in one repeatable-read transaction, so a newly
-persisted snapshot cannot replace the snapshot set halfway through a page
-sequence. Latest selection also partitions on the endpoint-account HMAC
-internally; the HMAC is never returned, while the immutable snapshot identity
-keeps account epochs distinct for cursor binding. The returned
-`InventorySnapshotInfo` carries snapshot identity, source, completeness,
-observation/expiry timestamps, and inventory digest; its `ProvenanceAt` helper
-reports current, stale, or explicitly unsupported state.
-
-This storage page intentionally retains the capability digest and bounded safe
-metadata from the normalized `control.Model`. The `llm.ModelInventoryPage`
-wire contract requires a list of capability names, which is not derivable from
-a digest. The authorization, signed public cursor, and an explicit capability
-encoding/mapping decision remain follow-up work in the control/query layer;
-storage does not fabricate capability names or make discovered models
-routable.
+The inventory page retains model capability digests and safe metadata.
+Capability names are not derivable from a digest; storage does not fabricate
+capabilities or make discovered models routable.
 
 ## Typed query boundary
 
@@ -191,22 +172,12 @@ model-inventory, and credit-status carry keyset cursors; budget-status and
 spend-summary are complete bounded snapshots without a public cursor. This
 package does not add storage reads, provider refreshes, budget aggregation, or
 Activity registration; those remain composition work behind
-`control.QueryService`. For the audit requirement, `QueryService.Audit` offers
-a storage-neutral callback after response and cursor validation. It receives
-canonical redacted envelopes and exact-or-unknown cost metadata and must commit
-the record before returning; failures are surfaced as retryable finalize state
-errors. The runtime now carries an optional, snapshot-scoped
-`PostgresQueryRepositories` snapshot/query-side bundle from the PostgreSQL
-closer into its `productionClientSet`. A custom closer may provide inventory,
-query-audit, and scope-resolution capabilities when their key material and
-schema are provisioned; the default closer exposes provider status and spend
-summary. Persisted-query composition implements spend summary from PostgreSQL;
-budget status remains deployment-provided and fail-closed. A companion
-`QueryService` is forwarded only when the same closer supplies one, so an
-unconfigured query family stays fail-closed rather than falling back to an
-in-memory answer. The low-level persisted-query constructor accepts a
-snapshot-scoped Redis budget-status reader, but the production builder leaves
-that family unsupported until runtime composition owns such a reader.
+`control.QueryService`. For auditing, `QueryService.Audit` provides a best-effort callback after response
+and cursor validation; runtime composition logs audit metadata normally.
+`QueryRepositories` carries Redis provider readers, the optional Redis budget
+reader, and the remaining SQL spend reader. `PostgresQueryRepositories` is a
+compatibility alias for deployment builders. Missing optional capabilities
+continue to fail closed.
 
 `CursorCodec` signs a bounded opaque position with HMAC-SHA256. Its claims bind
 the query kind, full tenant/project/actor scope (including tags), canonical

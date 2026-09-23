@@ -1,7 +1,7 @@
 package runtime
 
 // This file composes the storage-neutral typed query contract with the
-// PostgreSQL read pages. Budget status is exposed only when a snapshot-scoped
+// Redis provider state and remaining SQL spend pages. Budget status is exposed only when a snapshot-scoped
 // Redis generation reader is supplied. Spend is read from the PostgreSQL
 // ledgers when an authenticated deployment supplies the scope-ID resolver.
 
@@ -34,12 +34,12 @@ import (
 type QueryServiceBuilder func(context.Context, *config.Snapshot, PostgresQueryRepositories) (activity.QueryService, error)
 
 type providerStatusReader interface {
-	ListRouteStatuses(context.Context, postgresstore.ProviderStatusListOptions) (postgresstore.ProviderStatusPage, error)
-	ListCreditStatuses(context.Context, postgresstore.CreditStatusListOptions) (control.CreditStatusPage, error)
+	ListRouteStatuses(context.Context, control.ProviderStatusListOptions) (control.ProviderStatusPage, error)
+	ListCreditStatuses(context.Context, control.CreditStatusListOptions) (control.CreditStatusPage, error)
 }
 
 type inventoryReader interface {
-	ListInventoryModels(context.Context, postgresstore.InventoryModelListOptions) (postgresstore.InventoryModelPage, error)
+	ListInventoryModels(context.Context, control.InventoryModelListOptions) (control.InventoryModelPage, error)
 }
 
 type spendSummaryReader interface {
@@ -180,10 +180,10 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 	// creates non-nil typed interfaces and turns an unsupported query family
 	// into a nil-receiver panic. Missing and typed-nil optional capabilities
 	// must retain the same fail-closed behavior.
-	if repositories.ProviderStatus != nil {
+	if !isNilCapability(repositories.ProviderStatus) {
 		handler.provider = repositories.ProviderStatus
 	}
-	if repositories.Inventory != nil {
+	if !isNilCapability(repositories.Inventory) {
 		handler.inventory = repositories.Inventory
 	}
 	if repositories.SpendSummary != nil {
@@ -312,7 +312,7 @@ func (handler *persistedQueryHandler) providerStatus(ctx context.Context, reques
 	if query.Availability != nil {
 		availability = control.Availability(*query.Availability)
 	}
-	page, err := handler.provider.ListRouteStatuses(ctx, postgresstore.ProviderStatusListOptions{
+	page, err := handler.provider.ListRouteStatuses(ctx, control.ProviderStatusListOptions{
 		ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint),
 		Availability: availability, IncludeHealthy: boolValue(query.IncludeHealthy), SnapshotHorizon: horizon,
 		AfterRouteID: after, Limit: query.Page.Size,
@@ -353,7 +353,7 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 		return control.QueryResponse{}, fmt.Errorf("model inventory filter has unexpected type")
 	}
 	horizon := time.Time{}
-	position := postgresstore.InventoryModelPosition{}
+	position := control.InventoryModelPosition{}
 	if claims != nil {
 		horizon = claims.Horizon
 		var err error
@@ -366,7 +366,7 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 	if query.Lifecycle != nil {
 		lifecycle = control.Lifecycle(*query.Lifecycle)
 	}
-	page, err := handler.inventory.ListInventoryModels(ctx, postgresstore.InventoryModelListOptions{
+	page, err := handler.inventory.ListInventoryModels(ctx, control.InventoryModelListOptions{
 		ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), ModelPrefix: stringValue(query.ModelPrefix), Lifecycle: lifecycle,
 		SnapshotHorizon: horizon, After: position, Limit: query.Page.Size,
 	})
@@ -416,7 +416,7 @@ func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request 
 	if claims != nil {
 		horizon, after = claims.Horizon, claims.Position
 	}
-	page, err := handler.provider.ListCreditStatuses(ctx, postgresstore.CreditStatusListOptions{ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), IncludeOK: boolValue(query.IncludeOK), SnapshotHorizon: horizon, AfterEndpointKey: after, Limit: query.Page.Size})
+	page, err := handler.provider.ListCreditStatuses(ctx, control.CreditStatusListOptions{ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), IncludeOK: boolValue(query.IncludeOK), SnapshotHorizon: horizon, AfterEndpointKey: after, Limit: query.Page.Size})
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
@@ -499,18 +499,18 @@ func executionID(request control.QueryRequest) control.QueryExecutionID {
 	return control.QueryExecutionID(hex.EncodeToString(digest[:]))
 }
 
-func encodeInventoryPosition(position postgresstore.InventoryModelPosition) string {
+func encodeInventoryPosition(position control.InventoryModelPosition) string {
 	return strings.Join([]string{position.Provider, position.EndpointID, position.SnapshotID.String(), position.ProviderModelID}, "\x00")
 }
 
-func decodeInventoryPosition(value string) (postgresstore.InventoryModelPosition, error) {
+func decodeInventoryPosition(value string) (control.InventoryModelPosition, error) {
 	parts := strings.Split(value, "\x00")
 	if len(parts) != 4 || parts[0] == "" || parts[1] == "" || parts[3] == "" {
-		return postgresstore.InventoryModelPosition{}, errors.New("position is incomplete")
+		return control.InventoryModelPosition{}, errors.New("position is incomplete")
 	}
 	snapshotID, err := uuid.Parse(parts[2])
 	if err != nil || snapshotID == uuid.Nil {
-		return postgresstore.InventoryModelPosition{}, errors.New("snapshot id is invalid")
+		return control.InventoryModelPosition{}, errors.New("snapshot id is invalid")
 	}
-	return postgresstore.InventoryModelPosition{Provider: parts[0], EndpointID: parts[1], SnapshotID: snapshotID, ProviderModelID: parts[3]}, nil
+	return control.InventoryModelPosition{Provider: parts[0], EndpointID: parts[1], SnapshotID: snapshotID, ProviderModelID: parts[3]}, nil
 }

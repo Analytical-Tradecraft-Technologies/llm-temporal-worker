@@ -75,8 +75,8 @@ The production client set forwards a query service only when it is supplied by
 the same snapshot-scoped PostgreSQL closer as its repositories; the default
 composition does not invent authorization, cursor keys, or handlers. Query
 families without a configured service therefore fail closed. The reusable
-PostgreSQL composition for provider status, model inventory, credit status,
-and spend summary is documented in
+storage composition using Redis for provider status, model inventory, and
+credit status, with PostgreSQL still supplying spend summary is documented in
 [persisted-query-service.md](persisted-query-service.md) and is installed only
 through an explicit `ProductionFactoryOptions.QueryServiceBuilder`. Spend
 summary additionally requires `PersistedQueryOptions.ResolveScope`, an

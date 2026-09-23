@@ -15,3 +15,8 @@ var continuationFunctionSource string
 var throttleFunctionSource string
 
 var continuationPutScript = redisclient.NewScript(continuationFunctionSource)
+
+//go:embed functions/provider_state.lua
+var providerStateSource string
+
+var providerStateScript = redisclient.NewScript(providerStateSource)

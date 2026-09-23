@@ -396,11 +396,17 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	postgresProbe = identifyDependencyProbe(DependencyPostgres, postgresProbe)
-	var providerControl engine.ProviderStatusRecorder
-	if source, ok := postgresCloser.(providerStatusRepositorySource); ok {
-		providerControl = newPostgresProviderStatusRecorder(source)
+	providerState, err := redisstore.NewProviderStateStore(redisstore.ProviderStateOptions{Client: redisClient, Keys: keyOptions, Clock: factory.options.Clock})
+	if err != nil {
+		if postgresCloser != nil {
+			_ = postgresCloser.Close()
+		}
+		closeOwned()
+		return nil, nil, fmt.Errorf("construct Redis provider state: %w", err)
 	}
+	var providerControl engine.ProviderStatusRecorder = providerState
 	queryRepos := queryRepositoriesFromCloser(postgresCloser)
+	queryRepos.ProviderStatus, queryRepos.Inventory = providerState, providerState
 	var queryService activity.QueryService
 	if source, ok := postgresCloser.(queryServiceSource); ok {
 		queryService = source.QueryService()
@@ -450,9 +456,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis budget status reader: %w", err)
 	}
-	// The query repository bundle is the existing per-snapshot composition
-	// handoff. BudgetStatus is deliberately the only non-PostgreSQL capability
-	// carried here and is nil when its Redis seam was not explicitly enabled.
+	// Attach the snapshot-owned Redis budget reader alongside provider state.
 	queryRepos.BudgetStatus = budgetStatusReader
 	var redisProbe DependencyProbe
 	switch {
@@ -611,6 +615,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			CompositionFactory:     factory.options.DurableCompositionFactory,
 			composition:            precomposed,
 			ProviderStatusRecorder: providerControl,
+			ProviderInventory:      providerState,
 			Clock:                  clock,
 			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
 			CompactPortsFactory:    factory.options.CompactPortsFactory,
@@ -1439,14 +1444,9 @@ type postgresPoolCloser struct {
 	namespace postgresstore.Namespace
 }
 
-func (closer postgresPoolCloser) ProviderStatusRepository() postgresstore.ProviderStatusRepository {
-	return postgresstore.DefaultProviderStatusRepository(closer.pool, closer.namespace)
-}
-
 func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
-	repository := closer.ProviderStatusRepository()
 	spend := postgresstore.SpendSummaryRepository{Pool: closer.pool, Namespace: closer.namespace}
-	return PostgresQueryRepositories{ProviderStatus: &repository, SpendSummary: &spend}
+	return PostgresQueryRepositories{SpendSummary: &spend}
 }
 
 // CheckpointRepository exposes only the storage-neutral repository contract.

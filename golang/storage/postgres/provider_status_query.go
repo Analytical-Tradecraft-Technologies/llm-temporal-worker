@@ -15,69 +15,12 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/control"
 )
 
-const (
-	DefaultProviderStatusPageSize = 100
-	MaxProviderStatusPageSize     = 1000
-)
+// These aliases retain the legacy SQL adapter while query contracts live in control.
+type ProviderStatusListOptions = control.ProviderStatusListOptions
+type ProviderStatusPage = control.ProviderStatusPage
 
-// ProviderStatusListOptions describes the database-side portion of a
-// provider-status query.  AfterRouteID is an unsigned keyset position.  The
-// control layer must authenticate it before passing it here.
-type ProviderStatusListOptions struct {
-	ConfigDigest   [32]byte
-	Provider       string
-	EndpointID     string
-	Availability   control.Availability
-	IncludeHealthy bool
-	// SnapshotHorizon pins a paginated read to the observation horizon chosen
-	// by the control/query layer. A zero value preserves the historical
-	// current-projection read for internal callers that do not paginate.
-	SnapshotHorizon time.Time
-	AfterRouteID    string
-	Limit           int
-}
-
-// ProviderStatusPage is a bounded projection page.  NextRouteID is empty
-// when the page is complete; otherwise it is the last route key needed for a
-// subsequent keyset read.  It is not a signed public cursor.
-type ProviderStatusPage struct {
-	Routes      []control.RouteStatus
-	NextRouteID string
-}
-
-func (options *ProviderStatusListOptions) normalize() error {
-	if options == nil {
-		return errors.New("provider status list options are nil")
-	}
-	if options.ConfigDigest == ([32]byte{}) {
-		return errors.New("provider status list config digest is required")
-	}
-	for name, value := range map[string]string{
-		"provider":    options.Provider,
-		"endpoint_id": options.EndpointID,
-		"after_route": options.AfterRouteID,
-	} {
-		if value == "" {
-			continue
-		}
-		if err := validateProviderStatusQueryIdentifier(name, value); err != nil {
-			return err
-		}
-	}
-	if options.Availability != "" && !validProviderStatusAvailability(options.Availability) {
-		return fmt.Errorf("provider status availability %q is invalid", options.Availability)
-	}
-	if !options.SnapshotHorizon.IsZero() {
-		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
-	}
-	if options.Limit == 0 {
-		options.Limit = DefaultProviderStatusPageSize
-	}
-	if options.Limit < 1 || options.Limit > MaxProviderStatusPageSize {
-		return fmt.Errorf("provider status page size must be between 1 and %d", MaxProviderStatusPageSize)
-	}
-	return nil
-}
+const DefaultProviderStatusPageSize = control.DefaultProviderStatusPageSize
+const MaxProviderStatusPageSize = control.MaxProviderStatusPageSize
 
 func validateProviderStatusQueryIdentifier(name, value string) error {
 	if len(value) > 256 || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
@@ -131,7 +74,7 @@ func (repository ProviderStatusRepository) ListRouteStatuses(ctx context.Context
 	if err := repository.validate(); err != nil {
 		return page, err
 	}
-	if err := options.normalize(); err != nil {
+	if err := options.Normalize(); err != nil {
 		return page, err
 	}
 	relation, err := repository.Namespace.Render("provider_route_status")
