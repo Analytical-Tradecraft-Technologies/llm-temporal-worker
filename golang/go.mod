@@ -5,6 +5,9 @@ go 1.26.0
 tool golang.org/x/vuln/cmd/govulncheck
 
 require (
+	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/eventsourcing v0.1.0
+	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts v0.1.0
+	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/anthropics/anthropic-sdk-go v1.74.0
@@ -33,6 +36,7 @@ require (
 )
 
 require (
+	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 // indirect
@@ -40,8 +44,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.3 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.3 // indirect
+	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.69.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.11.3 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.13.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.10.0 // indirect
