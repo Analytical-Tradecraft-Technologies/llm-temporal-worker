@@ -12,6 +12,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
@@ -56,6 +57,9 @@ func (function TemporalClientFactoryFunc) New(ctx context.Context, value config.
 // only non-secret Temporal configuration. Credentials, if a deployment adds
 // them through the SDK, stay inside the SDK's credential boundary.
 type DefaultTemporalClientFactory struct {
+	// Logger is the process logger. When omitted, use the configured log
+	// format and level on stderr, never the SDK's legacy default logger.
+	Logger *observability.Logger
 	// Identity overrides the generated worker/client identity. It is useful for
 	// tests and for deployments that already provide a stable identity.
 	Identity string
@@ -73,7 +77,16 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	logger := factory.Logger
+	if logger == nil {
+		var err error
+		logger, err = newRuntimeLogger(value, Options{})
+		if err != nil {
+			return nil, err
+		}
+	}
 	options := client.Options{
+		Logger:    logger.TemporalLogger(),
 		HostPort:  value.Temporal.Target,
 		Namespace: value.Temporal.Namespace,
 		Identity:  factory.identity(value.Temporal.IdentityPrefix),

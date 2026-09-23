@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -143,5 +145,55 @@ func TestDefaultTemporalClientFactoryUsesBoundedDialRetry(t *testing.T) {
 	}
 	if got, want := attempts.Load(), int32(2); got != want {
 		t.Fatalf("factory dial attempts = %d, want %d", got, want)
+	}
+}
+
+func TestTemporalClientFactoryBindsConfiguredLogger(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Level: "warn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	factory := DefaultTemporalClientFactory{
+		Logger: logger,
+		DialContext: func(_ context.Context, options client.Options) (client.Client, error) {
+			called = true
+			if options.Logger == nil {
+				t.Fatal("SDK default logger would be used")
+			}
+			options.Logger.Info("filtered SDK event")
+			options.Logger.Warn("SDK event", "TaskQueue", "queue-1", "Error", errors.New("private-provider-error"))
+			return nil, nil
+		},
+	}
+	if _, err := factory.New(context.Background(), config.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if !called || strings.Contains(output.String(), "filtered") || strings.Contains(output.String(), "private-provider-error") || !strings.Contains(output.String(), `"task_queue":"queue-1"`) {
+		t.Fatalf("unexpected SDK logging: called=%v logs=%s", called, output.String())
+	}
+}
+
+func TestTemporalClientFactoryConfiguresSlogWhenLoggerOmitted(t *testing.T) {
+	var value config.Config
+	value.Telemetry.Logs.Level = "error"
+	called := false
+	factory := DefaultTemporalClientFactory{
+		DialContext: func(_ context.Context, options client.Options) (client.Client, error) {
+			called = true
+			if options.Logger == nil {
+				t.Fatal("SDK default logger would be used")
+			}
+			return nil, nil
+		},
+	}
+	if _, err := factory.New(context.Background(), value); err != nil || !called {
+		t.Fatalf("factory err=%v called=%v", err, called)
+	}
+	value.Telemetry.Logs.Format = "invalid"
+	called = false
+	if _, err := factory.New(context.Background(), value); err == nil || called {
+		t.Fatalf("invalid logging config reached SDK: err=%v called=%v", err, called)
 	}
 }

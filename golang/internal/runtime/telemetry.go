@@ -26,22 +26,9 @@ func newRuntimeTelemetry(ctx context.Context, configuration config.Config, optio
 		}
 	}
 
-	logger := options.Logger
-	if logger == nil {
-		output := options.LogOutput
-		if output == nil {
-			output = os.Stderr
-		}
-		var err error
-		logger, err = observability.NewLogger(observability.LogOptions{
-			Format:         configuration.Telemetry.Logs.Format,
-			Level:          configuration.Telemetry.Logs.Level,
-			ContentLogging: configuration.Telemetry.ContentLogging,
-			Output:         output,
-		})
-		if err != nil {
-			return nil, nil, nil, errors.New("construct logger failed")
-		}
+	logger, err := newRuntimeLogger(configuration, options)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	tracer := options.Tracer
@@ -70,6 +57,28 @@ func newRuntimeTelemetry(ctx context.Context, configuration config.Config, optio
 		SampleRatio: &ratio,
 		Batch:       true,
 	}), logger, nil
+}
+
+// newRuntimeLogger is shared by runtime construction and standalone Temporal
+// client construction so SDK events use the same configured slog behavior.
+func newRuntimeLogger(configuration config.Config, options Options) (*observability.Logger, error) {
+	if options.Logger != nil {
+		return options.Logger, nil
+	}
+	output := options.LogOutput
+	if output == nil {
+		output = os.Stderr
+	}
+	logger, err := observability.NewLogger(observability.LogOptions{
+		Format:         configuration.Telemetry.Logs.Format,
+		Level:          configuration.Telemetry.Logs.Level,
+		ContentLogging: configuration.Telemetry.ContentLogging,
+		Output:         output,
+	})
+	if err != nil {
+		return nil, errors.New("construct logger failed")
+	}
+	return logger, nil
 }
 
 // defaultTraceExporter uses OTLP/gRPC with its secure default transport. The

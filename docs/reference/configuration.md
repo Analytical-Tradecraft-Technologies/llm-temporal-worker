@@ -398,6 +398,15 @@ drain. Kubernetes `terminationGracePeriodSeconds` must then exceed the same
 shutdown budget (with deployment-specific margin), as described in the
 [deployment shutdown contract](../architecture/deployment-and-operations.md#probes-and-shutdown).
 
+Application and Temporal SDK client/worker events share the configured
+`log/slog` logger. `telemetry.logs.format` selects JSON or text, and
+`telemetry.logs.level` applies to SDK events as well as application events.
+Logs go to stderr unless an embedding supplies a logger or output writer.
+The Temporal adapter retains bounded workflow/run/activity IDs and task queue
+names, classifies errors without logging their raw messages, and drops
+unrecognized SDK attributes. It does not fall back to the SDK's standard
+`log` logger. Custom Temporal client factories own their logger configuration.
+
 When `telemetry.tracing.enabled` is true, `otlp_endpoint` names the OTLP/gRPC
 collector and `sample_ratio` is a decimal from `0` through `1`. Runtime uses
 the secure OTLP transport default; deploy a collector endpoint with TLS. The
