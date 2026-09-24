@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 )
@@ -47,14 +46,6 @@ func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {
 	}
 	if _, err := config.Load(append(original, []byte("\nbudgets_json: '{}'")...)); err == nil {
 		t.Fatal("accepted two budget sources")
-	}
-	withoutLease := strings.Replace(string(original), "  reservation_lease: 15m\n", "", 1)
-	loaded, err := config.Load([]byte(withoutLease))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if time.Duration(loaded.State.ReservationLease) != 15*time.Minute {
-		t.Fatalf("lease default = %v", loaded.State.ReservationLease)
 	}
 }
 

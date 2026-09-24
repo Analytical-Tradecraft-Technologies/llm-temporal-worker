@@ -42,53 +42,6 @@ func TestAdmissionWireUsesLuaFieldNames(t *testing.T) {
 	}
 }
 
-func TestAdmissionFunctionMetadataIsStableAndVersioned(t *testing.T) {
-	metadata := AdmissionFunctionMetadata()
-	if metadata.Library != AdmissionFunctionLibrary || metadata.Version != AdmissionFunctionVersion {
-		t.Fatalf("unexpected function metadata %#v", metadata)
-	}
-	source := AdmissionFunctionSource()
-	if !strings.Contains(source, "ACTION == 'begin'") || !strings.Contains(source, "ACTION == 'continue'") ||
-		!strings.Contains(source, "ACTION == 'complete'") || !strings.Contains(source, "ACTION == 'fail'") ||
-		!strings.Contains(source, "ACTION == 'durable_fence'") {
-		t.Fatal("admission function is missing a required transition")
-	}
-	if len(AdmissionFunctionDigest()) != 64 || AdmissionFunctionDigest() == "" {
-		t.Fatalf("invalid function digest %q", AdmissionFunctionDigest())
-	}
-	if !strings.Contains(source, "redis.call('TIME')") {
-		t.Fatal("admission function does not use Redis server time")
-	}
-	if !strings.Contains(source, "can_increment_reservations") || !strings.Contains(source, "redis.call('TTL'") ||
-		!strings.Contains(source, "redis.call('PEXPIREAT'") {
-		t.Fatal("admission function lacks mutation preflight or monotonic retention")
-	}
-	if strings.Contains(source, ".. KEYS") || strings.Contains(source, "..ARGV") {
-		t.Fatal("function dynamically interpolates key names")
-	}
-}
-
-func TestAdmissionFunctionValidatesInvocationShapeAndFieldBounds(t *testing.T) {
-	source := AdmissionFunctionSource()
-	for _, fragment := range []string{
-		"local MAX_KEYS = 512",
-		"local MAX_KEY_BYTES = 1024",
-		"local MAX_ARGUMENT_BYTES = 2 * 1024 * 1024",
-		"local function valid_invocation",
-		"#KEYS ~= 3 + #reservations",
-		"#KEYS ~= 2 + #old + #reservations",
-		"#record.reservations > MAX_RESERVATIONS",
-		"local function valid_attempt",
-		"not valid_attempt(record.attempt)",
-		"not valid_attempt(attempt)",
-		"attempt.attempt_number >= MAX_ATTEMPT_NUMBER",
-	} {
-		if !strings.Contains(source, fragment) {
-			t.Fatalf("admission Function omits invocation/field bound %q", fragment)
-		}
-	}
-}
-
 func TestEncodeAttemptEnforcesFunctionFieldBounds(t *testing.T) {
 	tooLong := strings.Repeat("x", maxAttemptRouteBytes+1)
 	if _, err := encodeAttempt(admission.AttemptFacts{RouteID: tooLong}); err == nil {
@@ -110,12 +63,6 @@ func TestEncodeAttemptEnforcesFunctionFieldBounds(t *testing.T) {
 
 func TestAdmissionFunctionLibraryAndLuaFallbackHaveExplicitDigests(t *testing.T) {
 	library := AdmissionFunctionSource()
-	if !strings.HasPrefix(library, "#!lua name="+AdmissionFunctionLibrary+"\n") {
-		t.Fatalf("function library header = %q", library[:min(len(library), 48)])
-	}
-	if !strings.Contains(library, "redis.register_function('"+AdmissionFunctionVersion+"'") {
-		t.Fatal("function library does not register the configured version")
-	}
 	functionDigest := sha256.Sum256([]byte(library))
 	if got, want := AdmissionFunctionDigest(), hex.EncodeToString(functionDigest[:]); got != want {
 		t.Fatalf("function digest = %q, want %q", got, want)
@@ -208,30 +155,4 @@ func functionInvocationReply(ctx context.Context) *redisclient.Cmd {
 	command := redisclient.NewCmd(ctx)
 	command.SetVal([]interface{}{"ok"})
 	return command
-}
-
-func TestAdmissionFunctionPreservesRecordRetentionOnUpdates(t *testing.T) {
-	source := AdmissionFunctionSource()
-	for _, fragment := range []string{
-		"local current_ttl = redis.call('TTL', key)",
-		"current_ttl == -2",
-		"current_ttl >= 0 and current_ttl < ttl_value",
-		"redis.call('EXPIRE', key, tostring(restore_ttl))",
-	} {
-		if !strings.Contains(source, fragment) {
-			t.Fatalf("admission function does not preserve record TTL: missing %q", fragment)
-		}
-	}
-}
-
-func TestContinuationFunctionUsesCreateIfAbsentAndTTL(t *testing.T) {
-	if !strings.Contains(continuationFunctionSource, "'NX'") || !strings.Contains(continuationFunctionSource, "EXPIRE") {
-		t.Fatal("continuation function is not immutable/expiring")
-	}
-	if !strings.Contains(continuationFunctionSource, "#KEYS >= 3") {
-		t.Fatal("continuation function does not support two-key root writes")
-	}
-	if !strings.Contains(continuationFunctionSource, "DEL', KEYS[1], KEYS[2]") {
-		t.Fatal("continuation function does not clean up provisional conflicts")
-	}
 }

@@ -361,12 +361,16 @@ func TestExampleSelectsEmbeddedRedisExecutionContract(t *testing.T) {
 
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	digest := redisstore.AdmissionFunctionDigest()
+	original := string(exampleYAML(t))
 	data := strings.Replace(
-		string(exampleYAML(t)),
+		original,
 		"admission_digest: "+digest,
 		"admission_digest: "+strings.ToUpper(digest),
 		1,
 	)
+	if data == original {
+		t.Fatal("example admission digest was not replaced")
+	}
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
@@ -535,6 +539,7 @@ func TestLoadRejectsUnknownDuplicateAndFourthClass(t *testing.T) {
 }
 
 func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
+	original := string(exampleYAML(t))
 	cases := map[string]string{
 		"unsafe URL":                 strings.Replace(string(exampleYAML(t)), "https://api.openai.com/v1", "http://api.openai.com/v1", 1),
 		"timeout":                    strings.Replace(string(exampleYAML(t)), "timeout: 115s", "timeout: 121s", 1),
@@ -554,6 +559,9 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"outbound userinfo":          strings.Replace(string(exampleYAML(t)), "outbound_hosts: [api.openai.com]", "outbound_hosts: [user@api.openai.com]", 1),
 	}
 	for name, data := range cases {
+		if data == original {
+			t.Fatalf("fixture for invalid %s was not changed", name)
+		}
 		if _, err := config.Load([]byte(data)); err == nil {
 			t.Errorf("accepted invalid %s", name)
 		}
