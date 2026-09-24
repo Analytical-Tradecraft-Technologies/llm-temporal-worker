@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -12,16 +13,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/control"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
+	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
 type fakePersistedProvider struct {
 	mu       sync.Mutex
-	status   postgresstore.ProviderStatusPage
+	status   control.ProviderStatusPage
 	credit   control.CreditStatusPage
-	lastOpts postgresstore.ProviderStatusListOptions
+	lastOpts control.ProviderStatusListOptions
 }
 
 type fakeSpendSummary struct {
@@ -48,14 +51,14 @@ func (fake *fakeSpendSummary) ListSpendSummary(_ context.Context, options postgr
 	return fake.result, nil
 }
 
-func (fake *fakePersistedProvider) ListRouteStatuses(_ context.Context, options postgresstore.ProviderStatusListOptions) (postgresstore.ProviderStatusPage, error) {
+func (fake *fakePersistedProvider) ListRouteStatuses(_ context.Context, options control.ProviderStatusListOptions) (control.ProviderStatusPage, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.lastOpts = options
 	return fake.status, nil
 }
 
-func (fake *fakePersistedProvider) ListCreditStatuses(_ context.Context, _ postgresstore.CreditStatusListOptions) (control.CreditStatusPage, error) {
+func (fake *fakePersistedProvider) ListCreditStatuses(_ context.Context, _ control.CreditStatusListOptions) (control.CreditStatusPage, error) {
 	return fake.credit, nil
 }
 
@@ -83,7 +86,7 @@ func boolPtr(value bool) *bool { return &value }
 
 func TestPersistedQueryProviderStatusIsAuditedAndCursorBound(t *testing.T) {
 	observed := time.Date(2026, time.July, 21, 23, 0, 0, 0, time.UTC)
-	providerReader := &fakePersistedProvider{status: postgresstore.ProviderStatusPage{Routes: []control.RouteStatus{{RouteID: "route-a", EndpointID: "endpoint-a", Provider: "provider-a", Availability: control.AvailabilityAvailable, Credit: control.CreditOK, Billing: control.BillingOK, Circuit: control.CircuitClosed, ObservedAt: observed, StaleAfter: observed.Add(time.Hour)}}}}
+	providerReader := &fakePersistedProvider{status: control.ProviderStatusPage{Routes: []control.RouteStatus{{RouteID: "route-a", EndpointID: "endpoint-a", Provider: "provider-a", Availability: control.AvailabilityAvailable, Credit: control.CreditOK, Billing: control.BillingOK, Circuit: control.CircuitClosed, ObservedAt: observed, StaleAfter: observed.Add(time.Hour)}}}}
 	var audited control.QueryAuditRecord
 	service := persistedQueryTestService(t, providerReader, func(_ context.Context, record control.QueryAuditRecord) error { audited = record; return nil })
 	first, err := service.Execute(context.Background(), providerQueryRequest(t, nil))
@@ -331,8 +334,10 @@ func TestNewPersistedQueryServiceRequiresSecuritySeams(t *testing.T) {
 
 func TestNewPersistedQueryServiceNormalizesMissingOptionalCapabilities(t *testing.T) {
 	var budget *fakeBudgetStatus
+	var providerReader *fakePersistedProvider
+	var inventory *redisstore.ProviderStateStore
 	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour}
-	service, err := NewPersistedQueryService(&config.Snapshot{}, PostgresQueryRepositories{}, PersistedQueryOptions{
+	service, err := NewPersistedQueryService(&config.Snapshot{}, QueryRepositories{ProviderStatus: providerReader, Inventory: inventory}, PersistedQueryOptions{
 		Authorize:    func(context.Context, control.Authorization) error { return nil },
 		Cursor:       codec,
 		Audit:        func(context.Context, control.QueryAuditRecord) error { return nil },
@@ -379,11 +384,17 @@ func TestNewPersistedQueryServiceBuilderRequiresDeploymentSecurityInputs(t *test
 	}
 }
 
-func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *testing.T) {
+func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
 	authorize := func(context.Context, control.Authorization) error { return nil }
 	cursorKey := []byte("query-builder-key")
 	builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
 		Authorize: authorize,
+		Logger:    logger,
 		Cursor:    &control.CursorCodec{Key: cursorKey, TTL: time.Hour},
 	})
 	if err != nil {
@@ -391,12 +402,8 @@ func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *
 	}
 	cursorKey[0] = 'X'
 
-	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{}); err == nil || !strings.Contains(err.Error(), "audit repository") {
+	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{}); err != nil {
 		t.Fatalf("builder without audit repository error = %v", err)
-	}
-	var nilAudit *postgresstore.QueryExecutionRepository
-	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{QueryAudit: nilAudit}); err == nil || !strings.Contains(err.Error(), "audit repository") {
-		t.Fatalf("builder with typed-nil audit repository error = %v", err)
 	}
 
 	audit := &postgresstore.QueryExecutionRepository{}
@@ -414,8 +421,11 @@ func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *
 	if !ok {
 		t.Fatalf("query service = %T, want *control.QueryService", service)
 	}
-	if err := queryService.Audit(context.Background(), control.QueryAuditRecord{}); err == nil || !strings.Contains(err.Error(), "query audit request JSON") {
-		t.Fatalf("bound PostgreSQL audit adapter error = %v, want request validation", err)
+	if err := queryService.Audit(context.Background(), control.QueryAuditRecord{Kind: llm.QueryBudgetStatus}); err != nil {
+		t.Fatalf("log audit: %v", err)
+	}
+	if !strings.Contains(output.String(), `"query_kind":"budget_status"`) {
+		t.Fatalf("audit was not logged: %s", output.String())
 	}
 	handler := queryService.TypedHandler.(*persistedQueryHandler)
 	if got, err := handler.resolveScope(context.Background(), control.QueryScope{Tenant: "tenant", Project: "project"}); err != nil || got != scopeID {
@@ -431,5 +441,33 @@ func TestPersistedQueryServiceBuilderRequiresAndBindsSnapshotAuditRepository(t *
 	}
 	if got := string(nextService.(*control.QueryService).CursorCodec.Key); got != "query-builder-key" {
 		t.Fatalf("reloaded snapshot cursor key = %q, want independent builder copy", got)
+	}
+}
+
+// The public composition path accepts neutral readers; a SQL pool is not
+// required to serve provider state. Authorization and cursor handling still run.
+func TestPersistedQueryComposesNeutralProviderReader(t *testing.T) {
+	now := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	reader := &fakePersistedProvider{status: control.ProviderStatusPage{Routes: []control.RouteStatus{{
+		RouteID: "route-a", EndpointID: "endpoint-a", Provider: "provider-a",
+		Availability: control.AvailabilityAvailable, Credit: control.CreditOK,
+		Billing: control.BillingOK, Circuit: control.CircuitClosed,
+		ObservedAt: now.Add(-time.Minute), StaleAfter: now.Add(time.Minute),
+	}}}}
+	service, err := NewPersistedQueryService(&config.Snapshot{}, QueryRepositories{ProviderStatus: reader}, PersistedQueryOptions{
+		Authorize: func(context.Context, control.Authorization) error { return nil },
+		Cursor:    &control.CursorCodec{Key: []byte("query-test-key")},
+		Audit:     func(context.Context, control.QueryAuditRecord) error { return nil },
+		Clock:     func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.Execute(context.Background(), providerQueryRequest(t, nil))
+	if err != nil || !response.Complete {
+		t.Fatalf("neutral provider query: %#v %v", response, err)
+	}
+	if !reader.lastOpts.SnapshotHorizon.Equal(now) {
+		t.Fatal("snapshot horizon was not bound")
 	}
 }

@@ -52,14 +52,17 @@ func TestReferenceMaterializerIsIdempotentAndAtomic(t *testing.T) {
 func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 	now := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
 	m := newReferenceMaterializer(t, func() time.Time { return now })
-	first := referenceTestReservation(now, 0, "0.60")
-	second := referenceTestReservation(now, 1, "0.60")
+	first := referenceTestReservation(now, 0, "0.40")
+	second := referenceTestReservation(now, 1, "0.40")
 	request := ReserveRequest{OperationID: "op-multi", GenerationID: "gen-1", Reservations: []admission.WindowReservation{first, second}}
 	accepted, err := m.Accept(context.Background(), request)
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("acceptance = %#v, %v", accepted, err)
 	}
 
+	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
+		t.Fatal(err)
+	}
 	completion := exactCompletion("completion-second", request.OperationID, request.GenerationID, second, 2, "0.10")
 	reconcile := ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: []budget.CompletionEvent{completion}}
 	if err := m.Reconcile(context.Background(), reconcile); err != nil {
@@ -75,9 +78,9 @@ func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 		t.Fatalf("changed completion error = %v, want conflict", err)
 	}
 
-	// The completion above targeted only bucket 1. Bucket 0 remains at 0.60,
+	// The completion above targeted only bucket 1. Bucket 0 remains at 0.40,
 	// while bucket 1 has only 0.10 accounted cost.
-	firstFollowup := ReserveRequest{OperationID: "op-first-followup", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "0.50")}}
+	firstFollowup := ReserveRequest{OperationID: "op-first-followup", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "0.60")}}
 	if result, err := m.Accept(context.Background(), firstFollowup); err != nil || result.Accepted {
 		t.Fatalf("bucket 0 was reconciled accidentally: %#v, %v", result, err)
 	}
@@ -95,11 +98,19 @@ func TestReferenceMaterializerExpiryRemovesReservedAndAccounted(t *testing.T) {
 	if result, err := m.Accept(context.Background(), request); err != nil || !result.Accepted {
 		t.Fatalf("acceptance = %#v, %v", result, err)
 	}
+	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
+		t.Fatal(err)
+	}
 	completion := exactCompletion("completion-expiring", request.OperationID, request.GenerationID, reservation, 2, "0.20")
 	if err := m.Reconcile(context.Background(), ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: []budget.CompletionEvent{completion}}); err != nil {
 		t.Fatalf("reconcile = %v", err)
 	}
 	now = now.Add(2 * time.Minute)
+	stillActive := ReserveRequest{OperationID: "still-accounted", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "1.00")}}
+	if result, err := m.Accept(context.Background(), stillActive); err != nil || result.Accepted {
+		t.Fatalf("start deadline refunded accounted cost: %#v, %v", result, err)
+	}
+	now = now.Add(3 * time.Hour)
 	newRequest := ReserveRequest{OperationID: "op-after-expiry", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "1.00")}}
 	if result, err := m.Accept(context.Background(), newRequest); err != nil || !result.Accepted {
 		t.Fatalf("expired reserved/accounted values still consume capacity: %#v, %v", result, err)
@@ -124,6 +135,9 @@ func TestReferenceDispatchFenceIsAtomicIdempotentAndRetainsReconciliation(t *tes
 	}
 	retainUntil := now.Add(time.Hour)
 	now = request.ExpiresAt.Add(-time.Nanosecond)
+	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}); err != nil {
+		t.Fatalf("claim before fence: %v", err)
+	}
 	fence := DispatchFenceRequest{Reservation: request, RetainUntil: retainUntil}
 	if err := m.FenceDispatch(context.Background(), fence); err != nil {
 		t.Fatalf("near-expiry fence = %v", err)
@@ -162,8 +176,37 @@ func TestReferenceDispatchFenceRejectsExpiredAndStaleFacts(t *testing.T) {
 		t.Fatalf("stale fence error = %v, want conflict", err)
 	}
 	now = request.ExpiresAt
-	if err := m.FenceDispatch(context.Background(), DispatchFenceRequest{Reservation: request, RetainUntil: now.Add(time.Hour)}); !errors.Is(err, ErrReferenceReservationNotFound) {
-		t.Fatalf("expired fence error = %v, want reservation not found", err)
+	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatalf("expired claim error = %v, want lease expired", err)
+	}
+}
+
+func TestReferenceUnplannedReservationReplayPreservesExpiredLease(t *testing.T) {
+	now := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	m := newReferenceMaterializer(t, func() time.Time { return now })
+	request := ReserveRequest{
+		OperationID: "unplanned-replay", GenerationID: "gen-1",
+		ExpiresAt: now.Add(time.Minute),
+		Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "1")},
+	}
+	accepted, err := m.Accept(context.Background(), request)
+	if err != nil || !accepted.Accepted {
+		t.Fatalf("acceptance = %#v, %v", accepted, err)
+	}
+	now = now.Add(2 * time.Minute)
+	replay, err := m.Accept(context.Background(), request)
+	if err != nil || !replay.Accepted || !replay.Events[0].OccurredAt.Equal(accepted.Events[0].OccurredAt) {
+		t.Fatalf("reservation replay changed immutable event facts: %#v, %v", replay, err)
+	}
+	if _, err := m.Claim(context.Background(), ClaimRequest{
+		OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID,
+	}); !errors.Is(err, ErrLeaseExpired) {
+		t.Fatalf("replay renewed expired authorization: %v", err)
+	}
+	request.OperationID = "after-unplanned-expiry"
+	request.ExpiresAt = now.Add(time.Minute)
+	if result, err := m.Accept(context.Background(), request); err != nil || !result.Accepted {
+		t.Fatalf("expired unclaimed reservation retained capacity: %#v, %v", result, err)
 	}
 }
 

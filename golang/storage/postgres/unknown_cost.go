@@ -39,7 +39,7 @@ type UnknownCostCandidate struct {
 // UnknownCostRepository is a read-only, bounded reconciliation queue over
 // completed operations whose actual cost is still unknown. It deliberately
 // does not accept an exact amount or mutate budget state: authoritative billing
-// evidence and the compound operation/journal transaction are separate work.
+// evidence and Redis budget settlement belong to the durable reconciliation port.
 type UnknownCostRepository struct {
 	Pool      *pgxpool.Pool
 	Namespace Namespace

@@ -36,6 +36,11 @@ HTTPS source URL, ISO-8601 source review date, SDK version, provenance,
 redactions, capability facts, and the narrow list of generated fields that may
 be ignored in equivalence checks.
 
+The recorded SDK version describes the fixture's provenance and does not need
+to match the current `go.mod` version. Adapter contract tests exercise the
+fixtures against the currently selected SDK. Update the recorded version when
+the fixtures are regenerated or explicitly reviewed against another SDK version.
+
 Every `service_classes` mapping contains non-empty `economy`, `standard`, and
 `priority` facts; `provider_default` is not a public class. Profiles may retain
 supplemental documented scenarios such as `priority_downgrade`, `unknown_tier`,

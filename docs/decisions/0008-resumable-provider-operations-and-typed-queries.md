@@ -43,12 +43,12 @@ Current budget status is the deliberate exception: it reads the verified Redis
 budget generation only and returns its generation, manifest digest, and Stream
 high-water mark. It never falls back to PostgreSQL. Spend summary reads
 completed PostgreSQL operation/cost rows, not budget journal/working-set rows.
-Every Query has an idempotent key but is recorded in a dedicated bounded inline
-**query_executions** audit ledger rather than the paid inference operation/blob
-state machine. It records exact-or-unknown **actual_cost_usd**; confirmed local
-stored-state queries record exact zero. A Query response carries a distinct
-query-execution ID. Historical spend may union these rows with inference costs
-without pretending they share lifecycle semantics.
+Each Query carries an operation key and a distinct query-execution ID.
+Completed reads emit best-effort metadata to normal logs, including
+exact-or-unknown cost; local stored-state reads report exact zero. They do not
+require durable query-audit storage. The legacy `query_executions` repository
+remains for direct callers until SQL removal; its existing rows may still be
+included in historical spend, but normal query logging does not add rows.
 
 The OCaml package exposes exact wire variants at its protocol layer and a GADT
 at its ergonomic layer, associating each request constructor with its result

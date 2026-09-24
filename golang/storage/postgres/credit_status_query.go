@@ -15,59 +15,11 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/control"
 )
 
-const (
-	DefaultCreditStatusPageSize = 100
-	MaxCreditStatusPageSize     = 1000
-)
+// These aliases retain the legacy SQL adapter while query contracts live in control.
+type CreditStatusListOptions = control.CreditStatusListOptions
 
-// CreditStatusListOptions describes the unsigned database portion of a
-// credit-status query. Endpoint IDs are the stable keyset position because a
-// configured endpoint may have more than one route projection; the query
-// chooses the latest projection for each endpoint deterministically.
-type CreditStatusListOptions struct {
-	ConfigDigest     [32]byte
-	Provider         string
-	EndpointID       string
-	IncludeOK        bool
-	SnapshotHorizon  time.Time
-	AfterEndpointKey string
-	Limit            int
-}
-
-func (options *CreditStatusListOptions) normalize() error {
-	if options == nil {
-		return errors.New("credit status list options are nil")
-	}
-	if options.ConfigDigest == ([32]byte{}) {
-		return errors.New("credit status list config digest is required")
-	}
-	for name, value := range map[string]string{
-		"provider":    options.Provider,
-		"endpoint_id": options.EndpointID,
-	} {
-		if value == "" {
-			continue
-		}
-		if err := validateProviderStatusQueryIdentifier(name, value); err != nil {
-			return err
-		}
-	}
-	if options.AfterEndpointKey != "" {
-		if _, _, err := splitCreditStatusKey(options.AfterEndpointKey); err != nil {
-			return err
-		}
-	}
-	if !options.SnapshotHorizon.IsZero() {
-		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
-	}
-	if options.Limit == 0 {
-		options.Limit = DefaultCreditStatusPageSize
-	}
-	if options.Limit < 1 || options.Limit > MaxCreditStatusPageSize {
-		return fmt.Errorf("credit status page size must be between 1 and %d", MaxCreditStatusPageSize)
-	}
-	return nil
-}
+const DefaultCreditStatusPageSize = control.DefaultCreditStatusPageSize
+const MaxCreditStatusPageSize = control.MaxCreditStatusPageSize
 
 // ListCreditStatuses reads one current status projection per provider/endpoint
 // identity in stable key order. The DISTINCT ON ordering is deliberate: when a
@@ -81,7 +33,7 @@ func (repository ProviderStatusRepository) ListCreditStatuses(ctx context.Contex
 	if err := repository.validate(); err != nil {
 		return page, err
 	}
-	if err := options.normalize(); err != nil {
+	if err := options.Normalize(); err != nil {
 		return page, err
 	}
 	afterProvider, afterEndpoint, err := splitCreditStatusKey(options.AfterEndpointKey)

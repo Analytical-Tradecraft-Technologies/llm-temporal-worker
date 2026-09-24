@@ -12,7 +12,7 @@ import (
 
 func TestInventoryModelListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 	options := InventoryModelListOptions{ConfigDigest: sha256.Sum256([]byte("config"))}
-	if err := options.normalize(); err != nil {
+	if err := options.Normalize(); err != nil {
 		t.Fatal(err)
 	}
 	if options.Limit != DefaultInventoryPageSize {
@@ -29,7 +29,7 @@ func TestInventoryModelListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 		After:           InventoryModelPosition{Provider: "openai", EndpointID: "primary", SnapshotID: uuid.MustParse("018f7b5d-9ad8-7f5e-8d8c-4cf8e5c4a4d1"), ProviderModelID: "gpt-4o"},
 		Limit:           10,
 	}
-	if err := valid.normalize(); err != nil {
+	if err := valid.Normalize(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,7 +48,7 @@ func TestInventoryModelListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 		{name: "position without snapshot", options: InventoryModelListOptions{ConfigDigest: options.ConfigDigest, SnapshotHorizon: time.Now(), After: InventoryModelPosition{Provider: "provider", EndpointID: "endpoint", ProviderModelID: "model"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := test.options.normalize(); err == nil {
+			if err := test.options.Normalize(); err == nil {
 				t.Fatal("invalid options were accepted")
 			}
 		})

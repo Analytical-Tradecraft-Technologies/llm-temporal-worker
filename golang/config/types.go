@@ -89,6 +89,7 @@ type Config struct {
 	Budgets          BudgetsConfig             `yaml:"budgets" json:"budgets"`
 	Continuation     ContinuationConfig        `yaml:"continuation" json:"continuation"`
 	Telemetry        TelemetryConfig           `yaml:"telemetry" json:"telemetry"`
+	BudgetsJSON      string                    `yaml:"budgets_json,omitempty" json:"-"`
 }
 
 type ServerConfig struct {

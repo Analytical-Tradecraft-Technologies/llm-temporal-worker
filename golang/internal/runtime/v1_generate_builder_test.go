@@ -17,7 +17,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	durable "github.com/mfow/llm-temporal-worker/golang/storage/durable"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
 type generateBuilderClientSet struct{ capabilities V1RuntimeCapabilities }
@@ -45,7 +44,7 @@ func completeGenerateCapabilities(factory GeneratePortsFactory) V1RuntimeCapabil
 			Blobs:        builderCheckpointBlobReader{},
 			Materializer: builderCheckpointMaterializer{},
 		},
-		Journal:              builderJournal{},
+		Budgets:              builderBudgets{},
 		Clock:                time.Now,
 		GeneratePortsFactory: factory,
 	}
@@ -82,7 +81,7 @@ func TestV1RuntimeCapabilitiesValidateGenerateRequiresEveryCapability(t *testing
 		{name: "planner", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Planner = nil }},
 		{name: "adapters", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Adapters = nil }},
 		{name: "checkpoints", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Checkpoints = CheckpointCapabilities{} }},
-		{name: "journal", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Journal = nil }},
+		{name: "claim", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Budgets = nil }},
 		{name: "clock", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Clock = nil }},
 		{name: "ports factory", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.GeneratePortsFactory = nil }},
 	}
@@ -111,7 +110,7 @@ func TestV1RuntimeCapabilitiesValidateCompactRequiresEveryCapability(t *testing.
 		{name: "planner", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Planner = nil }},
 		{name: "adapters", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Adapters = nil }},
 		{name: "checkpoints", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Checkpoints = CheckpointCapabilities{} }},
-		{name: "journal", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Journal = nil }},
+		{name: "claim", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Budgets = nil }},
 		{name: "clock", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Clock = nil }},
 		{name: "ports factory", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.CompactPortsFactory = nil }},
 	}
@@ -215,7 +214,7 @@ func TestGenerateV1RuntimeBuilderPreservesReconciliationNoDuplicateDispatch(t *t
 		t.Fatalf("dispatch/reconcile calls = %d/%d, want 1/2", stateful.dispatchCalls, stateful.reconcileCalls)
 	}
 	wantEvents := []string{
-		"replay", "cache", "compaction", "route", "reserve", "journal", "dispatch", "finalize", "reconcile",
+		"replay", "cache", "compaction", "route", "reserve", "claim", "dispatch", "finalize", "reconcile",
 		"replay", "reconcile",
 		"replay",
 	}
@@ -257,11 +256,11 @@ func validBuilderGeneratePorts(events *[]string) durable.GeneratePorts {
 			record("reserve")
 			return reservation, nil
 		},
-		Journal: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.JournalReceipt, error) {
-			record("journal")
-			return durable.JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, nil
+		Claim: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			record("claim")
+			return durable.ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation-1"}, nil
 		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.JournalReceipt) (durable.DispatchResult, error) {
+		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.DispatchResult, error) {
 			record("dispatch")
 			return durable.DispatchResult{}, nil
 		},
@@ -310,7 +309,7 @@ func (state *builderGenerateRetryState) ports(request llm.GenerateRequestV1) dur
 			return durable.GenerateReplay{}, nil
 		}
 	}
-	ports.Dispatch = func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.JournalReceipt) (durable.DispatchResult, error) {
+	ports.Dispatch = func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.DispatchResult, error) {
 		state.events = append(state.events, "dispatch")
 		state.dispatchCalls++
 		return durable.DispatchResult{}, nil
@@ -362,11 +361,4 @@ func (builderCheckpointMaterializer) MaterializeHandle(context.Context, string, 
 	return state.MaterializedState{}, nil
 }
 
-type builderJournal struct{}
-
-func (builderJournal) AppendReservation(context.Context, budget.ReservationEvent) (postgresstore.JournalRecord, error) {
-	return postgresstore.JournalRecord{}, nil
-}
-func (builderJournal) AppendCompletion(context.Context, budget.CompletionEvent) (postgresstore.JournalRecord, error) {
-	return postgresstore.JournalRecord{}, nil
-}
+type builderBudgets struct{ durable.BudgetLeaser }

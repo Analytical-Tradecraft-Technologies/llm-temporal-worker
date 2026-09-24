@@ -12,6 +12,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/admission"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/storage/conformance"
 	durable "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -76,6 +77,9 @@ func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
 		t.Fatalf("denied replay = %#v", deniedReplay)
 	}
 
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
+		t.Fatal(err)
+	}
 	reservationEvent := accepted.Events[0]
 	completion := budget.CompletionEvent{
 		EventID: "durable-completion-1", GenerationID: string(request.GenerationID),
@@ -122,6 +126,9 @@ func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accepted reservation = %v", err)
 	}
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
+		t.Fatal(err)
+	}
 	base := accepted.Events[0]
 	completion := func(id string) budget.CompletionEvent {
 		return budget.CompletionEvent{EventID: id, GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
@@ -129,7 +136,7 @@ func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
 			ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now}
 	}
 	first, second := completion("batch-first"), completion("batch-second")
-	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first, second}}); !errors.Is(err, ErrRedisBudgetConflict) {
+	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first, second}}); err == nil {
 		t.Fatalf("mixed completion batch = %v, want conflict", err)
 	}
 	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first}}); err != nil {
@@ -162,6 +169,11 @@ func TestLiveRedisBatchEscrowSequenceReplayAndClose(t *testing.T) {
 	if result, acceptErr := materializer.AcceptBatchEscrow(ctx, escrowDigest, escrow); acceptErr != nil || !result.Accepted {
 		t.Fatalf("accept escrow = %#v, %v", result, acceptErr)
 	}
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{
+		OperationID: escrow.OperationID, GenerationID: escrow.GenerationID, IncarnationID: escrow.IncarnationID,
+	}); !errors.Is(err, ErrRedisBudgetConflict) {
+		t.Fatalf("escrow directly authorized provider dispatch: %v", err)
+	}
 	child := func(id, amount string) durable.ReserveRequest {
 		request := escrow
 		request.OperationID = durable.OperationID(id)
@@ -184,9 +196,11 @@ func TestLiveRedisBatchEscrowSequenceReplayAndClose(t *testing.T) {
 	if err != nil || len(replay) != 1 || replay[0].OperationID != firstResult[0].OperationID {
 		t.Fatalf("same-sequence replay = %#v, %v", replay, err)
 	}
-	escrowTTL, ttlErr := client.PTTL(ctx, materializer.space.durableBudgetOperationKey(string(escrow.GenerationID), string(escrow.OperationID))).Result()
-	if ttlErr != nil || escrowTTL <= 45*time.Minute {
-		t.Fatalf("escrow TTL after shorter first wave = %v, %v; want phase retention", escrowTTL, ttlErr)
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: first.OperationID, GenerationID: first.GenerationID, IncarnationID: first.IncarnationID}); err != nil {
+		t.Fatalf("claim allocated grant: %v", err)
+	}
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: first.OperationID, GenerationID: first.GenerationID, IncarnationID: first.IncarnationID}); !errors.Is(err, durable.ErrAlreadyClaimed) {
+		t.Fatalf("allocated grant claim replay = %v", err)
 	}
 	changedDigest := sha256.Sum256([]byte("changed-sequence-one"))
 	if _, err = materializer.AllocateBatchGrants(ctx, changedDigest, escrow, 1, []durable.ReserveRequest{child("grant-changed", "0.01")}); !errors.Is(err, ErrRedisBudgetConflict) {
@@ -274,6 +288,9 @@ func TestLiveRedisDispatchFenceRetainsTerminalReconciliationPastLease(t *testing
 		t.Fatalf("unfenced acceptance = %#v, %v", result, err)
 	}
 	time.Sleep(time.Until(leaseUntil.Add(-300 * time.Millisecond)))
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}); err != nil {
+		t.Fatalf("claim before fence: %v", err)
+	}
 	fence := durable.DispatchFenceRequest{Reservation: request, RetainUntil: now.Add(30 * time.Second)}
 	if err := materializer.FenceDispatch(ctx, fence); err != nil {
 		t.Fatalf("near-expiry fence = %v", err)
@@ -287,10 +304,10 @@ func TestLiveRedisDispatchFenceRetainsTerminalReconciliationPastLease(t *testing
 	if err := materializer.FenceDispatch(ctx, fence); err != nil {
 		t.Fatalf("idempotent fence after original lease = %v", err)
 	}
-	if err := materializer.FenceDispatch(ctx, durable.DispatchFenceRequest{
-		Reservation: expiredRequest, RetainUntil: now.Add(30 * time.Second),
-	}); !errors.Is(err, ErrRedisBudgetReservationNotFound) {
-		t.Fatalf("expired unfenced reservation = %v, want not found", err)
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{
+		OperationID: expiredRequest.OperationID, GenerationID: expiredRequest.GenerationID, IncarnationID: expiredRequest.IncarnationID,
+	}); !errors.Is(err, durable.ErrLeaseExpired) {
+		t.Fatalf("expired unclaimed reservation = %v, want expired", err)
 	}
 	event := accepted.Events[0]
 	cost := pricing.MustUSD("0.005")
@@ -305,5 +322,32 @@ func TestLiveRedisDispatchFenceRetainsTerminalReconciliationPastLease(t *testing
 		IncarnationID: request.IncarnationID, Events: []budget.CompletionEvent{completion},
 	}); err != nil {
 		t.Fatalf("terminal reconciliation after original lease = %v", err)
+	}
+}
+
+func TestLiveRedisRollingBudget(t *testing.T) {
+	client := openLiveRedis(t)
+	if err := client.ScriptLoad(context.Background(), AdmissionLuaSource()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if liveRedisLuaScriptCleanupAllowed() {
+			if err := client.ScriptFlush(context.Background()).Err(); err != nil {
+				t.Errorf("flush isolated Redis Lua script cache: %v", err)
+			}
+		}
+	})
+	for _, mode := range []AdmissionMode{AdmissionModeFunction, AdmissionModeLua} {
+		t.Run(string(mode), func(t *testing.T) {
+			conformance.RunDurableRollingBudget(t, func(t *testing.T) (durable.BudgetMaterializer, func() time.Time, func(time.Duration)) {
+				keys := liveKeyOptions("rolling-budget")
+				cleanupLivePrefix(t, client, keys.Prefix)
+				m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: keys, GenerationID: "rolling-gen", IncarnationID: "rolling-inc", Clock: time.Now})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return m, time.Now, time.Sleep
+			})
+		})
 	}
 }

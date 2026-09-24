@@ -23,7 +23,7 @@ local MAX_RESERVATIONS = 253
 local MAX_ATTEMPT_NUMBER = 1000000
 
 local function valid_invocation(min_keys, max_keys, argument_count)
-    local key_bound = (ACTION == 'durable_reserve_batch' or ACTION == 'durable_allocate_batch_grants') and MAX_BATCH_KEYS or MAX_KEYS
+    local key_bound = (ACTION == 'durable_reserve_batch' or ACTION == 'durable_reserve_escrow' or ACTION == 'durable_allocate_batch_grants') and MAX_BATCH_KEYS or MAX_KEYS
     if #KEYS < min_keys or (max_keys and #KEYS > max_keys) or #KEYS > key_bound then
         return false
     end
@@ -676,19 +676,33 @@ local function durable_reservation_matches(left, right)
         left.duration_nanos == right.duration_nanos and
         left.bucket_start_nanos == right.bucket_start_nanos and
         durable_int(left.expires_millis) == durable_int(right.expires_millis) and
+        durable_int(left.window_expires_millis) == durable_int(right.window_expires_millis) and
         left.event_id == right.event_id and left.amount_usd == right.amount_usd and
         left.limit_usd == right.limit_usd
 end
 
-local function durable_extend_key(key, retain_until, now_millis)
-    local ttl = redis.call('PTTL', key)
-    if ttl == -2 then return false end
-    if ttl >= 0 and ttl < retain_until - now_millis then
-        redis.call('PEXPIREAT', key, tostring(retain_until))
+local function durable_key_types(string_count)
+    for index, key in ipairs(KEYS) do
+        local expected = index <= string_count and 'string' or ((index - string_count) % 2 == 1 and 'hash' or 'zset')
+        local kind = redis.call('TYPE', key).ok
+        if kind ~= 'none' and kind ~= expected then return false end
     end
     return true
 end
 
+
+-- Validate key types before any mutation: Redis scripts are atomic, but command
+-- errors do not roll back earlier writes.
+if ACTION == 'durable_reserve' or ACTION == 'durable_claim' or ACTION == 'durable_reconcile' or ACTION == 'durable_fence' or ACTION == 'durable_close_batch' then
+    local counts = {durable_reserve = 10, durable_claim = 4, durable_reconcile = 5, durable_fence = 8, durable_close_batch = 6}
+    local argument_count = counts[ACTION]
+    if not valid_invocation(3, 1 + 2 * MAX_DURABLE_RESERVATIONS, argument_count) then return {'invalid_request', ''} end
+    for i, key in ipairs(KEYS) do
+        local expected = i == 1 and 'string' or (i % 2 == 0 and 'hash' or 'zset')
+        local kind = redis.call('TYPE', key).ok
+        if kind ~= 'none' and kind ~= expected then return {'state_unavailable', ''} end
+    end
+end
 
 if ACTION == 'durable_close_batch' then
     if not valid_invocation(3,1+2*MAX_DURABLE_RESERVATIONS,6) then return {'invalid_request',''} end
@@ -698,6 +712,7 @@ if ACTION == 'durable_close_batch' then
     if record.generation_id~=generation or record.incarnation_id~=incarnation or record.operation_id~=operation_id or record.fingerprint~=fingerprint then return {'conflict',''} end
     if record.status=='closed' then if record.close_digest~=close_digest then return {'conflict',''} end;return {'existing',raw} end
     if record.status~='accepted' or type(record.reservations)~='table' or #KEYS~=1+2*#record.reservations then return {'conflict',''} end
+    if not record.escrow or record.claimed then return {'conflict',''} end
     local refund=durable_int(record.remaining_escrow_nano)
     if not refund or refund<0 then return {'state_unavailable',''} end
     for index,reservation in ipairs(record.reservations) do
@@ -705,6 +720,8 @@ if ACTION == 'durable_close_batch' then
         local bucket_key=KEYS[1+(index-1)*2+1];local field=durable_bucket_field(reservation.bucket)
         local current=durable_int(redis.call('HGET',bucket_key,field) or '0')
         if not current or current<amount then return {'state_unavailable',''} end
+        local expiry_key=KEYS[1+(index-1)*2+2]
+        if amount>0 and not redis.call('ZSCORE',expiry_key,durable_expiry_member(fingerprint,reservation.bucket,reservation.amount_nano)) then return {'not_found',''} end
     end
     for index,reservation in ipairs(record.reservations) do
         local amount=durable_int(reservation.amount_nano);local bucket_key=KEYS[1+(index-1)*2+1];local expiry_key=KEYS[1+(index-1)*2+2]
@@ -731,6 +748,7 @@ if ACTION == 'durable_allocate_batch_grants' then
         not bounded_string(fingerprint,64,true) or #fingerprint ~= 64 or not allocation_sequence or allocation_sequence<=0 then
         return {'invalid_request',''}
     end
+    if not durable_key_types(#operations + 2) then return {'state_unavailable',''} end
     local existing_raw=redis.call('GET',KEYS[2])
     if existing_raw then
         local decoded_ok,existing=pcall(cjson.decode,existing_raw)
@@ -748,6 +766,7 @@ if ACTION == 'durable_allocate_batch_grants' then
         escrow.operation_id~=escrow_id or escrow.generation_id~=generation or
         escrow.incarnation_id~=incarnation or escrow.fingerprint~=escrow_fingerprint or
         type(escrow.reservations)~='table' then return {'conflict',''} end
+    if not escrow.escrow or escrow.claimed then return {'conflict',''} end
     local prior_sequence=durable_int(escrow.allocation_sequence or '0')
     if not prior_sequence or allocation_sequence~=prior_sequence+1 then return {'conflict',''} end
     local remaining_logical=durable_int(escrow.remaining_escrow_nano)
@@ -755,6 +774,8 @@ if ACTION == 'durable_allocate_batch_grants' then
     if not remaining_logical or not original_logical or original_logical<=0 or remaining_logical<0 or remaining_logical>original_logical then return {'state_unavailable',''} end
     local allocated_logical=0
     local now=redis.call('TIME');local now_millis=durable_int(now[1])*1000+math.floor(durable_int(now[2])/1000)
+    local escrow_start_by=durable_int(escrow.start_by_millis)
+    if not escrow_start_by or now_millis>=escrow_start_by then return {'expired',''} end
     local aggregates,records,seen={}, {}, {}
     for oi,operation in ipairs(operations) do
         if type(operation)~='table' then return {'invalid_request',''} end
@@ -773,6 +794,7 @@ if ACTION == 'durable_allocate_batch_grants' then
         seen[operation.operation_id]=true
         local reservations={}
         local seen_reservations={}
+        local start_by=math.min(now_millis+15*60*1000,escrow_start_by)
         for _,reservation in ipairs(operation.reservations) do
             if type(reservation)~='table' or not bounded_string(reservation.policy_id,128,true) or
                 not bounded_string(reservation.window_id,128,true) or not bounded_string(reservation.bucket,64,true) or
@@ -782,6 +804,9 @@ if ACTION == 'durable_allocate_batch_grants' then
             local bki=durable_int(reservation.bucket_key_index);local eki=durable_int(reservation.expiry_key_index)
             if not amount or amount<=0 or not limit or limit<amount or not bucket or bucket<0 or not expires or expires<=now_millis or not bki or not eki or
                 bki<=#operations+2 or eki<=#operations+2 or bki==eki or bki>#KEYS or eki>#KEYS then return {'invalid_request',''} end
+            local window_expires=durable_int(reservation.window_expires_millis)
+            if not window_expires or window_expires<=0 then return {'invalid_request',''} end
+            start_by=math.min(start_by,expires)
             local identity=reservation.policy_id..'\0'..reservation.window_id..'\0'..reservation.bucket
             if seen_reservations[identity] then return {'invalid_request',''} end
             seen_reservations[identity]=true
@@ -795,7 +820,8 @@ if ACTION == 'durable_allocate_batch_grants' then
             incarnation_id=incarnation,fingerprint=operation.fingerprint,status='accepted',
             occurred_at=operation.occurred_at,expires_at=operation.expires_at,route=operation.route,
             bounds=operation.bounds,logical_cost_nano=operation.logical_cost_nano,
-            remaining_escrow_nano=operation.logical_cost_nano,reservations=reservations,events={}}
+            remaining_escrow_nano=operation.logical_cost_nano,reservations=reservations,events={},
+            start_by_millis=start_by,claimed=false}
     end
     if allocated_logical>remaining_logical then return {'conflict',''} end
     remaining_logical=remaining_logical-allocated_logical
@@ -803,11 +829,12 @@ if ACTION == 'durable_allocate_batch_grants' then
         local identity=reservation.policy_id..'\0'..reservation.window_id..'\0'..reservation.bucket
         local aggregate=aggregates[identity]
         if aggregate then
-            local escrow_amount=durable_int(reservation.amount_nano);local escrow_expires=durable_int(reservation.expires_millis)
-            if not escrow_amount or not escrow_expires or aggregate.amount>escrow_amount or aggregate.reservation.limit_nano~=reservation.limit_nano then return {'conflict',''} end
+            local escrow_amount=durable_int(reservation.amount_nano)
+            if not escrow_amount or aggregate.amount>escrow_amount or aggregate.reservation.limit_nano~=reservation.limit_nano then return {'conflict',''} end
             local bucket_key=KEYS[aggregate.bki];local current=durable_int(redis.call('HGET',bucket_key,durable_bucket_field(reservation.bucket)) or '0')
-            if not current or current<aggregate.amount then return {'state_unavailable',''} end
-            aggregate.matched=true;aggregate.escrow=reservation;aggregate.remaining=escrow_amount-aggregate.amount;aggregate.expires=escrow_expires
+            local member=durable_expiry_member(escrow_fingerprint,reservation.bucket,reservation.amount_nano)
+            if not current or current<escrow_amount or not redis.call('ZSCORE',KEYS[aggregate.eki],member) then return {'state_unavailable',''} end
+            aggregate.matched=true;aggregate.escrow=reservation;aggregate.remaining=escrow_amount-aggregate.amount;aggregate.expires=escrow_start_by
         end
     end
     for _,aggregate in pairs(aggregates) do if not aggregate.matched then return {'conflict',''} end end
@@ -825,11 +852,11 @@ if ACTION == 'durable_allocate_batch_grants' then
             local amount=durable_int(reservation.amount_nano)
             redis.call('HSET',KEYS[bki],durable_limit_field(reservation.bucket),reservation.limit_nano)
             redis.call('HINCRBY',KEYS[bki],durable_bucket_field(reservation.bucket),reservation.amount_nano)
-            redis.call('ZADD',KEYS[eki],tostring(durable_int(reservation.expires_millis)),durable_expiry_member(operation.fingerprint,reservation.bucket,reservation.amount_nano))
+            redis.call('ZADD',KEYS[eki],tostring(record.start_by_millis),durable_expiry_member(operation.fingerprint,reservation.bucket,reservation.amount_nano))
             reservation.reserved_nano=reservation.amount_nano;reservation.accounted_nano='0'
             reservation.reservation_revision=1;reservation.status='reserved'
         end
-        redis.call('SET',KEYS[durable_int(operation.operation_key_index)],durable_encode(record),'EX',tostring(ttl))
+        redis.call('SET',KEYS[durable_int(operation.operation_key_index)],durable_encode(record))
     end
     escrow.status='accepted';escrow.allocation_sequence=allocation_sequence;escrow.allocation_digest=content_digest
     escrow.remaining_escrow_nano=string.format('%.0f',remaining_logical)
@@ -838,12 +865,13 @@ if ACTION == 'durable_allocate_batch_grants' then
         content_digest=content_digest,fingerprint=fingerprint,status='accepted',operations=records,
         escrow_id=escrow_id,escrow_fingerprint=escrow_fingerprint,allocation_sequence=allocation_sequence,
         remaining_escrow_nano=escrow.remaining_escrow_nano}
-    local encoded=durable_encode(batch);redis.call('SET',KEYS[2],encoded,'EX',tostring(ttl))
+    local encoded=durable_encode(batch);redis.call('SET',KEYS[2],encoded)
     return {'created',encoded}
 end
 
-if ACTION == 'durable_reserve_batch' then
+if ACTION == 'durable_reserve_batch' or ACTION == 'durable_reserve_escrow' then
     if not valid_invocation(4, MAX_BATCH_KEYS, 7) then return {'invalid_request', ''} end
+    local is_escrow = ACTION == 'durable_reserve_escrow'
     local generation = ARGV[2]
     local incarnation = ARGV[3]
     local content_digest = ARGV[4]
@@ -858,6 +886,8 @@ if ACTION == 'durable_reserve_batch' then
     if not operations_ok or type(operations) ~= 'table' or #operations == 0 or #operations > 1024 then
         return {'invalid_request', ''}
     end
+    if is_escrow and #operations ~= 1 then return {'invalid_request',''} end
+    if not durable_key_types(#operations + 1) then return {'state_unavailable',''} end
     local existing_raw = redis.call('GET', KEYS[1])
     if existing_raw then
         local existing_ok, existing = pcall(cjson.decode, existing_raw)
@@ -865,6 +895,7 @@ if ACTION == 'durable_reserve_batch' then
             return {'state_unavailable', ''}
         end
         if existing.generation_id ~= generation then return {'generation_mismatch', ''} end
+        if (existing.escrow == true) ~= is_escrow then return {'conflict',''} end
         if existing.incarnation_id ~= incarnation then return {'incarnation_mismatch', ''} end
         if existing.content_digest ~= content_digest or existing.fingerprint ~= fingerprint then
             return {'conflict', ''}
@@ -898,6 +929,8 @@ if ACTION == 'durable_reserve_batch' then
         seen_operations[operation.operation_id] = true
         local reservations = {}
         local seen_reservations = {}
+        local start_by = now_millis + 15 * 60 * 1000
+        if is_escrow then start_by = MAX_SAFE end
         for reservation_index, reservation in ipairs(operation.reservations) do
             if type(reservation) ~= 'table' or not bounded_string(reservation.policy_id, 128, true) or
                 not bounded_string(reservation.window_id, 128, true) or not bounded_string(reservation.bucket, 64, true) or
@@ -913,15 +946,18 @@ if ACTION == 'durable_reserve_batch' then
             local bucket_key_index = durable_int(reservation.bucket_key_index)
             local expiry_key_index = durable_int(reservation.expiry_key_index)
             if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or
-                limit <= 0 or amount > limit or expires <= now_millis or not bucket_key_index or
+                limit <= 0 or expires <= now_millis or not bucket_key_index or
                 not expiry_key_index or bucket_key_index <= #operations+1 or expiry_key_index <= #operations+1 or bucket_key_index == expiry_key_index or
                 bucket_key_index > #KEYS or expiry_key_index > #KEYS then
                 return {'invalid_request', ''}
             end
+            local window_expires = durable_int(reservation.window_expires_millis)
+            if not window_expires or window_expires <= 0 then return {'invalid_request', ''} end
+            start_by = math.min(start_by, expires)
             local reservation_identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. reservation.bucket
             if seen_reservations[reservation_identity] then return {'invalid_request', ''} end
             seen_reservations[reservation_identity] = true
-            local aggregate_identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. reservation.bucket
+            local aggregate_identity = reservation.policy_id .. '\0' .. reservation.window_id
             local aggregate = aggregates[aggregate_identity]
             if not aggregate then
                 aggregate = {
@@ -947,7 +983,7 @@ if ACTION == 'durable_reserve_batch' then
             occurred_at = operation.occurred_at, expires_at = operation.expires_at,
             route = operation.route, bounds = operation.bounds,
             logical_cost_nano=operation.logical_cost_nano,remaining_escrow_nano=operation.logical_cost_nano,
-            reservations = reservations, events = {},
+            reservations = reservations, events = {}, start_by_millis = start_by, claimed = false, escrow = is_escrow,
         }
     end
     local denial = nil
@@ -955,11 +991,19 @@ if ACTION == 'durable_reserve_batch' then
         local bucket_key = KEYS[aggregate.bucket_key_index]
         local expiry_key = KEYS[aggregate.expiry_key_index]
         if not durable_cleanup(bucket_key, expiry_key, now_millis) then return {'state_unavailable', ''} end
-        local prior_limit = redis.call('HGET', bucket_key, durable_limit_field(aggregate.bucket))
-        if prior_limit and prior_limit ~= aggregate.limit_nano then return {'conflict', ''} end
         local limit = durable_int(aggregate.limit_nano)
-        local active = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(aggregate.bucket)) or '0')
-        if not limit or not active then return {'state_unavailable', ''} end
+        local active = 0
+        local fields = redis.call('HGETALL', bucket_key)
+        for field = 1, #fields, 2 do
+            if string.sub(fields[field], 1, 4) == 'sum:' then
+                local amount_in_bucket = durable_int(fields[field + 1])
+                if not amount_in_bucket or amount_in_bucket < 0 or amount_in_bucket > MAX_SAFE - active then
+                    return {'state_unavailable', ''}
+                end
+                active = active + amount_in_bucket
+            end
+        end
+        if not limit then return {'state_unavailable', ''} end
         if active > limit or aggregate.amount > limit - active then
             denial = {
                 policy_id = aggregate.policy_id, window_id = aggregate.window_id,
@@ -977,6 +1021,7 @@ if ACTION == 'durable_reserve_batch' then
         local denied = {
             schema = DURABLE_SCHEMA, generation_id = generation, incarnation_id = incarnation,
             content_digest = content_digest, fingerprint = fingerprint, status = 'denied',
+            escrow = is_escrow,
             operations = records,
         }
         local encoded_denied = durable_encode(denied)
@@ -991,22 +1036,23 @@ if ACTION == 'durable_reserve_batch' then
             local amount = durable_int(reservation.amount_nano)
             redis.call('HSET', bucket_key, durable_limit_field(reservation.bucket), reservation.limit_nano)
             redis.call('HINCRBY', bucket_key, durable_bucket_field(reservation.bucket), reservation.amount_nano)
-            redis.call('ZADD', expiry_key, tostring(durable_int(reservation.expires_millis)),
+            redis.call('ZADD', expiry_key, tostring(record.start_by_millis),
                 durable_expiry_member(operation.fingerprint, reservation.bucket, reservation.amount_nano))
             reservation.reserved_nano = reservation.amount_nano
             reservation.accounted_nano = '0'
             reservation.reservation_revision = 1
             reservation.status = 'reserved'
         end
-        redis.call('SET', KEYS[durable_int(operation.operation_key_index)], durable_encode(record), 'EX', tostring(ttl))
+        redis.call('SET', KEYS[durable_int(operation.operation_key_index)], durable_encode(record))
     end
     local accepted = {
         schema = DURABLE_SCHEMA, generation_id = generation, incarnation_id = incarnation,
         content_digest = content_digest, fingerprint = fingerprint, status = 'accepted',
+        escrow = is_escrow,
         operations = records,
     }
     local encoded_accepted = durable_encode(accepted)
-    redis.call('SET', KEYS[1], encoded_accepted, 'EX', tostring(ttl))
+    redis.call('SET', KEYS[1], encoded_accepted)
     return {'created', encoded_accepted}
 end
 if ACTION == 'durable_reserve' then
@@ -1052,6 +1098,8 @@ if ACTION == 'durable_reserve' then
     if not now_seconds or not now_micros then return {'state_unavailable', ''} end
     local now_millis = now_seconds * 1000 + math.floor(now_micros / 1000)
     local seen = {}
+    local windows = {}
+    local start_by = now_millis + 15 * 60 * 1000
     for index, reservation in ipairs(reservations) do
         if type(reservation) ~= 'table' or not bounded_string(reservation.policy_id, 128, true) or
             not bounded_string(reservation.window_id, 128, true) or not bounded_string(reservation.bucket, 64, true) or
@@ -1063,20 +1111,37 @@ if ACTION == 'durable_reserve' then
         local amount = durable_int(reservation.amount_nano)
         local limit = durable_int(reservation.limit_nano)
         local expires = durable_int(reservation.expires_millis)
-        if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or limit <= 0 or amount > limit or expires <= now_millis then
+        local window_expires = durable_int(reservation.window_expires_millis)
+        if not window_expires or window_expires <= 0 then return {'invalid_request', ''} end
+        if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or limit <= 0 or expires <= now_millis then
             return {'invalid_request', ''}
         end
+        start_by = math.min(start_by, expires)
         local identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. reservation.bucket
         if seen[identity] then return {'invalid_request', ''} end
         seen[identity] = true
         local bucket_key = KEYS[1 + (index - 1) * 2 + 1]
         local expiry_key = KEYS[1 + (index - 1) * 2 + 2]
-        if not durable_cleanup(bucket_key, expiry_key, now_millis) then return {'state_unavailable', ''} end
-        local limit_field = durable_limit_field(reservation.bucket)
-        local prior_limit = redis.call('HGET', bucket_key, limit_field)
-        if prior_limit and prior_limit ~= reservation.limit_nano then return {'conflict', ''} end
-        local active = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(reservation.bucket)) or '0')
-        if not active then return {'state_unavailable', ''} end
+        local window = windows[bucket_key]
+        if not window then
+            if not durable_cleanup(bucket_key, expiry_key, now_millis) then return {'state_unavailable', ''} end
+            -- The hash holds all live buckets for this policy/window, including
+            -- reconciled cost. Sum once, inside the atomic admission command.
+            local fields = redis.call('HGETALL', bucket_key)
+            window = {active = 0, limit = reservation.limit_nano}
+            for field = 1, #fields, 2 do
+                if string.sub(fields[field], 1, 4) == 'sum:' then
+                    local amount_in_bucket = durable_int(fields[field + 1])
+                    if not amount_in_bucket or amount_in_bucket < 0 or amount_in_bucket > MAX_SAFE - window.active then
+                        return {'state_unavailable', ''}
+                    end
+                    window.active = window.active + amount_in_bucket
+                end -- Limits may change on reload; existing usage is preserved.
+            end
+            windows[bucket_key] = window
+        end
+        if window.limit ~= reservation.limit_nano then return {'conflict', ''} end
+        local active = window.active
         if active > limit or amount > limit - active then
             local denial = {
                 schema = DURABLE_SCHEMA, operation_id = operation_id, generation_id = generation,
@@ -1088,22 +1153,24 @@ if ACTION == 'durable_reserve' then
                 events = {},
             }
             local encoded_denial = durable_encode(denial)
-            redis.call('SET', KEYS[1], encoded_denial, 'EX', tostring(ttl))
             return {'created', encoded_denial}
         end
+        -- Include earlier buckets in this request without mutating shared state.
+        window.active = active + amount
     end
     local record = {
         schema = DURABLE_SCHEMA, operation_id = operation_id, generation_id = generation,
         incarnation_id = incarnation, fingerprint = fingerprint, status = 'accepted',
         occurred_at = occurred_at, route = route, reservations = reservations, events = {},
         logical_cost_nano=ARGV[10],remaining_escrow_nano=ARGV[10],
+        start_by_millis = start_by, claimed = false,
     }
     for index, reservation in ipairs(reservations) do
         local bucket_key = KEYS[1 + (index - 1) * 2 + 1]
         local expiry_key = KEYS[1 + (index - 1) * 2 + 2]
         local bucket = reservation.bucket
         local amount = durable_int(reservation.amount_nano)
-        local expires = durable_int(reservation.expires_millis)
+        local expires = start_by
         redis.call('HSET', bucket_key, durable_limit_field(bucket), reservation.limit_nano)
         redis.call('HINCRBY', bucket_key, durable_bucket_field(bucket), tostring(amount))
         redis.call('ZADD', expiry_key, tostring(expires), durable_expiry_member(fingerprint, bucket, tostring(amount)))
@@ -1113,7 +1180,7 @@ if ACTION == 'durable_reserve' then
         reservation.status = 'reserved'
     end
     local encoded = durable_encode(record)
-    redis.call('SET', KEYS[1], encoded, 'EX', tostring(ttl))
+    redis.call('SET', KEYS[1], encoded) -- Persistent tombstone prevents lease reuse.
     return {'created', encoded}
 end
 
@@ -1150,6 +1217,7 @@ if ACTION == 'durable_fence' then
     if record.fingerprint ~= fingerprint or not durable_route_matches(record.route, route) then
         return {'conflict', ''}
     end
+    if not record.claimed then return {'not_claimed', ''} end
     if type(record.reservations) ~= 'table' or #record.reservations ~= #reservations then
         return {'state_unavailable', ''}
     end
@@ -1188,43 +1256,69 @@ if ACTION == 'durable_fence' then
             reservation.status ~= 'reserved' or reserved <= 0 or accounted ~= 0 then
             return {'state_unavailable', ''}
         end
-        if not record.dispatch_fenced and lease_expires <= now_millis then return {'expired', ''} end
         local bucket_key = KEYS[1 + (index - 1) * 2 + 1]
         local expiry_key = KEYS[1 + (index - 1) * 2 + 2]
         local aggregate = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(reservation.bucket)) or '')
-        local limit = redis.call('HGET', bucket_key, durable_limit_field(reservation.bucket))
         local member = durable_expiry_member(fingerprint, reservation.bucket, tostring(reserved))
         local score = durable_int(redis.call('ZSCORE', expiry_key, member) or '')
-        if not aggregate or aggregate < reserved or limit ~= reservation.limit_nano or not score then
+        if not aggregate or aggregate < reserved then
             return {'not_found', ''}
         end
-        if (not record.dispatch_fenced and score ~= lease_expires) or
-            (record.dispatch_fenced and (score <= now_millis or score < prior_retain)) then
+        if score then
             return {'state_unavailable', ''}
         end
     end
     for index, reservation in ipairs(record.reservations) do
         local bucket_key = KEYS[1 + (index - 1) * 2 + 1]
         local expiry_key = KEYS[1 + (index - 1) * 2 + 2]
-        local reserved = durable_int(reservation.reserved_nano)
-        local member = durable_expiry_member(fingerprint, reservation.bucket, tostring(reserved))
-        redis.call('ZADD', expiry_key, tostring(effective_retain), member)
-        reservation.reconcile_expires_millis = effective_retain
-        if not durable_extend_key(bucket_key, effective_retain, now_millis) or
-            not durable_extend_key(expiry_key, effective_retain, now_millis) then
-            return {'state_unavailable', ''}
-        end
+        -- Claim removed the start-lease expiry. Fencing must never make paid
+        -- work automatically refundable again, even after terminal retention.
+        redis.call('PERSIST', bucket_key)
+        redis.call('PERSIST', expiry_key)
     end
     record.dispatch_fenced = true
     record.dispatch_fingerprint = fingerprint
     record.retain_until_millis = effective_retain
     local encoded = durable_encode(record)
     redis.call('SET', KEYS[1], encoded)
-    if operation_ttl ~= -1 then
-        redis.call('PEXPIREAT', KEYS[1], tostring(effective_retain))
-    end
     if prior_retain > 0 then return {'existing', encoded} end
     return {'fenced', encoded}
+end
+
+if ACTION == 'durable_claim' then
+    if #ARGV ~= 4 or #KEYS < 3 then return {'invalid_request', ''} end
+    local raw = redis.call('GET', KEYS[1])
+    if not raw then return {'not_found', ''} end
+    local ok, record = pcall(cjson.decode, raw)
+    if not ok or type(record) ~= 'table' or record.schema ~= DURABLE_SCHEMA or
+        type(record.reservations) ~= 'table' or #record.reservations == 0 or
+        #record.reservations > MAX_DURABLE_RESERVATIONS then return {'state_unavailable', ''} end
+    if record.generation_id ~= ARGV[2] then return {'generation_mismatch', ''} end
+    if record.incarnation_id ~= ARGV[3] then return {'incarnation_mismatch', ''} end
+    if record.operation_id ~= ARGV[4] or record.status ~= 'accepted' then return {'not_found', ''} end
+    if record.escrow then return {'conflict',''} end
+    if record.claimed then return {'already_claimed', ''} end
+    local now = redis.call('TIME')
+    local millis = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+    local start_by = durable_int(record.start_by_millis)
+    if not start_by or millis >= start_by then return {'expired', ''} end
+    if #KEYS ~= 1 + 2 * #record.reservations then return {'invalid_request', ''} end
+    for index, reservation in ipairs(record.reservations) do
+        local member = durable_expiry_member(record.fingerprint, reservation.bucket, reservation.amount_nano)
+        if reservation.status ~= 'reserved' or not redis.call('ZSCORE', KEYS[1 + index * 2], member) then
+            return {'finalized', ''}
+        end
+    end
+    for index, reservation in ipairs(record.reservations) do
+        -- Claimed/ambiguous work retains its full reservation until settlement,
+        -- including when its original budget bucket has rolled out of the window.
+        redis.call('ZREM', KEYS[1 + index * 2], durable_expiry_member(record.fingerprint, reservation.bucket, reservation.amount_nano))
+        redis.call('PERSIST', KEYS[index * 2])
+        redis.call('PERSIST', KEYS[1 + index * 2])
+    end
+    record.claimed = true
+    redis.call('SET', KEYS[1], durable_encode(record))
+    return {'claimed', ''}
 end
 
 if ACTION == 'durable_reconcile' then
@@ -1250,18 +1344,23 @@ if ACTION == 'durable_reconcile' then
     if type(record.reservations) ~= 'table' or #record.reservations == 0 or #record.reservations > MAX_DURABLE_RESERVATIONS then
         return {'state_unavailable', ''}
     end
+    if #KEYS ~= 1 + 2 * #record.reservations or #events > #record.reservations then return {'invalid_request', ''} end
     if type(record.events) ~= 'table' then record.events = {} end
     -- Validate and stage the complete batch before mutating any aggregate. A
     -- later conflict must not leave earlier events in the batch applied.
     local staged = {}
     local staged_reservations = {}
     local staged_event_ids = {}
+    local covered_reservations = {}
     for _, event in ipairs(events) do
         if type(event) ~= 'table' or not bounded_string(event.event_id, 128, true) or
             not bounded_string(event.window_id, 128, true) or not bounded_string(event.bucket_start_nanos, 64, true) or
             not bounded_string(event.reserved_decrease_nano, 64, true) or not bounded_string(event.accounted_increase_nano, 64, true) or
             not bounded_string(event.accounted_decrease_nano, 64, true) or not bounded_string(event.fingerprint, 64, true) or
             #event.fingerprint ~= 64 then return {'invalid_request', ''} end
+        local identity = event.window_id .. '\0' .. event.bucket_start_nanos
+        if covered_reservations[identity] then return {'conflict', ''} end
+        covered_reservations[identity] = true
         local batch_fingerprint = staged_event_ids[event.event_id]
         if batch_fingerprint then
             if batch_fingerprint ~= event.fingerprint then return {'conflict', ''} end
@@ -1293,6 +1392,11 @@ if ACTION == 'durable_reconcile' then
                 end
                 local status = reservation.status or 'reserved'
                 if status == 'finalized' then return {'finalized', ''} end
+                -- Durable cancellation/cache completion is an exact-zero
+                -- terminal result on either side of the one-shot Claim.
+                local exact_zero = event.kind == 'finalize_exact' and accounted_increase == 0 and accounted_decrease == 0
+                if event.kind ~= 'release' and not exact_zero and not record.claimed then return {'not_claimed', ''} end
+                if event.kind == 'release' and record.claimed then return {'conflict', ''} end
                 if event.kind == 'retain_ambiguous' then
                     if status ~= 'reserved' or reserved_decrease ~= 0 or accounted_increase ~= 0 or accounted_decrease ~= 0 then return {'conflict', ''} end
                 elseif event.kind == 'resolve_unknown_exact' then
@@ -1302,16 +1406,28 @@ if ACTION == 'durable_reconcile' then
                 else
                     return {'invalid_request', ''}
                 end
+                if event.kind ~= 'retain_ambiguous' and
+                    (reserved_decrease ~= old_reserved or accounted_decrease ~= old_accounted) then
+                    return {'conflict', ''}
+                end
                 local old_total = old_reserved + old_accounted
                 local new_reserved = old_reserved - reserved_decrease
                 local new_accounted = old_accounted + accounted_increase - accounted_decrease
-                if new_accounted < 0 then return {'conflict', ''} end
+                if new_accounted < 0 or new_accounted > MAX_SAFE - new_reserved then return {'conflict', ''} end
                 local new_total = new_reserved + new_accounted
                 local bucket_key = KEYS[1 + (reservation_index - 1) * 2 + 1]
                 local expiry_key = KEYS[1 + (reservation_index - 1) * 2 + 2]
                 local bucket = reservation.bucket
+                -- Expiry cleanup may already have removed this operation. Never
+                -- subtract another operation's contribution from the same bucket.
+                if old_total > 0 and (not record.claimed or old_reserved == 0) and
+                    not redis.call('ZSCORE', expiry_key, durable_expiry_member(record.fingerprint, bucket, tostring(old_total))) then
+                    return {'not_found', ''}
+                end
+                if not durable_int(reservation.window_expires_millis) then return {'state_unavailable', ''} end
                 local current = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(bucket)) or '0')
                 if not current or current < old_total then return {'not_found', ''} end
+                if current - old_total > MAX_SAFE - new_total then return {'state_unavailable', ''} end
                 staged_reservations[reservation_index] = true
                 staged[#staged + 1] = {
                     event = event, reservation_index = reservation_index, old_total = old_total,
@@ -1332,15 +1448,15 @@ if ACTION == 'durable_reconcile' then
             redis.call('ZREM', item.expiry_key, durable_expiry_member(record.fingerprint, item.bucket, tostring(item.old_total)))
         end
         if item.new_total > 0 then
-            local reconcile_expires = durable_int(reservation.reconcile_expires_millis or reservation.expires_millis)
-            if not reconcile_expires then return {'state_unavailable', ''} end
             redis.call('HINCRBY', item.bucket_key, durable_bucket_field(item.bucket), tostring(item.new_total))
-            redis.call('ZADD', item.expiry_key, tostring(reconcile_expires), durable_expiry_member(record.fingerprint, item.bucket, tostring(item.new_total)))
+            if event.kind ~= 'retain_ambiguous' then
+                redis.call('ZADD', item.expiry_key, tostring(reservation.window_expires_millis), durable_expiry_member(record.fingerprint, item.bucket, tostring(item.new_total)))
+            end
         end
         reservation.reserved_nano = tostring(item.new_reserved)
         reservation.accounted_nano = tostring(item.new_accounted)
         reservation.reservation_revision = durable_int(event.reservation_revision)
-        if event.kind == 'retain_ambiguous' then reservation.status = 'ambiguous' else reservation.status = 'finalized' end
+        if event.kind == 'retain_ambiguous' or event.kind == 'finalize_unknown' then reservation.status = 'ambiguous' else reservation.status = 'finalized' end
         record.events[event.event_id] = event.fingerprint
     end
     local encoded = durable_encode(record)

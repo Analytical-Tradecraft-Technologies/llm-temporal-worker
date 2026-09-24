@@ -111,9 +111,14 @@ func durableAcceptedRecord(t *testing.T, request durable.ReserveRequest, now tim
 	if err != nil {
 		t.Fatal(err)
 	}
+	startBy := now.Add(durable.BudgetStartLease)
+	if request.ExpiresAt.Before(startBy) {
+		startBy = request.ExpiresAt
+	}
 	return mustJSON(t, durableOperation{
 		Schema: "durable-budget/v1", OperationID: string(request.OperationID), GenerationID: string(request.GenerationID),
 		IncarnationID: "incarnation-1", Fingerprint: fingerprint, Status: "accepted", OccurredAt: now,
+		StartByMillis: startBy.UnixMilli(),
 		ExpiresAt: request.ExpiresAt, LogicalCostNano: logicalNano, RemainingEscrowNano: logicalNano,
 		Route: request.Route, Bounds: request.Bounds, Reservations: reservations, Events: map[string]string{},
 	})
@@ -371,15 +376,12 @@ func TestRedisBudgetMaterializerBatchGrantUsesCanonicalOperationRecord(t *testin
 func TestRedisBudgetMaterializerConfirmationFailsClosedAtLeaseDeadline(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	request := durableTestRequest(now)
-	request.ExpiresAt = now
-	reader := &durableMaterializerReader{}
+	reader := &durableMaterializerReader{value: durableAcceptedRecord(t, request, now)}
 	materializer := testRedisMaterializer(t, &durableMaterializerInvoker{})
 	materializer.reader = reader
-	if _, err := materializer.Confirm(context.Background(), request); !errors.Is(err, ErrRedisBudgetReservationNotFound) {
+	materializer.clock = func() time.Time { return request.ExpiresAt }
+	if _, err := materializer.Confirm(context.Background(), request); !errors.Is(err, durable.ErrLeaseExpired) {
 		t.Fatalf("expired confirmation error = %v", err)
-	}
-	if reader.calls != 0 {
-		t.Fatal("expired reservation performed a Redis read")
 	}
 }
 

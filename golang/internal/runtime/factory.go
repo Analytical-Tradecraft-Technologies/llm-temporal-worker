@@ -202,14 +202,14 @@ type productionClientSet struct {
 	queryRepos      PostgresQueryRepositories
 	queryService    activity.QueryService
 	checkpoints     CheckpointCapabilities
-	journal         durablestore.Journal
+	budgets         durablestore.BudgetLeaser
 	v1Capabilities  V1RuntimeCapabilities
 	v1Runtime       activity.V1Runtime
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
 var _ CheckpointCapabilitiesSource = (*productionClientSet)(nil)
-var _ JournalSource = (*productionClientSet)(nil)
+var _ BudgetSource = (*productionClientSet)(nil)
 var _ V1RuntimeCapabilitiesSource = (*productionClientSet)(nil)
 
 func (set *productionClientSet) Close(ctx context.Context) error {
@@ -267,14 +267,13 @@ func (set *productionClientSet) CheckpointCapabilities() CheckpointCapabilities 
 	return set.checkpoints
 }
 
-// Journal returns the optional write-only PostgreSQL budget journal owned by
-// this immutable snapshot. It is not active-budget state and must not be used
-// for normal admission reads. A nil value is an explicit unconfigured seam.
-func (set *productionClientSet) Journal() durablestore.Journal {
+// Budgets returns the Redis budget authority owned by this snapshot. A nil
+// value is an explicit unconfigured capability.
+func (set *productionClientSet) Budgets() durablestore.BudgetLeaser {
 	if set == nil {
 		return nil
 	}
-	return set.journal
+	return set.budgets
 }
 
 // V1RuntimeCapabilities returns the preparatory typed dependency bundle owned
@@ -454,11 +453,17 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, err
 	}
 	postgresProbe = identifyDependencyProbe(DependencyPostgres, postgresProbe)
-	var providerControl engine.ProviderStatusRecorder
-	if source, ok := postgresCloser.(providerStatusRepositorySource); ok {
-		providerControl = newPostgresProviderStatusRecorder(source)
+	providerState, err := redisstore.NewProviderStateStore(redisstore.ProviderStateOptions{Client: redisClient, Keys: keyOptions, Clock: factory.options.Clock})
+	if err != nil {
+		if postgresCloser != nil {
+			_ = postgresCloser.Close()
+		}
+		closeOwned()
+		return nil, nil, fmt.Errorf("construct Redis provider state: %w", err)
 	}
+	var providerControl engine.ProviderStatusRecorder = providerState
 	queryRepos := queryRepositoriesFromCloser(postgresCloser)
+	queryRepos.ProviderStatus, queryRepos.Inventory = providerState, providerState
 	var queryService activity.QueryService
 	if source, ok := postgresCloser.(queryServiceSource); ok {
 		queryService = source.QueryService()
@@ -515,9 +520,9 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			return nil, nil, fmt.Errorf("construct Redis budget generation port: %w", err)
 		}
 	}
-	var budgetMaterializer durablestore.BudgetMaterializer
-	var budgetGenerationID durablestore.GenerationID
-	var budgetIncarnationID durablestore.IncarnationID
+	var budgets durablestore.BudgetLeaser
+	budgetGenerationID := durablestore.GenerationID("redis-budget-v1")
+	budgetIncarnationID := durablestore.IncarnationID("redis-budget-v1")
 	if generationPort != nil {
 		active, activeErr := generationPort.ActiveGeneration(ctx)
 		if activeErr != nil {
@@ -537,7 +542,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		}
 		budgetGenerationID = durablestore.GenerationID(active.GenerationID)
 		budgetIncarnationID = durablestore.IncarnationID(active.IncarnationID)
-		budgetMaterializer, err = redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
+		budgets, err = redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
 			Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
 			FunctionVersion: value.State.Redis.AdmissionVersion,
 			GenerationID:    durablestore.GenerationID(active.GenerationID),
@@ -552,6 +557,22 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			return nil, nil, fmt.Errorf("construct Redis budget materializer: %w", err)
 		}
 	}
+	if budgets == nil {
+		// Without a managed generation, keep the Redis accounting namespace
+		// stable across policy and configuration reloads.
+		budgets, err = redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
+			Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
+			FunctionVersion: value.State.Redis.AdmissionVersion,
+			GenerationID: budgetGenerationID, IncarnationID: budgetIncarnationID, Clock: clock,
+		})
+		if err != nil {
+			if postgresCloser != nil {
+				_ = postgresCloser.Close()
+			}
+			closeOwned()
+			return nil, nil, fmt.Errorf("construct Redis budgets: %w", err)
+		}
+	}
 	budgetStatusReader, err := composeBudgetStatusReader(ctx, snapshot, factory.options.Clock, value.State.Redis.AdmissionMode, redisClient, generationPort, budgetKeys, factory.options.BudgetStatusReaderFactory)
 	if err != nil {
 		if postgresCloser != nil {
@@ -560,9 +581,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis budget status reader: %w", err)
 	}
-	// The query repository bundle is the existing per-snapshot composition
-	// handoff. BudgetStatus is deliberately the only non-PostgreSQL capability
-	// carried here and is nil when its Redis seam was not explicitly enabled.
+	// Attach the snapshot-owned Redis budget reader alongside provider state.
 	queryRepos.BudgetStatus = budgetStatusReader
 	var redisProbe DependencyProbe
 	switch {
@@ -732,7 +751,6 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		checkpointCapabilities.VerifyHandle = keyring.VerifyCheckpointHandle
 	}
 	checkpointCapabilities.WriteLocator = checkpointLocatorWriter
-	journal := journalFromCloser(postgresCloser)
 	var durableComposition *durablestore.Composition
 	var resolveScope func(context.Context, llm.RequestContext) (string, error)
 	if durableSource != nil {
@@ -760,7 +778,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			Ports: durablestore.CompositionPorts{
 				Operations: durableOperations, Continuations: continuationStore,
 				Checkpoints: checkpointCapabilities.Materializer, Results: durableResults,
-				Journal: journal, Materializer: budgetMaterializer,
+				Materializer: budgets,
 				Finalizer: atomicFinalizer,
 			},
 		}).Build()
@@ -799,7 +817,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		queryRepos:      queryRepos,
 		queryService:    queryService,
 		checkpoints:     checkpointCapabilities,
-		journal:         journal,
+		budgets:         budgets,
 		v1Capabilities: V1RuntimeCapabilities{
 			ConfigDigest:           snapshot.Digest(),
 			Snapshot:               snapshotSource,
@@ -807,7 +825,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			Estimator:              estimator,
 			Adapters:               capabilityAdapterRegistry,
 			Checkpoints:            checkpointCapabilities,
-			Journal:                journal,
+			Budgets:                budgets,
 			CompositionFactory:     compositionFactory,
 			BudgetGenerationID:     budgetGenerationID,
 			BudgetIncarnationID:    budgetIncarnationID,
@@ -822,6 +840,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			GrantHMACKey:           append([]byte(nil), keySecret...),
 			composition:            compositionValue,
 			ProviderStatusRecorder: providerControl,
+			ProviderInventory:      providerState,
 			Clock:                  clock,
 			ResolveScope:           resolveScope,
 			GeneratePortsFactory:   generatePortsFactory,
@@ -1536,7 +1555,10 @@ func (factory *ProductionEngineFactory) anthropicProfile(endpointID string, endp
 		copy := *supplied.Anthropic
 		return &copy, nil
 	}
-	tiers, actual := endpointTiers(endpoint)
+	tiers, _ := endpointTiers(endpoint)
+	// Anthropic accepts standard_only/auto on requests but reports
+	// standard/priority on responses. Keep those mappings independent.
+	actual := anthropicmessages.DefaultProfile(endpointID).ActualServiceClasses
 	priority := endpoint.ServiceClasses[llm.ServiceClassPriority]
 	value, err := anthropicmessages.NewProfile(anthropicmessages.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: anthropicExtensionSpecs(endpoint), ExpectedBaseURL: endpoint.BaseURL, PriorityCapacity: priority.ProviderValue == "auto" || priority.RequiresCapability != ""})
 	if err != nil {
@@ -1735,9 +1757,6 @@ type postgresPoolCloser struct {
 	repositories postgresstore.DurableRepositories
 }
 
-func (closer postgresPoolCloser) ProviderStatusRepository() postgresstore.ProviderStatusRepository {
-	return postgresstore.DefaultProviderStatusRepository(closer.pool, closer.namespace)
-}
 func (closer *postgresPoolCloser) DurableOperations() admission.AdmissionStore {
 	if closer == nil || closer.repositories.Operations.Pool == nil {
 		return nil
@@ -1767,22 +1786,8 @@ func (closer *postgresPoolCloser) AtomicFinalizer() durablestore.AtomicFinalizer
 }
 
 func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
-	repository := closer.ProviderStatusRepository()
 	spend := postgresstore.SpendSummaryRepository{Pool: closer.pool, Namespace: closer.namespace}
-	return PostgresQueryRepositories{ProviderStatus: &repository, SpendSummary: &spend}
-}
-
-// Journal exposes only the write-only durable journal contract. The runtime
-// wraps it before storing it on the snapshot client set so callers cannot
-// recover this concrete repository or its pool through a type assertion.
-func (closer *postgresPoolCloser) Journal() durablestore.Journal {
-	if closer == nil {
-		return nil
-	}
-	if closer.repositories.Journal.Pool != nil {
-		return &closer.repositories.Journal
-	}
-	return &postgresstore.BudgetJournalRepository{Pool: closer.pool, Namespace: closer.namespace}
+	return PostgresQueryRepositories{SpendSummary: &spend}
 }
 
 // CheckpointRepository exposes only the storage-neutral repository contract.

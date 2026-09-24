@@ -23,39 +23,22 @@ import (
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
-// providerStatusRepositorySource is implemented by a PostgreSQL client set
-// that owns the same pool used for durable state. Keeping this optional avoids
-// changing the public PostgresFactory signature or opening a second pool.
-type providerStatusRepositorySource interface {
-	ProviderStatusRepository() postgresstore.ProviderStatusRepository
-}
-
-// PostgresQueryRepositories is the optional query bundle owned by one durable
-// PostgreSQL pool. Repositories are pointers because deployments may roll out
-// only the query slices whose key material and schema are available. A missing
-// repository must remain an explicit fail-closed result rather than being
-// replaced with an in-memory answer.
-type PostgresQueryRepositories struct {
-	ProviderStatus *postgresstore.ProviderStatusRepository
-	Inventory      *postgresstore.InventoryRepository
+// QueryRepositories holds snapshot-owned capabilities. Provider state and inventory
+// use Redis; the remaining spend reader still uses SQL during the staged migration.
+type QueryRepositories struct {
+	ProviderStatus control.ProviderStatusReader
+	Inventory      control.InventoryReader
 	SpendSummary   *postgresstore.SpendSummaryRepository
 	QueryAudit     *postgresstore.QueryExecutionRepository
 	ScopeResolver  QueryScopeResolver
-	// BudgetStatus is the snapshot-owned Redis reader for budget_status. It is
-	// kept beside the query repository bundle only because this bundle is the
-	// existing per-snapshot query composition handoff. It is never read from
-	// PostgreSQL and remains nil unless production composition explicitly
-	// constructs a Redis generation reader.
-	BudgetStatus BudgetStatusReader
+	BudgetStatus   BudgetStatusReader
 }
 
-// PostgresQueryRepositoriesSource is implemented by PostgreSQL closers that
-// construct snapshot-owned query repositories and supporting capabilities
-// alongside their pool. The runtime copies this bundle into the immutable
-// production client set so a reload cannot accidentally point a query Activity
-// at a closed or newer pool.
+// PostgresQueryRepositories is retained for existing composition builders.
+type PostgresQueryRepositories = QueryRepositories
+
 type PostgresQueryRepositoriesSource interface {
-	QueryRepositories() PostgresQueryRepositories
+	QueryRepositories() QueryRepositories
 }
 
 // CheckpointLocatorWriter is the only PostgreSQL locator-write capability
@@ -177,21 +160,9 @@ type CheckpointCapabilitiesSource interface {
 	CheckpointCapabilities() CheckpointCapabilities
 }
 
-// PostgresJournalSource is implemented by a PostgreSQL client closer that
-// exposes only the write-only durable budget journal. It deliberately returns
-// the storage-neutral durable.Journal contract instead of a pool or concrete
-// repository so a future V1 composition cannot read budget projections during
-// normal admission.
-type PostgresJournalSource interface {
-	Journal() durablestore.Journal
-}
-
-// JournalSource is the optional snapshot-client capability consumed by a
-// future durable V1 builder. The journal is owned by the same immutable client
-// set and is closed with that set; nil means PostgreSQL journal composition is
-// not configured.
-type JournalSource interface {
-	Journal() durablestore.Journal
+// BudgetSource exposes the snapshot-owned Redis reservation/claim/settlement port.
+type BudgetSource interface {
+	Budgets() durablestore.BudgetLeaser
 }
 
 // DurableCompositionFactory constructs the complete storage-neutral
@@ -207,11 +178,10 @@ type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (dur
 
 // V1RuntimeCapabilities is the preparatory storage- and provider-neutral
 // dependency bundle owned by one immutable configuration snapshot. It exposes
-// only the snapshot/planning/adapter contracts, checkpoint capability, and
-// optional write-only journal that are safe to carry into the future durable
-// composition. It deliberately
+// snapshot/planning/adapter contracts, checkpoints and Redis budgets for
+// durable composition. It deliberately
 // omits the legacy Redis admission, continuation, and blob-result stores:
-// Task 19 must supply PostgreSQL durable operations, BudgetMaterializer/Journal,
+// Deployment composition must supply durable operations
 // and the corresponding result/continuation ports before the V1 runtime can
 // compose them. Adapters own provider credentials. A nil optional recorder or
 // clock is an unconfigured capability; callers must not fall back to a legacy
@@ -228,9 +198,9 @@ type V1RuntimeCapabilities struct {
 	Estimator    budget.Estimator
 	Adapters     engine.AdapterRegistry
 	Checkpoints  CheckpointCapabilities
-	// Journal is the optional write-only PostgreSQL budget journal. It is
-	// preparatory input for Task 19 and does not activate V1 composition.
-	Journal durablestore.Journal
+	// Budgets is the Redis authority for reserve, claim and settlement.
+	// Exposing it does not by itself activate V1 composition.
+	Budgets durablestore.BudgetLeaser
 	// CompositionFactory is the Task 19 seam for the snapshot-owned
 	// PostgreSQL/Redis responsibility split. It is optional while deployments
 	// still use the preparatory phase factories. The complete durable builder
@@ -263,6 +233,8 @@ type V1RuntimeCapabilities struct {
 	// must be at least 32 bytes when batch admission is enabled.
 	GrantKeyID   string
 	GrantHMACKey []byte
+	// ProviderInventory caches model listings using the same snapshot-owned Redis client.
+	ProviderInventory control.InventoryStore
 	// GeneratePortsFactory is a per-snapshot constructor for the storage-
 	// neutral durable Generate phase. It must close over only the immutable
 	// adapters and stores represented by this capability bundle; a nil value is
@@ -364,8 +336,8 @@ func (capabilities V1RuntimeCapabilities) ValidateGenerate() error {
 	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
 		return fmt.Errorf("v1 Generate checkpoint capabilities: %w", err)
 	}
-	if isNilCapability(capabilities.Journal) {
-		return errors.New("v1 Generate PostgreSQL journal is not configured")
+	if isNilCapability(capabilities.Budgets) {
+		return errors.New("v1 Generate Redis budgets are not configured")
 	}
 	if capabilities.Clock == nil {
 		return errors.New("v1 Generate clock is not configured")
@@ -394,8 +366,8 @@ func (capabilities V1RuntimeCapabilities) ValidateCompact() error {
 	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
 		return fmt.Errorf("v1 Compact checkpoint capabilities: %w", err)
 	}
-	if isNilCapability(capabilities.Journal) {
-		return errors.New("v1 Compact PostgreSQL journal is not configured")
+	if isNilCapability(capabilities.Budgets) {
+		return errors.New("v1 Compact Redis budgets are not configured")
 	}
 	if capabilities.Clock == nil {
 		return errors.New("v1 Compact clock is not configured")
@@ -487,23 +459,6 @@ func (materializer snapshotCheckpointMaterializer) MaterializeHandle(ctx context
 	return materializer.delegate.MaterializeHandle(ctx, scopeID, handle, limits)
 }
 
-// snapshotJournal erases the concrete PostgreSQL repository before it enters
-// the client set. It preserves the write-only durable.Journal contract while
-// preventing callers from reaching into a pgx pool through a type assertion.
-type snapshotJournal struct {
-	delegate durablestore.Journal
-}
-
-var _ durablestore.Journal = snapshotJournal{}
-
-func (journal snapshotJournal) AppendReservation(ctx context.Context, event budget.ReservationEvent) (postgresstore.JournalRecord, error) {
-	return journal.delegate.AppendReservation(ctx, event)
-}
-
-func (journal snapshotJournal) AppendCompletion(ctx context.Context, event budget.CompletionEvent) (postgresstore.JournalRecord, error) {
-	return journal.delegate.AppendCompletion(ctx, event)
-}
-
 // queryServiceSource lets an embedding supply the typed control-plane query
 // implementation from the same PostgreSQL pool. It is deliberately optional:
 // until handlers for a query kind are composed, QueryService remains nil and
@@ -515,10 +470,6 @@ type queryServiceSource interface {
 func queryRepositoriesFromCloser(closer io.Closer) PostgresQueryRepositories {
 	if source, ok := closer.(PostgresQueryRepositoriesSource); ok {
 		return source.QueryRepositories()
-	}
-	if source, ok := closer.(providerStatusRepositorySource); ok {
-		repository := source.ProviderStatusRepository()
-		return PostgresQueryRepositories{ProviderStatus: &repository}
 	}
 	return PostgresQueryRepositories{}
 }
@@ -582,41 +533,4 @@ func checkpointCapabilitiesFromCloserWithBindings(closer io.Closer, reader state
 		return CheckpointCapabilities{}
 	}
 	return capabilities
-}
-
-func journalFromCloser(closer io.Closer) durablestore.Journal {
-	if source, ok := closer.(PostgresJournalSource); ok {
-		journal := source.Journal()
-		if journal == nil {
-			return nil
-		}
-		return snapshotJournal{delegate: journal}
-	}
-	return nil
-}
-
-type postgresProviderStatusRecorder struct {
-	repository postgresstore.ProviderStatusRepository
-}
-
-var _ engine.ProviderStatusRecorder = (*postgresProviderStatusRecorder)(nil)
-
-func newPostgresProviderStatusRecorder(source providerStatusRepositorySource) engine.ProviderStatusRecorder {
-	if source == nil {
-		return nil
-	}
-	repository := source.ProviderStatusRepository()
-	return &postgresProviderStatusRecorder{repository: repository}
-}
-
-func (recorder *postgresProviderStatusRecorder) RecordProviderStatus(ctx context.Context, observation control.StatusObservation) error {
-	if recorder == nil {
-		return fmt.Errorf("provider status recorder is nil")
-	}
-	event, err := control.NewStatusEvent(observation)
-	if err != nil {
-		return err
-	}
-	_, err = recorder.repository.PersistStatusEvent(ctx, event)
-	return err
 }

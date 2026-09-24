@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 # Both build and runtime roots are reviewed immutable manifest-list digests.
-# Buildx still selects only linux/amd64; a dependency update changes the
-# readable patch tag and digest together.
+# Buildx selects the requested Linux architecture; a dependency update changes
+# the readable patch tag and digest together.
 ARG GO_IMAGE=docker.io/library/golang:1.26.7@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac
 ARG VERSION=dev
 ARG REVISION=unknown
@@ -15,12 +15,6 @@ FROM ${GO_IMAGE} AS build
 
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION
-ARG REVISION
-ARG BUILD_TIME
-ARG SOURCE
-ARG GO_VERSION
-ARG GO_BUILD_TAGS
 
 WORKDIR /src
 
@@ -33,10 +27,17 @@ RUN --mount=type=cache,id=llmtw-modules-v1,target=/go/pkg/mod,sharing=locked \
     go mod download
 
 COPY . .
+
+ARG VERSION
+ARG REVISION
+ARG BUILD_TIME
+ARG SOURCE
+ARG GO_VERSION
+ARG GO_BUILD_TAGS
+
 RUN --mount=type=cache,id=llmtw-modules-v1,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,id=llmtw-build-v1,target=/root/.cache/go-build,sharing=locked \
     test "${TARGETOS:-linux}" = "linux" && \
-    test "${TARGETARCH:-amd64}" = "amd64" && \
     test -n "${VERSION}" && test "${VERSION}" != "dev" && \
     test -n "${REVISION}" && test "${REVISION}" != "unknown" && \
     test -n "${BUILD_TIME}" && test "${BUILD_TIME}" != "unknown" && \
@@ -48,7 +49,7 @@ RUN --mount=type=cache,id=llmtw-modules-v1,target=/go/pkg/mod,sharing=locked \
       test "${actual_go_version}" = "${GO_VERSION}"; \
       go_version="${GO_VERSION}"; \
     fi && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     go build -tags="${GO_BUILD_TAGS}" -trimpath -buildvcs=false \
       -ldflags="-s -w \
         -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION} \
@@ -60,7 +61,7 @@ RUN --mount=type=cache,id=llmtw-modules-v1,target=/go/pkg/mod,sharing=locked \
 
 # Distroless static includes CA roots, time-zone data, and uid 65532, but no
 # shell, package manager, or toolchain. The reviewed digest is the same
-# manifest list for which Buildx selects linux/amd64.
+# manifest list for which Buildx selects the requested architecture.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 
 ARG VERSION

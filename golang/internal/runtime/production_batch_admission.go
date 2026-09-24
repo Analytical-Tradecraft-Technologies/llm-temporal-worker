@@ -302,7 +302,7 @@ func (binding *productionPhaseBinding) batchMaterializationResponse(request llm.
 }
 
 type captureBatchMaterializer struct {
-	durablestore.BudgetMaterializer
+	durablestore.BudgetLeaser
 	requests []durablestore.ReserveRequest
 }
 
@@ -355,7 +355,7 @@ func (binding *productionPhaseBinding) reserveBatchEscrow(ctx context.Context, r
 			operations = append(operations, llm.ReserveBatchOperationV1{OperationKey: fmt.Sprintf("escrow/%s/%d", template.TemplateKey, index), Model: template.Model, ServiceClass: template.ServiceClass, ServiceClassFallbacks: append([]llm.ServiceClass(nil), template.ServiceClassFallbacks...), MaxInputTokens: template.MaxInputTokens, MaxOutputTokens: template.MaxOutputTokens, MaxReasoningTokens: template.MaxReasoningTokens, MaxCacheReadTokens: template.MaxCacheReadTokens, MaxCacheWriteTokens: template.MaxCacheWriteTokens})
 		}
 	}
-	capture := &captureBatchMaterializer{BudgetMaterializer: binding.composition.Materializer}
+	capture := &captureBatchMaterializer{BudgetLeaser: binding.composition.Materializer}
 	planningBinding := *binding
 	planningBinding.composition.Materializer = capture
 	planningRequest := llm.ReserveBatchRequestV1{APIVersion: llm.ReserveBatchAPIVersion, Context: request.Context, CustomerID: request.CustomerID, RunID: request.RunID, BudgetID: request.BudgetID, BatchKey: digestCanonical(map[string]any{"batch_id": batchID, "purpose": "escrow-plan"}), PricingGenerationID: request.PricingGenerationID, PricingManifestSHA256: request.PricingManifestSHA256, RemainingMaxCostMicrounits: request.RemainingMaxCostMicrounits, Operations: operations}
@@ -534,7 +534,7 @@ func (binding *productionPhaseBinding) allocateBatchGrants(ctx context.Context, 
 	if !result.Accepted {
 		return llm.AllocateBatchGrantsResponseV1{}, errors.New("batch escrow is not accepted")
 	}
-	capture := &captureBatchMaterializer{BudgetMaterializer: binding.composition.Materializer}
+	capture := &captureBatchMaterializer{BudgetLeaser: binding.composition.Materializer}
 	allocating := *binding
 	allocating.composition.Materializer = capture
 	allocating.cap.ReservationLease = request.GrantExpiresAt.Sub(now)

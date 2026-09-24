@@ -50,7 +50,7 @@ func (binding *productionPhaseBinding) compactPorts() durablestore.CompactPorts 
 		CacheLookup:   binding.compactCacheLookup,
 		Route:         binding.routeCompact,
 		Reserve:       binding.reserveCompact,
-		Journal:       binding.journalCompact,
+		Claim:         binding.claimCompact,
 		Dispatch:      binding.dispatchCompact,
 		Finalize:      binding.finalizeCompact,
 		Abort:         binding.abortCompact,
@@ -407,20 +407,8 @@ func (binding *productionPhaseBinding) reserveCompact(ctx context.Context, _ llm
 	return binding.reserveGenerate(ctx, llm.GenerateRequestV1{}, route)
 }
 
-func (binding *productionPhaseBinding) journalCompact(ctx context.Context, request llm.CompactRequestV1, route durablestore.RoutePlan, reservation durablestore.ReserveResult) (durablestore.JournalReceipt, error) {
-	reserveRequest, err := reservationRequest(route)
-	if err != nil {
-		return durablestore.JournalReceipt{}, err
-	}
-	if err := durablestore.ValidatePlannedReserveResult(reserveRequest, reservation); err != nil {
-		return durablestore.JournalReceipt{}, err
-	}
-	for _, event := range reservation.Events {
-		if _, err := binding.composition.Journal.AppendReservation(ctx, event); err != nil {
-			return durablestore.JournalReceipt{}, err
-		}
-	}
-	return durablestore.JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, nil
+func (binding *productionPhaseBinding) claimCompact(ctx context.Context, _ llm.CompactRequestV1, route durablestore.RoutePlan, reservation durablestore.ReserveResult) (durablestore.ClaimReceipt, error) {
+	return binding.claimGenerate(ctx, llm.GenerateRequestV1{}, route, reservation)
 }
 
 func validateCompactProviderResponse(response llm.Response, maxBytes int) error {
@@ -437,7 +425,7 @@ func (binding *productionPhaseBinding) failCompactProviderOutput(ctx context.Con
 	return binding.failPostResponse(ctx, route, *route.Reservation, response, compactInvalidProviderOutputReason, cause)
 }
 
-func (binding *productionPhaseBinding) dispatchCompact(ctx context.Context, request llm.CompactRequestV1, replay durablestore.CompactReplay, route durablestore.RoutePlan, receipt durablestore.JournalReceipt) (durablestore.CompactDispatchResult, error) {
+func (binding *productionPhaseBinding) dispatchCompact(ctx context.Context, request llm.CompactRequestV1, replay durablestore.CompactReplay, route durablestore.RoutePlan, receipt durablestore.ClaimReceipt) (durablestore.CompactDispatchResult, error) {
 	generated, err := binding.dispatchGenerate(ctx, llm.GenerateRequestV1{CostAdmission: request.CostAdmission}, durablestore.GenerateReplay{State: replay.State}, route, receipt)
 	if err != nil {
 		return durablestore.CompactDispatchResult{}, err
@@ -542,11 +530,6 @@ func (binding *productionPhaseBinding) reconcileCompact(ctx context.Context, _ l
 	events, err := completionEvents(route, reservation, finalization.Response.Cost, operation.CompletedAt)
 	if err != nil {
 		return err
-	}
-	for _, event := range events {
-		if _, err := binding.composition.Journal.AppendCompletion(context.WithoutCancel(ctx), event); err != nil {
-			return err
-		}
 	}
 	return binding.composition.Materializer.Reconcile(context.WithoutCancel(ctx), durablestore.ReconcileRequest{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: reservation.IncarnationID, Events: events})
 }

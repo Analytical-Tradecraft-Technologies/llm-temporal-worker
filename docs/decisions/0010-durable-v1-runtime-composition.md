@@ -23,7 +23,7 @@ legacy `llm.Engine` call:
   durable checkpoint/cache/cost finalization;
 - Compact has a distinct request/response and lifecycle, not a Generate alias;
 - Query is a control-plane read with its own authorization, pagination, and
-  audit ledger, and must never dispatch inference.
+  best-effort audit logging, and must never dispatch inference.
 
 `ProductionEngineFactory.Build` currently returns the reusable `llm.Engine`
 and its snapshot-owned clients. The process runtime therefore installs

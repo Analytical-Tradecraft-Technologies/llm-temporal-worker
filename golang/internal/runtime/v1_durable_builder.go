@@ -55,8 +55,8 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
 		}
 		// Bind one validated composition to both phase factories. This keeps
-		// PostgreSQL operation state, the write-only journal, and Redis active
-		// budgets on the same snapshot identity across Generate and Compact. The
+		// PostgreSQL operation/checkpoint finalization and Redis budget leases
+		// on the same snapshot identity across Generate and Compact. The
 		// complete builder never lets deployment callbacks construct phase ports
 		// without that state boundary: missing or invalid composition fails before
 		// either phase callback. Only the production factory's automatic preflight,

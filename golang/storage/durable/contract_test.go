@@ -12,7 +12,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
 func validIdentity() StateIdentity {
@@ -73,13 +72,6 @@ func TestCompositionValidateRejectsTypedNilCapabilities(t *testing.T) {
 			},
 		},
 		{
-			name: "journal",
-			set: func(composition *Composition) {
-				var value *typedNilJournal
-				composition.Journal = value
-			},
-		},
-		{
 			name: "materializer",
 			set: func(composition *Composition) {
 				var value *typedNilMaterializer
@@ -112,7 +104,6 @@ func validComposition() Composition {
 		Continuations: compositionContinuationStub{},
 		Checkpoints:   compositionCheckpointStub{},
 		Results:       compositionResultStub{},
-		Journal:       compositionJournalStub{},
 		Materializer:  compositionMaterializerStub{},
 	}
 }
@@ -125,8 +116,7 @@ type typedNilCheckpointStore struct {
 	state.CheckpointHandleMaterializer
 }
 type typedNilResultStore struct{ ResultStore }
-type typedNilJournal struct{ Journal }
-type typedNilMaterializer struct{ BudgetMaterializer }
+type typedNilMaterializer struct{ BudgetLeaser }
 
 type compositionAdmissionStub struct{}
 
@@ -168,15 +158,6 @@ func (compositionResultStub) Put(context.Context, string, llm.Response) (state.B
 	return state.BlobRef{}, nil
 }
 
-type compositionJournalStub struct{}
-
-func (compositionJournalStub) AppendReservation(context.Context, budget.ReservationEvent) (postgresstore.JournalRecord, error) {
-	return postgresstore.JournalRecord{}, nil
-}
-func (compositionJournalStub) AppendCompletion(context.Context, budget.CompletionEvent) (postgresstore.JournalRecord, error) {
-	return postgresstore.JournalRecord{}, nil
-}
-
 type compositionMaterializerStub struct{}
 
 func (compositionMaterializerStub) Accept(context.Context, ReserveRequest) (ReserveResult, error) {
@@ -190,7 +171,7 @@ func (compositionMaterializerStub) FenceDispatch(context.Context, DispatchFenceR
 }
 func (compositionMaterializerStub) Reconcile(context.Context, ReconcileRequest) error { return nil }
 
-func TestReserveResultRequiresJournalEventsAfterAcceptance(t *testing.T) {
+func TestReserveResultRequiresEventsAfterAcceptance(t *testing.T) {
 	request := ReserveRequest{
 		OperationID:  OperationID("op-1"),
 		GenerationID: GenerationID("gen-1"),
@@ -198,7 +179,7 @@ func TestReserveResultRequiresJournalEventsAfterAcceptance(t *testing.T) {
 	}
 	result := ReserveResult{OperationID: request.OperationID, Accepted: true, GenerationID: request.GenerationID, IncarnationID: IncarnationID("inc-1")}
 	if err := result.Validate(request); err == nil {
-		t.Fatal("accepted reservation without journal event passed validation")
+		t.Fatal("accepted reservation without reservation event passed validation")
 	}
 
 	result.Events = []budget.ReservationEvent{{
@@ -211,11 +192,11 @@ func TestReserveResultRequiresJournalEventsAfterAcceptance(t *testing.T) {
 	}
 	result.Accepted = false
 	if err := result.Validate(request); err == nil {
-		t.Fatal("denied reservation with journal event passed validation")
+		t.Fatal("denied reservation with reservation event passed validation")
 	}
 }
 
-func TestLifecycleRequiresJournalBeforeDispatchAndReconcileLast(t *testing.T) {
+func TestLifecycleRequiresClaimBeforeDispatchAndReconcileLast(t *testing.T) {
 	var lifecycle Lifecycle
 	if err := lifecycle.Advance(PhaseRedisAccepted); err == nil {
 		t.Fatal("lifecycle allowed Redis acceptance before operation replay")
@@ -226,10 +207,10 @@ func TestLifecycleRequiresJournalBeforeDispatchAndReconcileLast(t *testing.T) {
 	if err := lifecycle.Advance(PhaseRedisAccepted); err != nil {
 		t.Fatalf("advance Redis acceptance: %v", err)
 	}
-	if err := lifecycle.Advance(PhaseDispatched); !errors.Is(err, ErrJournalRequired) {
-		t.Fatalf("dispatch without PostgreSQL journal returned %v, want %v", err, ErrJournalRequired)
+	if err := lifecycle.Advance(PhaseDispatched); !errors.Is(err, ErrClaimRequired) {
+		t.Fatalf("dispatch without Redis claim returned %v, want %v", err, ErrClaimRequired)
 	}
-	for _, phase := range []Phase{PhaseOperationReplay, PhaseRedisAccepted, PhasePostgresJournaled, PhaseDispatched, PhasePostgresFinalized, PhaseRedisReconciled} {
+	for _, phase := range []Phase{PhaseOperationReplay, PhaseRedisAccepted, PhaseRedisClaimed, PhaseDispatched, PhaseResultFinalized, PhaseRedisReconciled} {
 		// The first two phases were already recorded above.
 		if phase <= PhaseRedisAccepted {
 			continue
@@ -241,14 +222,14 @@ func TestLifecycleRequiresJournalBeforeDispatchAndReconcileLast(t *testing.T) {
 	if got := lifecycle.Phases(); len(got) != 6 || got[len(got)-1] != PhaseRedisReconciled {
 		t.Fatalf("unexpected lifecycle phases: %#v", got)
 	}
-	if err := lifecycle.Advance(PhasePostgresFinalized); err == nil {
+	if err := lifecycle.Advance(PhaseResultFinalized); err == nil {
 		t.Fatal("lifecycle allowed phase after reconciliation")
 	}
 }
 
 func TestReconcileFailureIsRetryableOnlyAfterPostgresFinalization(t *testing.T) {
 	var lifecycle Lifecycle
-	for _, phase := range []Phase{PhaseOperationReplay, PhaseRedisAccepted, PhasePostgresJournaled, PhaseDispatched, PhasePostgresFinalized} {
+	for _, phase := range []Phase{PhaseOperationReplay, PhaseRedisAccepted, PhaseRedisClaimed, PhaseDispatched, PhaseResultFinalized} {
 		if err := lifecycle.Advance(phase); err != nil {
 			t.Fatalf("advance %s: %v", phase, err)
 		}
@@ -282,7 +263,6 @@ func ptr[T any](value T) *T { return &value }
 var (
 	_ admission.AdmissionStore = nil
 	_ state.ContinuationStore  = nil
-	_ Journal                  = (postgresstore.BudgetJournal)(nil)
 	_ ResultStore              = llmResultStoreStub{}
 )
 
@@ -293,4 +273,8 @@ func (llmResultStoreStub) Get(context.Context, string) (llm.Response, error) {
 }
 func (llmResultStoreStub) Put(context.Context, string, llm.Response) (state.BlobRef, error) {
 	return state.BlobRef{}, nil
+}
+
+func (compositionMaterializerStub) Claim(context.Context, ClaimRequest) (ClaimReceipt, error) {
+	return ClaimReceipt{}, nil
 }

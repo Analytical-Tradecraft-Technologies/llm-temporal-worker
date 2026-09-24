@@ -1,7 +1,7 @@
 package runtime
 
 // This file composes the storage-neutral typed query contract with the
-// PostgreSQL read pages. Budget status is exposed only when a snapshot-scoped
+// Redis provider state and remaining SQL spend pages. Budget status is exposed only when a snapshot-scoped
 // Redis generation reader is supplied. Spend is read from the PostgreSQL
 // ledgers when an authenticated deployment supplies the scope-ID resolver.
 
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/control"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
@@ -26,18 +28,18 @@ import (
 )
 
 // QueryServiceBuilder composes a QueryService for one immutable config
-// snapshot. Deployments use this seam to provide authorization, cursor keys,
-// and the query audit callback without the production factory inventing
-// security material or silently accepting unaudited reads.
+// snapshot. Deployments use this seam to provide authorization and cursor keys
+// without the production factory inventing security material. Query auditing
+// defaults to best-effort structured logs and does not require a repository.
 type QueryServiceBuilder func(context.Context, *config.Snapshot, PostgresQueryRepositories) (activity.QueryService, error)
 
 type providerStatusReader interface {
-	ListRouteStatuses(context.Context, postgresstore.ProviderStatusListOptions) (postgresstore.ProviderStatusPage, error)
-	ListCreditStatuses(context.Context, postgresstore.CreditStatusListOptions) (control.CreditStatusPage, error)
+	ListRouteStatuses(context.Context, control.ProviderStatusListOptions) (control.ProviderStatusPage, error)
+	ListCreditStatuses(context.Context, control.CreditStatusListOptions) (control.CreditStatusPage, error)
 }
 
 type inventoryReader interface {
-	ListInventoryModels(context.Context, postgresstore.InventoryModelListOptions) (postgresstore.InventoryModelPage, error)
+	ListInventoryModels(context.Context, control.InventoryModelListOptions) (control.InventoryModelPage, error)
 }
 
 type spendSummaryReader interface {
@@ -84,13 +86,14 @@ func NewRedisBudgetStatusReaderFactory() BudgetStatusReaderFactory {
 // repositories. Returning uuid.Nil or an error fails the query closed.
 type QueryScopeResolver func(context.Context, control.QueryScope) (uuid.UUID, error)
 
-// PersistedQueryOptions are the mandatory security and observability seams
-// for NewPersistedQueryService. No default authorization, cursor key, or
-// audit sink is safe to infer from a config snapshot.
+// PersistedQueryOptions configures authenticated reads and optional audit
+// observation. Authorization and cursor keys are mandatory. A nil Audit uses
+// Logger, or a logger configured from the snapshot writing to stderr.
 type PersistedQueryOptions struct {
 	Authorize    control.AuthorizeFunc
 	Cursor       *control.CursorCodec
 	Audit        control.AuditFunc
+	Logger       *observability.Logger
 	Clock        func() time.Time
 	ResolveScope QueryScopeResolver
 	// BudgetStatus is required to expose budget_status. It must be backed by
@@ -98,22 +101,17 @@ type PersistedQueryOptions struct {
 	BudgetStatus BudgetStatusReader
 }
 
-// PersistedQueryBuilderOptions contains the deployment-owned security and
-// state-read capabilities used by NewPersistedQueryServiceBuilder. Audit is
-// intentionally absent: the builder always binds the snapshot-owned
-// PostgresQueryRepositories.QueryAudit capability so a production query cannot
-// accidentally use an in-memory, newer-snapshot, or otherwise unrelated sink.
+// PersistedQueryBuilderOptions supplies deployment-owned security inputs and
+// an optional logger. Audit events use normal logs; no audit repository is needed.
 type PersistedQueryBuilderOptions struct {
 	Authorize control.AuthorizeFunc
 	Cursor    *control.CursorCodec
 	Clock     func() time.Time
+	Logger    *observability.Logger
 }
 
-// NewPersistedQueryServiceBuilder returns a production-factory builder that
-// binds persisted reads and audit writes from the same immutable PostgreSQL
-// client set. Authorization and cursor key material remain explicit
-// deployment inputs. The returned builder fails closed when the snapshot does
-// not expose a durable audit repository.
+// NewPersistedQueryServiceBuilder binds authenticated reads to one immutable
+// snapshot and logs completed queries on a best-effort basis.
 func NewPersistedQueryServiceBuilder(options PersistedQueryBuilderOptions) (QueryServiceBuilder, error) {
 	if options.Authorize == nil {
 		return nil, errors.New("persisted query builder authorization is required")
@@ -125,15 +123,12 @@ func NewPersistedQueryServiceBuilder(options PersistedQueryBuilderOptions) (Quer
 	cursor.Key = append([]byte(nil), options.Cursor.Key...)
 
 	return func(_ context.Context, snapshot *config.Snapshot, repositories PostgresQueryRepositories) (activity.QueryService, error) {
-		if isNilCapability(repositories.QueryAudit) {
-			return nil, errors.New("persisted query audit repository is required")
-		}
 		snapshotCursor := cursor
 		snapshotCursor.Key = append([]byte(nil), cursor.Key...)
 		return NewPersistedQueryService(snapshot, repositories, PersistedQueryOptions{
 			Authorize:    options.Authorize,
 			Cursor:       &snapshotCursor,
-			Audit:        repositories.QueryAudit.RecordAudit,
+			Logger:       options.Logger,
 			Clock:        options.Clock,
 			ResolveScope: repositories.ScopeResolver,
 			BudgetStatus: repositories.BudgetStatus,
@@ -154,8 +149,22 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 	if options.Cursor == nil || len(options.Cursor.Key) == 0 {
 		return nil, errors.New("persisted query cursor codec is required")
 	}
-	if options.Audit == nil {
-		return nil, errors.New("persisted query audit sink is required")
+	audit := options.Audit
+	if audit == nil {
+		logger := options.Logger
+		if logger == nil {
+			configuration := snapshot.Config()
+			var err error
+			logger, err = observability.NewLogger(observability.LogOptions{
+				Format: configuration.Telemetry.Logs.Format,
+				Level:  configuration.Telemetry.Logs.Level,
+				Output: os.Stderr,
+			})
+			if err != nil {
+				return nil, errors.New("construct query audit logger failed")
+			}
+		}
+		audit = logger.QueryAudit
 	}
 	clock := options.Clock
 	if clock == nil {
@@ -171,10 +180,10 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 	// creates non-nil typed interfaces and turns an unsupported query family
 	// into a nil-receiver panic. Missing and typed-nil optional capabilities
 	// must retain the same fail-closed behavior.
-	if repositories.ProviderStatus != nil {
+	if !isNilCapability(repositories.ProviderStatus) {
 		handler.provider = repositories.ProviderStatus
 	}
-	if repositories.Inventory != nil {
+	if !isNilCapability(repositories.Inventory) {
 		handler.inventory = repositories.Inventory
 	}
 	if repositories.SpendSummary != nil {
@@ -186,7 +195,7 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 	return &control.QueryService{
 		TypedHandler: handler,
 		Authorize:    options.Authorize,
-		Audit:        options.Audit,
+		Audit:        audit,
 		CursorCodec:  options.Cursor,
 		Clock:        clock,
 	}, nil
@@ -303,7 +312,7 @@ func (handler *persistedQueryHandler) providerStatus(ctx context.Context, reques
 	if query.Availability != nil {
 		availability = control.Availability(*query.Availability)
 	}
-	page, err := handler.provider.ListRouteStatuses(ctx, postgresstore.ProviderStatusListOptions{
+	page, err := handler.provider.ListRouteStatuses(ctx, control.ProviderStatusListOptions{
 		ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint),
 		Availability: availability, IncludeHealthy: boolValue(query.IncludeHealthy), SnapshotHorizon: horizon,
 		AfterRouteID: after, Limit: query.Page.Size,
@@ -344,7 +353,7 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 		return control.QueryResponse{}, fmt.Errorf("model inventory filter has unexpected type")
 	}
 	horizon := time.Time{}
-	position := postgresstore.InventoryModelPosition{}
+	position := control.InventoryModelPosition{}
 	if claims != nil {
 		horizon = claims.Horizon
 		var err error
@@ -357,7 +366,7 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 	if query.Lifecycle != nil {
 		lifecycle = control.Lifecycle(*query.Lifecycle)
 	}
-	page, err := handler.inventory.ListInventoryModels(ctx, postgresstore.InventoryModelListOptions{
+	page, err := handler.inventory.ListInventoryModels(ctx, control.InventoryModelListOptions{
 		ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), ModelPrefix: stringValue(query.ModelPrefix), Lifecycle: lifecycle,
 		SnapshotHorizon: horizon, After: position, Limit: query.Page.Size,
 	})
@@ -407,7 +416,7 @@ func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request 
 	if claims != nil {
 		horizon, after = claims.Horizon, claims.Position
 	}
-	page, err := handler.provider.ListCreditStatuses(ctx, postgresstore.CreditStatusListOptions{ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), IncludeOK: boolValue(query.IncludeOK), SnapshotHorizon: horizon, AfterEndpointKey: after, Limit: query.Page.Size})
+	page, err := handler.provider.ListCreditStatuses(ctx, control.CreditStatusListOptions{ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), IncludeOK: boolValue(query.IncludeOK), SnapshotHorizon: horizon, AfterEndpointKey: after, Limit: query.Page.Size})
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
@@ -490,18 +499,18 @@ func executionID(request control.QueryRequest) control.QueryExecutionID {
 	return control.QueryExecutionID(hex.EncodeToString(digest[:]))
 }
 
-func encodeInventoryPosition(position postgresstore.InventoryModelPosition) string {
+func encodeInventoryPosition(position control.InventoryModelPosition) string {
 	return strings.Join([]string{position.Provider, position.EndpointID, position.SnapshotID.String(), position.ProviderModelID}, "\x00")
 }
 
-func decodeInventoryPosition(value string) (postgresstore.InventoryModelPosition, error) {
+func decodeInventoryPosition(value string) (control.InventoryModelPosition, error) {
 	parts := strings.Split(value, "\x00")
 	if len(parts) != 4 || parts[0] == "" || parts[1] == "" || parts[3] == "" {
-		return postgresstore.InventoryModelPosition{}, errors.New("position is incomplete")
+		return control.InventoryModelPosition{}, errors.New("position is incomplete")
 	}
 	snapshotID, err := uuid.Parse(parts[2])
 	if err != nil || snapshotID == uuid.Nil {
-		return postgresstore.InventoryModelPosition{}, errors.New("snapshot id is invalid")
+		return control.InventoryModelPosition{}, errors.New("snapshot id is invalid")
 	}
-	return postgresstore.InventoryModelPosition{Provider: parts[0], EndpointID: parts[1], SnapshotID: snapshotID, ProviderModelID: parts[3]}, nil
+	return control.InventoryModelPosition{Provider: parts[0], EndpointID: parts[1], SnapshotID: snapshotID, ProviderModelID: parts[3]}, nil
 }

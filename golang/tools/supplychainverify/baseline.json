@@ -9,6 +9,11 @@
   ],
   "trusted_module_roots": [
     {
+      "path": "github.com/Analytical-Tradecraft-Technologies/cloud-storage",
+      "license": "Apache-2.0",
+      "source": "https://github.com/Analytical-Tradecraft-Technologies/cloud-storage"
+    },
+    {
       "path": "github.com/Analytical-Tradecraft-Technologies",
       "license": "LicenseRef-ATT-Proprietary",
       "source": "https://github.com/Analytical-Tradecraft-Technologies"

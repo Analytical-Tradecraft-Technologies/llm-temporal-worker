@@ -520,8 +520,7 @@ type capabilityCheckpointStub struct {
 	state.CheckpointHandleMaterializer
 }
 type capabilityResultStub struct{ durable.ResultStore }
-type capabilityJournalStub struct{ durable.Journal }
-type capabilityMaterializerStub struct{ durable.BudgetMaterializer }
+type capabilityMaterializerStub struct{ durable.BudgetLeaser }
 type capabilityFinalizerStub struct{ durable.AtomicFinalizer }
 
 func validCapabilityComposition() durable.Composition {
@@ -535,7 +534,6 @@ func validCapabilityComposition() durable.Composition {
 		Continuations: capabilityContinuationStub{},
 		Checkpoints:   capabilityCheckpointStub{},
 		Results:       capabilityResultStub{},
-		Journal:       capabilityJournalStub{},
 		Materializer:  capabilityMaterializerStub{},
 		Finalizer:     capabilityFinalizerStub{},
 	}
@@ -546,8 +544,7 @@ var (
 	_ state.ContinuationStore            = capabilityContinuationStub{}
 	_ state.CheckpointHandleMaterializer = capabilityCheckpointStub{}
 	_ durable.ResultStore                = capabilityResultStub{}
-	_ durable.Journal                    = capabilityJournalStub{}
-	_ durable.BudgetMaterializer         = capabilityMaterializerStub{}
+	_ durable.BudgetLeaser               = capabilityMaterializerStub{}
 	_ durable.AtomicFinalizer            = capabilityFinalizerStub{}
 	_ blobstore.Store                    = capabilityBlobStoreStub{}
 )

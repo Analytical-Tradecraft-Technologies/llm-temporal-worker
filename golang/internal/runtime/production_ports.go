@@ -112,7 +112,7 @@ func (binding *productionPhaseBinding) generatePorts() durablestore.GeneratePort
 		Compact:            binding.compactForGenerate,
 		Route:              binding.routeGenerate,
 		Reserve:            binding.reserveGenerate,
-		Journal:            binding.journalGenerate,
+		Claim:              binding.claimGenerate,
 		Dispatch:           binding.dispatchGenerate,
 		Finalize:           binding.finalizeGenerate,
 		FinalizeCache:      binding.finalizeGenerateCache,
@@ -972,13 +972,17 @@ func (binding *productionPhaseBinding) reserveGenerate(ctx context.Context, _ ll
 	return result, nil
 }
 
-func (binding *productionPhaseBinding) journalGenerate(ctx context.Context, _ llm.GenerateRequestV1, route durablestore.RoutePlan, reservation durablestore.ReserveResult) (durablestore.JournalReceipt, error) {
-	for _, event := range reservation.Events {
-		if _, err := binding.composition.Journal.AppendReservation(ctx, event); err != nil {
-			return durablestore.JournalReceipt{}, err
-		}
+func (binding *productionPhaseBinding) claimGenerate(ctx context.Context, _ llm.GenerateRequestV1, route durablestore.RoutePlan, reservation durablestore.ReserveResult) (durablestore.ClaimReceipt, error) {
+	request, err := reservationRequest(route)
+	if err != nil {
+		return durablestore.ClaimReceipt{}, err
 	}
-	return durablestore.JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, nil
+	if err := durablestore.ValidatePlannedReserveResult(request, reservation); err != nil {
+		return durablestore.ClaimReceipt{}, err
+	}
+	return binding.composition.Materializer.Claim(ctx, durablestore.ClaimRequest{
+		OperationID: reservation.OperationID, GenerationID: reservation.GenerationID, IncarnationID: reservation.IncarnationID,
+	})
 }
 
 func (binding *productionPhaseBinding) confirmReservation(ctx context.Context, route durablestore.RoutePlan) (durablestore.ReserveResult, error) {
@@ -1190,7 +1194,7 @@ func (observer *productionDispatchObserver) releaseCapacity(ctx context.Context)
 	return err
 }
 
-func (binding *productionPhaseBinding) dispatchGenerate(ctx context.Context, request llm.GenerateRequestV1, _ durablestore.GenerateReplay, route durablestore.RoutePlan, _ durablestore.JournalReceipt) (durablestore.DispatchResult, error) {
+func (binding *productionPhaseBinding) dispatchGenerate(ctx context.Context, request llm.GenerateRequestV1, _ durablestore.GenerateReplay, route durablestore.RoutePlan, _ durablestore.ClaimReceipt) (durablestore.DispatchResult, error) {
 	if route.Execution == nil {
 		return durablestore.DispatchResult{}, errors.New("route execution is unavailable")
 	}
@@ -1371,7 +1375,11 @@ func (binding *productionPhaseBinding) finalizeFailedBudget(ctx context.Context,
 				event.UnknownReasonCode = "ambiguous_dispatch"
 			}
 		case operation.State == admission.StateCanceled:
-			event.Kind, event.CostStatus, event.ActualCostUSD = budget.JournalRelease, budget.CostExact, &zero
+			// Definite no-cost terminal outcomes settle at exact zero whether
+			// Redis still owns an unclaimed lease or a successful one-shot claim.
+			// Redis selects the valid transition atomically; ambiguous work above
+			// remains charged instead of guessing whether a claim was received.
+			event.Kind, event.CostStatus, event.ActualCostUSD = budget.JournalFinalizeExact, budget.CostExact, &zero
 			event.ReservedDecreaseUSD = reserved.AmountUSD
 		case operation.CostStatus == "unknown":
 			event.Kind, event.CostStatus, event.UnknownReasonCode = budget.JournalFinalizeUnknown, budget.CostUnknown, operation.CostUnknownReason
@@ -1380,7 +1388,7 @@ func (binding *productionPhaseBinding) finalizeFailedBudget(ctx context.Context,
 			}
 			event.ReservedDecreaseUSD, event.AccountedIncreaseUSD = reserved.AmountUSD, reserved.AmountUSD
 		case operation.CostMethod == "worker_cache_zero":
-			event.Kind, event.CostStatus, event.ActualCostUSD = budget.JournalRelease, budget.CostExact, &zero
+			event.Kind, event.CostStatus, event.ActualCostUSD = budget.JournalFinalizeExact, budget.CostExact, &zero
 			event.ReservedDecreaseUSD = reserved.AmountUSD
 		default:
 			if operation.ActualCostUSD == nil {
@@ -1391,11 +1399,6 @@ func (binding *productionPhaseBinding) finalizeFailedBudget(ctx context.Context,
 			event.ReservedDecreaseUSD, event.AccountedIncreaseUSD = reserved.AmountUSD, actual
 		}
 		events = append(events, event)
-	}
-	for _, event := range events {
-		if _, err := binding.composition.Journal.AppendCompletion(context.WithoutCancel(ctx), event); err != nil {
-			return err
-		}
 	}
 	return binding.composition.Materializer.Reconcile(context.WithoutCancel(ctx), durablestore.ReconcileRequest{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: reservation.IncarnationID, Events: events})
 }
@@ -1558,11 +1561,6 @@ func (binding *productionPhaseBinding) reconcileCompletedResponseBudget(ctx cont
 	if err != nil {
 		return err
 	}
-	for _, event := range events {
-		if _, err := binding.composition.Journal.AppendCompletion(context.WithoutCancel(ctx), event); err != nil {
-			return err
-		}
-	}
 	return binding.composition.Materializer.Reconcile(context.WithoutCancel(ctx), durablestore.ReconcileRequest{
 		OperationID: route.OperationID, GenerationID: route.GenerationID,
 		IncarnationID: reservation.IncarnationID, Events: events,
@@ -1611,11 +1609,6 @@ func (binding *productionPhaseBinding) reconcileGenerate(ctx context.Context, _ 
 	events, err := completionEvents(route, reservation, finalization.Response.Cost, operation.CompletedAt)
 	if err != nil {
 		return err
-	}
-	for _, event := range events {
-		if _, err := binding.composition.Journal.AppendCompletion(ctx, event); err != nil {
-			return err
-		}
 	}
 	return binding.composition.Materializer.Reconcile(ctx, durablestore.ReconcileRequest{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: reservation.IncarnationID, Events: events})
 }

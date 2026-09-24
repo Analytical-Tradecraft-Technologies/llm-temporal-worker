@@ -263,6 +263,8 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: %v", ErrBudgetStatusUnavailable, err)
 	}
 	result := control.BudgetStatusResult{ActiveAt: activeAt, GenerationID: control.BudgetGenerationID(read.GenerationID), ManifestDigest: control.ManifestDigest(read.ManifestDigest), StreamHighWaterMark: control.StreamHighWaterMark(read.StreamHighWaterMark)}
+	// The public query contract requires an array even when details are excluded.
+	result.Windows = []control.BudgetWindow{}
 	include := query.IncludeWindows == nil || *query.IncludeWindows
 	if include {
 		result.Windows = make([]control.BudgetWindow, 0, len(read.Members))

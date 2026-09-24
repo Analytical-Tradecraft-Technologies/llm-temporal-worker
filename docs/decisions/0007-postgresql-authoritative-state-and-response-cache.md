@@ -1,5 +1,10 @@
 # ADR 0007: PostgreSQL Durable State and Exact-Response Cache
 
+> **Budget design superseded:** Redis now owns budget leases and settlement;
+> the SQL budget journal writer has been removed. The SQL budget rebuild and
+> automatic Stream broadcast described below are not the current runtime. See
+> [Redis budget leases](../reference/redis-budget-leases.md) for the implemented contract.
+
 - Status: Accepted design; implementation pending
 - Date: 2026-07-18
 - Complements: ADR 0004; Redis remains the low-latency throttle and admission accelerator

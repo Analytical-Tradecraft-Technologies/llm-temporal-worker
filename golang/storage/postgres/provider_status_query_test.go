@@ -10,7 +10,7 @@ import (
 
 func TestProviderStatusListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 	options := ProviderStatusListOptions{ConfigDigest: sha256.Sum256([]byte("config"))}
-	if err := options.normalize(); err != nil {
+	if err := options.Normalize(); err != nil {
 		t.Fatal(err)
 	}
 	if options.Limit != DefaultProviderStatusPageSize {
@@ -28,7 +28,7 @@ func TestProviderStatusListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 		{name: "unsafe route key", options: ProviderStatusListOptions{ConfigDigest: options.ConfigDigest, AfterRouteID: strings.Repeat("r", 257)}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := test.options.normalize(); err == nil {
+			if err := test.options.Normalize(); err == nil {
 				t.Fatal("invalid options were accepted")
 			}
 		})

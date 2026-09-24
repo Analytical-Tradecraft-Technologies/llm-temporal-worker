@@ -8,77 +8,38 @@ import (
 	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
-var (
-	// ErrBudgetBoundaryInvalid identifies a boundary that cannot safely own
-	// both snapshot-scoped stores.
-	ErrBudgetBoundaryInvalid = errors.New("durable budget boundary is invalid")
-	// ErrJournalPending means Redis accepted a reservation, but PostgreSQL did
-	// not yet record every reservation event. The caller must persist the
-	// cleanup/recovery metadata and must not dispatch a provider call from the
-	// partial result.
-	ErrJournalPending = errors.New("postgres budget journal is pending")
-)
+var ErrBudgetBoundaryInvalid = errors.New("durable budget boundary is invalid")
 
-// BudgetBoundary is the narrow Redis/PostgreSQL budget handoff used by a
-// future durable Generate or Compact composition. It deliberately owns no
-// provider, operation, checkpoint, cache, or legacy engine state.
-//
-// The boundary is immutable after snapshot construction. Its identity binds
-// the Redis generation namespace and PostgreSQL worker namespace to the same
-// configuration snapshot; callers must construct a new boundary on reload.
+// BudgetBoundary owns only Redis budget reservations, dispatch claims and
+// settlement. Operation/checkpoint persistence belongs to the caller.
 type BudgetBoundary struct {
 	Identity     StateIdentity
-	Materializer BudgetMaterializer
-	Journal      Journal
+	Materializer BudgetLeaser
 }
 
-// Validate checks the complete snapshot-owned budget handoff. In particular,
-// typed-nil interfaces are rejected before an Activity can begin a Redis or
-// PostgreSQL side effect.
 func (boundary BudgetBoundary) Validate() error {
-	if err := boundary.Identity.Validate(); err != nil {
-		return fmt.Errorf("%w: identity: %v", ErrBudgetBoundaryInvalid, err)
+	if err := boundary.Identity.ValidateBudget(); err != nil {
+		return fmt.Errorf("%w: %v", ErrBudgetBoundaryInvalid, err)
 	}
 	if isNilPort(boundary.Materializer) {
-		return fmt.Errorf("%w: Redis budget materializer is required", ErrBudgetBoundaryInvalid)
-	}
-	if isNilPort(boundary.Journal) {
-		return fmt.Errorf("%w: PostgreSQL budget journal is required", ErrBudgetBoundaryInvalid)
+		return fmt.Errorf("%w: Redis budget leaser is required", ErrBudgetBoundaryInvalid)
 	}
 	return nil
 }
 
-// BudgetReservation contains the Redis decision and the PostgreSQL records
-// that prove every reservation event was journaled. DispatchReady is false on
-// denial, validation failure, cancellation, or a partial journal write.
 type BudgetReservation struct {
-	Result         ReserveResult
-	JournalRecords []postgresstore.JournalRecord
-	// ReleaseEvents is bounded cleanup metadata for an accepted reservation
-	// whose PostgreSQL journal could not be completed. ReleasePending is true
-	// only when the best-effort Redis cleanup also failed.
-	ReleaseEvents  []budget.CompletionEvent
-	ReleasePending bool
-	// PostgresRecoveryRequired is true when one or more reservation journal
-	// appends succeeded before a later append failed. Recovery must reconcile
-	// that append-only gap before this operation can be retried for dispatch.
-	PostgresRecoveryRequired bool
+	Result  ReserveResult
+	claimed bool
 }
 
 func (reservation BudgetReservation) DispatchReady() bool {
-	return reservation.Result.Accepted && len(reservation.Result.Events) > 0 &&
-		len(reservation.JournalRecords) == len(reservation.Result.Events) && !reservation.ReleasePending
+	return reservation.Result.Accepted && reservation.claimed
 }
 
-// Reserve executes the only safe pre-dispatch order: Redis accepts first,
-// then PostgreSQL records every returned reservation event. A journal error
-// aborts this lifecycle after best-effort cleanup; this boundary never permits
-// dispatch from a partial result.
-// The returned partial reservation is never dispatch-ready.
+// Reserve returns immediately with acquired or wait. An unsuccessful acquisition
+// is not remembered as a permanent denial; workflow timers may retry it.
 func (boundary BudgetBoundary) Reserve(ctx context.Context, lifecycle *Lifecycle, request ReserveRequest) (BudgetReservation, error) {
 	var result BudgetReservation
 	if ctx == nil {
@@ -92,65 +53,69 @@ func (boundary BudgetBoundary) Reserve(ctx context.Context, lifecycle *Lifecycle
 	}
 	current, ok := lifecycle.Current()
 	if !ok || (current != PhaseOperationReplay && current != PhaseRedisAccepted) {
-		return result, fmt.Errorf("%w: reserve requires operation replay or a retry after Redis acceptance", ErrInvalidPhase)
-	}
-	if lifecycle.reservationAborted {
-		return result, fmt.Errorf("%w: reservation cleanup was attempted; recover before retry", ErrInvalidPhase)
-	}
-	if err := ctx.Err(); err != nil {
-		return result, err
+		return result, ErrInvalidPhase
 	}
 	accepted, err := boundary.Materializer.Accept(ctx, request)
 	if err != nil {
 		return result, err
 	}
 	if err := accepted.Validate(request); err != nil {
-		return result, fmt.Errorf("%w: Redis acceptance: %v", ErrBudgetBoundaryInvalid, err)
+		return result, fmt.Errorf("%w: %v", ErrBudgetBoundaryInvalid, err)
+	}
+	seen := make(map[string]bool)
+	for _, event := range accepted.Events {
+		if seen[event.EventID] {
+			return result, ErrBudgetBoundaryInvalid
+		}
+		seen[event.EventID] = true
 	}
 	if accepted.Accepted {
 		if err := lifecycle.bindReservationIdentity(accepted); err != nil {
 			return result, err
 		}
-	}
-	if current == PhaseOperationReplay {
-		if err := lifecycle.Advance(PhaseRedisAccepted); err != nil {
-			return result, err
+		if current == PhaseOperationReplay {
+			if err := lifecycle.Advance(PhaseRedisAccepted); err != nil {
+				return result, err
+			}
 		}
 	}
 	result.Result = accepted
-	if !accepted.Accepted {
-		// A denial is a complete Redis decision and must not create a journal
-		// record or provider work.
-		return result, nil
-	}
-	result.JournalRecords = make([]postgresstore.JournalRecord, 0, len(accepted.Events))
-	seen := make(map[string]struct{}, len(accepted.Events))
-	for index, event := range accepted.Events {
-		if _, exists := seen[event.EventID]; exists {
-			return boundary.reservationJournalFailure(ctx, lifecycle, result, accepted, fmt.Errorf("duplicate reservation event %d", index))
-		}
-		seen[event.EventID] = struct{}{}
-	}
-	for index, event := range accepted.Events {
-		if err := ctx.Err(); err != nil {
-			return boundary.reservationJournalFailure(ctx, lifecycle, result, accepted, fmt.Errorf("reservation journal canceled: %v", err))
-		}
-		record, err := boundary.Journal.AppendReservation(ctx, event)
-		if err != nil {
-			return boundary.reservationJournalFailure(ctx, lifecycle, result, accepted, fmt.Errorf("reservation event %d: %v", index, err))
-		}
-		result.JournalRecords = append(result.JournalRecords, record)
-	}
-	if err := lifecycle.Advance(PhasePostgresJournaled); err != nil {
-		return result, err
-	}
 	return result, nil
 }
 
-// Finalize records all completion events in PostgreSQL before reconciling
-// Redis. PostgreSQL remains authoritative if reconciliation fails; callers
-// must retry the reconciliation handoff and must not submit the provider a
-// second time.
+// Claim must succeed immediately before submission. A lost reply never grants
+// permission to resubmit: the reservation remains charged and requires recovery.
+func (boundary BudgetBoundary) Claim(ctx context.Context, lifecycle *Lifecycle, reservation *BudgetReservation) (ClaimReceipt, error) {
+	if ctx == nil || lifecycle == nil || reservation == nil {
+		return ClaimReceipt{}, ErrBudgetBoundaryInvalid
+	}
+	if err := boundary.Validate(); err != nil {
+		return ClaimReceipt{}, err
+	}
+	current, ok := lifecycle.Current()
+	if !ok || current != PhaseRedisAccepted || !reservation.Result.Accepted {
+		return ClaimReceipt{}, ErrInvalidPhase
+	}
+	result := reservation.Result
+	if err := lifecycle.bindReservationIdentity(result); err != nil {
+		return ClaimReceipt{}, err
+	}
+	receipt, err := boundary.Materializer.Claim(ctx, ClaimRequest{result.OperationID, result.GenerationID, result.IncarnationID})
+	if err != nil {
+		return ClaimReceipt{}, err
+	}
+	if err := receipt.Validate(result); err != nil {
+		return ClaimReceipt{}, err
+	}
+	if err := lifecycle.Advance(PhaseRedisClaimed); err != nil {
+		return ClaimReceipt{}, err
+	}
+	reservation.claimed = true
+	return receipt, nil
+}
+
+// Finalize atomically settles the full reservation in Redis. Callers retry
+// the same completion batch after an uncertain reply without dispatching again.
 func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycle, reservation BudgetReservation, events []budget.CompletionEvent) error {
 	if ctx == nil {
 		return fmt.Errorf("%w: context is nil", ErrBudgetBoundaryInvalid)
@@ -162,11 +127,11 @@ func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycl
 		return ErrInvalidPhase
 	}
 	current, ok := lifecycle.Current()
-	if !ok || (current != PhaseDispatched && current != PhasePostgresFinalized) {
+	if !ok || (current != PhaseDispatched && current != PhaseResultFinalized) {
 		return fmt.Errorf("%w: finalize requires dispatch or a reconciliation retry", ErrInvalidPhase)
 	}
 	if !reservation.DispatchReady() {
-		return fmt.Errorf("%w: reservation is not journaled", ErrJournalRequired)
+		return fmt.Errorf("%w: reservation is not claimed", ErrClaimRequired)
 	}
 	if len(events) == 0 {
 		return fmt.Errorf("%w: completion events are required", ErrBudgetBoundaryInvalid)
@@ -227,18 +192,11 @@ func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycl
 		return err
 	}
 	if current == PhaseDispatched {
-		for index, event := range events {
-			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("%w: completion journal canceled: %v", ErrJournalPending, err)
-			}
-			if _, err := boundary.Journal.AppendCompletion(ctx, event); err != nil {
-				return fmt.Errorf("%w: completion event %d: %v", ErrJournalPending, index, err)
-			}
-		}
-		if err := lifecycle.Advance(PhasePostgresFinalized); err != nil {
+		if err := lifecycle.Advance(PhaseResultFinalized); err != nil {
 			return err
 		}
 	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -258,45 +216,6 @@ func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycl
 		return err
 	}
 	return nil
-}
-
-func (boundary BudgetBoundary) reservationJournalFailure(ctx context.Context, lifecycle *Lifecycle, result BudgetReservation, accepted ReserveResult, cause error) (BudgetReservation, error) {
-	result.PostgresRecoveryRequired = len(result.JournalRecords) > 0
-	// A best-effort release aborts this lifecycle even when it succeeds: a
-	// subsequent Reserve could otherwise replay an already released Redis
-	// reservation while PostgreSQL still has a partial append-only journal.
-	// The caller must persist ReleaseEvents and begin a fresh operation after
-	// recovery confirms the state is safe.
-	if lifecycle != nil {
-		lifecycle.markReservationAborted()
-	}
-	releaseEvents := reservationReleaseEvents(accepted)
-	result.ReleaseEvents = releaseEvents
-	releaseErr := boundary.Materializer.Reconcile(ctx, ReconcileRequest{
-		OperationID: accepted.OperationID, GenerationID: accepted.GenerationID, IncarnationID: accepted.IncarnationID,
-		Events: releaseEvents,
-	})
-	if releaseErr != nil {
-		result.ReleasePending = true
-		return result, fmt.Errorf("%w: %v; Redis release cleanup pending: %v", ErrJournalPending, cause, releaseErr)
-	}
-	return result, fmt.Errorf("%w: %v", ErrJournalPending, cause)
-}
-
-func reservationReleaseEvents(result ReserveResult) []budget.CompletionEvent {
-	released := make([]budget.CompletionEvent, 0, len(result.Events))
-	zero := pricing.USD{}
-	for _, event := range result.Events {
-		cost := zero
-		released = append(released, budget.CompletionEvent{
-			EventID:      fmt.Sprintf("%x", sha256.Sum256([]byte("release:"+event.EventID))),
-			GenerationID: event.GenerationID, OperationID: event.OperationID, WindowID: event.WindowID,
-			BucketStart: event.BucketStart, ReservationRevision: event.ReservationRevision + 1,
-			Kind: budget.JournalRelease, ReservedDecreaseUSD: event.AmountUSD,
-			ActualCostUSD: &cost, CostStatus: budget.CostExact, OccurredAt: event.OccurredAt,
-		})
-	}
-	return released
 }
 
 func completionDigest(events []budget.CompletionEvent) [32]byte {

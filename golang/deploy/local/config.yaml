@@ -31,7 +31,7 @@ state:
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
-  reservation_lease: 2m
+  reservation_lease: 15m
   redis:
     addresses: [redis:6379]
     key_prefix: llmtw
@@ -49,7 +49,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: c7ab5a848a1f1567d42e9a41c8493836ff16b70efa01e3bb7a3acb06f2cd7e17
+    admission_digest: 5c9ec6ade951984b614bf0e9dbb1961753c550a6201152d095ed3fa847a65eb1
     max_connections: 16
     dial_timeout: 2s
     operation_timeout: 3s

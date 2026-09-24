@@ -20,129 +20,15 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/control"
 )
 
-const (
-	DefaultInventoryPageSize = 100
-	MaxInventoryPageSize     = 1000
-)
+// These aliases retain the legacy SQL adapter while query contracts live in control.
+type InventoryModelPosition = control.InventoryModelPosition
+type InventoryModelListOptions = control.InventoryModelListOptions
+type InventorySnapshotInfo = control.InventorySnapshotInfo
+type InventoryModelRecord = control.InventoryModelRecord
+type InventoryModelPage = control.InventoryModelPage
 
-// InventoryModelPosition is the unsigned database keyset position.  Public
-// query cursors must authenticate all four fields before passing them to the
-// repository.
-type InventoryModelPosition struct {
-	Provider        string
-	EndpointID      string
-	SnapshotID      uuid.UUID
-	ProviderModelID string
-}
-
-// InventoryModelListOptions describes filters and the pinned snapshot
-// horizon for a persisted inventory read.  A zero SnapshotHorizon discovers
-// the latest snapshot horizon in the same repeatable-read transaction; callers
-// must pass the returned horizon on the next page.
-type InventoryModelListOptions struct {
-	ConfigDigest    [32]byte
-	Provider        string
-	EndpointID      string
-	ModelPrefix     string
-	Lifecycle       control.Lifecycle
-	SnapshotHorizon time.Time
-	After           InventoryModelPosition
-	Limit           int
-}
-
-// InventorySnapshotInfo is the provenance needed by the query layer to
-// report support, completeness, and current/stale state without exposing
-// provider credentials or raw responses.
-type InventorySnapshotInfo struct {
-	ID              uuid.UUID
-	ConfigDigest    [32]byte
-	InventoryDigest [32]byte
-	Provider        string
-	EndpointID      string
-	Source          control.InventorySource
-	ObservedAt      time.Time
-	ExpiresAt       time.Time
-	Complete        bool
-}
-
-func (snapshot InventorySnapshotInfo) ProvenanceAt(now time.Time) control.Provenance {
-	if snapshot.Source == control.InventoryUnsupported {
-		return control.ProvenanceUnsupported
-	}
-	if now.IsZero() || !now.Before(snapshot.ExpiresAt) {
-		return control.ProvenanceStale
-	}
-	return control.ProvenanceCurrent
-}
-
-// InventoryModelRecord combines one normalized model row with its immutable
-// snapshot provenance.  The control.Model value retains the capability digest
-// and safe metadata exactly as persisted; it does not invent wire-level
-// capability names.
-type InventoryModelRecord struct {
-	Snapshot InventorySnapshotInfo
-	Model    control.Model
-}
-
-// InventoryModelPage is a bounded, stable storage page.  Next is nil when no
-// further model row exists.  SnapshotHorizon is a required cursor-binding
-// value for callers that request another page.
-type InventoryModelPage struct {
-	Models          []InventoryModelRecord
-	Next            *InventoryModelPosition
-	SnapshotHorizon time.Time
-}
-
-func (options *InventoryModelListOptions) normalize() error {
-	if options == nil {
-		return errors.New("inventory model list options are nil")
-	}
-	if options.ConfigDigest == ([32]byte{}) {
-		return errors.New("inventory model list config digest is required")
-	}
-	for name, value := range map[string]string{
-		"provider":       options.Provider,
-		"endpoint_id":    options.EndpointID,
-		"model_prefix":   options.ModelPrefix,
-		"after_provider": options.After.Provider,
-		"after_endpoint": options.After.EndpointID,
-		"after_model":    options.After.ProviderModelID,
-	} {
-		if value == "" {
-			continue
-		}
-		if len(value) > 256 || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
-			return fmt.Errorf("inventory model %s is empty or unsafe", name)
-		}
-	}
-	if options.Lifecycle != "" && !validInventoryLifecycle(options.Lifecycle) {
-		return fmt.Errorf("inventory model lifecycle %q is invalid", options.Lifecycle)
-	}
-	if options.Limit == 0 {
-		options.Limit = DefaultInventoryPageSize
-	}
-	if options.Limit < 1 || options.Limit > MaxInventoryPageSize {
-		return fmt.Errorf("inventory model page size must be between 1 and %d", MaxInventoryPageSize)
-	}
-	if options.SnapshotHorizon.IsZero() && (options.After != InventoryModelPosition{}) {
-		return errors.New("inventory model continuation requires a snapshot horizon")
-	}
-	if (options.After.Provider == "") != (options.After.EndpointID == "") ||
-		(options.After.EndpointID == "") != (options.After.ProviderModelID == "") ||
-		(options.After.ProviderModelID == "") != (options.After.SnapshotID == uuid.Nil) {
-		return errors.New("inventory model continuation position is incomplete")
-	}
-	if options.Provider != "" && options.After.Provider != "" && options.Provider != options.After.Provider {
-		return errors.New("inventory model continuation provider does not match filter")
-	}
-	if options.EndpointID != "" && options.After.EndpointID != "" && options.EndpointID != options.After.EndpointID {
-		return errors.New("inventory model continuation endpoint does not match filter")
-	}
-	if !options.SnapshotHorizon.IsZero() {
-		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
-	}
-	return nil
-}
+const DefaultInventoryPageSize = control.DefaultInventoryPageSize
+const MaxInventoryPageSize = control.MaxInventoryPageSize
 
 func validInventoryLifecycle(value control.Lifecycle) bool {
 	switch value {
@@ -164,7 +50,7 @@ func (repository InventoryRepository) ListInventoryModels(ctx context.Context, o
 	if err := repository.validateRead(); err != nil {
 		return page, err
 	}
-	if err := options.normalize(); err != nil {
+	if err := options.Normalize(); err != nil {
 		return page, err
 	}
 	snapshots, err := repository.Namespace.Render("provider_inventory_snapshots")

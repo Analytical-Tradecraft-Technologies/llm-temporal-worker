@@ -39,9 +39,10 @@ type QueryAuditRecord struct {
 	CompletedAt           time.Time
 }
 
-// AuditFunc must durably record a validated query before QueryService.Execute
-// returns. Returning an error prevents the response from crossing the Activity
-// boundary and causes the caller to retry the same operation.
+// AuditFunc observes a validated query on a best-effort basis. An audit failure
+// must never fail or retry an otherwise successful query. Implementations should
+// log bounded metadata and return promptly; they must not require durable storage.
+// The error result is retained for adapters, but Execute deliberately ignores it.
 type AuditFunc func(context.Context, QueryAuditRecord) error
 
 func buildQueryAudit(request llm.QueryRequestV1, requestJSON []byte, response llm.QueryResponseV1, startedAt, completedAt time.Time) (QueryAuditRecord, error) {

@@ -8,7 +8,7 @@ import (
 
 func TestCreditStatusListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 	options := CreditStatusListOptions{ConfigDigest: sha256.Sum256([]byte("config"))}
-	if err := options.normalize(); err != nil {
+	if err := options.Normalize(); err != nil {
 		t.Fatal(err)
 	}
 	if options.Limit != DefaultCreditStatusPageSize {
@@ -24,7 +24,7 @@ func TestCreditStatusListOptionsNormalizeDefaultsAndBounds(t *testing.T) {
 		{name: "unsafe continuation", options: CreditStatusListOptions{ConfigDigest: options.ConfigDigest, AfterEndpointKey: strings.Repeat("e", 257)}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := test.options.normalize(); err == nil {
+			if err := test.options.Normalize(); err == nil {
 				t.Fatal("invalid options were accepted")
 			}
 		})

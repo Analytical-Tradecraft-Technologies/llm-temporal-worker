@@ -7,13 +7,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
+	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -57,6 +58,9 @@ func (function TemporalClientFactoryFunc) New(ctx context.Context, value config.
 // production client is authenticated with a compact JWT loaded from a bounded
 // file and may send that credential only over its configured TLS connection.
 type DefaultTemporalClientFactory struct {
+	// Logger is the process logger. When omitted, use the configured log
+	// format and level on stderr, never the SDK's legacy default logger.
+	Logger *observability.Logger
 	// Identity overrides the generated worker/client identity. It is useful for
 	// tests and for deployments that already provide a stable identity.
 	Identity string
@@ -74,7 +78,16 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	logger := factory.Logger
+	if logger == nil {
+		var err error
+		logger, err = newRuntimeLogger(value, Options{})
+		if err != nil {
+			return nil, err
+		}
+	}
 	options := client.Options{
+		Logger:    logger.TemporalLogger(),
 		HostPort:  value.Temporal.Target,
 		Namespace: value.Temporal.Namespace,
 		Identity:  factory.identity(value.Temporal.IdentityPrefix),
@@ -286,21 +299,7 @@ func readBoundedFile(path string) ([]byte, error) {
 }
 
 func readBoundedFileLimit(path string, maxBytes int64) ([]byte, error) {
-	if path == "" {
-		return nil, errors.New("file path is required")
-	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
-		return nil, errors.New("file is unavailable")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, errors.New("file is unavailable")
-	}
-	defer file.Close()
-	value, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
-	if err != nil || int64(len(value)) > maxBytes {
-		return nil, errors.New("file exceeds the safe size limit")
-	}
-	return value, nil
+	// Kubernetes projected Secrets use symlinks. Validate the opened target
+	// while preserving the tighter bound for Temporal JWT credentials.
+	return secrets.ReadSecretFile(context.Background(), path, maxBytes)
 }

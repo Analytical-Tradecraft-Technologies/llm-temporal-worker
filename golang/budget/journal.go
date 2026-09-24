@@ -8,9 +8,9 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
-// JournalEventKind is the append-only PostgreSQL budget journal vocabulary.
-// It intentionally mirrors the database CHECK constraint; adding a new kind
-// requires a schema/ledger review rather than silently changing accounting.
+// JournalEventKind is the budget accounting event vocabulary. The historical
+// name remains for callers, but these events now settle directly in Redis;
+// they do not require a SQL journal.
 type JournalEventKind string
 
 const (

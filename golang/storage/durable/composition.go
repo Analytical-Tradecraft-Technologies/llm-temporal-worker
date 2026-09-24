@@ -24,8 +24,7 @@ type CompositionPorts struct {
 	Continuations state.ContinuationStore
 	Checkpoints   state.CheckpointHandleMaterializer
 	Results       ResultStore
-	Journal       Journal
-	Materializer  BudgetMaterializer
+	Materializer  BudgetLeaser
 	Finalizer     AtomicFinalizer
 }
 
@@ -49,7 +48,6 @@ func (builder CompositionBuilder) Build() (Composition, error) {
 		Continuations: builder.Ports.Continuations,
 		Checkpoints:   builder.Ports.Checkpoints,
 		Results:       builder.Ports.Results,
-		Journal:       builder.Ports.Journal,
 		Materializer:  builder.Ports.Materializer,
 		Finalizer:     builder.Ports.Finalizer,
 	}
@@ -59,13 +57,12 @@ func (builder CompositionBuilder) Build() (Composition, error) {
 	return composition, nil
 }
 
-// BudgetBoundary returns the Redis/PostgreSQL handoff for this composition.
+// BudgetBoundary returns the Redis budget boundary for this composition.
 // The boundary is reconstructed from the composition's immutable ports so it
-// cannot accidentally use a journal or materializer from another snapshot.
+// cannot accidentally use a materializer from another snapshot.
 func (composition Composition) BudgetBoundary() BudgetBoundary {
 	return BudgetBoundary{
 		Identity:     composition.Identity,
-		Journal:      composition.Journal,
 		Materializer: composition.Materializer,
 	}
 }

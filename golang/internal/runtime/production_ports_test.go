@@ -20,7 +20,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
@@ -724,10 +723,10 @@ func nowClock(now *time.Time) func() time.Time {
 func TestCompletedReconciliationRetryReusesPersistedTimestampAndEvents(t *testing.T) {
 	completedAt := time.Date(2026, 8, 10, 12, 1, 0, 0, time.UTC)
 	route := durableRouteFixture(t, completedAt.Add(-time.Minute), completedAt.Add(time.Minute))
-	journal := &captureJournal{}
+	
 	materializer := &replayReservationMaterializer{result: *route.Reservation}
 	store := &transitionAdmissionStore{operation: admission.Operation{ID: string(route.OperationID), State: admission.StateCompleted, CompletedAt: completedAt}}
-	binding := &productionPhaseBinding{composition: durablestore.Composition{Operations: store, Journal: journal, Materializer: materializer}}
+	binding := &productionPhaseBinding{composition: durablestore.Composition{Operations: store, Materializer: materializer}}
 	actual := "0.1"
 	finalization := durablestore.GenerateFinalization{Response: llm.GenerateResponseV1{Cost: llm.CostV1{Status: "exact", ActualCostUSD: &actual}}}
 	for range 2 {
@@ -735,25 +734,25 @@ func TestCompletedReconciliationRetryReusesPersistedTimestampAndEvents(t *testin
 			t.Fatal(err)
 		}
 	}
-	if materializer.reconciles != 2 || len(journal.completions) != 2 || !reflect.DeepEqual(journal.completions[0], journal.completions[1]) || !journal.completions[0].OccurredAt.Equal(completedAt) {
-		t.Fatalf("replayed completion changed deterministic facts: %#v", journal.completions)
+	if materializer.reconciles != 2 || len(materializer.completions) != 2 || !reflect.DeepEqual(materializer.completions[0], materializer.completions[1]) || !materializer.completions[0].OccurredAt.Equal(completedAt) {
+		t.Fatalf("replayed completion changed deterministic facts: %#v", materializer.completions)
 	}
 }
 
 func TestFailedCompensationRetryReusesPersistedTimestampAndEvents(t *testing.T) {
 	completedAt := time.Date(2026, 8, 10, 12, 1, 0, 0, time.UTC)
 	route := durableRouteFixture(t, completedAt.Add(-time.Minute), completedAt.Add(time.Minute))
-	journal := &captureJournal{}
+	
 	materializer := &replayReservationMaterializer{result: *route.Reservation}
-	binding := &productionPhaseBinding{composition: durablestore.Composition{Journal: journal, Materializer: materializer}}
+	binding := &productionPhaseBinding{composition: durablestore.Composition{Materializer: materializer}}
 	operation := admission.Operation{ID: string(route.OperationID), State: admission.StateDefiniteFailed, CostStatus: "exact", CostMethod: "worker_cache_zero", CompletedAt: completedAt}
 	for range 2 {
 		if err := binding.finalizeFailedBudget(context.Background(), route, *route.Reservation, operation); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if materializer.reconciles != 2 || len(journal.completions) != 2 || !reflect.DeepEqual(journal.completions[0], journal.completions[1]) || journal.completions[0].ReservationRevision != 2 {
-		t.Fatalf("replayed compensation changed deterministic facts: %#v", journal.completions)
+	if materializer.reconciles != 2 || len(materializer.completions) != 2 || !reflect.DeepEqual(materializer.completions[0], materializer.completions[1]) || materializer.completions[0].ReservationRevision != 2 {
+		t.Fatalf("replayed compensation changed deterministic facts: %#v", materializer.completions)
 	}
 }
 
@@ -767,8 +766,8 @@ func TestGenerateTerminalReplayDoesNotMaterializeExpiredParent(t *testing.T) {
 	}
 	route, immutableFacts := terminalGenerateRouteFixture(t, request, occurredAt)
 	expiredParent := &failingGenerateCheckpointMaterializer{err: errors.New("checkpoint expired")}
-	journal := &captureJournal{}
-	budgetState := &replayReservationMaterializer{}
+	
+	materializer := &replayReservationMaterializer{}
 	store := &terminalGenerateOperationStore{operation: admission.Operation{
 		ID: string(route.OperationID), State: admission.StateCompleted,
 		ImmutableFacts: immutableFacts, CompletedAt: completedAt, ExpiresAt: occurredAt.Add(24 * time.Hour),
@@ -788,7 +787,7 @@ func TestGenerateTerminalReplayDoesNotMaterializeExpiredParent(t *testing.T) {
 			},
 			Checkpoints: CheckpointCapabilities{Materializer: expiredParent},
 		},
-		composition: durablestore.Composition{Operations: store, Results: results, Journal: journal, Materializer: budgetState},
+		composition: durablestore.Composition{Operations: store, Results: results, Materializer: materializer},
 	}
 	first, err := durablestore.GenerateV1(context.Background(), request, binding.generatePorts())
 	if err != nil {
@@ -804,8 +803,8 @@ func TestGenerateTerminalReplayDoesNotMaterializeExpiredParent(t *testing.T) {
 	if expiredParent.calls != 0 {
 		t.Fatalf("expired parent materialization calls = %d, want 0", expiredParent.calls)
 	}
-	if budgetState.reconciles != 2 || len(journal.completions) != 2 || !reflect.DeepEqual(journal.completions[0], journal.completions[1]) {
-		t.Fatalf("terminal replay did not idempotently reconcile: %#v", journal.completions)
+	if materializer.reconciles != 2 || len(materializer.completions) != 2 || !reflect.DeepEqual(materializer.completions[0], materializer.completions[1]) {
+		t.Fatalf("terminal replay did not idempotently reconcile: %#v", materializer.completions)
 	}
 }
 
@@ -819,8 +818,8 @@ func TestGenerateTerminalFailureReplaysWithoutExpiredParent(t *testing.T) {
 	}
 	route, immutableFacts := terminalGenerateRouteFixture(t, request, occurredAt)
 	expiredParent := &failingGenerateCheckpointMaterializer{err: errors.New("checkpoint expired")}
-	journal := &captureJournal{}
-	budgetState := &replayReservationMaterializer{}
+	
+	materializer := &replayReservationMaterializer{}
 	actual := pricing.MustUSD("0.125")
 	store := &terminalGenerateOperationStore{operation: admission.Operation{
 		ID: string(route.OperationID), State: admission.StateDefiniteFailed, ImmutableFacts: immutableFacts,
@@ -836,7 +835,7 @@ func TestGenerateTerminalFailureReplaysWithoutExpiredParent(t *testing.T) {
 			},
 			Checkpoints: CheckpointCapabilities{Materializer: expiredParent},
 		},
-		composition: durablestore.Composition{Operations: store, Journal: journal, Materializer: budgetState},
+		composition: durablestore.Composition{Operations: store, Materializer: materializer},
 	}
 	var first string
 	for attempt := range 2 {
@@ -853,11 +852,11 @@ func TestGenerateTerminalFailureReplaysWithoutExpiredParent(t *testing.T) {
 	if expiredParent.calls != 0 {
 		t.Fatalf("expired parent materialization calls = %d, want 0", expiredParent.calls)
 	}
-	if budgetState.reconciles != 2 || len(journal.completions) != 2 || !reflect.DeepEqual(journal.completions[0], journal.completions[1]) {
-		t.Fatalf("terminal failure did not idempotently reconcile: %#v", journal.completions)
+	if materializer.reconciles != 2 || len(materializer.completions) != 2 || !reflect.DeepEqual(materializer.completions[0], materializer.completions[1]) {
+		t.Fatalf("terminal failure did not idempotently reconcile: %#v", materializer.completions)
 	}
-	if journal.completions[0].ActualCostUSD == nil || journal.completions[0].ActualCostUSD.Cmp(actual) != 0 {
-		t.Fatalf("terminal failure lost persisted exact cost: %#v", journal.completions[0])
+	if materializer.completions[0].ActualCostUSD == nil || materializer.completions[0].ActualCostUSD.Cmp(actual) != 0 {
+		t.Fatalf("terminal failure lost persisted exact cost: %#v", materializer.completions[0])
 	}
 }
 
@@ -874,7 +873,7 @@ func TestGenerateRootTerminalFailureReconcilesWithoutParentMaterialization(t *te
 		CompletedAt: completedAt, ExpiresAt: occurredAt.Add(24 * time.Hour),
 		CostStatus: "exact", CostMethod: "worker_cache_zero", FailureReason: "provider_dispatch_failed",
 	}}
-	journal := &captureJournal{}
+	
 	materializer := &replayReservationMaterializer{}
 	binding := &productionPhaseBinding{
 		cap: V1RuntimeCapabilities{
@@ -884,13 +883,13 @@ func TestGenerateRootTerminalFailureReconcilesWithoutParentMaterialization(t *te
 				return "", errors.New("unexpected scope resolution")
 			},
 		},
-		composition: durablestore.Composition{Operations: store, Journal: journal, Materializer: materializer},
+		composition: durablestore.Composition{Operations: store, Materializer: materializer},
 	}
 	if _, err := binding.replayGenerate(context.Background(), request); err == nil {
 		t.Fatal("root terminal failure replay returned success")
 	}
-	if materializer.reconciles != 1 || len(journal.completions) != 1 || journal.completions[0].Kind != budget.JournalRelease {
-		t.Fatalf("root terminal reconciliation = %#v, reconciles=%d", journal.completions, materializer.reconciles)
+	if materializer.reconciles != 1 || len(materializer.completions) != 1 || materializer.completions[0].Kind != budget.JournalFinalizeExact || materializer.completions[0].ActualCostUSD == nil || !materializer.completions[0].ActualCostUSD.IsZero() {
+		t.Fatalf("root terminal reconciliation = %#v, reconciles=%d", materializer.completions, materializer.reconciles)
 	}
 }
 
@@ -1012,7 +1011,7 @@ func TestBoundedCheckpointItemCountRejectsArithmeticOverflow(t *testing.T) {
 	}
 }
 
-func TestGenerateCheckpointPreflightRejectsKnownBoundsBeforeRouteReservationJournalOrDispatch(t *testing.T) {
+func TestGenerateCheckpointPreflightRejectsKnownBoundsBeforeRouteReservationClaimOrDispatch(t *testing.T) {
 	parent := llm.CheckpointHandle("parent")
 	limits := state.MaterializeLimits{MaxDepth: 2, MaxRows: 2, MaxItems: 2, MaxBytes: 1024}
 	item := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "bounded input"}}}
@@ -1064,7 +1063,7 @@ func TestGenerateCheckpointPreflightRejectsKnownBoundsBeforeRouteReservationJour
 				composition: durablestore.Composition{Operations: store},
 			}
 			ports := binding.generatePorts()
-			var routeCalls, reservationCalls, journalCalls, dispatchCalls int
+			var routeCalls, reservationCalls, claimCalls, dispatchCalls int
 			ports.Route = func(context.Context, llm.GenerateRequestV1, durablestore.GenerateReplay, durablestore.CompactionDecision) (durablestore.RoutePlan, error) {
 				routeCalls++
 				return durablestore.RoutePlan{}, errors.New("unexpected route")
@@ -1073,11 +1072,11 @@ func TestGenerateCheckpointPreflightRejectsKnownBoundsBeforeRouteReservationJour
 				reservationCalls++
 				return durablestore.ReserveResult{}, errors.New("unexpected reservation")
 			}
-			ports.Journal = func(context.Context, llm.GenerateRequestV1, durablestore.RoutePlan, durablestore.ReserveResult) (durablestore.JournalReceipt, error) {
-				journalCalls++
-				return durablestore.JournalReceipt{}, errors.New("unexpected journal")
+			ports.Claim = func(context.Context, llm.GenerateRequestV1, durablestore.RoutePlan, durablestore.ReserveResult) (durablestore.ClaimReceipt, error) {
+				claimCalls++
+				return durablestore.ClaimReceipt{}, errors.New("unexpected claim")
 			}
-			ports.Dispatch = func(context.Context, llm.GenerateRequestV1, durablestore.GenerateReplay, durablestore.RoutePlan, durablestore.JournalReceipt) (durablestore.DispatchResult, error) {
+			ports.Dispatch = func(context.Context, llm.GenerateRequestV1, durablestore.GenerateReplay, durablestore.RoutePlan, durablestore.ClaimReceipt) (durablestore.DispatchResult, error) {
 				dispatchCalls++
 				return durablestore.DispatchResult{}, errors.New("unexpected provider dispatch")
 			}
@@ -1108,8 +1107,8 @@ func TestGenerateCheckpointPreflightRejectsKnownBoundsBeforeRouteReservationJour
 			if !reflect.DeepEqual(store.failure, receipt) || !reflect.DeepEqual(store.transitions, []string{"atomic_failed"}) {
 				t.Fatalf("replay mutated durable receipt: transitions=%v receipt=%#v", store.transitions, store.failure)
 			}
-			if routeCalls != 0 || reservationCalls != 0 || journalCalls != 0 || dispatchCalls != 0 {
-				t.Fatalf("post-preflight work ran: route=%d reservation=%d journal=%d dispatch=%d", routeCalls, reservationCalls, journalCalls, dispatchCalls)
+			if routeCalls != 0 || reservationCalls != 0 || claimCalls != 0 || dispatchCalls != 0 {
+				t.Fatalf("post-preflight work ran: route=%d reservation=%d claim=%d dispatch=%d", routeCalls, reservationCalls, claimCalls, dispatchCalls)
 			}
 		})
 	}
@@ -1187,7 +1186,7 @@ func TestOutputOnlyCheckpointViolationPersistsCostReconcilesAndReplaysStably(t *
 				ID: string(route.OperationID), State: admission.StateDispatching, DispatchToken: "dispatch-token",
 				ImmutableFacts: immutableFacts, ExpiresAt: now.Add(time.Hour),
 			}}}
-			journal := &captureJournal{}
+			
 			materializer := &replayReservationMaterializer{result: *route.Reservation}
 			binding := &productionPhaseBinding{
 				cap: V1RuntimeCapabilities{
@@ -1198,7 +1197,7 @@ func TestOutputOnlyCheckpointViolationPersistsCostReconcilesAndReplaysStably(t *
 						return "00000000-0000-0000-0000-000000000001", nil
 					},
 				},
-				composition: durablestore.Composition{Operations: store, Journal: journal, Materializer: materializer},
+				composition: durablestore.Composition{Operations: store, Materializer: materializer},
 			}
 			dispatch := durablestore.DispatchResult{Response: llm.Response{
 				Cost: test.cost,
@@ -1213,10 +1212,10 @@ func TestOutputOnlyCheckpointViolationPersistsCostReconcilesAndReplaysStably(t *
 			if store.operation.State != admission.StateDefiniteFailed || store.failure.Certainty != admission.Accepted || !store.failure.PostResponse || store.failure.CostStatus != test.wantStatus {
 				t.Fatalf("post-response terminal failure = %#v, operation=%#v", store.failure, store.operation)
 			}
-			if materializer.reconciles != 1 || len(journal.completions) != 1 || journal.completions[0].Kind != test.wantKind {
-				t.Fatalf("initial accounting was not reconciled: %#v", journal.completions)
+			if materializer.reconciles != 1 || len(materializer.completions) != 1 || materializer.completions[0].Kind != test.wantKind {
+				t.Fatalf("initial accounting was not reconciled: %#v", materializer.completions)
 			}
-			accounted := journal.completions[0]
+			accounted := materializer.completions[0]
 			if test.wantStatus == "exact" {
 				if accounted.ActualCostUSD == nil || accounted.ActualCostUSD.Cmp(exact) != 0 || accounted.AccountedIncreaseUSD.Cmp(exact) != 0 {
 					t.Fatalf("exact provider result was not accounted: %#v", accounted)
@@ -1227,8 +1226,8 @@ func TestOutputOnlyCheckpointViolationPersistsCostReconcilesAndReplaysStably(t *
 			if _, err := binding.replayGenerate(context.Background(), request); err == nil {
 				t.Fatal("terminal output-bound failure replay returned success")
 			}
-			if store.failCalls != 1 || materializer.reconciles != 2 || len(journal.completions) != 2 || !reflect.DeepEqual(journal.completions[0], journal.completions[1]) {
-				t.Fatalf("terminal accounting replay changed: failCalls=%d reconciles=%d events=%#v", store.failCalls, materializer.reconciles, journal.completions)
+			if store.failCalls != 1 || materializer.reconciles != 2 || len(materializer.completions) != 2 || !reflect.DeepEqual(materializer.completions[0], materializer.completions[1]) {
+				t.Fatalf("terminal accounting replay changed: failCalls=%d reconciles=%d events=%#v", store.failCalls, materializer.reconciles, materializer.completions)
 			}
 		})
 	}
@@ -1251,7 +1250,7 @@ func TestPreWriteInvokeFailurePersistsAtomicTerminalBeforeCompensation(t *testin
 	}
 	binding := &productionPhaseBinding{
 		cap:         V1RuntimeCapabilities{Clock: func() time.Time { return now }},
-		composition: durablestore.Composition{Operations: store, Journal: builderJournal{}, Materializer: materializer},
+		composition: durablestore.Composition{Operations: store, Materializer: materializer},
 	}
 	cause := errors.New("invoke failed before write")
 	err := binding.failProviderAttempt(context.Background(), route, store.operation, 0, admission.NotDispatched, cause)
@@ -1312,10 +1311,10 @@ func TestDispatchPreflightFailuresAtomicallyTerminalizeWithoutInvokingProvider(t
 					Clock:    func() time.Time { return now },
 					Adapters: preflightAdapterRegistry{adapter: adapter, err: test.registryErr},
 				},
-				composition: durablestore.Composition{Operations: store, Journal: builderJournal{}, Materializer: materializer},
+				composition: durablestore.Composition{Operations: store, Materializer: materializer},
 			}
 			dispatchRequest := llm.GenerateRequestV1{CostAdmission: &llm.CostAdmissionV1{GatewayAttemptOrdinal: 41}}
-			_, err := binding.dispatchGenerate(context.Background(), dispatchRequest, durablestore.GenerateReplay{}, route, durablestore.JournalReceipt{})
+			_, err := binding.dispatchGenerate(context.Background(), dispatchRequest, durablestore.GenerateReplay{}, route, durablestore.ClaimReceipt{})
 			if !errors.Is(err, test.want) {
 				t.Fatalf("dispatchGenerate() error = %v, want %v", err, test.want)
 			}
@@ -1364,10 +1363,10 @@ func TestDispatchReservationProofFailuresAtomicallyTerminalizeAndReconcile(t *te
 					Adapters: preflightAdapterRegistry{adapter: adapter},
 				},
 				composition: durablestore.Composition{
-					Operations: store, Journal: builderJournal{}, Materializer: materializer,
+					Operations: store, Materializer: materializer,
 				},
 			}
-			_, err := binding.dispatchGenerate(context.Background(), llm.GenerateRequestV1{}, durablestore.GenerateReplay{}, route, durablestore.JournalReceipt{})
+			_, err := binding.dispatchGenerate(context.Background(), llm.GenerateRequestV1{}, durablestore.GenerateReplay{}, route, durablestore.ClaimReceipt{})
 			if !errors.Is(err, test.want) {
 				t.Fatalf("dispatch reservation proof error = %v, want %v", err, test.want)
 			}
@@ -1584,6 +1583,10 @@ func (*transitionMaterializer) Confirm(context.Context, durablestore.ReserveRequ
 	return durablestore.ReserveResult{}, errors.New("recovered reservation confirmation is unavailable")
 }
 
+func (*transitionMaterializer) Claim(context.Context, durablestore.ClaimRequest) (durablestore.ClaimReceipt, error) {
+	return durablestore.ClaimReceipt{}, errors.New("unexpected reservation claim")
+}
+
 func (*transitionMaterializer) FenceDispatch(context.Context, durablestore.DispatchFenceRequest) error {
 	return errors.New("unexpected dispatch fence")
 }
@@ -1631,6 +1634,7 @@ type replayReservationMaterializer struct {
 	confirms       int
 	confirmErr     error
 	reconciles     int
+	completions    []budget.CompletionEvent
 	fences         []durablestore.DispatchFenceRequest
 	fenceErr       error
 	onFence        func()
@@ -1648,6 +1652,10 @@ func (materializer *replayReservationMaterializer) Confirm(_ context.Context, re
 	return materializer.result, materializer.confirmErr
 }
 
+func (*replayReservationMaterializer) Claim(_ context.Context, request durablestore.ClaimRequest) (durablestore.ClaimReceipt, error) {
+	return durablestore.ClaimReceipt{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}, nil
+}
+
 func (materializer *replayReservationMaterializer) FenceDispatch(_ context.Context, request durablestore.DispatchFenceRequest) error {
 	if materializer.onFence != nil {
 		materializer.onFence()
@@ -1656,8 +1664,9 @@ func (materializer *replayReservationMaterializer) FenceDispatch(_ context.Conte
 	return materializer.fenceErr
 }
 
-func (materializer *replayReservationMaterializer) Reconcile(context.Context, durablestore.ReconcileRequest) error {
+func (materializer *replayReservationMaterializer) Reconcile(_ context.Context, request durablestore.ReconcileRequest) error {
 	materializer.reconciles++
+	materializer.completions = append(materializer.completions, request.Events...)
 	return nil
 }
 
@@ -1687,6 +1696,11 @@ func (materializer *orderingMaterializer) Confirm(context.Context, durablestore.
 	return materializer.result, nil
 }
 
+func (materializer *orderingMaterializer) Claim(_ context.Context, request durablestore.ClaimRequest) (durablestore.ClaimReceipt, error) {
+	*materializer.calls = append(*materializer.calls, "claim")
+	return durablestore.ClaimReceipt{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}, nil
+}
+
 func (*orderingMaterializer) FenceDispatch(context.Context, durablestore.DispatchFenceRequest) error {
 	return nil
 }
@@ -1695,18 +1709,6 @@ func (*orderingMaterializer) Reconcile(context.Context, durablestore.ReconcileRe
 	return nil
 }
 
-type captureJournal struct {
-	completions []budget.CompletionEvent
-}
-
-func (*captureJournal) AppendReservation(context.Context, budget.ReservationEvent) (postgresstore.JournalRecord, error) {
-	return postgresstore.JournalRecord{}, nil
-}
-
-func (journal *captureJournal) AppendCompletion(_ context.Context, event budget.CompletionEvent) (postgresstore.JournalRecord, error) {
-	journal.completions = append(journal.completions, event)
-	return postgresstore.JournalRecord{}, nil
-}
 
 type terminalGenerateOperationStore struct {
 	transitionAdmissionStore

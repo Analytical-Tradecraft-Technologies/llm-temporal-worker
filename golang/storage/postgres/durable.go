@@ -25,7 +25,6 @@ type DurableRepositories struct {
 	Operations  OperationRepository
 	Blobs       BlobRepository
 	Checkpoints DurableCheckpointRepository
-	Journal     BudgetJournalRepository
 	Finalizer   AtomicFinalizationRepository
 }
 
@@ -59,7 +58,6 @@ func NewDurableRepositories(options DurableRepositoryOptions) (DurableRepositori
 	operations.Now = options.Clock
 	blobs := BlobRepository{Pool: options.Pool, Namespace: options.Namespace, Keys: options.EnvelopeKeys, NewID: UUIDv7}
 	checkpoints := DurableCheckpointRepository{Pool: options.Pool, Namespace: options.Namespace, Now: options.Clock}
-	journal := BudgetJournalRepository{Pool: options.Pool, Namespace: options.Namespace}
 	finalizer := AtomicFinalizationRepository{Blobs: blobs, Checkpoints: checkpoints, Operations: operations, Now: options.Clock}
 	if err := scopes.validate(); err != nil {
 		return DurableRepositories{}, fmt.Errorf("validate durable scope repository: %w", err)
@@ -70,7 +68,7 @@ func NewDurableRepositories(options DurableRepositoryOptions) (DurableRepositori
 	if err := blobs.validate(); err != nil {
 		return DurableRepositories{}, fmt.Errorf("validate durable blob repository: %w", err)
 	}
-	return DurableRepositories{Scopes: scopes, Operations: operations, Blobs: blobs, Checkpoints: checkpoints, Journal: journal, Finalizer: finalizer}, nil
+	return DurableRepositories{Scopes: scopes, Operations: operations, Blobs: blobs, Checkpoints: checkpoints, Finalizer: finalizer}, nil
 }
 
 // CheckpointBlobLocator resolves only metadata belonging to the supplied

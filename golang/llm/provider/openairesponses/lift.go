@@ -8,6 +8,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	usageutil "github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/usage"
 	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -55,16 +56,27 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		FinishReason: string(response.Status),
 		Raw:          providerRaw,
 	}
+	input, err := usageutil.OrdinaryInput(response.Usage.InputTokens, response.Usage.InputTokensDetails.CachedTokens, response.Usage.InputTokensDetails.CacheWriteTokens)
+	if err != nil {
+		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped.Provider.ResponseID = response.ID
+		return llm.Response{}, mapped
+	}
 	usage := llm.Usage{
-		InputTokens:      response.Usage.InputTokens,
+		InputTokens:      input,
 		OutputTokens:     response.Usage.OutputTokens,
 		ReasoningTokens:  response.Usage.OutputTokensDetails.ReasoningTokens,
 		CacheReadTokens:  response.Usage.InputTokensDetails.CachedTokens,
 		CacheWriteTokens: response.Usage.InputTokensDetails.CacheWriteTokens,
 	}
+	usage.ProviderRaw = make(map[string]json.RawMessage)
+	if response.Usage.InputTokens > 0 {
+		encodedInput, _ := json.Marshal(response.Usage.InputTokens)
+		usage.ProviderRaw["input_tokens"] = encodedInput
+	}
 	if response.Usage.TotalTokens > 0 {
 		encoded, _ := json.Marshal(response.Usage.TotalTokens)
-		usage.ProviderRaw = map[string]json.RawMessage{"total_tokens": encoded}
+		usage.ProviderRaw["total_tokens"] = encoded
 	}
 	service := llm.ServiceFacts{
 		Requested:     call.ServiceClass,

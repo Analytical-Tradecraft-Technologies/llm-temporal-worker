@@ -653,3 +653,27 @@ The release job retains:
 - Kustomize rendered manifest;
 - image digest, SBOM, scan, signature, and provenance;
 - dependency/module inventory.
+
+## Reusing trusted master evidence
+
+The master Verify job records one full race-enabled test run as both the test
+and race summaries. Fuzz jobs retain summaries for all three bounded shards.
+Compose health and redacted service-log summaries are captured after the existing
+lifecycle tests pass and before their services are removed. Raw command output
+is never uploaded. Gate wrappers report their stage and elapsed time.
+
+Release evidence downloads these successful inputs from the same workflow run;
+it requires all three fuzz shards and waits for successful image publication.
+It still collects the memory benchmark, fixture metadata, rendered manifests,
+and dependency metadata, but does not repeat the test suite, start another
+Compose stack, or build another image. Standalone collection without
+`--verified-inputs` retains its original verification behavior.
+
+The scanner downloads the published Linux AMD64 child manifest by immutable
+digest into a temporary OCI directory, preserving and verifying that digest
+before Syft and Trivy run. The evidence describes this AMD64 image, not the
+multi-platform index or the ARM64 image. Publication still precedes evidence
+scanning; this job is not a pre-publication vulnerability gate. Intermediate
+summaries are retained for one day and the final bundle for fourteen days.
+Reruns can reuse successful jobs from the same run; after intermediate artifacts
+expire, rerun all producer jobs as well.

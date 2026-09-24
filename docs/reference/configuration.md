@@ -140,7 +140,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: c7ab5a848a1f1567d42e9a41c8493836ff16b70efa01e3bb7a3acb06f2cd7e17
+    admission_digest: 5c9ec6ade951984b614bf0e9dbb1961753c550a6201152d095ed3fa847a65eb1
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -467,11 +467,12 @@ telemetry:
 
 `temporal.api_key_file` contains the raw signed JWT sent as Temporal gRPC
 `authorization: Bearer <token>` metadata. Production requires TLS plus this
-file; an API key, plaintext endpoint, empty token, unreadable file, oversized
-token, or token containing control characters is rejected before the SDK
-client is created. The file is re-read for every RPC so a projected Secret can
-rotate the token without restarting the worker. The token itself is never
-included in config hashes, diagnostics, or logs.
+file; a plaintext endpoint, unreadable file, empty or oversized token, or malformed
+compact JWT is rejected before the SDK client is created. The JWT is bounded to
+16 KiB and CA files to 1 MiB; projected Secret symlinks are followed with validation
+of the opened regular-file target. The token is loaded when the client is created,
+so restart the worker to adopt a rotated JWT. It is never included in config
+hashes, diagnostics, or logs.
 
 `temporal.worker.heartbeat_keepalive_interval` controls the fixed, redacted
 heartbeat emitted while a one-shot provider call is in flight. It defaults to
@@ -487,6 +488,15 @@ drain. Kubernetes `terminationGracePeriodSeconds` must then exceed the same
 shutdown budget (with deployment-specific margin), as described in the
 [deployment shutdown contract](../architecture/deployment-and-operations.md#probes-and-shutdown).
 
+Application and Temporal SDK client/worker events share the configured
+`log/slog` logger. `telemetry.logs.format` selects JSON or text, and
+`telemetry.logs.level` applies to SDK events as well as application events.
+Logs go to stderr unless an embedding supplies a logger or output writer.
+The Temporal adapter retains bounded workflow/run/activity IDs and task queue
+names, classifies errors without logging their raw messages, and drops
+unrecognized SDK attributes. It does not fall back to the SDK's standard
+`log` logger. Custom Temporal client factories own their logger configuration.
+
 When `telemetry.tracing.enabled` is true, `otlp_endpoint` names the OTLP/gRPC
 collector and `sample_ratio` is a decimal from `0` through `1`. Runtime uses
 the secure OTLP transport default; deploy a collector endpoint with TLS. The
@@ -498,9 +508,18 @@ resolved credentials.
 
 **state.kind** is **durable** or the legacy development-only **redis** fixture.
 Durable is the production default
-and requires both **state.redis** and **state.postgres**: PostgreSQL is the
-system of record, while Redis provides the active budget/throttle materialization
-and cross-worker coordination optimization.
+and requires both **state.redis** and **state.postgres**: PostgreSQL and blob storage
+own durable operation, result, and checkpoint state with atomic finalization.
+Redis is authoritative for budget reservations, one-shot paid-work claims,
+settlement, provider status/inventory, and resource-capacity leases; it is not a
+cache of a SQL budget journal.
+
+Production retains a `20m` immutable `state.reservation_lease` for queued customer
+Activities. The Redis paid-work start deadline is independently bounded to the
+earlier of 15 minutes after acceptance and that immutable expiry. Claiming does
+not extend the start deadline; claimed or ambiguous work remains charged until
+explicit settlement. Batch escrow retains its own immutable expiry, while each
+allocated paid-work grant receives the bounded start deadline.
 
 In durable mode the runtime constructs and probes both stores before admitting
 work. The PostgreSQL dependency probe checks the current database, UTC session
@@ -537,7 +556,7 @@ state:
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d
-  reservation_lease: 2m
+  reservation_lease: 15m
 blob_store:
   kind: memory
   inline_bytes: 262144
@@ -654,6 +673,28 @@ Run `make postgres-integration` from `golang/` to exercise the namespace and
 contract gates against the pinned PostgreSQL service image.
 
 ## Pricing and budget matching
+
+Budget policies can be supplied as a JSON object in the worker setting
+`budgets_json`, instead of the existing `budgets` YAML object:
+
+```yaml
+budgets_json: |
+  {
+    "require_match": true,
+    "policies": [{
+      "id": "acme-production",
+      "match": {"tenant": "acme", "environment": "production"},
+      "windows": [{"duration": "1h", "bucket": "1m", "limit_usd": "25.000000000000000000"}]
+    }]
+  }
+```
+
+Both forms share strict field and policy validation. JSON must be one object,
+at most 4 MiB, with no unknown or duplicate fields. Nonempty `budgets` and
+`budgets_json` cannot be combined. The effective policy values enter the
+configuration digest, so equivalent JSON and YAML produce the same snapshot.
+No SQL budget configuration is read. See [Redis budget leases](redis-budget-leases.md)
+for the 15-minute start deadline and persistent paid-work accounting.
 
 `pricing.require_price_when_budgeted` controls the explicit unpriced policy.
 When it is `true`, a route without a current catalog quote is eligible only if
@@ -802,15 +843,12 @@ storage-neutral and does not itself publish a Redis pointer or run an atomic
 budget Function; deployment wiring must still perform those operations under
 the recovery procedure below.
 
-Workers keep leases and broadcast cursors in the configured Redis budget
-namespace. Joining an existing live lease set, restarting one worker, handling
-a Stream gap, checking readiness, and serving `budget_status` read budget state
-only from Redis. The service may read PostgreSQL budget tables only when the
-Redis lease set proves a zero-live-worker cold bootstrap or the Redis generation
-is missing/incomplete under a verified new Redis process/dataset incarnation
-after persistence loss. Same-incarnation partial corruption fails closed and
-does not read PostgreSQL. There is no config switch
-that enables a routine PostgreSQL fallback.
+The generation/Stream contracts above remain available for deployment assembly;
+they do not automatically publish budget events or start worker tailers. The
+current durable budget leaser uses shared atomic Redis state directly and has
+no SQL budget journal or SQL rebuild fallback. See
+[Redis budget leases](redis-budget-leases.md) for the active contract and the
+remaining recovery and cleanup work.
 
 ## Service-class rules
 

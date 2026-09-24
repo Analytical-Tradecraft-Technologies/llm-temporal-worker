@@ -15,7 +15,7 @@ var errSimulatedWorkerCrash = errors.New("simulated worker crash before Redis re
 // fake store treats Finalize as the durable PostgreSQL commit, then injects a
 // worker failure before Redis reconciliation. A retry replays the committed
 // identities and only invokes Reconcile; provider dispatch, reservation,
-// journaling, and finalization each remain exactly once.
+// claiming, and finalization each remain exactly once.
 func TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit(t *testing.T) {
 	request := testGenerateRequest()
 	store := &generateCrashRecoveryStore{
@@ -58,8 +58,8 @@ func TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit(t *testing.T) {
 	if store.dispatchCalls != 1 {
 		t.Fatalf("provider dispatch count = %d, want exactly one", store.dispatchCalls)
 	}
-	if store.reserveCalls != 1 || store.journalCalls != 1 || store.finalizeCalls != 1 {
-		t.Fatalf("pre-dispatch/finalization calls = reserve %d, journal %d, finalize %d; want one each", store.reserveCalls, store.journalCalls, store.finalizeCalls)
+	if store.reserveCalls != 1 || store.claimCalls != 1 || store.finalizeCalls != 1 {
+		t.Fatalf("pre-dispatch/finalization calls = reserve %d, claim %d, finalize %d; want one each", store.reserveCalls, store.claimCalls, store.finalizeCalls)
 	}
 	if store.reconcileCalls != 2 {
 		t.Fatalf("reconciliation calls = %d, want crash retry plus successful retry", store.reconcileCalls)
@@ -76,7 +76,7 @@ type generateCrashRecoveryStore struct {
 	reconciled bool
 
 	reserveCalls   int
-	journalCalls   int
+	claimCalls     int
 	dispatchCalls  int
 	finalizeCalls  int
 	reconcileCalls int
@@ -110,11 +110,11 @@ func (store *generateCrashRecoveryStore) ports() GeneratePorts {
 			store.reserveCalls++
 			return store.reservation, nil
 		},
-		Journal: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error) {
-			store.journalCalls++
-			return JournalReceipt{OperationID: store.route.OperationID, GenerationID: store.route.GenerationID}, nil
+		Claim: func(context.Context, llm.GenerateRequestV1, RoutePlan, ReserveResult) (ClaimReceipt, error) {
+			store.claimCalls++
+			return ClaimReceipt{OperationID: store.route.OperationID, GenerationID: store.route.GenerationID, IncarnationID: "incarnation-id"}, nil
 		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, JournalReceipt) (DispatchResult, error) {
+		Dispatch: func(context.Context, llm.GenerateRequestV1, GenerateReplay, RoutePlan, ClaimReceipt) (DispatchResult, error) {
 			store.dispatchCalls++
 			return DispatchResult{}, nil
 		},

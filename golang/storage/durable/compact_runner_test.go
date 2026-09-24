@@ -76,11 +76,11 @@ func testCompactPorts(events *[]string, failStage string) CompactPorts {
 			*events = append(*events, "reserve")
 			return reservation, fail("reserve")
 		},
-		Journal: func(context.Context, llm.CompactRequestV1, RoutePlan, ReserveResult) (JournalReceipt, error) {
-			*events = append(*events, "journal")
-			return JournalReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID}, fail("journal")
+		Claim: func(context.Context, llm.CompactRequestV1, RoutePlan, ReserveResult) (ClaimReceipt, error) {
+			*events = append(*events, "claim")
+			return ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "compact-incarnation-id"}, fail("claim")
 		},
-		Dispatch: func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, JournalReceipt) (CompactDispatchResult, error) {
+		Dispatch: func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, ClaimReceipt) (CompactDispatchResult, error) {
 			*events = append(*events, "dispatch")
 			return CompactDispatchResult{}, fail("dispatch")
 		},
@@ -108,7 +108,7 @@ func TestCompactV1RunsDistinctDurablePhasesInOrder(t *testing.T) {
 	if response.Checkpoint.Kind != "compaction" || response.OperationKey != "compact-operation-1" {
 		t.Fatalf("response = %#v", response)
 	}
-	if got, want := events, []string{"replay", "cache", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"replay", "cache", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
 }
@@ -216,7 +216,7 @@ func TestCompactV1CancellationAfterCacheFinalizationDoesNotReturnSuccess(t *test
 }
 
 func TestCompactV1FailsClosedBeforeDispatch(t *testing.T) {
-	for _, failStage := range []string{"replay", "cache", "route", "reserve", "journal"} {
+	for _, failStage := range []string{"replay", "cache", "route", "reserve", "claim"} {
 		t.Run(failStage, func(t *testing.T) {
 			events := []string{}
 			_, err := CompactV1(context.Background(), testCompactRequest(), testCompactPorts(&events, failStage))
@@ -320,7 +320,7 @@ func TestCompactV1ReconciliationFailureIsRetryableAfterFinalization(t *testing.T
 	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Retry != provider.RetrySameOperation {
 		t.Fatalf("provider error = %#v", providerErr)
 	}
-	if got, want := events, []string{"replay", "cache", "route", "reserve", "journal", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"replay", "cache", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("phase order = %v, want %v", got, want)
 	}
 }
@@ -401,5 +401,26 @@ func TestCompactV1RejectsNonZeroCacheVariant(t *testing.T) {
 	_, err := CompactV1(context.Background(), testCompactRequest(), ports)
 	if err == nil || !errors.Is(err, ErrV1Stage) {
 		t.Fatalf("error = %v, want variant validation failure", err)
+	}
+}
+
+func TestCompactV1RejectsMismatchedClaimIdentity(t *testing.T) {
+	for name, mutate := range claimIdentityMutations() {
+		t.Run(name, func(t *testing.T) {
+			events := []string{}
+			ports := testCompactPorts(&events, "")
+			ports.Claim = func(_ context.Context, _ llm.CompactRequestV1, _ RoutePlan, reservation ReserveResult) (ClaimReceipt, error) {
+				receipt := ClaimReceipt{OperationID: reservation.OperationID, GenerationID: reservation.GenerationID, IncarnationID: reservation.IncarnationID}
+				mutate(&receipt)
+				return receipt, nil
+			}
+			_, err := CompactV1(context.Background(), testCompactRequest(), ports)
+			if err == nil || !errors.Is(err, ErrV1Stage) {
+				t.Fatalf("error = %v, want claim identity failure", err)
+			}
+			if contains(events, "dispatch") {
+				t.Fatalf("mismatched claim reached dispatch: %v", events)
+			}
+		})
 	}
 }

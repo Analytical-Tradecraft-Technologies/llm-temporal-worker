@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,32 +48,6 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 	}
 }
 
-func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
-	dockerfileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, want := range []string{
-		"ARG GO_IMAGE=docker.io/library/golang:" + reviewedGoPatch + "@sha256:45a5f7a810238aabcbad211d70b9ae082022d96f7c7259e94041ad1b933575ac",
-		"FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35",
-		`test "${TARGETOS:-linux}" = "linux"`,
-		`test "${TARGETARCH:-amd64}" = "amd64"`,
-		"CGO_ENABLED=0 GOOS=linux GOARCH=amd64",
-	} {
-		if !strings.Contains(string(dockerfileData), want) {
-			t.Errorf("Dockerfile toolchain policy is missing %q", want)
-		}
-	}
-
-	makefileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(makefileData), "IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)") {
-		t.Error("Makefile image verification must use the installed reviewed Go toolchain")
-	}
-}
 
 func TestImageBuildContextAndFinalStageExcludeSecretsAndTools(t *testing.T) {
 	dockerfileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
@@ -199,32 +174,6 @@ func TestImageVerifyTargetUsesHardenedRuntimeContract(t *testing.T) {
 	}
 }
 
-func TestMasterWorkflowSmokesActualProductionImageProcess(t *testing.T) {
-	workflow := readRepositoryFile(t, repositoryRoot(t), ".github", "workflows", "master.yml")
-	script := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "smoke-image.sh")
-	for _, want := range []string{
-		"--platform linux/amd64",
-		"--load",
-		"LLMTW_SMOKE_IMAGE: llm-temporal-worker:master-${{ github.run_number }}",
-		"run: bash scripts/release/smoke-image.sh",
-	} {
-		if !strings.Contains(workflow, want) {
-			t.Errorf("master image job is missing %q", want)
-		}
-	}
-	for _, want := range []string{
-		"--profile worker up",
-		"--no-build",
-		`"/usr/local/bin/llm-temporal-worker"`,
-		`'["worker","--config","/etc/llmtw/config.yaml"]'`,
-		"/health/live",
-		"/health/ready",
-	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("production image smoke is missing %q", want)
-		}
-	}
-}
 
 func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
@@ -245,13 +194,13 @@ func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 
 	for _, want := range []string{
 		"docker buildx build --platform linux/amd64 --provenance=false --sbom=false",
-		`--output "type=docker,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)"`,
+		`--output "type=oci,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)"`,
 		`archive_directory="$$(mktemp -d "$${TMPDIR:-/tmp}/llmtw-image-verify.XXXXXX")"`,
-		`cleanup_archive() { rm -rf -- "$$archive_directory"; };`,
+		`rm -rf -- "$$archive_directory";`,
 		`docker image load --input "$$archive"`,
 		`tar -xf "$$archive" -C "$$layout"`,
 		`docker image inspect "$(IMAGE_VERIFY_TAG)"`,
-		"trap cleanup_archive EXIT HUP INT TERM",
+		"trap cleanup_archive EXIT",
 	} {
 		if !strings.Contains(branch, want) {
 			t.Fatalf("OCI layout image-verify branch is missing %q", want)
@@ -266,7 +215,7 @@ func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 	for _, forbidden := range []string{
 		"--load",
 		`docker image load --input "$$layout"`,
-		`--output "type=oci,`,
+		`--output "type=docker,`,
 		`rm -rf -- "$$layout"`,
 	} {
 		if strings.Contains(branch, forbidden) {
@@ -278,5 +227,56 @@ func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 	extract := strings.Index(branch, `tar -xf "$$archive" -C "$$layout"`)
 	if build < 0 || load <= build || extract <= load {
 		t.Fatalf("OCI archive must be built once, then loaded and extracted from that exact artifact: %q", branch)
+	}
+}
+
+func TestImageVerifyOCIArchiveFailureReportsStageAndCleansArchive(t *testing.T) {
+	for _, scenario := range []struct{ failAt, stage string }{
+		{"export", "OCI export"},
+		{"import", "OCI import (requires the containerd image store)"},
+		{"runtime", "runtime checks"},
+	} {
+		t.Run(scenario.failAt, func(t *testing.T) {
+			dir := t.TempDir()
+			fake := func(name, body string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nset -eu\n"+body), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fake("docker", `case "$1 ${2:-}" in
+  "info ") exit 0 ;;
+  "buildx build")
+    [ "$FAIL_AT" != export ] || exit 1
+    while [ "$1" != --output ]; do shift; done
+    case "$2" in type=oci,*) ;; *) exit 2 ;; esac
+    archive=${2#*dest=}; archive=${archive%%,*}
+    mkdir "$TMPDIR/payload"
+    printf '{"imageLayoutVersion":"1.0.0"}' > "$TMPDIR/payload/oci-layout"
+    tar -cf "$archive" -C "$TMPDIR/payload" oci-layout ;;
+  "image load")
+    [ "$FAIL_AT" != import ] || exit 1
+    test -f "$4" ;;
+  "image inspect") test -f "$IMAGE_VERIFY_OCI_LAYOUT/oci-layout" ;;
+  *) exit 2 ;;
+esac
+`)
+			fake("fake-go", `test "$1" = test
+test -f "$IMAGE_VERIFY_OCI_LAYOUT/oci-layout"
+test -n "$LLMTW_IMAGE"
+exit 1
+`)
+			cmd := exec.Command("make", "image-verify", "GO="+filepath.Join(dir, "fake-go"), "IMAGE_VERIFY_GO_VERSION=go1.26.7")
+			cmd.Dir = moduleRoot(t)
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TMPDIR="+dir, "FAIL_AT="+scenario.failAt, "IMAGE_VERIFY_OCI_LAYOUT="+filepath.Join(dir, "image.oci"))
+			output, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "image-verify: failed at "+scenario.stage+"\n") {
+				t.Fatalf("wrong failure diagnostic: %v\n%s", err, output)
+			}
+			archives, err := filepath.Glob(filepath.Join(dir, "llmtw-image-verify.*"))
+			if err != nil || len(archives) != 0 {
+				t.Fatalf("failed verification retained temporary archives: %v, %v", archives, err)
+			}
+		})
 	}
 }

@@ -108,7 +108,7 @@ func TestCompactCheckpointFailureTerminalizesAndReconcilesAcceptedProviderOutcom
 			},
 			CheckpointLimits: state.MaterializeLimits{MaxDepth: 8, MaxRows: 8, MaxItems: 8, MaxBytes: 1024},
 		},
-		composition: durablestore.Composition{Operations: store, Journal: builderJournal{}, Materializer: materializer},
+		composition: durablestore.Composition{Operations: store, Materializer: materializer},
 	}
 	actual := pricing.MustUSD("0.125")
 	request := llm.CompactRequestV1{
@@ -170,6 +170,10 @@ func (*compactFailureBudgetMaterializer) Accept(context.Context, durablestore.Re
 
 func (*compactFailureBudgetMaterializer) Confirm(context.Context, durablestore.ReserveRequest) (durablestore.ReserveResult, error) {
 	return durablestore.ReserveResult{}, errors.New("unexpected reservation confirmation")
+}
+
+func (*compactFailureBudgetMaterializer) Claim(context.Context, durablestore.ClaimRequest) (durablestore.ClaimReceipt, error) {
+	return durablestore.ClaimReceipt{}, errors.New("unexpected reservation claim")
 }
 
 func (*compactFailureBudgetMaterializer) FenceDispatch(context.Context, durablestore.DispatchFenceRequest) error {
@@ -257,7 +261,7 @@ func TestCompactInvalidProviderOutputReplaysPendingExactCostReconciliation(t *te
 				Settings: state.RootModelState("model-1"),
 			}}},
 		},
-		composition: durablestore.Composition{Operations: store, Journal: builderJournal{}, Materializer: materializer},
+		composition: durablestore.Composition{Operations: store, Materializer: materializer},
 	}
 	actual := pricing.MustUSD("0.125")
 	response := llm.Response{Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &actual, Method: "provider_reported"}}
@@ -369,7 +373,7 @@ func newCompactTerminalReplayFixture(
 			},
 		},
 		composition: durablestore.Composition{
-			Operations: store, Journal: builderJournal{}, Materializer: materializer,
+			Operations: store, Materializer: materializer,
 		},
 	}
 	return binding, request, materializer, reserved, completedAt
@@ -394,7 +398,7 @@ func TestCompactTerminalFailuresReplayPendingBudgetAccounting(t *testing.T) {
 			state: admission.StateDefiniteFailed, reason: "provider_dispatch_failed",
 			costStatus: "exact", costMethod: "worker_cache_zero", actual: &exactZero,
 			wantError: errCompactOperationPreviouslyFailed,
-			wantKind:  budget.JournalRelease,
+			wantKind:  budget.JournalFinalizeExact,
 		},
 		{
 			name:  "generic definite provider failure with unknown cost",
@@ -446,7 +450,7 @@ func TestCompactTerminalFailuresReplayPendingBudgetAccounting(t *testing.T) {
 				if !event.ReservedDecreaseUSD.IsZero() || !event.AccountedIncreaseUSD.IsZero() {
 					t.Fatalf("ambiguous retained bound changed accounting totals: %#v", event)
 				}
-			case budget.JournalRelease:
+			case budget.JournalFinalizeExact:
 				if event.ReservedDecreaseUSD.Cmp(reserved) != 0 || !event.AccountedIncreaseUSD.IsZero() || event.ActualCostUSD == nil || event.ActualCostUSD.Cmp(exactZero) != 0 {
 					t.Fatalf("exact-zero failure did not release reservation: %#v", event)
 				}
