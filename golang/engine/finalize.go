@@ -30,7 +30,14 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	response.APIVersion = llm.APIVersion
 	response.OperationKey = request.OperationKey
 	response.OperationID = operation.ID
-	response.Route = llm.RouteFacts{RouteID: candidate.candidate.RouteID, EndpointID: candidate.candidate.EndpointID, APIFamily: candidate.candidate.Family, RequestedModel: request.Model, ResolvedModel: call.Model}
+	observed := response.Route.ObservedModelRevision
+	basis := llm.ModelIdentityBasisConfiguredRoute
+	if response.Route.ModelIdentityBasis == llm.ModelIdentityBasisProviderReported && observed != "" {
+		basis = llm.ModelIdentityBasisProviderReported
+	} else {
+		observed = ""
+	}
+	response.Route = llm.RouteFacts{RouteID: candidate.candidate.RouteID, EndpointID: candidate.candidate.EndpointID, APIFamily: candidate.candidate.Family, RequestedModel: request.Model, ResolvedModel: call.Model, ModelIdentityBasis: basis, ObservedModelRevision: observed}
 	response.Service.Requested = candidate.candidate.RequestedClass
 	response.Service.Attempted = candidate.candidate.AttemptedClass
 	response.Service.FallbackIndex = candidate.candidate.FallbackIndex

@@ -22,6 +22,8 @@
   "route": {
     "api_family": "openai_chat",
     "endpoint_id": "exa-chat-fixture",
+    "model_identity_basis": "provider_reported",
+    "observed_model_revision": "exa",
     "requested_model": "exa",
     "resolved_model": "exa"
   },

@@ -192,6 +192,8 @@ services:
       AI_ACH_RESOURCE_CAPACITY_MANIFEST_SHA256: 519eba96d3f4a1eedcedf36efc8f35ce324be39d6c311237ef6d676b92f9c45a
       AI_ACH_PROPHET_PROFILE_FILE: /fixtures/prophet-profile.json
       AI_ACH_PRICING_IDENTITY_FILE: /run/smoke/pricing-identity.json
+      # Synthetic local adapter configuration, not a real tournament authorization.
+      METACULUS_TOURNAMENT_JSON: '{"schema_version":"metaculus_tournament/v1","platform_id":"metaculus","tournament_id":900001,"competition_id":"metaculus-synthetic-approved-900001","canonical_slug":"synthetic-approved","official_rules_url":"https://www.metaculus.com/notebooks/38928/futureeval-resources-page/","rules_revision":"synthetic-rules-v1","effective_from_utc":"2026-01-01T00:00:00Z","effective_until_utc":"2099-01-01T00:00:00Z","supported_question_types":["binary","discrete","multiple_choice","numeric"],"forecast_window_seconds":5400,"initial_only":true,"private_comments":true,"score_mode":"spot_peer_log"}'
     volumes: &victoria-volumes
       - type: bind
         source: ./.local/joined-smoke

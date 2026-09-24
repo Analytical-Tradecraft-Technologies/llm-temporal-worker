@@ -25,7 +25,7 @@
     "request_id": "bedrock-request-fixture",
     "response_id": "msg-bedrock-fixture"
   },
-  "route": {"api_family": "bedrock_messages", "endpoint_id": "bedrock-fixture", "requested_model": "claude-contract", "resolved_model": "claude-contract"},
+  "route": {"api_family": "bedrock_messages", "endpoint_id": "bedrock-fixture", "model_identity_basis": "provider_reported", "observed_model_revision": "claude-contract", "requested_model": "claude-contract", "resolved_model": "claude-contract"},
   "service": {"actual": "priority", "attempted": "standard", "fallback_index": 0, "provider_value": "priority", "requested": "standard"},
   "status": "tool_calls",
   "usage": {

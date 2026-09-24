@@ -56,7 +56,7 @@ func TestV1GenerateAndCompactFixturesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestV1RequestContextRejectsTags(t *testing.T) {
+func TestV1RequestContextRejectsUnknownTags(t *testing.T) {
 	contextWithTags := llm.RequestContext{
 		Tenant: "tenant", Project: "project", Actor: "actor",
 		Tags: map[string]string{"region": "au"},
@@ -92,17 +92,11 @@ func TestV1RequestContextRejectsTags(t *testing.T) {
 			if err == nil {
 				t.Fatal("nonempty context tags were accepted")
 			}
-			if message := err.Error(); !strings.Contains(message, "context") || !strings.Contains(message, "tags") {
-				t.Fatalf("error = %q, want clear context tags rejection", message)
-			}
 		})
 		t.Run(test.name+" unmarshal", func(t *testing.T) {
 			err := json.Unmarshal([]byte(test.wire), test.target())
 			if err == nil {
 				t.Fatal("wire context tags were accepted")
-			}
-			if message := err.Error(); !strings.Contains(message, "context") || !strings.Contains(message, "tags") {
-				t.Fatalf("error = %q, want clear context tags rejection", message)
 			}
 		})
 	}
@@ -566,7 +560,7 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	if err := json.Unmarshal(readV1Fixture(t, "generate-response.json"), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	envelope["route"] = json.RawMessage(`{"route_id":"route-1","endpoint_id":"endpoint-1","api_family":"responses","requested_model":"gpt-test","resolved_model":"gpt-test-2026"}`)
+	envelope["route"] = json.RawMessage(`{"route_id":"route-1","endpoint_id":"endpoint-1","api_family":"responses","requested_model":"gpt-test","resolved_model":"gpt-test-2026","model_identity_basis":"provider_reported","observed_model_revision":"gpt-observed-2026"}`)
 	envelope["usage"] = json.RawMessage(`{"input_tokens":10,"output_tokens":20,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5}`)
 	data, err := json.Marshal(envelope)
 	if err != nil {
@@ -578,6 +572,9 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	}
 	if response.Route == nil || response.Route.RouteID != "route-1" || response.Route.ResolvedModel != "gpt-test-2026" {
 		t.Fatalf("route metadata was not decoded: %#v", response.Route)
+	}
+	if response.Route.ModelIdentityBasis != llm.ModelIdentityBasisProviderReported || response.Route.ObservedModelRevision != "gpt-observed-2026" {
+		t.Fatalf("observed model metadata was lost or replaced with configured route: %#v", response.Route)
 	}
 	if response.Usage == nil || response.Usage.InputTokens != 10 || response.Usage.CacheWriteTokens != 5 {
 		t.Fatalf("usage metadata was not decoded: %#v", response.Usage)

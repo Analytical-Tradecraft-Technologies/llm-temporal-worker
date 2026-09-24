@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/codexcli"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	yaml "go.yaml.in/yaml/v4"
 )
@@ -254,6 +255,7 @@ type EndpointConfig struct {
 	PriceCatalog      string                          `yaml:"price_catalog" json:"price_catalog"`
 	ProviderStorage   ProviderStorageConfig           `yaml:"provider_storage" json:"provider_storage"`
 	Extensions        map[string]map[string]any       `yaml:"extensions" json:"extensions"`
+	CodexCLI          *codexcli.Config                `yaml:"codex_cli,omitempty" json:"codex_cli,omitempty"`
 }
 
 type TierConfig struct {
@@ -401,6 +403,10 @@ func (secret SecretRef) Validate(path string) error {
 
 func (auth AuthConfig) Validate(path string) error {
 	switch auth.Kind {
+	case "chatgpt_cli":
+		if auth.Name != "" || auth.Path != "" || auth.Audience != "" {
+			return fmt.Errorf("%s chatgpt_cli credentials belong only to the official CLI auth home", path)
+		}
 	case "bearer_env", "header_env":
 		if !envNamePattern.MatchString(auth.Name) || auth.Path != "" || auth.Audience != "" {
 			return fmt.Errorf("%s %s requires a valid environment name", path, auth.Kind)

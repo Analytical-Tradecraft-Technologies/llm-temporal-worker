@@ -3,6 +3,7 @@ package bedrockmessages
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -35,6 +36,15 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
+	if err := validateEmulatedJSON(call, output, hasToolCalls, hasRefusal); err != nil {
+		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped.Provider.ResponseID = response.ID
+		return llm.Response{}, mapped
+	}
+	modelIdentityBasis := llm.ModelIdentityBasisUnknown
+	if response.Model != "" {
+		modelIdentityBasis = llm.ModelIdentityBasisProviderReported
+	}
 	return llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
@@ -42,7 +52,8 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		Output:       output,
 		Route: llm.RouteFacts{
 			EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockMessages),
-			RequestedModel: call.Model, ResolvedModel: string(response.Model),
+			RequestedModel: call.Model, ResolvedModel: call.Model,
+			ModelIdentityBasis: modelIdentityBasis, ObservedModelRevision: string(response.Model),
 		},
 		Service: llm.ServiceFacts{
 			Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual,
@@ -190,4 +201,30 @@ func invalidResponseError(call provider.Call, requestID, message string) *provid
 	mapped.Provider.RequestID = requestID
 	mapped.OperationID = call.OperationKey
 	return mapped
+}
+
+func validateEmulatedJSON(call provider.Call, output []llm.Item, hasToolCalls, hasRefusal bool) error {
+	if hasToolCalls || hasRefusal {
+		return nil
+	}
+	_, schema, ok := compiledParameters(call.SDKParams)
+	if !ok || schema == nil {
+		return nil
+	}
+	var content strings.Builder
+	for _, item := range output {
+		message, ok := item.(llm.Message)
+		if !ok || message.Actor != llm.ActorModel {
+			continue
+		}
+		for _, part := range message.Content {
+			if text, ok := part.(llm.TextPart); ok {
+				content.WriteString(text.Text)
+			}
+		}
+	}
+	if err := schema.Validate([]byte(content.String())); err != nil {
+		return fmt.Errorf("provider JSON response does not satisfy schema: %w", err)
+	}
+	return nil
 }

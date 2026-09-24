@@ -61,16 +61,21 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		ProviderValue: string(response.Usage.ServiceTier),
 		FallbackIndex: 0,
 	}
+	modelIdentityBasis := llm.ModelIdentityBasisUnknown
+	if response.Model != "" {
+		modelIdentityBasis = llm.ModelIdentityBasisProviderReported
+	}
 	result := llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
 		Status:       status,
 		Output:       output,
 		Route: llm.RouteFacts{
-			EndpointID:     call.EndpointID,
-			APIFamily:      string(provider.FamilyAnthropicMessages),
-			RequestedModel: call.Model,
-			ResolvedModel:  string(response.Model),
+			EndpointID:         call.EndpointID,
+			APIFamily:          string(provider.FamilyAnthropicMessages),
+			RequestedModel:     call.Model,
+			ResolvedModel:      call.Model,
+			ModelIdentityBasis: modelIdentityBasis, ObservedModelRevision: string(response.Model),
 		},
 		Service:      service,
 		Usage:        usage,

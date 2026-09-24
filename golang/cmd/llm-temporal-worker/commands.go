@@ -68,6 +68,8 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		return executeHealthcheckCommand(ctx, args[1:], options)
 	case "budget-bootstrap":
 		return executeBudgetBootstrapCommand(ctx, args[1:], options)
+	case "schema":
+		return executeSchemaCommand(ctx, args[1:], options)
 	case "help", "-h", "--help":
 		writeUsage(options.Out)
 		return 0
@@ -279,5 +281,5 @@ func writeCommandError(output io.Writer, err error) {
 }
 
 func writeUsage(output io.Writer) {
-	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|budget-bootstrap|validate-config|print-effective-config|healthcheck>\n")
+	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|budget-bootstrap|schema|validate-config|print-effective-config|healthcheck>\n")
 }

@@ -23,6 +23,7 @@ var supportedFamilies = map[string]struct{}{
 	"anthropic_aws_messages":     {},
 	"bedrock_anthropic_messages": {},
 	"bedrock_converse":           {},
+	"codex_cli":                  {},
 }
 
 var postgresNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
@@ -88,6 +89,11 @@ func (config Config) Validate() error {
 		}
 		if err := config.Endpoints[name].validate("endpoints."+name, config.Limits.ProviderTimeout); err != nil {
 			return err
+		}
+		if config.Endpoints[name].Family == "codex_cli" {
+			if config.Environment != "development" || config.State.Kind != StateKindDurable || len(config.Endpoints) != 1 || !config.Budgets.RequireMatch {
+				return fmt.Errorf("codex_cli requires a private development worker with durable state, matched budgets and no API fallback endpoints")
+			}
 		}
 	}
 	if len(config.Models) == 0 {
@@ -503,6 +509,12 @@ func (limits LimitsConfig) validate() error {
 func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) error {
 	if _, ok := supportedFamilies[endpoint.Family]; !ok {
 		return fmt.Errorf("%s.family %q is unsupported", path, endpoint.Family)
+	}
+	if endpoint.Family == "codex_cli" {
+		return endpoint.validateCodexCLI(path, providerTimeout)
+	}
+	if endpoint.CodexCLI != nil || endpoint.Auth.Kind == "chatgpt_cli" {
+		return fmt.Errorf("%s codex_cli settings and chatgpt_cli auth require family codex_cli", path)
 	}
 	baseHost := ""
 	var err error

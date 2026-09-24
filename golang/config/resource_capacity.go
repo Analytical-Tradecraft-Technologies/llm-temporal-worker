@@ -211,8 +211,16 @@ func (value ResourceCapacityConfig) validate(environment string) error {
 		return err
 	}
 	locator, err := url.Parse(value.ArtifactLocator)
-	if err != nil || locator.Scheme != "s3" || locator.Host == "" || locator.Path == "" {
-		return errors.New("resource_capacity.artifact_locator must be an explicit s3 URI")
+	if err != nil {
+		return errors.New("resource_capacity.artifact_locator is invalid")
+	}
+	if locator.Scheme == "file" && environment == "development" {
+		canonical := (&url.URL{Scheme: "file", Path: value.ManifestFile}).String()
+		if locator.Host != "" || locator.User != nil || locator.Opaque != "" || locator.RawQuery != "" || locator.ForceQuery || locator.Fragment != "" || value.ArtifactLocator != canonical {
+			return errors.New("development resource_capacity.artifact_locator must be the canonical file URI for manifest_file without authority, query or fragment")
+		}
+	} else if locator.Scheme != "s3" || locator.Host == "" || locator.Path == "" {
+		return errors.New("resource_capacity.artifact_locator must be an explicit s3 URI outside development local-file mode")
 	}
 	if err := validateIdentifier(value.GenerationID, "resource_capacity.generation_id"); err != nil {
 		return err
@@ -296,8 +304,8 @@ func decodeCanonicalCapacity(encoded []byte, maximum int, destination any, label
 
 // VerifyResourceCapacity independently authenticates the operator-owned
 // manifest before any runtime or provider adapter can consume its limits.
-func VerifyResourceCapacity(configured ResourceCapacityConfig) (VerifiedResourceCapacity, error) {
-	if err := configured.validate("production"); err != nil {
+func VerifyResourceCapacity(configured ResourceCapacityConfig, environment string) (VerifiedResourceCapacity, error) {
+	if err := configured.validate(environment); err != nil {
 		return VerifiedResourceCapacity{}, err
 	}
 	manifestBytes, err := os.ReadFile(configured.ManifestFile)

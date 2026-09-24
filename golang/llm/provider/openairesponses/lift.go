@@ -73,16 +73,21 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		ProviderValue: string(response.ServiceTier),
 		FallbackIndex: 0,
 	}
+	modelIdentityBasis := llm.ModelIdentityBasisUnknown
+	if response.Model != "" {
+		modelIdentityBasis = llm.ModelIdentityBasisProviderReported
+	}
 	result := llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
 		Status:       status,
 		Output:       output,
 		Route: llm.RouteFacts{
-			EndpointID:     call.EndpointID,
-			APIFamily:      string(provider.FamilyOpenAIResponses),
-			RequestedModel: call.Model,
-			ResolvedModel:  string(response.Model),
+			EndpointID:         call.EndpointID,
+			APIFamily:          string(provider.FamilyOpenAIResponses),
+			RequestedModel:     call.Model,
+			ResolvedModel:      call.Model,
+			ModelIdentityBasis: modelIdentityBasis, ObservedModelRevision: string(response.Model),
 		},
 		Service:      service,
 		Usage:        usage,

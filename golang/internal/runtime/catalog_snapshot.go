@@ -13,6 +13,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/internal/catalog"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/codexcli"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 )
@@ -144,6 +145,19 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 			if profile.Model != routeValue.Model {
 				return routing.Catalog{}, fmt.Errorf("route %q model %q does not match capability profile %q model %q", routeValue.ID, routeValue.Model, endpoint.CapabilityProfile, profile.Model)
 			}
+			if family == provider.FamilyCodexCLI {
+				if endpoint.CodexCLI == nil || routeValue.Model != endpoint.CodexCLI.Model ||
+					len(modelValue.AllowedTenants) != 1 || modelValue.AllowedTenants[0] != endpoint.CodexCLI.ApprovedTenant {
+					return routing.Catalog{}, fmt.Errorf("route %q must pin the approved Codex model and sole tenant", routeValue.ID)
+				}
+				expected := codexcli.Capabilities(profile.Set.Version)
+				for feature, capability := range expected.Features {
+					declared, present := profile.Set.Features[feature]
+					if !present || declared.State != capability.State || declared.Transform != capability.Transform {
+						return routing.Catalog{}, fmt.Errorf("route %q Codex capability %q must truthfully declare %s/%s", routeValue.ID, feature, capability.State, capability.Transform)
+					}
+				}
+			}
 			if (family == provider.FamilyBedrockMessages || family == provider.FamilyBedrockConverse) && profile.ServiceClassesDeclared {
 				supportedClasses := make(map[llm.ServiceClass]struct{}, len(profile.ServiceClasses))
 				for _, class := range profile.ServiceClasses {
@@ -225,6 +239,9 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 			}
 			if endpoint.Region != "" && entry.Region != endpoint.Region {
 				continue
+			}
+			if family == provider.FamilyCodexCLI && !strings.HasPrefix(entry.Provenance, "subscription_estimate:") {
+				return "", "", "", false, fmt.Errorf("Codex pricing provenance must declare subscription_estimate: and an operator estimate source, not an API invoice")
 			}
 			if found != nil {
 				return "", "", "", false, fmt.Errorf("multiple active price entries for model %q tier %q", model, tier)

@@ -199,7 +199,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["kind", "name", "path", "audience"],
       "properties": {
-        "kind": { "enum": ["bearer_env", "header_env", "bearer_file", "header_file", "azure_default_credential", "aws_default_chain", "workload_identity"] },
+        "kind": { "enum": ["bearer_env", "header_env", "bearer_file", "header_file", "azure_default_credential", "aws_default_chain", "workload_identity", "chatgpt_cli"] },
         "name": { "type": "string" }, "path": { "type": "string" },
         "audience": { "type": "string" }
       }
@@ -413,15 +413,32 @@
       "required": ["provider_value", "requires_capability"],
       "properties": { "provider_value": { "type": "string", "minLength": 1 }, "requires_capability": { "type": "string" } }
     },
+    "codex_cli": {
+      "type": "object", "additionalProperties": false,
+      "required": ["private_operator_mode", "executable", "executable_sha256", "model", "auth_home", "temp_root", "approved_tenant", "approved_root_run_id", "budget_is_estimate"],
+      "properties": {
+        "private_operator_mode": { "const": true },
+        "budget_is_estimate": { "const": true },
+        "executable": { "type": "string", "pattern": "^/" },
+        "executable_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "model": { "type": "string", "minLength": 1 },
+        "auth_home": { "type": "string", "pattern": "^/" },
+        "temp_root": { "type": "string", "pattern": "^/" },
+        "approved_tenant": { "type": "string", "minLength": 1 },
+        "approved_root_run_id": { "type": "string", "minLength": 1 },
+        "approved_operation_keys": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
     "endpoint": {
       "type": "object", "additionalProperties": false,
       "required": ["family", "base_url", "outbound_hosts", "region", "auth", "account_region", "timeout", "service_classes", "capability_profile", "price_catalog", "provider_storage", "extensions"],
       "properties": {
-        "family": { "enum": ["openai_responses", "azure_openai_responses", "azure_openai_chat", "openai_chat", "anthropic_messages", "anthropic_aws_messages", "bedrock_anthropic_messages", "bedrock_converse"] },
+        "family": { "enum": ["openai_responses", "azure_openai_responses", "azure_openai_chat", "openai_chat", "anthropic_messages", "anthropic_aws_messages", "bedrock_anthropic_messages", "bedrock_converse", "codex_cli"] },
         "base_url": { "type": "string" },
-        "outbound_hosts": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "outbound_hosts": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "region": { "type": "string" }, "aws_workspace_id": { "type": "string" }, "auth": { "$ref": "#/$defs/auth" },
         "account_region": { "type": "string" }, "timeout": { "$ref": "#/$defs/duration" },
+        "codex_cli": { "$ref": "#/$defs/codex_cli" },
         "service_classes": {
           "type": "object", "minProperties": 1,
           "propertyNames": { "enum": ["economy", "standard", "priority"] },
@@ -432,6 +449,21 @@
         "extensions": { "type": ["object", "null"], "additionalProperties": { "type": "object" } }
       },
       "allOf": [
+        {
+          "if": { "properties": { "family": { "const": "codex_cli" } } },
+          "then": {
+            "required": ["codex_cli"],
+            "properties": {
+              "base_url": { "const": "" },
+              "outbound_hosts": { "maxItems": 0 },
+              "auth": { "properties": { "kind": { "const": "chatgpt_cli" } } }
+            }
+          },
+          "else": {
+            "properties": { "outbound_hosts": { "minItems": 1 } },
+            "not": { "required": ["codex_cli"] }
+          }
+        },
         {
           "if": { "properties": { "family": { "const": "anthropic_aws_messages" } } },
           "then": {

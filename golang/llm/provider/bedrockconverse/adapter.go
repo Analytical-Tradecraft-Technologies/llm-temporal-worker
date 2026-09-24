@@ -110,12 +110,16 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
 			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
 		}
+		if capability.State == provider.CapabilityEmulated &&
+			(feature != provider.FeatureStructuredOutput || capability.Transform != jsonSchemaPromptTransform) {
+			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("unsupported emulation transform %q", capability.Transform))
+		}
 	}
 	tier, err := adapter.profile.providerTier(serviceClass)
 	if err != nil {
 		return provider.Call{}, unsupportedServiceError(err.Error())
 	}
-	params, err := lowerRequest(normalized, adapter.profile, tier, input.Strict)
+	params, err := compileRequest(normalized, adapter.profile, tier, input.Strict, capabilities.Features[provider.FeatureStructuredOutput])
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}
@@ -149,12 +153,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if call.Family != provider.FamilyBedrockConverse || call.EndpointID != adapter.endpointID {
 		return provider.Result{}, dispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
 	}
-	params, ok := call.SDKParams.(bedrockruntime.ConverseInput)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*bedrockruntime.ConverseInput); pointerOK && pointer != nil {
-			params, ok = *pointer, true
-		}
-	}
+	params, _, ok := compiledParameters(call.SDKParams)
 	if !ok {
 		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}
@@ -210,13 +209,16 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 	if err != nil {
 		return llm.Response{}, invalidResponseError(call, requestID, err.Error())
 	}
+	if err := validateEmulatedJSON(call, output, hasToolCalls, status == llm.ResponseStatusRefused); err != nil {
+		return llm.Response{}, invalidResponseError(call, requestID, err.Error())
+	}
 	usage := llm.Usage{}
 	if response.Usage != nil {
 		usage.InputTokens = int64Value(response.Usage.InputTokens)
 		usage.OutputTokens = int64Value(response.Usage.OutputTokens)
 	}
 	return llm.Response{APIVersion: llm.APIVersion, OperationKey: call.OperationKey, Status: status, Output: output,
-		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model},
+		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model, ModelIdentityBasis: llm.ModelIdentityBasisConfiguredRoute},
 		Service: llm.ServiceFacts{Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual, ProviderValue: actualTier},
 		Usage:   usage, Provider: llm.ProviderFacts{RequestID: requestID, FinishReason: string(response.StopReason)}}, nil
 }
@@ -239,6 +241,13 @@ func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 		switch value := block.(type) {
 		case *types.ContentBlockMemberText:
 			text.WriteString(value.Value)
+		case *types.ContentBlockMemberReasoningContent:
+			flushText()
+			state, err := liftReasoning(value.Value)
+			if err != nil {
+				return nil, false, fmt.Errorf("content block %d: %w", index, err)
+			}
+			items = append(items, state)
 		case *types.ContentBlockMemberToolUse:
 			flushText()
 			arguments, err := value.Value.Input.MarshalSmithyDocument()
@@ -253,6 +262,59 @@ func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 	}
 	flushText()
 	return items, hasToolCalls, nil
+}
+
+func liftReasoning(block types.ReasoningContentBlock) (llm.ProviderState, error) {
+	var content any
+	switch value := block.(type) {
+	case *types.ReasoningContentBlockMemberReasoningText:
+		if value == nil || value.Value.Text == nil {
+			return llm.ProviderState{}, fmt.Errorf("reasoning text is missing")
+		}
+		text := map[string]any{"text": *value.Value.Text}
+		if value.Value.Signature != nil {
+			text["signature"] = *value.Value.Signature
+		}
+		content = map[string]any{"reasoningText": text}
+	case *types.ReasoningContentBlockMemberRedactedContent:
+		if value == nil || len(value.Value) == 0 {
+			return llm.ProviderState{}, fmt.Errorf("redacted reasoning content is missing")
+		}
+		content = map[string]any{"redactedContent": value.Value}
+	default:
+		return llm.ProviderState{}, fmt.Errorf("unsupported reasoning content type %T", block)
+	}
+	raw, err := json.Marshal(map[string]any{"reasoningContent": content})
+	if err != nil {
+		return llm.ProviderState{}, err
+	}
+	return llm.ProviderState{Provider: "bedrock", EndpointFamily: "converse", MediaType: "application/vnd.amazon.bedrock.content-block+json", Opaque: raw}, nil
+}
+
+func validateEmulatedJSON(call provider.Call, output []llm.Item, hasToolCalls, hasRefusal bool) error {
+	if hasToolCalls || hasRefusal {
+		return nil
+	}
+	_, schema, ok := compiledParameters(call.SDKParams)
+	if !ok || schema == nil {
+		return nil
+	}
+	var content strings.Builder
+	for _, item := range output {
+		message, ok := item.(llm.Message)
+		if !ok || message.Actor != llm.ActorModel {
+			continue
+		}
+		for _, part := range message.Content {
+			if text, ok := part.(llm.TextPart); ok {
+				content.WriteString(text.Text)
+			}
+		}
+	}
+	if err := schema.Validate([]byte(content.String())); err != nil {
+		return fmt.Errorf("provider JSON response does not satisfy schema: %w", err)
+	}
+	return nil
 }
 
 func liftStatus(reason types.StopReason, hasToolCalls bool) (llm.ResponseStatus, error) {
@@ -295,8 +357,14 @@ func requiredFeatures(request llm.Request) []provider.Feature {
 			}
 		}
 	}
-	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
+	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto && request.ToolPolicy.Mode != llm.ToolChoiceNone {
 		features = append(features, provider.FeatureToolCall)
+	}
+	if request.Output != nil && request.Output.Format.Kind != "" && request.Output.Format.Kind != llm.OutputKindText {
+		features = append(features, provider.FeatureStructuredOutput)
+	}
+	if request.Reasoning != nil {
+		features = append(features, provider.FeatureReasoning)
 	}
 	return uniqueFeatures(features)
 }

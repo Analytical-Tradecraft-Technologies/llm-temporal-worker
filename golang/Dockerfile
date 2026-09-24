@@ -28,13 +28,13 @@ WORKDIR /src
 # into the build context. BuildKit cache mounts are optional but harmless when
 # the builder does not enable them.
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,id=llmtw-modules-v1,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=llmtw-build-v1,target=/root/.cache/go-build,sharing=locked \
     go mod download
 
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,id=llmtw-modules-v1,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=llmtw-build-v1,target=/root/.cache/go-build,sharing=locked \
     test "${TARGETOS:-linux}" = "linux" && \
     test "${TARGETARCH:-amd64}" = "amd64" && \
     test -n "${VERSION}" && test "${VERSION}" != "dev" && \

@@ -267,6 +267,31 @@ func TestGenerateDefaultsOmittedServiceClassToStandard(t *testing.T) {
 	}
 }
 
+func TestGeneratePreservesObservedIdentityWithoutAttestingConfiguredFallback(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		basis    llm.ModelIdentityBasis
+		observed string
+		want     llm.ModelIdentityBasis
+	}{
+		{name: "unobserved", want: llm.ModelIdentityBasisConfiguredRoute},
+		{name: "provider reported", basis: llm.ModelIdentityBasisProviderReported, observed: "provider-revision-2026", want: llm.ModelIdentityBasisProviderReported},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			providerResponse := successfulResponse()
+			providerResponse.Route = llm.RouteFacts{ResolvedModel: "provider-model", ModelIdentityBasis: test.basis, ObservedModelRevision: test.observed}
+			harness := newHarness(t, &fakeAdapter{name: "fake", response: providerResponse})
+			response, err := harness.engine.Generate(context.Background(), baseRequest("model-identity"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.Route.ResolvedModel != "provider-model" || response.Route.ModelIdentityBasis != test.want || response.Route.ObservedModelRevision != test.observed {
+				t.Fatalf("final result conflates routing and observed identity: %#v", response.Route)
+			}
+		})
+	}
+}
+
 func TestGenerateRejectsUnmatchedRequiredBudgetPolicyBeforeAdmission(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	harness := newHarness(t, adapter)

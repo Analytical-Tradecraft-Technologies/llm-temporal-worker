@@ -26,12 +26,23 @@ func (status ResponseStatus) Valid() bool {
 	}
 }
 
+type ModelIdentityBasis string
+
+const (
+	ModelIdentityBasisUnknown          ModelIdentityBasis = "unknown"
+	ModelIdentityBasisConfiguredRoute  ModelIdentityBasis = "configured_route"
+	ModelIdentityBasisProviderReported ModelIdentityBasis = "provider_reported"
+)
+
 type RouteFacts struct {
 	RouteID        string
 	EndpointID     string
 	APIFamily      string
 	RequestedModel string
 	ResolvedModel  string
+	// ResolvedModel is the configured routing target, not revision attestation.
+	ModelIdentityBasis    ModelIdentityBasis
+	ObservedModelRevision string
 }
 
 func (route RouteFacts) MarshalJSON() ([]byte, error) {
@@ -51,6 +62,12 @@ func (route RouteFacts) MarshalJSON() ([]byte, error) {
 	if route.ResolvedModel != "" {
 		fields["resolved_model"] = route.ResolvedModel
 	}
+	if route.ModelIdentityBasis != "" {
+		fields["model_identity_basis"] = route.ModelIdentityBasis
+	}
+	if route.ObservedModelRevision != "" {
+		fields["observed_model_revision"] = route.ObservedModelRevision
+	}
 	return marshalObject(fields)
 }
 
@@ -59,7 +76,7 @@ func decodeRouteFacts(data []byte) (RouteFacts, error) {
 	if err != nil {
 		return RouteFacts{}, err
 	}
-	if err := checkUnknownFields(fields, "route_id", "endpoint_id", "api_family", "requested_model", "resolved_model"); err != nil {
+	if err := checkUnknownFields(fields, "route_id", "endpoint_id", "api_family", "requested_model", "resolved_model", "model_identity_basis", "observed_model_revision"); err != nil {
 		return RouteFacts{}, err
 	}
 	route := RouteFacts{}
@@ -77,6 +94,26 @@ func decodeRouteFacts(data []byte) (RouteFacts, error) {
 	}
 	if route.ResolvedModel, _, err = optionalString(fields, "resolved_model"); err != nil {
 		return RouteFacts{}, err
+	}
+	basis, _, err := optionalString(fields, "model_identity_basis")
+	if err != nil {
+		return RouteFacts{}, err
+	}
+	route.ModelIdentityBasis = ModelIdentityBasis(basis)
+	if route.ObservedModelRevision, _, err = optionalString(fields, "observed_model_revision"); err != nil {
+		return RouteFacts{}, err
+	}
+	switch route.ModelIdentityBasis {
+	case "", ModelIdentityBasisUnknown, ModelIdentityBasisConfiguredRoute:
+		if route.ObservedModelRevision != "" {
+			return RouteFacts{}, fmt.Errorf("observed model revision requires provider_reported identity basis")
+		}
+	case ModelIdentityBasisProviderReported:
+		if route.ObservedModelRevision == "" {
+			return RouteFacts{}, fmt.Errorf("provider_reported identity basis requires an observed model revision")
+		}
+	default:
+		return RouteFacts{}, fmt.Errorf("invalid model identity basis %q", route.ModelIdentityBasis)
 	}
 	return route, nil
 }

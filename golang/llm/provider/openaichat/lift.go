@@ -68,16 +68,21 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 		ProviderValue: string(response.ServiceTier),
 		FallbackIndex: 0,
 	}
+	modelIdentityBasis := llm.ModelIdentityBasisUnknown
+	if response.Model != "" {
+		modelIdentityBasis = llm.ModelIdentityBasisProviderReported
+	}
 	result := llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
 		Status:       status,
 		Output:       output,
 		Route: llm.RouteFacts{
-			EndpointID:     call.EndpointID,
-			APIFamily:      string(provider.FamilyOpenAIChat),
-			RequestedModel: call.Model,
-			ResolvedModel:  response.Model,
+			EndpointID:         call.EndpointID,
+			APIFamily:          string(provider.FamilyOpenAIChat),
+			RequestedModel:     call.Model,
+			ResolvedModel:      call.Model,
+			ModelIdentityBasis: modelIdentityBasis, ObservedModelRevision: response.Model,
 		},
 		Service:  service,
 		Usage:    usage,

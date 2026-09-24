@@ -125,7 +125,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
 		}
 	}
-	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)
+	params, err := compileRequest(normalized, adapter.profile, providerTier, input.Strict, set.Features[provider.FeatureStructuredOutput])
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}
@@ -161,12 +161,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if call.Family != provider.FamilyBedrockMessages || call.EndpointID != adapter.endpointID {
 		return provider.Result{}, dispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
 	}
-	params, ok := call.SDKParams.(anthropic.MessageNewParams)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*anthropic.MessageNewParams); pointerOK && pointer != nil {
-			params, ok = *pointer, true
-		}
-	}
+	params, _, ok := compiledParameters(call.SDKParams)
 	if !ok {
 		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}

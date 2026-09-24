@@ -51,7 +51,7 @@ func TestLiftPreservesThinkingToolOrderUsageAndActualTier(t *testing.T) {
 	if lifted.Provider.ResponseID != "msg_1" || lifted.Provider.RequestID != "req-1" || lifted.Provider.FinishReason != "tool_use" {
 		t.Fatalf("provider facts = %#v", lifted.Provider)
 	}
-	if lifted.Route.ResolvedModel != "claude-resolved" || lifted.Route.APIFamily != string(provider.FamilyAnthropicMessages) {
+	if lifted.Route.ResolvedModel != call.Model || lifted.Route.ObservedModelRevision != "claude-resolved" || lifted.Route.ModelIdentityBasis != llm.ModelIdentityBasisProviderReported || lifted.Route.APIFamily != string(provider.FamilyAnthropicMessages) {
 		t.Fatalf("route = %#v", lifted.Route)
 	}
 	if lifted.Usage.InputTokens != 10 || lifted.Usage.OutputTokens != 7 || lifted.Usage.ReasoningTokens != 4 || lifted.Usage.CacheReadTokens != 3 || lifted.Usage.CacheWriteTokens != 2 {

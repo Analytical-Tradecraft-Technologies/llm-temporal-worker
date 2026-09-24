@@ -570,7 +570,10 @@ const (
 	CostAdmissionAPIVersion = "llm.cost_admission/v1"
 	CostAdmissionContextTag = "llm.cost_admission"
 	CostAdmissionForecastV1 = "forecast/v1"
+	RootRunIDContextTag     = "root_run_id"
 )
+
+var forecastRootRunIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
 
 // CostAdmissionV1 binds a caller-owned operation ceiling to one immutable
 // pricing snapshot. It is optional for legacy non-forecast callers; callers
@@ -748,9 +751,18 @@ type GenerateRequestV1 struct {
 }
 
 func validateRequestContextV1(context RequestContext) error {
-	if len(context.Tags) > 0 {
-		if len(context.Tags) != 1 || context.Tags[CostAdmissionContextTag] != CostAdmissionForecastV1 {
-			return fmt.Errorf("v1 context tags only support %s=%s", CostAdmissionContextTag, CostAdmissionForecastV1)
+	for name, value := range context.Tags {
+		switch name {
+		case CostAdmissionContextTag:
+			if value != CostAdmissionForecastV1 {
+				return fmt.Errorf("unsupported forecast cost-admission context tag")
+			}
+		case RootRunIDContextTag:
+			if !forecastRootRunIDPattern.MatchString(value) || context.Tags[CostAdmissionContextTag] != CostAdmissionForecastV1 {
+				return fmt.Errorf("root run context requires a bounded identity and forecast cost admission")
+			}
+		default:
+			return fmt.Errorf("unsupported inference context tag %q", name)
 		}
 	}
 	if context.Tenant == "" || context.Project == "" || context.Actor == "" {

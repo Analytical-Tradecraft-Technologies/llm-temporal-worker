@@ -13,8 +13,10 @@
   "route": {
     "api_family": "anthropic_messages",
     "endpoint_id": "anthropic-prod",
+    "model_identity_basis": "provider_reported",
+    "observed_model_revision": "claude-resolved",
     "requested_model": "claude-contract",
-    "resolved_model": "claude-resolved"
+    "resolved_model": "claude-contract"
   },
   "service": {
     "actual": "standard",

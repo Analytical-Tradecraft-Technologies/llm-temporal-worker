@@ -1,0 +1,8 @@
+# syntax=docker/dockerfile:1.10
+# The full Victoria worker image supplies the real ATT workflow and Stage-2
+# dependencies. This local image only installs its dedicated CLI dispatch name.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER 0:0
+RUN ln -s /usr/local/bin/competition-worker /opt/ai-ach/bin/retrospective-forecast-eval
+USER 65532:65532

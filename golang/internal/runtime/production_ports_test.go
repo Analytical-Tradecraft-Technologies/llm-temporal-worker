@@ -24,6 +24,32 @@ import (
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
+func TestReplayProviderDefaultsDoNotRequireOptionalReasoningControls(t *testing.T) {
+	model := "private-subscription-model"
+	effort := llm.ReasoningEffortProviderDefault
+	request := llm.GenerateRequestV1{
+		SettingsPatch: llm.SettingsPatchV1{
+			Model:           llm.Patch[string]{Set: &model},
+			ReasoningEffort: llm.Patch[llm.ReasoningEffort]{Set: &effort},
+		},
+	}
+	providerRequest, _, err := requestFromReplay(request, durablestore.GenerateReplay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providerRequest.Reasoning != nil || providerRequest.Sampling != nil {
+		t.Fatal("provider defaults became unsupported optional capability requests")
+	}
+	effort = llm.ReasoningEffortLow
+	providerRequest, _, err = requestFromReplay(request, durablestore.GenerateReplay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providerRequest.Reasoning == nil || providerRequest.Reasoning.Effort != effort {
+		t.Fatal("an explicit reasoning control was silently discarded")
+	}
+}
+
 func TestProductionPhaseFactoriesRejectIncompleteSnapshotBeforeCallbacks(t *testing.T) {
 	if _, err := NewProductionGeneratePortsFactory()(context.Background(), V1RuntimeCapabilities{}); err == nil {
 		t.Fatal("Generate factory accepted an incomplete durable snapshot")
@@ -913,6 +939,29 @@ func TestBindRouteProvenanceOverridesProviderSelectedRouteFacts(t *testing.T) {
 	}
 	if response.Service.Requested != candidate.RequestedClass || response.Service.Attempted != candidate.AttemptedClass || response.Service.FallbackIndex != candidate.FallbackIndex {
 		t.Fatalf("service provenance is incomplete: %#v", response.Service)
+	}
+}
+
+func TestBindRouteProvenanceNeverAttestsConfiguredModel(t *testing.T) {
+	candidate := routing.Candidate{Model: "configured-model"}
+	for _, test := range []struct {
+		name     string
+		route    llm.RouteFacts
+		basis    llm.ModelIdentityBasis
+		observed string
+	}{
+		{name: "CLI terminal usage only", basis: llm.ModelIdentityBasisConfiguredRoute},
+		{name: "legacy configured fallback", route: llm.RouteFacts{ResolvedModel: candidate.Model}, basis: llm.ModelIdentityBasisConfiguredRoute},
+		{name: "explicit configured route", route: llm.RouteFacts{ResolvedModel: candidate.Model, ModelIdentityBasis: llm.ModelIdentityBasisConfiguredRoute}, basis: llm.ModelIdentityBasisConfiguredRoute},
+		{name: "provider metadata", route: llm.RouteFacts{ResolvedModel: "provider-revision", ModelIdentityBasis: llm.ModelIdentityBasisProviderReported, ObservedModelRevision: "provider-revision"}, basis: llm.ModelIdentityBasisProviderReported, observed: "provider-revision"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := llm.Response{Route: test.route}
+			bindRouteProvenance(&response, llm.Request{Model: "requested-model"}, candidate)
+			if response.Route.ResolvedModel != candidate.Model || response.Route.ModelIdentityBasis != test.basis || response.Route.ObservedModelRevision != test.observed {
+				t.Fatalf("configured and observed model identity conflated: %#v", response.Route)
+			}
+		})
 	}
 }
 

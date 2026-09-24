@@ -43,8 +43,11 @@ func TestLiftCompletedToolResponsePreservesUsageAndIDs(t *testing.T) {
 	if lifted.Status != llm.ResponseStatusToolCalls || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassPriority {
 		t.Fatalf("status/service = %#v %#v", lifted.Status, lifted.Service)
 	}
-	if lifted.Provider.ResponseID != "chatcmpl-1" || lifted.Provider.RequestID != "req-1" || lifted.Route.ResolvedModel != "chat-model-resolved" {
+	if lifted.Provider.ResponseID != "chatcmpl-1" || lifted.Provider.RequestID != "req-1" || lifted.Route.ResolvedModel != call.Model {
 		t.Fatalf("identity = %#v %#v", lifted.Provider, lifted.Route)
+	}
+	if lifted.Route.ModelIdentityBasis != llm.ModelIdentityBasisProviderReported || lifted.Route.ObservedModelRevision != "chat-model-resolved" {
+		t.Fatalf("provider-reported model metadata was lost: %#v", lifted.Route)
 	}
 	if lifted.Usage.InputTokens != 10 || lifted.Usage.OutputTokens != 7 || lifted.Usage.ReasoningTokens != 2 || lifted.Usage.CacheReadTokens != 3 || lifted.Usage.CacheWriteTokens != 1 {
 		t.Fatalf("usage = %#v", lifted.Usage)

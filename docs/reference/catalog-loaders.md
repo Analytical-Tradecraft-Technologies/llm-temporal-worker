@@ -68,6 +68,29 @@ capability declaration at the compiled version. A state, transform, or reason
 that differs between routes is rejected during runtime composition instead of
 letting map iteration choose an arbitrary adapter profile at worker startup.
 
+Bedrock Messages and Bedrock Converse support an explicit prompt-and-validation
+transform for JSON schemas outside a provider's native structured-output subset:
+
+```yaml
+output.json_schema: {level: emulated, transform: json_schema_prompt_v1}
+```
+
+This declaration sends the complete schema as instructions, not as a native
+Bedrock grammar. The adapter validates returned JSON against the original local
+schema, including numeric bounds and ordered array items. Invalid output is a
+non-retryable `provider_invalid_response`; the adapter does not repair or
+redispatch it. This is emulated structured output, not a provider guarantee.
+Native schema declarations continue to use the native provider path.
+
+For Amazon Nova 2 Lite, the Converse adapter lowers enabled `low`, `medium`
+and `high` reasoning effort to native `reasoningConfig.maxReasoningEffort`.
+Explicit reasoning token budgets and unsupported summaries are rejected
+before dispatch. High effort rejects sampling parameters. Redacted reasoning
+remains opaque provider state rather than generated text; reported output
+tokens are preserved without separately charging that reasoning a second time.
+The public `standard` service class maps to Bedrock's native `default` tier
+when that tier is declared in the endpoint catalog.
+
 ## Price documents
 
 Price documents contain a version, immutable `id`, and USD-denominated entries.

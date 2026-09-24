@@ -1,6 +1,7 @@
 package joined_test
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -177,11 +178,42 @@ func TestJoinedResourceCapacityFixtureAuthenticates(t *testing.T) {
 	}
 	configuration.ResourceCapacity.ManifestFile = manifestPath
 	configuration.ResourceCapacity.TrustRootFile = trustRootPath
-	verified, err := workerconfig.VerifyResourceCapacity(configuration.ResourceCapacity)
+	verified, err := workerconfig.VerifyResourceCapacity(configuration.ResourceCapacity, configuration.Environment)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if verified.ManifestSHA256 != configuration.ResourceCapacity.ManifestSHA256 || verified.GenerationID != configuration.ResourceCapacity.GenerationID {
 		t.Fatalf("verified resource capacity identity = %#v, want digest %q generation %q", verified, configuration.ResourceCapacity.ManifestSHA256, configuration.ResourceCapacity.GenerationID)
+	}
+
+	local := configuration.ResourceCapacity
+	local.ArtifactLocator = (&url.URL{Scheme: "file", Path: manifestPath}).String()
+	localVerified, err := workerconfig.VerifyResourceCapacity(local, "development")
+	if err != nil {
+		t.Fatalf("authenticate signed development-local manifest: %v", err)
+	}
+	if localVerified.ManifestSHA256 != verified.ManifestSHA256 || localVerified.GenerationID != verified.GenerationID {
+		t.Fatal("local reference changed the authenticated capacity identity")
+	}
+	for _, test := range []struct {
+		name        string
+		environment string
+		locator     string
+	}{
+		{name: "production rejects local", environment: "production", locator: local.ArtifactLocator},
+		{name: "other environment rejects local", environment: "staging", locator: local.ArtifactLocator},
+		{name: "different manifest", environment: "development", locator: (&url.URL{Scheme: "file", Path: manifestPath + ".other"}).String()},
+		{name: "authority", environment: "development", locator: (&url.URL{Scheme: "file", Host: "localhost", Path: manifestPath}).String()},
+		{name: "query", environment: "development", locator: local.ArtifactLocator + "?source=local"},
+		{name: "empty query", environment: "development", locator: local.ArtifactLocator + "?"},
+		{name: "fragment", environment: "development", locator: local.ArtifactLocator + "#manifest"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rejected := local
+			rejected.ArtifactLocator = test.locator
+			if _, err := workerconfig.VerifyResourceCapacity(rejected, test.environment); err == nil {
+				t.Fatal("unapproved capacity reference was accepted")
+			}
+		})
 	}
 }

@@ -10,7 +10,75 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
+
+const jsonSchemaPromptTransform = "json_schema_prompt_v1"
+
+// Emulation retains the complete contract locally instead of silently dropping
+// constraints that Bedrock's native JSON grammar cannot represent.
+type emulatedJSONCall struct {
+	params anthropic.MessageNewParams
+	schema *llmschema.Schema
+}
+
+func (call emulatedJSONCall) MarshalJSON() ([]byte, error) {
+	return json.Marshal(call.params)
+}
+
+func compileRequest(request llm.Request, profile Profile, serviceTier string, strict bool, capability provider.Capability) (any, error) {
+	if request.Output == nil || request.Output.Format.Kind == "" || request.Output.Format.Kind == llm.OutputKindText || capability.State != provider.CapabilityEmulated {
+		return lowerRequestWithStrict(request, profile, serviceTier, strict)
+	}
+	if capability.Transform != jsonSchemaPromptTransform {
+		return nil, fmt.Errorf("emulated structured output requires the %q transform", jsonSchemaPromptTransform)
+	}
+	document := request.Output.Format.Schema
+	if request.Output.Format.Kind == llm.OutputKindJSON {
+		document = json.RawMessage(`{"type":"object"}`)
+	}
+	schema, err := llmschema.Parse(document)
+	if err != nil {
+		return nil, fmt.Errorf("emulated output schema: %w", err)
+	}
+	instructions := append([]llm.Instruction(nil), request.Instructions...)
+	level := llm.InstructionLevelApplication
+	if len(instructions) > 0 {
+		level = instructions[0].Level
+	}
+	request.Instructions = append(instructions, llm.Instruction{
+		Kind:  llm.InstructionKindText,
+		Level: level,
+		Text:  "Return exactly one JSON value satisfying the following complete JSON Schema. Do not use Markdown fences or add prose outside the JSON.\n" + string(schema.Canonical()),
+	})
+	output := *request.Output
+	output.Format = llm.OutputFormat{Kind: llm.OutputKindText}
+	request.Output = &output
+	params, err := lowerRequestWithStrict(request, profile, serviceTier, strict)
+	if err != nil {
+		return nil, err
+	}
+	return emulatedJSONCall{params: params, schema: schema}, nil
+}
+
+func compiledParameters(value any) (anthropic.MessageNewParams, *llmschema.Schema, bool) {
+	switch value := value.(type) {
+	case anthropic.MessageNewParams:
+		return value, nil, true
+	case *anthropic.MessageNewParams:
+		if value != nil {
+			return *value, nil, true
+		}
+	case emulatedJSONCall:
+		return value.params, value.schema, true
+	case *emulatedJSONCall:
+		if value != nil {
+			return value.params, value.schema, true
+		}
+	}
+	return anthropic.MessageNewParams{}, nil, false
+}
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
 	return lowerRequestWithStrict(request, profile, serviceTier, false)
@@ -108,7 +176,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		if choice != nil {
 			target["tool_choice"] = choice
 		}
-	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto {
+	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto && request.ToolPolicy.Mode != llm.ToolChoiceNone {
 		return anthropic.MessageNewParams{}, fmt.Errorf("tool policy %q requires at least one tool", request.ToolPolicy.Mode)
 	}
 	encoded, err := json.Marshal(target)

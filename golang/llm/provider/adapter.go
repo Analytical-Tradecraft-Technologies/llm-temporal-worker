@@ -10,11 +10,12 @@ const (
 	FamilyAnthropicMessages Family = "anthropic_messages"
 	FamilyBedrockMessages   Family = "bedrock_messages"
 	FamilyBedrockConverse   Family = "bedrock_converse"
+	FamilyCodexCLI          Family = "codex_cli"
 )
 
 func (family Family) Valid() bool {
 	switch family {
-	case FamilyOpenAIResponses, FamilyOpenAIChat, FamilyAnthropicMessages, FamilyBedrockMessages, FamilyBedrockConverse:
+	case FamilyOpenAIResponses, FamilyOpenAIChat, FamilyAnthropicMessages, FamilyBedrockMessages, FamilyBedrockConverse, FamilyCodexCLI:
 		return true
 	default:
 		return false

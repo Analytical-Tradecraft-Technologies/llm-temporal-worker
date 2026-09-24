@@ -37,6 +37,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockconverse"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockmessages"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/codexcli"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openaichat"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openairesponses"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
@@ -393,7 +394,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	var verifiedResourceCapacity config.VerifiedResourceCapacity
 	if value.ResourceCapacity.ManifestFile != "" {
-		verifiedResourceCapacity, err = config.VerifyResourceCapacity(value.ResourceCapacity)
+		verifiedResourceCapacity, err = config.VerifyResourceCapacity(value.ResourceCapacity, value.Environment)
 		if err != nil {
 			return nil, nil, fmt.Errorf("verify signed resource capacity: %w", err)
 		}
@@ -1197,6 +1198,12 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 	maxResponseBytes := value.Limits.ProviderResponseBytes
 	if maxResponseBytes == 0 {
 		maxResponseBytes = config.DefaultProviderResponseBytes
+	}
+	if endpoint.Family == "codex_cli" {
+		if endpoint.CodexCLI == nil || endpoint.Auth.Kind != "chatgpt_cli" {
+			return nil, fmt.Errorf("endpoint %q: explicit private Codex CLI approval is required", endpointID)
+		}
+		return codexcli.New(endpointID, capabilities.Version, *endpoint.CodexCLI, time.Duration(endpoint.Timeout), maxResponseBytes)
 	}
 	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, maxResponseBytes, factory.options.EgressResolver, factory.options.EgressDial)
 	if err != nil {

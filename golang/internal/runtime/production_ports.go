@@ -464,9 +464,17 @@ func requestFromReplay(request llm.GenerateRequestV1, replay durablestore.Genera
 		Model: settings.Model, ServiceClass: settings.ServiceClass, ServiceClassFallbacks: append([]llm.ServiceClass(nil), settings.ServiceClassFallbacks...),
 		Portability: settings.Portability, Instructions: append([]llm.Instruction(nil), settings.Instructions...), Input: input,
 		Tools: append([]llm.Tool(nil), settings.Tools...), ToolPolicy: settings.ToolPolicy, Output: settings.Output,
-		Sampling:   &llm.SamplingSpec{Temperature: settings.Temperature},
-		Reasoning:  &llm.ReasoningSpec{Effort: settings.ReasoningEffort, Summary: settings.ReasoningSummary},
 		Extensions: cloneRawMessages(settings.Extensions),
+	}
+	// Provider-default controls are absence, not requests for optional
+	// capabilities. In particular, transports without sampling/reasoning
+	// controls must still be able to execute an uncustomized v1 request.
+	if settings.Temperature != nil {
+		providerRequest.Sampling = &llm.SamplingSpec{Temperature: settings.Temperature}
+	}
+	if (settings.ReasoningEffort != "" && settings.ReasoningEffort != llm.ReasoningEffortProviderDefault) ||
+		(settings.ReasoningSummary != "" && settings.ReasoningSummary != llm.ReasoningSummaryProviderDefault) {
+		providerRequest.Reasoning = &llm.ReasoningSpec{Effort: settings.ReasoningEffort, Summary: settings.ReasoningSummary}
 	}
 	return providerRequest, settings, nil
 }
@@ -1270,10 +1278,20 @@ func (binding *productionPhaseBinding) dispatchGenerate(ctx context.Context, req
 }
 
 func bindRouteProvenance(response *llm.Response, request llm.Request, candidate routing.Candidate) {
+	// Only adapter-declared provider metadata is observational evidence. A
+	// configured route (including CLI model selection) cannot attest a revision.
+	observed := response.Route.ObservedModelRevision
+	basis := llm.ModelIdentityBasisConfiguredRoute
+	if response.Route.ModelIdentityBasis == llm.ModelIdentityBasisProviderReported && observed != "" {
+		basis = llm.ModelIdentityBasisProviderReported
+	} else {
+		observed = ""
+	}
 	response.Route = llm.RouteFacts{
 		RouteID: candidate.RouteID, EndpointID: candidate.EndpointID,
 		APIFamily: candidate.Family, RequestedModel: request.Model,
-		ResolvedModel: candidate.Model,
+		ResolvedModel:      candidate.Model,
+		ModelIdentityBasis: basis, ObservedModelRevision: observed,
 	}
 	response.Service.Requested = candidate.RequestedClass
 	response.Service.Attempted = candidate.AttemptedClass

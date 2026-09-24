@@ -30,6 +30,8 @@
   "route": {
     "api_family": "openai_chat",
     "endpoint_id": "openrouter-chat-fixture",
+    "model_identity_basis": "provider_reported",
+    "observed_model_revision": "router-model",
     "requested_model": "router-model",
     "resolved_model": "router-model"
   },
