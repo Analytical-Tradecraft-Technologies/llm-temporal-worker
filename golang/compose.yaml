@@ -2,7 +2,7 @@ name: llmtw
 
 services:
   postgres:
-    image: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: ${LLMTW_POSTGRES_PASSWORD:-local-only}
@@ -22,7 +22,7 @@ services:
   # Temporal-owned PostgreSQL service above.
   worker-postgres:
     profiles: [durable]
-    image: postgres:18.6-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
       POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}
       POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
