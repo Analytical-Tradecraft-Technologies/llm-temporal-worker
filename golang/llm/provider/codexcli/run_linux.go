@@ -119,6 +119,7 @@ func childArguments(model, cwd, schemaPath string) []string {
 	settings := []string{
 		`forced_login_method="chatgpt"`, `cli_auth_credentials_store="file"`, `approval_policy="never"`,
 		`model_provider="llmtw_subscription"`, `model_providers.llmtw_subscription.name="OpenAI"`,
+		`model_providers.llmtw_subscription.base_url="https://chatgpt.com/backend-api/codex"`,
 		`model_providers.llmtw_subscription.requires_openai_auth=true`,
 		`model_providers.llmtw_subscription.request_max_retries=0`, `model_providers.llmtw_subscription.stream_max_retries=0`,
 		`model_providers.llmtw_subscription.supports_websockets=false`,

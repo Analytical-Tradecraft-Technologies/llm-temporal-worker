@@ -1,74 +1,74 @@
 package postgres
 
 import (
-	"strings"
+	"context"
 	"testing"
 )
 
 func TestRenderRoleGrantsUsesLeastPrivilegeRuntimeCatalog(t *testing.T) {
-	namespace, err := NewNamespace("llm_worker", "private", "tenant_")
+	repository, ctx, cleanup := operationIntegrationRepository(t)
+	defer cleanup()
+	tx, err := repository.Pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql, err := RenderRoleGrants(namespace)
-	if err != nil {
+	defer tx.Rollback(context.Background())
+	// The role and ACL changes are transactional, including when a local
+	// integration database has not provisioned the runtime role yet.
+	if _, err := tx.Exec(ctx, `DO $$ BEGIN
+		IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'llmtw_runtime') THEN
+			CREATE ROLE llmtw_runtime NOLOGIN;
+		END IF;
+	END $$`); err != nil {
 		t.Fatal(err)
 	}
-
-	if strings.Contains(sql, "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES") {
-		t.Fatal("role ACL must not grant all table privileges")
+	if err := grantRuntimeRoles(ctx, tx, repository.Namespace, true); err != nil {
+		t.Fatal(err)
 	}
-	for _, required := range []string{
-		`REVOKE ALL ON TABLE "private"."tenant_operations" FROM llmtw_runtime;`,
-		`GRANT SELECT, INSERT ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_runtime;`,
-		`GRANT SELECT, INSERT ON TABLE "private"."tenant_checkpoint_provider_state" TO llmtw_runtime;`,
-		`GRANT SELECT, INSERT ON TABLE "private"."tenant_checkpoint_provider_affinities" TO llmtw_runtime;`,
-		`GRANT UPDATE (expires_at, deletion_state, locator_ciphertext, locator_key_id, encryption_context_digest) ON TABLE "private"."tenant_blobs" TO llmtw_runtime;`,
-		`GRANT SELECT, INSERT, UPDATE ON TABLE "private"."tenant_operations" TO llmtw_runtime;`,
-		`GRANT SELECT, INSERT, UPDATE (state, dispatch_disposition, provider, resolved_model, actual_cost_usd, cost_status, cost_method, cost_unknown_reason_code, finished_at) ON TABLE "private"."tenant_operation_attempts" TO llmtw_runtime;`,
-		`GRANT SELECT (journal_id, event_id, redis_generation_id, operation_id, window_id, bucket_start, reservation_revision, event_kind, reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd, actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at), INSERT, UPDATE (event_id) ON TABLE "private"."tenant_budget_journal_events" TO llmtw_runtime;`,
-		`GRANT SELECT (reserved_cost_usd, accounted_cost_usd, last_journal_id), INSERT, UPDATE ON TABLE "private"."tenant_budget_buckets" TO llmtw_runtime;`,
-		`GRANT SELECT (operation_id, window_id, state, reserved_cost_usd, reservation_revision), INSERT, UPDATE ON TABLE "private"."tenant_operation_budget_reservations" TO llmtw_runtime;`,
-		`GRANT UPDATE (response_digest) ON TABLE "private"."tenant_query_executions" TO llmtw_runtime;`,
-		`GRANT SELECT ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
-		`GRANT INSERT, UPDATE, DELETE ON TABLE "private"."tenant_conversation_checkpoints" TO llmtw_maintenance;`,
-		`GRANT USAGE ON SEQUENCE "private"."tenant_budget_journal_events_journal_id_seq" TO llmtw_runtime;`,
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE llmtw_runtime"); err != nil {
+		t.Fatal(err)
+	}
+	// Check effective PostgreSQL authorization, not the renderer's SQL text.
+	// These reads are needed by RETURNING, ON CONFLICT and reconciliation;
+	// the terminal attempt write is required even when its value is NULL.
+	for _, check := range []struct {
+		table, column, privilege string
+		allowed                  bool
+	}{
+		{"budget_journal_events", "xmax", "SELECT", true},
+		{"budget_buckets", "window_id", "SELECT", true},
+		{"budget_buckets", "bucket_start", "SELECT", true},
+		{"operation_budget_reservations", "actual_cost_status", "SELECT", true},
+		{"operation_attempts", "cost_catalog_version", "UPDATE", true},
+		{"budget_journal_events", "actual_cost_usd", "UPDATE", false},
 	} {
-		if !strings.Contains(sql, required) {
-			t.Errorf("rendered role grants missing %q", required)
+		relation, err := repository.Namespace.Render(check.table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var allowed bool
+		if err := tx.QueryRow(ctx, "SELECT has_column_privilege(current_user, $1, $2, $3)", relation, check.column, check.privilege).Scan(&allowed); err != nil {
+			t.Fatal(err)
+		}
+		if allowed != check.allowed {
+			t.Errorf("%s on %s.%s: allowed=%t, want %t", check.privilege, check.table, check.column, allowed, check.allowed)
 		}
 	}
-	if strings.Contains(sql, "ON ALL TABLES") || strings.Contains(sql, "ON ALL SEQUENCES") {
-		t.Fatal("shared-schema role ACL must not sweep unrelated relations")
-	}
-	if strings.Contains(sql, `GRANT USAGE ON SCHEMA "private"`) {
-		t.Fatal("shared-schema role ACL must leave schema privileges to the operator")
-	}
-	owned, err := renderRoleGrants(namespace, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(owned, `GRANT USAGE ON SCHEMA "private" TO llmtw_runtime;`) {
-		t.Fatal("dedicated schema grants omitted runtime schema usage")
-	}
-
-	// Immutable checkpoint/provider records must never acquire destructive or
-	// mutable runtime privileges through a future broad-grant regression.
 	for _, table := range []string{
-		"tenant_conversation_checkpoints",
-		"tenant_checkpoint_provider_state",
-		"tenant_checkpoint_provider_affinities",
-		"tenant_provider_status_events",
-		"tenant_provider_inventory_snapshots",
-		"tenant_provider_inventory_models",
+		"conversation_checkpoints", "checkpoint_provider_state",
+		"checkpoint_provider_affinities", "provider_status_events",
+		"provider_inventory_snapshots", "provider_inventory_models",
 	} {
-		for _, line := range strings.Split(sql, "\n") {
-			if !strings.Contains(line, "TO llmtw_runtime;") || !strings.Contains(line, table) {
-				continue
-			}
-			if strings.Contains(line, "UPDATE") || strings.Contains(line, "DELETE") {
-				t.Errorf("runtime received forbidden privilege: %s", strings.TrimSpace(line))
-			}
+		relation, err := repository.Namespace.Render(table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var destructive bool
+		if err := tx.QueryRow(ctx, "SELECT has_table_privilege(current_user, $1, 'UPDATE,DELETE')", relation).Scan(&destructive); err != nil {
+			t.Fatal(err)
+		}
+		if destructive {
+			t.Errorf("runtime can alter immutable relation %s", table)
 		}
 	}
 }

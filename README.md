@@ -117,8 +117,9 @@ policy. A minimal environment excludes API keys, proxies and loader overrides.
 remaining tool-bearing features, agents, apps, plugins, MCP, hooks, project
 instructions and automatic compaction are disabled. System config capable of
 adding hooks/MCP is rejected. A fixed CLI-managed provider retains official
-ChatGPT auth while setting request and stream retries to zero; overriding
-the built-in `openai` retry keys would be ignored by this pinned release.
+ChatGPT auth and pins `https://chatgpt.com/backend-api/codex`; missing auth
+cannot select the metered API endpoint. Request and stream retries are zero;
+overriding the built-in `openai` retry keys would be ignored by this release.
 
 Missing/duplicate terminal usage, malformed JSON, model-reroute warnings,
 native tool events, authentication failures and interrupted children fail

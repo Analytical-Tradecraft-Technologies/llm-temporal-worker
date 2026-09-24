@@ -754,7 +754,7 @@ func renderRoleGrants(namespace Namespace, schemaOwned bool) (string, error) {
 		// Terminal operation transitions close the matching attempt in the
 		// same transaction. Keep the mutable surface limited to those facts;
 		// request/ciphertext and routing identity remain immutable at runtime.
-		{table: "operation_attempts", privileges: "SELECT, INSERT, UPDATE (state, dispatch_disposition, provider, resolved_model, actual_cost_usd, cost_status, cost_method, cost_unknown_reason_code, finished_at)"},
+		{table: "operation_attempts", privileges: "SELECT, INSERT, UPDATE (state, dispatch_disposition, provider, resolved_model, actual_cost_usd, cost_status, cost_method, cost_catalog_version, cost_unknown_reason_code, finished_at)"},
 		{table: "conversation_checkpoints", privileges: "SELECT, INSERT"},
 		{table: "checkpoint_provider_state", privileges: "SELECT, INSERT"},
 		{table: "checkpoint_provider_affinities", privileges: "SELECT, INSERT"},
@@ -766,10 +766,11 @@ func renderRoleGrants(namespace Namespace, schemaOwned bool) (string, error) {
 		{table: "budget_redis_generations", privileges: "SELECT, INSERT, UPDATE"},
 		// Append statements contain no SELECT. PostgreSQL nevertheless requires
 		// column SELECT privileges for RETURNING and values referenced by an
-		// ON CONFLICT/UPDATE expression, so grant only those dependencies.
-		{table: "budget_journal_events", privileges: "SELECT (journal_id, event_id, redis_generation_id, operation_id, window_id, bucket_start, reservation_revision, event_kind, reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd, actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at), INSERT, UPDATE (event_id)"},
-		{table: "budget_buckets", privileges: "SELECT (reserved_cost_usd, accounted_cost_usd, last_journal_id), INSERT, UPDATE"},
-		{table: "operation_budget_reservations", privileges: "SELECT (operation_id, window_id, state, reserved_cost_usd, reservation_revision), INSERT, UPDATE"},
+		// ON CONFLICT/UPDATE expression, including conflict keys and the xmax
+		// system column used to distinguish inserted and replayed events.
+		{table: "budget_journal_events", privileges: "SELECT (xmax, journal_id, event_id, redis_generation_id, operation_id, window_id, bucket_start, reservation_revision, event_kind, reserved_increase_usd, reserved_decrease_usd, accounted_increase_usd, accounted_decrease_usd, actual_cost_usd, actual_cost_status, actual_cost_unknown_reason_code, occurred_at), INSERT, UPDATE (event_id)"},
+		{table: "budget_buckets", privileges: "SELECT (window_id, bucket_start, reserved_cost_usd, accounted_cost_usd, last_journal_id), INSERT, UPDATE"},
+		{table: "operation_budget_reservations", privileges: "SELECT (operation_id, window_id, state, reserved_cost_usd, reservation_revision, actual_cost_status), INSERT, UPDATE"},
 		{table: "price_catalogs", privileges: "SELECT"},
 		{table: "price_entries", privileges: "SELECT"},
 		{table: "provider_status_events", privileges: "SELECT, INSERT"},
