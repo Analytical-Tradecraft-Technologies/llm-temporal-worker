@@ -769,6 +769,20 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 		reserveRequest.Route != expectedRoute || len(reserveRequest.Reservations) != len(route.Execution.Reservations) {
 		return durablestore.RoutePlan{}, errors.New("batch grant reservation does not match resolved Generate route")
 	}
+	bounds := reserveRequest.Bounds
+	// The pre-grant route estimate cannot see the signed cache ceilings and
+	// assumes every input token may be a priced cache read and write. Re-price
+	// the request with the signed component bounds before comparing it with
+	// the grant, so a frozen cache cap of zero adds no cache charge.
+	estimator := binding.cap.Estimator
+	estimator.MaxInput = 0
+	estimator.MaxOutput = 0
+	estimator.MaxReasoning = 0
+	estimator.CacheBounds = &budget.CacheTokenBounds{Read: bounds.MaxCacheReadTokens, Write: bounds.MaxCacheWriteTokens}
+	grantedEstimate, estimateErr := estimator.EstimateCandidate(route.Execution.Request, route.Execution.Candidate, route.Execution.Price)
+	if estimateErr != nil {
+		return durablestore.RoutePlan{}, fmt.Errorf("estimate granted Generate components: %w", estimateErr)
+	}
 	// Policy matching preserves configuration order, whereas materializers may
 	// canonicalize it. Match window identities, not positions or current buckets.
 	type grantWindowKey struct {
@@ -788,6 +802,7 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 		if !exists {
 			return durablestore.RoutePlan{}, errors.New("Generate route budget window identity does not match its batch grant")
 		}
+		actual.AmountUSD = grantedEstimate.CostUSD
 		if err := validateGrantedWindowReservation(actual, reserveRequest.Reservations[index]); err != nil {
 			return durablestore.RoutePlan{}, err
 		}
@@ -796,7 +811,6 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	if len(reserveRequest.Reservations) == 0 {
 		return durablestore.RoutePlan{}, errors.New("batch grant has no budget reservation")
 	}
-	bounds := reserveRequest.Bounds
 	grantKeyDigest := sha256.Sum256(binding.cap.GrantHMACKey)
 	if bounds.GrantKeyID != binding.cap.GrantKeyID || bounds.GrantKeySHA256 != hex.EncodeToString(grantKeyDigest[:]) {
 		return durablestore.RoutePlan{}, errors.New("batch grant reservation signing key does not match active snapshot")
@@ -807,7 +821,7 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	grantedMaximum := reserveRequest.LogicalCostUSD
 	grantedMicro, err := pricing.CeilMicroFromUSD(grantedMaximum)
 	if err != nil || int64(grantedMicro) != admitted.RemainingMaxCostMicrounits ||
-		route.Execution.EstimatedUSD.Cmp(grantedMaximum) > 0 {
+		grantedEstimate.CostUSD.Cmp(grantedMaximum) > 0 {
 		return durablestore.RoutePlan{}, errors.New("Generate estimate exceeds its signed batch grant ceiling")
 	}
 	route.Execution.Reservations = append([]admission.WindowReservation(nil), reserveRequest.Reservations...)
@@ -822,19 +836,11 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	if err := binding.cap.Estimator.ValidateCandidateTokenLimits(route.Execution.Request, route.Execution.Candidate); err != nil {
 		return route, fmt.Errorf("validate granted Generate token ceilings: %w", err)
 	}
-	estimator := binding.cap.Estimator
-	estimator.MaxInput = 0
-	estimator.MaxOutput = 0
-	estimator.MaxReasoning = 0
-	actualEstimate, estimateErr := estimator.EstimateCandidate(route.Execution.Request, route.Execution.Candidate, route.Execution.Price)
-	if estimateErr != nil {
-		return durablestore.RoutePlan{}, fmt.Errorf("estimate granted Generate components: %w", estimateErr)
-	}
-	if actualEstimate.InputTokens > bounds.MaxInputTokens ||
-		actualEstimate.OutputTokens > bounds.MaxOutputTokens ||
-		actualEstimate.ReasoningTokens > bounds.MaxReasoningTokens ||
-		actualEstimate.CacheReadTokens > bounds.MaxCacheReadTokens ||
-		actualEstimate.CacheWriteTokens > bounds.MaxCacheWriteTokens {
+	if grantedEstimate.InputTokens > bounds.MaxInputTokens ||
+		grantedEstimate.OutputTokens > bounds.MaxOutputTokens ||
+		grantedEstimate.ReasoningTokens > bounds.MaxReasoningTokens ||
+		grantedEstimate.CacheReadTokens > bounds.MaxCacheReadTokens ||
+		grantedEstimate.CacheWriteTokens > bounds.MaxCacheWriteTokens {
 		return route, fmt.Errorf("%w: Generate token components exceed the signed batch grant", budget.ErrTokenLimit)
 	}
 	return route, nil

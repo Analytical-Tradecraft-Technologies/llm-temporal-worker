@@ -29,11 +29,23 @@ type Estimator struct {
 	SafetyRatio  *big.Rat
 	MaxOutput    int64
 	MaxReasoning int64
+	// CacheBounds, when set, are the signed per-operation cache-token
+	// ceilings. The estimate then charges at most that many cache tokens, so
+	// a zero ceiling adds no cache charge. Nil keeps the uncapped assumption
+	// that every input token may be a priced cache read and cache write.
+	CacheBounds *CacheTokenBounds
 	// Tokenizer, when configured, is the provider-specific exact token
 	// counter. It receives the candidate because tokenization can vary by
 	// provider family/model. A nil tokenizer uses the conservative UTF-8
 	// fallback below.
 	Tokenizer Tokenizer
+}
+
+// CacheTokenBounds are an operation's signed cache-read and cache-write
+// token ceilings.
+type CacheTokenBounds struct {
+	Read  int64
+	Write int64
 }
 
 // Tokenizer returns the exact input token count for one authorized candidate.
@@ -111,14 +123,8 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 			return Estimate{}, fmt.Errorf("%w: reasoning tokens %d exceed %d", ErrTokenLimit, reasoningTokens, estimator.MaxReasoning)
 		}
 	}
-	cacheRead := int64(0)
-	if entry.ComponentUnknown(pricing.PriceComponentCacheRead) || entry.Prices.CacheReadPerMillion.CanonicalString() != "0" {
-		cacheRead = inputTokens
-	}
-	cacheWrite := int64(0)
-	if entry.ComponentUnknown(pricing.PriceComponentCacheWrite) || entry.Prices.CacheWritePerMillion.CanonicalString() != "0" {
-		cacheWrite = inputTokens
-	}
+	cacheRead := estimator.cacheTokens(inputTokens, entry, pricing.PriceComponentCacheRead, entry.Prices.CacheReadPerMillion)
+	cacheWrite := estimator.cacheTokens(inputTokens, entry, pricing.PriceComponentCacheWrite, entry.Prices.CacheWritePerMillion)
 	components := []struct {
 		component     pricing.PriceComponent
 		price         pricing.DecimalUSD
@@ -175,6 +181,25 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		}
 	}
 	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, CatalogVersion: entry.Version}, nil
+}
+
+// cacheTokens is the conservative cache-token assumption for one component:
+// every input token when the component is priced or unknown, clipped to the
+// signed ceiling when one applies. A zero ceiling therefore never charges
+// cache tokens, whatever the catalog price.
+func (estimator Estimator) cacheTokens(inputTokens int64, entry pricing.Entry, component pricing.PriceComponent, price pricing.DecimalUSD) int64 {
+	if !entry.ComponentUnknown(component) && price.CanonicalString() == "0" {
+		return 0
+	}
+	tokens := inputTokens
+	if estimator.CacheBounds != nil {
+		limit := estimator.CacheBounds.Read
+		if component == pricing.PriceComponentCacheWrite {
+			limit = estimator.CacheBounds.Write
+		}
+		tokens = min(tokens, max(limit, 0))
+	}
+	return tokens
 }
 
 func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, entries map[string]pricing.Entry) (Estimate, error) {

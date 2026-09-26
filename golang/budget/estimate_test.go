@@ -195,6 +195,50 @@ func TestEstimateCandidateRejectsMicroUSDCompatibilityOverflow(t *testing.T) {
 	}
 }
 
+func TestEstimateCandidateChargesCacheOnlyUpToSignedCaps(t *testing.T) {
+	request := llm.Request{OperationKey: "estimate-cache", Model: "logical", Output: &llm.OutputSpec{MaxTokens: intPointer(0)}}
+	tokenizer := func(llm.Request, routing.Candidate) (int64, error) { return 1_000, nil }
+	// Claude Opus 5.5 list prices: a cache write costs more than input, so the
+	// uncapped assumption must still charge it.
+	entry := pricing.Entry{Prices: pricing.UnitPrices{
+		InputPerMillion:      pricing.MustDecimalUSD("4"),
+		CacheReadPerMillion:  pricing.MustDecimalUSD("0.20"),
+		CacheWritePerMillion: pricing.MustDecimalUSD("5"),
+	}}
+	unknownCache := pricing.Entry{Prices: entry.Prices, UnknownComponents: []pricing.PriceComponent{pricing.PriceComponentCacheRead, pricing.PriceComponentCacheWrite}}
+	for _, test := range []struct {
+		name              string
+		bounds            *CacheTokenBounds
+		entry             pricing.Entry
+		read, write       int64
+		cost              string
+		unusablePriceWant bool
+	}{
+		{name: "uncapped", entry: entry, read: 1_000, write: 1_000, cost: "0.009200000000000000"},
+		{name: "frozen zero caps", bounds: &CacheTokenBounds{}, entry: entry, cost: "0.004000000000000000"},
+		{name: "read cap below input", bounds: &CacheTokenBounds{Read: 300}, entry: entry, read: 300, cost: "0.004060000000000000"},
+		{name: "caps above input", bounds: &CacheTokenBounds{Read: 5_000, Write: 5_000}, entry: entry, read: 1_000, write: 1_000, cost: "0.009200000000000000"},
+		{name: "zero caps ignore unknown cache prices", bounds: &CacheTokenBounds{}, entry: unknownCache, cost: "0.004000000000000000"},
+		{name: "positive cap needs a known cache price", bounds: &CacheTokenBounds{Read: 1}, entry: unknownCache, unusablePriceWant: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			estimate, err := (Estimator{Tokenizer: tokenizer, CacheBounds: test.bounds}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, test.entry)
+			if test.unusablePriceWant {
+				if !errors.Is(err, ErrUnusablePrice) {
+					t.Fatalf("error = %v, want %v", err, ErrUnusablePrice)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if estimate.CacheReadTokens != test.read || estimate.CacheWriteTokens != test.write || estimate.CostUSD.String() != test.cost {
+				t.Fatalf("estimate = read %d write %d cost %s, want read %d write %d cost %s", estimate.CacheReadTokens, estimate.CacheWriteTokens, estimate.CostUSD.String(), test.read, test.write, test.cost)
+			}
+		})
+	}
+}
+
 func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 	request := llm.Request{Model: "logical", ServiceClass: llm.ServiceClassStandard}
 	context := ContextFor(request, routing.Candidate{EndpointID: "ep", AttemptedClass: llm.ServiceClassPriority}, "prod")
