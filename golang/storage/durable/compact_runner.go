@@ -22,6 +22,7 @@ import (
 // A completed response is returned before cache lookup or any admission work
 // so Temporal retries cannot create a second child for one operation key.
 type CompactReplay struct {
+	Pending   *llm.PendingOperationV1
 	State     state.MaterializedState
 	Completed *llm.CompactResponseV1
 	// ReconciliationPending is populated when finalization committed but the
@@ -72,6 +73,7 @@ func (decision CompactCacheDecision) Validate() error {
 // compaction finalization. Provider adapters must reject tool calls,
 // structured output, and non-text content before returning this response.
 type CompactDispatchResult struct {
+	Pending  *llm.PendingOperationV1
 	Response llm.Response
 }
 
@@ -87,6 +89,11 @@ type CompactFinalization struct {
 // -> one-shot summarizer dispatch -> PostgreSQL finalization -> reconciliation.
 // Every callback must be idempotent across Temporal Activity retries.
 type CompactPorts struct {
+	// Suspend must durably bind the provider handle to the original request,
+	// route and reservation before returning it to Temporal. A replay must
+	// return that handle without reserving or submitting again.
+	Suspend func(context.Context, llm.CompactRequestV1, CompactReplay, RoutePlan, ReserveResult, CompactDispatchResult) error
+
 	Replay        func(context.Context, llm.CompactRequestV1) (CompactReplay, error)
 	CacheLookup   func(context.Context, llm.CompactRequestV1, CompactReplay) (CompactCacheDecision, error)
 	Route         func(context.Context, llm.CompactRequestV1, CompactReplay) (RoutePlan, error)
@@ -149,6 +156,15 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	}
 	if err := contextErr(ctx); err != nil {
 		return llm.CompactResponseV1{}, err
+	}
+	if replay.Pending != nil {
+		if replay.Completed != nil || replay.ReconciliationPending != nil {
+			return llm.CompactResponseV1{}, stageError("replay", errors.New("conflicting replay states"))
+		}
+		if err := replay.Pending.Validate(); err != nil || replay.Pending.Kind != "compact" {
+			return llm.CompactResponseV1{}, stageError("replay", errors.New("invalid pending handle"))
+		}
+		return llm.CompactResponseV1{OperationKey: request.OperationKey, OperationID: replay.Pending.OperationID, Pending: replay.Pending}, nil
 	}
 	if replay.ReconciliationPending != nil {
 		pending := replay.ReconciliationPending
@@ -228,6 +244,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	if err := contextErr(ctx); err != nil {
 		return llm.CompactResponseV1{}, err
 	}
+	if route.Background && ports.Suspend == nil {
+		return llm.CompactResponseV1{}, stageError("route", errors.New("background route requires pending persistence"))
+	}
 	reservation, err := ports.Reserve(ctx, request, route)
 	if err != nil {
 		return llm.CompactResponseV1{}, stageError("compact Redis reservation", err)
@@ -252,6 +271,18 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	dispatch, err := ports.Dispatch(ctx, request, replay, route, claim)
 	if err != nil {
 		return llm.CompactResponseV1{}, stageError("compact provider dispatch", err)
+	}
+	if dispatch.Pending != nil {
+		if err := validatePendingDispatch(dispatch.Pending, route, "compact"); err != nil {
+			return llm.CompactResponseV1{}, err
+		}
+		if ports.Suspend == nil {
+			return llm.CompactResponseV1{}, stageError("suspend", errors.New("pending persistence port is required"))
+		}
+		if err := ports.Suspend(ctx, request, replay, route, reservation, dispatch); err != nil {
+			return llm.CompactResponseV1{}, stageError("suspend", err)
+		}
+		return llm.CompactResponseV1{OperationKey: request.OperationKey, OperationID: string(route.OperationID), Pending: dispatch.Pending}, nil
 	}
 	finalization, err := ports.Finalize(ctx, request, replay, route, reservation, dispatch)
 	if err != nil {
@@ -327,6 +358,9 @@ func validateCompactClaim(reservation ReserveResult, claim ClaimReceipt) error {
 }
 
 func validateCompactResponse(request llm.CompactRequestV1, expectedOperationID OperationID, response llm.CompactResponseV1) error {
+	if response.Pending != nil {
+		return errors.New("finalization must be terminal")
+	}
 	if response.OperationKey != request.OperationKey {
 		return errors.New("compact response operation key does not match request")
 	}

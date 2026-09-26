@@ -22,3 +22,7 @@
 (test
  (name test_generate)
  (libraries llm_temporal temporal-sdk yojson))
+
+(test
+ (name test_poll)
+ (libraries llm_temporal temporal-sdk yojson))

@@ -27,11 +27,13 @@ const (
 	generateV1OutputType = "llm.GenerateResponseV1"
 	compactV1InputType   = "llm.CompactRequestV1"
 	compactV1OutputType  = "llm.CompactResponseV1"
+	pollV1InputType      = "llm.PollRequestV1"
+	pollV1OutputType     = "llm.PollResponseV1"
 	queryV1InputType     = "llm.QueryRequestV1"
 	queryV1OutputType    = "llm.QueryResponseV1"
 )
 
-// V1ActivityDescriptors returns the exact three one-shot Activities exposed
+// V1ActivityDescriptors returns the four one-shot Activities exposed
 // by a production v1 worker. The returned slice is newly allocated and can be
 // safely retained by a registry/introspection endpoint.
 func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
@@ -45,6 +47,7 @@ func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
 		{TaskQueue: taskQueue, Name: GenerateActivityName, InputType: generateV1InputType, OutputType: generateV1OutputType},
 		{TaskQueue: taskQueue, Name: CompactActivityName, InputType: compactV1InputType, OutputType: compactV1OutputType},
 		{TaskQueue: taskQueue, Name: QueryActivityName, InputType: queryV1InputType, OutputType: queryV1OutputType},
+		{TaskQueue: taskQueue, Name: PollActivityName, InputType: pollV1InputType, OutputType: pollV1OutputType},
 	}
 	for _, descriptor := range descriptors {
 		if err := descriptor.Validate(); err != nil {
@@ -68,6 +71,10 @@ func (descriptor V1ActivityDescriptor) Validate() error {
 	case CompactActivityName:
 		if descriptor.InputType != compactV1InputType || descriptor.OutputType != compactV1OutputType {
 			return fmt.Errorf("Compact v1 Activity descriptor types are invalid")
+		}
+	case PollActivityName:
+		if descriptor.InputType != pollV1InputType || descriptor.OutputType != pollV1OutputType {
+			return fmt.Errorf("Poll v1 Activity descriptor types are invalid")
 		}
 	case QueryActivityName:
 		if descriptor.InputType != queryV1InputType || descriptor.OutputType != queryV1OutputType {

@@ -970,6 +970,7 @@ func (cost CostV1) validate() error {
 }
 
 type GenerateResponseV1 struct {
+	Pending      *PendingOperationV1
 	APIVersion   string
 	OperationKey string
 	OperationID  string
@@ -984,6 +985,12 @@ type GenerateResponseV1 struct {
 }
 
 func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
+	if response.Pending != nil {
+		if response.Status != "" || len(response.Output) != 0 || response.Checkpoint != (CheckpointMetadata{}) || response.Cache != (CacheDispositionV1{}) || response.Route != nil || response.Usage != nil || response.Cost != (CostV1{}) || response.Diagnostics != nil {
+			return nil, fmt.Errorf("pending Generate has terminal fields")
+		}
+		return marshalPendingV1("generate", response.OperationKey, response.OperationID, response.Pending)
+	}
 	if response.OperationKey == "" || response.OperationID == "" || !response.Status.Valid() {
 		return nil, fmt.Errorf("response identity and status are required")
 	}
@@ -1014,6 +1021,13 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 }
 
 func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
+	if pending, key, id, ok, err := unmarshalPendingV1(data, "generate"); ok || err != nil {
+		if err != nil {
+			return err
+		}
+		*response = GenerateResponseV1{OperationKey: key, OperationID: id, Pending: pending}
+		return nil
+	}
 	fields, err := decodeObject(data)
 	if err != nil {
 		return err
@@ -1235,6 +1249,7 @@ func validateCompactPolicy(raw json.RawMessage) error {
 }
 
 type CompactResponseV1 struct {
+	Pending      *PendingOperationV1
 	APIVersion   string
 	OperationKey string
 	OperationID  string
@@ -1247,6 +1262,12 @@ type CompactResponseV1 struct {
 }
 
 func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
+	if response.Pending != nil {
+		if response.Checkpoint != (CheckpointMetadata{}) || response.Cache != (CacheDispositionV1{}) || len(response.Provenance) != 0 || response.Usage != nil || response.Cost != (CostV1{}) || response.Diagnostics != nil {
+			return nil, fmt.Errorf("pending Compact has terminal fields")
+		}
+		return marshalPendingV1("compact", response.OperationKey, response.OperationID, response.Pending)
+	}
 	if response.APIVersion != "" && response.APIVersion != CompactAPIVersion {
 		return nil, fmt.Errorf("api_version %q is unsupported", response.APIVersion)
 	}
@@ -1276,6 +1297,13 @@ func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
 }
 
 func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
+	if pending, key, id, ok, err := unmarshalPendingV1(data, "compact"); ok || err != nil {
+		if err != nil {
+			return err
+		}
+		*response = CompactResponseV1{OperationKey: key, OperationID: id, Pending: pending}
+		return nil
+	}
 	fields, err := decodeObject(data)
 	if err != nil {
 		return err

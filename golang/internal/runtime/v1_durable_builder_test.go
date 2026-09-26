@@ -500,3 +500,34 @@ var (
 	_ durable.ResultStore        = capabilityResultStub{}
 	_ durable.BudgetMaterializer = capabilityMaterializerStub{}
 )
+
+func TestDurableBuilderRequiresPollForBackgroundSubmission(t *testing.T) {
+	clients := &generateBuilderClientSet{}
+	clients.capabilities = completeDurableBuilderCapabilities(
+		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+			p := validBuilderGeneratePorts(nil)
+			p.Suspend = func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ReserveResult, durable.DispatchResult) error {
+				return nil
+			}
+			return p, nil
+		},
+		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+			return validCompactPorts(), nil
+		},
+	)
+	builder := NewDurableV1RuntimeBuilder()
+	if _, err := builder(context.Background(), &config.Snapshot{}, nil, clients); !errors.Is(err, ErrDurableV1Composition) {
+		t.Fatalf("background without poll: %v", err)
+	}
+	called := false
+	clients.capabilities.PollPortsFactory = func(_ context.Context, c V1RuntimeCapabilities) (durable.PollPorts, error) {
+		if _, ok := c.DurableComposition(); !ok {
+			t.Fatal("poll missing validated composition")
+		}
+		called = true
+		return durable.PollPorts{Load: func(context.Context, llm.PollRequestV1) (durable.PollReplay, error) { return durable.PollReplay{}, nil }}, nil
+	}
+	if _, err := builder(context.Background(), &config.Snapshot{}, nil, clients); err != nil || !called {
+		t.Fatalf("poll wiring: %v", err)
+	}
+}

@@ -80,6 +80,20 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 		if err != nil {
 			return nil, fmt.Errorf("%w: validate durable ports: %v", ErrDurableV1Composition, err)
 		}
+
+		if phaseCapabilities.PollPortsFactory != nil {
+			ports, err := phaseCapabilities.PollPortsFactory(ctx, phaseCapabilities)
+			if err != nil {
+				return nil, err
+			}
+			if err = ports.Validate(); err != nil {
+				return nil, err
+			}
+			runtime.Poll = ports
+		}
+		if (generate.Suspend != nil || compact.Suspend != nil) && runtime.Poll.Load == nil {
+			return nil, fmt.Errorf("%w: polling ports required for background submission", ErrDurableV1Composition)
+		}
 		return runtime, nil
 	}
 }

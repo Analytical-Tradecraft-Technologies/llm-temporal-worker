@@ -89,3 +89,17 @@ func (runtime *snapshotV1Runtime) with(ctx context.Context, function func(activi
 func snapshotV1RuntimeUnavailable() error {
 	return provider.NewError(provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "durable v1 runtime is not configured")
 }
+
+func (runtime *snapshotV1Runtime) PollV1(ctx context.Context, request llm.PollRequestV1) (llm.PollResponseV1, error) {
+	var result llm.PollResponseV1
+	err := runtime.with(ctx, func(current activity.V1Runtime) error {
+		poll, ok := current.(activity.PollV1Runtime)
+		if !ok {
+			return snapshotV1RuntimeUnavailable()
+		}
+		var err error
+		result, err = poll.PollV1(ctx, request)
+		return err
+	})
+	return result, err
+}

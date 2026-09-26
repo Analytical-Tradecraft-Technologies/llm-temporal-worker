@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-temporal-worker.dev/schema/llm.temporal/poll/v1/poll-request.json",
+  "title": "llm.temporal/poll/v1 PollRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "context",
+    "pending"
+  ],
+  "properties": {
+    "api_version": {
+      "const": "llm.temporal/poll/v1"
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant",
+        "project",
+        "actor"
+      ],
+      "properties": {
+        "tenant": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "pending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "kind",
+        "provider",
+        "endpoint_id",
+        "provider_operation_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "endpoint_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "provider_operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "kind": {
+          "enum": [
+            "generate",
+            "compact"
+          ]
+        }
+      }
+    }
+  }
+}

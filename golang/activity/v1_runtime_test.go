@@ -115,7 +115,7 @@ func TestRegisterV1InstallsExactActivityNames(t *testing.T) {
 	registry := &v1Registry{}
 	activities := &Activities{V1Runtime: &v1RuntimeStub{}}
 	activities.Register(registry)
-	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName}
+	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PollActivityName}
 	if fmt.Sprint(registry.names) != fmt.Sprint(want) {
 		t.Fatalf("registered names = %v, want %v", registry.names, want)
 	}

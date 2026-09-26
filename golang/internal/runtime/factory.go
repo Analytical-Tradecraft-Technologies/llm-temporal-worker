@@ -145,6 +145,7 @@ type ProductionFactoryOptions struct {
 	// the Generate-only runtime unconfigured and causes that builder to fail
 	// closed before Temporal polling.
 	GeneratePortsFactory GeneratePortsFactory
+	PollPortsFactory     func(context.Context, V1RuntimeCapabilities) (durablestore.PollPorts, error)
 	// CompactPortsFactory supplies the complete snapshot-owned durable
 	// Compact phase to a compact-only composition builder. Nil intentionally
 	// leaves Compact unconfigured and never falls back to the legacy engine.
@@ -618,6 +619,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			ProviderInventory:      providerState,
 			Clock:                  clock,
 			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
+			PollPortsFactory:       factory.options.PollPortsFactory,
 			CompactPortsFactory:    factory.options.CompactPortsFactory,
 		},
 		close: func(closeContext context.Context) error {
@@ -762,6 +764,7 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 			CompositionFactory:   factory.options.DurableCompositionFactory,
 			composition:          precomposed,
 			GeneratePortsFactory: factory.options.GeneratePortsFactory,
+			PollPortsFactory:     factory.options.PollPortsFactory,
 			CompactPortsFactory:  factory.options.CompactPortsFactory,
 		},
 		close: func(context.Context) error { return nil },
