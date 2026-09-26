@@ -1,0 +1,54 @@
+{
+  "id": "gen-1790000001-astra",
+  "provider": "OpenAI",
+  "model": "openai/gpt-6-astra",
+  "object": "chat.completion",
+  "created": 1790000000,
+  "service_tier": "default",
+  "system_fingerprint": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "completed",
+      "message": {
+        "role": "assistant",
+        "content": "{\"probability\": 0.62, \"rationale\": \"Base rate and current trend.\"}",
+        "refusal": null,
+        "reasoning": "Checked the base rate, then the trend.",
+        "reasoning_details": [
+          {
+            "type": "reasoning.summary",
+            "summary": "Checked the base rate, then the trend.",
+            "format": "unknown",
+            "index": 0
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1850,
+    "completion_tokens": 1900,
+    "total_tokens": 3750,
+    "prompt_tokens_details": {
+      "cached_tokens": 1536,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 1650,
+      "audio_tokens": 0,
+      "image_tokens": 0
+    },
+    "cost": 0.099676,
+    "is_byok": false,
+    "cost_details": {
+      "upstream_inference_cost": null,
+      "upstream_inference_prompt_cost": 0.004676,
+      "upstream_inference_completions_cost": 0.095
+    }
+  }
+}

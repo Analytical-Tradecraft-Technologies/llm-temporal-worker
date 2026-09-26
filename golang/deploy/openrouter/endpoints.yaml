@@ -1,0 +1,133 @@
+# OpenRouter frontier endpoints and models for the FutureEval Fall 2026 routes.
+#
+# This is the endpoints/models fragment of a worker configuration; merge it
+# into the full configuration (for att-deps, the llmTemporalWorker values) and
+# load capabilities.yaml and prices.yaml from this directory as catalogs.
+# One endpoint pins one model: the capability profile's exact model must equal
+# the route model, and OpenRouter's provider.order names one upstream with
+# allow_fallbacks false, require_parameters true and data_collection deny.
+#
+# extensions.openrouter:
+#   provider_order        exact upstream provider slug; base slugs never match
+#                         flex/priority tier endpoints.
+#   supported_parameters  copied from the pinned endpoint's OpenRouter listing
+#                         (2026-09-26). A request needing any other optional
+#                         parameter is refused before dispatch; max_tokens is
+#                         sent when listed; store and parallel_tool_calls are
+#                         omitted; service_tier is omitted for a default-only
+#                         endpoint.
+#   reasoning_efforts     public effort -> OpenRouter reasoning.effort. Unmapped
+#                         efforts are refused before dispatch.
+#   missing_service_tier  class recorded when a response reports no tier.
+#   model_aliases         documented dated revisions (permaslugs) accepted as
+#                         the response model echo; the route still reports the
+#                         pinned slug as the resolved and observed revision.
+#
+# The route IDs must be covered by the signed resource-capacity manifest, and
+# allowed_tenants must be the deployment tenant.
+endpoints:
+  openrouter-anthropic-opus55:
+    family: openai_chat
+    base_url: https://openrouter.ai/api/v1
+    outbound_hosts: [openrouter.ai]
+    auth:
+      kind: bearer_file
+      path: /var/run/secrets/providers/openrouter-api-key
+    account_region: global
+    timeout: 115s
+    service_classes:
+      standard:
+        provider_value: default
+    capability_profile: or-anthropic-claude-opus-5-5-v1
+    price_catalog: catalog-2026-09-26
+    provider_storage:
+      permitted: false
+    extensions:
+      openrouter:
+        provider_order: [anthropic]
+        allow_fallbacks: false
+        require_parameters: true
+        supported_parameters: [max_tokens, stop, reasoning, include_reasoning, tool_choice, tools, structured_outputs, response_format, verbosity]
+        reasoning_efforts: {low: low, medium: medium, high: high, maximum: max}
+        missing_service_tier: standard
+        model_aliases: [anthropic/claude-opus-5.5-20260921]
+
+  openrouter-openai-gpt6-astra:
+    family: openai_chat
+    base_url: https://openrouter.ai/api/v1
+    outbound_hosts: [openrouter.ai]
+    auth:
+      kind: bearer_file
+      path: /var/run/secrets/providers/openrouter-api-key
+    account_region: global
+    timeout: 115s
+    service_classes:
+      standard:
+        provider_value: default
+    capability_profile: or-openai-gpt-6-astra-v1
+    price_catalog: catalog-2026-09-26
+    provider_storage:
+      permitted: false
+    extensions:
+      openrouter:
+        provider_order: [openai]
+        allow_fallbacks: false
+        require_parameters: true
+        supported_parameters: [reasoning, include_reasoning, seed, max_tokens, response_format, structured_outputs, tools, tool_choice]
+        reasoning_efforts: {low: low, medium: medium, high: high, maximum: max}
+        missing_service_tier: standard
+        model_aliases: [openai/gpt-6-astra-20260903]
+
+  openrouter-google-gemini31-pro:
+    family: openai_chat
+    base_url: https://openrouter.ai/api/v1
+    outbound_hosts: [openrouter.ai]
+    auth:
+      kind: bearer_file
+      path: /var/run/secrets/providers/openrouter-api-key
+    account_region: global
+    timeout: 115s
+    service_classes:
+      standard:
+        provider_value: default
+    capability_profile: or-google-gemini-3-1-pro-preview-v1
+    price_catalog: catalog-2026-09-26
+    provider_storage:
+      permitted: false
+    extensions:
+      openrouter:
+        provider_order: [google-vertex/global]
+        allow_fallbacks: false
+        require_parameters: true
+        supported_parameters: [reasoning, include_reasoning, max_tokens, temperature, top_p, seed, response_format, tools, tool_choice, stop, structured_outputs]
+        reasoning_efforts: {low: low, medium: medium, high: high}
+        missing_service_tier: standard
+        model_aliases: [google/gemini-3.1-pro-preview-20260219]
+
+models:
+  claude-opus-5-5:
+    allowed_tenants: [futureeval]
+    data_regions: [global]
+    routes:
+      - id: openrouter-opus55
+        endpoint: openrouter-anthropic-opus55
+        model: anthropic/claude-opus-5.5
+        classes: [standard]
+
+  gpt-6-astra:
+    allowed_tenants: [futureeval]
+    data_regions: [global]
+    routes:
+      - id: openrouter-gpt6-astra
+        endpoint: openrouter-openai-gpt6-astra
+        model: openai/gpt-6-astra
+        classes: [standard]
+
+  gemini-3-1-pro-preview:
+    allowed_tenants: [futureeval]
+    data_regions: [global]
+    routes:
+      - id: openrouter-gemini31-pro
+        endpoint: openrouter-google-gemini31-pro
+        model: google/gemini-3.1-pro-preview
+        classes: [standard]

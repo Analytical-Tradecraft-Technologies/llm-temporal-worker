@@ -1,0 +1,63 @@
+# OpenRouter list prices for the FutureEval Fall 2026 routes, USD per million
+# tokens. Read on 2026-09-26 from each model page's endpoint pricing on
+# openrouter.ai for the pinned provider's standard (default-tier) endpoint.
+#
+# - Reasoning tokens are priced at the output rate. OpenRouter reports them
+#   inside completion_tokens and bills them as output, so this separate price
+#   only makes reservations conservative; the settled cost is OpenRouter's
+#   usage.cost receipt.
+# - Cache prices are the listed rates. The estimator charges cache tokens only
+#   up to the signed per-operation cache caps, so a cap of 0 adds no charge.
+# - GPT-6 Astra switches to 20/75 above 272,000 prompt tokens and Gemini 3.1
+#   Pro to 4/18 above 200,000. These entries are upper bounds only while every
+#   admitted prompt stays below 200,000 tokens (limits.max_input_tokens and the
+#   signed max_input_tokens must stay at or below that).
+# - provider_tier must equal the endpoint's service_classes.standard
+#   provider_value ("default").
+version: catalog-2026-09-26
+id: catalog-2026-09-26
+entries:
+  - provider: openrouter
+    endpoint_id: openrouter-anthropic-opus55
+    family: openai_chat
+    region: global
+    model: anthropic/claude-opus-5.5
+    provider_tier: default
+    input_per_million: "4"
+    output_per_million: "20"
+    reasoning_per_million: "20"
+    cache_read_per_million: "0.20"
+    cache_write_per_million: "5"
+    per_request: "0"
+    effective_from: 2026-09-26T00:00:00Z
+    source: "openrouter.ai/anthropic/claude-opus-5.5 provider anthropic standard, read 2026-09-26 (cache write is the 5-minute rate; 1-hour is 8)"
+
+  - provider: openrouter
+    endpoint_id: openrouter-openai-gpt6-astra
+    family: openai_chat
+    region: global
+    model: openai/gpt-6-astra
+    provider_tier: default
+    input_per_million: "10"
+    output_per_million: "50"
+    reasoning_per_million: "50"
+    cache_read_per_million: "1"
+    cache_write_per_million: "12.5"
+    per_request: "0"
+    effective_from: 2026-09-26T00:00:00Z
+    source: "openrouter.ai/openai/gpt-6-astra provider openai standard, read 2026-09-26 (prompts up to 272000 tokens)"
+
+  - provider: openrouter
+    endpoint_id: openrouter-google-gemini31-pro
+    family: openai_chat
+    region: global
+    model: google/gemini-3.1-pro-preview
+    provider_tier: default
+    input_per_million: "2"
+    output_per_million: "12"
+    reasoning_per_million: "12"
+    cache_read_per_million: "0.20"
+    cache_write_per_million: "0.375"
+    per_request: "0"
+    effective_from: 2026-09-26T00:00:00Z
+    source: "openrouter.ai/google/gemini-3.1-pro-preview provider google-vertex/global standard, read 2026-09-26 (prompts up to 200000 tokens)"

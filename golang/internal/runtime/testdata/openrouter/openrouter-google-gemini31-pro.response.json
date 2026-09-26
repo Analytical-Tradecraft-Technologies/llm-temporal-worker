@@ -1,0 +1,54 @@
+{
+  "id": "gen-1790000002-gemini",
+  "provider": "Google",
+  "model": "google/gemini-3.1-pro-preview",
+  "object": "chat.completion",
+  "created": 1790000000,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "stop",
+      "native_finish_reason": "STOP",
+      "message": {
+        "role": "assistant",
+        "content": "{\"probability\": 0.62, \"rationale\": \"Base rate and current trend.\"}",
+        "refusal": null,
+        "reasoning": "Checked the base rate, then the trend.",
+        "reasoning_details": [
+          {
+            "type": "reasoning.summary",
+            "summary": "Checked the base rate, then the trend.",
+            "format": "unknown",
+            "index": 0
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1850,
+    "completion_tokens": 1200,
+    "total_tokens": 3050,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 950,
+      "audio_tokens": 0,
+      "image_tokens": 0
+    },
+    "cost": 0.0181,
+    "is_byok": false,
+    "cost_details": {
+      "upstream_inference_cost": null,
+      "upstream_inference_prompt_cost": 0.0037,
+      "upstream_inference_completions_cost": 0.0144
+    }
+  }
+}

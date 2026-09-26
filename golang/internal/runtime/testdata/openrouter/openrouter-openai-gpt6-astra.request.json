@@ -1,0 +1,61 @@
+{
+  "model": "openai/gpt-6-astra",
+  "messages": [
+    {
+      "role": "developer",
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a calibrated forecaster. Return a probability and a short rationale."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Will the event resolve Yes before 2026-12-31?"
+        }
+      ]
+    }
+  ],
+  "max_tokens": 4000,
+  "reasoning": {
+    "effort": "high"
+  },
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "forecast",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "rationale": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "probability",
+          "rationale"
+        ],
+        "additionalProperties": false
+      },
+      "strict": true
+    }
+  },
+  "tool_choice": "none",
+  "provider": {
+    "order": [
+      "openai"
+    ],
+    "allow_fallbacks": false,
+    "require_parameters": true,
+    "data_collection": "deny"
+  }
+}

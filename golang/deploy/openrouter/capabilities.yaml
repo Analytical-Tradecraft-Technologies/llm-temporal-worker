@@ -1,0 +1,71 @@
+# OpenRouter frontier capability catalog for the FutureEval Fall 2026 routes.
+#
+# Verified 2026-09-26 from each model page's endpoint listing on openrouter.ai
+# for the pinned upstream provider only: supported_parameters, context_length,
+# max_completion_tokens and reasoning_config. Each entry pins one exact
+# OpenRouter slug; a route model must equal it. Only the standard service class
+# is declared: every endpoint maps it to OpenRouter's default tier.
+version: openrouter-frontier-2026-09-26
+entries:
+  # https://openrouter.ai/anthropic/claude-opus-5.5, provider "anthropic"
+  # (permaslug anthropic/claude-opus-5.5-20260921). Mandatory reasoning;
+  # efforts low, medium, high, xhigh, max; no reasoning.max_tokens.
+  - id: or-anthropic-claude-opus-5-5-v1
+    family: openai_chat
+    model:
+      exact: anthropic/claude-opus-5.5
+    verified_at: 2026-09-26T00:00:00Z
+    features:
+      input.text: {level: native}
+      output.json_schema: {level: native}
+      tools.auto: {level: native}
+      reasoning: {level: native}
+      usage: {level: native}
+      service.standard: {level: native}
+      service.economy: {level: unsupported}
+      service.priority: {level: unsupported}
+    limits:
+      context_tokens: 1000000
+      output_tokens: 128000
+
+  # https://openrouter.ai/openai/gpt-6-astra, provider "openai" (permaslug
+  # openai/gpt-6-astra-20260903). Mandatory reasoning; efforts low, medium,
+  # high, xhigh, max. The openai endpoint does not list stop or temperature.
+  - id: or-openai-gpt-6-astra-v1
+    family: openai_chat
+    model:
+      exact: openai/gpt-6-astra
+    verified_at: 2026-09-26T00:00:00Z
+    features:
+      input.text: {level: native}
+      output.json_schema: {level: native}
+      tools.auto: {level: native}
+      reasoning: {level: native}
+      usage: {level: native}
+      service.standard: {level: native}
+      service.economy: {level: unsupported}
+      service.priority: {level: unsupported}
+    limits:
+      context_tokens: 1050000
+      output_tokens: 128000
+
+  # https://openrouter.ai/google/gemini-3.1-pro-preview, provider
+  # "google-vertex/global" (permaslug google/gemini-3.1-pro-preview-20260219).
+  # Mandatory reasoning; efforts high, medium, low only.
+  - id: or-google-gemini-3-1-pro-preview-v1
+    family: openai_chat
+    model:
+      exact: google/gemini-3.1-pro-preview
+    verified_at: 2026-09-26T00:00:00Z
+    features:
+      input.text: {level: native}
+      output.json_schema: {level: native}
+      tools.auto: {level: native}
+      reasoning: {level: native}
+      usage: {level: native}
+      service.standard: {level: native}
+      service.economy: {level: unsupported}
+      service.priority: {level: unsupported}
+    limits:
+      context_tokens: 1048576
+      output_tokens: 65536
