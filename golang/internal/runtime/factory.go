@@ -1296,7 +1296,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		}
 		return adapter, nil
 	case "openai_chat":
-		chatProfile, err := factory.chatProfile(endpointID, endpoint, capabilities, profile)
+		chatProfile, dialect, err := factory.chatProfile(endpointID, endpoint, capabilities, endpointRouteModel(snapshot, endpointID), profile)
 		if err != nil {
 			return nil, err
 		}
@@ -1304,7 +1304,10 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, err
 		}
-		switch profile.ChatDialect {
+		// Build the client for the dialect the profile was built for. An
+		// auto-detected OpenRouter endpoint must not fall through to the
+		// direct-OpenAI adapter, which refuses a non-OpenAI profile.
+		switch dialect {
 		case ChatDialectOpenRouter:
 			openrouterClient, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
 			if err != nil {
@@ -1490,17 +1493,20 @@ func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
 
 var allProviderFeatures = []provider.Feature{provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall, provider.FeatureStructuredOutput, provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage}
 
-func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile) (*openaichat.Profile, error) {
+// chatProfile returns the endpoint's Chat profile and the dialect it was built
+// for. The dialect is resolved once so client construction cannot disagree
+// with the profile.
+func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, model string, supplied EndpointProfile) (*openaichat.Profile, ChatDialect, error) {
 	if supplied.Chat != nil {
 		copy := *supplied.Chat
 		if supplied.ChatDialect == "" || supplied.ChatDialect == ChatDialectGeneric {
 			value, err := openaichat.NewOpenAIProfile(copy)
 			if err != nil {
-				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+				return nil, "", fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return &value, nil
+			return &value, ChatDialectGeneric, nil
 		}
-		return &copy, nil
+		return &copy, supplied.ChatDialect, nil
 	}
 	tiers, actual := endpointTiers(endpoint)
 	allowed := extensionSpecs(endpoint)
@@ -1511,42 +1517,42 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 		_, exaExtension := endpoint.Extensions["exa"]
 		switch {
 		case openRouterExtension && exaExtension:
-			return nil, fmt.Errorf("endpoint %q: chat dialect markers are ambiguous", endpointID)
+			return nil, "", fmt.Errorf("endpoint %q: chat dialect markers are ambiguous", endpointID)
 		case openRouterExtension:
 			dialect = ChatDialectOpenRouter
 		case exaExtension:
 			dialect = ChatDialectExa
 		case base == "https://openrouter.ai/api/v1" || base == "https://api.exa.ai":
-			return nil, fmt.Errorf("endpoint %q: specialized chat dialect must be explicit", endpointID)
+			return nil, "", fmt.Errorf("endpoint %q: specialized chat dialect must be explicit", endpointID)
 		default:
 			dialect = ChatDialectGeneric
 		}
 	}
 	switch dialect {
 	case ChatDialectOpenRouter:
-		order, err := stringSlice(extensionValue(endpoint, "openrouter", "provider_order"))
+		options, err := openaichat.ParseOpenRouterEndpoint(endpoint.Extensions["openrouter"])
 		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			return nil, "", fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		value, err := openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ProviderOrder: order, AllowFallbacks: false, RequireParameters: true})
+		value, err := openaichat.NewOpenRouterProfile(options.ProfileConfig(endpointID, endpoint.BaseURL, model, capabilities, tiers))
 		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			return nil, "", fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		return &value, nil
+		return &value, dialect, nil
 	case ChatDialectExa:
 		value, err := openaichat.NewExaProfile(openaichat.ExaProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual})
 		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			return nil, "", fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		return &value, nil
+		return &value, dialect, nil
 	case ChatDialectGeneric:
 		value, err := openaichat.NewOpenAIProfile(openaichat.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: allowed, ExpectedBaseURL: endpoint.BaseURL})
 		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			return nil, "", fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		return &value, nil
+		return &value, dialect, nil
 	default:
-		return nil, fmt.Errorf("endpoint %q: unsupported chat dialect %q", endpointID, dialect)
+		return nil, "", fmt.Errorf("endpoint %q: unsupported chat dialect %q", endpointID, dialect)
 	}
 }
 
@@ -1655,23 +1661,25 @@ func azureDeployment(endpoint config.EndpointConfig) (string, error) {
 	return value, nil
 }
 
-func stringSlice(value any) ([]string, error) {
-	values, ok := value.([]any)
-	if !ok {
-		if stringsValue, ok := value.([]string); ok {
-			return append([]string(nil), stringsValue...), nil
+// endpointRouteModel returns the one upstream model every route on the
+// endpoint names, or "" when the snapshot has no such single model. Catalog
+// compilation already binds each route model to the endpoint capability
+// profile's exact model; pinning it on the adapter refuses any other model at
+// compile time as well.
+func endpointRouteModel(snapshot engine.Snapshot, endpointID string) string {
+	model := ""
+	for _, candidate := range snapshot.Routes.Models {
+		for _, route := range candidate.Routes {
+			if route.EndpointID != endpointID {
+				continue
+			}
+			if model != "" && model != route.Model {
+				return ""
+			}
+			model = route.Model
 		}
-		return nil, fmt.Errorf("extension provider_order must be an array of strings")
 	}
-	result := make([]string, len(values))
-	for index, item := range values {
-		text, ok := item.(string)
-		if !ok || strings.TrimSpace(text) == "" {
-			return nil, fmt.Errorf("extension provider_order entry %d must be a non-empty string", index)
-		}
-		result[index] = text
-	}
-	return result, nil
+	return model
 }
 
 func (factory *ProductionEngineFactory) providerSecret(ctx context.Context, auth config.AuthConfig, endpointID string) ([]byte, error) {

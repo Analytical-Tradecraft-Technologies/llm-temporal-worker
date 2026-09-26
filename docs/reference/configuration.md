@@ -286,14 +286,18 @@ endpoints:
     timeout: 115s
     service_classes:
       standard:
-        provider_value: standard
+        provider_value: default
     capability_profile: openrouter-chat-pinned-v2
     price_catalog: catalog-2026-07-13
     extensions:
       openrouter:
-        provider_order: [ProviderA]
+        provider_order: [anthropic]
         allow_fallbacks: false
         require_parameters: true
+        supported_parameters: [max_tokens, reasoning, response_format, structured_outputs, tools, tool_choice]
+        reasoning_efforts: {low: low, medium: medium, high: high, maximum: max}
+        missing_service_tier: standard
+        model_aliases: [anthropic/claude-opus-5.5-20260921]
 
   exa-answer:
     family: openai_chat
@@ -849,6 +853,50 @@ current durable budget leaser uses shared atomic Redis state directly and has
 no SQL budget journal or SQL rebuild fallback. See
 [Redis budget leases](redis-budget-leases.md) for the active contract and the
 remaining recovery and cleanup work.
+
+
+## OpenRouter endpoints
+
+An `openai_chat` endpoint with an `extensions.openrouter` block uses the
+OpenRouter profile. `validate-config` checks the block with the same rules as
+the runtime profile, so an invalid effort or wire combination is refused before
+a worker starts. Every field other than `provider_order` and
+`supported_parameters` is optional; unknown fields are refused.
+
+| Field | Meaning |
+| --- | --- |
+| `provider_order` | Upstream provider slugs sent as `provider.order`. Pin exactly one. A base slug (for example `anthropic`) never matches tier endpoints such as `anthropic/fast`; a region (`google-vertex/global`) needs the full slug. |
+| `allow_fallbacks`, `require_parameters` | May only restate `false` and `true`. The profile always sends `allow_fallbacks: false`, `require_parameters: true` and `data_collection: deny`. |
+| `supported_parameters` | The pinned endpoint's `supported_parameters` from the model's OpenRouter page, using OpenRouter's parameter names. It sets the wire shape: `max_tokens` when listed (otherwise `max_completion_tokens`), `parallel_tool_calls` only when listed, and never `store`, which is not an OpenRouter request field. A request that would send any other optional parameter, or a JSON-schema response format without `structured_outputs`, fails while compiling, before reservation or dispatch. |
+| `reasoning_efforts` | Maps public efforts (`minimal`, `low`, `medium`, `high`, `maximum`) to OpenRouter's unified `reasoning.effort` (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`). The adapter sends `{"reasoning": {"effort": ...}}`, the only documented way to enable reasoning on Anthropic models. An unmapped effort, a disabled reasoning mode or a token budget is refused while compiling. |
+| `missing_service_tier` | Required when the endpoint maps exactly one class to OpenRouter's `default` tier. Such an endpoint omits `service_tier` (requests without it are never routed to a non-default tier), and a response whose `service_tier` is null is recorded as this class. It must be the class mapped to `default`. |
+| `model_aliases` | Documented dated revisions (permaslugs, `<model>-<suffix>`) that OpenRouter may echo as the response `model`. |
+
+`service_classes` provider values must be OpenRouter's documented tiers:
+`default`, `flex` or `priority` (the `fast` alias is refused because OpenRouter
+reports it as `priority`). Endpoints that map more than one class send
+`service_tier` explicitly.
+
+`maximum` is never lowered to a top-level `reasoning_effort: "max"`. On an
+OpenRouter endpoint it becomes the configured `reasoning.effort`, normally
+`max` when the model page lists it (Claude Opus 5.5, GPT-6 Astra); leave it
+unmapped for a model without it (Gemini 3.1 Pro lists only low, medium and
+high) so the request is refused instead of silently downgraded. Generic Chat
+Completions endpoints map `maximum` to `xhigh`, the strongest value their
+top-level `reasoning_effort` accepts.
+
+The response `model` echo is part of the route contract. It must equal the
+route model or one of its `model_aliases`; anything else, including an empty
+echo, a routing-variant suffix such as `:floor`, or an unlisted date, fails the
+call as an invalid provider response. When it matches, both `resolved_model`
+and `observed_model_revision` are the route model and the raw echo is kept in
+`provider.raw.response_model`. A null `usage.cost` is treated as an unreported
+receipt, so the catalog usage cost applies.
+
+`golang/deploy/openrouter/` contains the Fall 2026 frontier endpoints and
+models (`endpoints.yaml`), their capability catalog and the dated price catalog
+`catalog-2026-09-26`, verified against the OpenRouter model pages on
+2026-09-26.
 
 ## Service-class rules
 

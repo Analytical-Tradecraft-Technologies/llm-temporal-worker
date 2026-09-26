@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -24,6 +25,52 @@ func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testin
 	loaded.Server.ShutdownTimeout = config.Duration(time.Duration(loaded.Temporal.Worker.GracefulStopTimeout) + time.Duration(loaded.Server.FinalizationTimeout) + time.Second)
 	if err := loaded.Validate(); err != nil {
 		t.Fatalf("shutdown budget with one-second residual flush margin rejected: %v", err)
+	}
+}
+
+func TestConfigValidationRefusesInvalidOpenRouterEffortAndWire(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(extension map[string]any, endpoint *config.EndpointConfig)
+		want   string
+	}{
+		{name: "top-level max is not an effort value", mutate: func(extension map[string]any, _ *config.EndpointConfig) {
+			extension["reasoning_efforts"] = map[string]any{"maximum": "maximum"}
+		}, want: `maps reasoning effort "maximum" to "maximum"`},
+		{name: "misspelled effort", mutate: func(extension map[string]any, _ *config.EndpointConfig) {
+			extension["reasoning_efforts"] = map[string]any{"high": "hihg"}
+		}, want: `maps reasoning effort "high" to "hihg"`},
+		{name: "effort without reasoning parameter", mutate: func(extension map[string]any, _ *config.EndpointConfig) {
+			extension["supported_parameters"] = []any{"max_tokens", "response_format"}
+		}, want: `support "reasoning"`},
+		{name: "store parameter", mutate: func(extension map[string]any, _ *config.EndpointConfig) {
+			extension["supported_parameters"] = []any{"max_tokens", "reasoning", "store"}
+		}, want: `"store" is not a documented OpenRouter parameter`},
+		{name: "undocumented tier", mutate: func(_ map[string]any, endpoint *config.EndpointConfig) {
+			endpoint.ServiceClasses[llm.ServiceClassStandard] = config.TierConfig{ProviderValue: "standard"}
+		}, want: `provider tier "standard" is not a documented OpenRouter tier`},
+		{name: "missing tier policy", mutate: func(extension map[string]any, _ *config.EndpointConfig) {
+			delete(extension, "missing_service_tier")
+		}, want: "must declare missing_service_tier"},
+		{name: "hidden fallback", mutate: func(extension map[string]any, _ *config.EndpointConfig) {
+			extension["allow_fallbacks"] = true
+		}, want: "allow_fallbacks must be false"},
+		{name: "unknown field", mutate: func(extension map[string]any, _ *config.EndpointConfig) {
+			extension["service_tier"] = "default"
+		}, want: `field "service_tier" is not supported`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			loaded, err := config.Load(exampleYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint := loaded.Endpoints["openrouter-pinned"]
+			test.mutate(endpoint.Extensions["openrouter"], &endpoint)
+			loaded.Endpoints["openrouter-pinned"] = endpoint
+			if err := loaded.Validate(); err == nil || !strings.Contains(err.Error(), "endpoints.openrouter-pinned") || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

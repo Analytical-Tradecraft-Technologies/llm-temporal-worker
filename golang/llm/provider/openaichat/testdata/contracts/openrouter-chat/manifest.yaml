@@ -8,7 +8,7 @@ service_classes:
   economy:
     supported: false
   standard:
-    requested_tier: standard
+    requested_tier: default
     actual_tier: default
   priority:
     supported: false

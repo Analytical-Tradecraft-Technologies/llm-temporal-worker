@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openaichat"
 )
 
 var supportedFamilies = map[string]struct{}{
@@ -582,6 +583,15 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 		}
 		if tier.ProviderValue == "" {
 			return fmt.Errorf("%s.service_classes.%s.provider_value is required", path, class)
+		}
+	}
+	if values, ok := endpoint.Extensions["openrouter"]; ok && endpoint.Family == "openai_chat" {
+		tiers := map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "", llm.ServiceClassPriority: ""}
+		for class, tier := range endpoint.ServiceClasses {
+			tiers[class] = tier.ProviderValue
+		}
+		if err := openaichat.ValidateOpenRouterEndpoint(path, endpoint.BaseURL, values, tiers); err != nil {
+			return fmt.Errorf("%s.extensions.openrouter: %w", path, err)
 		}
 	}
 	return nil

@@ -81,25 +81,7 @@ func chatProfileFor(liveProfile Profile) (openaichat.Profile, error) {
 			ExpectedModel:   liveProfile.Model,
 		})
 	case "openrouter-chat":
-		return openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{
-			ID:                liveProfile.ID,
-			CapabilityVersion: capabilities.Version,
-			BaseURL:           liveOpenRouterBaseURL,
-			Model:             liveProfile.Model,
-			Capabilities:      capabilities,
-			ServiceTiers: map[llm.ServiceClass]string{
-				llm.ServiceClassEconomy:  "",
-				llm.ServiceClassStandard: "standard",
-				llm.ServiceClassPriority: "",
-			},
-			ActualServiceClasses: map[string]llm.ServiceClass{
-				"default":  llm.ServiceClassStandard,
-				"standard": llm.ServiceClassStandard,
-			},
-			ProviderOrder:     []string{"openai"},
-			AllowFallbacks:    false,
-			RequireParameters: true,
-		})
+		return openaichat.NewOpenRouterProfile(openRouterProfileConfig(liveProfile))
 	case "exa-chat":
 		return openaichat.NewExaProfile(openaichat.ExaProfileConfig{
 			ID:                liveProfile.ID,
@@ -465,6 +447,9 @@ func isLiveAzureOpenAIHost(host string) bool {
 	return false
 }
 
+// openRouterProfileConfig pins the live OpenRouter probe to OpenAI's default
+// tier. The supported parameters and dated revision are copied from the
+// openai/gpt-4.1-mini model page's "openai" endpoint listing.
 func openRouterProfileConfig(profile Profile) openaichat.OpenRouterProfileConfig {
 	capabilities := liveChatCapabilities("live-" + profile.ID + "/v1")
 	return openaichat.OpenRouterProfileConfig{
@@ -475,16 +460,18 @@ func openRouterProfileConfig(profile Profile) openaichat.OpenRouterProfileConfig
 		Capabilities:      capabilities,
 		ServiceTiers: map[llm.ServiceClass]string{
 			llm.ServiceClassEconomy:  "",
-			llm.ServiceClassStandard: "standard",
+			llm.ServiceClassStandard: "default",
 			llm.ServiceClassPriority: "",
 		},
 		ActualServiceClasses: map[string]llm.ServiceClass{
-			"default":  llm.ServiceClassStandard,
-			"standard": llm.ServiceClassStandard,
+			"default": llm.ServiceClassStandard,
 		},
-		ProviderOrder:     []string{"openai"},
-		AllowFallbacks:    false,
-		RequireParameters: true,
+		MissingActualServiceClass: llm.ServiceClassStandard,
+		ProviderOrder:             []string{"openai"},
+		AllowFallbacks:            false,
+		RequireParameters:         true,
+		SupportedParameters:       []string{"seed", "max_tokens", "response_format", "structured_outputs", "tools", "tool_choice", "temperature", "top_p"},
+		ModelAliases:              []string{"openai/gpt-4.1-mini-2025-04-14"},
 	}
 }
 

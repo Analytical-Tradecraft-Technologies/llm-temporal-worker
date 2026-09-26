@@ -75,8 +75,22 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 		FallbackIndex: 0,
 	}
 	modelIdentityBasis := llm.ModelIdentityBasisUnknown
+	observedModel := response.Model
 	if response.Model != "" {
 		modelIdentityBasis = llm.ModelIdentityBasisProviderReported
+	}
+	if profile.ResponseModel.Pinned {
+		if !profile.ResponseModel.accepts(call.Model, response.Model) {
+			mapped := invalidResponseError(call, requestID, fmt.Sprintf("provider response model %q is neither the pinned model %q nor a configured revision of it", response.Model, call.Model))
+			mapped.Provider.ResponseID = response.ID
+			return llm.Response{}, mapped
+		}
+		// A documented dated revision identifies the pinned model, so the
+		// observed revision is reported as the configured model. The raw echo
+		// stays in provider facts for audit.
+		encoded, _ := json.Marshal(response.Model)
+		providerRaw["response_model"] = encoded
+		observedModel = call.Model
 	}
 	result := llm.Response{
 		APIVersion:   llm.APIVersion,
@@ -88,7 +102,7 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 			APIFamily:          string(provider.FamilyOpenAIChat),
 			RequestedModel:     call.Model,
 			ResolvedModel:      call.Model,
-			ModelIdentityBasis: modelIdentityBasis, ObservedModelRevision: response.Model,
+			ModelIdentityBasis: modelIdentityBasis, ObservedModelRevision: observedModel,
 		},
 		Service:  service,
 		Usage:    usage,

@@ -116,6 +116,32 @@ func TestCompileRejectsToolResultWithoutPrecedingCall(t *testing.T) {
 	}
 }
 
+func TestLowerReasoningNeverSendsTopLevelMax(t *testing.T) {
+	profile, err := NewProfile(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for effort, want := range map[llm.ReasoningEffort]string{
+		llm.ReasoningEffortMinimal: "minimal",
+		llm.ReasoningEffortHigh:    "high",
+		// Chat Completions' reasoning_effort has no "max"; maximum is the
+		// strongest accepted value.
+		llm.ReasoningEffortMaximum: "xhigh",
+	} {
+		params, err := lowerRequest(llm.Request{Model: "chat-model", Reasoning: &llm.ReasoningSpec{Effort: effort}}, profile, "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := marshalWire(t, params)["reasoning_effort"]; got != want {
+			t.Fatalf("%s reasoning_effort = %#v, want %q", effort, got, want)
+		}
+	}
+	shape := WireShape{ReasoningEfforts: map[llm.ReasoningEffort]string{llm.ReasoningEffortMaximum: "max"}}
+	if err := shape.validate("chat-contract"); err == nil || !strings.Contains(err.Error(), `to "max", which the reasoning_effort field does not accept`) {
+		t.Fatalf("top-level max mapping error = %v", err)
+	}
+}
+
 // openaiChatParams is an alias kept in the test so the SDK type does not leak
 // into provider-neutral assertions.
 type openaiChatParams = openai.ChatCompletionNewParams

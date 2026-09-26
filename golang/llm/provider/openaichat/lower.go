@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
@@ -51,7 +52,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		}
 	}
 	if request.Reasoning != nil {
-		if err := lowerReasoning(*request.Reasoning, requestMap); err != nil {
+		if err := lowerReasoning(*request.Reasoning, profile.WireShape, requestMap); err != nil {
 			return openai.ChatCompletionNewParams{}, err
 		}
 	}
@@ -97,6 +98,9 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		delete(requestMap, "store")
 	} else {
 		requestMap["store"] = false
+	}
+	if err := checkSupportedParameters(profile, requestMap); err != nil {
+		return openai.ChatCompletionNewParams{}, err
 	}
 	encoded, err := json.Marshal(requestMap)
 	if err != nil {
@@ -450,7 +454,7 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 	return nil
 }
 
-func lowerReasoning(reasoning llm.ReasoningSpec, target map[string]any) error {
+func lowerReasoning(reasoning llm.ReasoningSpec, shape WireShape, target map[string]any) error {
 	switch reasoning.Mode {
 	case "", llm.ReasoningModeProviderDefault, llm.ReasoningModeAdaptive, llm.ReasoningModeEnabled, llm.ReasoningModeDisabled:
 	default:
@@ -463,19 +467,59 @@ func lowerReasoning(reasoning llm.ReasoningSpec, target map[string]any) error {
 		return fmt.Errorf("reasoning summary %q is not supported by Chat Completions", reasoning.Summary)
 	}
 	effort := reasoning.Effort
-	if reasoning.Mode == llm.ReasoningModeDisabled || reasoning.Summary == llm.ReasoningSummaryNone {
+	if reasoning.Mode == llm.ReasoningModeDisabled {
+		if shape.ReasoningEffortField == ReasoningEffortFieldObject {
+			// The unified object can express disabling only as effort "none",
+			// which mandatory-reasoning models reject. Refuse it locally.
+			return fmt.Errorf("reasoning cannot be disabled through the %s field", shape.reasoningFieldName())
+		}
 		effort = llm.ReasoningEffortMinimal
 	}
-	switch effort {
-	case "", llm.ReasoningEffortProviderDefault:
-	case llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh:
-		target["reasoning_effort"] = string(effort)
-	case llm.ReasoningEffortMaximum:
-		target["reasoning_effort"] = "max"
-	default:
-		return fmt.Errorf("reasoning effort %q is not supported", effort)
+	if effort == "" || effort == llm.ReasoningEffortProviderDefault {
+		return nil
 	}
+	value, ok := shape.reasoningEffort(effort)
+	if !ok {
+		return fmt.Errorf("reasoning effort %q is not mapped by this profile", effort)
+	}
+	if shape.ReasoningEffortField == ReasoningEffortFieldObject {
+		target["reasoning"] = map[string]any{"effort": value}
+		return nil
+	}
+	target["reasoning_effort"] = value
 	return nil
+}
+
+// checkSupportedParameters refuses, before dispatch, a request that would
+// send an optional parameter the pinned upstream does not accept. OpenRouter
+// would otherwise route nowhere under require_parameters or silently ignore
+// the parameter without it.
+func checkSupportedParameters(profile Profile, requestMap map[string]any) error {
+	if profile.SupportedParameters == nil {
+		return nil
+	}
+	unsupported := make([]string, 0)
+	for field := range requestMap {
+		if field == "model" || field == "messages" || field == "service_tier" {
+			continue
+		}
+		if _, owned := profile.WireDefaults[field]; owned {
+			continue
+		}
+		if _, ok := profile.SupportedParameters[field]; !ok {
+			unsupported = append(unsupported, field)
+		}
+	}
+	if format, ok := requestMap["response_format"].(map[string]any); ok && format["type"] == "json_schema" {
+		if _, ok := profile.SupportedParameters["structured_outputs"]; !ok {
+			unsupported = append(unsupported, "structured_outputs")
+		}
+	}
+	if len(unsupported) == 0 {
+		return nil
+	}
+	sort.Strings(unsupported)
+	return fmt.Errorf("profile %q pinned upstream does not support request parameters %s", profile.ID, strings.Join(unsupported, ", "))
 }
 
 func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any) error {

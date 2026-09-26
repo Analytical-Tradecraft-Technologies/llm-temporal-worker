@@ -53,7 +53,7 @@ endpoints are checked in rather than supplied by an environment variable.
 | `openai-responses` | OpenAI Responses; `gpt-4.1-mini` | `LLMTW_LIVE_OPENAI_RESPONSES` | `OPENAI_API_KEY`; OpenAI v1 endpoint | Pinned |
 | `azure-responses` | Azure OpenAI Responses; `gpt-4.1-mini` | `LLMTW_LIVE_AZURE_RESPONSES` | Azure Default Credential; `LLMTW_LIVE_AZURE_OPENAI_ENDPOINT` must be an HTTPS Azure OpenAI resource endpoint (`*.openai.azure.com`, `*.openai.azure.us`, or `*.openai.azure.cn`) | Pinned |
 | `openai-chat` | OpenAI Chat Completions; `gpt-4.1-mini` | `LLMTW_LIVE_OPENAI_CHAT` | `OPENAI_API_KEY`; OpenAI v1 endpoint | Rejected before invocation |
-| `openrouter-chat` | OpenRouter Chat Completions; `openai/gpt-4.1-mini` | `LLMTW_LIVE_OPENROUTER_CHAT` | `OPENROUTER_API_KEY`; OpenRouter API endpoint | Rejected before invocation |
+| `openrouter-chat` | OpenRouter Chat Completions; `openai/gpt-4.1-mini` pinned to provider `openai`, default tier | `LLMTW_LIVE_OPENROUTER_CHAT` | `OPENROUTER_API_KEY`; OpenRouter API endpoint | Rejected before invocation |
 | `exa-chat` | Exa Chat; `exa` | `LLMTW_LIVE_EXA_CHAT` | `EXA_API_KEY`; Exa API endpoint | Rejected before invocation |
 | `anthropic-direct` | Anthropic Messages; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_DIRECT` | `ANTHROPIC_API_KEY`; Anthropic API endpoint | Conditional: pinned only when replayable opaque state is returned |
 | `anthropic-aws` | Anthropic Messages through AWS; `claude-3-5-haiku-latest` | `LLMTW_LIVE_ANTHROPIC_AWS` | AWS default credential chain; `LLMTW_LIVE_ANTHROPIC_AWS_WORKSPACE_ID` | Conditional: pinned only when replayable opaque state is returned |
@@ -67,6 +67,16 @@ model, operation key, normalized `standard` class, and a non-empty provider
 tier. A provider-internal value such as `default` is an explicit mapping for
 the public `standard` class; it is never permission to use an unspecified
 provider default.
+
+The OpenRouter profile is the production OpenRouter shape: it sends only the
+parameters in the pinned endpoint's `supported_parameters` listing, uses
+`max_tokens`, omits `store`, `parallel_tool_calls` and `service_tier` (the
+default tier needs none), and keeps `allow_fallbacks: false`,
+`require_parameters: true` and `data_collection: deny`. It is the one chat
+profile allowed to map a null reported tier to `standard`, because OpenRouter
+documents `service_tier: null` when the upstream reports none. The response
+`model` must be `openai/gpt-4.1-mini` or its listed revision
+`openai/gpt-4.1-mini-2025-04-14`; any other echo fails the probe.
 
 For profiles that do not support continuations, the harness first compiles a
 pinned-continuation request and requires the adapter to reject it before any

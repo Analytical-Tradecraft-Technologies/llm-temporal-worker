@@ -14,6 +14,7 @@
       "generation_id": "gen-openrouter-usage",
       "openrouter_cost": 0.00000456,
       "openrouter_cost_details": {"upstream_inference_cost": 0.00000456},
+      "response_model": "router-model",
       "openrouter_usage": {
         "completion_tokens": 13,
         "completion_tokens_details": {"reasoning_tokens": 3},

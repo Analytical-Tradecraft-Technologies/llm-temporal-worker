@@ -234,15 +234,25 @@ endpoints:
     account_region: global
     timeout: 115s
     service_classes:
+      # OpenRouter's documented tiers are default, flex and priority. A
+      # default-only endpoint omits service_tier on the wire.
       standard:
-        provider_value: standard
+        provider_value: default
     capability_profile: openrouter-chat-pinned-v2
     price_catalog: catalog-2026-07-13
     extensions:
       openrouter:
-        provider_order: [ProviderA]
+        # The exact upstream provider slug from the model's OpenRouter page.
+        provider_order: [anthropic]
         allow_fallbacks: false
         require_parameters: true
+        # The pinned endpoint's OpenRouter supported_parameters listing. Any
+        # other optional request parameter is refused before dispatch.
+        supported_parameters: [max_tokens, reasoning, response_format, structured_outputs, tools, tool_choice]
+        # Public effort -> OpenRouter reasoning.effort; unmapped efforts are
+        # refused before dispatch.
+        reasoning_efforts: {low: low, medium: medium, high: high, maximum: max}
+        missing_service_tier: standard
 
   exa-answer:
     family: openai_chat

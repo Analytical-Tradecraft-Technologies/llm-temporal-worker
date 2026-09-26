@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"unicode"
 
 	openai "github.com/openai/openai-go/v3"
 
@@ -31,6 +33,19 @@ const (
 	DefaultFalseFieldUnsupported DefaultFalseFieldSupport = "unsupported"
 )
 
+// ReasoningEffortField selects where a public reasoning effort is lowered.
+type ReasoningEffortField string
+
+const (
+	// ReasoningEffortFieldTopLevel is Chat Completions' top-level
+	// reasoning_effort field.
+	ReasoningEffortFieldTopLevel ReasoningEffortField = ""
+	// ReasoningEffortFieldObject is OpenRouter's unified reasoning object,
+	// {"reasoning": {"effort": ...}}. OpenRouter documents it as the only way
+	// to enable reasoning on Anthropic models.
+	ReasoningEffortFieldObject ReasoningEffortField = "reasoning"
+)
+
 // WireShape describes the small set of Chat Completions wire differences that
 // must be known before lowering. The zero value is the ordinary OpenAI shape.
 // Marking a default-false field unsupported omits it only while false; a
@@ -42,6 +57,27 @@ type WireShape struct {
 	// OmitServiceTier is valid only when the profile supports exactly one public
 	// service class and maps a missing response tier back to that class.
 	OmitServiceTier bool
+	// ReasoningEffortField selects the wire location of a reasoning effort.
+	ReasoningEffortField ReasoningEffortField
+	// ReasoningEfforts maps each supported public effort to the exact provider
+	// value. Nil keeps the default top-level mapping (maximum becomes xhigh,
+	// the strongest value Chat Completions accepts). A non-nil map is closed:
+	// an unmapped effort is rejected while compiling, before dispatch. The
+	// object field has no default mapping.
+	ReasoningEfforts map[llm.ReasoningEffort]string
+}
+
+// ResponseModelPolicy pins the Chat Completions response `model` echo.
+type ResponseModelPolicy struct {
+	// Pinned requires every response to echo the requested model or one of
+	// Aliases. The lifted route then reports the requested model as the
+	// provider-reported revision and keeps the raw echo in provider facts, so
+	// the resolved and observed revisions are both the configured model.
+	Pinned bool
+	// Aliases are documented dated revisions of the requested model. An echo
+	// is accepted only when it is listed here and has the form
+	// "<requested model>-<suffix>".
+	Aliases []string
 }
 
 // ExtensionSpec describes the fields an endpoint profile permits in one
@@ -84,6 +120,13 @@ type Profile struct {
 	// defaults and explicit wire-shape decisions are automatically reserved.
 	ReservedWireFields map[string]struct{}
 	WireShape          WireShape
+	// SupportedParameters, when non-nil, closes the optional request
+	// parameters the pinned upstream accepts. Lowering rejects a request that
+	// would emit any other field besides model, messages, service_tier and
+	// profile wire defaults, and a JSON-schema response format additionally
+	// requires "structured_outputs".
+	SupportedParameters map[string]struct{}
+	ResponseModel       ResponseModelPolicy
 	// ResponseAugment may add profile-specific facts (for example citations or
 	// provider-reported cost) after the common Chat response has been lifted.
 	ResponseAugment           func(provider.Call, *openai.ChatCompletion, *llm.Response) error
@@ -119,6 +162,9 @@ func NewProfile(profile Profile) (Profile, error) {
 	copy.AllowedExtensions = cloneExtensions(profile.AllowedExtensions)
 	copy.WireDefaults = cloneRawMessages(profile.WireDefaults)
 	copy.ReservedWireFields = cloneStringSet(profile.ReservedWireFields)
+	copy.WireShape.ReasoningEfforts = cloneReasoningEfforts(profile.WireShape.ReasoningEfforts)
+	copy.SupportedParameters = cloneOptionalStringSet(profile.SupportedParameters)
+	copy.ResponseModel.Aliases = append([]string(nil), profile.ResponseModel.Aliases...)
 	if copy.ExpectedBaseURL != "" {
 		copy.ExpectedBaseURL, _ = clientconfig.BaseURL(copy.ExpectedBaseURL)
 	}
@@ -134,6 +180,10 @@ func NewProfile(profile Profile) (Profile, error) {
 	if copy.WireShape.OutputTokenLimitField != "" {
 		copy.ReservedWireFields[string(OutputTokenLimitFieldMaxCompletionTokens)] = struct{}{}
 		copy.ReservedWireFields[string(OutputTokenLimitFieldMaxTokens)] = struct{}{}
+	}
+	if copy.WireShape.ReasoningEffortField == ReasoningEffortFieldObject {
+		copy.ReservedWireFields["reasoning"] = struct{}{}
+		copy.ReservedWireFields["reasoning_effort"] = struct{}{}
 	}
 	return copy, nil
 }
@@ -218,6 +268,14 @@ func (profile Profile) validate() error {
 	if err := profile.WireShape.validate(profile.ID); err != nil {
 		return err
 	}
+	for parameter := range profile.SupportedParameters {
+		if parameter == "" || parameter == "model" || parameter == "messages" || parameter == "service_tier" {
+			return fmt.Errorf("openai chat profile %q supported parameter %q is invalid", profile.ID, parameter)
+		}
+	}
+	if err := profile.ResponseModel.validate(profile.ID); err != nil {
+		return err
+	}
 	if profile.WireShape.Store == DefaultFalseFieldUnsupported {
 		if _, exists := profile.WireDefaults["store"]; exists {
 			return fmt.Errorf("openai chat profile %q cannot default unsupported wire field %q", profile.ID, "store")
@@ -293,7 +351,97 @@ func (shape WireShape) validate(profileID string) error {
 	default:
 		return fmt.Errorf("openai chat profile %q parallel_tool_calls field support %q is invalid", profileID, shape.ParallelToolCalls)
 	}
+	var vocabulary map[string]struct{}
+	switch shape.ReasoningEffortField {
+	case ReasoningEffortFieldTopLevel:
+		vocabulary = topLevelReasoningEfforts
+	case ReasoningEffortFieldObject:
+		vocabulary = objectReasoningEfforts
+	default:
+		return fmt.Errorf("openai chat profile %q reasoning effort field %q is unsupported", profileID, shape.ReasoningEffortField)
+	}
+	for effort, value := range shape.ReasoningEfforts {
+		switch effort {
+		case llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortMaximum:
+		default:
+			return fmt.Errorf("openai chat profile %q maps unsupported public reasoning effort %q", profileID, effort)
+		}
+		if _, ok := vocabulary[value]; !ok {
+			return fmt.Errorf("openai chat profile %q maps reasoning effort %q to %q, which the %s field does not accept", profileID, effort, value, shape.reasoningFieldName())
+		}
+	}
 	return nil
+}
+
+// topLevelReasoningEfforts is the Chat Completions reasoning_effort
+// vocabulary shared by OpenAI and OpenRouter's documented parameter. "none"
+// is excluded because no public effort disables reasoning, and "max" is
+// excluded because it is not a top-level Chat Completions value.
+var topLevelReasoningEfforts = map[string]struct{}{"minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}}
+
+// objectReasoningEfforts is OpenRouter's unified reasoning.effort vocabulary
+// without "none".
+var objectReasoningEfforts = map[string]struct{}{"minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {}}
+
+// defaultTopLevelReasoningEfforts preserves the ordinary OpenAI Chat mapping.
+// maximum becomes xhigh, the strongest effort the top-level field accepts.
+var defaultTopLevelReasoningEfforts = map[llm.ReasoningEffort]string{
+	llm.ReasoningEffortMinimal: "minimal",
+	llm.ReasoningEffortLow:     "low",
+	llm.ReasoningEffortMedium:  "medium",
+	llm.ReasoningEffortHigh:    "high",
+	llm.ReasoningEffortMaximum: "xhigh",
+}
+
+func (shape WireShape) reasoningFieldName() string {
+	if shape.ReasoningEffortField == ReasoningEffortFieldObject {
+		return "reasoning.effort"
+	}
+	return "reasoning_effort"
+}
+
+// reasoningEffort returns the provider value for one public effort.
+func (shape WireShape) reasoningEffort(effort llm.ReasoningEffort) (string, bool) {
+	efforts := shape.ReasoningEfforts
+	if efforts == nil && shape.ReasoningEffortField == ReasoningEffortFieldTopLevel {
+		efforts = defaultTopLevelReasoningEfforts
+	}
+	value, ok := efforts[effort]
+	return value, ok
+}
+
+func (policy ResponseModelPolicy) validate(profileID string) error {
+	if len(policy.Aliases) > 0 && !policy.Pinned {
+		return fmt.Errorf("openai chat profile %q response model aliases require a pinned response model", profileID)
+	}
+	seen := make(map[string]struct{}, len(policy.Aliases))
+	for _, alias := range policy.Aliases {
+		if alias == "" || len(alias) > 256 || strings.IndexFunc(alias, unicode.IsSpace) >= 0 {
+			return fmt.Errorf("openai chat profile %q response model alias %q is invalid", profileID, alias)
+		}
+		if _, duplicate := seen[alias]; duplicate {
+			return fmt.Errorf("openai chat profile %q repeats response model alias %q", profileID, alias)
+		}
+		seen[alias] = struct{}{}
+	}
+	return nil
+}
+
+// accepts reports whether a response model echo identifies the requested
+// model: the exact requested model, or a configured dated revision of it.
+func (policy ResponseModelPolicy) accepts(requested, echo string) bool {
+	if echo == requested {
+		return true
+	}
+	if !strings.HasPrefix(echo, requested+"-") || len(echo) == len(requested)+1 {
+		return false
+	}
+	for _, alias := range policy.Aliases {
+		if alias == echo {
+			return true
+		}
+	}
+	return false
 }
 
 func (profile Profile) capabilityVersion() string {
@@ -435,6 +583,28 @@ func cloneStringSet(values map[string]struct{}) map[string]struct{} {
 	copy := make(map[string]struct{}, len(values))
 	for key := range values {
 		copy[key] = struct{}{}
+	}
+	return copy
+}
+
+// cloneOptionalStringSet preserves nil, which means "not enforced", as
+// distinct from an empty closed set.
+func cloneOptionalStringSet(values map[string]struct{}) map[string]struct{} {
+	if values == nil {
+		return nil
+	}
+	return cloneStringSet(values)
+}
+
+// cloneReasoningEfforts preserves nil, which selects the default mapping, as
+// distinct from an empty closed mapping.
+func cloneReasoningEfforts(values map[llm.ReasoningEffort]string) map[llm.ReasoningEffort]string {
+	if values == nil {
+		return nil
+	}
+	copy := make(map[llm.ReasoningEffort]string, len(values))
+	for effort, value := range values {
+		copy[effort] = value
 	}
 	return copy
 }

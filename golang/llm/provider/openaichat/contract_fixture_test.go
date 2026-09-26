@@ -323,17 +323,16 @@ func chatFixtureProfiles(t *testing.T) []chatFixtureProfile {
 		Capabilities:      chatFixtureCapabilities("openrouter-contract/v1"),
 		ServiceTiers: map[llm.ServiceClass]string{
 			llm.ServiceClassEconomy:  "",
-			llm.ServiceClassStandard: "standard",
+			llm.ServiceClassStandard: "default",
 			llm.ServiceClassPriority: "",
 		},
 		ActualServiceClasses: map[string]llm.ServiceClass{
-			"default":  llm.ServiceClassStandard,
-			"standard": llm.ServiceClassStandard,
-			"priority": llm.ServiceClassPriority,
+			"default": llm.ServiceClassStandard,
 		},
 		MissingActualServiceClass: llm.ServiceClassStandard,
 		ProviderOrder:             []string{"fixture-provider"},
 		RequireParameters:         true,
+		SupportedParameters:       []string{"max_tokens", "reasoning", "response_format", "structured_outputs", "tools", "tool_choice"},
 	})
 	if err != nil {
 		t.Fatal(err)

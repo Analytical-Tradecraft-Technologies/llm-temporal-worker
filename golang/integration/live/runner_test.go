@@ -227,8 +227,14 @@ func TestChatProfilesRequireReportedActualTier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build %s chat profile: %v", liveProfile.ID, err)
 		}
-		if profile.MissingActualServiceClass != "" {
-			t.Errorf("%s accepts a missing actual tier", liveProfile.ID)
+		// OpenRouter documents a null service_tier when the upstream reports
+		// none; its default-tier-only profile maps that to standard by policy.
+		wantMissing := llm.ServiceClass("")
+		if liveProfile.ID == "openrouter-chat" {
+			wantMissing = llm.ServiceClassStandard
+		}
+		if profile.MissingActualServiceClass != wantMissing {
+			t.Errorf("%s missing actual tier class = %q, want %q", liveProfile.ID, profile.MissingActualServiceClass, wantMissing)
 		}
 		if profile.ServiceTiers[llm.ServiceClassStandard] == "" {
 			t.Errorf("%s has no explicit standard tier", liveProfile.ID)
