@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -68,6 +69,32 @@ func TestConfigValidationRefusesInvalidOpenRouterEffortAndWire(t *testing.T) {
 			test.mutate(endpoint.Extensions["openrouter"], &endpoint)
 			loaded.Endpoints["openrouter-pinned"] = endpoint
 			if err := loaded.Validate(); err == nil || !strings.Contains(err.Error(), "endpoints.openrouter-pinned") || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestResourceCapacityAcceptsOnlyAuthorizedForecastEventInflight(t *testing.T) {
+	for _, test := range []struct {
+		events, stage2 int
+		want           string
+	}{
+		{events: 2, stage2: 6},
+		{events: 5, stage2: 15},
+		{events: 3, stage2: 15, want: "forecast event admission policy is invalid"},
+		{events: 4, stage2: 15, want: "forecast event admission policy is invalid"},
+		{events: 5, stage2: 14, want: "Python Stage2 slots cannot admit every forecast event ensemble"},
+	} {
+		t.Run(fmt.Sprintf("events-%d-stage2-%d", test.events, test.stage2), func(t *testing.T) {
+			loaded, err := config.Load(exampleYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded.ResourceCapacity.Limits.ForecastEventMaxInflight = test.events
+			loaded.ResourceCapacity.Limits.PythonStage2MaxInflight = test.stage2
+			err = loaded.Validate()
+			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
 				t.Fatalf("validation error = %v, want %q", err, test.want)
 			}
 		})

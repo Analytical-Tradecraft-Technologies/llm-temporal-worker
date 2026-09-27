@@ -109,7 +109,7 @@ func (limits ResourceCapacityLimits) validate() error {
 	if limits.SearchFetchMaxInflight < 64 || limits.SearchFetchMaxInflight > 4096 || limits.PythonStage2MaxInflight < 6 || limits.PythonStage2MaxInflight > 4096 {
 		return errors.New("resource_capacity search/fetch or Python Stage2 limit is invalid")
 	}
-	if limits.ForecastEventMaxInflight != 2 || limits.ForecastEventAdmissionWaitSeconds != 5 {
+	if !authorizedForecastEventMaxInflight(limits.ForecastEventMaxInflight) || limits.ForecastEventAdmissionWaitSeconds != 5 {
 		return errors.New("resource_capacity forecast event admission policy is invalid")
 	}
 	if limits.ForecastEventMaxInflight*productionMaxForecastEnsembleSize > limits.PythonStage2MaxInflight {
@@ -184,6 +184,25 @@ type ResourceCapacityConfig struct {
 	ArtifactLocator string                 `yaml:"artifact_locator" json:"artifact_locator"`
 	GenerationID    string                 `yaml:"generation_id" json:"generation_id"`
 	Limits          ResourceCapacityLimits `yaml:"limits" json:"limits"`
+}
+
+// authorizedForecastEventMaxInflight mirrors the TML competition workflow's
+// authorised set (competition/workflow/resource_capacity.go,
+// authorizedForecastEventMaxInflight). Only values with a capacity derivation
+// are accepted, never a free range, because each one moves the coordinator's
+// child waves and the provider in-flight and request rate the signed routes
+// must hold:
+//   - 2 is the pre-season generation that signed test and smoke manifests
+//     still carry.
+//   - 5 is the Fall 2026 FutureEval generation. Metaculus releases up to 5
+//     questions at once, each open 5,400 s. At 2 they run as three coordinator
+//     waves (about 11,130 s) and up to 3 get no forecast; at 5 they run as one
+//     wave that publishes within 4,310 s of release.
+//
+// Python Stage2 must still admit every ensemble of that many events, so 5
+// requires python_stage2_max_inflight of at least 15.
+func authorizedForecastEventMaxInflight(value int) bool {
+	return value == 2 || value == 5
 }
 
 func (value ResourceCapacityConfig) configured() bool {

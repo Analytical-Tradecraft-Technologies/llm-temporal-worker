@@ -469,6 +469,13 @@ telemetry:
   content_logging: disabled
 ```
 
+`resource_capacity.limits.forecast_event_max_inflight` accepts only the
+generations TML authorises: `2` (the pre-season generation that signed test
+and smoke manifests carry) or `5` (the Fall 2026 FutureEval generation, where
+up to five simultaneously released questions run as one coordinator wave). Any
+other value is refused. `python_stage2_max_inflight` must still be at least
+three times that value, so `5` requires `15` or more.
+
 `temporal.api_key_file` contains the raw signed JWT sent as Temporal gRPC
 `authorization: Bearer <token>` metadata. Production requires TLS plus this
 file; a plaintext endpoint, unreadable file, empty or oversized token, or malformed
