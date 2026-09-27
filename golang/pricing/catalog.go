@@ -81,6 +81,9 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 			entry.UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
 			sort.Slice(entry.UnknownComponents, func(i, j int) bool { return entry.UnknownComponents[i] < entry.UnknownComponents[j] })
 		}
+		if entry.MaxPromptTokens < 0 {
+			return Catalog{}, fmt.Errorf("pricing entry %d max prompt tokens must not be negative", index)
+		}
 		if !entry.EffectiveFrom.IsZero() && !entry.EffectiveUntil.IsZero() && !entry.EffectiveUntil.After(entry.EffectiveFrom) {
 			return Catalog{}, fmt.Errorf("pricing entry %d effective interval is empty", index)
 		}

@@ -595,6 +595,7 @@ type persistedPricingEntry struct {
 	InputPerMillion, OutputPerMillion, CacheReadPerMillion    string
 	CacheWritePerMillion, ReasoningPerMillion, PerRequest     string
 	UnknownComponents                                         []pricing.PriceComponent
+	MaxPromptTokens                                           int64 `json:",omitempty"`
 	EffectiveFrom, EffectiveUntil                             time.Time
 	Provenance, Version                                       string
 }
@@ -617,6 +618,7 @@ func persistPricingEntry(entry pricing.Entry) persistedPricingEntry {
 		ReasoningPerMillion:  decimalText(entry.Prices.ReasoningPerMillion),
 		PerRequest:           decimalText(entry.Prices.PerRequest),
 		UnknownComponents:    append([]pricing.PriceComponent(nil), entry.UnknownComponents...),
+		MaxPromptTokens:      entry.MaxPromptTokens,
 		EffectiveFrom:        entry.EffectiveFrom, EffectiveUntil: entry.EffectiveUntil,
 		Provenance: entry.Provenance, Version: entry.Version,
 	}
@@ -637,6 +639,7 @@ func (entry persistedPricingEntry) restore() (pricing.Entry, error) {
 		Region: entry.Region, Model: entry.Model, ProviderTier: entry.ProviderTier,
 		Prices:            pricing.UnitPrices{InputPerMillion: parsed[0], OutputPerMillion: parsed[1], CacheReadPerMillion: parsed[2], CacheWritePerMillion: parsed[3], ReasoningPerMillion: parsed[4], PerRequest: parsed[5]},
 		UnknownComponents: append([]pricing.PriceComponent(nil), entry.UnknownComponents...),
+		MaxPromptTokens:   entry.MaxPromptTokens,
 		EffectiveFrom:     entry.EffectiveFrom, EffectiveUntil: entry.EffectiveUntil,
 		Provenance: entry.Provenance, Version: entry.Version,
 	}, nil

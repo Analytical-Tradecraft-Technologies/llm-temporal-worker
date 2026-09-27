@@ -239,6 +239,21 @@ func TestEstimateCandidateChargesCacheOnlyUpToSignedCaps(t *testing.T) {
 	}
 }
 
+func TestEstimateCandidateRefusesPromptAbovePriceTier(t *testing.T) {
+	request := llm.Request{OperationKey: "estimate-tier", Model: "logical", Output: &llm.OutputSpec{MaxTokens: intPointer(0)}}
+	entry := pricing.Entry{MaxPromptTokens: 200_000, Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("2")}}
+	for _, test := range []struct {
+		tokens int64
+		refuse bool
+	}{{tokens: 200_000}, {tokens: 200_001, refuse: true}} {
+		tokenizer := func(llm.Request, routing.Candidate) (int64, error) { return test.tokens, nil }
+		_, err := (Estimator{Tokenizer: tokenizer}).EstimateCandidate(request, routing.Candidate{ID: "gemini"}, entry)
+		if test.refuse != errors.Is(err, ErrUnusablePrice) || (!test.refuse && err != nil) {
+			t.Fatalf("%d prompt tokens: error = %v, want refusal %v", test.tokens, err, test.refuse)
+		}
+	}
+}
+
 func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 	request := llm.Request{Model: "logical", ServiceClass: llm.ServiceClassStandard}
 	context := ContextFor(request, routing.Candidate{EndpointID: "ep", AttemptedClass: llm.ServiceClassPriority}, "prod")

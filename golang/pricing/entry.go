@@ -49,10 +49,17 @@ type Entry struct {
 	// separate from UnitPrices so a missing value cannot be confused with a
 	// known-free zero. Cost and estimate callers fail closed when they need one.
 	UnknownComponents []PriceComponent
-	EffectiveFrom     time.Time
-	EffectiveUntil    time.Time
-	Provenance        string
-	Version           string
+	// MaxPromptTokens, when positive, is the largest prompt this quote covers.
+	// Providers such as OpenRouter bill a higher tier above a prompt-size
+	// threshold (Gemini 3.1 Pro above 200,000, GPT-6 Astra above 272,000), so
+	// a larger prompt must not be priced or reserved with this entry. Zero
+	// means the quote has no prompt-size tier. It is omitted from the
+	// canonical digest when zero so existing catalog identities are unchanged.
+	MaxPromptTokens int64 `json:",omitempty"`
+	EffectiveFrom   time.Time
+	EffectiveUntil  time.Time
+	Provenance      string
+	Version         string
 }
 
 func (entry Entry) ComponentUnknown(component PriceComponent) bool {

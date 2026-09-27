@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openaichat"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
 // TestOpenRouterFrontierDeploymentLowersAndLiftsPinnedModels proves the
@@ -29,7 +31,7 @@ import (
 // path: configuration validation, catalog binding, factory adapter
 // construction, the exact request body per model and the lifted receipt.
 func TestOpenRouterFrontierDeploymentLowersAndLiftsPinnedModels(t *testing.T) {
-	compiled := compileOpenRouterDeployment(t)
+	compiled := compileOpenRouterDeployment(t, nil)
 	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
 	snapshot, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compiled)
 	if err != nil {
@@ -154,7 +156,7 @@ func readOpenRouterFixture(t *testing.T, name string) []byte {
 // compileOpenRouterDeployment merges the shipped endpoints/models fragment and
 // catalogs into the local fixture configuration and compiles it with full
 // configuration validation.
-func compileOpenRouterDeployment(t *testing.T) *config.Snapshot {
+func compileOpenRouterDeployment(t *testing.T, limits map[string]any) *config.Snapshot {
 	t.Helper()
 	read := func(path string) []byte {
 		data, err := os.ReadFile(path)
@@ -183,6 +185,9 @@ func compileOpenRouterDeployment(t *testing.T) *config.Snapshot {
 	document["endpoints"] = fragment["endpoints"]
 	document["models"] = fragment["models"]
 	document["limits"].(map[string]any)["provider_timeout"] = "120s"
+	for key, value := range limits {
+		document["limits"].(map[string]any)[key] = value
+	}
 	document["capabilities"].(map[string]any)["catalogs"] = catalogRef("capabilities.yaml")
 	document["pricing"].(map[string]any)["catalogs"] = catalogRef("prices.yaml")
 	data, err := yaml.Marshal(document)
@@ -194,4 +199,40 @@ func compileOpenRouterDeployment(t *testing.T) *config.Snapshot {
 		t.Fatal(err)
 	}
 	return compiled
+}
+
+// The shipped Gemini and GPT-6 quotes are valid only below OpenRouter's
+// prompt-size tier thresholds. A configuration or reservation that could admit
+// a larger prompt is refused before any provider call.
+func TestOpenRouterPriceTierBoundaryIsEnforced(t *testing.T) {
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	loader := CatalogSnapshotLoader{Clock: func() time.Time { return now }}
+	if _, err := loader.Load(context.Background(), compileOpenRouterDeployment(t, map[string]any{"max_input_tokens": 200000})); err != nil {
+		t.Fatalf("input limit at the lowest tier boundary rejected: %v", err)
+	}
+	_, err := loader.Load(context.Background(), compileOpenRouterDeployment(t, map[string]any{"max_input_tokens": 200001}))
+	if err == nil || !strings.Contains(err.Error(), "limits.max_input_tokens 200001 exceeds max_prompt_tokens 200000") || !strings.Contains(err.Error(), "google/gemini-3.1-pro-preview") {
+		t.Fatalf("input limit above the Gemini tier boundary error = %v", err)
+	}
+
+	snapshot, err := loader.Load(context.Background(), compileOpenRouterDeployment(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote, err := snapshot.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter-openai-gpt6-astra", Region: "global", Model: "openai/gpt-6-astra", ProviderTier: "default", At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := llm.ReserveBatchOperationV1{Model: "gpt-6-astra", ServiceClass: llm.ServiceClassStandard, MaxInputTokens: 272000, MaxOutputTokens: 4000, MaxReasoningTokens: 8000, MaxCacheReadTokens: 272000, MaxCacheWriteTokens: 272000}
+	if _, err := priceDescriptorMaximum(descriptor, quote.Entry); err != nil {
+		t.Fatalf("descriptor at the GPT-6 tier boundary rejected: %v", err)
+	}
+	descriptor.MaxInputTokens = 272001
+	if _, err := priceDescriptorMaximum(descriptor, quote.Entry); err == nil || !strings.Contains(err.Error(), "exceeds the price entry's max_prompt_tokens 272000") {
+		t.Fatalf("descriptor above the GPT-6 tier boundary error = %v", err)
+	}
+	restored, err := persistPricingEntry(quote.Entry).restore()
+	if err != nil || restored.MaxPromptTokens != 272000 {
+		t.Fatalf("persisted price lost its prompt ceiling: %#v %v", restored, err)
+	}
 }

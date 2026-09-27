@@ -31,7 +31,7 @@ func TestRoutePriceIdentityUsesEndpointIdentity(t *testing.T) {
 		}},
 	}}
 
-	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassStandard}, when)
+	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassStandard}, 0, when)
 	if err != nil {
 		t.Fatalf("routePriceIdentity() error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestRoutePriceIdentityRejectsMissingEndpointQuote(t *testing.T) {
 			Provider: "provider", Family: "openai_responses", EndpointID: "other", Model: "model", ProviderTier: "priority",
 		}}}},
 	}}
-	_, _, _, _, err := routePriceIdentity(bundle, "target", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, time.Now())
+	_, _, _, _, err := routePriceIdentity(bundle, "target", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, 0, time.Now())
 	if err == nil {
 		t.Fatal("routePriceIdentity() succeeded without endpoint-specific quote")
 	}
@@ -77,7 +77,7 @@ func TestRoutePriceIdentityUsesVerifiedIdentityWithoutCurrentQuote(t *testing.T)
 		"prices": {Version: "prices-v1", Catalog: pricing.Catalog{Version: "prices-v1", Entries: []pricing.Entry{stale}}},
 	}}
 
-	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, when)
+	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, 0, when)
 	if err != nil {
 		t.Fatalf("routePriceIdentity() error = %v", err)
 	}

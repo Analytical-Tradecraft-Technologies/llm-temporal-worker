@@ -169,7 +169,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 					}
 				}
 			}
-			providerName, routeRegion, priceVersion, priceAvailable, err := routePriceIdentity(bundle, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, now)
+			providerName, routeRegion, priceVersion, priceAvailable, err := routePriceIdentity(bundle, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, int64(value.Limits.MaxInputTokens), now)
 			if err != nil {
 				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)
 			}
@@ -211,7 +211,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 	return routing.CompileCatalog(value.Version, models)
 }
 
-func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, now time.Time) (string, string, string, bool, error) {
+func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, maxInputTokens int64, now time.Time) (string, string, string, bool, error) {
 	priceCatalog, ok := bundle.Pricing[endpoint.PriceCatalog]
 	if !ok {
 		return "", "", "", false, fmt.Errorf("price catalog %q is unavailable", endpoint.PriceCatalog)
@@ -255,6 +255,9 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 		}
 		if found.Provider != providerName || found.Region != routeRegion {
 			return "", "", "", false, fmt.Errorf("active price entry does not match verified endpoint identity")
+		}
+		if found.MaxPromptTokens > 0 && maxInputTokens > found.MaxPromptTokens {
+			return "", "", "", false, fmt.Errorf("limits.max_input_tokens %d exceeds max_prompt_tokens %d of the active price for model %q tier %q; above it the provider bills a higher tier", maxInputTokens, found.MaxPromptTokens, model, tier)
 		}
 		entryVersion := found.Version
 		if entryVersion == "" {

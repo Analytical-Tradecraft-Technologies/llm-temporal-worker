@@ -975,6 +975,14 @@ entries:
     source: operator-verified
 ```
 
+An entry may set `max_prompt_tokens` when the provider bills a higher tier
+above a prompt size (OpenRouter bills Gemini 3.1 Pro at a higher rate above
+200,000 prompt tokens and GPT-6 Astra above 272,000). The worker then refuses
+to load a configuration whose `limits.max_input_tokens` exceeds it for a
+configured route, refuses a reserve-batch operation whose `max_input_tokens`
+exceeds it, and refuses to price a larger prompt with that entry. Zero or
+omitted means no prompt-size tier.
+
 Prices in examples are illustrative. Production catalogs require provenance and
 review; they never refresh silently from an untrusted endpoint.
 Every decimal property is defined as USD by its field name and catalog

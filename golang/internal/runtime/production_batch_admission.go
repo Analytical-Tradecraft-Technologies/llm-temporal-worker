@@ -660,6 +660,9 @@ func (binding *productionPhaseBinding) closeBatch(ctx context.Context, request l
 }
 
 func priceDescriptorMaximum(descriptor llm.ReserveBatchOperationV1, entry pricing.Entry) (pricing.USD, error) {
+	if entry.MaxPromptTokens > 0 && descriptor.MaxInputTokens > entry.MaxPromptTokens {
+		return pricing.USD{}, fmt.Errorf("max_input_tokens %d exceeds the price entry's max_prompt_tokens %d: the provider bills a higher tier above it", descriptor.MaxInputTokens, entry.MaxPromptTokens)
+	}
 	components := []struct {
 		component   pricing.PriceComponent
 		price       pricing.DecimalUSD

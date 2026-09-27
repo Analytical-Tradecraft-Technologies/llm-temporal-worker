@@ -9,9 +9,10 @@
 # - Cache prices are the listed rates. The estimator charges cache tokens only
 #   up to the signed per-operation cache caps, so a cap of 0 adds no charge.
 # - GPT-6 Astra switches to 20/75 above 272,000 prompt tokens and Gemini 3.1
-#   Pro to 4/18 above 200,000. These entries are upper bounds only while every
-#   admitted prompt stays below 200,000 tokens (limits.max_input_tokens and the
-#   signed max_input_tokens must stay at or below that).
+#   Pro to 4/18 above 200,000. max_prompt_tokens records the boundary: the
+#   worker refuses to load a config whose limits.max_input_tokens exceeds it,
+#   refuses reserve-batch operations whose max_input_tokens exceed it, and
+#   refuses to price a prompt above it.
 # - provider_tier must equal the endpoint's service_classes.standard
 #   provider_value ("default").
 version: catalog-2026-09-26
@@ -44,6 +45,7 @@ entries:
     cache_read_per_million: "1"
     cache_write_per_million: "12.5"
     per_request: "0"
+    max_prompt_tokens: 272000
     effective_from: 2026-09-26T00:00:00Z
     source: "openrouter.ai/openai/gpt-6-astra provider openai standard, read 2026-09-26 (prompts up to 272000 tokens)"
 
@@ -59,5 +61,6 @@ entries:
     cache_read_per_million: "0.20"
     cache_write_per_million: "0.375"
     per_request: "0"
+    max_prompt_tokens: 200000
     effective_from: 2026-09-26T00:00:00Z
     source: "openrouter.ai/google/gemini-3.1-pro-preview provider google-vertex/global standard, read 2026-09-26 (prompts up to 200000 tokens)"

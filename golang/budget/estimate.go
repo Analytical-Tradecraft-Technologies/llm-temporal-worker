@@ -103,6 +103,10 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	if estimator.MaxInput > 0 && inputTokens > estimator.MaxInput {
 		return Estimate{}, fmt.Errorf("%w: input tokens %d exceed %d", ErrTokenLimit, inputTokens, estimator.MaxInput)
 	}
+	if entry.MaxPromptTokens > 0 && inputTokens > entry.MaxPromptTokens {
+		// Above this size the provider bills a higher tier than the quote.
+		return Estimate{}, fmt.Errorf("%w: prompt tokens %d exceed the price entry's max_prompt_tokens %d", ErrUnusablePrice, inputTokens, entry.MaxPromptTokens)
+	}
 	outputTokens := estimator.MaxOutput
 	if outputTokens <= 0 {
 		outputTokens = 1_000

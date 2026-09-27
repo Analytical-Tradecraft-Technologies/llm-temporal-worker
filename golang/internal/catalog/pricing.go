@@ -31,11 +31,14 @@ type pricingEntryFile struct {
 	CacheWrite     decimalValue `yaml:"cache_write_per_million"`
 	Reasoning      decimalValue `yaml:"reasoning_per_million"`
 	PerRequest     decimalValue `yaml:"per_request"`
-	EffectiveFrom  time.Time    `yaml:"effective_from"`
-	EffectiveUntil time.Time    `yaml:"effective_until"`
-	Source         string       `yaml:"source"`
-	Provenance     string       `yaml:"provenance"`
-	Version        string       `yaml:"version"`
+	// MaxPromptTokens is the largest prompt the quote covers, for providers
+	// that bill a higher tier above a prompt-size threshold.
+	MaxPromptTokens int64     `yaml:"max_prompt_tokens"`
+	EffectiveFrom   time.Time `yaml:"effective_from"`
+	EffectiveUntil  time.Time `yaml:"effective_until"`
+	Source          string    `yaml:"source"`
+	Provenance      string    `yaml:"provenance"`
+	Version         string    `yaml:"version"`
 }
 
 type decimalValue struct {
@@ -150,6 +153,9 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 	if err := validateIdentifier(providerTier, path+".provider_tier"); err != nil {
 		return pricing.Entry{}, err
 	}
+	if fileEntry.MaxPromptTokens < 0 {
+		return pricing.Entry{}, fmt.Errorf("%s.max_prompt_tokens must not be negative", path)
+	}
 	if !fileEntry.EffectiveFrom.IsZero() && !fileEntry.EffectiveUntil.IsZero() && !fileEntry.EffectiveUntil.After(fileEntry.EffectiveFrom) {
 		return pricing.Entry{}, fmt.Errorf("%s effective interval is empty", path)
 	}
@@ -193,6 +199,7 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 		ProviderTier:      providerTier,
 		Prices:            pricing.UnitPrices{InputPerMillion: fileEntry.Input.value, OutputPerMillion: fileEntry.Output.value, CacheReadPerMillion: fileEntry.CacheRead.value, CacheWritePerMillion: fileEntry.CacheWrite.value, ReasoningPerMillion: fileEntry.Reasoning.value, PerRequest: fileEntry.PerRequest.value},
 		UnknownComponents: unknownComponents,
+		MaxPromptTokens:   fileEntry.MaxPromptTokens,
 		EffectiveFrom:     fileEntry.EffectiveFrom,
 		EffectiveUntil:    fileEntry.EffectiveUntil,
 		Provenance:        provenance,
