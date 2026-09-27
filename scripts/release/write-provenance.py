@@ -53,6 +53,8 @@ def main() -> None:
         reject("evidence run ID must be positive")
     if not args.workflow_run_id.isdigit() or int(args.workflow_run_id) < 1:
         reject("workflow run ID must be positive")
+    # The builder identity is the release workflow of the running source
+    # repository, matching the Fulcio certificate identity it is signed with.
     source = safe_source(args.source)
 
     output = Path(args.output)
@@ -62,7 +64,7 @@ def main() -> None:
 
     predicate = {
         "buildDefinition": {
-            "buildType": "https://github.com/mfow/llm-temporal-worker/.github/workflows/master.yml@refs/heads/master",
+            "buildType": f"{source}/.github/workflows/master.yml@refs/heads/master",
             "externalParameters": {
                 "version": args.version,
                 "revision": args.revision,
@@ -83,9 +85,9 @@ def main() -> None:
         },
         "runDetails": {
             "builder": {
-                "id": "https://github.com/mfow/llm-temporal-worker/.github/workflows/release.yml@refs/heads/master"
+                "id": f"{source}/.github/workflows/release.yml@refs/heads/master"
             },
-            "metadata": {"invocationId": f"https://github.com/mfow/llm-temporal-worker/actions/runs/{args.workflow_run_id}"},
+            "metadata": {"invocationId": f"{source}/actions/runs/{args.workflow_run_id}"},
         },
     }
     temporary = output.with_name(f".{output.name}.{os.getpid()}.tmp")

@@ -199,13 +199,16 @@ func assertLiveProviderWorkflowSourceAndActionBoundary(t *testing.T, workflow wo
 		if scalarString(t, workflow.name, env, "TRUSTED_MASTER_SHA") != "${{ github.sha }}" {
 			t.Fatalf("%s job %q must bind anonymous checkout to github.sha", workflow.name, profile.id)
 		}
+		if scalarString(t, workflow.name, env, "SOURCE_REPOSITORY_URL") != "${{ github.server_url }}/${{ github.repository }}.git" {
+			t.Fatalf("%s job %q must fetch the running repository", workflow.name, profile.id)
+		}
 		run := scalarString(t, workflow.name, checkout, "run")
 		for _, want := range []string{
 			"GIT_CONFIG_NOSYSTEM=1",
 			"GIT_TERMINAL_PROMPT=0",
 			"GIT_ASKPASS=/bin/false",
 			"git init --quiet \"$GITHUB_WORKSPACE\"",
-			"https://github.com/mfow/llm-temporal-worker.git",
+			`remote add origin "$SOURCE_REPOSITORY_URL"`,
 			"-c credential.helper= -c http.extraHeader= fetch --no-tags --force origin",
 			"refs/remotes/origin/master",
 		} {

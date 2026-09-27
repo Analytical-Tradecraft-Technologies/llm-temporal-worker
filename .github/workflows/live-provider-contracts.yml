@@ -71,6 +71,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -87,7 +88,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -176,6 +177,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -192,7 +194,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -288,6 +290,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -304,7 +307,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -392,6 +395,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -408,7 +412,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -496,6 +500,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -512,7 +517,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -600,6 +605,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -616,7 +622,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -705,6 +711,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -721,7 +728,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -817,6 +824,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -833,7 +841,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -928,6 +936,7 @@ jobs:
         shell: bash
         env:
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -944,7 +953,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"

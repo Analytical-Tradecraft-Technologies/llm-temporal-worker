@@ -178,7 +178,7 @@ reference="llm-temporal-worker@$digest"
 bash scripts/release/record.sh \
   -artifact-dir release-artifacts \
   -output release-artifacts/evidence.json \
-  -repository https://github.com/mfow/llm-temporal-worker \
+  -repository https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker \
   -revision "$(git rev-parse HEAD)" \
   -image-reference "$reference" \
   -image-digest "$digest" \
@@ -337,7 +337,9 @@ Because `actions/checkout` v6 requires a token input even for public
 repositories, neither release job uses it. Before either job passes a manual
 ref to Git, it validates the tag's strict `refs/tags/vMAJOR.MINOR.PATCH` shape
 in a shell environment. Each job then performs its own fixed unauthenticated
-HTTPS Git fetch from `https://github.com/mfow/llm-temporal-worker.git`, with an
+HTTPS Git fetch from the running repository,
+`${{ github.server_url }}/${{ github.repository }}.git` (for example
+`https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git`), with an
 empty temporary Git home, no system Git configuration, disabled prompting,
 and no credential helper. Each checkout fails closed if its fresh workspace
 is not empty, the exact tag cannot be fetched, or fetched `master` is not the
@@ -424,9 +426,22 @@ digests, evidence run, publication run, and immutable image digest. After the
 digest checks, the protected job uses GitHub's keyless OIDC identity to sign
 the digest and attest both the evidence-bound CycloneDX SBOM and SLSA predicate.
 It immediately verifies the signature and both attestations before tagging,
-using issuer `https://token.actions.githubusercontent.com` and exact certificate
-identity
-`https://github.com/mfow/llm-temporal-worker/.github/workflows/release.yml@refs/heads/master`.
+using the pinned issuer `https://token.actions.githubusercontent.com` and the
+exact certificate identity
+`${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@refs/heads/master`
+(today
+`https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/.github/workflows/release.yml@refs/heads/master`).
+Fulcio sets a GitHub Actions certificate's SAN URI to
+`https://github.com/{job_workflow_ref}`
+([Fulcio OIDC usage](https://github.com/sigstore/fulcio/blob/main/docs/oidc.md)),
+and `job_workflow_ref` names the repository's current owner, so the identity is
+derived from the running repository rather than a fixed owner; a repository
+transfer or rename otherwise makes `cosign verify` fail after the digest push.
+Before verifying, the step also requires the running workflow,
+`${{ github.server_url }}/${{ github.workflow_ref }}`, to equal that identity,
+so only master's `release.yml` can sign (release.yml calls no reusable workflow,
+so its `job_workflow_ref` equals `workflow_ref`). The SLSA predicate's
+`builder.id` and `buildType` use the same repository.
 Regex or repository-wide identity matches are not accepted.
 
 External prerequisites are: a protected `release-publication` GitHub

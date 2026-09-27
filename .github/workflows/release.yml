@@ -61,6 +61,7 @@ jobs:
         env:
           RELEASE_REF: ${{ steps.release-ref.outputs.release_ref }}
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -77,7 +78,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master \
             "$RELEASE_REF:$RELEASE_REF"
@@ -203,6 +204,7 @@ jobs:
         env:
           RELEASE_REF: ${{ steps.release-ref.outputs.release_ref }}
           TRUSTED_MASTER_SHA: ${{ github.sha }}
+          SOURCE_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           set -euo pipefail
           test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)" || {
@@ -219,7 +221,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master \
             "$RELEASE_REF:$RELEASE_REF"
@@ -388,13 +390,21 @@ jobs:
         shell: bash
         env:
           PUBLISHED_IMAGE: ${{ steps.publish.outputs.published_image }}
-          EXPECTED_CERTIFICATE_IDENTITY: https://github.com/mfow/llm-temporal-worker/.github/workflows/release.yml@refs/heads/master
+          # Fulcio's GitHub Actions SAN is server_url + job_workflow_ref, which
+          # carries the repository's current owner and name. Derive the pinned
+          # file and branch from the running repository instead of a fixed owner.
+          EXPECTED_CERTIFICATE_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@refs/heads/master
+          SIGNING_WORKFLOW_IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
           EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com
           AWS_ACCESS_KEY_ID: ""
           AWS_SECRET_ACCESS_KEY: ""
           AWS_SESSION_TOKEN: ""
         run: |
           set -euo pipefail
+          if [[ "$SIGNING_WORKFLOW_IDENTITY" != "$EXPECTED_CERTIFICATE_IDENTITY" ]]; then
+            echo "signing workflow is not this repository's master release.yml" >&2
+            exit 1
+          fi
           identity=(--certificate-identity "$EXPECTED_CERTIFICATE_IDENTITY" --certificate-oidc-issuer "$EXPECTED_OIDC_ISSUER")
           cosign verify "${identity[@]}" "$PUBLISHED_IMAGE"
           cosign verify-attestation "${identity[@]}" --type cyclonedx "$PUBLISHED_IMAGE"

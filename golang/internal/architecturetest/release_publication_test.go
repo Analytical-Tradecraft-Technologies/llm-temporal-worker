@@ -154,7 +154,9 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 		"cosign verify \"${identity[@]}\" \"$PUBLISHED_IMAGE\"",
 		"cosign verify-attestation \"${identity[@]}\" --type cyclonedx",
 		"cosign verify-attestation \"${identity[@]}\" --type slsaprovenance",
-		"EXPECTED_CERTIFICATE_IDENTITY: https://github.com/mfow/llm-temporal-worker/.github/workflows/release.yml@refs/heads/master",
+		"EXPECTED_CERTIFICATE_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@refs/heads/master",
+		"SIGNING_WORKFLOW_IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}",
+		`if [[ "$SIGNING_WORKFLOW_IDENTITY" != "$EXPECTED_CERTIFICATE_IDENTITY" ]]; then`,
 		"EXPECTED_OIDC_ISSUER: https://token.actions.githubusercontent.com",
 		"RELEASE_PUBLICATION_IMAGE_REPOSITORY: ${{ vars.RELEASE_PUBLICATION_IMAGE_REPOSITORY }}",
 		"ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}",
@@ -203,7 +205,8 @@ func TestReleaseRunbookDocumentsExternalAuthorizationBoundary(t *testing.T) {
 		"`actions: read`",
 		"credential-free HTTPS",
 		"fixed unauthenticated",
-		"`https://github.com/mfow/llm-temporal-worker.git`",
+		"`${{ github.server_url }}/${{ github.repository }}.git`",
+		"`https://github.com/{job_workflow_ref}`",
 		"`github.sha`",
 		"`.github/workflows/master.yml`",
 		"only as the input to GitHub's",
@@ -978,6 +981,9 @@ func assertAnonymousFixedPublicCheckout(t *testing.T, workflow workflowDocument)
 		if got := scalarString(t, workflow.name, checkoutEnv, "TRUSTED_MASTER_SHA"); got != "${{ github.sha }}" {
 			t.Fatalf("%s job %q anonymous checkout must bind the protected workflow revision, got %q", workflow.name, jobName, got)
 		}
+		if got := scalarString(t, workflow.name, checkoutEnv, "SOURCE_REPOSITORY_URL"); got != "${{ github.server_url }}/${{ github.repository }}.git" {
+			t.Fatalf("%s job %q anonymous checkout must fetch the running repository, got %q", workflow.name, jobName, got)
+		}
 		checkoutRun := scalarString(t, workflow.name, checkoutStep, "run")
 		for _, want := range []string{
 			`test -z "$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -print -quit)"`,
@@ -985,7 +991,7 @@ func assertAnonymousFixedPublicCheckout(t *testing.T, workflow workflowDocument)
 			`export GIT_TERMINAL_PROMPT=0`,
 			`export GIT_ASKPASS=/bin/false`,
 			`git init --quiet "$GITHUB_WORKSPACE"`,
-			`git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git`,
+			`git -C "$GITHUB_WORKSPACE" remote add origin "$SOURCE_REPOSITORY_URL"`,
 			`git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin`,
 			`+refs/heads/master:refs/remotes/origin/master`,
 			`"$RELEASE_REF:$RELEASE_REF"`,
