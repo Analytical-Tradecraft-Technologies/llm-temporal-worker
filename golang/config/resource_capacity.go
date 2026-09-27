@@ -14,10 +14,15 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 )
 
 const resourceCapacityManifestSchemaVersion = "competition_resource_capacity_manifest/v1"
 const productionMaxForecastEnsembleSize = 3
+
+// resourceCapacityContentAddressPrefix is TML's frozen capacity artifact
+// locator form, urn:sha256:<manifest_sha256>.
+const resourceCapacityContentAddressPrefix = "urn:sha256:"
 
 var resourceCapacitySHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -229,17 +234,27 @@ func (value ResourceCapacityConfig) validate(environment string) error {
 	if err := validateIdentifier(value.ArtifactID, "resource_capacity.artifact_id"); err != nil {
 		return err
 	}
-	locator, err := url.Parse(value.ArtifactLocator)
-	if err != nil {
+	if strings.HasPrefix(value.ArtifactLocator, resourceCapacityContentAddressPrefix) {
+		// TML freezes the capacity artifact as a content address. It names the
+		// exact signed bytes only when it equals manifest_sha256, which
+		// VerifyResourceCapacity binds to the manifest file before checking its
+		// signature, so it is at least as strong as an s3 location.
+		digest := strings.TrimPrefix(value.ArtifactLocator, resourceCapacityContentAddressPrefix)
+		if !resourceCapacitySHA256Pattern.MatchString(digest) {
+			return errors.New("resource_capacity.artifact_locator urn:sha256 must carry 64 lowercase hex characters")
+		}
+		if digest != value.ManifestSHA256 {
+			return errors.New("resource_capacity.artifact_locator urn:sha256 must equal manifest_sha256")
+		}
+	} else if locator, err := url.Parse(value.ArtifactLocator); err != nil {
 		return errors.New("resource_capacity.artifact_locator is invalid")
-	}
-	if locator.Scheme == "file" && environment == "development" {
+	} else if locator.Scheme == "file" && environment == "development" {
 		canonical := (&url.URL{Scheme: "file", Path: value.ManifestFile}).String()
 		if locator.Host != "" || locator.User != nil || locator.Opaque != "" || locator.RawQuery != "" || locator.ForceQuery || locator.Fragment != "" || value.ArtifactLocator != canonical {
 			return errors.New("development resource_capacity.artifact_locator must be the canonical file URI for manifest_file without authority, query or fragment")
 		}
 	} else if locator.Scheme != "s3" || locator.Host == "" || locator.Path == "" {
-		return errors.New("resource_capacity.artifact_locator must be an explicit s3 URI outside development local-file mode")
+		return errors.New("resource_capacity.artifact_locator must be an explicit s3 URI or urn:sha256:<manifest_sha256> outside development local-file mode")
 	}
 	if err := validateIdentifier(value.GenerationID, "resource_capacity.generation_id"); err != nil {
 		return err

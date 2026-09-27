@@ -469,6 +469,14 @@ telemetry:
   content_logging: disabled
 ```
 
+`resource_capacity.artifact_locator` is an explicit `s3://bucket/key` URI or
+the content address TML freezes in its schedule and profile,
+`urn:sha256:<hex>`. The content address is accepted only when `<hex>` equals
+`manifest_sha256` (64 lowercase hex characters), which the worker binds to the
+manifest file before verifying its signature; a mismatched or malformed
+address, or any other scheme, is refused while validating the configuration.
+Development may instead use the canonical `file://` URI of `manifest_file`.
+
 `resource_capacity.limits.forecast_event_max_inflight` accepts only the
 generations TML authorises: `2` (the pre-season generation that signed test
 and smoke manifests carry) or `5` (the Fall 2026 FutureEval generation, where
