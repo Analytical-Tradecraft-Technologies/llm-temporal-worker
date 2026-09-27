@@ -663,6 +663,15 @@ func priceDescriptorMaximum(descriptor llm.ReserveBatchOperationV1, entry pricin
 	if entry.MaxPromptTokens > 0 && descriptor.MaxInputTokens > entry.MaxPromptTokens {
 		return pricing.USD{}, fmt.Errorf("max_input_tokens %d exceeds the price entry's max_prompt_tokens %d: the provider bills a higher tier above it", descriptor.MaxInputTokens, entry.MaxPromptTokens)
 	}
+	// A model the provider caches automatically may report the whole prompt as
+	// cache reads or writes. Admitting it under a smaller signed ceiling would
+	// dispatch a call that is billed and then refused in finalizeGenerate.
+	if entry.AutomaticCacheRead && descriptor.MaxCacheReadTokens < descriptor.MaxInputTokens {
+		return pricing.USD{}, fmt.Errorf("model %q bills automatic prompt-cache reads: max_cache_read_tokens %d must be at least max_input_tokens %d", entry.Model, descriptor.MaxCacheReadTokens, descriptor.MaxInputTokens)
+	}
+	if entry.AutomaticCacheWrite && descriptor.MaxCacheWriteTokens < descriptor.MaxInputTokens {
+		return pricing.USD{}, fmt.Errorf("model %q bills automatic prompt-cache writes: max_cache_write_tokens %d must be at least max_input_tokens %d", entry.Model, descriptor.MaxCacheWriteTokens, descriptor.MaxInputTokens)
+	}
 	components := []struct {
 		component   pricing.PriceComponent
 		price       pricing.DecimalUSD
@@ -783,7 +792,12 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	estimator.MaxReasoning = 0
 	estimator.CacheBounds = &budget.CacheTokenBounds{Read: bounds.MaxCacheReadTokens, Write: bounds.MaxCacheWriteTokens}
 	grantedEstimate, estimateErr := estimator.EstimateCandidate(route.Execution.Request, route.Execution.Candidate, route.Execution.Price)
-	if estimateErr != nil {
+	// A token-bound estimate (for example an automatic cache the signed
+	// ceilings cannot cover) is a deterministic refusal. Keep validating the
+	// grant identity and return it with the confirmed reservation below, so the
+	// operation terminalizes and its reservation is released.
+	tokenBound := errors.Is(estimateErr, budget.ErrTokenLimit)
+	if estimateErr != nil && !tokenBound {
 		return durablestore.RoutePlan{}, fmt.Errorf("estimate granted Generate components: %w", estimateErr)
 	}
 	// Policy matching preserves configuration order, whereas materializers may
@@ -806,6 +820,9 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 			return durablestore.RoutePlan{}, errors.New("Generate route budget window identity does not match its batch grant")
 		}
 		actual.AmountUSD = grantedEstimate.CostUSD
+		if tokenBound {
+			actual.AmountUSD = reserveRequest.Reservations[index].AmountUSD
+		}
 		if err := validateGrantedWindowReservation(actual, reserveRequest.Reservations[index]); err != nil {
 			return durablestore.RoutePlan{}, err
 		}
@@ -824,7 +841,7 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	grantedMaximum := reserveRequest.LogicalCostUSD
 	grantedMicro, err := pricing.CeilMicroFromUSD(grantedMaximum)
 	if err != nil || int64(grantedMicro) != admitted.RemainingMaxCostMicrounits ||
-		grantedEstimate.CostUSD.Cmp(grantedMaximum) > 0 {
+		(!tokenBound && grantedEstimate.CostUSD.Cmp(grantedMaximum) > 0) {
 		return durablestore.RoutePlan{}, errors.New("Generate estimate exceeds its signed batch grant ceiling")
 	}
 	route.Execution.Reservations = append([]admission.WindowReservation(nil), reserveRequest.Reservations...)
@@ -838,6 +855,9 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	}
 	if err := binding.cap.Estimator.ValidateCandidateTokenLimits(route.Execution.Request, route.Execution.Candidate); err != nil {
 		return route, fmt.Errorf("validate granted Generate token ceilings: %w", err)
+	}
+	if tokenBound {
+		return route, fmt.Errorf("estimate granted Generate components: %w", estimateErr)
 	}
 	if grantedEstimate.InputTokens > bounds.MaxInputTokens ||
 		grantedEstimate.OutputTokens > bounds.MaxOutputTokens ||

@@ -8,6 +8,11 @@
 #   usage.cost receipt.
 # - Cache prices are the listed rates. The estimator charges cache tokens only
 #   up to the signed per-operation cache caps, so a cap of 0 adds no charge.
+# - automatic_cache marks what OpenRouter caches and bills without an opt-in
+#   (prompt-caching guide): GPT-5.6 and later read and write, Gemini 2.5 and
+#   later read implicitly. Reserve-batch then requires the matching signed
+#   cache caps to be at least max_input_tokens; Opus caches only with
+#   cache_control, which the worker never sends.
 # - GPT-6 Astra switches to 20/75 above 272,000 prompt tokens and Gemini 3.1
 #   Pro to 4/18 above 200,000. max_prompt_tokens records the boundary: the
 #   worker refuses to load a config whose limits.max_input_tokens exceeds it,
@@ -46,6 +51,7 @@ entries:
     cache_write_per_million: "12.5"
     per_request: "0"
     max_prompt_tokens: 272000
+    automatic_cache: [read, write]
     effective_from: 2026-09-26T00:00:00Z
     source: "openrouter.ai/openai/gpt-6-astra provider openai standard, read 2026-09-26 (prompts up to 272000 tokens)"
 
@@ -62,5 +68,6 @@ entries:
     cache_write_per_million: "0.375"
     per_request: "0"
     max_prompt_tokens: 200000
+    automatic_cache: [read]
     effective_from: 2026-09-26T00:00:00Z
     source: "openrouter.ai/google/gemini-3.1-pro-preview provider google-vertex/global standard, read 2026-09-26 (prompts up to 200000 tokens)"

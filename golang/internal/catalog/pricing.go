@@ -33,12 +33,15 @@ type pricingEntryFile struct {
 	PerRequest     decimalValue `yaml:"per_request"`
 	// MaxPromptTokens is the largest prompt the quote covers, for providers
 	// that bill a higher tier above a prompt-size threshold.
-	MaxPromptTokens int64     `yaml:"max_prompt_tokens"`
-	EffectiveFrom   time.Time `yaml:"effective_from"`
-	EffectiveUntil  time.Time `yaml:"effective_until"`
-	Source          string    `yaml:"source"`
-	Provenance      string    `yaml:"provenance"`
-	Version         string    `yaml:"version"`
+	MaxPromptTokens int64 `yaml:"max_prompt_tokens"`
+	// AutomaticCache lists the cache components the provider bills without
+	// an opt-in: read, write.
+	AutomaticCache []string  `yaml:"automatic_cache"`
+	EffectiveFrom  time.Time `yaml:"effective_from"`
+	EffectiveUntil time.Time `yaml:"effective_until"`
+	Source         string    `yaml:"source"`
+	Provenance     string    `yaml:"provenance"`
+	Version        string    `yaml:"version"`
 }
 
 type decimalValue struct {
@@ -153,6 +156,17 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 	if err := validateIdentifier(providerTier, path+".provider_tier"); err != nil {
 		return pricing.Entry{}, err
 	}
+	automaticRead, automaticWrite := false, false
+	for index, component := range fileEntry.AutomaticCache {
+		switch {
+		case component == "read" && !automaticRead:
+			automaticRead = true
+		case component == "write" && !automaticWrite:
+			automaticWrite = true
+		default:
+			return pricing.Entry{}, fmt.Errorf("%s.automatic_cache[%d] must be a distinct read or write", path, index)
+		}
+	}
 	if fileEntry.MaxPromptTokens < 0 {
 		return pricing.Entry{}, fmt.Errorf("%s.max_prompt_tokens must not be negative", path)
 	}
@@ -191,18 +205,20 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 		unknownComponents = append(unknownComponents, pricing.PriceComponentPerRequest)
 	}
 	return pricing.Entry{
-		Provider:          providerName,
-		Family:            string(family),
-		EndpointID:        endpointID,
-		Region:            fileEntry.Region,
-		Model:             fileEntry.Model,
-		ProviderTier:      providerTier,
-		Prices:            pricing.UnitPrices{InputPerMillion: fileEntry.Input.value, OutputPerMillion: fileEntry.Output.value, CacheReadPerMillion: fileEntry.CacheRead.value, CacheWritePerMillion: fileEntry.CacheWrite.value, ReasoningPerMillion: fileEntry.Reasoning.value, PerRequest: fileEntry.PerRequest.value},
-		UnknownComponents: unknownComponents,
-		MaxPromptTokens:   fileEntry.MaxPromptTokens,
-		EffectiveFrom:     fileEntry.EffectiveFrom,
-		EffectiveUntil:    fileEntry.EffectiveUntil,
-		Provenance:        provenance,
-		Version:           entryVersion,
+		Provider:            providerName,
+		Family:              string(family),
+		EndpointID:          endpointID,
+		Region:              fileEntry.Region,
+		Model:               fileEntry.Model,
+		ProviderTier:        providerTier,
+		Prices:              pricing.UnitPrices{InputPerMillion: fileEntry.Input.value, OutputPerMillion: fileEntry.Output.value, CacheReadPerMillion: fileEntry.CacheRead.value, CacheWritePerMillion: fileEntry.CacheWrite.value, ReasoningPerMillion: fileEntry.Reasoning.value, PerRequest: fileEntry.PerRequest.value},
+		UnknownComponents:   unknownComponents,
+		MaxPromptTokens:     fileEntry.MaxPromptTokens,
+		AutomaticCacheRead:  automaticRead,
+		AutomaticCacheWrite: automaticWrite,
+		EffectiveFrom:       fileEntry.EffectiveFrom,
+		EffectiveUntil:      fileEntry.EffectiveUntil,
+		Provenance:          provenance,
+		Version:             entryVersion,
 	}, nil
 }

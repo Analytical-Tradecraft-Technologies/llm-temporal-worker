@@ -56,10 +56,17 @@ type Entry struct {
 	// means the quote has no prompt-size tier. It is omitted from the
 	// canonical digest when zero so existing catalog identities are unchanged.
 	MaxPromptTokens int64 `json:",omitempty"`
-	EffectiveFrom   time.Time
-	EffectiveUntil  time.Time
-	Provenance      string
-	Version         string
+	// AutomaticCacheRead and AutomaticCacheWrite mark models the provider
+	// caches without an opt-in and bills for it (OpenRouter: GPT-5.6 and later
+	// read and write, Gemini 2.5 and later read implicitly). Any prompt may then
+	// report cache tokens, so admission requires cache ceilings that cover the
+	// whole prompt. Omitted from the canonical digest when false.
+	AutomaticCacheRead  bool `json:",omitempty"`
+	AutomaticCacheWrite bool `json:",omitempty"`
+	EffectiveFrom       time.Time
+	EffectiveUntil      time.Time
+	Provenance          string
+	Version             string
 }
 
 func (entry Entry) ComponentUnknown(component PriceComponent) bool {

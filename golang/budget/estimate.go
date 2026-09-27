@@ -127,8 +127,14 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 			return Estimate{}, fmt.Errorf("%w: reasoning tokens %d exceed %d", ErrTokenLimit, reasoningTokens, estimator.MaxReasoning)
 		}
 	}
-	cacheRead := estimator.cacheTokens(inputTokens, entry, pricing.PriceComponentCacheRead, entry.Prices.CacheReadPerMillion)
-	cacheWrite := estimator.cacheTokens(inputTokens, entry, pricing.PriceComponentCacheWrite, entry.Prices.CacheWritePerMillion)
+	cacheRead, err := estimator.cacheTokens(inputTokens, entry, pricing.PriceComponentCacheRead, entry.Prices.CacheReadPerMillion, entry.AutomaticCacheRead)
+	if err != nil {
+		return Estimate{}, err
+	}
+	cacheWrite, err := estimator.cacheTokens(inputTokens, entry, pricing.PriceComponentCacheWrite, entry.Prices.CacheWritePerMillion, entry.AutomaticCacheWrite)
+	if err != nil {
+		return Estimate{}, err
+	}
 	components := []struct {
 		component     pricing.PriceComponent
 		price         pricing.DecimalUSD
@@ -190,20 +196,29 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 // cacheTokens is the conservative cache-token assumption for one component:
 // every input token when the component is priced or unknown, clipped to the
 // signed ceiling when one applies. A zero ceiling therefore never charges
-// cache tokens, whatever the catalog price.
-func (estimator Estimator) cacheTokens(inputTokens int64, entry pricing.Entry, component pricing.PriceComponent, price pricing.DecimalUSD) int64 {
-	if !entry.ComponentUnknown(component) && price.CanonicalString() == "0" {
-		return 0
-	}
-	tokens := inputTokens
+// cache tokens, whatever the catalog price, unless the provider caches
+// automatically: then any prompt may report its whole length as cache
+// tokens, and a ceiling below the prompt is refused before dispatch.
+func (estimator Estimator) cacheTokens(inputTokens int64, entry pricing.Entry, component pricing.PriceComponent, price pricing.DecimalUSD, automatic bool) (int64, error) {
+	limit := int64(-1)
 	if estimator.CacheBounds != nil {
-		limit := estimator.CacheBounds.Read
+		limit = max(estimator.CacheBounds.Read, 0)
 		if component == pricing.PriceComponentCacheWrite {
-			limit = estimator.CacheBounds.Write
+			limit = max(estimator.CacheBounds.Write, 0)
 		}
-		tokens = min(tokens, max(limit, 0))
+		// The signed ceiling bounds reported usage whatever the price, so an
+		// automatic cache is refused even when it is free.
+		if automatic && limit < inputTokens {
+			return 0, fmt.Errorf("%w: model bills automatic %s tokens but the signed ceiling %d is below the %d-token prompt", ErrTokenLimit, component, limit, inputTokens)
+		}
 	}
-	return tokens
+	if !entry.ComponentUnknown(component) && price.CanonicalString() == "0" {
+		return 0, nil
+	}
+	if limit >= 0 {
+		return min(inputTokens, limit), nil
+	}
+	return inputTokens, nil
 }
 
 func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, entries map[string]pricing.Entry) (Estimate, error) {

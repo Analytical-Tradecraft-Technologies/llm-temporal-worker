@@ -236,3 +236,44 @@ func TestOpenRouterPriceTierBoundaryIsEnforced(t *testing.T) {
 		t.Fatalf("persisted price lost its prompt ceiling: %#v %v", restored, err)
 	}
 }
+
+// OpenRouter bills GPT-6 automatic cache reads and writes and Gemini implicit
+// cache reads on any eligible prompt. Reserve-batch refuses signed cache caps
+// that cannot cover the prompt instead of admitting a call that is billed and
+// then refused in finalizeGenerate; Opus is cached only on request.
+func TestOpenRouterAutomaticCacheNeedsCoveringCaps(t *testing.T) {
+	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	snapshot, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compileOpenRouterDeployment(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		endpoint, model   string
+		read, write, want string
+	}{
+		{endpoint: "openrouter-openai-gpt6-astra", model: "openai/gpt-6-astra", want: "bills automatic prompt-cache reads: max_cache_read_tokens 0 must be at least max_input_tokens 131072"},
+		{endpoint: "openrouter-openai-gpt6-astra", model: "openai/gpt-6-astra", read: "full", want: "bills automatic prompt-cache writes: max_cache_write_tokens 0"},
+		{endpoint: "openrouter-openai-gpt6-astra", model: "openai/gpt-6-astra", read: "full", write: "full"},
+		{endpoint: "openrouter-google-gemini31-pro", model: "google/gemini-3.1-pro-preview", want: "bills automatic prompt-cache reads"},
+		{endpoint: "openrouter-google-gemini31-pro", model: "google/gemini-3.1-pro-preview", read: "full"},
+		{endpoint: "openrouter-anthropic-opus55", model: "anthropic/claude-opus-5.5"},
+	} {
+		t.Run(test.endpoint+"/"+test.read+"-"+test.write, func(t *testing.T) {
+			quote, err := snapshot.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: test.endpoint, Region: "global", Model: test.model, ProviderTier: "default", At: now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			descriptor := llm.ReserveBatchOperationV1{ServiceClass: llm.ServiceClassStandard, MaxInputTokens: 131072, MaxOutputTokens: 4000, MaxReasoningTokens: 8000}
+			if test.read == "full" {
+				descriptor.MaxCacheReadTokens = descriptor.MaxInputTokens
+			}
+			if test.write == "full" {
+				descriptor.MaxCacheWriteTokens = descriptor.MaxInputTokens
+			}
+			_, err = priceDescriptorMaximum(descriptor, quote.Entry)
+			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}

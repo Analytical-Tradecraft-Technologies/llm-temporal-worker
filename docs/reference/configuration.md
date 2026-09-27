@@ -983,6 +983,15 @@ configured route, refuses a reserve-batch operation whose `max_input_tokens`
 exceeds it, and refuses to price a larger prompt with that entry. Zero or
 omitted means no prompt-size tier.
 
+`automatic_cache: [read, write]` marks cache components the provider bills
+without an opt-in (OpenRouter's prompt-caching guide: GPT-5.6 and later read
+and write automatically, Gemini 2.5 and later read implicitly). Any prompt may
+then report cache tokens, so a reserve-batch operation on that entry must sign
+`max_cache_read_tokens` (and `max_cache_write_tokens` for `write`) of at least
+its `max_input_tokens`; otherwise the reservation is refused before dispatch
+instead of admitting a call that is billed and then rejected against its
+signed cache ceiling. The listed cache components need known prices.
+
 Prices in examples are illustrative. Production catalogs require provenance and
 review; they never refresh silently from an untrusted endpoint.
 Every decimal property is defined as USD by its field name and catalog

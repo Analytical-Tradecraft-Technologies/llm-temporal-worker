@@ -284,8 +284,8 @@ func validatePersistableCatalog(catalog pricing.Catalog) (pricing.Catalog, error
 		if entry.Provenance != "" {
 			return pricing.Catalog{}, fmt.Errorf("pricing entry %d provenance is not representable by the existing PostgreSQL projection", index)
 		}
-		if entry.MaxPromptTokens != 0 {
-			return pricing.Catalog{}, fmt.Errorf("pricing entry %d max_prompt_tokens is not representable by the existing PostgreSQL projection", index)
+		if entry.MaxPromptTokens != 0 || entry.AutomaticCacheRead || entry.AutomaticCacheWrite {
+			return pricing.Catalog{}, fmt.Errorf("pricing entry %d max_prompt_tokens or automatic_cache is not representable by the existing PostgreSQL projection", index)
 		}
 		if entry.Version != catalog.Version {
 			return pricing.Catalog{}, fmt.Errorf("pricing entry %d version %q must equal catalog version %q for PostgreSQL digest round-trip", index, entry.Version, catalog.Version)

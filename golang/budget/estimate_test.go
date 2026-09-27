@@ -254,6 +254,42 @@ func TestEstimateCandidateRefusesPromptAbovePriceTier(t *testing.T) {
 	}
 }
 
+func TestEstimateCandidateRefusesAutomaticCacheAboveSignedCaps(t *testing.T) {
+	request := llm.Request{OperationKey: "estimate-auto-cache", Model: "logical", Output: &llm.OutputSpec{MaxTokens: intPointer(0)}}
+	tokenizer := func(llm.Request, routing.Candidate) (int64, error) { return 1_000, nil }
+	// GPT-6 Astra list prices; OpenRouter caches it automatically.
+	gpt6 := pricing.Entry{AutomaticCacheRead: true, AutomaticCacheWrite: true, Prices: pricing.UnitPrices{
+		InputPerMillion: pricing.MustDecimalUSD("10"), CacheReadPerMillion: pricing.MustDecimalUSD("1"), CacheWritePerMillion: pricing.MustDecimalUSD("12.5"),
+	}}
+	freeRead := pricing.Entry{AutomaticCacheRead: true, Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("2")}}
+	for _, test := range []struct {
+		name   string
+		entry  pricing.Entry
+		bounds *CacheTokenBounds
+		refuse bool
+		cost   string
+	}{
+		{name: "zero caps", entry: gpt6, bounds: &CacheTokenBounds{}, refuse: true},
+		{name: "write cap below prompt", entry: gpt6, bounds: &CacheTokenBounds{Read: 1_000, Write: 999}, refuse: true},
+		{name: "free automatic read still bounded by the cap", entry: freeRead, bounds: &CacheTokenBounds{}, refuse: true},
+		{name: "caps cover the prompt", entry: gpt6, bounds: &CacheTokenBounds{Read: 1_000, Write: 1_000}, cost: "0.023500000000000000"},
+		{name: "uncapped", entry: gpt6, cost: "0.023500000000000000"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			estimate, err := (Estimator{Tokenizer: tokenizer, CacheBounds: test.bounds}).EstimateCandidate(request, routing.Candidate{ID: "gpt6"}, test.entry)
+			if test.refuse {
+				if !errors.Is(err, ErrTokenLimit) {
+					t.Fatalf("error = %v, want %v", err, ErrTokenLimit)
+				}
+				return
+			}
+			if err != nil || estimate.CostUSD.String() != test.cost {
+				t.Fatalf("estimate = %s, %v; want %s", estimate.CostUSD.String(), err, test.cost)
+			}
+		})
+	}
+}
+
 func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 	request := llm.Request{Model: "logical", ServiceClass: llm.ServiceClassStandard}
 	context := ContextFor(request, routing.Candidate{EndpointID: "ep", AttemptedClass: llm.ServiceClassPriority}, "prod")

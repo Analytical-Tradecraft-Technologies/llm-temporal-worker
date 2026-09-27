@@ -81,6 +81,9 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 			entry.UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
 			sort.Slice(entry.UnknownComponents, func(i, j int) bool { return entry.UnknownComponents[i] < entry.UnknownComponents[j] })
 		}
+		if (entry.AutomaticCacheRead && entry.ComponentUnknown(PriceComponentCacheRead)) || (entry.AutomaticCacheWrite && entry.ComponentUnknown(PriceComponentCacheWrite)) {
+			return Catalog{}, fmt.Errorf("pricing entry %d bills automatic caching but leaves that cache price unknown", index)
+		}
 		if entry.MaxPromptTokens < 0 {
 			return Catalog{}, fmt.Errorf("pricing entry %d max prompt tokens must not be negative", index)
 		}
