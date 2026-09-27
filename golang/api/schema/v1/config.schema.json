@@ -140,7 +140,7 @@
             },
             "search_fetch_max_inflight": { "type": "integer", "minimum": 64, "maximum": 4096 },
             "python_stage2_max_inflight": { "type": "integer", "minimum": 6, "maximum": 4096 },
-            "forecast_event_max_inflight": { "const": 2 },
+            "forecast_event_max_inflight": { "enum": [2, 5] },
             "forecast_event_admission_wait_seconds": { "const": 5 },
             "provider_call_execution_overhead_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
             "provider_call_queue_seconds": { "type": "integer", "minimum": 1, "maximum": 30 },

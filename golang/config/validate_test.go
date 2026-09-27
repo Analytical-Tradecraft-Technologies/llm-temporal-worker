@@ -494,6 +494,32 @@ func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 	}
 }
 
+func TestConfigSchemaAcceptsOnlyAuthorizedForecastEventInflight(t *testing.T) {
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for events, valid := range map[int]bool{2: true, 5: true, 3: false, 4: false} {
+		loaded, err := config.Load(exampleYAML(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded.ResourceCapacity.Limits.ForecastEventMaxInflight = events
+		loaded.ResourceCapacity.Limits.PythonStage2MaxInflight = 15
+		encoded, err := json.Marshal(loaded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := compiled.Validate(encoded); (err == nil) != valid {
+			t.Fatalf("forecast_event_max_inflight %d schema error = %v, want valid=%v", events, err, valid)
+		}
+	}
+}
+
 func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
 	if err != nil {
