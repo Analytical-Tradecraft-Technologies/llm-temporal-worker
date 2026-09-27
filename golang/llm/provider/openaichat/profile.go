@@ -60,8 +60,8 @@ type WireShape struct {
 	// ReasoningEffortField selects the wire location of a reasoning effort.
 	ReasoningEffortField ReasoningEffortField
 	// ReasoningEfforts maps each supported public effort to the exact provider
-	// value. Nil keeps the default top-level mapping (maximum becomes xhigh,
-	// the strongest value Chat Completions accepts). A non-nil map is closed:
+	// value. Nil keeps the default top-level mapping (maximum becomes max, as
+	// in the SDK's reasoning_effort vocabulary). A non-nil map is closed:
 	// an unmapped effort is rejected while compiling, before dispatch. The
 	// object field has no default mapping.
 	ReasoningEfforts map[llm.ReasoningEffort]string
@@ -374,23 +374,23 @@ func (shape WireShape) validate(profileID string) error {
 }
 
 // topLevelReasoningEfforts is the Chat Completions reasoning_effort
-// vocabulary shared by OpenAI and OpenRouter's documented parameter. "none"
-// is excluded because no public effort disables reasoning, and "max" is
-// excluded because it is not a top-level Chat Completions value.
-var topLevelReasoningEfforts = map[string]struct{}{"minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}}
+// vocabulary documented by the pinned openai-go SDK (ChatCompletionNewParams
+// ReasoningEffort: none, minimal, low, medium, high, xhigh, max). "none" is
+// excluded because no public effort disables reasoning.
+var topLevelReasoningEfforts = map[string]struct{}{"minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {}}
 
 // objectReasoningEfforts is OpenRouter's unified reasoning.effort vocabulary
 // without "none".
 var objectReasoningEfforts = map[string]struct{}{"minimal": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {}}
 
-// defaultTopLevelReasoningEfforts preserves the ordinary OpenAI Chat mapping.
-// maximum becomes xhigh, the strongest effort the top-level field accepts.
+// defaultTopLevelReasoningEfforts is the ordinary OpenAI Chat mapping, the
+// same one the Responses, Anthropic and Bedrock adapters use: maximum is max.
 var defaultTopLevelReasoningEfforts = map[llm.ReasoningEffort]string{
 	llm.ReasoningEffortMinimal: "minimal",
 	llm.ReasoningEffortLow:     "low",
 	llm.ReasoningEffortMedium:  "medium",
 	llm.ReasoningEffortHigh:    "high",
-	llm.ReasoningEffortMaximum: "xhigh",
+	llm.ReasoningEffortMaximum: "max",
 }
 
 func (shape WireShape) reasoningFieldName() string {

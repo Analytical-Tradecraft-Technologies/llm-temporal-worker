@@ -877,13 +877,12 @@ a worker starts. Every field other than `provider_order` and
 reports it as `priority`). Endpoints that map more than one class send
 `service_tier` explicitly.
 
-`maximum` is never lowered to a top-level `reasoning_effort: "max"`. On an
-OpenRouter endpoint it becomes the configured `reasoning.effort`, normally
-`max` when the model page lists it (Claude Opus 5.5, GPT-6 Astra); leave it
-unmapped for a model without it (Gemini 3.1 Pro lists only low, medium and
-high) so the request is refused instead of silently downgraded. Generic Chat
-Completions endpoints map `maximum` to `xhigh`, the strongest value their
-top-level `reasoning_effort` accepts.
+On an OpenRouter endpoint `maximum` becomes the configured `reasoning.effort`,
+normally `max` when the model page lists it (Claude Opus 5.5, GPT-6 Astra);
+leave it unmapped for a model without it (Gemini 3.1 Pro lists only low,
+medium and high) so the request is refused instead of silently downgraded.
+Generic and Azure Chat Completions endpoints send `reasoning_effort: "max"`,
+a value the pinned openai-go SDK documents for that field.
 
 The response `model` echo is part of the route contract. It must equal the
 route model or one of its `model_aliases`; anything else, including an empty
