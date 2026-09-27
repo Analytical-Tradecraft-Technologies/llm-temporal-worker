@@ -71,11 +71,20 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		requestMap["tool_choice"] = policy
 	}
 	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
-		if profile.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported {
+		switch profile.WireShape.ParallelToolCalls {
+		case DefaultFalseFieldUnsupported:
 			if request.ToolPolicy.Parallel {
 				return openai.ChatCompletionNewParams{}, fmt.Errorf("profile %q does not support parallel_tool_calls", profile.ID)
 			}
-		} else {
+		case DefaultTrueFieldUnsupported:
+			// The upstream default is parallel, so omitting the field keeps
+			// Parallel=true. Sequential tool use cannot be expressed; refuse it
+			// while compiling whenever the model may call a tool, rather than
+			// paying for a response that may carry several calls.
+			if !request.ToolPolicy.Parallel && len(request.Tools) > 0 && request.ToolPolicy.Mode != llm.ToolChoiceNone {
+				return openai.ChatCompletionNewParams{}, fmt.Errorf("profile %q cannot request sequential tool calls: the pinned upstream does not support parallel_tool_calls and defaults it to true", profile.ID)
+			}
+		default:
 			requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
 		}
 	}

@@ -196,7 +196,9 @@ func openRouterWireShape(config OpenRouterProfileConfig) (WireShape, map[string]
 	shape := WireShape{
 		OutputTokenLimitField: OutputTokenLimitFieldMaxCompletionTokens,
 		Store:                 DefaultFalseFieldUnsupported,
-		ParallelToolCalls:     DefaultFalseFieldUnsupported,
+		// OpenRouter documents parallel_tool_calls with default true, and the
+		// pinned upstreams run tool calls in parallel when it is absent.
+		ParallelToolCalls: DefaultTrueFieldUnsupported,
 		ReasoningEffortField:  ReasoningEffortFieldObject,
 		ReasoningEfforts:      map[llm.ReasoningEffort]string{},
 	}

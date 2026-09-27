@@ -186,7 +186,10 @@ func TestOpenRouterRefusesUnsupportedRequestsBeforeDispatch(t *testing.T) {
 		{name: "unlisted output cap", mutate: func(config *OpenRouterProfileConfig) {
 			config.SupportedParameters = []string{"reasoning", "response_format", "structured_outputs", "tool_choice"}
 		}, want: "does not support request parameters max_completion_tokens"},
-		{name: "parallel tool calls", request: func(request *llm.Request) { request.ToolPolicy.Parallel = true }, want: "does not support parallel_tool_calls"},
+		{name: "sequential callable tools", request: func(request *llm.Request) {
+			request.Tools = []llm.Tool{{Name: "search", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+			request.ToolPolicy = llm.ToolPolicy{Mode: llm.ToolChoiceAuto, Parallel: false}
+		}, want: "cannot request sequential tool calls"},
 		{name: "unmapped maximum effort", mutate: gemini, request: func(request *llm.Request) { request.Reasoning.Effort = llm.ReasoningEffortMaximum }, want: `reasoning effort "maximum" is not mapped`},
 		{name: "unmapped minimal effort", request: func(request *llm.Request) { request.Reasoning.Effort = llm.ReasoningEffortMinimal }, want: `reasoning effort "minimal" is not mapped`},
 		{name: "disabled reasoning", request: func(request *llm.Request) { request.Reasoning.Mode = llm.ReasoningModeDisabled }, want: "cannot be disabled"},
@@ -199,6 +202,34 @@ func TestOpenRouterRefusesUnsupportedRequestsBeforeDispatch(t *testing.T) {
 			_, err := lowerRequest(request, openRouterTestProfile(t, test.mutate), "default")
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+// OpenRouter defaults parallel_tool_calls to true and the pinned endpoints do
+// not list it: parallel tool use is the omitted default, and a request that
+// cannot call tools needs no parallel policy.
+func TestOpenRouterParallelToolPolicyUsesUpstreamDefault(t *testing.T) {
+	tools := []llm.Tool{{Name: "search", InputSchema: json.RawMessage(`{"type":"object"}`)}}
+	for _, test := range []struct {
+		name   string
+		tools  []llm.Tool
+		policy llm.ToolPolicy
+	}{
+		{name: "parallel auto", tools: tools, policy: llm.ToolPolicy{Mode: llm.ToolChoiceAuto, Parallel: true}},
+		{name: "tools disabled", tools: tools, policy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}},
+		{name: "no tools", policy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := openRouterForecastRequest("anthropic/claude-opus-5.5", llm.ReasoningEffortHigh)
+			request.Tools, request.ToolPolicy = test.tools, test.policy
+			params, err := lowerRequest(request, openRouterTestProfile(t, nil), "default")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := marshalWire(t, params)["parallel_tool_calls"]; exists {
+				t.Fatalf("unsupported parallel_tool_calls emitted")
 			}
 		})
 	}

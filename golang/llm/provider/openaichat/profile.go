@@ -31,6 +31,11 @@ type DefaultFalseFieldSupport string
 const (
 	DefaultFalseFieldSupported   DefaultFalseFieldSupport = ""
 	DefaultFalseFieldUnsupported DefaultFalseFieldSupport = "unsupported"
+	// DefaultTrueFieldUnsupported marks a field the upstream does not accept
+	// but treats as true when absent (OpenRouter documents parallel_tool_calls
+	// with default true). It is valid only for ParallelToolCalls: the field is
+	// omitted while true and a false value is refused.
+	DefaultTrueFieldUnsupported DefaultFalseFieldSupport = "unsupported_default_true"
 )
 
 // ReasoningEffortField selects where a public reasoning effort is lowered.
@@ -174,7 +179,7 @@ func NewProfile(profile Profile) (Profile, error) {
 	if copy.WireShape.Store == DefaultFalseFieldUnsupported {
 		copy.ReservedWireFields["store"] = struct{}{}
 	}
-	if copy.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported {
+	if copy.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported || copy.WireShape.ParallelToolCalls == DefaultTrueFieldUnsupported {
 		copy.ReservedWireFields["parallel_tool_calls"] = struct{}{}
 	}
 	if copy.WireShape.OutputTokenLimitField != "" {
@@ -308,7 +313,7 @@ func (profile Profile) validate() error {
 			return fmt.Errorf("openai chat profile %q omitted service_tier must map a missing actual tier to %q", profile.ID, supportedClass)
 		}
 	}
-	if profile.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported {
+	if profile.WireShape.ParallelToolCalls == DefaultFalseFieldUnsupported || profile.WireShape.ParallelToolCalls == DefaultTrueFieldUnsupported {
 		if _, exists := profile.WireDefaults["parallel_tool_calls"]; exists {
 			return fmt.Errorf("openai chat profile %q cannot default unsupported wire field %q", profile.ID, "parallel_tool_calls")
 		}
@@ -347,7 +352,7 @@ func (shape WireShape) validate(profileID string) error {
 		return fmt.Errorf("openai chat profile %q store field support %q is invalid", profileID, shape.Store)
 	}
 	switch shape.ParallelToolCalls {
-	case DefaultFalseFieldSupported, DefaultFalseFieldUnsupported:
+	case DefaultFalseFieldSupported, DefaultFalseFieldUnsupported, DefaultTrueFieldUnsupported:
 	default:
 		return fmt.Errorf("openai chat profile %q parallel_tool_calls field support %q is invalid", profileID, shape.ParallelToolCalls)
 	}
