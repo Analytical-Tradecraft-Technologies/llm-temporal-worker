@@ -24,6 +24,12 @@ var ErrUnusablePrice = errors.New("candidate price is unusable")
 // without trying another provider or acquiring a budget reservation.
 var ErrTokenLimit = errors.New("request exceeds configured token limit")
 
+// ErrPromptTierExceeded marks a prompt larger than the price entry's
+// max_prompt_tokens: the provider would bill a higher tier than the quote. It
+// is also ErrUnusablePrice, so an ordinary route plan skips the candidate; a
+// granted operation classifies it as a deterministic token-limit refusal.
+var ErrPromptTierExceeded = errors.New("prompt exceeds the price entry's prompt-size tier")
+
 type Estimator struct {
 	MaxInput     int64
 	SafetyRatio  *big.Rat
@@ -105,7 +111,7 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	}
 	if entry.MaxPromptTokens > 0 && inputTokens > entry.MaxPromptTokens {
 		// Above this size the provider bills a higher tier than the quote.
-		return Estimate{}, fmt.Errorf("%w: prompt tokens %d exceed the price entry's max_prompt_tokens %d", ErrUnusablePrice, inputTokens, entry.MaxPromptTokens)
+		return Estimate{}, fmt.Errorf("%w: %w: prompt tokens %d exceed max_prompt_tokens %d", ErrUnusablePrice, ErrPromptTierExceeded, inputTokens, entry.MaxPromptTokens)
 	}
 	outputTokens := estimator.MaxOutput
 	if outputTokens <= 0 {

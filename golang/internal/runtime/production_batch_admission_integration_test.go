@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -381,5 +382,104 @@ func TestLiveRedisProductionBatchGrantMaterializationIdentity(t *testing.T) {
 				t.Fatal("replayed receipt renewed expired grant")
 			}
 		})
+	}
+}
+
+// A granted Generate whose prompt exceeds its signed max_input_tokens (which
+// reserve-batch keeps at or below the price entry's prompt-size tier, as for
+// Gemini 3.1 Pro above 200,000 tokens) must be refused as a deterministic
+// token-limit outcome that still holds the confirmed reservation, so the
+// no-dispatch terminal can release the grant instead of leaving it reserved
+// until lease expiry.
+func TestLiveRedisOversizedGrantedPromptReleasesItsGrant(t *testing.T) {
+	address := os.Getenv("LLMTW_REDIS_ADDR")
+	if address == "" {
+		t.Skip("set LLMTW_REDIS_ADDR to an isolated Redis to run the durable grant gate")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	client := redisclient.NewClient(&redisclient.Options{Addr: address})
+	t.Cleanup(func() { _ = client.Close() })
+	if os.Getenv("LLMTW_REDIS_TEST_PROVISION") == "1" {
+		if err := client.FunctionLoad(ctx, redisstore.AdmissionFunctionSource()).Err(); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	clock := func() time.Time { return now }
+	prefix := fmt.Sprintf("live-tier-%d", time.Now().UnixNano())
+	materializer, err := redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
+		Client: client, Mode: redisstore.AdmissionModeFunction,
+		Keys:         redisstore.KeyOptions{Prefix: prefix, HashTag: "admission", KeySecret: []byte(strings.Repeat("k", 32))},
+		GenerationID: "generation-grant", IncarnationID: "incarnation-grant", Clock: clock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := testPriceEntry("openrouter-google-gemini31-pro", "google/gemini-3.1-pro-preview", "default")
+	entry.Version, entry.MaxPromptTokens = "prices-v1", 200
+	catalog, err := pricing.CompileUSD("prices-v1", []pricing.Entry{entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := hex.EncodeToString(catalog.Digest[:])
+	routes := routing.Catalog{Models: map[string]routing.Model{"gemini": {Name: "gemini", Routes: []routing.Route{{
+		ID: "route-gemini", EndpointID: entry.EndpointID, Provider: entry.Provider, Family: entry.Family, Region: entry.Region,
+		Model: entry.Model, Classes: []llm.ServiceClass{llm.ServiceClassStandard},
+		ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, PriceAvailable: true,
+		Capabilities: routing.CapabilitySet{Version: "capabilities-v1", Features: map[routing.Feature]routing.Capability{routing.FeatureText: {State: routing.CapabilityNative}}},
+	}}}}}
+	calls := []string{}
+	binding := &productionPhaseBinding{
+		cap: V1RuntimeCapabilities{
+			Clock: clock, Planner: routing.DeterministicPlanner{}, ReservationLease: 30 * time.Minute, OperationRetention: 2 * time.Hour,
+			BudgetGenerationID: "generation-grant", BudgetIncarnationID: "incarnation-grant",
+			GrantKeyID: "grant-key", GrantHMACKey: []byte(strings.Repeat("h", 32)),
+			ResolveScope: func(context.Context, llm.RequestContext) (string, error) { return "scope-1", nil },
+			Snapshot: engine.StaticSnapshot{Value: engine.Snapshot{Routes: routes, Prices: pricing.NewResolver(catalog), RequireBudgetMatch: true,
+				BudgetPolicies: []budget.Policy{{ID: "policy", Windows: []budget.Window{{ID: "hour", Duration: time.Hour, Bucket: time.Minute, Limit: 100_000_000, LimitUSD: pricing.MustUSD("100")}}}}}},
+		},
+		composition: durablestore.Composition{Materializer: materializer, Operations: &immutableCaptureStore{calls: &calls}},
+	}
+	requestContext := llm.RequestContext{Tenant: "tenant", Project: "forecast", Actor: "actor"}
+	descriptor := llm.ReserveBatchOperationV1{OperationKey: "gemini-oversized", Model: "gemini", ServiceClass: llm.ServiceClassStandard, MaxInputTokens: 200, MaxOutputTokens: 100}
+	reserve := llm.ReserveBatchRequestV1{APIVersion: llm.ReserveBatchAPIVersion, Context: requestContext, CustomerID: "customer-1", RunID: "run-1", BudgetID: "budget-1", BatchKey: "direct",
+		PricingGenerationID: catalog.Version, PricingManifestSHA256: manifest, RemainingMaxCostMicrounits: 100_000_000, Operations: []llm.ReserveBatchOperationV1{descriptor}}
+	response, err := binding.reserveBatch(ctx, reserve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := response.Grants[0]
+	admitted := llm.CostAdmissionV1{APIVersion: llm.CostAdmissionAPIVersion, BudgetID: reserve.BudgetID, CustomerID: reserve.CustomerID, RunID: reserve.RunID, OperationKey: descriptor.OperationKey,
+		GatewayAttemptOrdinal: 1, BatchID: response.BatchID, BatchSHA256: response.BatchSHA256, GrantMaterializationRequestSHA256: response.RequestSHA256,
+		GrantID: grant.GrantID, GrantSHA256: grant.GrantSHA256, GrantKeyID: grant.GrantKeyID, GrantHMACSHA256: grant.GrantHMACSHA256,
+		PricingGenerationID: catalog.Version, PricingManifestSHA256: manifest, RemainingMaxCostMicrounits: grant.MaxCostMicrounits}
+	forecastContext := requestContext
+	forecastContext.Tags = map[string]string{llm.CostAdmissionContextTag: llm.CostAdmissionForecastV1}
+	generate := llm.GenerateRequestV1{APIVersion: llm.APIVersion, OperationKey: descriptor.OperationKey, Context: forecastContext, CostAdmission: &admitted}
+	grantUSD, err := pricing.USDFromMicro(pricing.MicroUSD(grant.MaxCostMicrounits))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := routing.Candidate{RouteID: "route-gemini", EndpointID: entry.EndpointID, Provider: entry.Provider, Family: entry.Family, Region: entry.Region, Model: entry.Model, RequestedClass: llm.ServiceClassStandard, AttemptedClass: llm.ServiceClassStandard, ProviderTier: "default"}
+	// The byte-count estimator makes this prompt far larger than 200 tokens.
+	oversized := llm.Request{APIVersion: llm.APIVersion, Context: requestContext, OperationKey: descriptor.OperationKey, Model: descriptor.Model, ServiceClass: descriptor.ServiceClass,
+		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("evidence ", 100)}}}}}
+	route := durablestore.RoutePlan{OperationID: strictOperationIdentity(rawScope(requestContext), requestContext.Actor, "generate", llm.APIVersion, descriptor.OperationKey),
+		GenerationID: "generation-grant", RouteID: "route-gemini", EndpointID: entry.EndpointID, Provider: entry.Provider, Model: entry.Model, PriceVersion: entry.Version,
+		Execution: &durablestore.RouteExecution{Request: oversized, Candidate: candidate, Price: entry, EstimatedUSD: grantUSD,
+			Reservations: []admission.WindowReservation{{PolicyID: "policy", WindowID: "hour", Bucket: now.Unix() / 60, Amount: pricing.MicroUSD(grant.MaxCostMicrounits), Limit: 100_000_000, AmountUSD: grantUSD, LimitUSD: pricing.MustUSD("100"), BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour)}}}}
+	granted, err := binding.prepareGrantedReservationRoute(ctx, generate, route)
+	if !errors.Is(err, budget.ErrTokenLimit) {
+		t.Fatalf("oversized granted prompt error = %v, want %v", err, budget.ErrTokenLimit)
+	}
+	if granted.Reservation == nil || !granted.ReservationRecovered {
+		t.Fatalf("token-bound refusal lost the confirmed reservation needed to release the grant: %#v", granted)
+	}
+	// The durable no-dispatch terminal (definite failure at exact zero cost)
+	// settles the grant through the same path routeGenerate uses.
+	terminal := admission.Operation{ID: string(route.OperationID), State: admission.StateDefiniteFailed, CostStatus: "exact", CostMethod: "worker_cache_zero", CompletedAt: now}
+	if err := binding.finalizeFailedBudget(ctx, granted, *granted.Reservation, terminal); err != nil {
+		t.Fatalf("release oversized grant: %v", err)
 	}
 }

@@ -873,12 +873,18 @@ func (binding *productionPhaseBinding) routeGenerate(ctx context.Context, reques
 			entry.Version = quote.CatalogVersion
 		}
 		estimator := binding.cap.Estimator
+		priceEntry := entry
 		if request.CostAdmission != nil && request.CostAdmission.BatchID != "" {
 			estimator.MaxInput = 0
 			estimator.MaxOutput = 0
 			estimator.MaxReasoning = 0
+			// A granted operation is re-priced against its signed bounds in
+			// prepareGrantedReservationRoute, which refuses an oversized prompt
+			// as a token-limit error while holding the confirmed reservation, so
+			// the grant is released. Refusing it here would leave it reserved.
+			priceEntry.MaxPromptTokens = 0
 		}
-		estimate, estimateErr := estimator.EstimateCandidate(dispatchRequest, candidate, entry)
+		estimate, estimateErr := estimator.EstimateCandidate(dispatchRequest, candidate, priceEntry)
 		if estimateErr != nil {
 			if errors.Is(estimateErr, budget.ErrTokenLimit) {
 				tokenLimitErr = estimateErr

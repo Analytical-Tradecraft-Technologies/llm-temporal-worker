@@ -787,7 +787,9 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	// the request with the signed component bounds before comparing it with
 	// the grant, so a frozen cache cap of zero adds no cache charge.
 	estimator := binding.cap.Estimator
-	estimator.MaxInput = 0
+	// Apply the signed input bound first, so an oversized prompt is a
+	// token-limit refusal before the price entry's prompt-size tier check.
+	estimator.MaxInput = bounds.MaxInputTokens
 	estimator.MaxOutput = 0
 	estimator.MaxReasoning = 0
 	estimator.CacheBounds = &budget.CacheTokenBounds{Read: bounds.MaxCacheReadTokens, Write: bounds.MaxCacheWriteTokens}
@@ -796,7 +798,7 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 	// ceilings cannot cover) is a deterministic refusal. Keep validating the
 	// grant identity and return it with the confirmed reservation below, so the
 	// operation terminalizes and its reservation is released.
-	tokenBound := errors.Is(estimateErr, budget.ErrTokenLimit)
+	tokenBound := errors.Is(estimateErr, budget.ErrTokenLimit) || errors.Is(estimateErr, budget.ErrPromptTierExceeded)
 	if estimateErr != nil && !tokenBound {
 		return durablestore.RoutePlan{}, fmt.Errorf("estimate granted Generate components: %w", estimateErr)
 	}
@@ -857,7 +859,7 @@ func (binding *productionPhaseBinding) prepareGrantedReservationRoute(ctx contex
 		return route, fmt.Errorf("validate granted Generate token ceilings: %w", err)
 	}
 	if tokenBound {
-		return route, fmt.Errorf("estimate granted Generate components: %w", estimateErr)
+		return route, fmt.Errorf("%w: estimate granted Generate components: %w", budget.ErrTokenLimit, estimateErr)
 	}
 	if grantedEstimate.InputTokens > bounds.MaxInputTokens ||
 		grantedEstimate.OutputTokens > bounds.MaxOutputTokens ||
