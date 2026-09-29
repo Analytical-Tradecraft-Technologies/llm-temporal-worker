@@ -37,17 +37,8 @@ func (r *Repository) BeginOperation(ctx context.Context, operation Operation) (R
 	if operation.Key == "" || len(operation.Key) > 4096 || !utf8.ValidString(operation.Key) {
 		return Record{}, ErrInvalid
 	}
-	identity, _ := json.Marshal(struct {
-		Namespace string
-		Scope     Scope
-		Kind, Key string
-	}{r.namespace, operation.Scope, operation.Kind, operation.Key})
-	data := derive(r.secret, "operation-id", identity)
-	// UUIDv8 carries application-defined, HMAC-derived bits.
-	data[6] = (data[6] & 0x0f) | 0x80
-	data[8] = (data[8] & 0x3f) | 0x80
-	id, _ := uuid.FromBytes(data[:16])
-	request, err := normalizeRequest(CreateRequest{ID: RequestID(RequestIDPrefix + id.String()), Scope: operation.Scope, Kind: operation.Kind, RequestIndex: operation.RequestIndex, Manifest: operation.Manifest, CreatedAt: operation.Now})
+	id := r.operationID(operation.Scope, operation.Kind, operation.Key)
+	request, err := normalizeRequest(CreateRequest{ID: id, Scope: operation.Scope, Kind: operation.Kind, RequestIndex: operation.RequestIndex, Manifest: operation.Manifest, CreatedAt: operation.Now})
 	if err != nil {
 		return Record{}, err
 	}
@@ -102,6 +93,20 @@ func (r *Repository) BeginOperation(ctx context.Context, operation Operation) (R
 		return record, err
 	}
 	return Record{}, contracts.ErrConflict
+}
+
+func (r *Repository) operationID(scope Scope, kind, key string) RequestID {
+	identity, _ := json.Marshal(struct {
+		Namespace string
+		Scope     Scope
+		Kind, Key string
+	}{r.namespace, scope, kind, key})
+	data := derive(r.secret, "operation-id", identity)
+	// UUIDv8 carries application-defined, HMAC-derived bits.
+	data[6] = (data[6] & 0x0f) | 0x80
+	data[8] = (data[8] & 0x3f) | 0x80
+	id, _ := uuid.FromBytes(data[:16])
+	return RequestID(RequestIDPrefix + id.String())
 }
 
 // CompleteOperation publishes the result only after the inner runtime has
