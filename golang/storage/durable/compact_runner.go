@@ -3,7 +3,7 @@ package durable
 // This file contains the storage-neutral orchestration for the v1 Compact
 // Activity. Compact is deliberately a separate runner from Generate: it
 // creates a compaction checkpoint, never returns a normal answer, and has a
-// fixed cache variant of zero. The concrete Redis, PostgreSQL, checkpoint,
+// fixed cache variant of zero. The concrete Redis, cloud cache, checkpoint,
 // and provider adapters are supplied by the snapshot-owned composition.
 
 import (
@@ -25,7 +25,7 @@ type CompactReplay struct {
 	State     state.MaterializedState
 	Completed *llm.CompactResponseV1
 	// ReconciliationPending is populated when finalization committed but the
-	// Redis completion event did not. A retry must run Reconcile before it can
+	// Redis settlement or cache receipts remain pending. A retry must run Reconcile before it can
 	// return the completed response.
 	ReconciliationPending *CompactReconciliation
 }
@@ -85,7 +85,7 @@ type CompactFinalization struct {
 // CompactPorts are the snapshot-bound production composition ports for one
 // Compact operation. The order is intentionally distinct from Generate:
 // replay -> exact cache -> route -> Redis reservation -> Redis budget claim
-// -> one-shot summarizer dispatch -> PostgreSQL finalization -> reconciliation.
+// -> one-shot summarizer dispatch -> checkpoint finalization -> reconciliation.
 // Every callback must be idempotent across Temporal Activity retries.
 type CompactPorts struct {
 	Replay        func(context.Context, llm.CompactRequestV1) (CompactReplay, error)
@@ -265,10 +265,10 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	}
 	finalization, err := ports.Finalize(ctx, request, replay, route, reservation, dispatch)
 	if err != nil {
-		return llm.CompactResponseV1{}, stageError("compact PostgreSQL finalization", err)
+		return llm.CompactResponseV1{}, stageError("compact durable finalization", err)
 	}
 	if err := validateCompactResponse(request, route.OperationID, finalization.Response); err != nil {
-		return llm.CompactResponseV1{}, stageError("compact PostgreSQL finalization", err)
+		return llm.CompactResponseV1{}, stageError("compact durable finalization", err)
 	}
 	if err := contextErr(ctx); err != nil {
 		return llm.CompactResponseV1{}, err

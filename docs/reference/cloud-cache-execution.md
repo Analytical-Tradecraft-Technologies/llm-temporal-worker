@@ -51,18 +51,43 @@ while retaining its charge; a subsequent attempt must acquire fresh budget.
 
 ## Completion and remaining composition
 
-This is the preparation/dispatch gate, not full production cache activation.
+After a provider result is resolved, the finalizer first commits the origin
+checkpoint. For a started fill, its reconciliation port then calls
+`ResponseCache.CompleteAttempt` with the **persisted** lease, completion time,
+outcome, and optional successful entry. It passes an idempotent callback that
+settles the original Redis budget generation. The helper publishes a successful
+entry, settles Redis, then completes the fill. A provider failure, incomplete
+response, or outcome-unknown attempt has no entry; Redis settlement still comes
+before the fill receipt. An unknown paid outcome remains charged. A later paid
+attempt needs a new budget generation and fill attempt ID.
+
+Every retry must use identical finalization values. An uncertain publication,
+Redis settlement, or fill completion leaves the operation pending and retries
+this sequence without another provider dispatch. `ReconciliationPending` is
+the runner's replay path for that work; `Completed` must only be returned once
+all required receipts are durable. The settlement callback must itself be
+idempotent because an activity can repeat after Redis settled but before the
+fill receipt committed. The cloud repositories validate the committed
+checkpoint, preserve newer successes, and reject an unstarted fill completion.
+
+For a hit, `FinalizeCache` commits a distinct zero-cost consumer checkpoint,
+then calls `ResponseCache.RecordUse` with `decision.Entry()` and a stable
+`ResponseUse`. A lost receipt acknowledgement is retried with the identical
+use. Replay must repair that receipt before reporting `Completed`; returning a
+completed checkpoint early would silently skip cache accounting. A hit does
+not reserve or settle Redis budget.
+
+These helpers cover the preparation/dispatch gate and ordered finalization,
+not full production cache activation.
 Deployments still supply the phase factories. Existing custom cache ports keep
 their behavior; using these helpers opts a phase into the cloud gate. Public
 activity names and v1 envelopes are unchanged.
 
-The durable finalizers still need to construct and commit consumer/origin
-checkpoints, publish successful entries, record idempotent use receipts,
-reconcile Redis, and complete fills in the documented order. Completed or
-reconciliation-pending replay must finish that work before returning. Incomplete
-responses cannot be published as successes. No automatic release is performed
-on runner errors, and a started fill never becomes dispatchable just because
-time has passed. See [fill ownership](cloud-cache-fills.md).
+The durable phase factories still need to construct the checkpoints and
+persist the finalization handoff so replay can finish these helpers before
+returning. Incomplete responses cannot be published as successes. No automatic
+release is performed on runner errors, and a started fill never becomes
+dispatchable just because time has passed. See [fill ownership](cloud-cache-fills.md).
 
 Workflow timers, provider polling/recovery composition, and removal of the
 remaining SQL runtime dependencies are follow-ups. The tests exercise the real
@@ -70,4 +95,6 @@ Generate/Compact runners and cloud cache implementation with shared in-memory
 KV/blob adapters and counted Redis/provider ports. They cover concurrent
 independent misses and retries, restart/expiry, lost start acknowledgements,
 fresh admission after a resolved unknown attempt, route fences, and safe
-short-circuiting. They do not establish live AWS, Redis, or Temporal behavior.
+short-circuiting. Finalization tests additionally cover publication, budget
+settlement, fill completion, cache-use receipts, uncertain writes, and restart
+retries. They do not establish live AWS, Redis, or Temporal behavior.

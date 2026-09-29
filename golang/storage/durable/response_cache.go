@@ -18,8 +18,9 @@ import (
 // Replay/recovery and authorized route selection must precede Prepare. Persist
 // the proposed lease first and reuse every field on retries. Its Attempt must
 // be the Redis generation ID: a new paid attempt needs a new budget generation.
-// This adapter does not construct fingerprints, publish checkpoints/results,
-// settle budget or complete fills. Those remain durable finalizer obligations.
+// This adapter does not construct fingerprints or publish checkpoints. Its
+// finalization helpers order result publication and fill completion around a
+// caller-supplied, idempotent Redis budget settlement.
 type ResponseCache struct {
 	responses cache.ResponseRepository
 	fills     cache.FillRepository
