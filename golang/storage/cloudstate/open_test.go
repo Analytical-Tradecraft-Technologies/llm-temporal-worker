@@ -119,3 +119,24 @@ func TestOpenAndConstructorRejectInvalidInputs(t *testing.T) {
 		t.Fatal("accepted unsupported provider")
 	}
 }
+
+func TestOpenProbeRejectsDeletedResources(t *testing.T) {
+	_, table, blobs, _ := fixture(t)
+	p := &namedProvider{table: table, blobs: blobs}
+	r, err := open(context.Background(), Config{RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}, bytes.Repeat([]byte{7}, 32), func(context.Context, map[string]any) (provider.StorageProvider, error) { return p, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.blobErr = contracts.ErrNotFound
+	if err := r.Probe(context.Background()); !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("missing bucket reported ready: %v", err)
+	}
+	p.blobErr = nil
+	p.tableErr = contracts.ErrPermissionDenied
+	if err := r.Probe(context.Background()); !errors.Is(err, contracts.ErrPermissionDenied) {
+		t.Fatalf("inaccessible table reported ready: %v", err)
+	}
+}

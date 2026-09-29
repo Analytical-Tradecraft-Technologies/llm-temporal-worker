@@ -185,6 +185,14 @@ func (temporal TemporalConfig) validate() error {
 }
 
 func (state StateConfig) validate(environment string) error {
+	if state.Requests != nil {
+		if state.Kind != StateKindDurable {
+			return fmt.Errorf("state.requests requires durable state")
+		}
+		if err := state.Requests.validate(); err != nil {
+			return err
+		}
+	}
 	switch state.Kind {
 	case StateKindDurable:
 		// Durable mode is the only production composition. Both stores are

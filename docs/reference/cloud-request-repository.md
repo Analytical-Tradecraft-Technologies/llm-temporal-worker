@@ -5,10 +5,91 @@ away from SQL. It uses the released `cloud-storage` v0.1.0 generic KV, blob, and
 event sourcing modules. The provider factory currently supports AWS IAM,
 DynamoDB, and S3. The repository itself uses only the generic store contracts.
 
-This package is not yet wired into the worker CLI, activities, or workflows.
-Existing request/checkpoint/cache/spend persistence and SQL dependencies remain
-until their callers are moved. Budgets and provider status stay in Redis.
+The worker configuration and snapshot factory can now attach this repository
+to an explicitly composed V1 activity runtime using `state.requests`. Generate
+and Compact record their inputs before execution and save completed responses
+before returning. The remaining checkpoint/cache/spend ports and SQL dependencies
+are not converted by this integration. Budgets and provider status stay in Redis.
 There is no SQL data import: this service has not been deployed.
+
+## Worker integration
+
+Add this section under the existing `state` settings:
+
+```yaml
+state:
+  kind: durable
+  requests:
+    provider:
+      type: aws
+      aws:
+        region: ap-southeast-2
+      key_value_stores:
+        requests: llm-requests
+      blob_stores:
+        payloads: llm-payloads
+    request_table: requests
+    payload_store: payloads
+    namespace: requests-v1
+    secret:
+      kind: env
+      name: LLMTW_REQUEST_STORAGE_KEY
+```
+
+`secret` references standard base64 encoding of an independent, stable 32-byte
+key. File references are also accepted; workload tokens are not suitable for
+durable encryption. Resolved bytes never enter the configuration digest or
+effective configuration output. AWS uses its IAM/default credential chain;
+optional `aws.profile` and `aws.temp_directory` are supported. Inline AWS keys
+and unknown configuration fields are rejected.
+
+The factory opens existing aliased resources once per configuration snapshot,
+exposes the repository through `V1RuntimeCapabilities.Requests`, and wraps the
+configured V1 runtime. A failed open rejects the snapshot and drains its existing
+clients. Readiness revalidates the named table/bucket and requires both a bounded
+table query and a blob read (a missing probe object is normal, a missing bucket
+is not). These checks establish read access, not write access;
+they do not provision or modify resources. A disabled `state.requests` section
+preserves the existing composition during this staged migration.
+
+This setting does **not** supply missing Generate/Compact phase factories or
+start a production worker on its own. An explicit durable V1 runtime is still
+required, even in development when request recording is enabled. PostgreSQL
+configuration remains required by the existing checkpoint/query composition.
+
+The operation binding includes tenant, project, activity kind, and
+`operation_key`. Its internal ID is a prefixed UUIDv8 derived using a separate
+HMAC domain. Reusing the same operation key with a different input is a conflict;
+changing the key creates a separate operation. Generate's existing
+`cache.variant` supplies the sample index (default zero); Compact uses zero.
+The current request/response wire format and activity names remain unchanged.
+
+The first write is the eight-shard discovery row. Concurrent initializers reuse
+its timestamp, including after a crash before the first event. The encrypted
+manifest contains the full submitted V1 input. A `running` record is an
+observation, **not a dispatch lease**: the inner durable runtime must still
+enforce operation idempotency and Redis's single-use claims. Retrying an
+unfinished operation invokes that same inner operation; this wrapper never
+submits to a provider or acquires/refunds budget itself.
+
+Only an inner success, after its checkpoint finalization and Redis settlement,
+is persisted as a completed response. A completed operation replays that exact
+response without invoking the inner runtime. This includes incomplete model
+responses as operation results; it does not admit them to a cross-request
+success cache. Failed inner calls remain discoverable for recovery and preserve
+the original error/retry policy. This layer does not infer a provider outcome
+from an error, mark paid work refundable, or implement new paid retries.
+
+If result publication loses its acknowledgement, retrying repairs the discovery
+index or replays the inner runtime's already finalized result. A returned response
+is saved with the configured, bounded `server.finalization_timeout`, even if its
+caller context has just ended. Different terminal responses cannot overwrite
+one another. Query calls pass through unchanged.
+
+Cross-operation cache lookup, full workflow progress (including route, provider
+job, budget receipt and policy/configuration versions), continuation/checkpoint
+conversion, cleanup/recovery orchestration, and SQL removal remain subsequent
+migration work. No workflow or cancellation API is introduced here.
 
 ## Opening existing stores
 

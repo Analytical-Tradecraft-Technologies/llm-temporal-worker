@@ -154,6 +154,8 @@ type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (dur
 // clock is an unconfigured capability; callers must not fall back to a legacy
 // engine or a process-global dependency.
 type V1RuntimeCapabilities struct {
+	// Requests is the configured cloud operation repository, when enabled.
+	Requests CloudRequestRepository
 	// ConfigDigest identifies the immutable configuration snapshot that owns
 	// this capability bundle. The automatic production factory provides it both
 	// to preflight composition and to the later complete builder, which validates

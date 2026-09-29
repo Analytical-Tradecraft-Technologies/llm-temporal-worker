@@ -116,13 +116,14 @@ type ProductionFactoryOptions struct {
 	Clock          func() time.Time
 	Planner        routing.Planner
 
-	RedisKeySecret  []byte
-	RedisClient     redis.UniversalClient
-	RedisFactory    RedisFactory
-	PostgresFactory PostgresFactory
-	BlobStore       blob.Store
-	BlobFactory     BlobFactory
-	BlobRefResolver BlobRefResolver
+	CloudRequestFactory CloudRequestFactory
+	RedisKeySecret      []byte
+	RedisClient         redis.UniversalClient
+	RedisFactory        RedisFactory
+	PostgresFactory     PostgresFactory
+	BlobStore           blob.Store
+	BlobFactory         BlobFactory
+	BlobRefResolver     BlobRefResolver
 	// CheckpointBlobLocator resolves a PostgreSQL checkpoint blob ID to the
 	// object-store reference recorded for that immutable blob. It is separate
 	// from BlobRefResolver because checkpoint rows carry a UUID blob ID while
@@ -662,6 +663,12 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	if builder == nil {
 		return engineValue, clients, nil
 	}
+	repository, err := factory.buildCloudRequests(ctx, snapshot.Config().State.Requests)
+	if err != nil {
+		_ = clients.Close(context.Background())
+		return nil, nil, err
+	}
+	clients.v1Capabilities.Requests = repository
 	v1Runtime, err := builder(ctx, snapshot, engineValue, clients)
 	if err != nil {
 		_ = clients.Close(context.Background())
@@ -673,6 +680,10 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	if isNilCapability(v1Runtime) {
 		_ = clients.Close(context.Background())
 		return nil, nil, fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid)
+	}
+	if repository != nil {
+		clients.probes = append(clients.probes, cloudRequestProbe(repository))
+		v1Runtime = &cloudRequestRuntime{inner: v1Runtime, requests: repository, clock: factory.options.Clock, finalizationTimeout: time.Duration(snapshot.Config().Server.FinalizationTimeout)}
 	}
 	clients.v1Runtime = v1Runtime
 	return engineValue, clients, nil

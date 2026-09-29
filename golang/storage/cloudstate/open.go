@@ -9,7 +9,7 @@ import (
 
 // Config embeds parsed provider JSON, including application aliases for existing
 // tables/buckets. Secret is supplied separately by the worker's secret resolver.
-// This is an adapter composition API; it does not change the CLI settings yet.
+// Worker settings use the same provider shape under state.requests.
 type Config struct {
 	Provider     map[string]any `json:"provider"`
 	RequestTable string         `json:"request_table"`
@@ -45,5 +45,16 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 	if err != nil {
 		return nil, err
 	}
-	return NewRepository(Options{Table: table, Blobs: blobs, Namespace: config.Namespace, Secret: secret})
+	repository, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: config.Namespace, Secret: secret})
+	if err != nil {
+		return nil, err
+	}
+	repository.probeStores = func(ctx context.Context) error {
+		if _, err := backend.OpenKeyValueStore(ctx, config.RequestTable); err != nil {
+			return err
+		}
+		_, err := backend.OpenBlobStore(ctx, config.PayloadStore)
+		return err
+	}
+	return repository, nil
 }

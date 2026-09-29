@@ -119,6 +119,9 @@ func (resolver ConfigResolver) Resolve(ctx context.Context, value *config.Config
 	for _, key := range value.Continuation.HandleKeys {
 		refs = append(refs, key.Secret)
 	}
+	if value.State.Requests != nil {
+		refs = append(refs, value.State.Requests.Secret)
+	}
 	for index, ref := range refs {
 		if _, err := resolver.Resolver.Resolve(ctx, ref); err != nil {
 			return fmt.Errorf("secret reference %d could not be resolved: %w", index, err)

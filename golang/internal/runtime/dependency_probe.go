@@ -21,9 +21,10 @@ import (
 type DependencyID string
 
 const (
-	DependencyRedis     DependencyID = "redis"
-	DependencyPostgres  DependencyID = "postgres"
-	DependencyBlobStore DependencyID = "blob_store"
+	DependencyCloudRequests DependencyID = "cloud_requests"
+	DependencyRedis         DependencyID = "redis"
+	DependencyPostgres      DependencyID = "postgres"
+	DependencyBlobStore     DependencyID = "blob_store"
 )
 
 // ProbeStatus and ProbeReason are closed sets so a dependency implementation
@@ -177,7 +178,7 @@ func CheckDependencyProbes(ctx context.Context, probes []DependencyProbe, timeou
 var errRequiredDependencyUnavailable = errors.New("required runtime dependency is unavailable")
 
 func normalizeProbeResult(result ProbeResult) ProbeResult {
-	if result.Dependency != DependencyRedis && result.Dependency != DependencyPostgres && result.Dependency != DependencyBlobStore {
+	if result.Dependency != DependencyRedis && result.Dependency != DependencyPostgres && result.Dependency != DependencyBlobStore && result.Dependency != DependencyCloudRequests {
 		return ProbeResult{Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
 	}
 	switch result.Status {
