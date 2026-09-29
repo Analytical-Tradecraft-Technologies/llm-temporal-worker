@@ -11,9 +11,12 @@ When `state.requests` is configured, the snapshot factory supplies
 cloud factories must expose a non-nil `CloudResponseCacheSource`; otherwise the
 snapshot is rejected and its clients drained before Activity construction.
 This supplies persistence to phase/finalizer builders. It does not enable
-automatic caching, implement fill ownership, or replace the complete production
+automatic caching or replace the complete production
 Generate/Compact finalizers. Existing public v1 cache-policy validation is
 unchanged; the new internal lookup contract supports an omitted maximum age.
+The companion `ResponseFills` capability supplies
+[durable fill coordination](cloud-cache-fills.md) and a nonblocking lookup/acquire
+helper; production phase callbacks still need to compose these capabilities.
 
 ## Cache identity and lookup
 
@@ -92,8 +95,8 @@ aggregate use-count or spend query is implemented here.
 There is no portable transaction across checkpoint and cache publication. The
 finalizer must retry an interrupted publication/receipt before declaring the
 operation complete. These methods neither acquire/refund Redis budget nor
-authorize a provider call. In particular, concurrent cache misses still require
-separate durable fill coordination and paid-attempt authorization.
+authorize a provider call. Concurrent cache misses require the companion
+durable fill coordinator plus separate paid-attempt authorization.
 
 ## Retention and verification
 

@@ -16,7 +16,7 @@ import (
 
 // CloudRequestRepository is snapshot-owned. It records operations; it does not
 // authorize paid attempts or settle budgets. The production factory also
-// requires CloudCheckpointSource and CloudResponseCacheSource when enabled.
+// requires CloudCheckpointSource, CloudResponseCacheSource and CloudResponseFillSource when enabled.
 type CloudRequestRepository interface {
 	BeginOperation(context.Context, cloudstate.Operation) (cloudstate.Record, error)
 	CompleteOperation(context.Context, cloudstate.Scope, cloudstate.RequestID, json.RawMessage, time.Time) (cloudstate.Record, error)
@@ -38,6 +38,39 @@ type CloudCheckpointSource interface {
 // snapshot stores as checkpoints. It does not activate automatic cache reuse.
 type CloudResponseCacheSource interface {
 	Responses() cache.ResponseRepository
+}
+
+// CloudResponseFillSource supplies durable fill fencing from the same stores.
+// It does not activate caching or authorize paid calls without Redis budget.
+type CloudResponseFillSource interface {
+	ResponseFills() cache.FillRepository
+}
+
+func cloudResponseFills(repository CloudRequestRepository) (cache.FillRepository, error) {
+	source, ok := repository.(CloudResponseFillSource)
+	if !ok {
+		return nil, fmt.Errorf("%w: cloud response fill source is missing", ErrProductionFactoryInvalid)
+	}
+	store := source.ResponseFills()
+	if isNilCapability(store) {
+		return nil, fmt.Errorf("%w: cloud response fill store is nil", ErrProductionFactoryInvalid)
+	}
+	return snapshotResponseFills{delegate: store}, nil
+}
+
+type snapshotResponseFills struct{ delegate cache.FillRepository }
+
+func (s snapshotResponseFills) Acquire(ctx context.Context, lease cache.FillLease) (cache.FillDecision, error) {
+	return s.delegate.Acquire(ctx, lease)
+}
+func (s snapshotResponseFills) Start(ctx context.Context, lease cache.FillLease, now time.Time) (bool, error) {
+	return s.delegate.Start(ctx, lease, now)
+}
+func (s snapshotResponseFills) Release(ctx context.Context, lease cache.FillLease, now time.Time) error {
+	return s.delegate.Release(ctx, lease, now)
+}
+func (s snapshotResponseFills) Complete(ctx context.Context, lease cache.FillLease, completion cache.FillCompletion) error {
+	return s.delegate.Complete(ctx, lease, completion)
 }
 
 func cloudResponseCache(repository CloudRequestRepository) (cache.ResponseRepository, error) {

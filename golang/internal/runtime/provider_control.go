@@ -164,6 +164,8 @@ type V1RuntimeCapabilities struct {
 	// Responses persists cache successes and finalizer use receipts in the
 	// same configured cloud stores. Phase factories explicitly opt into reuse.
 	Responses cache.ResponseRepository
+	// ResponseFills fences cache fill dispatch across workers without blocking.
+	ResponseFills cache.FillRepository
 	// ConfigDigest identifies the immutable configuration snapshot that owns
 	// this capability bundle. The automatic production factory provides it both
 	// to preflight composition and to the later complete builder, which validates

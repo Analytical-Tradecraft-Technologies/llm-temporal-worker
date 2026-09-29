@@ -257,7 +257,7 @@ func (s *responseCache) ReadUse(ctx context.Context, scope string, operation sta
 }
 
 func (s *responseCache) validStream(stream string) bool {
-	for _, kind := range []string{"entry", "use"} {
+	for _, kind := range []string{"entry", "use", "fill"} {
 		prefix := s.repository.namespace + "/cache/" + kind + "/"
 		if strings.HasPrefix(stream, prefix) && hexDigest(strings.TrimPrefix(stream, prefix)) {
 			return true

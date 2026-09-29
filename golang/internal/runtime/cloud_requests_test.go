@@ -123,7 +123,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
 		}),
 		CloudRequestFactory: func(_ context.Context, c cloudstate.Config, _ []byte) (CloudRequestRepository, error) {
-			r := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}}
+			r := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}
 			repositories = append(repositories, r)
 			namespaces = append(namespaces, c.Namespace)
 			return r, nil
@@ -142,6 +142,16 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			}
 			if repositories[len(repositories)-1].responseStore.(*cloudResponseTestStore).calls != 1 {
 				t.Fatal("mixed cache snapshots")
+			}
+			fills := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().ResponseFills
+			if fills == nil {
+				t.Fatal("response fills not attached")
+			}
+			if _, err := fills.Acquire(context.Background(), cache.FillLease{}); err != nil {
+				t.Fatal(err)
+			}
+			if repositories[len(repositories)-1].fillStore.(*cloudFillTestStore).calls != 1 {
+				t.Fatal("mixed fill snapshots")
 			}
 			checkpoints := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Checkpoints
 			if err := checkpoints.RequireMaterializer(); err != nil {
