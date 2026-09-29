@@ -109,8 +109,8 @@ func (state CheckpointProviderState) validate() error {
 	return nil
 }
 
-// DurableCheckpoint is the immutable row-shaped DTO shared by future
-// PostgreSQL and in-memory adapters. ScopeID is an opaque repository scope
+// DurableCheckpoint is the immutable metadata shared by checkpoint adapters.
+// ScopeID is an opaque repository scope
 // identity; raw tenant/project strings are never persisted in this record.
 type DurableCheckpoint struct {
 	ID                         CheckpointID
@@ -318,9 +318,11 @@ type CheckpointMaterializer interface {
 	Materialize(context.Context, string, CheckpointID, MaterializeLimits) (MaterializedState, error)
 }
 
-// CheckpointUnitOfWork owns one short durable publication transaction. The
-// interface does not expose a SQL transaction, preventing blob/provider I/O
-// from being performed while a future implementation holds database locks.
+// CheckpointUnitOfWork stages a durable publication. Portable adapters may
+// accept only one checkpoint per unit and must reject a second distinct write
+// before publishing anything. Commit can have an unknown outcome; retry the
+// identical checkpoint in a new unit. Rollback discards staged work, but cannot
+// undo a Commit that may already have published. No provider I/O belongs here.
 type CheckpointUnitOfWork interface {
 	PutCheckpoint(context.Context, CheckpointWrite) error
 	Commit(context.Context) error

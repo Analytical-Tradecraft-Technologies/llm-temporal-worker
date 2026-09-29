@@ -345,6 +345,20 @@ type CheckpointBlobReader interface {
 	Read(context.Context, string, CheckpointBlobReference) ([]byte, error)
 }
 
+// CheckpointBlobWriter persists immutable, scope-bound bytes before checkpoint
+// publication. Retrying the same bytes and media type must return the same
+// reference. Callers retain that reference across uncertain publication results.
+type CheckpointBlobWriter interface {
+	Write(context.Context, string, []byte, string) (CheckpointBlobReference, error)
+}
+
+// CheckpointStore is a complete portable checkpoint persistence capability.
+type CheckpointStore interface {
+	CheckpointRepository
+	CheckpointBlobReader
+	CheckpointBlobWriter
+}
+
 // BlobLocator resolves a durable ID to an object-store reference after applying
 // an authorization/scope filter. Returning a locator for another scope is a
 // fault and is rejected by ScopedBlobReader's metadata checks and the store's

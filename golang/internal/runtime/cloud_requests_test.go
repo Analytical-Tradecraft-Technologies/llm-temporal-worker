@@ -15,6 +15,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 )
 
@@ -108,6 +109,10 @@ func TestCloudRepositoryFactoryFailsClosedWithoutSecretLeak(t *testing.T) {
 }
 
 func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
+	verifier, err := state.NewKeyring([]state.Key{{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var repositories []*recordingCloudRequests
 	var namespaces []string
 	var fail bool
@@ -117,7 +122,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
 		}),
 		CloudRequestFactory: func(_ context.Context, c cloudstate.Config, _ []byte) (CloudRequestRepository, error) {
-			r := &recordingCloudRequests{}
+			r := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}}
 			repositories = append(repositories, r)
 			namespaces = append(namespaces, c.Namespace)
 			return r, nil
@@ -127,6 +132,26 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			if got != repositories[len(repositories)-1] {
 				t.Fatal("builder did not receive snapshot-owned repository")
 			}
+			checkpoints := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Checkpoints
+			if err := checkpoints.RequireMaterializer(); err != nil {
+				t.Fatal(err)
+			}
+			if checkpoints.BlobWriter == nil {
+				t.Fatal("cloud checkpoint writer missing")
+			}
+			if _, err := checkpoints.BlobWriter.Write(context.Background(), "scope", []byte("data"), "text/plain"); err != nil {
+				t.Fatal(err)
+			}
+			if repositories[len(repositories)-1].checkpointStore.(*cloudCheckpointTestStore).writes != 1 {
+				t.Fatal("writer did not use snapshot cloud store")
+			}
+			materializer := checkpoints.Materializer.(snapshotCheckpointMaterializer).delegate.(*state.DurableCheckpointMaterializer)
+			if materializer.HandleVerifier != verifier {
+				t.Fatal("lost snapshot verifier")
+			}
+			if clients.(CheckpointCapabilitiesSource).CheckpointCapabilities().Repository != checkpoints.Repository {
+				t.Fatal("different checkpoint bundles exposed")
+			}
 			if fail {
 				return nil, errors.New("builder failed")
 			}
@@ -135,7 +160,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 	}}
 	for _, namespace := range []string{"snapshot-one", "snapshot-two"} {
 		closed := false
-		clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
+		clients := &productionClientSet{checkpointVerifier: verifier, checkpoints: CheckpointCapabilities{Repository: builderCheckpointRepository{}, Blobs: builderCheckpointBlobReader{}, Materializer: builderCheckpointMaterializer{}}, close: func(context.Context) error { closed = true; return nil }}
 		_, built, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, namespace), nil, clients)
 		if err != nil || built != clients || closed {
 			t.Fatalf("attach: %v", err)
@@ -152,12 +177,63 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 	}
 	fail = true
 	closed := false
-	clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
+	clients := &productionClientSet{checkpointVerifier: verifier, close: func(context.Context) error { closed = true; return nil }}
 	if _, _, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, "rejected"), nil, clients); err == nil || !closed {
 		t.Fatal("failed build did not drain clients")
 	}
 	if err := requireDurableV1RuntimeBuilder(config.Config{Environment: "development", State: config.StateConfig{Kind: config.StateKindDurable, Requests: testCloudConfig()}}, nil); err == nil {
 		t.Fatal("silently ignored requests without runtime")
+	}
+}
+
+type cloudCheckpointTestStore struct {
+	builderCheckpointRepository
+	builderCheckpointBlobReader
+	writes int
+}
+
+func (s *cloudCheckpointTestStore) Write(context.Context, string, []byte, string) (state.CheckpointBlobReference, error) {
+	s.writes++
+	return state.CheckpointBlobReference{}, nil
+}
+
+func TestCloudCheckpointCapabilitiesRejectIncompleteStores(t *testing.T) {
+	verifier, err := state.NewKeyring([]state.Key{{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		repository CloudRequestRepository
+		verifier   state.CheckpointHandleVerifier
+	}{
+		{"no source", struct{ CloudRequestRepository }{&recordingCloudRequests{}}, verifier},
+		{"nil store", &recordingCloudRequests{}, verifier},
+		{"typed nil", &recordingCloudRequests{checkpointStore: (*cloudCheckpointTestStore)(nil)}, verifier},
+		{"no verifier", &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}}, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := cloudCheckpointCapabilities(test.repository, test.verifier, time.Now); !errors.Is(err, ErrProductionFactoryInvalid) {
+				t.Fatalf("missing capability accepted: %v", err)
+			}
+			closed, built := false, false
+			factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+				Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+					return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
+				}),
+				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
+					return test.repository, nil
+				},
+				V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
+					built = true
+					return &cloudInnerRuntime{}, nil
+				},
+			}}
+			clients := &productionClientSet{checkpointVerifier: test.verifier, close: func(context.Context) error { closed = true; return nil }}
+			if _, _, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, "incomplete"), nil, clients); err == nil || !closed || built {
+				t.Fatalf("incomplete checkpoint snapshot not rejected: closed=%t built=%t err=%v", closed, built, err)
+			}
+		})
 	}
 }
 

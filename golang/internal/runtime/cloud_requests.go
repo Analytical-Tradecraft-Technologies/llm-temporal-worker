@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 )
 
 // CloudRequestRepository is snapshot-owned. It records operations; it does not
-// authorize paid attempts, settle budgets, or replace checkpoint/cache ports.
+// authorize paid attempts or settle budgets. The production factory also
+// requires CloudCheckpointSource when this storage is enabled.
 type CloudRequestRepository interface {
 	BeginOperation(context.Context, cloudstate.Operation) (cloudstate.Record, error)
 	CompleteOperation(context.Context, cloudstate.Scope, cloudstate.RequestID, json.RawMessage, time.Time) (cloudstate.Record, error)
@@ -23,6 +25,33 @@ type CloudRequestRepository interface {
 // CloudRequestFactory opens existing stores using IAM. The default repository
 // owns no background process or closable client. Overrides obey that contract.
 type CloudRequestFactory func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error)
+
+// CloudCheckpointSource supplies checkpoint persistence from the same opened
+// cloud stores. Enabling cloud requests replaces the entire checkpoint bundle;
+// it must never mix cloud rows with a PostgreSQL blob reader or materializer.
+type CloudCheckpointSource interface {
+	Checkpoints() state.CheckpointStore
+}
+
+func cloudCheckpointCapabilities(repository CloudRequestRepository, verifier state.CheckpointHandleVerifier, clock func() time.Time) (CheckpointCapabilities, error) {
+	source, ok := repository.(CloudCheckpointSource)
+	if !ok || isNilCapability(verifier) {
+		return CheckpointCapabilities{}, fmt.Errorf("%w: cloud checkpoints require a store and handle verifier", ErrProductionFactoryInvalid)
+	}
+	store := source.Checkpoints()
+	if isNilCapability(store) {
+		return CheckpointCapabilities{}, fmt.Errorf("%w: cloud checkpoint store is nil", ErrProductionFactoryInvalid)
+	}
+	capabilities := CheckpointCapabilities{
+		Repository: snapshotCheckpointRepository{delegate: store},
+		Blobs:      snapshotCheckpointBlobReader{delegate: store},
+		BlobWriter: snapshotCheckpointBlobWriter{delegate: store},
+	}
+	capabilities.Materializer = snapshotCheckpointMaterializer{delegate: &state.DurableCheckpointMaterializer{
+		Repository: capabilities.Repository, Blobs: capabilities.Blobs, HandleVerifier: verifier, Now: clock,
+	}}
+	return capabilities, capabilities.RequireMaterializer()
+}
 
 func (factory *ProductionEngineFactory) buildCloudRequests(ctx context.Context, c *config.CloudRequestConfig) (CloudRequestRepository, error) {
 	if c == nil {

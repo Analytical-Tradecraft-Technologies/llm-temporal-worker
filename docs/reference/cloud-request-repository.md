@@ -8,8 +8,9 @@ DynamoDB, and S3. The repository itself uses only the generic store contracts.
 The worker configuration and snapshot factory can now attach this repository
 to an explicitly composed V1 activity runtime using `state.requests`. Generate
 and Compact record their inputs before execution and save completed responses
-before returning. The remaining checkpoint/cache/spend ports and SQL dependencies
-are not converted by this integration. Budgets and provider status stay in Redis.
+before returning. The same configuration now supplies cloud checkpoint metadata,
+blob writes/reads, and continuation materialization. Cache/spend composition and
+SQL dependencies remain to be migrated. Budgets and provider status stay in Redis.
 There is no SQL data import: this service has not been deployed.
 
 ## Worker integration
@@ -55,7 +56,10 @@ preserves the existing composition during this staged migration.
 This setting does **not** supply missing Generate/Compact phase factories or
 start a production worker on its own. An explicit durable V1 runtime is still
 required, even in development when request recording is enabled. PostgreSQL
-configuration remains required by the existing checkpoint/query composition.
+configuration remains required by the remaining durable/query composition.
+When cloud storage is enabled, the factory replaces the complete checkpoint
+bundle before invoking the V1 builder. It uses the snapshot's continuation
+keyring and never combines cloud checkpoint rows with SQL blob lookups.
 
 The operation binding includes tenant, project, activity kind, and
 `operation_key`. Its internal ID is a prefixed UUIDv8 derived using a separate
@@ -87,9 +91,58 @@ caller context has just ended. Different terminal responses cannot overwrite
 one another. Query calls pass through unchanged.
 
 Cross-operation cache lookup, full workflow progress (including route, provider
-job, budget receipt and policy/configuration versions), continuation/checkpoint
-conversion, cleanup/recovery orchestration, and SQL removal remain subsequent
+job, budget receipt and policy/configuration versions), finalizer composition,
+cleanup/recovery orchestration, and SQL removal remain subsequent
 migration work. No workflow or cancellation API is introduced here.
+
+## Checkpoint persistence
+
+`repository.Checkpoints()` implements `state.CheckpointStore`: the existing
+repository and blob-reader interfaces plus an immutable blob writer. The worker
+exposes these through `V1RuntimeCapabilities.Checkpoints`, including `BlobWriter`
+and an opaque-handle materializer. A custom cloud factory must provide
+`CloudCheckpointSource`; missing stores or handle verification reject the
+snapshot rather than silently using SQL checkpoints.
+
+A finalizer encodes delta, response, settings and optional snapshot blobs with
+`state.CheckpointBlobCodec`, writes them using `BlobWriter.Write`, and places the
+returned references in a `state.DurableCheckpoint`. It stages that checkpoint
+with `BeginCheckpoint` / `PutCheckpoint` and publishes with `Commit` (or uses
+`state.WithCheckpointUnitOfWork`). One unit accepts one distinct checkpoint;
+there is no portable multi-checkpoint transaction. Staging copies caller-owned
+data and performs no storage writes. Rollback discards local staged data; it
+cannot undo a commit with an unknown outcome.
+
+All blobs are encrypted and immutable. References authenticate the opaque scope,
+media type, digest and byte length before opening an object, and reads verify
+the encrypted content and its digest. Publishing checks parent depth, scoped
+lineage references and every referenced blob. The complete checkpoint metadata,
+including provider-state references and cache affinities, is also encrypted.
+Operation/cache origin IDs remain finalizer-supplied provenance: the finalizer
+must bind them to an authorized operation/cache result. This adapter does not
+check a SQL foreign key or authorize a paid request.
+
+Publication uses only generic conditional `Create` operations:
+
+1. Persist encrypted checkpoint metadata after validating its existing blobs.
+2. Reserve the checkpoint ID, then its public-handle HMAC, with immutable rows.
+3. Create the operation row, which makes exactly one checkpoint visible for
+   that scope and origin operation.
+
+Reads require a matching ID reservation and committed operation row. A losing
+or interrupted reservation stays unreadable. Concurrent identical writes are
+idempotent; different contents, reused IDs/handles or competing checkpoints for
+one operation conflict. After a lost acknowledgement, retry the identical
+checkpoint, including its IDs and timestamps, in a new unit. Completed retries
+perform no writes. Blob/row failure after any intermediate step can leave orphan
+objects or reservations; automatic cleanup is deferred, and these names must
+not be repurposed. There is no automatic TTL or deletion.
+
+Checkpoint keys use separate HMAC domains under `<namespace>/checkpoint/` in
+the same configured table; payloads share the configured bucket. They do not
+enter the eight pending-request shards. Scope and checkpoint IDs are not
+plaintext table keys. `Get` retains immutable history; the materializer enforces
+expiry and graph limits when deciding whether a continuation is usable.
 
 ## Opening existing stores
 
@@ -225,7 +278,10 @@ The offline suite uses the released event sourcing implementation over shared,
 linearizable KV/blob doubles. It exercises concurrent writers, restart reads,
 lost acknowledgements at every creation write boundary, update retries, index
 lag/repair, all eight discovery shards, scope isolation, corrupt data, encrypted
-payload binding, bounded reads, and configured provider/store selection. Run
+payload binding, bounded reads, and configured provider/store selection. The
+checkpoint suite additionally covers all publication failure boundaries,
+competing IDs/handles/operations, authenticated blob references, continuation
+replay after restart, staging/rollback, and expiry. Run
 `go test -race ./storage/cloudstate` from `golang`.
 
 These tests do not prove deployed IAM permissions, live DynamoDB/S3 behavior,

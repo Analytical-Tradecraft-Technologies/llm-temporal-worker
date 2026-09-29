@@ -182,15 +182,16 @@ type ProductionEngineFactory struct {
 // and exposes only the runtime's narrow dependency probe capability. The app
 // package still sees it solely as a ClientSet.
 type productionClientSet struct {
-	close           func(context.Context) error
-	probes          []DependencyProbe
-	providerControl engine.ProviderStatusRecorder
-	queryRepos      PostgresQueryRepositories
-	queryService    activity.QueryService
-	checkpoints     CheckpointCapabilities
-	budgets         durablestore.BudgetLeaser
-	v1Capabilities  V1RuntimeCapabilities
-	v1Runtime       activity.V1Runtime
+	close              func(context.Context) error
+	probes             []DependencyProbe
+	providerControl    engine.ProviderStatusRecorder
+	queryRepos         PostgresQueryRepositories
+	queryService       activity.QueryService
+	checkpoints        CheckpointCapabilities
+	checkpointVerifier state.CheckpointHandleVerifier
+	budgets            durablestore.BudgetLeaser
+	v1Capabilities     V1RuntimeCapabilities
+	v1Runtime          activity.V1Runtime
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
@@ -600,12 +601,13 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, fmt.Errorf("construct Redis budgets: %w", err)
 	}
 	clients := &productionClientSet{
-		probes:          probes,
-		providerControl: providerControl,
-		queryRepos:      queryRepos,
-		queryService:    queryService,
-		checkpoints:     checkpointCapabilities,
-		budgets:         budgets,
+		probes:             probes,
+		providerControl:    providerControl,
+		queryRepos:         queryRepos,
+		queryService:       queryService,
+		checkpoints:        checkpointCapabilities,
+		checkpointVerifier: keyring,
+		budgets:            budgets,
 		v1Capabilities: V1RuntimeCapabilities{
 			ConfigDigest:           snapshot.Digest(),
 			Snapshot:               snapshotSource,
@@ -669,6 +671,15 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 		return nil, nil, err
 	}
 	clients.v1Capabilities.Requests = repository
+	if repository != nil {
+		checkpoints, err := cloudCheckpointCapabilities(repository, clients.checkpointVerifier, factory.options.Clock)
+		if err != nil {
+			_ = clients.Close(context.Background())
+			return nil, nil, err
+		}
+		clients.checkpoints = checkpoints
+		clients.v1Capabilities.Checkpoints = checkpoints
+	}
 	v1Runtime, err := builder(ctx, snapshot, engineValue, clients)
 	if err != nil {
 		_ = clients.Close(context.Background())

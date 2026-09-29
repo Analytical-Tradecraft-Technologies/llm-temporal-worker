@@ -7,7 +7,8 @@ import (
 )
 
 // CloudRequestConfig enables durable request/response recording around an
-// explicitly composed V1 runtime. It does not configure checkpoint/cache ports.
+// explicitly composed V1 runtime, plus checkpoint metadata and encrypted blobs.
+// Response-cache composition remains separate during the migration.
 type CloudRequestConfig struct {
 	Provider     CloudStorageProviderConfig `yaml:"provider" json:"provider"`
 	RequestTable string                     `yaml:"request_table" json:"request_table"`

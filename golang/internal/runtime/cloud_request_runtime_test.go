@@ -11,6 +11,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 )
 
@@ -19,7 +20,10 @@ type recordingCloudRequests struct {
 	record                          cloudstate.Record
 	beginErr, completeErr, probeErr error
 	complete                        func(context.Context)
+	checkpointStore                 state.CheckpointStore
 }
+
+func (s *recordingCloudRequests) Checkpoints() state.CheckpointStore { return s.checkpointStore }
 
 func (s *recordingCloudRequests) BeginOperation(_ context.Context, op cloudstate.Operation) (cloudstate.Record, error) {
 	s.operation = op
