@@ -30,16 +30,16 @@ var (
 type GenerateReplay struct {
 	State     state.MaterializedState
 	Completed *llm.GenerateResponseV1
-	// ReconciliationPending is populated when PostgreSQL finalization has
-	// committed but the Redis completion event did not. A Temporal retry must
-	// reconcile the committed identities before returning the response; it
-	// must not dispatch the provider a second time.
+	// ReconciliationPending is populated when checkpoint finalization committed
+	// but budget settlement or cache receipts remain pending. A Temporal retry
+	// must reconcile the committed identities before returning the response;
+	// it must not dispatch the provider a second time.
 	ReconciliationPending *GenerateReconciliation
 }
 
 // GenerateReconciliation carries the durable identities needed to retry a
-// post-finalization Redis reconciliation. The response is already
-// authoritative in PostgreSQL; this value is only a bounded retry handoff and
+// post-finalization reconciliation. The checkpoint is already authoritative;
+// this value is only a bounded retry handoff and
 // must never be treated as permission to run provider work again.
 type GenerateReconciliation struct {
 	Route        RoutePlan
@@ -159,7 +159,7 @@ type DispatchResult struct {
 	Response llm.Response
 }
 
-// GenerateFinalization is the bounded response returned after the PostgreSQL
+// GenerateFinalization is the bounded response returned after the durable
 // checkpoint/cache/cost finalization phase.
 type GenerateFinalization struct {
 	Response llm.GenerateResponseV1
@@ -169,7 +169,7 @@ type GenerateFinalization struct {
 // callbacks are intentionally explicit and ordered by the runner below:
 // replay -> route-isolated cache -> compaction decision -> route/affinity ->
 // Redis reservation -> Redis budget claim -> provider state machine ->
-// PostgreSQL finalization -> Redis reconciliation.
+// checkpoint finalization -> Redis/cache reconciliation.
 //
 // Every callback must be idempotent for Temporal Activity retries.  The runner
 // does not log or serialize values passed between phases.
@@ -393,7 +393,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	}
 	finalization, err := ports.Finalize(ctx, request, replay, route, reservation, dispatch)
 	if err != nil {
-		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
+		return llm.GenerateResponseV1{}, stageError("durable finalization", err)
 	}
 	expectedParent := request.Parent
 	if compaction.Required {
@@ -401,7 +401,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		expectedParent = &compactedParent
 	}
 	if err := validateGenerateFinalization(request, route.OperationID, expectedParent, finalization); err != nil {
-		return llm.GenerateResponseV1{}, stageError("PostgreSQL finalization", err)
+		return llm.GenerateResponseV1{}, stageError("durable finalization", err)
 	}
 	if err := contextErr(ctx); err != nil {
 		return llm.GenerateResponseV1{}, err
