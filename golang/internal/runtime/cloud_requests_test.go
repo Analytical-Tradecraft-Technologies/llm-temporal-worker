@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
@@ -122,7 +123,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
 		}),
 		CloudRequestFactory: func(_ context.Context, c cloudstate.Config, _ []byte) (CloudRequestRepository, error) {
-			r := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}}
+			r := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}}
 			repositories = append(repositories, r)
 			namespaces = append(namespaces, c.Namespace)
 			return r, nil
@@ -131,6 +132,16 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			got := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Requests
 			if got != repositories[len(repositories)-1] {
 				t.Fatal("builder did not receive snapshot-owned repository")
+			}
+			responses := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Responses
+			if responses == nil {
+				t.Fatal("response cache not attached")
+			}
+			if err := responses.Publish(context.Background(), cache.ResponseEntry{}); err != nil {
+				t.Fatal(err)
+			}
+			if repositories[len(repositories)-1].responseStore.(*cloudResponseTestStore).calls != 1 {
+				t.Fatal("mixed cache snapshots")
 			}
 			checkpoints := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Checkpoints
 			if err := checkpoints.RequireMaterializer(); err != nil {
@@ -210,7 +221,7 @@ func TestCloudCheckpointCapabilitiesRejectIncompleteStores(t *testing.T) {
 		{"no source", struct{ CloudRequestRepository }{&recordingCloudRequests{}}, verifier},
 		{"nil store", &recordingCloudRequests{}, verifier},
 		{"typed nil", &recordingCloudRequests{checkpointStore: (*cloudCheckpointTestStore)(nil)}, verifier},
-		{"no verifier", &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}}, nil},
+		{"no verifier", &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}}, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := cloudCheckpointCapabilities(test.repository, test.verifier, time.Now); !errors.Is(err, ErrProductionFactoryInvalid) {

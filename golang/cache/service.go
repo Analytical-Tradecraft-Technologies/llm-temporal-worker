@@ -9,7 +9,7 @@ import (
 
 // FillCoordinator collapses identical in-process cache fills. It is only a
 // latency/cost optimization: callers must still perform the authoritative
-// PostgreSQL lookup, fill-lease acquisition, publication, and failure update.
+// durable lookup, fill-lease acquisition, publication, and failure update.
 // A Fingerprint is comparable and already domain-separated by Input.Operation;
 // callers must not derive it from raw prompt text or use one key across
 // operation domains.

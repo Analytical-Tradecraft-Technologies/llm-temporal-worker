@@ -1,5 +1,5 @@
-// Package cache contains the provider-neutral exact-response cache identity
-// primitives. It deliberately does not implement storage or cache lookup.
+// Package cache contains provider-neutral exact-response cache identities and
+// persistence contracts. Storage adapters implement ResponseRepository.
 package cache
 
 import "fmt"

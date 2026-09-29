@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
@@ -15,7 +16,7 @@ import (
 
 // CloudRequestRepository is snapshot-owned. It records operations; it does not
 // authorize paid attempts or settle budgets. The production factory also
-// requires CloudCheckpointSource when this storage is enabled.
+// requires CloudCheckpointSource and CloudResponseCacheSource when enabled.
 type CloudRequestRepository interface {
 	BeginOperation(context.Context, cloudstate.Operation) (cloudstate.Record, error)
 	CompleteOperation(context.Context, cloudstate.Scope, cloudstate.RequestID, json.RawMessage, time.Time) (cloudstate.Record, error)
@@ -31,6 +32,39 @@ type CloudRequestFactory func(context.Context, cloudstate.Config, []byte) (Cloud
 // it must never mix cloud rows with a PostgreSQL blob reader or materializer.
 type CloudCheckpointSource interface {
 	Checkpoints() state.CheckpointStore
+}
+
+// CloudResponseCacheSource binds cache publication/consumption to the same
+// snapshot stores as checkpoints. It does not activate automatic cache reuse.
+type CloudResponseCacheSource interface {
+	Responses() cache.ResponseRepository
+}
+
+func cloudResponseCache(repository CloudRequestRepository) (cache.ResponseRepository, error) {
+	source, ok := repository.(CloudResponseCacheSource)
+	if !ok {
+		return nil, fmt.Errorf("%w: cloud response cache source is missing", ErrProductionFactoryInvalid)
+	}
+	store := source.Responses()
+	if isNilCapability(store) {
+		return nil, fmt.Errorf("%w: cloud response cache store is nil", ErrProductionFactoryInvalid)
+	}
+	return snapshotResponseCache{delegate: store}, nil
+}
+
+type snapshotResponseCache struct{ delegate cache.ResponseRepository }
+
+func (s snapshotResponseCache) Publish(ctx context.Context, entry cache.ResponseEntry) error {
+	return s.delegate.Publish(ctx, entry)
+}
+func (s snapshotResponseCache) Lookup(ctx context.Context, lookup cache.ResponseLookup) (*cache.ResponseEntry, error) {
+	return s.delegate.Lookup(ctx, lookup)
+}
+func (s snapshotResponseCache) RecordUse(ctx context.Context, use cache.ResponseUse) error {
+	return s.delegate.RecordUse(ctx, use)
+}
+func (s snapshotResponseCache) ReadUse(ctx context.Context, scope string, operation state.OperationID) (cache.ResponseUse, error) {
+	return s.delegate.ReadUse(ctx, scope, operation)
 }
 
 func cloudCheckpointCapabilities(repository CloudRequestRepository, verifier state.CheckpointHandleVerifier, clock func() time.Time) (CheckpointCapabilities, error) {
