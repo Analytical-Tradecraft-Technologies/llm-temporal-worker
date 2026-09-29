@@ -123,13 +123,14 @@ type TemporalWorkerConfig struct {
 }
 
 type StateConfig struct {
-	Kind                       string         `yaml:"kind" json:"kind"`
-	OperationTerminalRetention Duration       `yaml:"operation_terminal_retention" json:"operation_terminal_retention"`
-	AmbiguousRetention         Duration       `yaml:"ambiguous_retention" json:"ambiguous_retention"`
-	ContinuationRetention      Duration       `yaml:"continuation_retention" json:"continuation_retention"`
-	ReservationLease           Duration       `yaml:"reservation_lease" json:"reservation_lease"`
-	Redis                      RedisConfig    `yaml:"redis" json:"redis"`
-	Postgres                   PostgresConfig `yaml:"postgres" json:"postgres"`
+	Kind                       string              `yaml:"kind" json:"kind"`
+	OperationTerminalRetention Duration            `yaml:"operation_terminal_retention" json:"operation_terminal_retention"`
+	AmbiguousRetention         Duration            `yaml:"ambiguous_retention" json:"ambiguous_retention"`
+	ContinuationRetention      Duration            `yaml:"continuation_retention" json:"continuation_retention"`
+	ReservationLease           Duration            `yaml:"reservation_lease" json:"reservation_lease"`
+	Redis                      RedisConfig         `yaml:"redis" json:"redis"`
+	Postgres                   PostgresConfig      `yaml:"postgres" json:"postgres"`
+	Requests                   *CloudRequestConfig `yaml:"requests,omitempty" json:"requests,omitempty"`
 }
 
 // StateKind identifies the storage composition selected for a worker.

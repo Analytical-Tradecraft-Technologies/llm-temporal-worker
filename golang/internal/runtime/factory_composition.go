@@ -12,6 +12,9 @@ import (
 // does not implement the immutable checkpoint, operation, and budget contract
 // exposed by the versioned Activities.
 func requireDurableV1RuntimeBuilder(value config.Config, builder V1RuntimeBuilder) error {
+	if value.State.Requests != nil && builder == nil {
+		return fmt.Errorf("%w: cloud requests require V1RuntimeBuilder", ErrDurableV1Composition)
+	}
 	if value.State.Kind != config.StateKindDurable || value.Environment == "development" {
 		return nil
 	}

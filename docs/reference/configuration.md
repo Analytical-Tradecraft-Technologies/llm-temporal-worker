@@ -418,9 +418,12 @@ resolved credentials.
 
 **state.kind** is **durable** or the legacy development-only **redis** fixture.
 Durable is the production default
-and requires both **state.redis** and **state.postgres**: PostgreSQL is the
-system of record, while Redis provides the active budget/throttle materialization
-and cross-worker coordination optimization.
+and still requires both **state.redis** and **state.postgres** while the
+checkpoint/query composition is migrated. Redis is authoritative for budgets
+and provider operational state. The optional **state.requests** section enables
+cloud-backed request/response recording around a configured V1 runtime; see
+[cloud request storage](cloud-request-repository.md#worker-integration) for its
+IAM provider configuration, store aliases, encryption secret, and current scope.
 
 In durable mode the runtime constructs and probes both stores before admitting
 work. The PostgreSQL dependency probe checks the current database, UTC session

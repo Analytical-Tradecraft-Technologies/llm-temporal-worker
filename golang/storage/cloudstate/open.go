@@ -9,7 +9,7 @@ import (
 
 // Config embeds parsed provider JSON, including application aliases for existing
 // tables/buckets. Secret is supplied separately by the worker's secret resolver.
-// This is an adapter composition API; it does not change the CLI settings yet.
+// Worker settings use the same provider shape under state.requests.
 type Config struct {
 	Provider     map[string]any `json:"provider"`
 	RequestTable string         `json:"request_table"`
