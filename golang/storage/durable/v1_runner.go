@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
@@ -54,21 +55,24 @@ const (
 	CacheDisabled CacheDisposition = iota
 	CacheMiss
 	CacheHit
+	CacheWait
+	CacheRecoveryRequired
 )
 
-// CacheDecision is returned by the cache phase.  The cache implementation is
-// responsible for route isolation, freshness, fill ownership, and replay-child
-// publication; this runner only prevents a hit from reaching inference.
+// CacheDecision is returned by the cache phase. ResponseCache preparation adds
+// route and fill-ownership fences to the runner. Hits still need a distinct
+// replay child from FinalizeCache; waiting/recovery decisions stop admission.
 type CacheDecision struct {
 	Disposition CacheDisposition
 	Response    *llm.GenerateResponseV1
+	preparation *responseCachePreparation
 }
 
 func (decision CacheDecision) Validate() error {
 	switch decision.Disposition {
-	case CacheDisabled, CacheMiss:
+	case CacheDisabled, CacheMiss, CacheWait, CacheRecoveryRequired:
 		if decision.Response != nil {
-			return errors.New("cache miss/disabled decision must not include a response")
+			return errors.New("non-hit cache decision must not include a response")
 		}
 	case CacheHit:
 		if decision.Response == nil {
@@ -77,7 +81,7 @@ func (decision CacheDecision) Validate() error {
 	default:
 		return fmt.Errorf("unknown cache disposition %d", decision.Disposition)
 	}
-	return nil
+	return decision.preparation.validate(decision.Disposition)
 }
 
 // CompactionDecision keeps automatic compaction as an explicit phase.  The
@@ -98,6 +102,9 @@ type RoutePlan struct {
 	Provider     string
 	Model        string
 	PriceVersion string
+	// CacheIdentity must match the complete authorized route used for a cloud
+	// cache lookup. It is required for misses prepared by ResponseCache.
+	CacheIdentity cache.RouteIdentity
 }
 
 func (plan RoutePlan) Validate() error {
@@ -284,6 +291,16 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err := decision.Validate(); err != nil {
 		return llm.GenerateResponseV1{}, stageError("cache decision", err)
 	}
+	variant := int32(0)
+	if request.Cache != nil {
+		variant = request.Cache.Variant
+	}
+	if decision.preparation != nil && decision.preparation.lease.Key.RequestIndex != int64(variant) {
+		return llm.GenerateResponseV1{}, stageError("cache decision", errors.New("cache sample index differs from request"))
+	}
+	if err := decision.preparation.stop(); err != nil {
+		return llm.GenerateResponseV1{}, stageError("cache ownership", err)
+	}
 	if err := contextErr(ctx); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
@@ -339,6 +356,9 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	if err := route.Validate(); err != nil {
 		return llm.GenerateResponseV1{}, stageError("route", err)
 	}
+	if err := decision.preparation.validateRoute(route); err != nil {
+		return llm.GenerateResponseV1{}, stageError("cache route", err)
+	}
 	if err := contextErr(ctx); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
@@ -354,6 +374,11 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		mapped.OperationID = string(route.OperationID)
 		mapped.RetryAfter = reservation.RetryAfter
 		return llm.GenerateResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
+	}
+	// Start is a one-use grant inside this activity invocation, never a token
+	// returned to a workflow. A duplicate or uncertain start cannot reach Claim.
+	if err := decision.preparation.start(ctx); err != nil {
+		return llm.GenerateResponseV1{}, stageError("cache start", err)
 	}
 	claim, err := ports.Claim(ctx, request, route, reservation)
 	if err != nil {

@@ -44,13 +44,14 @@ type CompactReconciliation struct {
 type CompactCacheDecision struct {
 	Disposition CacheDisposition
 	Response    *llm.CompactResponseV1
+	preparation *responseCachePreparation
 }
 
 func (decision CompactCacheDecision) Validate() error {
 	switch decision.Disposition {
-	case CacheDisabled, CacheMiss:
+	case CacheDisabled, CacheMiss, CacheWait, CacheRecoveryRequired:
 		if decision.Response != nil {
-			return errors.New("compact cache miss/disabled decision must not include a response")
+			return errors.New("non-hit compact cache decision must not include a response")
 		}
 	case CacheHit:
 		if decision.Response == nil {
@@ -65,7 +66,7 @@ func (decision CompactCacheDecision) Validate() error {
 	default:
 		return fmt.Errorf("unknown compact cache disposition %d", decision.Disposition)
 	}
-	return nil
+	return decision.preparation.validate(decision.Disposition)
 }
 
 // CompactDispatchResult is the provider-neutral one-shot result passed to
@@ -183,6 +184,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	if err := cache.Validate(); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact cache decision", err)
 	}
+	if err := cache.preparation.stop(); err != nil {
+		return llm.CompactResponseV1{}, stageError("compact cache ownership", err)
+	}
 	if err := contextErr(ctx); err != nil {
 		return llm.CompactResponseV1{}, err
 	}
@@ -225,6 +229,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	if err := route.Validate(); err != nil {
 		return llm.CompactResponseV1{}, stageError("compact route", err)
 	}
+	if err := cache.preparation.validateRoute(route); err != nil {
+		return llm.CompactResponseV1{}, stageError("compact cache route", err)
+	}
 	if err := contextErr(ctx); err != nil {
 		return llm.CompactResponseV1{}, err
 	}
@@ -242,6 +249,9 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		return llm.CompactResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
 	}
 
+	if err := cache.preparation.start(ctx); err != nil {
+		return llm.CompactResponseV1{}, stageError("compact cache start", err)
+	}
 	claim, err := ports.Claim(ctx, request, route, reservation)
 	if err != nil {
 		return llm.CompactResponseV1{}, stageError("compact Redis budget claim", err)

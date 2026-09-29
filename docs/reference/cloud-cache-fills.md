@@ -14,10 +14,12 @@ between the first miss and acquisition. An unstarted owner releases its fill
 when that second read finds a success. Storage errors cannot silently become
 paid cache misses.
 
-This is an internal coordination building block. It does not yet connect the
-production Generate/Compact phase callbacks, implement workflow timers, issue
-provider calls, or construct consuming cache-replay checkpoints. The public v1
-API and cache validation are unchanged. Production phase/finalizer composition
+This is an internal coordination building block. The
+[response cache execution adapter](cloud-cache-execution.md) connects its
+decisions to the Generate/Compact runners' dispatch gates. Deployment phase
+factories, workflow timers and consuming cache-replay checkpoints still need
+composition. The public v1 API and cache validation are unchanged.
+Production phase/finalizer composition
 remains tracked by
 [#815](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/815)
 under [#812](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/812).
