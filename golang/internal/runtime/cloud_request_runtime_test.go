@@ -23,7 +23,10 @@ type recordingCloudRequests struct {
 	complete                        func(context.Context)
 	checkpointStore                 state.CheckpointStore
 	responseStore                   cache.ResponseRepository
+	fillStore                       cache.FillRepository
 }
+
+func (s *recordingCloudRequests) ResponseFills() cache.FillRepository { return s.fillStore }
 
 func (s *recordingCloudRequests) Responses() cache.ResponseRepository { return s.responseStore }
 
