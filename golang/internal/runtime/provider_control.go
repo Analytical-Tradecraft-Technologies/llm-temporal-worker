@@ -45,6 +45,7 @@ type PostgresQueryRepositoriesSource interface {
 type CheckpointCapabilities struct {
 	Repository   state.CheckpointRepository
 	Blobs        state.CheckpointBlobReader
+	BlobWriter   state.CheckpointBlobWriter
 	Materializer state.CheckpointHandleMaterializer
 }
 
@@ -62,6 +63,9 @@ func (capabilities CheckpointCapabilities) Validate() error {
 	}
 	if isNilCapability(capabilities.Materializer) {
 		capabilities.Materializer = nil
+	}
+	if !isNilCapability(capabilities.BlobWriter) && (capabilities.Repository == nil || capabilities.Blobs == nil) {
+		return errors.New("checkpoint blob writer requires repository and blob-reader capabilities")
 	}
 	if capabilities.Materializer != nil && capabilities.Repository == nil {
 		return errors.New("checkpoint materializer requires a repository capability")
@@ -383,6 +387,14 @@ func (repository snapshotCheckpointRepository) BeginCheckpoint(ctx context.Conte
 // store, locator, or encryption binding outside the storage-neutral port.
 type snapshotCheckpointBlobReader struct {
 	delegate state.CheckpointBlobReader
+}
+
+type snapshotCheckpointBlobWriter struct {
+	delegate state.CheckpointBlobWriter
+}
+
+func (writer snapshotCheckpointBlobWriter) Write(ctx context.Context, scopeID string, data []byte, mediaType string) (state.CheckpointBlobReference, error) {
+	return writer.delegate.Write(ctx, scopeID, data, mediaType)
 }
 
 var _ state.CheckpointBlobReader = snapshotCheckpointBlobReader{}
