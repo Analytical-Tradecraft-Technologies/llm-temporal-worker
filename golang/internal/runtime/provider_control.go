@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -160,6 +161,9 @@ type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (dur
 type V1RuntimeCapabilities struct {
 	// Requests is the configured cloud operation repository, when enabled.
 	Requests CloudRequestRepository
+	// Responses persists cache successes and finalizer use receipts in the
+	// same configured cloud stores. Phase factories explicitly opt into reuse.
+	Responses cache.ResponseRepository
 	// ConfigDigest identifies the immutable configuration snapshot that owns
 	// this capability bundle. The automatic production factory provides it both
 	// to preflight composition and to the later complete builder, which validates

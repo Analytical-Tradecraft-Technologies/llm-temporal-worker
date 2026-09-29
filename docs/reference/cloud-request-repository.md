@@ -9,9 +9,13 @@ The worker configuration and snapshot factory can now attach this repository
 to an explicitly composed V1 activity runtime using `state.requests`. Generate
 and Compact record their inputs before execution and save completed responses
 before returning. The same configuration now supplies cloud checkpoint metadata,
-blob writes/reads, and continuation materialization. Cache/spend composition and
+blob writes/reads, continuation materialization, and response-cache persistence.
+Cache phase/finalizer execution, spend composition and
 SQL dependencies remain to be migrated. Budgets and provider status stay in Redis.
 There is no SQL data import: this service has not been deployed.
+
+See [cloud response-cache persistence](cloud-response-cache.md) for the cache
+identity, publication ordering and consuming-finalizer receipt contracts.
 
 ## Worker integration
 
@@ -90,7 +94,7 @@ is saved with the configured, bounded `server.finalization_timeout`, even if its
 caller context has just ended. Different terminal responses cannot overwrite
 one another. Query calls pass through unchanged.
 
-Cross-operation cache lookup, full workflow progress (including route, provider
+Automatic cross-operation cache reuse, full workflow progress (including route, provider
 job, budget receipt and policy/configuration versions), finalizer composition,
 cleanup/recovery orchestration, and SQL removal remain subsequent
 migration work. No workflow or cancellation API is introduced here.

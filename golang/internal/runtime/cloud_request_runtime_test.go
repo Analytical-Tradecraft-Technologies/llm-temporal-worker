@@ -9,6 +9,7 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
@@ -21,7 +22,10 @@ type recordingCloudRequests struct {
 	beginErr, completeErr, probeErr error
 	complete                        func(context.Context)
 	checkpointStore                 state.CheckpointStore
+	responseStore                   cache.ResponseRepository
 }
+
+func (s *recordingCloudRequests) Responses() cache.ResponseRepository { return s.responseStore }
 
 func (s *recordingCloudRequests) Checkpoints() state.CheckpointStore { return s.checkpointStore }
 

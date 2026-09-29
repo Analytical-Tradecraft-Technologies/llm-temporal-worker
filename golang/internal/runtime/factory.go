@@ -679,6 +679,12 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 		}
 		clients.checkpoints = checkpoints
 		clients.v1Capabilities.Checkpoints = checkpoints
+		responses, err := cloudResponseCache(repository)
+		if err != nil {
+			_ = clients.Close(context.Background())
+			return nil, nil, err
+		}
+		clients.v1Capabilities.Responses = responses
 	}
 	v1Runtime, err := builder(ctx, snapshot, engineValue, clients)
 	if err != nil {
