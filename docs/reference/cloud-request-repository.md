@@ -46,8 +46,9 @@ and unknown configuration fields are rejected.
 The factory opens existing aliased resources once per configuration snapshot,
 exposes the repository through `V1RuntimeCapabilities.Requests`, and wraps the
 configured V1 runtime. A failed open rejects the snapshot and drains its existing
-clients. Readiness requires both a bounded table query and a blob read (a missing
-probe object is normal). These checks establish read access, not write access;
+clients. Readiness revalidates the named table/bucket and requires both a bounded
+table query and a blob read (a missing probe object is normal, a missing bucket
+is not). These checks establish read access, not write access;
 they do not provision or modify resources. A disabled `state.requests` section
 preserves the existing composition during this staged migration.
 

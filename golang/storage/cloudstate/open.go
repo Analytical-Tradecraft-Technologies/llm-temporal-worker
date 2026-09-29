@@ -45,5 +45,16 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 	if err != nil {
 		return nil, err
 	}
-	return NewRepository(Options{Table: table, Blobs: blobs, Namespace: config.Namespace, Secret: secret})
+	repository, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: config.Namespace, Secret: secret})
+	if err != nil {
+		return nil, err
+	}
+	repository.probeStores = func(ctx context.Context) error {
+		if _, err := backend.OpenKeyValueStore(ctx, config.RequestTable); err != nil {
+			return err
+		}
+		_, err := backend.OpenBlobStore(ctx, config.PayloadStore)
+		return err
+	}
+	return repository, nil
 }

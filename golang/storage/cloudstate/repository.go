@@ -33,6 +33,8 @@ type Repository struct {
 	namespace string
 	secret    []byte
 	cipher    cipher.AEAD
+	// Set by Open to distinguish missing resources from a missing probe object.
+	probeStores func(context.Context) error
 }
 
 var namespacePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
