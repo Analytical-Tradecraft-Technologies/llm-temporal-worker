@@ -83,10 +83,18 @@ Deployments still supply the phase factories. Existing custom cache ports keep
 their behavior; using these helpers opts a phase into the cloud gate. Public
 activity names and v1 envelopes are unchanged.
 
-The durable phase factories still need to construct the checkpoints and
-persist the finalization handoff so replay can finish these helpers before
-returning. Incomplete responses cannot be published as successes. No automatic
-release is performed on runner errors, and a started fill never becomes
+The cloud request repository now exposes `SaveFinalizationHandoff` and
+`LoadFinalizationHandoff`. A phase factory can save a versioned, encrypted
+provider or cache-hit reconciliation payload in the running request after its
+checkpoint is committed. The repository checks that the checkpoint belongs to
+the same operation and has the expected kind; repeated identical saves repair
+uncertain acknowledgements, while different values conflict. Replay can load
+the same payload after a process restart without acquiring budget or starting
+provider work. The phase factories still need to construct the checkpoints,
+write and consume these handoffs, and cover the interval between provider
+completion and handoff persistence. A missing handoff is not permission to
+dispatch again. Incomplete responses cannot be published as successes. No
+automatic release is performed on runner errors, and a started fill never becomes
 dispatchable just because time has passed. See [fill ownership](cloud-cache-fills.md).
 
 Workflow timers, provider polling/recovery composition, and removal of the
