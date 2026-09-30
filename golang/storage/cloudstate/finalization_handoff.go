@@ -59,6 +59,24 @@ func (r *Repository) SaveFinalizationHandoff(ctx context.Context, scope Scope, i
 		if err != nil {
 			return err
 		}
+		plan, err := checkpointFinalizationProgress(progress)
+		if err != nil {
+			return err
+		}
+		if plan != nil {
+			if !equalHandoff(plan.Handoff, handoff) {
+				return contracts.ErrConflict
+			}
+			committed, err := r.Checkpoints().Get(ctx, plan.Checkpoint.ScopeID, plan.Checkpoint.ID)
+			if err != nil {
+				return err
+			}
+			actual, actualErr := committed.CanonicalDigest()
+			expected, expectedErr := plan.Checkpoint.CanonicalDigest()
+			if actualErr != nil || expectedErr != nil || actual != expected {
+				return contracts.ErrConflict
+			}
+		}
 		if existing != nil {
 			if !equalHandoff(*existing, handoff) {
 				return contracts.ErrConflict
@@ -66,6 +84,9 @@ func (r *Repository) SaveFinalizationHandoff(ctx context.Context, scope Scope, i
 			return r.advanceIndex(ctx, record)
 		}
 		encoded, _ := json.Marshal(handoff)
+		// The handoff replaces its now-committed publication plan, avoiding
+		// duplicate large response payloads in the current operation view.
+		delete(progress, "checkpoint_finalization")
 		progress["finalization_handoff"] = encoded
 		data, err := json.Marshal(progress)
 		if err != nil || len(data) > maxPayloadBytes {
@@ -154,6 +175,11 @@ func (r *Repository) verifyHandoffCheckpoint(ctx context.Context, record Record,
 	if err != nil {
 		return err
 	}
+	return r.verifyHandoffIdentity(record, checkpoint, handoff)
+}
+
+// verifyHandoffIdentity also validates plans whose checkpoint is not yet published.
+func (r *Repository) verifyHandoffIdentity(record Record, checkpoint state.DurableCheckpoint, handoff FinalizationHandoff) error {
 	var manifest struct {
 		OperationKey string `json:"operation_key"`
 	}

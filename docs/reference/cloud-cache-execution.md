@@ -87,11 +87,30 @@ The cloud request repository exposes `SaveFinalizationHandoff` and
 `LoadFinalizationHandoff`. The production factory now provides a snapshot-owned
 `V1RuntimeCapabilities.Finalizer` (`CloudFinalizer`) backed by those methods,
 the same cloud response/fill stores, and the snapshot's Redis budget authority.
-Custom cloud factories must also implement `CloudFinalizationStore`.
+Custom cloud factories must implement `CloudFinalizationStore` and
+`CloudCheckpointFinalizationStore`.
 
-After committing its checkpoint, a phase factory calls `CompleteGenerate` or
-`CompleteCompact` with its validated response and `FinalizationEffects`. Exactly
-one effects path is allowed:
+A phase factory can call `CommitGenerate` or `CommitCompact` with a fully built
+`state.DurableCheckpoint`, its validated response and `FinalizationEffects`.
+Referenced content blobs must already exist. The helper first saves an encrypted,
+immutable `CheckpointFinalization` plan in the running operation, then publishes
+the checkpoint metadata, attaches the readable-checkpoint handoff and applies
+the effects. Saving the plan makes the checkpoint commit and handoff persistence
+recoverable across a restart. It does not mark the operation completed; the outer
+runtime stores the terminal response after all effects succeed.
+
+The repository exposes `SaveCheckpointFinalization`, `LoadCheckpointFinalization`
+and `ResumeCheckpointFinalization` for that boundary. Identical retries retain the
+original checkpoint metadata, timestamps, response and accounting inputs.
+Competing plans conflict. The plan is replaced by its handoff after checkpoint
+publication, avoiding duplicate large response payloads in the operation view.
+The discovery index remains pending until the outer runtime completes the request.
+
+For phases that already committed their checkpoint, `CompleteGenerate` and
+`CompleteCompact` retain their existing handoff-and-effects behavior. These
+methods cannot recover a crash between checkpoint commit and handoff save;
+use the `Commit` methods to make that interval recoverable. Exactly one effects
+path is allowed:
 
 - Provider: the original fill lease, fill completion, optional successful cache
   entry, and the complete original Redis reconciliation request (including
@@ -110,16 +129,20 @@ The repository verifies checkpoint ownership and kind; repeated identical saves
 repair uncertain acknowledgements, while changed handoffs conflict.
 
 On a retry of a running cloud operation, the outer runtime loads and validates
-its handoff before invoking the inner runtime. If found, it repeats the same
+its handoff or staged publication plan before invoking the inner runtime.
+For a saved plan, it validates the typed response and receipts before resuming
+checkpoint publication and handoff persistence. It then repeats the same
 publication/settlement/receipt sequence and stores the terminal response, with
 no routing, admission, claim or provider dispatch. It retains all original
 accounting and completion timestamps across restarts and configuration reloads.
 Malformed, incompatible or unreadable saved handoffs fail closed. In particular,
 a missing referenced checkpoint cannot turn a saved handoff into a cache miss.
 
-Phase factories still need to construct and commit checkpoints and call this
-finalizer, and recover the interval between provider completion and handoff
-persistence. A missing handoff is not permission to dispatch again: the inner
+Phase factories still need to write content blobs, construct checkpoints and
+call this finalizer, and recover the interval between provider completion and
+publication-plan persistence. This change does not activate production cloud
+phase factories or remove the remaining SQL path. A missing handoff and plan
+are not permission to dispatch again: the inner
 runner's replay and single-use Redis claim remain responsible for that interval.
 No automatic release is performed on runner errors, and a started fill never
 becomes dispatchable just because time has passed. See
@@ -133,4 +156,8 @@ independent misses and retries, restart/expiry, lost start acknowledgements,
 fresh admission after a resolved unknown attempt, route fences, and safe
 short-circuiting. Finalization tests additionally cover publication, budget
 settlement, fill completion, cache-use receipts, uncertain writes, and restart
-retries. They do not establish live AWS, Redis, or Temporal behavior.
+retries. Publication-plan tests inject failures before and after every checkpoint
+metadata and operation/discovery-index write, exercise concurrent identical
+retries and conflicting plans, and verify missing content remains pending.
+Runtime tests cover both Generate and Compact, provider and cache-hit paths,
+and reject invalid saved instructions before checkpoint publication or effects. They do not establish live AWS, Redis, or Temporal behavior.

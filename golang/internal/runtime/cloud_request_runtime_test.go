@@ -17,15 +17,18 @@ import (
 )
 
 type recordingCloudRequests struct {
-	operation                       cloudstate.Operation
-	record                          cloudstate.Record
-	beginErr, completeErr, probeErr error
-	complete                        func(context.Context)
-	checkpointStore                 state.CheckpointStore
-	responseStore                   cache.ResponseRepository
-	fillStore                       cache.FillRepository
-	handoff                         *cloudstate.FinalizationHandoff
-	saveHandoffErr, loadHandoffErr  error
+	operation                               cloudstate.Operation
+	record                                  cloudstate.Record
+	beginErr, completeErr, probeErr         error
+	complete                                func(context.Context)
+	checkpointStore                         state.CheckpointStore
+	responseStore                           cache.ResponseRepository
+	fillStore                               cache.FillRepository
+	handoff                                 *cloudstate.FinalizationHandoff
+	saveHandoffErr, loadHandoffErr          error
+	checkpointPlan                          *cloudstate.CheckpointFinalization
+	savePlanErr, loadPlanErr, resumePlanErr error
+	planSteps                               []string
 }
 
 func (s *recordingCloudRequests) ResponseFills() cache.FillRepository { return s.fillStore }
@@ -279,4 +282,34 @@ func (s *recordingCloudRequests) LoadFinalizationHandoff(_ context.Context, _ cl
 		return cloudstate.FinalizationHandoff{}, cloudstate.ErrFinalizationHandoffMissing
 	}
 	return *s.handoff, nil
+}
+
+func (s *recordingCloudRequests) SaveCheckpointFinalization(_ context.Context, _ cloudstate.Scope, _ cloudstate.RequestID, plan cloudstate.CheckpointFinalization, _ time.Time) error {
+	s.planSteps = append(s.planSteps, "save")
+	s.checkpointPlan = &plan
+	s.record.Progress, _ = json.Marshal(map[string]any{"version": 1, "checkpoint_finalization": plan})
+	return s.savePlanErr
+}
+func (s *recordingCloudRequests) LoadCheckpointFinalization(_ context.Context, _ cloudstate.Scope, _ cloudstate.RequestID) (cloudstate.CheckpointFinalization, error) {
+	if s.loadPlanErr != nil {
+		return cloudstate.CheckpointFinalization{}, s.loadPlanErr
+	}
+	if s.checkpointPlan == nil {
+		return cloudstate.CheckpointFinalization{}, cloudstate.ErrCheckpointFinalizationMissing
+	}
+	return *s.checkpointPlan, nil
+}
+func (s *recordingCloudRequests) ResumeCheckpointFinalization(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, now time.Time) (cloudstate.FinalizationHandoff, error) {
+	s.planSteps = append(s.planSteps, "commit")
+	if s.resumePlanErr != nil {
+		return cloudstate.FinalizationHandoff{}, s.resumePlanErr
+	}
+	if s.checkpointPlan == nil {
+		return cloudstate.FinalizationHandoff{}, cloudstate.ErrCheckpointFinalizationMissing
+	}
+	handoff := s.checkpointPlan.Handoff
+	if err := s.SaveFinalizationHandoff(ctx, scope, id, handoff, now); err != nil {
+		return cloudstate.FinalizationHandoff{}, err
+	}
+	return handoff, nil
 }
