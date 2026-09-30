@@ -134,8 +134,9 @@ type StateConfig struct {
 }
 
 // StateKind identifies the storage composition selected for a worker.
-// Durable mode is the production composition: PostgreSQL is authoritative
-// and Redis provides the low-latency active-budget materialization. Redis-only
+// Durable mode is the production composition: cloud requests select the
+// durable cloud backend, otherwise PostgreSQL is required. Redis owns active
+// budgets and provider state in either case. Redis-only
 // remains accepted for the pre-composition development fixture; new
 // production configurations must use Durable.
 const (
@@ -169,7 +170,8 @@ type RedisConfig struct {
 	StreamTrimSafety Duration `yaml:"stream_trim_safety" json:"stream_trim_safety"`
 }
 
-// PostgresConfig selects the authoritative durable-state namespace. Database,
+// PostgresConfig selects the legacy durable-state namespace when Requests
+// is absent. Cloud-configured workers do not use this section. Database,
 // schema, and table_prefix are deliberately independent so deployments can
 // isolate workers without relying on search_path.
 type PostgresConfig struct {

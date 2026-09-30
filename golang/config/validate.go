@@ -195,9 +195,8 @@ func (state StateConfig) validate(environment string) error {
 	}
 	switch state.Kind {
 	case StateKindDurable:
-		// Durable mode is the only production composition. Both stores are
-		// required and readiness verifies their immutable contracts before a
-		// worker can poll new work.
+		// Durable mode requires Redis and a durable request backend. Readiness
+		// verifies their contracts before a worker can poll new work.
 	case StateKindRedis:
 		// Kept for the existing local Redis-only fixture while the durable
 		// repositories are adopted. It is never accepted as production.
@@ -235,6 +234,11 @@ func (state StateConfig) validate(environment string) error {
 	}
 	if err := state.Redis.validate(environment); err != nil {
 		return err
+	}
+	// Cloud request storage replaces PostgreSQL. Its unused configuration and
+	// credentials must not prevent startup or trigger database access.
+	if state.Requests != nil {
+		return nil
 	}
 	if err := state.Postgres.validate(environment, state.Kind == StateKindDurable); err != nil {
 		return err

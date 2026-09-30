@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -13,11 +14,16 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
+	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
+	redisclient "github.com/redis/go-redis/v9"
 )
 
 func testCloudConfig() *config.CloudRequestConfig {
@@ -185,7 +191,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 	}}
 	for _, namespace := range []string{"snapshot-one", "snapshot-two"} {
 		closed := false
-		clients := &productionClientSet{checkpointVerifier: verifier, checkpoints: CheckpointCapabilities{Repository: builderCheckpointRepository{}, Blobs: builderCheckpointBlobReader{}, Materializer: builderCheckpointMaterializer{}}, close: func(context.Context) error { closed = true; return nil }}
+		clients := &productionClientSet{probes: cloudBaseTestProbes(), checkpointVerifier: verifier, checkpoints: CheckpointCapabilities{Repository: builderCheckpointRepository{}, Blobs: builderCheckpointBlobReader{}, Materializer: builderCheckpointMaterializer{}}, close: func(context.Context) error { closed = true; return nil }}
 		_, built, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, namespace), nil, clients)
 		if err != nil || built != clients || closed {
 			t.Fatalf("attach: %v", err)
@@ -193,7 +199,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 		if _, ok := clients.V1Runtime().(*cloudRequestRuntime); !ok {
 			t.Fatal("repository not applied to actual V1 runtime")
 		}
-		if len(clients.DependencyProbes()) != 1 || clients.DependencyProbes()[0].Probe(context.Background()).Dependency != DependencyCloudRequests {
+		if len(clients.DependencyProbes()) != 3 || clients.DependencyProbes()[2].Probe(context.Background()).Dependency != DependencyCloudRequests {
 			t.Fatal("missing cloud readiness")
 		}
 	}
@@ -202,7 +208,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 	}
 	fail = true
 	closed := false
-	clients := &productionClientSet{checkpointVerifier: verifier, close: func(context.Context) error { closed = true; return nil }}
+	clients := &productionClientSet{probes: cloudBaseTestProbes(), checkpointVerifier: verifier, close: func(context.Context) error { closed = true; return nil }}
 	if _, _, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, "rejected"), nil, clients); err == nil || !closed {
 		t.Fatal("failed build did not drain clients")
 	}
@@ -278,5 +284,164 @@ func TestCloudReadinessBlocksUnavailableStorageAndSanitizesErrors(t *testing.T) 
 		if err != nil && strings.Contains(err.Error(), "private endpoint") {
 			t.Fatal("leaked endpoint")
 		}
+	}
+}
+
+// Cloud workers retain Redis and the existing result/blob-store dependency.
+func cloudBaseTestProbes() []DependencyProbe {
+	var probes []DependencyProbe
+	for _, id := range []DependencyID{DependencyRedis, DependencyBlobStore} {
+		probes = append(probes, identifyDependencyProbe(id, DependencyProbeFunc(func(context.Context) ProbeResult {
+			return ProbeResult{Dependency: id, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+		})))
+	}
+	return probes
+}
+
+// Construction exercises the real factory with in-process storage doubles;
+// the resolver and PostgreSQL factory reject any attempt to use the old backend.
+func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := config.Compile(context.Background(), data, config.ReferenceResolverFunc(func(_ context.Context, c *config.Config) error {
+		c.State.Requests = testCloudConfig()
+		c.State.Postgres = config.PostgresConfig{}
+		c.Endpoints = map[string]config.EndpointConfig{"openai-prod": c.Endpoints["openai-prod"]}
+		for name, model := range c.Models {
+			model.Routes = model.Routes[:1]
+			c.Models[name] = model
+		}
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		failOpen bool
+	}{{"successful cloud build", false}, {"failed cloud open", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			redis := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
+			defer redis.Close()
+			repository := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}
+			built := false
+			closed := false
+			factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+					return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{"test": {Routes: []routing.Route{{EndpointID: "openai-prod", Capabilities: routing.CapabilitySet{Version: "test-v1"}}}}}}}, nil
+				}),
+				Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+					if strings.Contains(strings.ToLower(ref.Name+ref.Path), "postgres") {
+						t.Fatal("resolved PostgreSQL secret")
+					}
+					if ref.Name == "REQUEST_KEY" {
+						return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
+					}
+					return bytes.Repeat([]byte{7}, 32), nil
+				}),
+				RedisClient: redis, RedisKeySecret: bytes.Repeat([]byte{8}, 32),
+				BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
+					return &cloudBootstrapBlobStore{newTestBlobStore()}, cloudBootstrapCloser{func() { closed = true }}, nil
+				},
+				PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
+					t.Fatal("opened PostgreSQL")
+					return nil, nil, nil
+				},
+				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
+					if test.failOpen {
+						return nil, errors.New("cloud open failed")
+					}
+					return repository, nil
+				},
+				V1RuntimeBuilder: func(_ context.Context, _ *config.Snapshot, _ llm.Engine, set app.ClientSet) (activity.V1Runtime, error) {
+					built = true
+					capabilities := set.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities()
+					if capabilities.Requests != repository || capabilities.Budgets == nil || capabilities.Finalizer == nil || capabilities.Checkpoints.Repository == nil || capabilities.Responses == nil || capabilities.ResponseFills == nil {
+						t.Fatal("incomplete cloud capabilities")
+					}
+					queries := set.(PostgresQueryRepositoriesSource).QueryRepositories()
+					if queries.SpendSummary != nil || queries.QueryAudit != nil || queries.ProviderStatus == nil || queries.Inventory == nil {
+						t.Fatal("incorrect query backend capabilities")
+					}
+					return &cloudInnerRuntime{}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, clients, err := factory.Build(context.Background(), snapshot)
+			if test.failOpen {
+				if err == nil || clients != nil || built || !closed {
+					t.Fatalf("failed cloud open did not reject and drain: err=%v built=%v closed=%v", err, built, closed)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !built || closed {
+				t.Fatal("cloud runtime not constructed")
+			}
+			probes := clients.(dependencyProbeSource).DependencyProbes()
+			if len(probes) != 3 {
+				t.Fatalf("probes=%d", len(probes))
+			}
+			if err := validateRequiredDependencyProbeSet(snapshot.Config().State, probes); err != nil {
+				t.Fatal(err)
+			}
+			if err := clients.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !closed {
+				t.Fatal("cloud snapshot leaked blob client")
+			}
+		})
+	}
+}
+
+type cloudBootstrapBlobStore struct{ *testBlobStore }
+
+func (*cloudBootstrapBlobStore) ProbeBucket(context.Context) error { return nil }
+
+type cloudBootstrapCloser struct{ close func() }
+
+func (c cloudBootstrapCloser) Close() error { c.close(); return nil }
+
+func TestCloudReadinessRejectsIncompleteClientsBeforeRuntimeBuilder(t *testing.T) {
+	verifier, err := state.NewKeyring([]state.Key{{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		probes []DependencyProbe
+	}{
+		{"missing Redis", cloudBaseTestProbes()[1:]},
+		{"missing blob store", cloudBaseTestProbes()[:1]},
+		{"unexpected SQL", append(cloudBaseTestProbes(), identifyDependencyProbe(DependencyPostgres, DependencyProbeFunc(func(context.Context) ProbeResult { return ProbeResult{} })))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			closed := false
+			factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+				Clock: time.Now,
+				Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+					return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
+				}),
+				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
+					return &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}, nil
+				},
+				V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
+					t.Fatal("invoked builder with invalid readiness set")
+					return nil, nil
+				},
+			}}
+			clients := &productionClientSet{probes: test.probes, checkpointVerifier: verifier, close: func(context.Context) error { closed = true; return nil }}
+			_, set, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, "invalid-readiness"), nil, clients)
+			if err == nil || set != nil || !closed {
+				t.Fatalf("readiness rejection: error=%v set=%T closed=%v", err, set, closed)
+			}
+		})
 	}
 }

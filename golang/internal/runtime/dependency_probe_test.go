@@ -382,7 +382,7 @@ func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *te
 		}))
 	}
 	complete := []DependencyProbe{ready(DependencyRedis), ready(DependencyPostgres), ready(DependencyBlobStore)}
-	if err := validateRequiredDependencyProbeSet(config.StateKindDurable, complete); err != nil {
+	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, complete); err != nil {
 		t.Fatalf("complete durable probe set rejected: %v", err)
 	}
 	tests := []struct {
@@ -395,12 +395,12 @@ func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *te
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := validateRequiredDependencyProbeSet(config.StateKindDurable, test.probes); err == nil {
+			if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, test.probes); err == nil {
 				t.Fatal("incomplete durable probe set unexpectedly accepted")
 			}
 		})
 	}
-	if err := validateRequiredDependencyProbeSet(config.StateKindMemory, nil); err != nil {
+	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindMemory}, nil); err != nil {
 		t.Fatalf("memory probe set rejected: %v", err)
 	}
 }
@@ -694,4 +694,39 @@ func (client *fakeRedisProbeClient) ScriptLoad(context.Context, string) *rediscl
 func (client *fakeRedisProbeClient) ConfigSet(context.Context, string, string) *redisclient.StatusCmd {
 	client.mutations++
 	return redisclient.NewStatusCmd(context.Background())
+}
+
+func TestValidateRequiredDependencyProbeSetSelectsCloudBackendWithoutIO(t *testing.T) {
+	ready := func(id DependencyID) DependencyProbe {
+		return identifyDependencyProbe(id, DependencyProbeFunc(func(context.Context) ProbeResult { t.Fatal("validation performed readiness IO"); return ProbeResult{} }))
+	}
+	cloud := config.StateConfig{Kind: config.StateKindDurable, Requests: testCloudConfig()}
+	tests := []struct {
+		name  string
+		ids   []DependencyID
+		valid bool
+	}{
+		{"complete", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests}, true},
+		{"missing cloud", []DependencyID{DependencyRedis, DependencyBlobStore}, false},
+		{"obsolete SQL", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyPostgres}, false},
+		{"mixed backend", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyPostgres}, false},
+		{"missing Redis", []DependencyID{DependencyBlobStore, DependencyCloudRequests}, false},
+		{"missing blobs", []DependencyID{DependencyRedis, DependencyCloudRequests}, false},
+		{"duplicate cloud", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyCloudRequests}, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var probes []DependencyProbe
+			for _, id := range test.ids {
+				probes = append(probes, ready(id))
+			}
+			err := validateRequiredDependencyProbeSet(cloud, probes)
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v, error=%v", test.valid, err)
+			}
+		})
+	}
+	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, cloudBaseTestProbes()); err == nil {
+		t.Fatal("SQL mode accepted missing SQL probe")
+	}
 }

@@ -111,11 +111,15 @@ func identifyDependencyProbe(id DependencyID, probe DependencyProbe) DependencyP
 // contract without invoking any external service. Durable snapshots must
 // carry exactly one identified probe for each required state dependency;
 // readiness still performs the bounded I/O check later.
-func validateRequiredDependencyProbeSet(stateKind string, probes []DependencyProbe) error {
-	if stateKind != config.StateKindDurable {
+func validateRequiredDependencyProbeSet(stateConfig config.StateConfig, probes []DependencyProbe) error {
+	if stateConfig.Kind != config.StateKindDurable {
 		return nil
 	}
-	required := []DependencyID{DependencyRedis, DependencyPostgres, DependencyBlobStore}
+	requestDependency := DependencyPostgres
+	if stateConfig.Requests != nil {
+		requestDependency = DependencyCloudRequests
+	}
+	required := []DependencyID{DependencyRedis, requestDependency, DependencyBlobStore}
 	seen := make(map[DependencyID]struct{}, len(probes))
 	for _, probe := range probes {
 		identity, ok := probe.(dependencyIdentitySource)
