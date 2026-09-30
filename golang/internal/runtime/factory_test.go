@@ -954,3 +954,25 @@ func azureOpenAIChatSnapshot() engine.Snapshot {
 		"model": {Routes: []routing.Route{{EndpointID: "azure-chat", Capabilities: routing.CapabilitySet{Version: "azure-chat/v1"}}}},
 	}}}
 }
+
+func TestBuildPostgresSkipsCloudComposition(t *testing.T) {
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+			t.Fatal("cloud mode resolved PostgreSQL credentials")
+			return nil, nil
+		}),
+		PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
+			t.Fatal("cloud mode opened PostgreSQL")
+			return nil, nil, nil
+		},
+	}}
+	value := config.Config{State: config.StateConfig{Kind: config.StateKindDurable, Requests: testCloudConfig()}}
+	probe, closer, err := factory.buildPostgres(context.Background(), value)
+	if err != nil || probe != nil || closer != nil {
+		t.Fatalf("cloud mode built PostgreSQL: probe=%T closer=%T error=%v", probe, closer, err)
+	}
+	factory.options = ProductionFactoryOptions{}
+	if _, _, err := factory.buildPostgres(context.Background(), value); err != nil {
+		t.Fatal(err)
+	}
+}

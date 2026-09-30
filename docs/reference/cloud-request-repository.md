@@ -10,8 +10,8 @@ to an explicitly composed V1 activity runtime using `state.requests`. Generate
 and Compact record their inputs before execution and save completed responses
 before returning. The same configuration now supplies cloud checkpoint metadata,
 blob writes/reads, continuation materialization, and response-cache persistence.
-Cache phase/finalizer execution, spend composition and
-SQL dependencies remain to be migrated. Budgets and provider status stay in Redis.
+Concrete phase composition, spend queries and removal of the legacy SQL
+packages remain to be migrated. Budgets and provider status stay in Redis.
 There is no SQL data import: this service has not been deployed.
 
 See [cloud response-cache persistence](cloud-response-cache.md) for the cache
@@ -40,6 +40,20 @@ state:
       kind: env
       name: LLMTW_REQUEST_STORAGE_KEY
 ```
+
+When `state.requests` is configured, `state.postgres` can be omitted. The worker
+ignores any remaining PostgreSQL settings, does not resolve its credentials or
+open its pool, and requires exactly Redis, the existing result blob store, and
+cloud request storage in its readiness probe set. Missing cloud capabilities or
+a failed cloud open reject the snapshot and drain its clients; there is no SQL
+fallback. Redis validation and durability policies remain required.
+
+Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
+pool, and readiness requirements. In cloud mode SQL spend and query-audit
+repositories are absent; query composition must keep those unsupported unless it
+supplies another implementation. A complete V1 runtime builder is still required:
+this bootstrap change does not configure concrete execution phase factories or
+remove the SQL packages from the build.
 
 `secret` references standard base64 encoding of an independent, stable 32-byte
 key. File references are also accepted; workload tokens are not suitable for

@@ -576,10 +576,6 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if postgresProbe != nil {
 		probes = append(probes, postgresProbe)
 	}
-	if err := validateRequiredDependencyProbeSet(value.State.Kind, probes); err != nil {
-		closeAll()
-		return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
-	}
 	var checkpointBlobReader state.CheckpointBlobReader
 	if factory.options.CheckpointBlobLocator != nil {
 		checkpointBlobReader = state.ScopedBlobReader{
@@ -663,6 +659,10 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	}
 	builder := factory.options.V1RuntimeBuilder
 	if builder == nil {
+		if err := validateRequiredDependencyProbeSet(snapshot.Config().State, clients.probes); err != nil {
+			_ = clients.Close(context.Background())
+			return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
+		}
 		return engineValue, clients, nil
 	}
 	repository, err := factory.buildCloudRequests(ctx, snapshot.Config().State.Requests)
@@ -697,6 +697,13 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 			return nil, nil, fmt.Errorf("%w: cloud finalization capabilities", ErrProductionFactoryInvalid)
 		}
 		clients.v1Capabilities.Finalizer = finalizer
+		clients.probes = append(clients.probes, cloudRequestProbe(repository))
+	}
+	// Validate the selected backend after attaching cloud capabilities, and
+	// before a phase builder can expose an Activity runtime.
+	if err := validateRequiredDependencyProbeSet(snapshot.Config().State, clients.probes); err != nil {
+		_ = clients.Close(context.Background())
+		return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
 	}
 	v1Runtime, err := builder(ctx, snapshot, engineValue, clients)
 	if err != nil {
@@ -711,7 +718,6 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 		return nil, nil, fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid)
 	}
 	if repository != nil {
-		clients.probes = append(clients.probes, cloudRequestProbe(repository))
 		v1Runtime = &cloudRequestRuntime{inner: v1Runtime, requests: repository, finalizer: clients.v1Capabilities.Finalizer, clock: factory.options.Clock, finalizationTimeout: time.Duration(snapshot.Config().Server.FinalizationTimeout)}
 	}
 	clients.v1Runtime = v1Runtime
@@ -809,7 +815,7 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 }
 
 func (factory *ProductionEngineFactory) buildPostgres(ctx context.Context, value config.Config) (DependencyProbe, io.Closer, error) {
-	if value.State.Kind != config.StateKindDurable {
+	if value.State.Kind != config.StateKindDurable || value.State.Requests != nil {
 		return nil, nil, nil
 	}
 	if factory.options.PostgresFactory == nil {
