@@ -22,7 +22,7 @@ func handoffFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Reco
 	if err != nil {
 		t.Fatal(err)
 	}
-	handoff := FinalizationHandoff{Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1,"response":"private answer","budget_generation":"generation-1"}`)}
+	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1,"response":"private answer","budget_generation":"generation-1"}`)}
 	return r, table, blobs, record, checkpoint, handoff
 }
 
@@ -221,7 +221,7 @@ func TestFinalizationHandoffCacheAndCompactKinds(t *testing.T) {
 			if err := publishCheckpoint(context.Background(), r.Checkpoints(), checkpoint); err != nil {
 				t.Fatal(err)
 			}
-			handoff := FinalizationHandoff{Mode: variant.mode, CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
+			handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: variant.mode, CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
 			if err := r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); err != nil {
 				t.Fatal(err)
 			}
@@ -244,8 +244,28 @@ func TestFinalizationHandoffRejectsManifestOperationMismatch(t *testing.T) {
 	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
 		t.Fatal(err)
 	}
-	handoff := FinalizationHandoff{Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
+	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
 	if err := r.SaveFinalizationHandoff(ctx, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
 		t.Fatalf("manifest key not bound to request ID: %v", err)
+	}
+}
+
+func TestFinalizationHandoffSeparatesCallerKeyFromInternalOperationID(t *testing.T) {
+	r, _, _, checkpoint := checkpointFixture(t)
+	op := Operation{Scope: Scope{Tenant: "tenant", Project: "project"}, Kind: "generate", Key: "caller-idempotency-key", Manifest: json.RawMessage(`{"operation_key":"caller-idempotency-key"}`), Now: checkpoint.CreatedAt}
+	record, err := r.BeginOperation(context.Background(), op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishCheckpoint(context.Background(), r.Checkpoints(), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
+	if err := r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
+	handoff.OperationID = state.OperationID(op.Key)
+	if err := r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
+		t.Fatalf("caller key accepted as internal ID: %v", err)
 	}
 }

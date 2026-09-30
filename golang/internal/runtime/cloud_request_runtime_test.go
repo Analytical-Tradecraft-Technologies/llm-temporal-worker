@@ -24,6 +24,8 @@ type recordingCloudRequests struct {
 	checkpointStore                 state.CheckpointStore
 	responseStore                   cache.ResponseRepository
 	fillStore                       cache.FillRepository
+	handoff                         *cloudstate.FinalizationHandoff
+	saveHandoffErr, loadHandoffErr  error
 }
 
 func (s *recordingCloudRequests) ResponseFills() cache.FillRepository { return s.fillStore }
@@ -261,4 +263,20 @@ func TestCloudRuntimeReplaysIncompleteOperationWithoutCreatingSuccessCache(t *te
 	if calls != 1 {
 		t.Fatal("incomplete operation was resubmitted")
 	}
+}
+
+func (s *recordingCloudRequests) SaveFinalizationHandoff(_ context.Context, _ cloudstate.Scope, _ cloudstate.RequestID, h cloudstate.FinalizationHandoff, _ time.Time) error {
+	s.handoff = &h
+	data, _ := json.Marshal(map[string]any{"version": 1, "finalization_handoff": h})
+	s.record.Progress = data
+	return s.saveHandoffErr
+}
+func (s *recordingCloudRequests) LoadFinalizationHandoff(_ context.Context, _ cloudstate.Scope, _ cloudstate.RequestID) (cloudstate.FinalizationHandoff, error) {
+	if s.loadHandoffErr != nil {
+		return cloudstate.FinalizationHandoff{}, s.loadHandoffErr
+	}
+	if s.handoff == nil {
+		return cloudstate.FinalizationHandoff{}, cloudstate.ErrFinalizationHandoffMissing
+	}
+	return *s.handoff, nil
 }

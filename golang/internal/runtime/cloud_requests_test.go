@@ -153,6 +153,10 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			if repositories[len(repositories)-1].fillStore.(*cloudFillTestStore).calls != 1 {
 				t.Fatal("mixed fill snapshots")
 			}
+			finalizer := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Finalizer
+			if finalizer == nil || finalizer.requests != repositories[len(repositories)-1] {
+				t.Fatal("finalizer not bound to snapshot request stores")
+			}
 			checkpoints := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Checkpoints
 			if err := checkpoints.RequireMaterializer(); err != nil {
 				t.Fatal(err)

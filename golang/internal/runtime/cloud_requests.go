@@ -16,7 +16,8 @@ import (
 
 // CloudRequestRepository is snapshot-owned. It records operations; it does not
 // authorize paid attempts or settle budgets. The production factory also
-// requires CloudCheckpointSource, CloudResponseCacheSource and CloudResponseFillSource when enabled.
+// requires CloudCheckpointSource, CloudResponseCacheSource, CloudResponseFillSource
+// and CloudFinalizationStore when enabled.
 type CloudRequestRepository interface {
 	BeginOperation(context.Context, cloudstate.Operation) (cloudstate.Record, error)
 	CompleteOperation(context.Context, cloudstate.Scope, cloudstate.RequestID, json.RawMessage, time.Time) (cloudstate.Record, error)
