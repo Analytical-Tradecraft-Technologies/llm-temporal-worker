@@ -17,7 +17,7 @@ var ErrCompositionBuilderInvalid = errors.New("durable composition builder is in
 // CompositionPorts is the complete storage-neutral port set owned by one
 // immutable runtime snapshot. Keeping the ports in one value makes it
 // possible for a factory to copy and validate the set atomically instead of
-// composing Redis and PostgreSQL capabilities independently during a reload.
+// composing Redis and durable backend capabilities independently during a reload.
 // The interfaces intentionally expose no concrete client, pool, or keyring.
 type CompositionPorts struct {
 	Operations    admission.AdmissionStore
@@ -27,7 +27,7 @@ type CompositionPorts struct {
 }
 
 // CompositionBuilder constructs one snapshot-owned Composition. It does not
-// dial services, create schema, read PostgreSQL budget state, or dispatch a
+// dial services, provision storage, or dispatch a
 // provider request. Deployment code supplies already-scoped ports and may
 // retain the resulting value for the lifetime of its immutable configuration
 // snapshot.

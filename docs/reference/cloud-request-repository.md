@@ -48,6 +48,22 @@ cloud request storage in its readiness probe set. Missing cloud capabilities or
 a failed cloud open reject the snapshot and drain its clients; there is no SQL
 fallback. Redis validation and durability policies remain required.
 
+Cloud composition uses `durable.StateIdentity.Cloud` instead of a fabricated
+PostgreSQL namespace. Its comparable identity contains the provider type,
+namespace, selected table/blob aliases, and a SHA-256 digest of the provider
+configuration (including physical mappings, region and profile). Resolved
+credentials are never part of that digest. The complete configuration digest
+still binds the rest of the worker settings, including secret references.
+
+Automatic preflight supplies the expected cloud identity before constructing
+external clients. The complete runtime builder validates it again against the
+snapshot, and composition reuse checks it before either phase gets its ports.
+Missing, mixed SQL/cloud, or mismatched identities reject composition. This
+validates the declared storage binding; deployment callbacks must still supply
+ports backed by those stores. Both Generate and Compact share one validated
+composition per snapshot. Legacy SQL identities remain supported while their
+implementation is removed in later migration steps.
+
 Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
 pool, and readiness requirements. In cloud mode SQL spend and query-audit
 repositories are absent; query composition must keep those unsupported unless it

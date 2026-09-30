@@ -643,7 +643,11 @@ func (factory *ProductionEngineFactory) preflightAutomaticDurableComposition(ctx
 	if snapshot == nil {
 		return nil, fmt.Errorf("%w: automatic durable composition requires a configuration snapshot", ErrDurableV1Composition)
 	}
-	composition, err := (V1RuntimeCapabilities{ConfigDigest: snapshot.Digest(), CompositionFactory: factory.options.DurableCompositionFactory}).BuildDurableComposition(ctx)
+	identity, err := cloudRequestIdentity(snapshot.Config().State.Requests)
+	if err != nil {
+		return nil, fmt.Errorf("%w: cloud identity: %v", ErrDurableV1Composition, err)
+	}
+	composition, err := (V1RuntimeCapabilities{CloudIdentity: identity, ConfigDigest: snapshot.Digest(), CompositionFactory: factory.options.DurableCompositionFactory}).BuildDurableComposition(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: automatic durable composition preflight: %v", ErrDurableV1Composition, err)
 	}
@@ -657,6 +661,12 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	if factory == nil || clients == nil {
 		return nil, nil, fmt.Errorf("%w: v1 runtime composition requires factory and clients", ErrProductionFactoryInvalid)
 	}
+	identity, err := cloudRequestIdentity(snapshot.Config().State.Requests)
+	if err != nil {
+		_ = clients.Close(context.Background())
+		return nil, nil, err
+	}
+	clients.v1Capabilities.CloudIdentity = identity
 	builder := factory.options.V1RuntimeBuilder
 	if builder == nil {
 		if err := validateRequiredDependencyProbeSet(snapshot.Config().State, clients.probes); err != nil {

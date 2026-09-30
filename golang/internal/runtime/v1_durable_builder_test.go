@@ -500,3 +500,54 @@ var (
 	_ durable.ResultStore        = capabilityResultStub{}
 	_ durable.BudgetMaterializer = capabilityMaterializerStub{}
 )
+
+func TestDurableBuilderBindsCloudIdentityToBothPhases(t *testing.T) {
+	snapshot := cloudSnapshot(t, "cloud-builder")
+	expected, err := cloudRequestIdentity(snapshot.Config().State.Requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []bool{false, true} {
+		t.Run(map[bool]string{false: "matching snapshot", true: "stale snapshot"}[stale], func(t *testing.T) {
+			phases, compositions := 0, 0
+			check := func(cap V1RuntimeCapabilities) {
+				phases++
+				c, ok := cap.DurableComposition()
+				if !ok || c.Identity.Cloud != expected || c.Identity.Postgres != (durable.PostgresIdentity{}) {
+					t.Fatal("phase lost cloud identity")
+				}
+			}
+			capabilities := completeDurableBuilderCapabilities(
+				func(_ context.Context, cap V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+					check(cap)
+					return validBuilderGeneratePorts(nil), nil
+				},
+				func(_ context.Context, cap V1RuntimeCapabilities) (durable.CompactPorts, error) {
+					check(cap)
+					return validCompactPorts(), nil
+				},
+			)
+			capabilities.CloudIdentity = expected
+			capabilities.ConfigDigest = snapshot.Digest()
+			if stale {
+				capabilities.CloudIdentity.Namespace = "previous"
+			}
+			capabilities.CompositionFactory = func(_ context.Context, cap V1RuntimeCapabilities) (durable.Composition, error) {
+				compositions++
+				c := validCapabilityComposition()
+				c.Identity.Postgres = durable.PostgresIdentity{}
+				c.Identity.Cloud = cap.CloudIdentity
+				c.Identity.ConfigDigest = cap.ConfigDigest
+				return c, nil
+			}
+			_, err := NewDurableV1RuntimeBuilder()(context.Background(), snapshot, nil, &generateBuilderClientSet{capabilities: capabilities})
+			if stale {
+				if err == nil || phases != 0 || compositions != 0 {
+					t.Fatalf("stale snapshot reached factories: phases=%d compositions=%d err=%v", phases, compositions, err)
+				}
+			} else if err != nil || phases != 2 || compositions != 1 {
+				t.Fatalf("cloud composition failed: phases=%d compositions=%d err=%v", phases, compositions, err)
+			}
+		})
+	}
+}
