@@ -691,6 +691,12 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 			return nil, nil, err
 		}
 		clients.v1Capabilities.ResponseFills = fills
+		finalizer, err := newCloudFinalizer(repository, responses, fills, clients.v1Capabilities.Budgets, factory.options.Clock)
+		if err != nil {
+			_ = clients.Close(context.Background())
+			return nil, nil, fmt.Errorf("%w: cloud finalization capabilities", ErrProductionFactoryInvalid)
+		}
+		clients.v1Capabilities.Finalizer = finalizer
 	}
 	v1Runtime, err := builder(ctx, snapshot, engineValue, clients)
 	if err != nil {
@@ -706,7 +712,7 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	}
 	if repository != nil {
 		clients.probes = append(clients.probes, cloudRequestProbe(repository))
-		v1Runtime = &cloudRequestRuntime{inner: v1Runtime, requests: repository, clock: factory.options.Clock, finalizationTimeout: time.Duration(snapshot.Config().Server.FinalizationTimeout)}
+		v1Runtime = &cloudRequestRuntime{inner: v1Runtime, requests: repository, finalizer: clients.v1Capabilities.Finalizer, clock: factory.options.Clock, finalizationTimeout: time.Duration(snapshot.Config().Server.FinalizationTimeout)}
 	}
 	clients.v1Runtime = v1Runtime
 	return engineValue, clients, nil

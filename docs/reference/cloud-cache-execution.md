@@ -83,19 +83,47 @@ Deployments still supply the phase factories. Existing custom cache ports keep
 their behavior; using these helpers opts a phase into the cloud gate. Public
 activity names and v1 envelopes are unchanged.
 
-The cloud request repository now exposes `SaveFinalizationHandoff` and
-`LoadFinalizationHandoff`. A phase factory can save a versioned, encrypted
-provider or cache-hit reconciliation payload in the running request after its
-checkpoint is committed. The repository checks that the checkpoint belongs to
-the same operation and has the expected kind; repeated identical saves repair
-uncertain acknowledgements, while different values conflict. Replay can load
-the same payload after a process restart without acquiring budget or starting
-provider work. The phase factories still need to construct the checkpoints,
-write and consume these handoffs, and cover the interval between provider
-completion and handoff persistence. A missing handoff is not permission to
-dispatch again. Incomplete responses cannot be published as successes. No
-automatic release is performed on runner errors, and a started fill never becomes
-dispatchable just because time has passed. See [fill ownership](cloud-cache-fills.md).
+The cloud request repository exposes `SaveFinalizationHandoff` and
+`LoadFinalizationHandoff`. The production factory now provides a snapshot-owned
+`V1RuntimeCapabilities.Finalizer` (`CloudFinalizer`) backed by those methods,
+the same cloud response/fill stores, and the snapshot's Redis budget authority.
+Custom cloud factories must also implement `CloudFinalizationStore`.
+
+After committing its checkpoint, a phase factory calls `CompleteGenerate` or
+`CompleteCompact` with its validated response and `FinalizationEffects`. Exactly
+one effects path is allowed:
+
+- Provider: the original fill lease, fill completion, optional successful cache
+  entry, and the complete original Redis reconciliation request (including
+  incarnation, event IDs, amounts and timestamps). The helper saves the encrypted
+  handoff, publishes any eligible success, settles Redis, then completes the
+  fill. Incomplete responses supply no entry. Valid application tool calls are
+  eligible successes; the service does not execute them.
+- Cache hit: the origin entry and distinct consumer use receipt. The helper
+  saves the handoff and records the use without touching Redis budget.
+
+`SaveGenerate` and `SaveCompact` persist the same typed handoffs without applying
+any effects, for finalizers that need separate save/settlement callbacks.
+Checkpoint scope/ID are trusted internal values. The handoff explicitly carries
+the internal operation ID, which may differ from the caller's idempotency key.
+The repository verifies checkpoint ownership and kind; repeated identical saves
+repair uncertain acknowledgements, while changed handoffs conflict.
+
+On a retry of a running cloud operation, the outer runtime loads and validates
+its handoff before invoking the inner runtime. If found, it repeats the same
+publication/settlement/receipt sequence and stores the terminal response, with
+no routing, admission, claim or provider dispatch. It retains all original
+accounting and completion timestamps across restarts and configuration reloads.
+Malformed, incompatible or unreadable saved handoffs fail closed. In particular,
+a missing referenced checkpoint cannot turn a saved handoff into a cache miss.
+
+Phase factories still need to construct and commit checkpoints and call this
+finalizer, and recover the interval between provider completion and handoff
+persistence. A missing handoff is not permission to dispatch again: the inner
+runner's replay and single-use Redis claim remain responsible for that interval.
+No automatic release is performed on runner errors, and a started fill never
+becomes dispatchable just because time has passed. See
+[fill ownership](cloud-cache-fills.md).
 
 Workflow timers, provider polling/recovery composition, and removal of the
 remaining SQL runtime dependencies are follow-ups. The tests exercise the real

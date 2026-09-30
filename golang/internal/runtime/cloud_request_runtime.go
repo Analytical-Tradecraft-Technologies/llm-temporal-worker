@@ -16,12 +16,14 @@ import (
 // cloudRequestRuntime records the outer operation boundary. The inner runtime
 // MUST remain idempotent for OperationKey, including concurrent calls and a
 // crash after provider submission. Running records are not dispatch leases.
-// Only an inner success (including completed Redis reconciliation) is replayed
-// here. Errors stay pending for recovery; this layer never refunds or retries
+// Completed results and committed finalization handoffs are replayed here.
+// Handoffs resume only publication/settlement, never the inner provider phases.
+// Errors stay pending for recovery; this layer never refunds or retries
 // a provider call and never converts unknown paid work into a free attempt.
 type cloudRequestRuntime struct {
 	inner               activity.V1Runtime
 	requests            CloudRequestRepository
+	finalizer           *CloudFinalizer
 	clock               func() time.Time
 	finalizationTimeout time.Duration
 }
@@ -121,7 +123,25 @@ func (r *cloudRequestRuntime) execute(ctx context.Context, caller llm.RequestCon
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	response, err := run(ctx)
+	var response []byte
+	if r.finalizer != nil {
+		var found bool
+		response, found, err = r.finalizer.replay(ctx, scope, record, kind, key, index)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			response, err = run(ctx)
+		}
+	} else {
+		// A configured handoff must never fall back to earlier phases.
+		var progress map[string]json.RawMessage
+		_ = json.Unmarshal(record.Progress, &progress)
+		if _, exists := progress["finalization_handoff"]; exists {
+			return nil, cloudRuntimeError(cloudstate.ErrCorrupt, true)
+		}
+		response, err = run(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}

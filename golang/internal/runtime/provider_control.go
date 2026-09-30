@@ -161,6 +161,8 @@ type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (dur
 type V1RuntimeCapabilities struct {
 	// Requests is the configured cloud operation repository, when enabled.
 	Requests CloudRequestRepository
+	// Finalizer saves typed checkpoint/cache/budget handoffs for outer replay.
+	Finalizer *CloudFinalizer
 	// Responses persists cache successes and finalizer use receipts in the
 	// same configured cloud stores. Phase factories explicitly opt into reuse.
 	Responses cache.ResponseRepository

@@ -5,17 +5,25 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
+// ErrFinalizationHandoffMissing distinguishes an absent instruction from a
+// missing request/checkpoint. Both are storage not-found errors, but only this
+// sentinel permits the runtime to consult its earlier-phase recovery path.
+var ErrFinalizationHandoffMissing = fmt.Errorf("finalization handoff missing: %w", contracts.ErrNotFound)
+
 // FinalizationHandoff is an encrypted, operation-scoped replay instruction.
 // Payload is a versioned application object containing the exact response and
 // receipt inputs needed to finish either provider or cache-hit reconciliation.
 // It is not an authorization to submit paid work again.
+// OperationID is the internal checkpoint owner, distinct from the caller key.
 type FinalizationHandoff struct {
+	OperationID     state.OperationID  `json:"operation_id"`
 	Mode            string             `json:"mode"`
 	CheckpointScope string             `json:"checkpoint_scope"`
 	CheckpointID    state.CheckpointID `json:"checkpoint_id"`
@@ -91,7 +99,7 @@ func (r *Repository) LoadFinalizationHandoff(ctx context.Context, scope Scope, i
 		return FinalizationHandoff{}, err
 	}
 	if handoff == nil {
-		return FinalizationHandoff{}, contracts.ErrNotFound
+		return FinalizationHandoff{}, ErrFinalizationHandoffMissing
 	}
 	if err := r.verifyHandoffCheckpoint(ctx, record, *handoff); err != nil {
 		return FinalizationHandoff{}, err
@@ -100,7 +108,7 @@ func (r *Repository) LoadFinalizationHandoff(ctx context.Context, scope Scope, i
 }
 
 func normalizeHandoff(handoff FinalizationHandoff) (FinalizationHandoff, error) {
-	if handoff.Mode != "provider" && handoff.Mode != "cache" || !safeText(handoff.CheckpointScope, 512) || !safeText(string(handoff.CheckpointID), 256) {
+	if !safeText(string(handoff.OperationID), 128) || handoff.Mode != "provider" && handoff.Mode != "cache" || !safeText(handoff.CheckpointScope, 512) || !safeText(string(handoff.CheckpointID), 256) {
 		return FinalizationHandoff{}, ErrInvalid
 	}
 	data, err := objectJSON(handoff.Payload)
@@ -138,7 +146,7 @@ func handoffProgress(data json.RawMessage) (map[string]json.RawMessage, *Finaliz
 }
 
 func equalHandoff(left, right FinalizationHandoff) bool {
-	return left.Mode == right.Mode && left.CheckpointScope == right.CheckpointScope && left.CheckpointID == right.CheckpointID && bytes.Equal(left.Payload, right.Payload)
+	return left.OperationID == right.OperationID && left.Mode == right.Mode && left.CheckpointScope == right.CheckpointScope && left.CheckpointID == right.CheckpointID && bytes.Equal(left.Payload, right.Payload)
 }
 
 func (r *Repository) verifyHandoffCheckpoint(ctx context.Context, record Record, handoff FinalizationHandoff) error {
@@ -151,7 +159,7 @@ func (r *Repository) verifyHandoffCheckpoint(ctx context.Context, record Record,
 	}
 	if json.Unmarshal(record.Request.Manifest, &manifest) != nil || manifest.OperationKey == "" ||
 		r.operationID(record.Request.Scope, record.Request.Kind, manifest.OperationKey) != record.Request.ID ||
-		string(checkpoint.OriginOperationID) != manifest.OperationKey {
+		checkpoint.OriginOperationID != handoff.OperationID {
 		return contracts.ErrConflict
 	}
 	expected := state.CheckpointCacheReplay

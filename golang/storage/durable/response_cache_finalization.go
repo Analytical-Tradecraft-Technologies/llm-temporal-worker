@@ -22,24 +22,8 @@ func (c *ResponseCache) CompleteAttempt(ctx context.Context, lease cache.FillLea
 	if c == nil || nilCacheRepository(c.responses) || nilCacheRepository(c.fills) || ctx == nil || settleBudget == nil {
 		return errors.New("response cache completion requires repositories, context and budget settlement")
 	}
-	if lease.Key.ScopeID == "" || lease.OperationID == "" || lease.Attempt == "" || lease.AcquiredAt.IsZero() ||
-		lease.ExpiresAt.IsZero() || !lease.ExpiresAt.After(lease.AcquiredAt) || lease.ExpiresAt.Sub(lease.AcquiredAt) > cache.MaxFillLease ||
-		completion.CompletedAt.IsZero() || completion.CompletedAt.Before(lease.AcquiredAt) {
-		return errors.New("invalid response cache completion identity or time")
-	}
-	switch completion.Outcome {
-	case cache.FillPublished:
-		if entry == nil || entry.ID == "" || entry.ID != completion.EntryID || entry.Key != lease.Key ||
-			entry.OriginOperationID != lease.OperationID || entry.OriginCheckpointID == "" || entry.CompletedAt.IsZero() ||
-			entry.CompletedAt.Before(lease.AcquiredAt) || entry.CompletedAt.After(completion.CompletedAt) {
-			return errors.New("published response does not match the started fill")
-		}
-	case cache.FillNotCacheable, cache.FillFailed, cache.FillUnknown:
-		if entry != nil || completion.EntryID != "" {
-			return errors.New("non-published fill cannot include a cache entry")
-		}
-	default:
-		return errors.New("invalid response cache fill outcome")
+	if err := ValidateAttemptCompletion(lease, completion, entry); err != nil {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -63,11 +47,44 @@ func (c *ResponseCache) RecordUse(ctx context.Context, origin cache.ResponseEntr
 	if c == nil || nilCacheRepository(c.responses) || ctx == nil {
 		return errors.New("response cache use requires a repository and context")
 	}
+	if err := ValidateResponseUse(origin, use); err != nil {
+		return err
+	}
+	return c.responses.RecordUse(ctx, use)
+}
+
+// ValidateAttemptCompletion validates immutable replay inputs before persisting them.
+// It performs no writes and does not authorize dispatch.
+func ValidateAttemptCompletion(lease cache.FillLease, completion cache.FillCompletion, entry *cache.ResponseEntry) error {
+	if lease.Key.ScopeID == "" || lease.OperationID == "" || lease.Attempt == "" || lease.AcquiredAt.IsZero() ||
+		lease.ExpiresAt.IsZero() || !lease.ExpiresAt.After(lease.AcquiredAt) || lease.ExpiresAt.Sub(lease.AcquiredAt) > cache.MaxFillLease ||
+		completion.CompletedAt.IsZero() || completion.CompletedAt.Before(lease.AcquiredAt) {
+		return errors.New("invalid response cache completion identity or time")
+	}
+	switch completion.Outcome {
+	case cache.FillPublished:
+		if entry == nil || entry.ID == "" || entry.ID != completion.EntryID || entry.Key != lease.Key ||
+			entry.OriginOperationID != lease.OperationID || entry.OriginCheckpointID == "" || entry.CompletedAt.IsZero() ||
+			entry.CompletedAt.Before(lease.AcquiredAt) || entry.CompletedAt.After(completion.CompletedAt) {
+			return errors.New("published response does not match the started fill")
+		}
+	case cache.FillNotCacheable, cache.FillFailed, cache.FillUnknown:
+		if entry != nil || completion.EntryID != "" {
+			return errors.New("non-published fill cannot include a cache entry")
+		}
+	default:
+		return errors.New("invalid response cache fill outcome")
+	}
+	return nil
+}
+
+// ValidateResponseUse validates the immutable origin and consumer receipt without writes.
+func ValidateResponseUse(origin cache.ResponseEntry, use cache.ResponseUse) error {
 	if origin.ID == "" || origin.Key.ScopeID == "" || origin.OriginOperationID == "" || origin.OriginCheckpointID == "" ||
 		origin.CompletedAt.IsZero() || use.ScopeID != origin.Key.ScopeID || use.EntryID != origin.ID ||
 		use.OperationID == "" || use.OperationID == origin.OriginOperationID || use.CheckpointID == "" ||
 		use.CheckpointID == origin.OriginCheckpointID || use.CompletedAt.IsZero() || use.CompletedAt.Before(origin.CompletedAt) {
 		return errors.New("cache use does not match its origin or consumer")
 	}
-	return c.responses.RecordUse(ctx, use)
+	return nil
 }
