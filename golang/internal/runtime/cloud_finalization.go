@@ -23,6 +23,14 @@ type CloudFinalizationStore interface {
 	LoadFinalizationHandoff(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.FinalizationHandoff, error)
 }
 
+// CloudCheckpointFinalizationStore saves and resumes a checkpoint publication
+// plan in the same operation store, before its finalization handoff is readable.
+type CloudCheckpointFinalizationStore interface {
+	SaveCheckpointFinalization(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.CheckpointFinalization, time.Time) error
+	LoadCheckpointFinalization(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.CheckpointFinalization, error)
+	ResumeCheckpointFinalization(context.Context, cloudstate.Scope, cloudstate.RequestID, time.Time) (cloudstate.FinalizationHandoff, error)
+}
+
 // ProviderFinalizationEffects contains the original attempt's exact settlement
 // inputs. Do not regenerate timestamps, IDs or costs on a retry. Entry is nil
 // for an incomplete/otherwise uncacheable response. No new budget is acquired.
@@ -51,14 +59,16 @@ type cloudFinalizationPayload struct {
 	Effects  FinalizationEffects `json:"effects"`
 }
 
-// CloudFinalizer is snapshot-owned. Phase finalizers save a handoff AFTER the
-// consumer/origin checkpoint commits and BEFORE publication or settlement.
-// The outer cloud runtime resumes it before invoking any inner phase on retry.
-// This does not recover a crash before Save succeeds; the inner phases must
+// CloudFinalizer is snapshot-owned. CommitGenerate/CommitCompact persist a
+// publication plan, commit the checkpoint, then attach its handoff before effects.
+// Save/Complete methods require an already committed checkpoint. The outer cloud
+// runtime resumes plans and handoffs before invoking any inner phase on retry.
+// This does not recover a crash before that plan is saved; the inner phases must
 // recover that interval without redispatching an already claimed attempt.
 type CloudFinalizer struct {
 	requests CloudRequestRepository
 	store    CloudFinalizationStore
+	plans    CloudCheckpointFinalizationStore
 	cache    *durable.ResponseCache
 	budgets  durable.BudgetLeaser
 	clock    func() time.Time
@@ -69,11 +79,15 @@ func newCloudFinalizer(repository CloudRequestRepository, responses cache.Respon
 	if !ok || isNilCapability(store) || clock == nil {
 		return nil, errors.New("cloud finalization store and clock are required")
 	}
+	plans, ok := repository.(CloudCheckpointFinalizationStore)
+	if !ok || isNilCapability(plans) {
+		return nil, errors.New("cloud checkpoint finalization store is required")
+	}
 	responseCache, err := durable.NewResponseCache(responses, fills, clock)
 	if err != nil {
 		return nil, err
 	}
-	return &CloudFinalizer{requests: repository, store: store, cache: responseCache, budgets: budgets, clock: clock}, nil
+	return &CloudFinalizer{requests: repository, store: store, plans: plans, cache: responseCache, budgets: budgets, clock: clock}, nil
 }
 
 // SaveGenerate persists a typed handoff bound to every input of this operation.
@@ -91,7 +105,7 @@ func (f *CloudFinalizer) SaveGenerate(ctx context.Context, request llm.GenerateR
 	if err != nil {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
-	return f.save(ctx, request.Context, "generate", request.OperationKey, index, input, checkpointScope, checkpointID, data, effects)
+	return f.save(ctx, request.Context, "generate", request.OperationKey, index, input, checkpointScope, checkpointID, data, effects, nil)
 }
 
 func (f *CloudFinalizer) SaveCompact(ctx context.Context, request llm.CompactRequestV1, checkpointScope string, checkpointID state.CheckpointID, response llm.CompactResponseV1, effects FinalizationEffects) error {
@@ -103,10 +117,10 @@ func (f *CloudFinalizer) SaveCompact(ctx context.Context, request llm.CompactReq
 	if err != nil {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
-	return f.save(ctx, request.Context, "compact", request.OperationKey, 0, input, checkpointScope, checkpointID, data, effects)
+	return f.save(ctx, request.Context, "compact", request.OperationKey, 0, input, checkpointScope, checkpointID, data, effects, nil)
 }
 
-func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, kind, key string, index int64, input json.RawMessage, checkpointScope string, checkpointID state.CheckpointID, response json.RawMessage, effects FinalizationEffects) error {
+func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, kind, key string, index int64, input json.RawMessage, checkpointScope string, checkpointID state.CheckpointID, response json.RawMessage, effects FinalizationEffects, checkpoint *state.DurableCheckpoint) error {
 	if f == nil || ctx == nil {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
@@ -130,7 +144,14 @@ func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, ki
 	scope := cloudstate.Scope{Tenant: caller.Tenant, Project: caller.Project}
 	record, err := f.requests.BeginOperation(ctx, cloudstate.Operation{Scope: scope, Kind: kind, Key: key, RequestIndex: index, Manifest: input, Now: f.clock()})
 	if err == nil {
-		err = f.store.SaveFinalizationHandoff(ctx, scope, record.Request.ID, handoff, f.clock())
+		if checkpoint == nil {
+			err = f.store.SaveFinalizationHandoff(ctx, scope, record.Request.ID, handoff, f.clock())
+		} else {
+			err = f.plans.SaveCheckpointFinalization(ctx, scope, record.Request.ID, cloudstate.CheckpointFinalization{Checkpoint: *checkpoint, Handoff: handoff}, f.clock())
+			if err == nil {
+				_, err = f.plans.ResumeCheckpointFinalization(ctx, scope, record.Request.ID, f.clock())
+			}
+		}
 	}
 	if err != nil {
 		return cloudRuntimeError(err, true)
@@ -145,8 +166,19 @@ func (f *CloudFinalizer) replay(ctx context.Context, scope cloudstate.Scope, rec
 	var progress map[string]json.RawMessage
 	_ = json.Unmarshal(record.Progress, &progress)
 	_, saved := progress["finalization_handoff"]
+	resumeCheckpoint := false
 	if errors.Is(err, cloudstate.ErrFinalizationHandoffMissing) && !saved {
-		return nil, false, nil
+		plan, loadErr := f.plans.LoadCheckpointFinalization(ctx, scope, record.Request.ID)
+		if errors.Is(loadErr, cloudstate.ErrCheckpointFinalizationMissing) {
+			// A previously observed plan must never become an earlier-phase miss.
+			if _, staged := progress["checkpoint_finalization"]; !staged {
+				return nil, false, nil
+			}
+		}
+		if loadErr != nil {
+			return nil, true, cloudRuntimeError(loadErr, true)
+		}
+		handoff, err, resumeCheckpoint = plan.Handoff, nil, true
 	}
 	if err != nil {
 		return nil, true, cloudRuntimeError(err, true)
@@ -161,10 +193,60 @@ func (f *CloudFinalizer) replay(ctx context.Context, scope cloudstate.Scope, rec
 	if err != nil || operationID != handoff.OperationID {
 		return nil, true, cloudRuntimeError(cloudstate.ErrCorrupt, true)
 	}
+	if resumeCheckpoint {
+		if _, err := f.plans.ResumeCheckpointFinalization(ctx, scope, record.Request.ID, f.clock()); err != nil {
+			return nil, true, cloudRuntimeError(err, true)
+		}
+	}
 	if err := f.finish(ctx, payload.Effects); err != nil {
 		return nil, true, cloudRuntimeError(err, true)
 	}
 	return payload.Response, true, nil
+}
+
+// CommitGenerate saves a publication plan before committing checkpoint metadata,
+// attaches its handoff, then completes cache/budget effects. Referenced content
+// blobs must already exist and the checkpoint/response/receipts must be retained
+// unchanged on storage retries. Never repeat paid provider work to rebuild them.
+func (f *CloudFinalizer) CommitGenerate(ctx context.Context, request llm.GenerateRequestV1, checkpoint state.DurableCheckpoint, response llm.GenerateResponseV1, effects FinalizationEffects) error {
+	input, err := json.Marshal(request)
+	if err != nil {
+		return cloudRuntimeError(cloudstate.ErrInvalid, false)
+	}
+	data, err := json.Marshal(response)
+	if err != nil {
+		return cloudRuntimeError(cloudstate.ErrInvalid, true)
+	}
+	index := int64(0)
+	if request.Cache != nil {
+		index = int64(request.Cache.Variant)
+	}
+	if err := f.save(ctx, request.Context, "generate", request.OperationKey, index, input, checkpoint.ScopeID, checkpoint.ID, data, effects, &checkpoint); err != nil {
+		return err
+	}
+	if err := f.finish(ctx, effects); err != nil {
+		return cloudRuntimeError(err, true)
+	}
+	return nil
+}
+
+// CommitCompact is the publication/reconciliation boundary for compaction.
+func (f *CloudFinalizer) CommitCompact(ctx context.Context, request llm.CompactRequestV1, checkpoint state.DurableCheckpoint, response llm.CompactResponseV1, effects FinalizationEffects) error {
+	input, err := json.Marshal(request)
+	if err != nil {
+		return cloudRuntimeError(cloudstate.ErrInvalid, false)
+	}
+	data, err := json.Marshal(response)
+	if err != nil {
+		return cloudRuntimeError(cloudstate.ErrInvalid, true)
+	}
+	if err := f.save(ctx, request.Context, "compact", request.OperationKey, 0, input, checkpoint.ScopeID, checkpoint.ID, data, effects, &checkpoint); err != nil {
+		return err
+	}
+	if err := f.finish(ctx, effects); err != nil {
+		return cloudRuntimeError(err, true)
+	}
+	return nil
 }
 
 // CompleteGenerate saves the handoff before running the finalization effects.
