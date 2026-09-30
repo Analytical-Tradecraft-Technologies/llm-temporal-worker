@@ -52,16 +52,48 @@ type RedisIdentity struct {
 	HashTag   string
 }
 
-// StateIdentity binds the two durable stores to one immutable configuration
+// CloudIdentity identifies a generic cloud request namespace and its selected
+// store aliases. ProviderDigest fingerprints provider configuration, including
+// physical mappings; it contains no resolved credentials.
+// The value is comparable so snapshot composition can reject mixed stores.
+type CloudIdentity struct {
+	Provider       string
+	Namespace      string
+	RequestTable   string
+	PayloadStore   string
+	ProviderDigest [32]byte
+}
+
+func (identity CloudIdentity) Validate() error {
+	for _, value := range []string{identity.Provider, identity.Namespace, identity.RequestTable, identity.PayloadStore} {
+		if !redisPrefixPattern.MatchString(value) {
+			return fmt.Errorf("%w: cloud storage identifier is invalid", ErrInvalidIdentity)
+		}
+	}
+	if identity.ProviderDigest == [32]byte{} {
+		return fmt.Errorf("%w: cloud provider digest is required", ErrInvalidIdentity)
+	}
+	return nil
+}
+
+// StateIdentity binds the selected durable backend and Redis to one immutable configuration
 // snapshot. A worker must not combine stores with different identities.
 type StateIdentity struct {
 	Postgres     PostgresIdentity
+	Cloud        CloudIdentity
 	Redis        RedisIdentity
 	ConfigDigest [32]byte
 }
 
 func (identity StateIdentity) Validate() error {
-	if _, err := identity.Postgres.Namespace(); err != nil {
+	if identity.Cloud != (CloudIdentity{}) {
+		if identity.Postgres != (PostgresIdentity{}) {
+			return fmt.Errorf("%w: cloud and PostgreSQL identities cannot be combined", ErrInvalidIdentity)
+		}
+		if err := identity.Cloud.Validate(); err != nil {
+			return err
+		}
+	} else if _, err := identity.Postgres.Namespace(); err != nil {
 		return fmt.Errorf("%w: postgres namespace: %v", ErrInvalidIdentity, err)
 	}
 	return identity.ValidateBudget()

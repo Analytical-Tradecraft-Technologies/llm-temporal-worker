@@ -348,3 +348,139 @@ func TestProductionFactoryDoesNotInferDurableBuilderFromCompositionFactory(t *te
 		t.Fatal("Build() invoked DurableCompositionFactory without an explicit V1RuntimeBuilder")
 	}
 }
+
+func TestCloudRequestIdentityBindsMappingsAndProviderConfiguration(t *testing.T) {
+	original := testCloudConfig()
+	want, err := cloudRequestIdentity(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*config.CloudRequestConfig)
+	}{
+		{"namespace", func(c *config.CloudRequestConfig) { c.Namespace = "other" }},
+		{"table alias", func(c *config.CloudRequestConfig) { c.RequestTable = "another" }},
+		{"bucket alias", func(c *config.CloudRequestConfig) { c.PayloadStore = "another" }},
+		{"physical table", func(c *config.CloudRequestConfig) { c.Provider.KeyValueStores["requests"] = "other-table" }},
+		{"physical bucket", func(c *config.CloudRequestConfig) { c.Provider.BlobStores["payloads"] = "other-bucket" }},
+		{"region", func(c *config.CloudRequestConfig) { c.Provider.AWS.Region = "us-east-1" }},
+		{"profile", func(c *config.CloudRequestConfig) { c.Provider.AWS.Profile = "other-account" }},
+		{"provider", func(c *config.CloudRequestConfig) { c.Provider.Type = "azure" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := testCloudConfig()
+			test.change(c)
+			got, err := cloudRequestIdentity(c)
+			if err != nil || got == want {
+				t.Fatalf("identity did not change: error=%v", err)
+			}
+		})
+	}
+	// encoding/json sorts map keys, regardless of insertion order.
+	original.Provider.KeyValueStores["extra"] = "another-table"
+	first, err := cloudRequestIdentity(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.Provider.KeyValueStores = map[string]string{"extra": "another-table", "requests": "physical-table"}
+	second, err := cloudRequestIdentity(original)
+	if err != nil || first != second {
+		t.Fatal("unstable map digest", err)
+	}
+	original.Secret.Name = "different-secret-reference"
+	third, err := cloudRequestIdentity(original)
+	if err != nil || second != third {
+		t.Fatal("secret reference entered provider identity", err)
+	}
+}
+
+func TestCloudCompositionPreflightValidatesBackendBeforeExternalWork(t *testing.T) {
+	snapshot := cloudSnapshot(t, "preflight")
+	for _, test := range []struct {
+		name   string
+		modify func(*durablestore.Composition)
+		valid  bool
+	}{
+		{"cloud without SQL", func(*durablestore.Composition) {}, true},
+		{"SQL instead of cloud", func(c *durablestore.Composition) {
+			c.Identity.Cloud = durablestore.CloudIdentity{}
+			c.Identity.Postgres = validCapabilityComposition().Identity.Postgres
+		}, false},
+		{"mixed backends", func(c *durablestore.Composition) {
+			c.Identity.Postgres = validCapabilityComposition().Identity.Postgres
+		}, false},
+		{"stale namespace", func(c *durablestore.Composition) { c.Identity.Cloud.Namespace = "previous" }, false},
+		{"stale provider mapping", func(c *durablestore.Composition) { c.Identity.Cloud.ProviderDigest[0] ^= 1 }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+				Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+					t.Fatal("resolved secret before identity validation")
+					return nil, nil
+				}),
+				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+					t.Fatal("loaded snapshot before identity validation")
+					return engine.Snapshot{}, nil
+				}),
+				GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
+					t.Fatal("constructed Generate before identity validation")
+					return durablestore.GeneratePorts{}, nil
+				},
+				CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
+					t.Fatal("constructed Compact before identity validation")
+					return durablestore.CompactPorts{}, nil
+				},
+				DurableCompositionFactory: func(_ context.Context, cap V1RuntimeCapabilities) (durablestore.Composition, error) {
+					calls++
+					c := validCapabilityComposition()
+					c.Identity.Postgres = durablestore.PostgresIdentity{}
+					c.Identity.Cloud = cap.CloudIdentity
+					c.Identity.ConfigDigest = cap.ConfigDigest
+					test.modify(&c)
+					return c, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.valid {
+				c, err := factory.preflightAutomaticDurableComposition(context.Background(), snapshot)
+				if err != nil || c == nil || c.Identity.Postgres != (durablestore.PostgresIdentity{}) {
+					t.Fatalf("cloud preflight: %v", err)
+				}
+			} else {
+				_, _, err := factory.Build(context.Background(), snapshot)
+				if !errors.Is(err, ErrDurableV1Composition) {
+					t.Fatalf("invalid cloud preflight: %v", err)
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("composition calls=%d", calls)
+			}
+		})
+	}
+}
+
+func TestBoundCloudCompositionRevalidatesIdentity(t *testing.T) {
+	expected, err := cloudRequestIdentity(testCloudConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := validCapabilityComposition()
+	c.Identity.Postgres = durablestore.PostgresIdentity{}
+	c.Identity.Cloud = expected
+	capabilities := V1RuntimeCapabilities{CloudIdentity: expected, ConfigDigest: c.Identity.ConfigDigest, composition: &c}
+	if _, err := capabilities.BuildDurableComposition(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	capabilities.CloudIdentity.Namespace = "other"
+	if _, err := capabilities.BuildDurableComposition(context.Background()); err == nil {
+		t.Fatal("reused mismatched cloud composition")
+	}
+	capabilities.CloudIdentity = durablestore.CloudIdentity{}
+	if _, err := capabilities.BuildDurableComposition(context.Background()); err == nil {
+		t.Fatal("legacy SQL bundle reused cloud composition")
+	}
+}

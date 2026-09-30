@@ -174,15 +174,17 @@ type V1RuntimeCapabilities struct {
 	// that the returned durable state identity matches. A zero digest leaves the
 	// identity unbound for contract-only and explicitly custom builder tests.
 	ConfigDigest [32]byte
-	Snapshot     engine.SnapshotSource
-	Planner      routing.Planner
-	Adapters     engine.AdapterRegistry
-	Checkpoints  CheckpointCapabilities
+	// CloudIdentity selects the expected cloud namespace. Zero retains legacy SQL composition.
+	CloudIdentity durablestore.CloudIdentity
+	Snapshot      engine.SnapshotSource
+	Planner       routing.Planner
+	Adapters      engine.AdapterRegistry
+	Checkpoints   CheckpointCapabilities
 	// Budgets is the Redis authority for reserve, claim and settlement.
 	// Exposing it does not by itself activate V1 composition.
 	Budgets durablestore.BudgetLeaser
 	// CompositionFactory is the Task 19 seam for the snapshot-owned
-	// PostgreSQL/Redis responsibility split. It is optional while deployments
+	// durable backend/Redis responsibility split. It is optional while deployments
 	// still use the preparatory phase factories. The complete durable builder
 	// invokes BuildDurableComposition once and passes its validated value to
 	// both phase factories; custom builders may invoke the helper explicitly.
@@ -211,7 +213,7 @@ type V1RuntimeCapabilities struct {
 	CompactPortsFactory CompactPortsFactory
 }
 
-// DurableComposition returns the validated PostgreSQL/Redis state boundary
+// DurableComposition returns the validated durable backend/Redis state boundary
 // attached to this immutable capability bundle. The boolean is false when no
 // composition factory was configured. A value is returned rather than the
 // internal pointer so phase factories cannot mutate a sibling phase's
@@ -237,7 +239,7 @@ func (capabilities V1RuntimeCapabilities) BuildDurableComposition(ctx context.Co
 	// A complete durable builder attaches the already validated value before
 	// invoking phase factories. Reuse it if a phase callback asks for the
 	// helper again; otherwise a per-call factory could silently construct a
-	// second PostgreSQL/Redis identity and violate the once-per-snapshot
+	// second durable backend/Redis identity and violate the once-per-snapshot
 	// boundary.
 	if capabilities.composition != nil {
 		if err := capabilities.validateDurableComposition(*capabilities.composition); err != nil {
@@ -264,6 +266,9 @@ func (capabilities V1RuntimeCapabilities) validateDurableComposition(composition
 	}
 	if expected := capabilities.ConfigDigest; expected != ([32]byte{}) && composition.Identity.ConfigDigest != expected {
 		return errors.New("durable composition config digest does not match capability configuration")
+	}
+	if composition.Identity.Cloud != capabilities.CloudIdentity {
+		return errors.New("durable composition cloud identity does not match capability configuration")
 	}
 	return nil
 }

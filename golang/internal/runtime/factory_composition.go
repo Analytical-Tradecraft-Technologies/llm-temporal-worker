@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 )
@@ -22,4 +25,21 @@ func requireDurableV1RuntimeBuilder(value config.Config, builder V1RuntimeBuilde
 		return fmt.Errorf("%w: production durable snapshots require V1RuntimeBuilder", ErrDurableV1Composition)
 	}
 	return nil
+}
+
+// cloudRequestIdentity binds aliases and their physical provider mappings to
+// composition without copying mutable maps or resolving any secret.
+func cloudRequestIdentity(value *config.CloudRequestConfig) (durablestore.CloudIdentity, error) {
+	if value == nil {
+		return durablestore.CloudIdentity{}, nil
+	}
+	encoded, err := json.Marshal(value.Provider)
+	if err != nil {
+		return durablestore.CloudIdentity{}, fmt.Errorf("%w: encode cloud provider identity", ErrDurableV1Composition)
+	}
+	identity := durablestore.CloudIdentity{Provider: value.Provider.Type, Namespace: value.Namespace, RequestTable: value.RequestTable, PayloadStore: value.PayloadStore, ProviderDigest: sha256.Sum256(encoded)}
+	if err := identity.Validate(); err != nil {
+		return durablestore.CloudIdentity{}, err
+	}
+	return identity, nil
 }

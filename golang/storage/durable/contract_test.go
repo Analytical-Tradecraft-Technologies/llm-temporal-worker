@@ -261,3 +261,46 @@ func (llmResultStoreStub) Put(context.Context, string, llm.Response) (state.Blob
 func (compositionMaterializerStub) Claim(context.Context, ClaimRequest) (ClaimReceipt, error) {
 	return ClaimReceipt{}, nil
 }
+
+func TestCloudStateIdentityRequiresExactlyOneBackend(t *testing.T) {
+	cloud := CloudIdentity{Provider: "aws", Namespace: "requests-v1", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: sha256.Sum256([]byte("provider"))}
+	for _, test := range []struct {
+		name   string
+		modify func(*StateIdentity)
+		valid  bool
+	}{
+		{"cloud without SQL", func(*StateIdentity) {}, true},
+		{"mixed backends", func(i *StateIdentity) { i.Postgres = validIdentity().Postgres }, false},
+		{"missing backend", func(i *StateIdentity) { i.Cloud = CloudIdentity{} }, false},
+		{"missing provider", func(i *StateIdentity) { i.Cloud.Provider = "" }, false},
+		{"unsafe namespace", func(i *StateIdentity) { i.Cloud.Namespace = "../other" }, false},
+		{"missing table", func(i *StateIdentity) { i.Cloud.RequestTable = "" }, false},
+		{"missing bucket", func(i *StateIdentity) { i.Cloud.PayloadStore = "" }, false},
+		{"missing provider digest", func(i *StateIdentity) { i.Cloud.ProviderDigest = [32]byte{} }, false},
+		{"missing snapshot digest", func(i *StateIdentity) { i.ConfigDigest = [32]byte{} }, false},
+		{"invalid Redis", func(i *StateIdentity) { i.Redis.HashTag = "{}" }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			identity := validIdentity()
+			identity.Postgres = PostgresIdentity{}
+			identity.Cloud = cloud
+			test.modify(&identity)
+			err := identity.Validate()
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+			if err != nil && !errors.Is(err, ErrInvalidIdentity) {
+				t.Fatalf("untyped identity error: %v", err)
+			}
+		})
+	}
+	composition := validComposition()
+	composition.Identity.Postgres = PostgresIdentity{}
+	composition.Identity.Cloud = cloud
+	if err := composition.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if composition.BudgetBoundary().Identity != composition.Identity {
+		t.Fatal("budget boundary lost cloud identity")
+	}
+}

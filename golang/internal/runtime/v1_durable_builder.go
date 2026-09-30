@@ -48,6 +48,13 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 			}
 			capabilities.ConfigDigest = expected
 		}
+		cloudIdentity, err := cloudRequestIdentity(snapshot.Config().State.Requests)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
+		}
+		if capabilities.CloudIdentity != cloudIdentity {
+			return nil, fmt.Errorf("%w: cloud identity does not match configuration snapshot", ErrDurableV1Composition)
+		}
 		if err := capabilities.ValidateGenerate(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
 		}
@@ -55,7 +62,7 @@ func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 			return nil, fmt.Errorf("%w: %v", ErrDurableV1Composition, err)
 		}
 		// Bind one validated composition to both phase factories. This keeps
-		// PostgreSQL operation state, the write-only journal, and Redis active
+		// Durable operation state and Redis active
 		// budgets on the same snapshot identity across Generate and Compact. The
 		// complete builder never lets deployment callbacks construct phase ports
 		// without that state boundary: missing or invalid composition fails before
