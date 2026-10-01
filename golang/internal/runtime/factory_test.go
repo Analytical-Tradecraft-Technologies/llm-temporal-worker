@@ -245,7 +245,7 @@ func TestPostgresCloserOnlyExposesRemainingSQLRepositories(t *testing.T) {
 	}
 	closer := postgresPoolCloser{namespace: namespace}
 	repositories := queryRepositoriesFromCloser(closer)
-	if repositories.ProviderStatus != nil || repositories.Inventory != nil || repositories.QueryAudit != nil {
+	if repositories.ProviderStatus != nil || repositories.Inventory != nil {
 		t.Fatal("SQL closer exposed migrated provider state")
 	}
 	if repositories.SpendSummary == nil {
@@ -626,7 +626,7 @@ func TestProductionClientSetRetainsSnapshotQueryBundleAndService(t *testing.T) {
 	if set.QueryService() != service {
 		t.Fatal("query service was not retained in snapshot client set")
 	}
-	if got := (&productionClientSet{}).QueryRepositories(); got.ProviderStatus != nil || got.Inventory != nil || got.QueryAudit != nil {
+	if got := (&productionClientSet{}).QueryRepositories(); got.ProviderStatus != nil || got.Inventory != nil {
 		t.Fatalf("nil capability set = %#v", got)
 	}
 }

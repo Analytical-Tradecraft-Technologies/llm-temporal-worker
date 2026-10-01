@@ -65,9 +65,9 @@ composition per snapshot. Legacy SQL identities remain supported while their
 implementation is removed in later migration steps.
 
 Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
-pool, and readiness requirements. In cloud mode SQL spend and query-audit
-repositories are absent; query composition must keep those unsupported unless it
-supplies another implementation. A complete V1 runtime builder is still required:
+pool, and readiness requirements. In cloud mode the spend reader is absent; query composition must keep spend
+unsupported unless it supplies an implementation of `control.SpendSummaryReader`.
+Query audits use normal structured logs and require no SQL repository. A complete V1 runtime builder is still required:
 this bootstrap change does not configure concrete execution phase factories or
 remove the SQL packages from the build.
 

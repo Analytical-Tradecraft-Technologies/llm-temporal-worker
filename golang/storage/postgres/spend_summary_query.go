@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,16 +18,10 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
 
-// SpendSummaryListOptions is the unsigned database portion of a spend
-// summary. ScopeID must already be resolved by the caller's authenticated
-// scope boundary. Time bounds are half-open: start <= completed_at < end.
-type SpendSummaryListOptions struct {
-	ScopeID        uuid.UUID
-	StartTime      time.Time
-	EndTime        time.Time
-	GroupBy        []control.SpendDimension
-	OperationKinds []control.OperationKind
-}
+// SpendSummaryListOptions retains the legacy adapter name for the neutral contract.
+type SpendSummaryListOptions = control.SpendSummaryListOptions
+
+var _ control.SpendSummaryReader = SpendSummaryRepository{}
 
 // SpendSummaryRepository reads exact and unknown costs from both durable
 // ledgers. A nil ActualCostUSD is never treated as zero: unknown rows are
@@ -45,7 +38,7 @@ func (repository SpendSummaryRepository) validate() error {
 	return repository.Namespace.Validate()
 }
 
-func (options *SpendSummaryListOptions) normalize() error {
+func normalizeSpendSummaryOptions(options *SpendSummaryListOptions) error {
 	if options == nil {
 		return errors.New("spend summary options are nil")
 	}
@@ -96,7 +89,7 @@ func (repository SpendSummaryRepository) ListSpendSummary(ctx context.Context, o
 	if err := repository.validate(); err != nil {
 		return result, err
 	}
-	if err := options.normalize(); err != nil {
+	if err := normalizeSpendSummaryOptions(&options); err != nil {
 		return result, err
 	}
 	operations, err := repository.Namespace.Render("operations")
