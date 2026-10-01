@@ -111,6 +111,20 @@ planners, provider execution, cache/compaction composition and CLI registration
 remain required to run the cloud worker. Budget settlement still follows
 durable result finalization, rather than refunding on a submission uncertainty.
 
+For response-cache lookup, phase factories can construct
+`V1RuntimeCapabilities.NewResponseCacheLookup(generatePlanner, compactPlanner)`
+and install its `Generate` and `Compact` methods as the `CacheLookup` ports.
+The typed planners authorize the scope/route, compute the fingerprint, and
+persist a stable fill lease whose attempt matches the Redis budget generation.
+The helper captures the validated snapshot's response/fill repositories and
+clock, binds the request's freshness/sample policy, and skips planners and stores
+when caching is omitted. Its decisions retain the existing ownership gate:
+hits bypass budgets, wait/recovery stop before routing, and an owned miss must
+start its fill before claiming Redis budget. Lookup/acquisition failures stop
+execution without being treated as misses or exposing SDK error text. See
+[cloud cache execution](cloud-cache-execution.md) for planning, finalization,
+recovery, and remaining production composition requirements.
+
 Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
 pool, and readiness requirements. In cloud mode the spend reader is absent; query composition must keep spend
 unsupported unless it supplies an implementation of `control.SpendSummaryReader`.

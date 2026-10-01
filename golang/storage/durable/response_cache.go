@@ -4,11 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+)
+
+var (
+	// ErrResponseCacheInvalid marks incomplete bindings or invalid preparation inputs.
+	ErrResponseCacheInvalid = errors.New("response cache preparation is invalid")
+	// ErrResponseCacheCorrupt marks cache data that does not match its lookup or origin.
+	ErrResponseCacheCorrupt = errors.New("response cache preparation data is corrupt")
 )
 
 // ResponseCache adapts cloud cache preparation to the Generate and Compact
@@ -29,7 +37,7 @@ type ResponseCache struct {
 
 func NewResponseCache(responses cache.ResponseRepository, fills cache.FillRepository, now func() time.Time) (*ResponseCache, error) {
 	if nilCacheRepository(responses) || nilCacheRepository(fills) || now == nil {
-		return nil, errors.New("response cache requires repositories and a clock")
+		return nil, fmt.Errorf("%w: repositories and a clock are required", ErrResponseCacheInvalid)
 	}
 	return &ResponseCache{responses: responses, fills: fills, now: now}, nil
 }
@@ -59,15 +67,18 @@ func (c *ResponseCache) PrepareGenerate(ctx context.Context, lease cache.FillLea
 	if p.entry != nil {
 		var response llm.GenerateResponseV1
 		if err := json.Unmarshal(p.entry.Response, &response); err != nil {
-			return CacheDecision{}, errors.New("invalid cached Generate response")
+			return CacheDecision{}, fmt.Errorf("%w: invalid cached Generate response", ErrResponseCacheCorrupt)
 		}
 		if response.OperationID != string(p.entry.OriginOperationID) || int64(response.Cache.Variant) != lease.Key.RequestIndex ||
 			(response.Status != llm.ResponseStatusCompleted && response.Status != llm.ResponseStatusToolCalls) || response.Checkpoint.Kind != "generation" || response.Cache.Disposition == "hit" {
-			return CacheDecision{}, errors.New("cached Generate response does not match its origin")
+			return CacheDecision{}, fmt.Errorf("%w: cached Generate response does not match its origin", ErrResponseCacheCorrupt)
 		}
 		d.Response = &response
 	}
-	return d, d.Validate()
+	if err := d.Validate(); err != nil {
+		return CacheDecision{}, fmt.Errorf("%w: invalid Generate cache decision", ErrResponseCacheCorrupt)
+	}
+	return d, nil
 }
 
 // PrepareCompact uses the separate compaction cache domain and sample zero.
@@ -81,29 +92,35 @@ func (c *ResponseCache) PrepareCompact(ctx context.Context, lease cache.FillLeas
 	if p.entry != nil {
 		var response llm.CompactResponseV1
 		if err := json.Unmarshal(p.entry.Response, &response); err != nil {
-			return CompactCacheDecision{}, errors.New("invalid cached Compact response")
+			return CompactCacheDecision{}, fmt.Errorf("%w: invalid cached Compact response", ErrResponseCacheCorrupt)
 		}
 		if response.OperationID != string(p.entry.OriginOperationID) || response.Checkpoint.Kind != "compaction" || response.Cache.Disposition == "hit" {
-			return CompactCacheDecision{}, errors.New("cached Compact response does not match its origin")
+			return CompactCacheDecision{}, fmt.Errorf("%w: cached Compact response does not match its origin", ErrResponseCacheCorrupt)
 		}
 		d.Response = &response
 	}
-	return d, d.Validate()
+	if err := d.Validate(); err != nil {
+		return CompactCacheDecision{}, fmt.Errorf("%w: invalid Compact cache decision", ErrResponseCacheCorrupt)
+	}
+	return d, nil
 }
 
 func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxAge *time.Duration, kind cache.OperationKind) (*responseCachePreparation, error) {
-	if c == nil || c.now == nil || nilCacheRepository(c.responses) || nilCacheRepository(c.fills) ||
+	if ctx == nil || c == nil || c.now == nil || nilCacheRepository(c.responses) || nilCacheRepository(c.fills) ||
 		lease.Key.Operation != kind || lease.Key.ScopeID == "" || lease.Key.RequestIndex < 0 ||
 		(kind == cache.OperationCompact && lease.Key.RequestIndex != 0) || lease.Key.Fingerprint == (cache.Fingerprint{}) ||
 		lease.OperationID == "" || lease.Attempt == "" || lease.AcquiredAt.IsZero() || !lease.ExpiresAt.After(lease.AcquiredAt) || lease.ExpiresAt.Sub(lease.AcquiredAt) > cache.MaxFillLease ||
 		(maxAge != nil && *maxAge <= 0) {
-		return nil, errors.New("invalid response cache preparation")
+		return nil, ErrResponseCacheInvalid
 	}
 	route := lease.Key.Route
 	if route.Provider == "" || route.Endpoint == "" || route.Model == "" || route.Revision == "" || route.Compiler == "" {
-		return nil, errors.New("response cache requires a complete resolved route")
+		return nil, fmt.Errorf("%w: a complete resolved route is required", ErrResponseCacheInvalid)
 	}
 	now := c.now().UTC()
+	if now.Before(lease.AcquiredAt) || !now.Before(lease.ExpiresAt) {
+		return nil, fmt.Errorf("%w: clock is outside the lease", ErrResponseCacheInvalid)
+	}
 	result, err := cache.Prepare(ctx, c.responses, c.fills, cache.ResponseLookup{Key: lease.Key, Now: now, MaxAge: maxAge}, lease)
 	if err != nil {
 		return nil, err
@@ -113,30 +130,30 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 		entry := result.Entry
 		if entry.Key != lease.Key || entry.ID == "" || entry.OriginOperationID == "" || entry.OriginCheckpointID == "" ||
 			entry.CompletedAt.IsZero() || entry.CompletedAt.After(now) || (maxAge != nil && now.Sub(entry.CompletedAt) > *maxAge) {
-			return nil, errors.New("cached response does not match lookup")
+			return nil, fmt.Errorf("%w: cached response does not match lookup", ErrResponseCacheCorrupt)
 		}
 		p.entry = cloneResponseEntry(entry)
 		p.disposition = CacheHit
 		return p, nil
 	}
 	if result.Fill.Record.Lease.Key != lease.Key {
-		return nil, errors.New("cache fill does not match lookup")
+		return nil, fmt.Errorf("%w: cache fill does not match lookup", ErrResponseCacheCorrupt)
 	}
 	switch result.Fill.Disposition {
 	case cache.FillOwned:
 		if !sameCacheLease(lease, result.Fill.Record.Lease) || result.Fill.Record.State != cache.FillHeld {
-			return nil, errors.New("cache ownership does not match proposed lease")
+			return nil, fmt.Errorf("%w: cache ownership does not match proposed lease", ErrResponseCacheCorrupt)
 		}
 		p.disposition = CacheMiss
 	case cache.FillWait:
 		if result.Fill.Record.State != cache.FillHeld || !result.Fill.Record.Lease.ExpiresAt.After(now) {
-			return nil, errors.New("invalid cache wait decision")
+			return nil, fmt.Errorf("%w: invalid cache wait decision", ErrResponseCacheCorrupt)
 		}
 		p.disposition = CacheWait
 	case cache.FillRecoveryNeeded, cache.FillAttemptFinished:
 		p.disposition = CacheRecoveryRequired
 	default:
-		return nil, errors.New("unknown cache fill decision")
+		return nil, fmt.Errorf("%w: unknown cache fill decision", ErrResponseCacheCorrupt)
 	}
 	return p, nil
 }
