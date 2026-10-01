@@ -56,8 +56,8 @@ The production factory accepts these choices through
 `runtime.NewPersistedQueryServiceBuilder` for the production persisted-query
 contract. It requires deployment-owned authorization and cursor key material,
 then logs completed queries through the optional supplied logger or normal
-snapshot-configured logs. It does not require or use
-`PostgresQueryRepositories.QueryAudit`. A PostgreSQL closer may expose read
+snapshot-configured logs. The repository bundle no longer contains a SQL audit
+repository. A PostgreSQL closer may expose read
 capabilities through `PostgresQueryRepositoriesSource`; missing read
 repositories remain a permanent unsupported-capability response rather than
 an empty result.
@@ -72,7 +72,7 @@ wrap that constructor, but must preserve the same generation/provenance and
 bounded-read contract. A nil factory, nil reader, or unavailable Redis
 generation leaves `budget_status` unsupported and never falls back to
 PostgreSQL. For the same reload-safety reason, spend summary obtains its
-scope resolver from `PostgresQueryRepositories.ScopeResolver`, not from
+scope resolver from `QueryRepositories.ScopeResolver`, not from
 process-lifetime builder options.
 
 The storage composition is persisted-only. Refresh requests are rejected
@@ -232,3 +232,12 @@ it must not resolve credentials or mutate that snapshot. The budget reader
 factory receives that snapshot's Redis capabilities independently and must not
 retain them after the reader is drained. A deployment that enables spend summary must expose a same-snapshot
 `ScopeResolver` in the repository bundle. No `QueryAudit` repository is needed.
+
+Query composition exposes spend through `control.SpendSummaryReader` and
+`control.SpendSummaryListOptions`, not a concrete PostgreSQL repository. A
+provider receives an already-authorized opaque scope ID, a half-open time range,
+and grouping/operation filters. The existing SQL adapter implements this same
+contract during the migration. Cloud mode leaves spend unsupported until a
+reader is explicitly supplied; nil and typed-nil readers fail closed. Query
+authorization and cursor handling remain independent of the chosen storage
+implementation; query audit logs remain best-effort.

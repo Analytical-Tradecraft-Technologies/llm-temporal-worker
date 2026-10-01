@@ -16,7 +16,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
 // QueryRepositories holds snapshot-owned capabilities. Provider state and inventory
@@ -24,8 +23,7 @@ import (
 type QueryRepositories struct {
 	ProviderStatus control.ProviderStatusReader
 	Inventory      control.InventoryReader
-	SpendSummary   *postgresstore.SpendSummaryRepository
-	QueryAudit     *postgresstore.QueryExecutionRepository
+	SpendSummary   control.SpendSummaryReader
 	ScopeResolver  QueryScopeResolver
 	BudgetStatus   BudgetStatusReader
 }

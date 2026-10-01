@@ -362,7 +362,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 						t.Fatal("incomplete cloud capabilities")
 					}
 					queries := set.(PostgresQueryRepositoriesSource).QueryRepositories()
-					if queries.SpendSummary != nil || queries.QueryAudit != nil || queries.ProviderStatus == nil || queries.Inventory == nil {
+					if queries.SpendSummary != nil || queries.ProviderStatus == nil || queries.Inventory == nil {
 						t.Fatal("incorrect query backend capabilities")
 					}
 					return &cloudInnerRuntime{}, nil

@@ -16,7 +16,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
 type fakePersistedProvider struct {
@@ -28,7 +27,7 @@ type fakePersistedProvider struct {
 
 type fakeSpendSummary struct {
 	result   control.SpendSummaryResult
-	lastOpts postgresstore.SpendSummaryListOptions
+	lastOpts control.SpendSummaryListOptions
 }
 
 type fakeBudgetStatus struct {
@@ -45,7 +44,7 @@ func (fake *fakeBudgetStatus) ReadBudgetStatus(_ context.Context, query control.
 	return fake.result, nil
 }
 
-func (fake *fakeSpendSummary) ListSpendSummary(_ context.Context, options postgresstore.SpendSummaryListOptions) (control.SpendSummaryResult, error) {
+func (fake *fakeSpendSummary) ListSpendSummary(_ context.Context, options control.SpendSummaryListOptions) (control.SpendSummaryResult, error) {
 	fake.lastOpts = options
 	return fake.result, nil
 }
@@ -199,7 +198,6 @@ func TestPersistedQueryBudgetStatusRejectsMismatchedReaderInstant(t *testing.T) 
 func TestNewPersistedQueryServiceBuilderBindsSnapshotRedisBudgetReader(t *testing.T) {
 	authorize := func(context.Context, control.Authorization) error { return nil }
 	reader := &fakeBudgetStatus{}
-	audit := &postgresstore.QueryExecutionRepository{}
 	builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
 		Authorize: authorize,
 		Cursor:    &control.CursorCodec{Key: []byte("query-builder-key"), TTL: time.Hour},
@@ -208,7 +206,6 @@ func TestNewPersistedQueryServiceBuilderBindsSnapshotRedisBudgetReader(t *testin
 		t.Fatal(err)
 	}
 	service, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{
-		QueryAudit:   audit,
 		BudgetStatus: reader,
 	})
 	if err != nil {
@@ -255,16 +252,17 @@ func TestPersistedQuerySpendSummaryUsesExplicitScopeResolver(t *testing.T) {
 	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
 	now := end.Add(time.Minute)
 	var resolved control.QueryScope
-	handler := &persistedQueryHandler{
-		spend: spend,
-		resolveScope: func(_ context.Context, scope control.QueryScope) (uuid.UUID, error) {
+	service, err := NewPersistedQueryService(&config.Snapshot{}, QueryRepositories{SpendSummary: spend}, PersistedQueryOptions{
+		ResolveScope: func(_ context.Context, scope control.QueryScope) (uuid.UUID, error) {
 			resolved = scope
 			return scopeID, nil
 		},
-		cursor: codec,
-		clock:  func() time.Time { return now },
+		Cursor: codec, Clock: func() time.Time { return now }, Authorize: func(context.Context, control.Authorization) error { return nil },
+		Audit: func(context.Context, control.QueryAuditRecord) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return now }}
 	request, err := control.EncodeQueryRequest(control.QueryRequest{
 		OperationKey: "spend-op",
 		Scope:        control.QueryScope{Tenant: expectedTenant, Project: expectedProject, Actor: "actor"},
@@ -334,7 +332,7 @@ func TestNewPersistedQueryServiceRequiresSecuritySeams(t *testing.T) {
 func TestNewPersistedQueryServiceNormalizesMissingOptionalCapabilities(t *testing.T) {
 	var budget *fakeBudgetStatus
 	var providerReader *fakePersistedProvider
-	var inventory *postgresstore.InventoryRepository
+	var inventory *typedNilQueryInventory
 	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour}
 	service, err := NewPersistedQueryService(&config.Snapshot{}, QueryRepositories{ProviderStatus: providerReader, Inventory: inventory}, PersistedQueryOptions{
 		Authorize:    func(context.Context, control.Authorization) error { return nil },
@@ -405,10 +403,8 @@ func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
 		t.Fatalf("builder without audit repository error = %v", err)
 	}
 
-	audit := &postgresstore.QueryExecutionRepository{}
 	scopeID := uuid.MustParse("019c9aaf-77f7-7d7f-92c0-b53eb2ed3c47")
 	service, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{
-		QueryAudit: audit,
 		ScopeResolver: func(context.Context, control.QueryScope) (uuid.UUID, error) {
 			return scopeID, nil
 		},
@@ -434,7 +430,7 @@ func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
 		t.Fatalf("snapshot cursor key = %q, want immutable builder copy", got)
 	}
 	queryService.CursorCodec.Key[0] = 'Y'
-	nextService, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{QueryAudit: audit})
+	nextService, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,3 +466,33 @@ func TestPersistedQueryComposesNeutralProviderReader(t *testing.T) {
 		t.Fatal("snapshot horizon was not bound")
 	}
 }
+
+// Promoted methods would panic if a typed-nil reader escaped normalization.
+type typedNilQueryInventory struct{ control.InventoryReader }
+
+func TestPersistedQueryTypedNilSpendReaderIsUnsupported(t *testing.T) {
+	var reader *fakeSpendSummary
+	service, err := NewPersistedQueryService(&config.Snapshot{}, QueryRepositories{SpendSummary: reader}, PersistedQueryOptions{
+		Authorize: func(context.Context, control.Authorization) error { return nil },
+		Cursor:    &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour},
+		ResolveScope: func(context.Context, control.QueryScope) (uuid.UUID, error) {
+			t.Fatal("resolved scope for unavailable spend reader")
+			return uuid.Nil, nil
+		},
+		Audit: func(context.Context, control.QueryAuditRecord) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "typed-nil-spend", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: llm.QuerySpendSummary, Filter: budgetOrSpendFilter(llm.QuerySpendSummary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Execute(context.Background(), request)
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+		t.Fatalf("typed-nil spend reader: %v", err)
+	}
+}
+
+var _ control.SpendSummaryReader = (*fakeSpendSummary)(nil)

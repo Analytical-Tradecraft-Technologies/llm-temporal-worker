@@ -11,7 +11,7 @@ import (
 
 func TestSpendSummaryOptionsNormalizeAndCloseEnums(t *testing.T) {
 	options := SpendSummaryListOptions{ScopeID: uuid.New(), StartTime: time.Unix(10, 0), EndTime: time.Unix(20, 0)}
-	if err := options.normalize(); err != nil {
+	if err := normalizeSpendSummaryOptions(&options); err != nil {
 		t.Fatal(err)
 	}
 	if options.StartTime.Location() != time.UTC || options.EndTime.Location() != time.UTC {
@@ -28,7 +28,7 @@ func TestSpendSummaryOptionsNormalizeAndCloseEnums(t *testing.T) {
 		{name: "unknown operation", options: SpendSummaryListOptions{ScopeID: uuid.New(), StartTime: time.Unix(10, 0), EndTime: time.Unix(20, 0), OperationKinds: []control.OperationKind{"replay"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := test.options.normalize(); err == nil {
+			if err := normalizeSpendSummaryOptions(&test.options); err == nil {
 				t.Fatal("invalid options were accepted")
 			}
 		})
@@ -74,7 +74,7 @@ func TestSpendSummaryEmptyGlobalBucketIsRepresentable(t *testing.T) {
 	// matches. ListSpendSummary intentionally retains that row only when the
 	// caller requested a global (ungrouped) summary.
 	options := SpendSummaryListOptions{ScopeID: uuid.New(), StartTime: time.Unix(10, 0), EndTime: time.Unix(20, 0)}
-	if err := options.normalize(); err != nil {
+	if err := normalizeSpendSummaryOptions(&options); err != nil {
 		t.Fatal(err)
 	}
 	if len(options.GroupBy) != 0 {

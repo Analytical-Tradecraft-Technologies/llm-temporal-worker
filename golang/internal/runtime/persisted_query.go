@@ -23,7 +23,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 )
 
@@ -31,7 +30,7 @@ import (
 // snapshot. Deployments use this seam to provide authorization and cursor keys
 // without the production factory inventing security material. Query auditing
 // defaults to best-effort structured logs and does not require a repository.
-type QueryServiceBuilder func(context.Context, *config.Snapshot, PostgresQueryRepositories) (activity.QueryService, error)
+type QueryServiceBuilder func(context.Context, *config.Snapshot, QueryRepositories) (activity.QueryService, error)
 
 type providerStatusReader interface {
 	ListRouteStatuses(context.Context, control.ProviderStatusListOptions) (control.ProviderStatusPage, error)
@@ -40,10 +39,6 @@ type providerStatusReader interface {
 
 type inventoryReader interface {
 	ListInventoryModels(context.Context, control.InventoryModelListOptions) (control.InventoryModelPage, error)
-}
-
-type spendSummaryReader interface {
-	ListSpendSummary(context.Context, postgresstore.SpendSummaryListOptions) (control.SpendSummaryResult, error)
 }
 
 // BudgetStatusReader is the snapshot-scoped Redis read seam for the budget
@@ -81,7 +76,7 @@ func NewRedisBudgetStatusReaderFactory() BudgetStatusReaderFactory {
 }
 
 // QueryScopeResolver maps an already-authorized tenant/project scope to its
-// opaque PostgreSQL scope ID. The runtime never derives or guesses this ID:
+// opaque durable scope ID. The runtime never derives or guesses this ID:
 // deployments must supply the same keyed resolver used by their durable
 // repositories. Returning uuid.Nil or an error fails the query closed.
 type QueryScopeResolver func(context.Context, control.QueryScope) (uuid.UUID, error)
@@ -122,7 +117,7 @@ func NewPersistedQueryServiceBuilder(options PersistedQueryBuilderOptions) (Quer
 	cursor := *options.Cursor
 	cursor.Key = append([]byte(nil), options.Cursor.Key...)
 
-	return func(_ context.Context, snapshot *config.Snapshot, repositories PostgresQueryRepositories) (activity.QueryService, error) {
+	return func(_ context.Context, snapshot *config.Snapshot, repositories QueryRepositories) (activity.QueryService, error) {
 		snapshotCursor := cursor
 		snapshotCursor.Key = append([]byte(nil), cursor.Key...)
 		return NewPersistedQueryService(snapshot, repositories, PersistedQueryOptions{
@@ -139,7 +134,7 @@ func NewPersistedQueryServiceBuilder(options PersistedQueryBuilderOptions) (Quer
 // NewPersistedQueryService builds the persisted query families against
 // one snapshot digest. Missing repository capabilities remain fail-closed;
 // callers must not receive an empty answer that could be mistaken for state.
-func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQueryRepositories, options PersistedQueryOptions) (activity.QueryService, error) {
+func NewPersistedQueryService(snapshot *config.Snapshot, repositories QueryRepositories, options PersistedQueryOptions) (activity.QueryService, error) {
 	if snapshot == nil {
 		return nil, errors.New("persisted query snapshot is nil")
 	}
@@ -186,7 +181,7 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories PostgresQu
 	if !isNilCapability(repositories.Inventory) {
 		handler.inventory = repositories.Inventory
 	}
-	if repositories.SpendSummary != nil {
+	if !isNilCapability(repositories.SpendSummary) {
 		handler.spend = repositories.SpendSummary
 	}
 	if !isNilCapability(options.BudgetStatus) {
@@ -205,7 +200,7 @@ type persistedQueryHandler struct {
 	configDigest [32]byte
 	provider     providerStatusReader
 	inventory    inventoryReader
-	spend        spendSummaryReader
+	spend        control.SpendSummaryReader
 	budget       BudgetStatusReader
 	resolveScope QueryScopeResolver
 	cursor       *control.CursorCodec
@@ -284,7 +279,7 @@ func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request 
 	if scopeID == uuid.Nil {
 		return control.QueryResponse{}, errors.New("resolve spend summary scope: resolver returned nil scope id")
 	}
-	result, err := handler.spend.ListSpendSummary(ctx, postgresstore.SpendSummaryListOptions{
+	result, err := handler.spend.ListSpendSummary(ctx, control.SpendSummaryListOptions{
 		ScopeID: scopeID, StartTime: query.StartTime, EndTime: query.EndTime,
 		GroupBy:        append([]control.SpendDimension(nil), query.GroupBy...),
 		OperationKinds: append([]control.OperationKind(nil), query.OperationKinds...),
