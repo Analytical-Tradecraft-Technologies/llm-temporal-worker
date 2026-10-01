@@ -82,6 +82,35 @@ Missing capabilities and invalid limits reject construction. Scope, handle,
 transcript and storage failures stop before later phases, and raw resolver/SDK
 errors are excluded from the serialized provider error.
 
+The same phase factories can construct Redis admission callbacks with
+`V1RuntimeCapabilities.NewBudgetAdmission(generatePlanner, compactPlanner)`.
+`ReserveGenerate`/`ClaimGenerate` fit Generate's ports, and
+`ReserveCompact`/`ClaimCompact` fit Compact's ports. The helper captures the
+already validated composition's budget boundary, creates no clients, and holds
+no invocation state. It does not use a separate leaser from another snapshot.
+Both planners must quote the selected route and resolve budget windows from
+their captured configuration. Planned operation/generation IDs must match the
+route, and a reservation must include at least one window. Claiming validates
+the reservation's identity/events without re-running the planner.
+
+Reserve returns acquired or wait immediately. An uncertain acceptance can be
+retried with the identical operation, windows, quote and `ExpiresAt`; changing
+these inputs is not a safe acceptance retry. Redis fixes the start deadline at
+first acceptance: at most 15 minutes, or an earlier planner expiry. Replaying
+acceptance does not renew it. Claim must succeed immediately before provider
+submission and can grant permission only once, across workers. A lost claim
+reply, duplicate claim, invalid receipt, or cancellation after consumption
+returns a non-retryable ambiguous result without dispatch permission. The
+reservation remains charged for recovery; another paid attempt requires fresh
+budget. Expired, unclaimed leases return a budget-wait error. Workflow timers
+and recovery policy remain outside these callbacks. No provider cancellation
+API is added. Planner/Redis error text is excluded from caller errors.
+
+This adapter supplies admission and claiming only. Concrete route/pricing
+planners, provider execution, cache/compaction composition and CLI registration
+remain required to run the cloud worker. Budget settlement still follows
+durable result finalization, rather than refunding on a submission uncertainty.
+
 Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
 pool, and readiness requirements. In cloud mode the spend reader is absent; query composition must keep spend
 unsupported unless it supplies an implementation of `control.SpendSummaryReader`.
