@@ -64,6 +64,24 @@ ports backed by those stores. Both Generate and Compact share one validated
 composition per snapshot. Legacy SQL identities remain supported while their
 implementation is removed in later migration steps.
 
+Phase factories can now construct the parent-materialization callbacks with
+`V1RuntimeCapabilities.NewCheckpointReplay(resolveScope, limits)`. The returned
+`Generate` and `Compact` methods fit their respective `Replay` ports. The scope
+resolver must authorize the caller and return the same opaque scope used for
+checkpoint publication and handle signing; raw tenant/project names are never
+used as guessed repository keys. Both callbacks use the captured snapshot's
+handle materializer and enforce handle, tenant/project, and tool-frontier
+bindings. Generate roots authorize the caller and return an empty base;
+follow-ups and Compact load the parent without folding the current delta into it.
+
+This helper performs only parent materialization. Completed-operation and
+finalization-handoff replay remain in the outer cloud runtime. Pending-attempt
+recovery, route/cache/provider execution and finalization still need concrete
+phase composition; installing this helper alone does not authorize paid work.
+Missing capabilities and invalid limits reject construction. Scope, handle,
+transcript and storage failures stop before later phases, and raw resolver/SDK
+errors are excluded from the serialized provider error.
+
 Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
 pool, and readiness requirements. In cloud mode the spend reader is absent; query composition must keep spend
 unsupported unless it supplies an implementation of `control.SpendSummaryReader`.
