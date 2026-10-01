@@ -1,19 +1,42 @@
 # Cloud cache preparation in the activity runners
 
-`storage/durable.ResponseCache` connects the cloud response/fill repositories to
-the existing Generate and Compact runners. Phase factories construct it with
-their snapshot's `Responses`, `ResponseFills`, and `Clock` capabilities:
+The snapshot-bound `V1RuntimeCapabilities.NewResponseCacheLookup` helper supplies
+the Generate and Compact `CacheLookup` callbacks. Construct it inside the complete
+runtime builder's phase factories, after the composition has been validated:
 
 ```go
-responseCache, err := durable.NewResponseCache(
-    capabilities.Responses, capabilities.ResponseFills, capabilities.Clock,
-)
+lookup, err := capabilities.NewResponseCacheLookup(generatePlanner, compactPlanner)
+// Handle err before installing either callback.
+generatePorts.CacheLookup = lookup.Generate
+compactPorts.CacheLookup = lookup.Compact
 ```
 
-The Generate `CacheLookup` callback calls `PrepareGenerate(ctx, lease, maxAge)`;
-Compact calls `PrepareCompact`. The lease must already be persisted, with its
-`Attempt` equal to the Redis budget generation ID. Reuse the identical lease on
-an uncertain acquisition. A new chargeable attempt uses a new generation.
+The typed planners receive the request and materialized replay state and return
+a persisted `cache.FillLease`. They must authorize the opaque scope and complete
+route and compute the semantic fingerprint. `Attempt` must equal the Redis
+budget generation ID. Reuse the identical lease on an uncertain acquisition;
+a new chargeable attempt uses a new generation. The helper does not create
+clients, invoke the composition factory again, or keep per-request state. It
+retains its repositories and trusted clock across configuration reloads.
+
+An omitted request cache policy returns `CacheDisabled` without calling a
+planner or touching either repository. An enabled policy binds the positive
+`MaxAgeSeconds` from the existing v1 envelope to successful completion age and
+requires the Generate sample index to match `Cache.Variant`. Compact uses zero
+and a separate domain. Invalid requests and plans fail before repository access.
+Planner and storage error text is excluded from the returned provider error.
+A failed lookup or uncertain acquisition never becomes a miss: a storage error
+requests a retry of the same operation, using the original persisted lease;
+invalid plans and corrupt returned data are non-retryable configuration and
+state errors, respectively. No provider submission is authorized by lookup.
+
+Internally, `storage/durable.ResponseCache` implements preparation and retains
+the fill gate used by the runners. Custom phase factories can still construct
+it directly with `durable.NewResponseCache(responses, fills, clock)` and call
+`PrepareGenerate(ctx, lease, maxAge)` or `PrepareCompact`. Its
+`ErrResponseCacheInvalid` and `ErrResponseCacheCorrupt` markers distinguish
+invalid preparation inputs from invalid returned cache data; repository errors
+remain wrapped by the runtime lookup helper at the caller boundary.
 
 Before preparing, the operation's replay/recovery phase must resolve any prior
 paid work. The phase factory must derive the opaque scope from authenticated
@@ -160,4 +183,8 @@ retries. Publication-plan tests inject failures before and after every checkpoin
 metadata and operation/discovery-index write, exercise concurrent identical
 retries and conflicting plans, and verify missing content remains pending.
 Runtime tests cover both Generate and Compact, provider and cache-hit paths,
-and reject invalid saved instructions before checkpoint publication or effects. They do not establish live AWS, Redis, or Temporal behavior.
+and reject invalid saved instructions before checkpoint publication or effects.
+Lookup adapter tests additionally exercise both real runners, disabled policies,
+sample and freshness binding, snapshot reloads, identical uncertain-acquisition
+retries, corrupt origins, and storage failures before budget/provider work.
+They do not establish live AWS, Redis, or Temporal behavior.
