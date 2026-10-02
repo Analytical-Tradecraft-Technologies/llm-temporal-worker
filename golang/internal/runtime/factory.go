@@ -270,7 +270,9 @@ func (set *productionClientSet) V1RuntimeCapabilities() V1RuntimeCapabilities {
 	if set == nil {
 		return V1RuntimeCapabilities{}
 	}
-	return set.v1Capabilities
+	capabilities := set.v1Capabilities
+	capabilities.BudgetEstimator = copyBudgetEstimator(capabilities.BudgetEstimator)
+	return capabilities
 }
 
 // V1Runtime returns the durable one-shot implementation composed for this
@@ -605,19 +607,21 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		checkpointVerifier: keyring,
 		budgets:            budgets,
 		v1Capabilities: V1RuntimeCapabilities{
-			ConfigDigest:           snapshot.Digest(),
-			Snapshot:               snapshotSource,
-			Planner:                planner,
-			Adapters:               capabilityAdapterRegistry,
-			Checkpoints:            checkpointCapabilities,
-			Budgets:                budgets,
-			CompositionFactory:     factory.options.DurableCompositionFactory,
-			composition:            precomposed,
-			ProviderStatusRecorder: providerControl,
-			ProviderInventory:      providerState,
-			Clock:                  clock,
-			GeneratePortsFactory:   factory.options.GeneratePortsFactory,
-			CompactPortsFactory:    factory.options.CompactPortsFactory,
+			ConfigDigest:              snapshot.Digest(),
+			Snapshot:                  snapshotSource,
+			Planner:                   planner,
+			Adapters:                  capabilityAdapterRegistry,
+			BudgetEstimator:           copyBudgetEstimator(estimator),
+			MaxBudgetBucketsPerWindow: value.Limits.MaxBudgetBucketsPerWindow,
+			Checkpoints:               checkpointCapabilities,
+			Budgets:                   budgets,
+			CompositionFactory:        factory.options.DurableCompositionFactory,
+			composition:               precomposed,
+			ProviderStatusRecorder:    providerControl,
+			ProviderInventory:         providerState,
+			Clock:                     clock,
+			GeneratePortsFactory:      factory.options.GeneratePortsFactory,
+			CompactPortsFactory:       factory.options.CompactPortsFactory,
 		},
 		close: func(closeContext context.Context) error {
 			if closeContext == nil {
@@ -810,15 +814,17 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	}
 	return engineValue, &productionClientSet{
 		v1Capabilities: V1RuntimeCapabilities{
-			ConfigDigest:         configDigest,
-			Snapshot:             snapshotSource,
-			Planner:              planner,
-			Adapters:             capabilityAdapterRegistry,
-			Clock:                clock,
-			CompositionFactory:   factory.options.DurableCompositionFactory,
-			composition:          precomposed,
-			GeneratePortsFactory: factory.options.GeneratePortsFactory,
-			CompactPortsFactory:  factory.options.CompactPortsFactory,
+			ConfigDigest:              configDigest,
+			Snapshot:                  snapshotSource,
+			Planner:                   planner,
+			Adapters:                  capabilityAdapterRegistry,
+			BudgetEstimator:           copyBudgetEstimator(estimator),
+			MaxBudgetBucketsPerWindow: value.Limits.MaxBudgetBucketsPerWindow,
+			Clock:                     clock,
+			CompositionFactory:        factory.options.DurableCompositionFactory,
+			composition:               precomposed,
+			GeneratePortsFactory:      factory.options.GeneratePortsFactory,
+			CompactPortsFactory:       factory.options.CompactPortsFactory,
 		},
 		close: func(context.Context) error { return nil },
 	}, nil
