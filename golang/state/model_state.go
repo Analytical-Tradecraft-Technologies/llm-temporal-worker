@@ -38,6 +38,27 @@ func RootModelState(model string) ModelState {
 	return ModelState{Model: model, ServiceClass: llm.ServiceClassStandard, Portability: llm.PortabilityStrict}
 }
 
+// ApplySettingsPatchV1 applies the public sparse patch without serializing and
+// decoding the entire model state. It preserves the exact decimal alongside its
+// provider projection and returns a detached value, as ApplySettingsPatch does.
+func ApplySettingsPatchV1(base ModelState, wire llm.SettingsPatchV1) (ModelState, error) {
+	if _, err := wire.MarshalJSON(); err != nil {
+		return ModelState{}, err
+	}
+	if wire.Temperature.Set != nil {
+		canonical, err := llm.NewDecimalV1(wire.Temperature.Set.String())
+		if err != nil {
+			return ModelState{}, err
+		}
+		wire.Temperature.Set = &canonical
+	}
+	patch, err := settingsPatchFromWire(wire)
+	if err != nil {
+		return ModelState{}, err
+	}
+	return ApplySettingsPatch(base, patch)
+}
+
 func (state ModelState) Validate() error {
 	if state.Model == "" {
 		return fmt.Errorf("model is required")
