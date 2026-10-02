@@ -11,8 +11,12 @@ generatePorts.CacheLookup = lookup.Generate
 compactPorts.CacheLookup = lookup.Compact
 ```
 
-The typed planners receive the request and materialized replay state and return
-a persisted `cache.FillLease`. They must authorize the opaque scope and complete
+The typed planners receive the original envelope and a `PreparedGenerateInput`
+or `PreparedCompactInput`, then return a persisted `cache.FillLease`. Preparation
+combines checkpoint history and sparse settings with the current delta before
+an enabled lookup can reach its planner. See [shared request preparation](cloud-request-preparation.md)
+for the effective input, exact decimal settings, and compaction prefix contract.
+Planners must authorize the opaque scope and complete
 route and compute the semantic fingerprint. `Attempt` must equal the Redis
 budget generation ID. Reuse the identical lease on an uncertain acquisition;
 a new chargeable attempt uses a new generation. The helper does not create
@@ -24,6 +28,9 @@ planner or touching either repository. An enabled policy binds the positive
 `MaxAgeSeconds` from the existing v1 envelope to successful completion age and
 requires the Generate sample index to match `Cache.Variant`. Compact uses zero
 and a separate domain. Invalid requests and plans fail before repository access.
+An unresolved generation tool frontier also stops before planning. Compact with
+no safe prefix fails before acquiring a fill; its surrounding replay/phase
+composition must handle that no-work case before routing or budget admission.
 Planner and storage error text is excluded from the returned provider error.
 A failed lookup or uncertain acquisition never becomes a miss: a storage error
 requests a retry of the same operation, using the original persisted lease;

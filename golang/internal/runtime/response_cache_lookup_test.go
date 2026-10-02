@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/cache"
+	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -63,9 +65,14 @@ func newCacheLookupFixture(t *testing.T) *cacheLookupFixture {
 	_, materializer, generate, compact := checkpointReplayFixture(t)
 	f.gen, f.compact = generate, compact
 	f.gen.Parent = nil
+	f.gen.SettingsPatch.Model = llm.Patch[string]{Set: preparationPointer("model")}
 	f.gen.Cache = &llm.CachePolicyV1{MaxAgeSeconds: 60}
 	f.compact.Cache = &llm.CachePolicyV1{MaxAgeSeconds: 120}
 	f.compactReplay.State = materializer.result
+	f.compactReplay.State.Settings = state.RootModelState("model")
+	policy := compaction.DefaultPolicy()
+	policy.RecentTurns = 0
+	f.compactReplay.State.Settings.CompactionPolicy, _ = json.Marshal(policy)
 	f.genLease = cache.FillLease{Key: cache.ResponseKey{ScopeID: "opaque-scope", Operation: cache.OperationGenerate,
 		Route: cache.RouteIdentity{Provider: "provider", Endpoint: "endpoint-1", Model: "model", Revision: "revision", Compiler: "compiler", Account: "account", Region: "region"}, Fingerprint: cache.Fingerprint{1}},
 		OperationID: "operation-1", Attempt: "generation-1", AcquiredAt: f.now, ExpiresAt: f.now.Add(time.Minute)}
@@ -96,17 +103,17 @@ func newCacheLookupFixture(t *testing.T) *cacheLookupFixture {
 	f.cap = V1RuntimeCapabilities{ConfigDigest: composition.Identity.ConfigDigest, CloudIdentity: composition.Identity.Cloud, composition: &composition, Responses: f.responses, ResponseFills: f.fills, Clock: func() time.Time { return f.now }}
 	var err error
 	f.helper, err = f.cap.NewResponseCacheLookup(
-		func(_ context.Context, request llm.GenerateRequestV1, replay durable.GenerateReplay) (cache.FillLease, error) {
+		func(_ context.Context, request llm.GenerateRequestV1, prepared PreparedGenerateInput) (cache.FillLease, error) {
 			f.plans++
-			if !reflect.DeepEqual(request, f.gen) || !reflect.DeepEqual(replay, f.genReplay) {
-				t.Fatal("Generate planner lost request or replay")
+			if !reflect.DeepEqual(request, f.gen) || prepared.Request.Model != "model" || prepared.SampleIndex != int64(request.Cache.Variant) {
+				t.Fatal("Generate planner lost request or prepared input")
 			}
 			return f.genLease, nil
 		},
-		func(_ context.Context, request llm.CompactRequestV1, replay durable.CompactReplay) (cache.FillLease, error) {
+		func(_ context.Context, request llm.CompactRequestV1, prepared PreparedCompactInput) (cache.FillLease, error) {
 			f.plans++
-			if !reflect.DeepEqual(request, f.compact) || !reflect.DeepEqual(replay, f.compactReplay) {
-				t.Fatal("Compact planner lost request or replay")
+			if !reflect.DeepEqual(request, f.compact) || prepared.Request == nil || prepared.Request.Model != "model" {
+				t.Fatal("Compact planner lost request or prepared input")
 			}
 			return f.compLease, nil
 		},
@@ -223,7 +230,7 @@ func TestResponseCacheLookupRejectsInvalidRequestsAndPlansBeforeStorage(t *testi
 				f.compact.Parent = ""
 				code = provider.CodeInvalidArgument
 			case "planner":
-				f.helper.generate = func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (cache.FillLease, error) {
+				f.helper.generate = func(context.Context, llm.GenerateRequestV1, PreparedGenerateInput) (cache.FillLease, error) {
 					return cache.FillLease{}, errors.New("sensitive planner error")
 				}
 			case "domain":
@@ -261,7 +268,7 @@ func TestResponseCacheLookupRejectsInvalidRequestsAndPlansBeforeStorage(t *testi
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(ctx)
 				defer cancel()
-				f.helper.generate = func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (cache.FillLease, error) {
+				f.helper.generate = func(context.Context, llm.GenerateRequestV1, PreparedGenerateInput) (cache.FillLease, error) {
 					cancel()
 					return f.genLease, nil
 				}
@@ -631,7 +638,7 @@ func TestResponseCacheLookupRetainsOriginalSnapshot(t *testing.T) {
 	}}
 	f.cap.ResponseFills = &lookupFills{} // A hit must never invoke this store.
 	f.cap.Clock = func() time.Time { return newNow }
-	next, err := f.cap.NewResponseCacheLookup(func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (cache.FillLease, error) {
+	next, err := f.cap.NewResponseCacheLookup(func(context.Context, llm.GenerateRequestV1, PreparedGenerateInput) (cache.FillLease, error) {
 		return newLease, nil
 	}, f.helper.compact)
 	if err != nil {

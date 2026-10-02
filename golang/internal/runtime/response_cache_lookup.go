@@ -15,8 +15,8 @@ import (
 // semantic fingerprint, and persist a stable fill lease before returning it.
 // Replay must resolve earlier paid work first. Every lease field must remain
 // identical on an uncertain acquisition retry; Attempt is the budget generation.
-type GenerateCachePlanner func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (cache.FillLease, error)
-type CompactCachePlanner func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (cache.FillLease, error)
+type GenerateCachePlanner func(context.Context, llm.GenerateRequestV1, PreparedGenerateInput) (cache.FillLease, error)
+type CompactCachePlanner func(context.Context, llm.CompactRequestV1, PreparedCompactInput) (cache.FillLease, error)
 
 // ResponseCacheLookup supplies the two CacheLookup phase ports from one
 // snapshot. It owns no invocation state, provider clients or budget authority.
@@ -57,7 +57,11 @@ func (lookup *ResponseCacheLookup) Generate(ctx context.Context, request llm.Gen
 	if request.Cache == nil {
 		return durable.CacheDecision{Disposition: durable.CacheDisabled}, nil
 	}
-	lease, err := lookup.generate(ctx, request, replay)
+	prepared, err := PrepareGenerateInput(ctx, request, replay)
+	if err != nil {
+		return durable.CacheDecision{}, err
+	}
+	lease, err := lookup.generate(ctx, request, prepared)
 	if err := validateCacheLookupPlan(ctx, lease, cache.OperationGenerate, int64(request.Cache.Variant), err); err != nil {
 		return durable.CacheDecision{}, err
 	}
@@ -76,7 +80,16 @@ func (lookup *ResponseCacheLookup) Compact(ctx context.Context, request llm.Comp
 	if request.Cache == nil {
 		return durable.CompactCacheDecision{Disposition: durable.CacheDisabled}, nil
 	}
-	lease, err := lookup.compact(ctx, request, replay)
+	prepared, err := PrepareCompactInput(ctx, request, replay)
+	if err != nil {
+		return durable.CompactCacheDecision{}, err
+	}
+	if prepared.Request == nil {
+		// No artifact can be produced for an empty/safely retained prefix.
+		// Do not acquire a fill lease which could later reach paid admission.
+		return durable.CompactCacheDecision{}, preparationError(provider.CodeInvalidArgument)
+	}
+	lease, err := lookup.compact(ctx, request, prepared)
 	if err := validateCacheLookupPlan(ctx, lease, cache.OperationCompact, 0, err); err != nil {
 		return durable.CompactCacheDecision{}, err
 	}
