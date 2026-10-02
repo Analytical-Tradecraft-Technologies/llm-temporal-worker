@@ -7,6 +7,10 @@ snapshot-bound cache lookup helper calls them before enabled cache planning;
 route, estimate, compile and checkpoint planners can use the same helpers.
 Omitting the cache policy still skips its planner and repositories.
 
+The [shared provider planner](cloud-provider-planning.md) uses these prepared
+inputs to resolve a route and compile its provider model and attempted class
+before admission.
+
 ```go
 generate, err := runtime.PrepareGenerateInput(ctx, request, replay)
 // Handle err before routing, estimating, or compiling.

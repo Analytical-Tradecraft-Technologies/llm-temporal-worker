@@ -16,6 +16,9 @@ or `PreparedCompactInput`, then return a persisted `cache.FillLease`. Preparatio
 combines checkpoint history and sparse settings with the current delta before
 an enabled lookup can reach its planner. See [shared request preparation](cloud-request-preparation.md)
 for the effective input, exact decimal settings, and compaction prefix contract.
+The [shared provider planner](cloud-provider-planning.md) supplies the selected
+candidate, compiled call and complete route identity for these planners and
+the subsequent admission/dispatch composition.
 Planners must authorize the opaque scope and complete
 route and compute the semantic fingerprint. `Attempt` must equal the Redis
 budget generation ID. Reuse the identical lease on an uncertain acquisition;
