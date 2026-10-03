@@ -37,10 +37,8 @@ func NewPolicy(maxAgeSeconds int64, variant int32) (Policy, error) {
 	return Policy{MaxAge: time.Duration(maxAgeSeconds) * time.Second, Variant: variant}, nil
 }
 
-// Validate checks an enabled policy after settings inheritance has been
-// materialized. An unknown effective temperature is intentionally treated as
-// unsafe for positive variants: provider defaults are not a reproducible
-// semantic contract. Compact is domain-separated and only supports variant 0.
+// Validate checks a policy after settings inheritance. Variant only separates
+// cache samples and is independent of temperature for both operation kinds.
 func (policy Policy) Validate(operation OperationKind, effectiveTemperature *float64) error {
 	return policy.ValidateWithMaximum(operation, effectiveTemperature, DefaultMaximumAge)
 }
@@ -60,20 +58,11 @@ func (policy Policy) ValidateWithMaximum(operation OperationKind, effectiveTempe
 	if policy.Variant < 0 {
 		return fmt.Errorf("cache variant must not be negative")
 	}
-	if operation == OperationCompact && policy.Variant != 0 {
-		return fmt.Errorf("compact cache variant must be zero")
-	}
 	if effectiveTemperature == nil {
-		if policy.Variant != 0 {
-			return fmt.Errorf("cache variant must be zero when effective temperature is unknown")
-		}
 		return nil
 	}
 	if math.IsNaN(*effectiveTemperature) || math.IsInf(*effectiveTemperature, 0) || *effectiveTemperature < 0 {
 		return fmt.Errorf("effective temperature is invalid")
-	}
-	if *effectiveTemperature == 0 && policy.Variant != 0 {
-		return fmt.Errorf("temperature zero requires cache variant zero")
 	}
 	return nil
 }

@@ -72,7 +72,7 @@ func (r *cloudRequestRuntime) CompactV1(ctx context.Context, request llm.Compact
 	if err != nil {
 		return response, cloudRuntimeError(cloudstate.ErrInvalid, false)
 	}
-	data, err := r.execute(ctx, request.Context, "compact", request.OperationKey, 0, input, func(ctx context.Context) ([]byte, error) {
+	data, err := r.execute(ctx, request.Context, "compact", request.OperationKey, request.Cache.SampleIndex(), input, func(ctx context.Context) ([]byte, error) {
 		value, err := r.inner.CompactV1(ctx, request)
 		if err != nil {
 			return nil, err

@@ -425,12 +425,10 @@ already a delta. Token estimates are conservative and model/version specific.
 The policy has hysteresis: compact to a lower target than the trigger so each
 new turn does not compact again.
 
-When the parent Generate opted into exact caching, its automatic compaction
-sub-operation receives the same maximum age but always uses compaction variant
-zero. Omitting cache on Generate also omits cache on automatic compaction. This
-allows a repeated long smoke workflow to avoid paying again for either the
-summary or the final answer without letting the final answer's stochastic
-variant change summary identity.
+The generation workflow's automatic compaction uses unrestricted-age summary
+caching with sample index zero. Explicit Compact requests can choose another
+non-negative sample index. Final-answer freshness and sample indexes do not
+change automatic summary identity; source content and policy versions do.
 
 ### Generic worker compaction
 

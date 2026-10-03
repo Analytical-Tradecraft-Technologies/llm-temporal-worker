@@ -70,7 +70,7 @@ func (lookup *ResponseCacheLookup) Generate(ctx context.Context, request llm.Gen
 	return decision, responseCacheLookupError(err)
 }
 
-// Compact uses a distinct cache domain and sample zero. Its planner fingerprints
+// Compact uses a distinct cache domain and independent sample index. Its planner fingerprints
 // the source content and policy versions rather than the caller's operation key.
 func (lookup *ResponseCacheLookup) Compact(ctx context.Context, request llm.CompactRequestV1, replay durable.CompactReplay) (durable.CompactCacheDecision, error) {
 	_, requestErr := request.MarshalJSON()
@@ -90,7 +90,7 @@ func (lookup *ResponseCacheLookup) Compact(ctx context.Context, request llm.Comp
 		return durable.CompactCacheDecision{}, preparationError(provider.CodeInvalidArgument)
 	}
 	lease, err := lookup.compact(ctx, request, prepared)
-	if err := validateCacheLookupPlan(ctx, lease, cache.OperationCompact, 0, err); err != nil {
+	if err := validateCacheLookupPlan(ctx, lease, cache.OperationCompact, request.Cache.SampleIndex(), err); err != nil {
 		return durable.CompactCacheDecision{}, err
 	}
 	maxAge := cacheMaximumAge(request.Cache)

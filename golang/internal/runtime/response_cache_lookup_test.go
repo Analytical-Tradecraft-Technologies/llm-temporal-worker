@@ -194,6 +194,7 @@ func TestResponseCacheLookupOmissionSkipsPlannerAndStores(t *testing.T) {
 func TestResponseCacheLookupBothPathsPreserveLeaseSampleAndFreshness(t *testing.T) {
 	f := newCacheLookupFixture(t)
 	f.gen.Cache.Variant, f.genLease.Key.RequestIndex = 7, 7
+	f.compact.Cache.Variant, f.compLease.Key.RequestIndex = 11, 11
 	g, err := f.helper.Generate(context.Background(), f.gen, f.genReplay)
 	if err != nil || g.Disposition != durable.CacheMiss {
 		t.Fatalf("Generate = %+v, %v", g, err)

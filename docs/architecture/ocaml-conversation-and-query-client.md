@@ -661,16 +661,11 @@ is encoded as **Keep** on a resumed checkpoint; an explicit value emits the
 closed v1 enum.  The facade never accepts a free-form reasoning string or
 silently clears an inherited value.
 
-Compact accepts the same `Cache_policy.t`, but its effective compaction
-sampling contract permits only variant zero. Automatic compaction receives the
-outer Generate cache age and variant zero; a final-answer variant of one or two
-is not propagated into the summary cache key.
-
-The OCaml facade rejects a positive cache variant before dispatch when the
-request patch explicitly sets temperature to zero. An inherited or omitted
-temperature remains unknown to the client and is validated by the worker after
-materialization. `Conversation.respond` returns this local rejection as a
-typed `Temporal.Error.t`; `Generate.make` rejects it at construction time.
+Compact accepts the same `Cache_policy.t` and independent non-negative sample
+index as Generate. The index changes only the cache identity, regardless of
+temperature, and is never forwarded as provider randomness. The worker's
+automatic compaction uses unrestricted-age summary caching with index zero;
+final-answer freshness and sample indexes do not change summary identity.
 
 The one-shot convenience **`Generate.make`/`Generate.invoke`/`Generate.start`**
 constructs and schedules one v1 Generate directly. It does not maintain a loop,

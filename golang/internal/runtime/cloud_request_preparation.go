@@ -76,6 +76,7 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	} else {
 		request := input.Compact
 		caller, kind, key, parent = request.Context, "compact", request.OperationKey, string(request.Parent)
+		index = request.Cache.SampleIndex()
 		manifest, _ = json.Marshal(request)
 	}
 	checkpointScope, err := p.authorize(ctx, caller)
@@ -186,6 +187,7 @@ func (p *CloudRequestPreparation) restore(ctx context.Context, record cloudstate
 			return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 		}
 		result.Compact, caller, parent = &request, request.Context, string(request.Parent)
+		index = request.Cache.SampleIndex()
 	default:
 		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}

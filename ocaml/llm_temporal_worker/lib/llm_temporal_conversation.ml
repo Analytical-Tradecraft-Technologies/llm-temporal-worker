@@ -215,12 +215,9 @@ let to_request ?settings_patch ?cache ~operation_key ~append conversation =
     operation_key; context = conversation.context; parent = conversation.checkpoint;
     append; settings_patch = request_patch conversation settings_patch; cache }
 
-let validate_cache_temperature (cache : cache_policy option) settings_patch =
-  match cache, settings_patch.temperature with
-  | Some { variant; _ }, Set temperature
-    when Int32.compare variant 0l > 0
-         && Usd_decimal.compare temperature Usd_decimal.zero <= 0 ->
-      Error "positive cache variant requires an explicitly positive temperature"
+let validate_cache_temperature (cache : cache_policy option) _settings_patch =
+  match cache with
+  | Some { variant; _ } when Int32.compare variant 0l < 0 -> Error "cache variant must not be negative"
   | _ -> Ok ()
 
 let child conversation (patch : settings_patch) checkpoint =
@@ -295,12 +292,9 @@ let compact_request ?policy ?cache ~operation_key conversation =
   match conversation.checkpoint with
   | None -> Error (Temporal.Error.codec ~message:"cannot compact a conversation without a checkpoint")
   | Some parent ->
-      (match cache with
-       | Some cache when Cache_policy.variant cache <> 0l ->
-           Error (Temporal.Error.codec ~message:"compact cache variant must be zero")
-       | _ ->
-           Ok { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key;
-                context = conversation.context; parent; policy; cache })
+      Ok { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key;
+           context = conversation.context; parent; policy; cache }
+
 
 let accept_compaction_response conversation (request : compact_request)
     (response : compaction_response) =

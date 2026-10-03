@@ -129,7 +129,7 @@ func (f *CloudFinalizer) SaveCompact(ctx context.Context, request llm.CompactReq
 	if err != nil {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
-	return f.save(ctx, request.Context, "compact", request.OperationKey, 0, input, checkpointScope, checkpointID, data, effects, nil)
+	return f.save(ctx, request.Context, "compact", request.OperationKey, request.Cache.SampleIndex(), input, checkpointScope, checkpointID, data, effects, nil)
 }
 
 func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, kind, key string, index int64, input json.RawMessage, checkpointScope string, checkpointID state.CheckpointID, response json.RawMessage, effects FinalizationEffects, checkpoint *state.DurableCheckpoint) error {
@@ -261,7 +261,7 @@ func (f *CloudFinalizer) CommitCompact(ctx context.Context, request llm.CompactR
 	if err != nil {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
-	if err := f.save(ctx, request.Context, "compact", request.OperationKey, 0, input, checkpoint.ScopeID, checkpoint.ID, data, effects, &checkpoint); err != nil {
+	if err := f.save(ctx, request.Context, "compact", request.OperationKey, request.Cache.SampleIndex(), input, checkpoint.ScopeID, checkpoint.ID, data, effects, &checkpoint); err != nil {
 		return err
 	}
 	if err := f.finish(ctx, effects); err != nil {
@@ -344,7 +344,7 @@ func validateFinalizationPayload(kind, key string, index int64, handoff cloudsta
 		publishable = response.Status == llm.ResponseStatusCompleted || response.Status == llm.ResponseStatusToolCalls
 	case "compact":
 		var response llm.CompactResponseV1
-		if json.Unmarshal(payload.Response, &response) != nil || response.OperationKey != key || response.Cache.Variant != 0 {
+		if json.Unmarshal(payload.Response, &response) != nil || response.OperationKey != key || int64(response.Cache.Variant) != index {
 			return "", invalid
 		}
 		operationID, disposition, cost = response.OperationID, response.Cache.Disposition, response.Cost

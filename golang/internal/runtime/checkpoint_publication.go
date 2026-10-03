@@ -123,7 +123,7 @@ func (p *CheckpointPublication) Compact(ctx context.Context, identity Checkpoint
 	if err != nil {
 		return zero, response, err
 	}
-	if err := validatePublicationCache(origin, disposition, cache.OperationCompact, identity, 0); err != nil {
+	if err := validatePublicationCache(origin, disposition, cache.OperationCompact, identity, request.Cache.SampleIndex()); err != nil {
 		return zero, response, err
 	}
 	response = llm.CompactResponseV1{APIVersion: llm.CompactAPIVersion, OperationKey: request.OperationKey, OperationID: string(identity.OperationID), Checkpoint: metadata, Cache: disposition, Cost: zeroPublicationCost()}

@@ -185,59 +185,73 @@ func TestCloudExecutionRuntimeGeneration(t *testing.T) {
 func TestCloudExecutionRuntimeCompaction(t *testing.T) {
 	for _, async := range []bool{false, true} {
 		for _, work := range []bool{false, true} {
-			t.Run(map[bool]string{false: "sync", true: "async"}[async]+map[bool]string{false: "/no-work", true: "/summary"}[work], func(t *testing.T) {
-				f := boundedCloud(t, async)
-				if work {
-					policy := json.RawMessage(`{"recent_turns":0}`)
-					f.request.SettingsPatch.CompactionPolicy.Set = &policy
-				}
-				parent := f.finish(t)
-				f.now = f.now.Add(time.Minute)
-				request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{}}
-				run := func() llm.ExecutionResultV1 {
-					t.Helper()
-					ctx := context.Background()
-					v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
-					if err == nil && v.State == llm.ExecutionCompleted {
-						return v
+			for _, index := range []int32{0, 1, 2147483647} {
+				t.Run(map[bool]string{false: "sync", true: "async"}[async]+map[bool]string{false: "/no-work", true: "/summary"}[work]+fmt.Sprintf("/sample-%d", index), func(t *testing.T) {
+					f := boundedCloud(t, async)
+					if work {
+						policy := json.RawMessage(`{"recent_turns":0}`)
+						f.request.SettingsPatch.CompactionPolicy.Set = &policy
 					}
-					boundedState(t, v, err, llm.ExecutionBudgetRequired)
-					ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context}
-					v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-					boundedState(t, v, err, llm.ExecutionAcquired)
-					f.restart(t)
-					v, err = f.runtime.CompactStepV1(ctx, request)
-					if err == nil && v.State == llm.ExecutionPending {
-						f.now = f.now.Add(2 * time.Second)
-						v, err = f.runtime.PollExecutionV1(ctx, ref)
+					parent := f.finish(t)
+					f.now = f.now.Add(time.Minute)
+					request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{Variant: index}}
+					run := func() llm.ExecutionResultV1 {
+						t.Helper()
+						ctx := context.Background()
+						v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
+						if err == nil && v.State == llm.ExecutionCompleted {
+							return v
+						}
+						boundedState(t, v, err, llm.ExecutionBudgetRequired)
+						ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context}
+						v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+						boundedState(t, v, err, llm.ExecutionAcquired)
+						f.restart(t)
+						v, err = f.runtime.CompactStepV1(ctx, request)
+						if err == nil && v.State == llm.ExecutionPending {
+							f.now = f.now.Add(2 * time.Second)
+							v, err = f.runtime.PollExecutionV1(ctx, ref)
+						}
+						boundedState(t, v, err, llm.ExecutionProviderCompleted)
+						f.restart(t)
+						v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+						return boundedState(t, v, err, llm.ExecutionCompleted)
 					}
-					boundedState(t, v, err, llm.ExecutionProviderCompleted)
-					f.restart(t)
-					v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-					return boundedState(t, v, err, llm.ExecutionCompleted)
-				}
-				first := run()
-				want := int32(1)
-				if work {
-					want++
-				}
-				if first.Compact == nil || f.submits.Load() != want {
-					t.Fatal("incorrect compaction dispatch")
-				}
-				replay := run()
-				if replay.Compact.Checkpoint.Handle != first.Compact.Checkpoint.Handle || f.submits.Load() != want {
-					t.Fatal("compaction retry changed result")
-				}
-				f.now = f.now.Add(time.Minute)
-				request.OperationKey = "another-compaction"
-				hit := run()
-				if hit.Compact.Checkpoint.Handle == first.Compact.Checkpoint.Handle || f.submits.Load() != want {
-					t.Fatal("compaction cache/no-work repeated provider call")
-				}
-				if work && hit.Compact.Cache.Disposition != "hit" {
-					t.Fatal("summary artifact not reused")
-				}
-			})
+					first := run()
+					want := int32(1)
+					if work {
+						want++
+					}
+					if first.Compact == nil || first.Compact.Cache.Variant != index || f.submits.Load() != want {
+						t.Fatal("incorrect compaction dispatch")
+					}
+					replay := run()
+					if replay.Compact.Checkpoint.Handle != first.Compact.Checkpoint.Handle || f.submits.Load() != want {
+						t.Fatal("compaction retry changed result")
+					}
+					f.now = f.now.Add(time.Minute)
+					request.OperationKey = "another-compaction"
+					hit := run()
+					if hit.Compact.Checkpoint.Handle == first.Compact.Checkpoint.Handle || hit.Compact.Cache.Variant != index || f.submits.Load() != want {
+						t.Fatal("compaction cache/no-work repeated provider call")
+					}
+					if work && hit.Compact.Cache.Disposition != "hit" {
+						t.Fatal("summary artifact not reused")
+					}
+					request.OperationKey = "different-sample"
+					request.Cache.Variant = (index + 1) % 2
+					if index == 2147483647 {
+						request.Cache.Variant = 0
+					}
+					distinct := run()
+					if work {
+						want++
+					}
+					if distinct.Compact.Cache.Variant != request.Cache.Variant || f.submits.Load() != want {
+						t.Fatal("different sample reused compaction cache")
+					}
+				})
+			}
 		}
 	}
 }
@@ -628,5 +642,40 @@ func TestCloudExecutionRuntimeCacheKeepsExactTemperature(t *testing.T) {
 	}
 	if f.submits.Load() != 2 {
 		t.Fatal("exact temperatures collided")
+	}
+}
+
+func TestCloudExecutionRuntimeIndependentSamples(t *testing.T) {
+	for _, temperature := range []string{"", "0", "0.5"} {
+		t.Run("temperature-"+temperature, func(t *testing.T) {
+			f := boundedCloud(t, false)
+			if temperature != "" {
+				value, err := llm.NewDecimalV1(temperature)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.request.SettingsPatch.Temperature.Set = &value
+			} else {
+				f.request.SettingsPatch.Temperature.Set = nil
+			}
+			for attempt, index := range []int32{0, 1, 2147483647} {
+				f.request.Cache = &llm.CachePolicyV1{Variant: index}
+				f.request.OperationKey = fmt.Sprintf("sample-%d", index)
+				result := f.finish(t)
+				if result.Generate.Cache.Variant != index || result.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != int32(attempt+1) {
+					t.Fatal("sample did not get independent provider result")
+				}
+				replay := f.finish(t)
+				if replay.Generate.Checkpoint.Handle != result.Generate.Checkpoint.Handle {
+					t.Fatal("retry changed checkpoint")
+				}
+				f.now = f.now.Add(time.Second)
+				f.request.OperationKey += "-cached"
+				hit := f.finish(t)
+				if hit.Generate.Cache.Variant != index || hit.Generate.Cache.Disposition != "hit" || f.submits.Load() != int32(attempt+1) {
+					t.Fatal("sample cache miss on identical request")
+				}
+			}
+		})
 	}
 }

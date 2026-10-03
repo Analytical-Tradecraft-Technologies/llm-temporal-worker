@@ -589,8 +589,8 @@ func TestV1VariantBoundariesAndTemperature(t *testing.T) {
 		}
 	}
 	for _, variant := range []int32{1, 2, 2147483647} {
-		if err := llm.ValidateVariantTemperature(variant, &zero); err == nil {
-			t.Fatalf("variant %d with zero temperature accepted", variant)
+		if err := llm.ValidateVariantTemperature(variant, &zero); err != nil {
+			t.Fatalf("variant %d with zero temperature rejected", variant)
 		}
 		if err := llm.ValidateVariantTemperature(variant, nil); err != nil {
 			t.Fatalf("variant %d with inherited temperature rejected: %v", variant, err)
@@ -599,8 +599,8 @@ func TestV1VariantBoundariesAndTemperature(t *testing.T) {
 	if err := llm.ValidateVariantTemperature(-1, nil); err == nil {
 		t.Fatal("negative variant accepted")
 	}
-	if err := llm.ValidateVariantTemperature(1, &zero); err == nil {
-		t.Fatal("positive variant with zero temperature accepted")
+	if err := llm.ValidateVariantTemperature(1, &zero); err != nil {
+		t.Fatal("positive variant with zero temperature rejected")
 	}
 	positive := 0.2
 	if err := llm.ValidateVariantTemperature(2147483647, &positive); err != nil {
@@ -611,6 +611,7 @@ func TestV1VariantBoundariesAndTemperature(t *testing.T) {
 func TestV1FixtureMatrixCoversForkPatchesCacheVariantsAndQueries(t *testing.T) {
 	for _, name := range []string{
 		"compact-request.json",
+		"compact-positive-variant.json",
 		"generate-fork-patch-set.json",
 		"generate-fork-patch-clear.json",
 		"generate-variant-unknown-temperature.json",
@@ -692,8 +693,8 @@ func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
 	if zero.SettingsPatch.Temperature.Set == nil {
 		t.Fatal("zero-temperature fixture omitted the temperature patch")
 	}
-	if err := llm.ValidateVariantDecimalTemperature(zero.Cache.Variant, zero.SettingsPatch.Temperature.Set); err == nil {
-		t.Fatal("positive variant with zero temperature accepted")
+	if err := llm.ValidateVariantDecimalTemperature(zero.Cache.Variant, zero.SettingsPatch.Temperature.Set); err != nil {
+		t.Fatal("positive variant with zero temperature rejected")
 	}
 }
 
@@ -715,7 +716,6 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 		"negative-generate-null-output.json",
 		"negative-compact-tools.json",
 		"negative-compact-structured-output.json",
-		"negative-compact-positive-variant.json",
 		"negative-query-mismatched-result.json",
 		"negative-query-page-size.json",
 		"negative-query-cursor.json",

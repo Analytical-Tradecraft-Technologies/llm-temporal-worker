@@ -133,12 +133,31 @@ func TestCanonicalizationPreservesLargeIntegerSeeds(t *testing.T) {
 	}
 }
 
-func TestCompactRejectsPositiveVariant(t *testing.T) {
-	input := testInput()
-	input.Operation = OperationCompact
-	input.Variant = 1
-	if _, err := Compute([]byte("secret"), input); err == nil {
-		t.Fatal("compact fingerprints must reject positive variants")
+func TestSampleIndexSeparatesBothOperationsWithoutChangingProviderInput(t *testing.T) {
+	for _, operation := range []OperationKind{OperationGenerate, OperationCompact} {
+		for _, temperature := range []*float64{nil, new(float64)} {
+			input := testInput()
+			input.Operation = operation
+			input.Request.Sampling = &llm.SamplingSpec{Temperature: temperature}
+			before, _ := json.Marshal(input.Request)
+			seen := map[Fingerprint]bool{}
+			for _, index := range []int32{0, 1, 2147483647} {
+				input.Variant = index
+				fingerprint, err := Compute([]byte("secret"), input)
+				if err != nil || seen[fingerprint] {
+					t.Fatalf("%s index %d: duplicate or error %v", operation, index, err)
+				}
+				seen[fingerprint] = true
+			}
+			after, _ := json.Marshal(input.Request)
+			if !bytes.Equal(before, after) {
+				t.Fatal("sample index changed provider input")
+			}
+			input.Variant = -1
+			if _, err := Compute([]byte("secret"), input); err == nil {
+				t.Fatal("negative index accepted")
+			}
+		}
 	}
 }
 
