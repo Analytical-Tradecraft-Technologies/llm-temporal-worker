@@ -62,6 +62,10 @@ bucket, refresh expiry or select newly reloaded prices. The Redis leaser sets
 the separate 15-minute deadline to start paid work when it accepts admission.
 A consumed claim remains charged. This planner neither renews nor releases it.
 
+[Durable cloud budget plans](cloud-budget-plans.md) provide the typed encrypted
+save/load boundary for these initial planning facts. Phase factories must load
+the saved plan before replanning and save a new proposal before Redis acceptance.
+
 `RequiresReservation` is false for a known-free quote or an unmatched request
 when matching is optional. `Quote == nil` distinguishes an unpriced, unmatched
 request explicitly allowed by `require_price_when_budgeted`; it is not a free
@@ -73,9 +77,10 @@ authorized path for free/unbudgeted work before enabling those configurations.
 Use the selected provider/cache identity from this combined planner when
 building cache fingerprints and fill leases. Choosing a different route after
 acquiring a fill would break its identity fence. Cache lookup may short-circuit
-before any actual admission. The helper does not acquire fills, persist durable
-attempts, install phase factories, submit providers or poll. Production wiring,
-paid-attempt recovery and remaining SQL removal are subsequent work.
+before any actual admission. The planning helper does not acquire fills or
+automatically invoke plan persistence, install phase factories, submit providers
+or poll. Production wiring, paid-attempt recovery and remaining SQL removal are
+subsequent work.
 
 Offline tests exercise both activities, exact sub-micro prices, all matched
 windows, alias/class resolution, fallback, snapshot mutation/reload, invalid

@@ -14,6 +14,11 @@ Concrete phase composition, spend queries and removal of the legacy SQL
 packages remain to be migrated. Budgets and provider status stay in Redis.
 There is no SQL data import: this service has not been deployed.
 
+[Durable cloud budget plans](cloud-budget-plans.md) now save the initial selected
+route and exact quote in encrypted request progress before Redis acceptance.
+They retain immutable admission inputs for restart and uncertain-reply recovery;
+they do not themselves authorize paid dispatch.
+
 See [cloud response-cache persistence](cloud-response-cache.md) for the cache
 identity, publication ordering and consuming-finalizer receipt contracts.
 
