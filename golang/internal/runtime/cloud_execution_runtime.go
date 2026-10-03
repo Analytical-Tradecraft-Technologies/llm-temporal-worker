@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
@@ -123,6 +124,23 @@ func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.Execu
 }
 
 func (r *CloudExecutionRuntime) advance(ctx context.Context, p PreparedCloudRequest, step cloudStep) (llm.ExecutionResultV1, error) {
+	for tries := 0; tries < 16; tries++ {
+		result, err := r.advanceAttempt(ctx, p, step)
+		if !errors.Is(err, errCloudAttemptAdvanced) {
+			return result, err
+		}
+		// Only acquisition may follow a competing caller to a newer attempt.
+		// Retrying a submission here could dispatch another paid request.
+		if step != cloudAcquire {
+			return llm.ExecutionResultV1{}, cloudRuntimeError(contracts.ErrConflict, true)
+		}
+	}
+	return llm.ExecutionResultV1{}, cloudRuntimeError(errCloudAttemptAdvanced, false)
+}
+
+var errCloudAttemptAdvanced = errors.New("cloud request attempt advanced")
+
+func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCloudRequest, step cloudStep) (llm.ExecutionResultV1, error) {
 	if done, found, err := r.replay(ctx, p); found || err != nil {
 		return done, err
 	}
@@ -272,6 +290,15 @@ func (r *CloudExecutionRuntime) finishProviderStep(ctx context.Context, p Prepar
 			failure.FailureCode = "incomplete_response"
 		}
 		if err := r.store.FinishRequestFailure(ctx, p.Record.Request.Scope, p.Record.Request.ID, attempt.ID, failure, r.now()); err != nil {
+			if errors.Is(err, contracts.ErrConflict) {
+				current, loadErr := r.store.LoadRequestAttempt(ctx, p.Record.Request.Scope, p.Record.Request.ID)
+				if loadErr != nil {
+					return llm.ExecutionResultV1{}, cloudRuntimeError(loadErr, true)
+				}
+				if current.ID != attempt.ID {
+					return llm.ExecutionResultV1{}, errCloudAttemptAdvanced
+				}
+			}
 			return llm.ExecutionResultV1{}, cloudRuntimeError(err, true)
 		}
 		return failure, nil

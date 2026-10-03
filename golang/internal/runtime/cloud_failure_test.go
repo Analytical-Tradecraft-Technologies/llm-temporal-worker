@@ -7,10 +7,85 @@ import (
 	"testing"
 	"time"
 
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 )
+
+type advanceBeforeFailureStore struct {
+	cloudExecutionStore
+	advance    func()
+	conflicted bool
+}
+
+func (s *advanceBeforeFailureStore) FinishRequestFailure(ctx context.Context, scope cloudstate.Scope, root, attempt cloudstate.RequestID, failure llm.ExecutionResultV1, now time.Time) error {
+	if s.advance != nil {
+		advance := s.advance
+		s.advance = nil
+		advance()
+	}
+	err := s.cloudExecutionStore.FinishRequestFailure(ctx, scope, root, attempt, failure, now)
+	s.conflicted = s.conflicted || errors.Is(err, contracts.ErrConflict)
+	return err
+}
+
+func TestCloudConcurrentFailureFinalization(t *testing.T) {
+	for _, step := range []string{"acquire", "generate", "poll", "complete"} {
+		t.Run(step, func(t *testing.T) {
+			f := boundedCloud(t, false)
+			f.request.Cache = &llm.CachePolicyV1{}
+			f.adapter.invoke = func(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
+				f.submits.Add(1)
+				failure := provider.NewError(provider.CodeProviderRateLimited, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryAfter, "private")
+				failure.RetryAfter = time.Second
+				return provider.Result{}, failure
+			}
+			ctx := context.Background()
+			v, err := f.runtime.GenerateStepV1(ctx, f.request)
+			boundedState(t, v, err, llm.ExecutionFailed)
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+			f.now = f.now.Add(time.Second)
+			// Force another acquisition to advance the root between this caller's
+			// load of the failed attempt and its idempotent failure finalization.
+			other := *f.runtime
+			var winner cloudstate.RequestAttempt
+			store := &advanceBeforeFailureStore{cloudExecutionStore: f.runtime.store}
+			store.advance = func() {
+				v, err := other.AcquireBudgetV1(ctx, ref)
+				boundedState(t, v, err, llm.ExecutionAcquired)
+				winner, err = f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(ref.RequestID))
+				if err != nil || winner.Number != 2 {
+					t.Fatal("competing acquisition did not advance the attempt", err)
+				}
+			}
+			f.runtime.store = store
+			switch step {
+			case "acquire":
+				v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			case "generate":
+				v, err = f.runtime.GenerateStepV1(ctx, f.request)
+			case "poll":
+				v, err = f.runtime.PollExecutionV1(ctx, ref)
+			case "complete":
+				v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+			}
+			if step == "acquire" {
+				boundedState(t, v, err, llm.ExecutionAcquired)
+			} else {
+				var mapped *provider.Error
+				if !errors.As(err, &mapped) || mapped.Code != provider.CodeOperationConflict || mapped.Retry != provider.RetryNever {
+					t.Fatal("non-acquisition step followed the new attempt", v, err)
+				}
+			}
+			current, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(ref.RequestID))
+			if err != nil || current.ID != winner.ID || !store.conflicted || f.submits.Load() != 1 {
+				t.Fatal("stale acquisition did not reuse the winner without dispatch", current, err, store.conflicted, f.submits.Load())
+			}
+		})
+	}
+}
 
 func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 	for _, async := range []bool{false, true} {
