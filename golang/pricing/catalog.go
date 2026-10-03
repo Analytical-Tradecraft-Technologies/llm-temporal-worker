@@ -191,6 +191,19 @@ func (resolver *PriceResolver) Resolve(query Query) (Quote, error) {
 	return catalog.Resolve(query)
 }
 
+// Snapshot returns a detached catalog for an in-flight decision. Later reloads
+// cannot change its prices, and callers cannot mutate the resolver's entries.
+func (resolver *PriceResolver) Snapshot() Catalog {
+	if resolver == nil {
+		return Catalog{}
+	}
+	catalog, ok := resolver.catalog.Load().(Catalog)
+	if !ok {
+		return Catalog{}
+	}
+	return cloneCatalog(catalog)
+}
+
 func (catalog Catalog) Resolve(query Query) (Quote, error) {
 	when := query.At
 	if when.IsZero() {

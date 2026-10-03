@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"errors"
 
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
@@ -52,12 +54,13 @@ func (planned PlannedProviderCall) Route(operation durable.OperationID, generati
 // no operation state and never invokes a provider or touches budget/storage.
 // The injected planner and registry must themselves be snapshot-owned.
 type ProviderPlanning struct {
-	catalog      routing.Catalog
-	health       routing.HealthView
-	planner      routing.Planner
-	adapters     engine.AdapterRegistry
-	configDigest [32]byte
-	configEpoch  string
+	catalog        routing.Catalog
+	health         routing.HealthView
+	planner        routing.Planner
+	adapters       engine.AdapterRegistry
+	configDigest   [32]byte
+	configEpoch    string
+	budgetSnapshot engine.Snapshot
 }
 
 func (capabilities V1RuntimeCapabilities) NewProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
@@ -83,7 +86,8 @@ func (capabilities V1RuntimeCapabilities) NewProviderPlanning(ctx context.Contex
 	}
 	return &ProviderPlanning{catalog: catalog, health: copyProviderHealth(snapshot.Health),
 		planner: capabilities.Planner, adapters: capabilities.Adapters,
-		configDigest: snapshot.ConfigDigest, configEpoch: snapshot.ConfigEpoch}, nil
+		configDigest: snapshot.ConfigDigest, configEpoch: snapshot.ConfigEpoch,
+		budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
 }
 
 func (planning *ProviderPlanning) Generate(ctx context.Context, prepared PreparedGenerateInput) (PlannedProviderCall, error) {
@@ -99,6 +103,12 @@ func (planning *ProviderPlanning) Compact(ctx context.Context, prepared Prepared
 }
 
 func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request) (PlannedProviderCall, error) {
+	return planning.selectCall(ctx, request, nil)
+}
+
+// selectCall permits the budget planner to reject a compiled candidate before
+// it wins selection. Neither callback nor compilation may perform paid work.
+func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, accept func(PlannedProviderCall) (bool, error)) (PlannedProviderCall, error) {
 	if ctx == nil || planning == nil || isNilCapability(planning.planner) || isNilCapability(planning.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
@@ -120,6 +130,7 @@ func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request)
 	if err != nil || len(plan.Candidates) == 0 {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetryNever)
 	}
+	lastPhase := provider.PhaseCompile
 	for _, candidate := range plan.Candidates {
 		if !planning.containsCandidate(semantic, candidate) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
@@ -175,11 +186,39 @@ func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request)
 		if !validPlannedCall(call, candidate, semantic.OperationKey, digest) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 		}
-		return PlannedProviderCall{Candidate: candidate, CacheIdentity: providerCacheIdentity(candidate),
+		planned := PlannedProviderCall{Candidate: candidate, CacheIdentity: providerCacheIdentity(candidate),
 			CapabilityVersion: capability.Version, ConfigDigest: planning.configDigest, ConfigEpoch: planning.configEpoch,
-			Call: call, Adapter: adapter}, nil
+			Call: call, Adapter: adapter}
+		if accept != nil {
+			accepted, err := accept(planned)
+			if ctx.Err() != nil {
+				return PlannedProviderCall{}, ctx.Err()
+			}
+			if err != nil {
+				return PlannedProviderCall{}, err
+			}
+			if !accepted {
+				lastPhase = provider.PhasePrice
+				continue
+			}
+		}
+		return planned, nil
 	}
-	return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhaseCompile, provider.RetryNever)
+	return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, lastPhase, provider.RetryNever)
+}
+
+func copyBudgetSnapshot(source engine.Snapshot) engine.Snapshot {
+	switch prices := source.Prices.(type) {
+	case *pricing.PriceResolver:
+		source.Prices = prices.Snapshot()
+	case pricing.Catalog:
+		source.Prices = pricing.NewResolver(prices).Snapshot()
+	}
+	source.BudgetPolicies = append([]budget.Policy(nil), source.BudgetPolicies...)
+	for index := range source.BudgetPolicies {
+		source.BudgetPolicies[index].Windows = append([]budget.Window(nil), source.BudgetPolicies[index].Windows...)
+	}
+	return source
 }
 
 func (planning *ProviderPlanning) containsCandidate(request llm.Request, candidate routing.Candidate) bool {

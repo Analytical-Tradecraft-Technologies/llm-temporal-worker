@@ -1,0 +1,259 @@
+package runtime
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"math/big"
+	"time"
+
+	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
+)
+
+// BudgetAttempt comes from the durable attempt, not a clock read during each
+// retry. Persist these values and the resulting quote before Redis acceptance.
+// ExpiresAt bounds unused admission; Redis owns the separate 15-minute start
+// deadline and retains consumed reservations until settlement/window expiry.
+type BudgetAttempt struct {
+	OperationID  durable.OperationID
+	GenerationID durable.GenerationID
+	QuotedAt     time.Time
+	ExpiresAt    time.Time
+}
+
+// PlannedBudgetCall is invocation-local data, not a dispatch grant. The price,
+// route and reservation are the non-secret facts to persist for recovery; the
+// Provider's adapter/SDK parameters must never be serialized or logged.
+type PlannedBudgetCall struct {
+	Provider    PlannedProviderCall
+	Route       durable.RoutePlan
+	Quote       *pricing.Quote // nil only for an explicitly permitted unpriced, unbudgeted call
+	Estimate    budget.Estimate
+	Reservation durable.ReserveRequest
+	QuotedAt    time.Time
+}
+
+// RequiresReservation distinguishes a positive matched quote from known-free
+// or unmatched requests. Empty vectors must not be submitted to Redis, and are
+// not permission to dispatch; composition must explicitly support that path.
+func (planned PlannedBudgetCall) RequiresReservation() bool {
+	return len(planned.Reservation.Reservations) != 0
+}
+
+// BudgetPlanning selects a compilable, priceable route using the exact snapshot
+// captured by ProviderPlanning. It neither reads budget balances nor reserves,
+// claims, submits, polls, or persists anything.
+type BudgetPlanning struct {
+	providers *ProviderPlanning
+	estimator budget.Estimator
+}
+
+// NewBudgetPlanning uses only snapshot-owned capabilities. It performs the
+// snapshot capture once and never constructs separate clients or a leaser.
+func (capabilities V1RuntimeCapabilities) NewBudgetPlanning(ctx context.Context) (*BudgetPlanning, error) {
+	providers, err := capabilities.NewProviderPlanning(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return providers.NewBudgetPlanning(capabilities.BudgetEstimator, capabilities.MaxBudgetBucketsPerWindow)
+}
+
+func (planning *ProviderPlanning) NewBudgetPlanning(estimator budget.Estimator, maxBuckets int) (*BudgetPlanning, error) {
+	if planning == nil || isNilCapability(planning.budgetSnapshot.Prices) || maxBuckets <= 0 ||
+		estimator.MaxOutput <= 0 || estimator.MaxReasoning < 0 || (estimator.SafetyRatio != nil && estimator.SafetyRatio.Sign() <= 0) {
+		return nil, budgetPlanningError(provider.CodeConfiguration)
+	}
+	if catalog, ok := planning.budgetSnapshot.Prices.(pricing.Catalog); ok && catalog.Validate() != nil {
+		return nil, budgetPlanningError(provider.CodeConfiguration)
+	}
+	seenPolicies, seenWindows := make(map[string]bool), make(map[string]bool)
+	for _, policy := range planning.budgetSnapshot.BudgetPolicies {
+		if policy.Validate(maxBuckets) != nil || len(policy.ID) > 128 || seenPolicies[policy.ID] {
+			return nil, budgetPlanningError(provider.CodeConfiguration)
+		}
+		seenPolicies[policy.ID] = true
+		for _, window := range policy.Windows {
+			// Redis completion identities name window/bucket, independently of
+			// policy. Aliased windows would duplicate a debit or its settlement.
+			if window.ID == "" || len(window.ID) > 128 || seenWindows[window.ID] {
+				return nil, budgetPlanningError(provider.CodeConfiguration)
+			}
+			seenWindows[window.ID] = true
+			limit, err := exactWindowLimit(window)
+			if err != nil {
+				return nil, budgetPlanningError(provider.CodeConfiguration)
+			}
+			materialized, err := pricing.FloorNanoUSD(limit)
+			if err != nil || materialized == 0 {
+				return nil, budgetPlanningError(provider.CodeConfiguration)
+			}
+		}
+	}
+	return &BudgetPlanning{providers: planning, estimator: copyBudgetEstimator(estimator)}, nil
+}
+
+func copyBudgetEstimator(estimator budget.Estimator) budget.Estimator {
+	if estimator.SafetyRatio != nil {
+		estimator.SafetyRatio = new(big.Rat).Set(estimator.SafetyRatio)
+	}
+	return estimator
+}
+
+func (planning *BudgetPlanning) Generate(ctx context.Context, prepared PreparedGenerateInput, attempt BudgetAttempt) (PlannedBudgetCall, error) {
+	return planning.plan(ctx, prepared.Request, attempt)
+}
+
+func (planning *BudgetPlanning) Compact(ctx context.Context, prepared PreparedCompactInput, attempt BudgetAttempt) (PlannedBudgetCall, error) {
+	if prepared.Request == nil {
+		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeInvalidArgument)
+	}
+	return planning.plan(ctx, *prepared.Request, attempt)
+}
+
+func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, attempt BudgetAttempt) (PlannedBudgetCall, error) {
+	if ctx == nil || planning == nil || planning.providers == nil {
+		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeConfiguration)
+	}
+	if err := ctx.Err(); err != nil {
+		return PlannedBudgetCall{}, err
+	}
+	if attempt.OperationID.Validate() != nil || attempt.GenerationID.Validate() != nil ||
+		!safeQuoteTime(attempt.QuotedAt) || !safeQuoteTime(attempt.ExpiresAt) || !attempt.ExpiresAt.After(attempt.QuotedAt) {
+		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeInvalidArgument)
+	}
+	semantic, err := llm.NormalizeRequest(request)
+	if err != nil || semantic.Continuation != nil {
+		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeInvalidArgument)
+	}
+	var result PlannedBudgetCall
+	_, err = planning.providers.selectCall(ctx, semantic, func(call PlannedProviderCall) (bool, error) {
+		quoted, usable, err := planning.quote(ctx, semantic, call, attempt)
+		if err == nil && usable {
+			result = quoted
+		}
+		return usable, err
+	})
+	if err != nil {
+		return PlannedBudgetCall{}, err
+	}
+	return result, nil
+}
+
+func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request, call PlannedProviderCall, attempt BudgetAttempt) (PlannedBudgetCall, bool, error) {
+	snapshot, candidate := planning.providers.budgetSnapshot, call.Candidate
+	route, err := call.Route(attempt.OperationID, attempt.GenerationID)
+	if err != nil {
+		return PlannedBudgetCall{}, false, err
+	}
+	// Match the application's logical model and the actually attempted class.
+	matches := budget.MatchPolicies(snapshot.BudgetPolicies, budget.ContextFor(semantic, candidate, snapshot.Environment))
+	if snapshot.RequireBudgetMatch && len(matches) == 0 {
+		return PlannedBudgetCall{}, false, nil
+	}
+	result := PlannedBudgetCall{Provider: call, Route: route, QuotedAt: attempt.QuotedAt.UTC(),
+		Reservation: durable.ReserveRequest{OperationID: attempt.OperationID, GenerationID: attempt.GenerationID, ExpiresAt: attempt.ExpiresAt.UTC()}}
+	query := pricing.Query{Provider: candidate.Provider, Family: candidate.Family, EndpointID: candidate.EndpointID,
+		Region: candidate.Region, Model: candidate.Model, ProviderTier: candidate.ProviderTier, At: attempt.QuotedAt.UTC()}
+	quote, err := snapshot.Prices.Resolve(query)
+	if ctx.Err() != nil {
+		return PlannedBudgetCall{}, false, ctx.Err()
+	}
+	if err != nil {
+		if errors.Is(err, pricing.ErrNoActivePrice) {
+			// Preserve the existing opt-in rule for unknown-cost unbudgeted work.
+			return result, len(matches) == 0 && snapshot.RequirePriceWhenBudgeted, nil
+		}
+		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
+	}
+	entry := quote.Entry
+	if entry.Version == "" {
+		entry.Version = quote.CatalogVersion
+	}
+	if !validBudgetQuote(quote, entry, query) || (candidate.PriceVersion != "" && entry.Version != candidate.PriceVersion) {
+		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
+	}
+	quote.Entry = entry
+	quote.Entry.UnknownComponents = append([]pricing.PriceComponent(nil), entry.UnknownComponents...)
+	result.Route.PriceVersion = entry.Version
+	// Estimate the provider model, attempted tier and exact compiled input.
+	resolved, _ := llm.NormalizeRequest(semantic)
+	resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
+	resolved.ServiceClassFallbacks = nil
+	digest, err := llm.RequestDigest(resolved)
+	if err != nil || digest != call.Call.Metadata.SchemaDigest {
+		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
+	}
+	estimate, err := planning.estimator.EstimateCandidate(resolved, candidate, entry)
+	if ctx.Err() != nil {
+		return PlannedBudgetCall{}, false, ctx.Err()
+	}
+	if err != nil {
+		if errors.Is(err, budget.ErrUnusablePrice) {
+			return PlannedBudgetCall{}, false, nil
+		}
+		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeInvalidArgument)
+	}
+	result.Quote, result.Estimate = &quote, estimate
+	if len(matches) == 0 || estimate.CostUSD.IsZero() {
+		return result, true, nil
+	}
+	if _, err := pricing.CeilNanoUSD(estimate.CostUSD); err != nil {
+		return PlannedBudgetCall{}, false, nil // unusable Redis quote; try an authorized fallback
+	}
+	for _, match := range matches {
+		window := match.Window
+		_, bucket := window.Range(attempt.QuotedAt)
+		// Match Redis's timestamp bounds without overflowing expiry arithmetic.
+		if bucket < 0 || bucket > (1<<62)/window.Bucket.Nanoseconds() {
+			return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
+		}
+		start := bucket * window.Bucket.Nanoseconds()
+		if window.Duration.Nanoseconds() > (1<<62)-start-window.Bucket.Nanoseconds() {
+			return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
+		}
+		limit, _ := exactWindowLimit(window) // validated when capturing the planner
+		legacyLimit, err := compatibilityBudgetLimit(limit, window.Limit)
+		if err != nil {
+			return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
+		}
+		result.Reservation.Reservations = append(result.Reservation.Reservations, admission.WindowReservation{
+			PolicyID: match.PolicyID, WindowID: window.ID, Bucket: bucket,
+			BucketNanos: window.Bucket.Nanoseconds(), DurationNanos: window.Duration.Nanoseconds(),
+			Amount: estimate.MicroUSD, AmountUSD: estimate.CostUSD, Limit: legacyLimit, LimitUSD: limit})
+	}
+	return result, true, nil
+}
+
+func exactWindowLimit(window budget.Window) (pricing.USD, error) {
+	if !window.LimitUSD.IsZero() {
+		return window.LimitUSD, window.LimitUSD.Validate()
+	}
+	return pricing.USDFromMicro(window.Limit)
+}
+
+func validBudgetQuote(quote pricing.Quote, entry pricing.Entry, query pricing.Query) bool {
+	digest, err := hex.DecodeString(quote.CatalogDigest)
+	if err != nil || len(digest) != 32 || quote.CatalogVersion == "" || entry.Version == "" ||
+		entry.Provider != query.Provider || entry.Family != query.Family || entry.EndpointID != query.EndpointID || entry.Region != query.Region ||
+		entry.Model != query.Model || entry.ProviderTier != query.ProviderTier || !entry.Active(query.At) {
+		return false
+	}
+	if [32]byte(digest) == ([32]byte{}) {
+		return false
+	}
+	_, err = pricing.CompileUSD(quote.CatalogVersion, []pricing.Entry{entry})
+	return err == nil
+}
+
+func safeQuoteTime(at time.Time) bool {
+	return !at.IsZero() && at.Equal(time.Unix(0, at.UnixNano())) && at.UnixNano() >= 0 && at.UnixNano() < 1<<62
+}
+
+func budgetPlanningError(code provider.Code) error {
+	return provider.NewError(code, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "budget planning failed")
+}

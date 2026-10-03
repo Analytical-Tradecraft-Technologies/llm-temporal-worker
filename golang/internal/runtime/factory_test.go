@@ -658,7 +658,7 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	value := config.Config{
 		State:        config.StateConfig{Kind: config.StateKindMemory, ContinuationRetention: config.Duration(time.Hour), ReservationLease: config.Duration(time.Minute)},
 		BlobStore:    config.BlobStoreConfig{Kind: "memory", InlineBytes: 256},
-		Limits:       config.LimitsConfig{RequestBytes: 1024, ContinuationDepth: 4, RouteAttempts: 1, TokenEstimateSafetyRatio: "1", MaxOutputTokens: 16},
+		Limits:       config.LimitsConfig{RequestBytes: 1024, ContinuationDepth: 4, RouteAttempts: 1, TokenEstimateSafetyRatio: "1", MaxOutputTokens: 16, MaxBudgetBucketsPerWindow: 100},
 		Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{ID: "key-2026-07", Primary: true, Secret: config.SecretRef{Kind: config.SecretEnv, Name: "CONTINUATION_KEY"}}}},
 	}
 	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.Snapshot{}, nil, nil, [32]byte{})
@@ -683,6 +683,13 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	}
 	if capabilities.Budgets != nil {
 		t.Fatal("memory composition exposed a PostgreSQL journal capability")
+	}
+	if capabilities.BudgetEstimator.MaxOutput != 16 || capabilities.BudgetEstimator.SafetyRatio.RatString() != "1" || capabilities.MaxBudgetBucketsPerWindow != 100 {
+		t.Fatal("memory composition omitted configured budget estimation settings")
+	}
+	capabilities.BudgetEstimator.SafetyRatio.SetInt64(9)
+	if clients.(*productionClientSet).V1RuntimeCapabilities().BudgetEstimator.SafetyRatio.RatString() != "1" {
+		t.Fatal("returned capabilities mutated snapshot-owned budget estimation")
 	}
 	if err := clients.Close(context.Background()); err != nil {
 		t.Fatalf("memory client close = %v", err)

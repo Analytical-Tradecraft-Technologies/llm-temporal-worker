@@ -31,7 +31,10 @@ future planning. Strict/best-effort portability is preserved. Checkpoint handles
 never become provider continuation identifiers.
 
 Local adapter-resolution, capability and compilation failures may yield to the
-next candidate. The first valid compiled call wins. Its endpoint, family, model,
+next candidate. The first valid compiled call wins in this compilation-only
+helper. [Cloud budget planning](cloud-budget-planning.md) additionally checks
+the selected candidate's configured policies and price before it can win,
+allowing authorized fallback when pricing is unusable. Its endpoint, family, model,
 operation key, class, capability version, provider tier and request digest must
 match the selection. Missing SDK parameters or mismatched calls fail closed.
 A compiler reporting possible dispatch stops with an ambiguous, non-retryable

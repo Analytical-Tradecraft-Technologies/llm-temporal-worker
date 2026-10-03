@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
@@ -177,7 +178,10 @@ type V1RuntimeCapabilities struct {
 	Snapshot      engine.SnapshotSource
 	Planner       routing.Planner
 	Adapters      engine.AdapterRegistry
-	Checkpoints   CheckpointCapabilities
+	// Budget estimation uses the settings bound to this runtime snapshot.
+	BudgetEstimator           budget.Estimator
+	MaxBudgetBucketsPerWindow int
+	Checkpoints               CheckpointCapabilities
 	// Budgets is the Redis authority for reserve, claim and settlement.
 	// Exposing it does not by itself activate V1 composition.
 	Budgets durablestore.BudgetLeaser

@@ -74,6 +74,43 @@ func TestCatalogValidateRequiresCompiledDigest(t *testing.T) {
 	}
 }
 
+func TestPriceResolverSnapshotIsDetachedAndSurvivesReload(t *testing.T) {
+	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard",
+		Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}, UnknownComponents: []PriceComponent{PriceComponentOutput}}
+	catalog, err := CompileUSD("v1", []Entry{entry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := NewResolver(catalog)
+	pinned := resolver.Snapshot()
+	if err := pinned.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	changed := resolver.Snapshot()
+	changed.Entries[0].Prices.InputPerMillion = MustDecimalUSD("2")
+	changed.Entries[0].UnknownComponents[0] = PriceComponentCacheRead
+	replacement, err := CompileUSD("v2", changed.Entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.ReloadValidated(replacement); err != nil {
+		t.Fatal(err)
+	}
+	query := Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Unix(2, 0)}
+	old, err := pinned.Resolve(query)
+	if err != nil || old.Entry.Prices.InputPerMillion.String() != "1" || !old.Entry.ComponentUnknown(PriceComponentOutput) {
+		t.Fatalf("snapshot changed after reload: %#v, %v", old, err)
+	}
+	current, err := resolver.Resolve(query)
+	if err != nil || current.Entry.Prices.InputPerMillion.String() != "2" || current.Entry.ComponentUnknown(PriceComponentOutput) {
+		t.Fatalf("snapshot mutated or prevented resolver reload: %#v, %v", current, err)
+	}
+	var missing *PriceResolver
+	if missing.Snapshot().Digest != ([32]byte{}) || new(PriceResolver).Snapshot().Digest != ([32]byte{}) {
+		t.Fatal("uninitialized resolver returned a usable snapshot")
+	}
+}
+
 func TestCostFromUsageRejectsUnknownCatalogComponent(t *testing.T) {
 	entry := Entry{
 		Prices:            UnitPrices{InputPerMillion: MustDecimalUSD("1")},
