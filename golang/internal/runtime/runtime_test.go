@@ -25,6 +25,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 func runtimeConfig(t *testing.T) []byte {
@@ -124,7 +125,8 @@ var _ EngineFactory = testQueryEngineFactory{}
 var _ QueryServiceFactory = testQueryEngineFactory{}
 
 type testRegistry struct {
-	names []string
+	names     []string
+	workflows []string
 }
 
 func (testRegistry) RegisterActivity(interface{}) {}
@@ -133,7 +135,13 @@ func (registry *testRegistry) RegisterActivityWithOptions(_ interface{}, options
 }
 func (testRegistry) RegisterDynamicActivity(interface{}, activity.DynamicRegisterOptions) {}
 
-var _ worker.ActivityRegistry = (*testRegistry)(nil)
+func (*testRegistry) RegisterWorkflow(interface{}) {}
+func (registry *testRegistry) RegisterWorkflowWithOptions(_ interface{}, options workflow.RegisterOptions) {
+	registry.workflows = append(registry.workflows, options.Name)
+}
+func (*testRegistry) RegisterDynamicWorkflow(interface{}, workflow.DynamicRegisterOptions) {}
+
+var _ app.WorkerRegistry = (*testRegistry)(nil)
 
 type testWorker struct {
 	started atomic.Bool
@@ -161,7 +169,7 @@ func testRuntimeOptions(t *testing.T, workerController *testWorker, closed *atom
 			}), nil
 		}),
 		V1Runtime: testV1Runtime{},
-		WorkerFactory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		WorkerFactory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			return workerController, &testRegistry{}, nil
 		},
 	}
@@ -662,7 +670,7 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	controller := &monitoringWorker{}
 	var closed atomic.Bool
 	options := testRuntimeOptions(t, &testWorker{}, &closed)
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 		return controller, &testRegistry{}, nil
 	}
 	options.DependencyProbes = []DependencyProbe{probe}
@@ -705,7 +713,7 @@ func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
 	var builds atomic.Int32
 	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
 	options.V1Runtime = nil
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 		return controller, &testRegistry{}, nil
 	}
 	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
@@ -780,7 +788,7 @@ func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 	var clientBuilds atomic.Int32
 	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
 	options.V1Runtime = nil
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 		if workerBuilds.Add(1) == 1 {
 			return initial, &testRegistry{}, nil
 		}
@@ -835,7 +843,7 @@ func TestRuntimeMonitorTracksReloadedV1ReadinessWithoutDependencyProbes(t *testi
 	var clientBuilds atomic.Int32
 	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
 	options.V1Runtime = nil
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 		if workerBuilds.Add(1) == 1 {
 			return initial, &testRegistry{}, nil
 		}
@@ -890,7 +898,7 @@ func TestRuntimeMonitorContinuesCheckingWhilePausedWorkerDrains(t *testing.T) {
 	var built atomic.Int32
 	var closed atomic.Bool
 	options := testRuntimeOptions(t, &testWorker{}, &closed)
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 		if built.Add(1) == 1 {
 			return first, &testRegistry{}, nil
 		}

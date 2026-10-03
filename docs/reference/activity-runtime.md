@@ -62,7 +62,7 @@ callers. Their registered result is now `ExecutionResultV1`. The older direct Go
 helpers still return their final response records, but are not registered on
 Temporal. A runtime that lacks `ExecutionRuntime` fails closed for all execution
 activities. The CLI production builder is not activated by this interface change;
-cloud composition, workflow registration, and the typed OCaml client follow in
+cloud composition and the typed OCaml client follow in
 separate dependent changes.
 
 Prepare accepts exactly one Generate or Compact request. Budget acquisition
@@ -313,3 +313,12 @@ arguments with conversation depth.
 An enabled cache policy may omit `max_age_seconds` to reuse any eligible success,
 regardless of its completion age. An explicit age remains bounded to 1–31536000
 seconds; zero and null are invalid. Omitting `cache` still disables reuse.
+
+## Worker registration
+
+Worker startup registers the public `llm.generate.workflow.v1` and
+`llm.compact.workflow.v1` workflows together with the internal
+`llm.request.execute.v1` and `llm.budget.wait.v1` workflows. They share the
+configured task queue with the eight v1 activities. After a dependency outage,
+resume creates a fresh worker and registers the same complete set before polling.
+The factory's registry must support both workflows and activities.
