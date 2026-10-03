@@ -77,3 +77,19 @@ The public and internal workflow implementations are available through
 `workflows.Register`. Production registration and runtime composition remain the
 next integration step. The activity registry now advertises eight v1 activities,
 including the new planning activity.
+
+### Failed attempts and retry timing
+
+Known provider failures retain a bounded retry classification and earliest retry
+instant in durable state. Their Redis settlement and cache-fill release finish
+before the failed child leaves pending discovery. A retryable failure keeps the
+public request running; explicit budget acquisition waits for the provider delay,
+then creates a distinct child and reservation. Retrying Prepare, Submit or Poll
+never creates that replacement. Unknown paid work retains its separate pending
+record and original claim, as described above.
+
+Permanent provider failures and incomplete compaction results also close the
+public request. The saved, sanitized failure replays after restart without
+loading an expired parent or contacting a provider. Authorization still runs
+before replay. Terminal writes repair their pending indexes after uncertain
+acknowledgements, and a stale child cannot close a newer active attempt.

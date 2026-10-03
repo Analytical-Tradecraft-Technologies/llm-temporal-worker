@@ -296,7 +296,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		var classified *provider.Error
 		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched) {
 			next.Stage = cloudstate.ExecutionFailed
-			next.Failure = &cloudstate.ExecutionFailure{Code: classified.Code, Dispatch: classified.Dispatch}
+			next.Failure = executionFailure(classified.Code, classified.Dispatch, classified, executor.clock())
 		}
 	} else {
 		if outcome.ProviderOperationID != "" {
@@ -322,7 +322,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			if !code.Valid() {
 				code = provider.CodeProviderUnavailable
 			}
-			next.Failure = &cloudstate.ExecutionFailure{Code: code, Dispatch: outcome.Dispatch}
+			next.Failure = executionFailure(code, outcome.Dispatch, outcome.Failure, executor.clock())
 		case provider.ResumableNotFound:
 			next.Stage = cloudstate.ExecutionUnknown
 			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
@@ -448,6 +448,23 @@ func executionSettlement(execution cloudstate.ProviderExecution) *durable.Reconc
 			event.Kind, event.CostStatus, event.UnknownReasonCode, event.AccountedIncreaseUSD = budget.JournalFinalizeUnknown, budget.CostUnknown, "provider_cost_unknown", reserved.AmountUSD
 		}
 		result.Events = append(result.Events, event)
+	}
+	return result
+}
+
+// Only a valid provider retry classification can authorize a new attempt. Raw
+// errors remain outcome_unknown; they never become a free or immediate retry.
+func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, failure *provider.Error, now time.Time) *cloudstate.ExecutionFailure {
+	result := &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch}
+	if failure != nil && failure.Retry.Valid() && failure.Retry != provider.RetryNever {
+		delay := failure.RetryAfter
+		if delay < time.Second {
+			delay = time.Second
+		}
+		if delay > 24*time.Hour {
+			delay = 24 * time.Hour
+		}
+		result.Retryable, result.RetryNotBefore = true, now.UTC().Add(delay)
 	}
 	return result
 }
