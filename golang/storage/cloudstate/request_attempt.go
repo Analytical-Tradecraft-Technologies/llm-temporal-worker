@@ -10,6 +10,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/google/uuid"
+	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
 var ErrRequestAttemptMissing = errors.New("request attempt missing")
@@ -254,6 +255,12 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 			return err
 		}
 		progress, plan, execution, err := executionProgress(record)
+		if errors.Is(err, ErrBudgetPlanMissing) {
+			progress, plan, err = budgetPlanProgress(record.Progress)
+			if progress["provider_execution"] != nil {
+				return ErrCorrupt
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -269,7 +276,11 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 			return contracts.ErrConflict
 		}
 		reason, status := "", record.Status
-		if execution == nil && record.Status == StatusRunning && !now.Before(plan.Reservation.ExpiresAt) {
+		expires := active.CreatedAt.Add(durable.BudgetStartLease)
+		if plan != nil {
+			expires = plan.Reservation.ExpiresAt
+		}
+		if execution == nil && record.Status == StatusRunning && !now.Before(expires) {
 			reason, status = "unused_quote_expired", StatusFailed
 		} else if execution != nil && execution.Stage == ExecutionUnknown && record.Status == StatusOutcomeUnknown && !now.Before(execution.RecoverAfter) {
 			reason = "outcome_unknown"

@@ -59,6 +59,13 @@ func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.
 // durable fence is written before Claim, and BeforePossibleWrite persists the
 // claim before allowing HTTP. A saved claim is never reused as a dispatch grant.
 func (executor *CloudProviderExecution) Submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult) (ProviderExecutionResult, error) {
+	return executor.submit(ctx, call, reservation, nil)
+}
+
+// The optional cache gate runs only for the durable execution-fence winner,
+// before a budget claim or HTTP request. A crash or uncertain gate reply stays
+// recoverable as an unknown child; retries cannot regain dispatch permission.
+func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult, start func(context.Context) error) (ProviderExecutionResult, error) {
 	if executor == nil || call == nil || call.owner != executor.admission || ctx == nil {
 		return ProviderExecutionResult{}, executionError(provider.CodeConfiguration)
 	}
@@ -76,6 +83,14 @@ func (executor *CloudProviderExecution) Submit(ctx context.Context, call *CloudB
 	}
 	if !fresh {
 		return executor.settle(ctx, call.scope, call.id, saved)
+	}
+	if start != nil {
+		if err := start(ctx); err != nil {
+			next := saved.Execution
+			next.Stage = cloudstate.ExecutionUnknown
+			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
+			return executor.save(ctx, call.scope, call.id, saved, next)
+		}
 	}
 	var claim *durable.ClaimReceipt
 	if saved.Plan.RequiresReservation() {

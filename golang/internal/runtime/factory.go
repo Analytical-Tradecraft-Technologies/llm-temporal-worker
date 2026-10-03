@@ -671,6 +671,7 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 		return nil, nil, err
 	}
 	clients.v1Capabilities.CloudIdentity = identity
+	clients.v1Capabilities.RedisIdentity = durablestore.RedisIdentity{KeyPrefix: snapshot.Config().State.Redis.KeyPrefix, HashTag: snapshot.Config().State.Redis.AdmissionHashTag}
 	builder := factory.options.V1RuntimeBuilder
 	if builder == nil {
 		if err := validateRequiredDependencyProbeSet(snapshot.Config().State, clients.probes); err != nil {
