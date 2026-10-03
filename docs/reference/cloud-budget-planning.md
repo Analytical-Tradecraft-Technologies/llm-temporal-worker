@@ -1,5 +1,8 @@
 # Cloud budget planning
 
+The [cloud admission integration](cloud-budget-admission.md) connects these plans
+to original request recovery, durable plan persistence and Redis Reserve/Claim.
+
 `internal/runtime.V1RuntimeCapabilities.NewBudgetPlanning` supplies shared Generate
 and Compact selection and quoting for cloud phase factories. It uses prepared
 semantic input and the same captured snapshot as provider compilation. Public
