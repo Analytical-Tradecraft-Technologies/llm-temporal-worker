@@ -2,8 +2,8 @@ package durable
 
 // This file contains the storage-neutral orchestration for the v1 Compact
 // Activity. Compact is deliberately a separate runner from Generate: it
-// creates a compaction checkpoint, never returns a normal answer, and has a
-// fixed cache variant of zero. The concrete Redis, cloud cache, checkpoint,
+// creates a compaction checkpoint, never returns a normal answer, and supports
+// independent cache sample indexes. The concrete Redis, cloud cache, checkpoint,
 // and provider adapters are supplied by the snapshot-owned composition.
 
 import (
@@ -56,9 +56,6 @@ func (decision CompactCacheDecision) Validate() error {
 	case CacheHit:
 		if decision.Response == nil {
 			return errors.New("compact cache hit must include a response template")
-		}
-		if decision.Response.Cache.Variant != 0 {
-			return errors.New("compact cache hit must use variant zero")
 		}
 		if _, err := json.Marshal(decision.Response); err != nil {
 			return fmt.Errorf("compact cache response template: %w", err)
@@ -349,8 +346,8 @@ func validateCompactResponse(request llm.CompactRequestV1, expectedOperationID O
 	if response.Checkpoint.Parent == nil || string(*response.Checkpoint.Parent) != string(request.Parent) {
 		return errors.New("compact response parent checkpoint does not match request")
 	}
-	if response.Cache.Variant != 0 {
-		return errors.New("compact response cache variant must be zero")
+	if int64(response.Cache.Variant) != request.Cache.SampleIndex() {
+		return errors.New("compact response cache variant does not match request")
 	}
 	if _, err := json.Marshal(response); err != nil {
 		return err

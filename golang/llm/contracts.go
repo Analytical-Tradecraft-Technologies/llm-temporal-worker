@@ -171,7 +171,7 @@ func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
 		}
 	}
 	result := CachePolicyV1{MaxAgeSeconds: maxAge, Variant: variant}
-	if err := result.validate(false); err != nil {
+	if err := result.validate(); err != nil {
 		return err
 	}
 	*policy = result
@@ -179,18 +179,18 @@ func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
 }
 
 func (policy CachePolicyV1) MarshalJSON() ([]byte, error) {
-	if err := policy.validate(false); err != nil {
+	if err := policy.validate(); err != nil {
 		return nil, err
 	}
 	type wire CachePolicyV1
 	return json.Marshal(wire(policy))
 }
 
-func (policy CachePolicyV1) validate(compact bool) error {
+func (policy CachePolicyV1) validate() error {
 	if policy.MaxAgeSeconds < 0 || policy.MaxAgeSeconds > 31536000 {
 		return fmt.Errorf("cache max_age_seconds must be between 1 and 31536000")
 	}
-	if policy.Variant < 0 || (compact && policy.Variant != 0) {
+	if policy.Variant < 0 {
 		return fmt.Errorf("cache variant is invalid")
 	}
 	return nil
@@ -650,7 +650,7 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("parent checkpoint is invalid")
 	}
 	if request.Cache != nil {
-		if err := request.Cache.validate(false); err != nil {
+		if err := request.Cache.validate(); err != nil {
 			return nil, err
 		}
 	}
@@ -734,7 +734,7 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(raw, &policy); err != nil {
 			return err
 		}
-		if err := policy.validate(false); err != nil {
+		if err := policy.validate(); err != nil {
 			return err
 		}
 		result.Cache = &policy
@@ -1138,7 +1138,7 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 		}
 	}
 	if request.Cache != nil {
-		if err := request.Cache.validate(true); err != nil {
+		if err := request.Cache.validate(); err != nil {
 			return nil, err
 		}
 	}
@@ -1201,7 +1201,7 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(raw, &policy); err != nil {
 			return err
 		}
-		if err := policy.validate(true); err != nil {
+		if err := policy.validate(); err != nil {
 			return err
 		}
 		result.Cache = &policy
@@ -1882,8 +1882,8 @@ func isZeroDecimal(value string) bool {
 	return value != ""
 }
 
-// ValidateVariantTemperature applies the part of cache validation that is
-// locally knowable before inherited settings are materialized by the worker.
+// ValidateVariantTemperature validates the independent sample index and optional
+// temperature. A sample index does not require a positive temperature.
 func ValidateVariantTemperature(variant int32, temperature *float64) error {
 	if variant < 0 {
 		return fmt.Errorf("variant must not be negative")
@@ -1891,14 +1891,11 @@ func ValidateVariantTemperature(variant int32, temperature *float64) error {
 	if temperature != nil && (*temperature < 0 || math.IsNaN(*temperature) || math.IsInf(*temperature, 0)) {
 		return fmt.Errorf("temperature is invalid")
 	}
-	if temperature != nil && *temperature == 0 && variant != 0 {
-		return fmt.Errorf("temperature zero requires variant zero")
-	}
 	return nil
 }
 
-// ValidateVariantDecimalTemperature applies the cache variant rule directly
-// to the exact v1 wire decimal. This keeps validation independent of a
+// ValidateVariantDecimalTemperature validates the independent sample index and
+// exact v1 wire decimal. This keeps validation independent of a
 // float64 conversion (which may round an 18-digit value or overflow for a
 // syntactically valid NUMERIC(38,18) value).
 func ValidateVariantDecimalTemperature(variant int32, temperature *DecimalV1) error {
@@ -1908,12 +1905,18 @@ func ValidateVariantDecimalTemperature(variant int32, temperature *DecimalV1) er
 	if temperature == nil {
 		return nil
 	}
-	canonical, err := NewDecimalV1(temperature.String())
+	_, err := NewDecimalV1(temperature.String())
 	if err != nil {
 		return fmt.Errorf("temperature is invalid: %w", err)
 	}
-	if canonical == "0" && variant != 0 {
-		return fmt.Errorf("temperature zero requires variant zero")
-	}
 	return nil
+}
+
+// SampleIndex is only a cache discriminator. Changing it requests an independent
+// sample without changing the provider request. Omission selects sample zero.
+func (policy *CachePolicyV1) SampleIndex() int64 {
+	if policy == nil {
+		return 0
+	}
+	return int64(policy.Variant)
 }

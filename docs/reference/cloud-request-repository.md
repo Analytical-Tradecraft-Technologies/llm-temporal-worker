@@ -164,8 +164,8 @@ keyring and never combines cloud checkpoint rows with SQL blob lookups.
 The operation binding includes tenant, project, activity kind, and
 `operation_key`. Its internal ID is a prefixed UUIDv8 derived using a separate
 HMAC domain. Reusing the same operation key with a different input is a conflict;
-changing the key creates a separate operation. Generate's existing
-`cache.variant` supplies the sample index (default zero); Compact uses zero.
+changing the key creates a separate operation. For both Generate and Compact,
+`cache.variant` supplies the independent sample index (default zero).
 The current request/response wire format and activity names remain unchanged.
 
 The first write is the eight-shard discovery row. Concurrent initializers reuse

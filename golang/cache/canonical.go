@@ -66,7 +66,7 @@ func (input Input) validate() error {
 	if err := input.Route.validate(); err != nil {
 		return err
 	}
-	if input.Variant < 0 || (input.Operation == OperationCompact && input.Variant != 0) {
+	if input.Variant < 0 {
 		return fmt.Errorf("cache variant is invalid")
 	}
 	if input.Request.OperationKey == "" {

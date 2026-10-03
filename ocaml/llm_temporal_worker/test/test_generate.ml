@@ -98,13 +98,11 @@ let () =
     | Ok value -> value
     | Error message -> failwith message
   in
-  (try
-     ignore (Generate.make ~operation_key ~context ~model
-       ~settings:zero_settings ~cache:zero_cache ~input ());
-     failwith "Generate.make accepted explicit zero temperature with positive cache variant"
-   with
-   | Invalid_argument message
-     when String.equal message "positive cache variant requires an explicitly positive temperature" -> ());
+  let sample = Generate.make ~operation_key ~context ~model
+      ~settings:zero_settings ~cache:zero_cache ~input () in
+  (match sample.cache with
+   | Some { variant = 1l; _ } -> ()
+   | _ -> failwith "sample index lost with zero temperature");
   let legacy = Request.make ~operation_key ~model ~service_class:Standard ~input () in
   if legacy.model <> model then failwith "legacy Request compatibility changed";
   (match List.rev !malformed_response_failures with

@@ -80,10 +80,8 @@ val to_request :
   ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> append:item list -> t -> generate_request
 
-(** A positive cache variant is only valid when the request explicitly sets a
-    strictly positive temperature. The worker remains authoritative when the
-    inherited temperature is unknown; this helper rejects only the case the
-    facade can prove invalid locally. *)
+(** Validate the sample index. It is independent of temperature and only
+    separates cache entries. The historical helper name is retained. *)
 val validate_cache_temperature :
   cache_policy option -> settings_patch -> (unit, validation_error) result
 

@@ -75,14 +75,12 @@ let () =
         ~temperature:(expect_valid (Usd_decimal.of_string "0")) ()) ()
   in
   let calls_before_zero = List.length !calls in
-  (match Conversation.respond_with ~dispatch ~cache
-      ~operation_key:(operation_key "zero-variant") ~append:[] zero_root with
-   | Error error when String.equal (Temporal.Error.message error)
-       "positive cache variant requires an explicitly positive temperature" -> ()
-   | Error error -> failf "unexpected zero-temperature cache error: %s" (Temporal.Error.message error)
-   | Ok _ -> failwith "positive cache variant accepted explicit zero temperature");
-  if List.length !calls <> calls_before_zero then
-    failwith "zero-temperature cache validation dispatched an Activity";
+  ignore (expect_ok (Conversation.respond_with
+      ~task_queue:(Temporal_task_queue.of_string "conversation-queue") ~dispatch ~cache
+      ~operation_key:(operation_key "zero-variant") ~append:[] zero_root));
+  if List.length !calls <> calls_before_zero + 1 then
+    failwith "zero-temperature sample did not dispatch";
+  calls := [];
   let branch_a = expect_ok (Conversation.respond_with
       ~task_queue:(Temporal_task_queue.of_string "conversation-queue") ~dispatch
       ~cache ~operation_key:(operation_key "a") ~append:[ message "A" ] parent) in
@@ -150,11 +148,10 @@ let () =
          cost = Exact_cost { actual_cost_usd = Usd_decimal.zero; method_ = Control_query_zero; catalog_version = None };
          diagnostics = [] }
   in
-  let invalid_cache = expect_valid (Conversation.Cache_policy.accept_up_to ~max_age_seconds:60L ~variant:1l ()) in
-  (match Conversation.compact_with ~dispatch:compact_dispatch ~cache:invalid_cache
-      ~operation_key:(operation_key "compact-invalid") cleared.conversation with
-   | Error _ -> ()
-   | Ok _ -> failwith "compact accepted a nonzero cache variant");
+  let sample_cache = expect_valid (Conversation.Cache_policy.accept_up_to ~max_age_seconds:60L ~variant:1l ()) in
+  ignore (expect_ok (Conversation.compact_with
+      ~task_queue:(Temporal_task_queue.of_string "compact-queue") ~dispatch:compact_dispatch ~cache:sample_cache
+      ~operation_key:(operation_key "compact-sample") cleared.conversation));
 
   let malformed_compact_dispatch ?task_queue:_ activity (request : compact_request) =
     if Temporal.Activity.name activity <> "llm.compact.v1" then failwith "wrong Compact descriptor";

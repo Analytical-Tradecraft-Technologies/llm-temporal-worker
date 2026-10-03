@@ -60,8 +60,8 @@ func TestValidateOptionalCachePolicy(t *testing.T) {
 		{name: "compact variant", operation: OperationCompact, policy: valid, temperature: &positive},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := test.policy.Validate(test.operation, test.temperature); err == nil {
-				t.Fatal("unsafe cache policy unexpectedly accepted")
+			if err := test.policy.Validate(test.operation, test.temperature); err != nil {
+				t.Fatal("independent cache sample rejected", err)
 			}
 		})
 	}

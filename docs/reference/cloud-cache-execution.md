@@ -27,10 +27,10 @@ clients, invoke the composition factory again, or keep per-request state. It
 retains its repositories and trusted clock across configuration reloads.
 
 An omitted request cache policy returns `CacheDisabled` without calling a
-planner or touching either repository. An enabled policy binds the positive
-`MaxAgeSeconds` from the existing v1 envelope to successful completion age and
-requires the Generate sample index to match `Cache.Variant`. Compact uses zero
-and a separate domain. Invalid requests and plans fail before repository access.
+planner or touching either repository. An enabled policy binds optional positive
+`MaxAgeSeconds` to successful completion age (omission means unrestricted age)
+and requires the sample index to match `Cache.Variant` for both Generate and
+Compact, in separate domains. Invalid requests and plans fail before repository access.
 An unresolved generation tool frontier also stops before planning. Compact with
 no safe prefix fails before acquiring a fill; its surrounding replay/phase
 composition must handle that no-work case before routing or budget admission.
@@ -52,9 +52,8 @@ Before preparing, the operation's replay/recovery phase must resolve any prior
 paid work. The phase factory must derive the opaque scope from authenticated
 context, authorize the complete route, and build the semantic fingerprint.
 For compaction, that fingerprint covers source content and policy versions.
-The Generate sample index must match the request's variant; Compact uses zero.
-`nil` maximum age means unrestricted completion age at this internal boundary;
-this PR does not change the existing public v1 cache-policy JSON schema.
+Both operations' sample indexes must match their request's variant, regardless
+of temperature. `nil` maximum age means unrestricted completion age.
 
 | Preparation | Runner behavior |
 | --- | --- |

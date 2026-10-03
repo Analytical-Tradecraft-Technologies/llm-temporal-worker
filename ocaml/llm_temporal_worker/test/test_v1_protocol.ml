@@ -76,6 +76,16 @@ let () =
   let compact = { api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1"; context; parent = checkpoint "cp-1"; policy = Some { target_tokens = Some 100L; summary_style = Some Concise }; cache = None } in
   ignore (ok (V1_codec.decode_compact_request (ok (V1_codec.encode_compact_request compact))));
   let compact_response = { api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1"; operation_id = Operation_id.of_string "id-2"; checkpoint = { handle = checkpoint "cp-2"; parent = Some (checkpoint "cp-1"); kind = Compaction_checkpoint; depth = 1l }; cache = { disposition = Cache_miss_populated; variant = 0l; entry_age_seconds = None }; provenance = None; usage = None; cost = Unknown_cost { reason = State_unavailable }; diagnostics = [] } in
+  List.iter (fun variant ->
+      let sampled = { compact with cache = Some { max_age_seconds = None; variant } } in
+      let decoded = ok (V1_codec.decode_compact_request (ok (V1_codec.encode_compact_request sampled))) in
+      if decoded.cache <> sampled.cache then failwith "compact sample index lost";
+      let sampled_response = { compact_response with cache = { compact_response.cache with variant } } in
+      let decoded_response = ok (V1_codec.decode_compaction_response (ok (V1_codec.encode_compaction_response sampled_response))) in
+      if decoded_response.cache.variant <> variant then failwith "compact response sample index lost")
+    [0l; 1l; Int32.max_int];
+  error (V1_codec.encode_compact_request
+    { compact with cache = Some { max_age_seconds = None; variant = -1l } });
   let compact_bytes = ok (V1_codec.encode_compaction_response compact_response) in
   let compact_without_diagnostics = ok (V1_codec.decode_compaction_response (omit "diagnostics" compact_bytes)) in
   if compact_without_diagnostics.diagnostics <> [] then failwith "omitted compact diagnostics";

@@ -193,7 +193,7 @@ func (r *CloudExecutionRuntime) finishCache(ctx context.Context, p PreparedCloud
 }
 func (r *CloudExecutionRuntime) finishNoWork(ctx context.Context, p PreparedCloudRequest) (llm.ExecutionResultV1, error) {
 	identity := r.publicationIdentity(p, p.Preparation.PreparedAt)
-	return r.publish(ctx, p, identity, nil, llm.CacheDispositionV1{Disposition: "disabled"}, nil, FinalizationEffects{NoWork: &NoWorkFinalizationEffects{}})
+	return r.publish(ctx, p, identity, nil, llm.CacheDispositionV1{Disposition: "disabled", Variant: int32(p.Record.Request.RequestIndex)}, nil, FinalizationEffects{NoWork: &NoWorkFinalizationEffects{}})
 }
 func (r *CloudExecutionRuntime) finishAttempt(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution) (llm.ExecutionResultV1, error) {
 	result, err := r.capabilities.Finalizer.LoadAttemptResult(ctx, p.Record.Request.Scope, p.Record.Request.ID)

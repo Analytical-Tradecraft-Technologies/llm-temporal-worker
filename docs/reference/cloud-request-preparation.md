@@ -59,7 +59,7 @@ that case. Otherwise the request uses the repository-owned prompt, plain-text
 output and explicit output-token bound; it strips application tools, tool policy,
 structured output, reasoning and provider continuation through
 `compaction.PrepareRequest`. Application checkpoint settings are retained
-separately for publication. Compaction sample index is always zero.
+separately for publication. Both operation kinds preserve the requested cache sample index (default zero).
 
 The returned settings, request, and compaction selection are detached from the
 caller and checkpoint data. There is no shared invocation state, so concurrent

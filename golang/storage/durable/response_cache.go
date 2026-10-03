@@ -81,7 +81,7 @@ func (c *ResponseCache) PrepareGenerate(ctx context.Context, lease cache.FillLea
 	return d, nil
 }
 
-// PrepareCompact uses the separate compaction cache domain and sample zero.
+// PrepareCompact uses the compaction cache domain and requested sample index.
 // Its fingerprint must cover source content and compaction policy versions.
 func (c *ResponseCache) PrepareCompact(ctx context.Context, lease cache.FillLease, maxAge *time.Duration) (CompactCacheDecision, error) {
 	p, err := c.prepare(ctx, lease, maxAge, cache.OperationCompact)
@@ -94,7 +94,7 @@ func (c *ResponseCache) PrepareCompact(ctx context.Context, lease cache.FillLeas
 		if err := json.Unmarshal(p.entry.Response, &response); err != nil {
 			return CompactCacheDecision{}, fmt.Errorf("%w: invalid cached Compact response", ErrResponseCacheCorrupt)
 		}
-		if response.OperationID != string(p.entry.OriginOperationID) || response.Checkpoint.Kind != "compaction" || response.Cache.Disposition == "hit" {
+		if response.OperationID != string(p.entry.OriginOperationID) || int64(response.Cache.Variant) != lease.Key.RequestIndex || response.Checkpoint.Kind != "compaction" || response.Cache.Disposition == "hit" {
 			return CompactCacheDecision{}, fmt.Errorf("%w: cached Compact response does not match its origin", ErrResponseCacheCorrupt)
 		}
 		d.Response = &response
@@ -108,7 +108,7 @@ func (c *ResponseCache) PrepareCompact(ctx context.Context, lease cache.FillLeas
 func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxAge *time.Duration, kind cache.OperationKind) (*responseCachePreparation, error) {
 	if ctx == nil || c == nil || c.now == nil || nilCacheRepository(c.responses) || nilCacheRepository(c.fills) ||
 		lease.Key.Operation != kind || lease.Key.ScopeID == "" || lease.Key.RequestIndex < 0 ||
-		(kind == cache.OperationCompact && lease.Key.RequestIndex != 0) || lease.Key.Fingerprint == (cache.Fingerprint{}) ||
+		lease.Key.Fingerprint == (cache.Fingerprint{}) ||
 		lease.OperationID == "" || lease.Attempt == "" || lease.AcquiredAt.IsZero() || !lease.ExpiresAt.After(lease.AcquiredAt) || lease.ExpiresAt.Sub(lease.AcquiredAt) > cache.MaxFillLease ||
 		(maxAge != nil && *maxAge <= 0) {
 		return nil, ErrResponseCacheInvalid

@@ -203,8 +203,8 @@ func TestResponseCacheRejectsInvalidInputBeforeStorage(t *testing.T) {
 	if _, err := c.PrepareGenerate(ctx, lease, nil); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	lease.Key.Operation, lease.Key.RequestIndex = cache.OperationCompact, 1
+	lease.Key.Operation, lease.Key.RequestIndex = cache.OperationCompact, -1
 	if _, err := c.PrepareCompact(context.Background(), lease, nil); err == nil {
-		t.Fatal("compact sample accepted")
+		t.Fatal("negative compact sample accepted")
 	}
 }

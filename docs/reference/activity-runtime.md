@@ -45,9 +45,8 @@ The v1 wire schemas are closed tagged records. Generate responses may carry
 only `generation` or `cache_replay` checkpoints; Compact policies contain only
 the documented `target_tokens` and `summary_style` controls; and each Query
 `kind` is bound to its corresponding filter and result page. Cache variants
-remain signed 32-bit values; once inherited settings are materialized, a
-non-zero variant requires a positive temperature, while Compact accepts variant
-zero only. These checks are performed by the JSON schema gate where
+are non-negative signed 32-bit sample indexes for both Generate and Compact.
+They only separate cache entries and do not depend on temperature. These checks are performed by the JSON schema gate where
 representable and by the Go contract validators before an Activity is
 dispatched.
 

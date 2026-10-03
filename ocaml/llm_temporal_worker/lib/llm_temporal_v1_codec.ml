@@ -150,6 +150,12 @@ let cache_policy_of_json context value =
   let* () = nonnegative (context ^ ".variant") (Int64.of_int32 variant) in
   Ok { max_age_seconds = age; variant }
 
+let validate_cache_policy context = function
+  | None -> Ok ()
+  | Some value ->
+    let* _ = cache_policy_of_json context (cache_policy_to_json value) in
+    Ok ()
+
 let usd_to_json value = `String (Usd_decimal.to_string value)
 let usd_of_json context value =
   let* value = string context value in
@@ -300,6 +306,7 @@ let route_of_v1_json context value =
   Ok { route_id; endpoint_id; api_family; requested_model; resolved_model }
 
 let generate_request_to_json (value : generate_request) =
+  let* () = validate_cache_policy "generate request.cache" value.cache in
   let* context = context_to_v1_json value.context in
   let fields = ["api_version", `String generate_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "context", context; "append", `List (List.map item_to_json value.append)] in
   let fields = match value.parent with None -> fields | Some parent -> fields @ ["parent", `String (Checkpoint.to_string parent)] in
@@ -360,6 +367,7 @@ let policy_of_json context value =
   Ok { target_tokens; summary_style }
 
 let compact_request_to_json (value : compact_request) =
+  let* () = validate_cache_policy "compact request.cache" value.cache in
   let* context = context_to_v1_json value.context in
   let fields = ["api_version", `String compact_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "context", context; "parent", `String (Checkpoint.to_string value.parent)] in
   let fields = fields @ option_field "policy" policy_to_json value.policy in
@@ -373,7 +381,7 @@ let compact_request_of_json value =
   let* context = required "compact request" "context" fields >>= context_of_v1_json in
   let* parent = required "compact request" "parent" fields >>= string "compact request.parent" >>= fun value -> nonempty "compact request.parent" value in
   let* policy = match optional "policy" fields with None | Some `Null -> Ok None | Some value -> let* value = policy_of_json "compact request.policy" value in Ok (Some value) in
-  let* cache = match optional "cache" fields with None | Some `Null -> Ok None | Some value -> let* value = cache_policy_of_json "compact request.cache" value in let* () = if value.variant = 0l then Ok () else Error (errorf "compact cache variant must be zero") in Ok (Some value) in
+  let* cache = match optional "cache" fields with None | Some `Null -> Ok None | Some value -> let* value = cache_policy_of_json "compact request.cache" value in Ok (Some value) in
   let* parent = validated "compact request.parent" Checkpoint.of_string parent in
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; policy; cache }
 
@@ -403,7 +411,6 @@ let compaction_response_of_json value =
   let* () = if status = "completed" then Ok () else Error (errorf "compact response.status must be completed") in
   let* checkpoint = required "compact response" "checkpoint" fields >>= checkpoint_of_json "compact response.checkpoint" in
   let* cache = required "compact response" "cache" fields >>= cache_disposition_of_json "compact response.cache" in
-  let* () = if cache.variant = 0l then Ok () else Error (errorf "compact response cache variant must be zero") in
   let* provenance = match optional "provenance" fields with None | Some `Null -> Ok None | Some value -> let* value = provenance_of_json "compact response.provenance" value in Ok (Some value) in
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "compact response.usage" value in Ok (Some value) in
   let* cost = required "compact response" "cost" fields >>= settled_cost_of_json "compact response.cost" in
