@@ -175,6 +175,8 @@ type V1RuntimeCapabilities struct {
 	ConfigDigest [32]byte
 	// CloudIdentity selects the expected cloud namespace. Zero retains legacy SQL composition.
 	CloudIdentity durablestore.CloudIdentity
+	// RedisIdentity binds the snapshot-owned budget authority without SQL ports.
+	RedisIdentity durablestore.RedisIdentity
 	Snapshot      engine.SnapshotSource
 	Planner       routing.Planner
 	Adapters      engine.AdapterRegistry

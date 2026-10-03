@@ -54,11 +54,8 @@ func (call *CloudBudgetCall) Plan() cloudstate.BudgetPlan {
 
 func (capabilities V1RuntimeCapabilities) NewCloudBudgetAdmission(ctx context.Context) (*CloudBudgetAdmission, error) {
 	store, ok := capabilities.Requests.(cloudAdmissionStore)
-	composition, bound := capabilities.DurableComposition()
-	if !ok || isNilCapability(store) || !bound {
-		return nil, budgetPlanningError(provider.CodeConfiguration)
-	}
-	if err := capabilities.validateDurableComposition(composition); err != nil {
+	boundary, err := capabilities.cloudBudgetBoundary()
+	if !ok || isNilCapability(store) || err != nil {
 		return nil, budgetPlanningError(provider.CodeConfiguration)
 	}
 	planning, err := capabilities.NewBudgetPlanning(ctx)
@@ -68,7 +65,7 @@ func (capabilities V1RuntimeCapabilities) NewCloudBudgetAdmission(ctx context.Co
 	// Use one capture for initial planning and reconstruction after a save race.
 	return &CloudBudgetAdmission{store: store, planning: planning,
 		recovery: &ProviderRecovery{providers: planning.providers},
-		admit:    BudgetAdmission{boundary: composition.BudgetBoundary()}}, nil
+		admit:    BudgetAdmission{boundary: boundary}}, nil
 }
 
 func (admission *CloudBudgetAdmission) PrepareGenerate(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, replay durable.GenerateReplay, attempt BudgetAttempt) (*CloudBudgetCall, error) {

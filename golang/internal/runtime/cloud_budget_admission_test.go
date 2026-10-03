@@ -121,6 +121,7 @@ func newCloudAdmissionFixture(t *testing.T, kind string, configure ...func(*budg
 	composition.Identity.Cloud = durable.CloudIdentity{Provider: "aws", Namespace: "requests-v1", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}}
 	composition.Materializer = f.leaser
 	f.cap.CloudIdentity, f.cap.composition = composition.Identity.Cloud, &composition
+	f.cap.RedisIdentity, f.cap.Budgets = composition.Identity.Redis, f.leaser
 	f.cap.Requests, f.cap.BudgetEstimator, f.cap.MaxBudgetBucketsPerWindow = f.store, f.estimator, 100
 	f.helper, err = f.cap.NewCloudBudgetAdmission(context.Background())
 	if err != nil {

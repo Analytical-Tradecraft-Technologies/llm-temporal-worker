@@ -228,3 +228,49 @@ the publication, settlement and fill-completion order.
 This finalization support does not activate production composition. The bounded
 runtime must authorize each call, recover existing attempts, acquire any fill
 lease, and publish the checkpoint before returning its completed response.
+
+## Bounded cloud execution runtime
+
+`V1RuntimeCapabilities.NewCloudExecutionRuntime` composes the authorized request
+preparation, independent attempt records, cache, Redis budget boundary, provider
+execution and checkpoint finalizer. Its required options are the scope resolver,
+checkpoint signing keyring and retention period, materialization limits, and
+Redis budget generation. It uses the snapshot's cloud identity, Redis identity
+and budget leaser directly; it does not request legacy SQL composition ports.
+
+The implementation satisfies `activity.ExecutionRuntime`. Preparation returns
+`budget_required`, a completed cache hit, a no-work compaction, or a cache wait.
+Acquisition tries Redis once and returns `acquired` or `budget_wait`. Generate
+and Compact steps submit once, or resume an existing attempt. Polling performs
+at most one provider read, respecting the saved next-poll time. Completion
+publishes the checkpoint and reconciles cache/budget effects before returning
+the typed response. Workflow timers are responsible for all waits.
+
+Before any budget claim or provider submission, the winning durable execution
+fence starts the cache fill. Losing the start acknowledgement cannot authorize
+another submission. After the 15-minute recovery interval an explicit acquire
+step can replace an unknown attempt with a separately charged child; the old
+child remains discoverable. An unused attempt can also expire before its quote
+was written, and is safely replaced without contacting a provider.
+
+Cache fingerprints cover the complete normalized semantic request, route,
+configuration, capability/compiler versions and request index. Compaction also
+includes policy and prompt versions. A content digest permits large transcripts
+without exceeding the smaller cache-manifest bound. Operation keys, actors,
+service-class controls and lineage handles are excluded from semantic identity;
+scopes and resolved provider routes remain isolated. Compaction reuse has no age
+restriction; generation applies the caller's completion-age limit.
+
+Known provider failures and invalid compaction summaries finish their cache
+fills without publishing a successful entry. A truncated generation is returned
+and settled without caching it as success. Independent cache consumers get new
+public request IDs and signed checkpoints. Every entry point, including terminal
+replay, invokes the supplied scope resolver before storage access.
+
+Integration-style tests use the actual encrypted cloud repositories and budget
+reference model with conditional in-memory cloud stores. They cover synchronous
+and polling providers, both request kinds, no-work and free paths, restart,
+concurrent submissions, budget/cache waits, large semantic inputs, sample
+isolation, uncertain paid work, lost start acknowledgements, expired unused
+attempts and authorization. These tests do not establish live dependency behavior.
+Production activation and Temporal workflow registration remain separate changes.
