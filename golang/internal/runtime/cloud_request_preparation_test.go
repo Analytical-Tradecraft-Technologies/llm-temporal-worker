@@ -21,6 +21,7 @@ type preparationTestStore struct {
 	data             []byte
 	accesses, saves  int
 	loadErr, saveErr error
+	beforeLoad       func()
 }
 
 func (s *preparationTestStore) BeginOperation(ctx context.Context, op cloudstate.Operation) (cloudstate.Record, error) {
@@ -41,6 +42,11 @@ func (s *preparationTestStore) Read(ctx context.Context, scope cloudstate.Scope,
 }
 func (s *preparationTestStore) LoadRequestPreparation(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID) (cloudstate.RequestPreparation, error) {
 	s.accesses++
+	if s.beforeLoad != nil {
+		hook := s.beforeLoad
+		s.beforeLoad = nil
+		hook()
+	}
 	if s.loadErr != nil {
 		return cloudstate.RequestPreparation{}, s.loadErr
 	}
@@ -50,6 +56,54 @@ func (s *preparationTestStore) LoadRequestPreparation(ctx context.Context, scope
 	var result cloudstate.RequestPreparation
 	err := json.Unmarshal(s.data, &result)
 	return result, err
+}
+
+func TestCloudRequestPreparationConcurrentCompletion(t *testing.T) {
+	for _, kind := range []string{"root", "generate", "compact"} {
+		for _, method := range []string{"prepare", "load"} {
+			for _, outcome := range []string{"completed", "still-running", "changed-input"} {
+				t.Run(kind+"/"+method+"/"+outcome, func(t *testing.T) {
+					p, store, materializer, input := cloudPreparationFixture(t, kind)
+					first, err := p.Prepare(context.Background(), input)
+					if err != nil {
+						t.Fatal(err)
+					}
+					calls := materializer.calls
+					materializer.err = state.ErrExpired
+					store.loadErr = contracts.ErrUnavailable
+					store.beforeLoad = func() {
+						if outcome != "still-running" {
+							store.record.Status = cloudstate.StatusCompleted
+							store.data = nil
+						}
+						if outcome == "changed-input" {
+							store.record.Request.CreatedAt = store.record.Request.CreatedAt.Add(time.Second)
+						}
+					}
+					var result PreparedCloudRequest
+					if method == "prepare" {
+						result, err = p.Prepare(context.Background(), input)
+					} else {
+						result, err = p.Load(context.Background(), referenceFor(first))
+					}
+					if outcome == "completed" {
+						if err != nil || result.Record.Status != cloudstate.StatusCompleted {
+							t.Fatalf("lost competing completion: %v", err)
+						}
+					} else {
+						code := provider.CodeStateUnavailable
+						if outcome == "changed-input" {
+							code = provider.CodeStateCorrupt
+						}
+						assertCheckpointReplayError(t, err, code)
+					}
+					if store.beforeLoad != nil || materializer.calls != calls || store.saves != 1 {
+						t.Fatal("did not exercise the race, or reopened/rewrote the parent")
+					}
+				})
+			}
+		}
+	}
 }
 func (s *preparationTestStore) SaveRequestPreparation(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, p cloudstate.RequestPreparation) error {
 	s.accesses++

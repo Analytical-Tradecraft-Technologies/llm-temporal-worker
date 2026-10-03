@@ -1,0 +1,3 @@
+(executable
+ (name live_client)
+ (libraries llm_temporal temporal-sdk yojson))

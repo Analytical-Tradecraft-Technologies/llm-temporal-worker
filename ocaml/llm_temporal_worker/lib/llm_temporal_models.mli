@@ -170,8 +170,14 @@ type cost_unknown_reason = Provider_did_not_report_cost | Catalog_incomplete | S
 type settled_cost =
   | Exact_cost of { actual_cost_usd : Usd_decimal.t; method_ : cost_method; catalog_version : Cost_catalog_version.t option }
   | Unknown_cost of { reason : cost_unknown_reason }
-type checkpoint_provenance = Provider_provenance | Worker_cache_provenance
-type provenance = { source : checkpoint_provenance; origin_operation_id : Operation_id.t option; policy : string option }
+type checkpoint_provenance = Provider_provenance | Worker_cache_provenance | No_work_provenance
+type provenance = {
+  source : checkpoint_provenance;
+  origin_operation_id : Operation_id.t option;
+  policy : string option;
+  policy_version : string option;
+  prompt_version : string option;
+}
 type settings_patch = {
   model : Model_selector.t patch;
   service_class : service_class patch;

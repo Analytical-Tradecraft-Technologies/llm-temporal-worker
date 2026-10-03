@@ -126,6 +126,14 @@ func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.Execu
 func (r *CloudExecutionRuntime) advance(ctx context.Context, p PreparedCloudRequest, step cloudStep) (llm.ExecutionResultV1, error) {
 	for tries := 0; tries < 16; tries++ {
 		result, err := r.advanceAttempt(ctx, p, step)
+		if err != nil {
+			completed, recoveryErr := r.preparation.completedAfterError(ctx, p.Record, p.Preparation.CheckpointScope, err)
+			if recoveryErr == nil {
+				result, _, replayErr := r.replay(ctx, completed)
+				return result, replayErr
+			}
+			err = recoveryErr
+		}
 		if !errors.Is(err, errCloudAttemptAdvanced) {
 			return result, err
 		}
