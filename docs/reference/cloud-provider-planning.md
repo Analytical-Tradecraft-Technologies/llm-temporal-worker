@@ -61,6 +61,11 @@ submission. Retry must verify/reconstruct a persisted selection rather than
 replan unknown paid work. Replanning after automatic compaction also requires
 a key appropriate to the new execution input.
 
+[Cloud provider recovery](cloud-provider-recovery.md) reconstructs a call from
+the saved route and input without selecting a replacement. It shares the
+compilation checks with this planner and requires the original configuration
+identity. Its reconstructed SDK objects remain local to that invocation.
+
 Compact with a nil prepared request fails before routing; the phase's no-work
 path must handle it without budget or provider work. The helper is available to
 phase factories and does not install production factories, authorize scope,

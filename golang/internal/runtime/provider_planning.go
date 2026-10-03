@@ -64,7 +64,14 @@ type ProviderPlanning struct {
 }
 
 func (capabilities V1RuntimeCapabilities) NewProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
-	if ctx == nil || isNilCapability(capabilities.Snapshot) || isNilCapability(capabilities.Planner) || isNilCapability(capabilities.Adapters) {
+	if isNilCapability(capabilities.Planner) {
+		return nil, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
+	}
+	return capabilities.captureProviderPlanning(ctx)
+}
+
+func (capabilities V1RuntimeCapabilities) captureProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
+	if ctx == nil || isNilCapability(capabilities.Snapshot) || isNilCapability(capabilities.Adapters) {
 		return nil, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
 	if err := ctx.Err(); err != nil {
@@ -135,60 +142,13 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 		if !planning.containsCandidate(semantic, candidate) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
-		adapter, err := planning.adapters.Adapter(ctx, candidate)
-		if ctx.Err() != nil {
-			return PlannedProviderCall{}, ctx.Err()
-		}
+		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
 		if err != nil {
-			if err := unsafePlanningFailure(err); err != nil {
-				return PlannedProviderCall{}, err
-			}
+			return PlannedProviderCall{}, err
+		}
+		if !usable {
 			continue
 		}
-		if isNilCapability(adapter) {
-			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
-		}
-		query := provider.CapabilityQuery{EndpointID: candidate.EndpointID, Family: provider.Family(candidate.Family), Model: candidate.Model, ServiceClass: candidate.AttemptedClass}
-		capability, err := adapter.Capabilities(ctx, query)
-		if ctx.Err() != nil {
-			return PlannedProviderCall{}, ctx.Err()
-		}
-		if err != nil {
-			if err := unsafePlanningFailure(err); err != nil {
-				return PlannedProviderCall{}, err
-			}
-			continue
-		}
-		if capability.Version != candidate.CapabilityVersion {
-			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
-		}
-		resolved, _ := llm.NormalizeRequest(semantic)
-		// The adapter needs the provider model and attempted class, not the
-		// logical alias or the originally requested fallback class.
-		resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
-		resolved.ServiceClassFallbacks = nil
-		digest, err := llm.RequestDigest(resolved)
-		if err != nil {
-			return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
-		}
-		call, err := adapter.Compile(ctx, provider.CompileInput{Request: resolved, Query: query,
-			Capability: capability, Strict: semantic.Portability != llm.PortabilityBestEffort,
-			Metadata: provider.CallMetadata{SchemaDigest: digest, CapabilityVersion: candidate.CapabilityVersion, ProviderTier: candidate.ProviderTier}})
-		if ctx.Err() != nil {
-			return PlannedProviderCall{}, ctx.Err()
-		}
-		if err != nil {
-			if err := unsafePlanningFailure(err); err != nil {
-				return PlannedProviderCall{}, err
-			}
-			continue
-		}
-		if !validPlannedCall(call, candidate, semantic.OperationKey, digest) {
-			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
-		}
-		planned := PlannedProviderCall{Candidate: candidate, CacheIdentity: providerCacheIdentity(candidate),
-			CapabilityVersion: capability.Version, ConfigDigest: planning.configDigest, ConfigEpoch: planning.configEpoch,
-			Call: call, Adapter: adapter}
 		if accept != nil {
 			accepted, err := accept(planned)
 			if ctx.Err() != nil {
@@ -205,6 +165,56 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 		return planned, nil
 	}
 	return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, lastPhase, provider.RetryNever)
+}
+
+// compileCandidate is shared by new selection and exact-route recovery.
+// An ordinary local failure is unusable; possible dispatch is always fatal.
+func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic llm.Request, candidate routing.Candidate) (PlannedProviderCall, bool, error) {
+	adapter, err := planning.adapters.Adapter(ctx, candidate)
+	if ctx.Err() != nil {
+		return PlannedProviderCall{}, false, ctx.Err()
+	}
+	if err != nil {
+		return PlannedProviderCall{}, false, unsafePlanningFailure(err)
+	}
+	if isNilCapability(adapter) {
+		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
+	}
+	query := provider.CapabilityQuery{EndpointID: candidate.EndpointID, Family: provider.Family(candidate.Family), Model: candidate.Model, ServiceClass: candidate.AttemptedClass}
+	capability, err := adapter.Capabilities(ctx, query)
+	if ctx.Err() != nil {
+		return PlannedProviderCall{}, false, ctx.Err()
+	}
+	if err != nil {
+		return PlannedProviderCall{}, false, unsafePlanningFailure(err)
+	}
+	if capability.Version != candidate.CapabilityVersion {
+		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
+	}
+	resolved, _ := llm.NormalizeRequest(semantic)
+	// The adapter needs the provider model and attempted class, not the
+	// logical alias or the originally requested fallback class.
+	resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
+	resolved.ServiceClassFallbacks = nil
+	digest, err := llm.RequestDigest(resolved)
+	if err != nil {
+		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
+	}
+	call, err := adapter.Compile(ctx, provider.CompileInput{Request: resolved, Query: query,
+		Capability: capability, Strict: semantic.Portability != llm.PortabilityBestEffort,
+		Metadata: provider.CallMetadata{SchemaDigest: digest, CapabilityVersion: candidate.CapabilityVersion, ProviderTier: candidate.ProviderTier}})
+	if ctx.Err() != nil {
+		return PlannedProviderCall{}, false, ctx.Err()
+	}
+	if err != nil {
+		return PlannedProviderCall{}, false, unsafePlanningFailure(err)
+	}
+	if !validPlannedCall(call, candidate, semantic.OperationKey, digest) {
+		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
+	}
+	return PlannedProviderCall{Candidate: candidate, CacheIdentity: providerCacheIdentity(candidate),
+		CapabilityVersion: capability.Version, ConfigDigest: planning.configDigest, ConfigEpoch: planning.configEpoch,
+		Call: call, Adapter: adapter}, true, nil
 }
 
 func copyBudgetSnapshot(source engine.Snapshot) engine.Snapshot {
