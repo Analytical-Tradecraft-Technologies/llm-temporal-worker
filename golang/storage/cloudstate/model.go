@@ -166,11 +166,12 @@ func validTransition(from, to Status) bool {
 	case StatusRunning:
 		return to == StatusRunning || to == StatusProviderPending || to == StatusCompleted || to == StatusFailed || to == StatusOutcomeUnknown
 	case StatusProviderPending:
-		return to == StatusProviderPending || to == StatusCompleted || to == StatusFailed || to == StatusOutcomeUnknown
+		return to == StatusRunning || to == StatusProviderPending || to == StatusCompleted || to == StatusFailed || to == StatusOutcomeUnknown
 	case StatusOutcomeUnknown:
-		// Retry orchestration must use a new paid attempt/budget receipt. Keeping
-		// that decision above storage avoids implicitly authorizing provider calls.
-		return to == StatusRunning || to == StatusFailed || to == StatusOutcomeUnknown
+		// Positive provider recovery may resume the original paid job. A new
+		// submission still requires a new attempt and fresh budget, enforced by
+		// the provider execution and admission contracts above this generic store.
+		return to == StatusRunning || to == StatusProviderPending || to == StatusFailed || to == StatusOutcomeUnknown
 	}
 	return false
 }

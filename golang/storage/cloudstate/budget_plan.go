@@ -156,6 +156,9 @@ func (r *Repository) SaveBudgetPlan(ctx context.Context, scope Scope, id Request
 		if _, finalizing := progress["finalization_handoff"]; finalizing {
 			return contracts.ErrConflict
 		}
+		if _, executing := progress["provider_execution"]; executing {
+			return contracts.ErrConflict
+		}
 		if existing != nil {
 			previous, _ := canonicalBudgetPlan(*existing)
 			if !bytes.Equal(previous, encoded) {
@@ -194,7 +197,8 @@ func (r *Repository) LoadBudgetPlan(ctx context.Context, scope Scope, id Request
 	}
 	_, checkpoint := progress["checkpoint_finalization"]
 	_, handoff := progress["finalization_handoff"]
-	if record.Status != StatusRunning || checkpoint || handoff {
+	_, executing := progress["provider_execution"]
+	if record.Status != StatusRunning || checkpoint || handoff || executing {
 		return BudgetPlan{}, contracts.ErrConflict
 	}
 	if plan == nil {
