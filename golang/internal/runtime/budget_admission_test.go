@@ -411,8 +411,8 @@ func TestBudgetAdmissionBothRunnersRequireAdmissionAndClaimBeforeDispatch(t *tes
 				if compact {
 					ports := validCompactPorts()
 					_, materializer, _, _ := checkpointReplayFixture(t)
-					ports.Replay = func(context.Context, llm.CompactRequestV1) (durable.CompactReplay, error) {
-						return durable.CompactReplay{State: materializer.result}, nil
+					ports.Replay = func(_ context.Context, request llm.CompactRequestV1) (durable.CompactReplay, error) {
+						return durable.CompactReplay{State: replayCallerState(materializer.result, request.Context)}, nil
 					}
 					ports.Route = func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (durable.RoutePlan, error) {
 						return f.route, nil

@@ -170,6 +170,15 @@ func (codec CheckpointBlobCodec) EncodeSettingsPatch(patch SettingsPatch) ([]byt
 	return codec.encode(CheckpointSettingsBlob, wire)
 }
 
+// EncodeSettingsPatchV1 preserves the public patch's exact decimal and its
+// omitted/set/clear states when publishing a durable checkpoint.
+func (codec CheckpointBlobCodec) EncodeSettingsPatchV1(patch llm.SettingsPatchV1) ([]byte, error) {
+	if _, err := patch.MarshalJSON(); err != nil {
+		return nil, err
+	}
+	return codec.encode(CheckpointSettingsBlob, patch)
+}
+
 func (codec CheckpointBlobCodec) DecodeSettingsPatch(data []byte) (SettingsPatch, error) {
 	var payload json.RawMessage
 	if err := codec.decode(CheckpointSettingsBlob, data, &payload); err != nil {

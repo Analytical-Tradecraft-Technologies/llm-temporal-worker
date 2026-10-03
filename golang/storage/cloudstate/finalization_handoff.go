@@ -129,7 +129,7 @@ func (r *Repository) LoadFinalizationHandoff(ctx context.Context, scope Scope, i
 }
 
 func normalizeHandoff(handoff FinalizationHandoff) (FinalizationHandoff, error) {
-	if !safeText(string(handoff.OperationID), 128) || handoff.Mode != "provider" && handoff.Mode != "cache" || !safeText(handoff.CheckpointScope, 512) || !safeText(string(handoff.CheckpointID), 256) {
+	if !safeText(string(handoff.OperationID), 128) || handoff.Mode != "provider" && handoff.Mode != "cache" && handoff.Mode != "no_work" || !safeText(handoff.CheckpointScope, 512) || !safeText(string(handoff.CheckpointID), 256) {
 		return FinalizationHandoff{}, ErrInvalid
 	}
 	data, err := objectJSON(handoff.Payload)
@@ -189,11 +189,19 @@ func (r *Repository) verifyHandoffIdentity(record Record, checkpoint state.Durab
 		return contracts.ErrConflict
 	}
 	expected := state.CheckpointCacheReplay
+	if handoff.Mode == "no_work" {
+		if record.Request.Kind != "compact" || checkpoint.OriginCacheEntryID != nil {
+			return contracts.ErrConflict
+		}
+		expected = state.CheckpointCompaction
+	}
 	if handoff.Mode == "provider" {
 		expected = state.CheckpointGeneration
-		if record.Request.Kind == "compact" {
-			expected = state.CheckpointCompaction
-		}
+	}
+	// Compaction cache consumers retain the compaction kind. OriginCacheEntryID
+	// records cache provenance; the response-cache receipt verifies that binding.
+	if record.Request.Kind == "compact" {
+		expected = state.CheckpointCompaction
 	}
 	if checkpoint.Kind != expected {
 		return contracts.ErrConflict

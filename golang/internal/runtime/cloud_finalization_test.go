@@ -107,6 +107,12 @@ func finalizationFixture(t *testing.T, kind, mode string) (*cloudRequestRuntime,
 	}
 	compact := llm.CompactRequestV1{OperationKey: generate.OperationKey, Context: generate.Context, Parent: "parent-checkpoint"}
 	compactResponse := llm.CompactResponseV1{APIVersion: llm.CompactAPIVersion, OperationKey: compact.OperationKey, OperationID: operation, Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-1", Kind: "compaction", Parent: &compact.Parent}, Cache: response.Cache, Cost: response.Cost}
+	if mode == "no_work" {
+		compactResponse.Cache.Disposition = "disabled"
+		compactResponse.Cost = zeroPublicationCost()
+		compactResponse.Provenance = json.RawMessage(`{"source":"no_work"}`)
+		effects = FinalizationEffects{NoWork: &NoWorkFinalizationEffects{}}
+	}
 	if effects.Provider != nil {
 		data, _ := json.Marshal(compactResponse)
 		effects.Provider.Entry.Response = data

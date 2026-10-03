@@ -57,6 +57,17 @@ func TestCloudResponseCacheCompactionOriginAndReplay(t *testing.T) {
 	if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
 		t.Fatal(err)
 	}
+	// The finalization handoff and cache receipt must accept the same compact
+	// consumer row; checking those paths separately missed a kind mismatch.
+	manifest, _ := json.Marshal(map[string]string{"operation_key": string(child.OriginOperationID)})
+	record, err := r.BeginOperation(ctx, Operation{Scope: Scope{Tenant: "tenant", Project: "project"}, Kind: "compact", Key: string(child.OriginOperationID), Manifest: manifest, Now: child.CreatedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff := FinalizationHandoff{OperationID: child.OriginOperationID, Mode: "cache", CheckpointScope: child.ScopeID, CheckpointID: child.ID, Payload: json.RawMessage(`{"version":1}`)}
+	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, child.CreatedAt); err != nil {
+		t.Fatal(err)
+	}
 	use := cache.ResponseUse{ScopeID: cp.ScopeID, OperationID: child.OriginOperationID, EntryID: entry.ID, CheckpointID: child.ID, CompletedAt: entry.CompletedAt}
 	if err := r.Responses().RecordUse(ctx, use); err != nil {
 		t.Fatal(err)

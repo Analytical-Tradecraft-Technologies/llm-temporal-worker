@@ -189,3 +189,91 @@ func TestCloudCheckpointFinalizationCommitOrdersEffects(t *testing.T) {
 		})
 	}
 }
+
+func TestCloudCheckpointFinalizationNoWorkRecoversWithoutEffects(t *testing.T) {
+	for _, failure := range []string{"plan", "checkpoint", "handoff", "terminal"} {
+		t.Run(failure, func(t *testing.T) {
+			r, repository, store, run, commit := checkpointFinalizerFixture(t, "compact", "no_work")
+			switch failure {
+			case "plan":
+				repository.savePlanErr = contracts.ErrOutcomeUnknown
+			case "checkpoint":
+				repository.resumePlanErr = contracts.ErrOutcomeUnknown
+			case "handoff":
+				repository.saveHandoffErr = contracts.ErrOutcomeUnknown
+			case "terminal":
+				repository.completeErr = contracts.ErrOutcomeUnknown
+			}
+			err := commit()
+			if failure == "terminal" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = run()
+			}
+			if err == nil {
+				t.Fatal("lost acknowledgement hidden")
+			}
+			repository.savePlanErr, repository.resumePlanErr, repository.saveHandoffErr, repository.completeErr = nil, nil, nil, nil
+			// A restarted snapshot must finish the saved publication without running
+			// the inner compaction phase or inventing budget/cache effects.
+			r.finalizer, err = newCloudFinalizer(repository, store, store, nil, r.clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := run(); err != nil {
+				t.Fatal(err)
+			}
+			if repository.record.Status != cloudstate.StatusCompleted || len(store.events) != 0 {
+				t.Fatal("no-work path did not complete without effects", store.events)
+			}
+		})
+	}
+}
+
+func TestCloudCheckpointFinalizationNoWorkRejectsPaidOrCachedPayload(t *testing.T) {
+	for _, fault := range []string{"kind", "mode", "cost", "provenance", "cache", "usage", "mixed"} {
+		t.Run(fault, func(t *testing.T) {
+			_, repository, store, run, commit := checkpointFinalizerFixture(t, "compact", "no_work")
+			repository.savePlanErr = contracts.ErrOutcomeUnknown
+			if err := commit(); err == nil {
+				t.Fatal("expected lost acknowledgement")
+			}
+			repository.savePlanErr = nil
+			var payload cloudFinalizationPayload
+			if err := json.Unmarshal(repository.checkpointPlan.Handoff.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			var response llm.CompactResponseV1
+			if err := json.Unmarshal(payload.Response, &response); err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "kind":
+				response.Checkpoint.Kind = "generation"
+			case "mode":
+				repository.checkpointPlan.Handoff.Mode = "provider"
+			case "cost":
+				amount := "1"
+				response.Cost.ActualCostUSD = &amount
+			case "provenance":
+				response.Provenance = json.RawMessage(`{"source":"provider"}`)
+			case "cache":
+				response.Cache.Disposition = "hit"
+			case "usage":
+				response.Usage = &llm.Usage{}
+			case "mixed":
+				payload.Effects.Cache = &CacheFinalizationEffects{}
+			}
+			payload.Response, _ = json.Marshal(response)
+			repository.checkpointPlan.Handoff.Payload, _ = json.Marshal(payload)
+			repository.planSteps = nil
+			if _, err := run(); err == nil {
+				t.Fatal("invalid no-work payload accepted")
+			}
+			if len(repository.planSteps) != 0 || len(store.events) != 0 {
+				t.Fatal("invalid plan performed effects")
+			}
+		})
+	}
+}
