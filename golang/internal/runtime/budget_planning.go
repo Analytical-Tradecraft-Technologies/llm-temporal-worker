@@ -12,6 +12,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -30,6 +31,8 @@ type BudgetAttempt struct {
 // route and reservation are the non-secret facts to persist for recovery; the
 // Provider's adapter/SDK parameters must never be serialized or logged.
 type PlannedBudgetCall struct {
+	mode        cloudstate.BudgetMode
+	unpriced    bool
 	Provider    PlannedProviderCall
 	Route       durable.RoutePlan
 	Quote       *pricing.Quote // nil only for an explicitly permitted unpriced, unbudgeted call
@@ -155,7 +158,7 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 	if snapshot.RequireBudgetMatch && len(matches) == 0 {
 		return PlannedBudgetCall{}, false, nil
 	}
-	result := PlannedBudgetCall{Provider: call, Route: route, QuotedAt: attempt.QuotedAt.UTC(),
+	result := PlannedBudgetCall{mode: cloudstate.BudgetReserved, Provider: call, Route: route, QuotedAt: attempt.QuotedAt.UTC(), Estimate: budget.Estimate{CandidateID: candidate.ID},
 		Reservation: durable.ReserveRequest{OperationID: attempt.OperationID, GenerationID: attempt.GenerationID, ExpiresAt: attempt.ExpiresAt.UTC()}}
 	query := pricing.Query{Provider: candidate.Provider, Family: candidate.Family, EndpointID: candidate.EndpointID,
 		Region: candidate.Region, Model: candidate.Model, ProviderTier: candidate.ProviderTier, At: attempt.QuotedAt.UTC()}
@@ -166,6 +169,7 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 	if err != nil {
 		if errors.Is(err, pricing.ErrNoActivePrice) {
 			// Preserve the existing opt-in rule for unknown-cost unbudgeted work.
+			result.mode, result.unpriced = cloudstate.BudgetUnmatched, true
 			return result, len(matches) == 0 && snapshot.RequirePriceWhenBudgeted, nil
 		}
 		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
@@ -200,6 +204,10 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 	}
 	result.Quote, result.Estimate = &quote, estimate
 	if len(matches) == 0 || estimate.CostUSD.IsZero() {
+		result.mode = cloudstate.BudgetUnmatched
+		if estimate.CostUSD.IsZero() {
+			result.mode = cloudstate.BudgetFree
+		}
 		return result, true, nil
 	}
 	if _, err := pricing.CeilNanoUSD(estimate.CostUSD); err != nil {

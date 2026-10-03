@@ -90,9 +90,12 @@ type cloudAdmissionFixture struct {
 	replay durable.CompactReplay
 }
 
-func newCloudAdmissionFixture(t *testing.T, kind string) *cloudAdmissionFixture {
+func newCloudAdmissionFixture(t *testing.T, kind string, configure ...func(*budgetPlanningFixture)) *cloudAdmissionFixture {
 	t.Helper()
 	f := &cloudAdmissionFixture{budgetPlanningFixture: newBudgetPlanningFixture(t)}
+	for _, change := range configure {
+		change(f.budgetPlanningFixture)
+	}
 	_, _, _, _, f.replay, _ = planningFixture()
 	// Keep preparation identical to the original stored request. The budget
 	// fixture's synthetic small output bound is not used by this integration.

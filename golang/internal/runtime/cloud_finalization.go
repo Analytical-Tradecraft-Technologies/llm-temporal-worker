@@ -39,6 +39,8 @@ type ProviderFinalizationEffects struct {
 	Completion cache.FillCompletion     `json:"completion"`
 	Entry      *cache.ResponseEntry     `json:"entry,omitempty"`
 	Budget     durable.ReconcileRequest `json:"budget"`
+	// Unreserved requires a matching successful durable execution with no budget claim.
+	Unreserved bool `json:"unreserved,omitempty"`
 }
 
 type CacheFinalizationEffects struct {
@@ -146,11 +148,14 @@ func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, ki
 	if err != nil {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
-	if effects.Provider != nil && isNilCapability(f.budgets) {
+	if effects.Provider != nil && !effects.Provider.Unreserved && isNilCapability(f.budgets) {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
 	scope := cloudstate.Scope{Tenant: caller.Tenant, Project: caller.Project}
 	record, err := f.requests.BeginOperation(ctx, cloudstate.Operation{Scope: scope, Kind: kind, Key: key, RequestIndex: index, Manifest: input, Now: f.clock()})
+	if err == nil {
+		err = f.verifyUnreserved(ctx, scope, record.Request.ID, kind, payload)
+	}
 	if err == nil {
 		if checkpoint == nil {
 			err = f.store.SaveFinalizationHandoff(ctx, scope, record.Request.ID, handoff, f.clock())
@@ -200,6 +205,9 @@ func (f *CloudFinalizer) replay(ctx context.Context, scope cloudstate.Scope, rec
 	operationID, err := validateFinalizationPayload(kind, key, index, handoff, payload)
 	if err != nil || operationID != handoff.OperationID {
 		return nil, true, cloudRuntimeError(cloudstate.ErrCorrupt, true)
+	}
+	if err := f.verifyUnreserved(ctx, scope, record.Request.ID, kind, payload); err != nil {
+		return nil, true, cloudRuntimeError(err, true)
 	}
 	if resumeCheckpoint {
 		if _, err := f.plans.ResumeCheckpointFinalization(ctx, scope, record.Request.ID, f.clock()); err != nil {
@@ -285,6 +293,9 @@ func (f *CloudFinalizer) finish(ctx context.Context, effects FinalizationEffects
 		return nil
 	}
 	if paid := effects.Provider; paid != nil {
+		if paid.Unreserved {
+			return f.cache.CompleteAttempt(ctx, paid.Lease, paid.Completion, paid.Entry, func(context.Context) error { return nil })
+		}
 		if isNilCapability(f.budgets) {
 			return cloudstate.ErrCorrupt
 		}
@@ -340,10 +351,14 @@ func validateFinalizationPayload(kind, key string, index int64, handoff cloudsta
 			string(paid.Lease.Key.Operation) != kind ||
 			paid.Lease.Key.RequestIndex != index ||
 			string(paid.Lease.OperationID) != operationID ||
-			string(paid.Budget.OperationID) != operationID ||
-			string(paid.Budget.GenerationID) != paid.Lease.Attempt ||
-			paid.Budget.Validate() != nil ||
 			durable.ValidateAttemptCompletion(paid.Lease, paid.Completion, paid.Entry) != nil {
+			return "", invalid
+		}
+		if paid.Unreserved {
+			if !equalFinalizationValue(paid.Budget, durable.ReconcileRequest{}) {
+				return "", invalid
+			}
+		} else if string(paid.Budget.OperationID) != operationID || string(paid.Budget.GenerationID) != paid.Lease.Attempt || paid.Budget.Validate() != nil {
 			return "", invalid
 		}
 		for _, event := range paid.Budget.Events {
@@ -398,4 +413,53 @@ func equalFinalizationJSON(left, right json.RawMessage) bool {
 	a, _ := json.Marshal(l)
 	b, _ := json.Marshal(r)
 	return bytes.Equal(a, b)
+}
+
+// A flag alone is never permission to bypass settlement. Verify the saved plan
+// and terminal provider result before publishing or replaying unreserved work.
+func (f *CloudFinalizer) verifyUnreserved(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, kind string, payload cloudFinalizationPayload) error {
+	effects := payload.Effects.Provider
+	if effects == nil || !effects.Unreserved {
+		return nil
+	}
+	store, ok := f.requests.(interface {
+		LoadProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.SavedProviderExecution, error)
+	})
+	if !ok || isNilCapability(store) {
+		return cloudstate.ErrCorrupt
+	}
+	saved, err := store.LoadProviderExecution(ctx, scope, id)
+	if err != nil {
+		return err
+	}
+	execution, plan := saved.Execution, saved.Plan
+	if execution.Validate(plan) != nil || plan.RequiresReservation() || plan.Kind != kind || execution.Stage != cloudstate.ExecutionSucceeded || !execution.Settled ||
+		string(plan.Route.OperationID) != string(effects.Lease.OperationID) || string(plan.Route.GenerationID) != effects.Lease.Attempt ||
+		plan.Route.CacheIdentity != effects.Lease.Key.Route || !execution.CompletedAt.Equal(effects.Completion.CompletedAt) {
+		return cloudstate.ErrCorrupt
+	}
+	var cost llm.CostV1
+	if kind == "generate" {
+		var response llm.GenerateResponseV1
+		if json.Unmarshal(payload.Response, &response) != nil || !equalFinalizationValue(response.Output, execution.Response.Output) || response.Status != execution.Response.Status {
+			return cloudstate.ErrCorrupt
+		}
+		cost = response.Cost
+	} else {
+		var response llm.CompactResponseV1
+		if json.Unmarshal(payload.Response, &response) != nil {
+			return cloudstate.ErrCorrupt
+		}
+		cost = response.Cost
+	}
+	if !equalFinalizationValue(cost, publicationCost(execution.Response.Cost)) {
+		return cloudstate.ErrCorrupt
+	}
+	return nil
+}
+
+func equalFinalizationValue(left, right any) bool {
+	l, le := json.Marshal(left)
+	r, re := json.Marshal(right)
+	return le == nil && re == nil && equalFinalizationJSON(l, r)
 }
