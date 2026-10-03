@@ -11,26 +11,23 @@ in alongside the architecture and active v1 completion plans. The plans
 identify remaining hardening and release evidence; the current code and its
 tests are the source of truth for behavior that has already been implemented.
 
-The staged target design is documentation-only and not yet implemented. It
-replaces the unreleased v1 contract in place through independently releasable
-durable-conversation, compaction/budget, optional route-isolated cache, and
-typed-query phases. Cross-provider cache equivalence and FX are future ADRs,
-not current schema or release gates. [Scope](scope.md#staged-delivery-and-document-authority)
-is the single status/authority index:
+The cloud request, budget, cache and workflow implementations are checked in,
+including typed OCaml callers. Production CLI authorization, deployment and
+real AWS/restore evidence remain release gates. [Scope](scope.md#staged-delivery-and-document-authority)
+separates those gates from implemented behavior.
 
+- [Cloud request repository and workflow integration](reference/cloud-request-repository.md)
+- [Redis budget leases](reference/redis-budget-leases.md)
 - [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)
-- [PostgreSQL state, cache, accounting, and control plane](architecture/postgresql-state-cache-and-control-plane.md)
-- [PostgreSQL repository foundation](reference/postgresql-repository-foundation.md)
-- [OCaml conversation and typed query client](architecture/ocaml-conversation-and-query-client.md)
+- [OCaml workflow clients](../ocaml/llm_temporal_worker/README.md)
 - [Production implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
-- [Maintenance retention and outbox contract](reference/maintenance.md)
 
 ## Current worker persistence
 
 Worker SQL persistence has been removed. Durable deployments use cloud
 key-value/blob storage for requests, attempts, cache successes and checkpoints,
 and Redis for budgets, throttles and provider state. SQL design documents and
-maintenance procedures linked above are historical. There is no SQL data
+maintenance procedures are historical. There is no SQL data
 migration; the service has no deployed SQL data. See the
 [cloud request repository](reference/cloud-request-repository.md).
 
@@ -42,13 +39,13 @@ migration; the service has no deployed SQL data. See the
 | Provider abstraction | Semantic item IR compiled to a provider request; never a lowest-common-denominator text blob |
 | Provider clients | Official OpenAI, Anthropic, AWS, and Temporal Go SDKs; raw HTTP is isolated to a documented SDK gap |
 | Retry ownership | Provider SDK retries are disabled; the worker classifies outcomes and Temporal owns durable retries |
-| Ambiguous dispatch | Never resend automatically when a provider may have accepted a billable request |
+| Ambiguous dispatch | Keep the uncertain attempt and its charge; any new dispatch needs a separate paid reservation |
 | Continuation | Immutable opaque handles backed by a state store and pinned to an endpoint when provider state requires it |
 | Budget accounting | Conservative preflight reservation across every matching sliding window, followed by refund/finalization |
-| Shared state | Redis is the v1 shared-state backend for conservative active-budget admission, throttles, and replica coordination; the configured blob store holds oversized payloads and results; memory is single-process development/test only |
-| Activity scope | Generate, Compact, and typed Query only; tool execution and agent-loop orchestration stay in caller workflows |
-| Response delivery | The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported. Compact and Query are separate final-response Activities |
-| Deployment | One stateless worker image, horizontally scalable when replicas share the configured Redis and production blob-store dependencies |
+| Shared state | Cloud key-value/blob stores hold durable requests, attempts, checkpoints and cache; Redis owns budgets, throttles and provider state; memory is for development/tests |
+| Temporal surface | Public generation and compaction workflows use bounded submission, polling and budget Activities; typed Query remains separate. Tool execution and application orchestration stay with callers |
+| Response delivery | Public workflows return final normalized responses; create/poll activity results may be pending. Live streaming and token-event APIs are not supported |
+| Deployment | One stateless worker image; replicas share cloud request storage and Redis, with explicit caller authorization |
 | Go baseline | Go 1.26, using the latest security patch in that release line |
 
 ## Read in this order
@@ -67,7 +64,7 @@ migration; the service has no deployed SQL data. See the
 12. [Master implementation sequence](superpowers/plans/2026-07-13-master-sequence.md)
 13. [V1 completion execution plan](superpowers/plans/2026-07-14-v1-completion.md)
 14. [Target conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
-15. [Target Redis-budget/PostgreSQL design and exact indexes](architecture/postgresql-state-cache-and-control-plane.md)
+15. [Cloud request persistence and recovery](reference/cloud-request-repository.md)
 16. [Target OCaml client design](architecture/ocaml-conversation-and-query-client.md)
 17. [Staged target implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
 
@@ -101,8 +98,8 @@ The first release is complete only when all of these statements are true:
   strict-mode lossy conversions fail before dispatch.
 - The router is deterministic for a fixed configuration snapshot and never
   changes service class without an explicit request fallback.
-- The operation ledger returns a cached completed result on an Activity retry
-  and refuses to replay an ambiguous provider dispatch.
+- Completed operations replay their saved response. An uncertain submission
+  retains its original budget claim; a retry uses a new paid attempt.
 - The in-memory exact-budget reference model and production Redis Function pass
   the same atomic-window transition suite, including concurrent
   overlapping-window admission tests.

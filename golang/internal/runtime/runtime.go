@@ -808,7 +808,7 @@ func (runtime *Runtime) dependencyProbes() []DependencyProbe {
 
 // currentV1RuntimeConfigured resolves the durable capability from the active
 // configuration snapshot. V1 composition is snapshot-scoped, just like the
-// Redis, PostgreSQL, and provider clients it owns; caching the initial value
+// cloud, Redis, and provider clients it owns; caching the initial value
 // would let a reload publish an unconfigured runtime while readiness remained
 // true.
 func (runtime *Runtime) currentV1RuntimeConfigured() bool {

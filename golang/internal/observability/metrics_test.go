@@ -96,10 +96,6 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.RecordMaintenanceFailure("cache")
 	metrics.RecordMaintenance("budget", "deleted", 3, time.Second)
 	metrics.RecordMaintenanceFailure("budget")
-	metrics.RecordPostgresPool(4, 2, 2, 8)
-	metrics.RecordPostgresLatency("query", 2*time.Millisecond)
-	metrics.RecordPostgresLatency("lock", -time.Second)
-	metrics.RecordPostgresTableTuples("cache", 20, 3)
 	metrics.RecordCache("hit")
 	metrics.RecordCache("use")
 	metrics.RecordCache("fill")
@@ -121,7 +117,6 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		"llmtw_continuation_total", "llmtw_config_reload_total", "llmtw_worker_polling",
 		"llmtw_heartbeat_age_seconds", "llmtw_maintenance_rows_total",
 		"llmtw_maintenance_failures_total", "llmtw_maintenance_duration_seconds",
-		"llmtw_postgres_pool_connections", "llmtw_postgres_latency_seconds", "llmtw_postgres_table_tuples",
 		"llmtw_cache_events_total", "llmtw_provider_poll_total", "llmtw_cost_status_total",
 	}
 	seen := make(map[string]bool, len(families))
@@ -158,15 +153,6 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	}
 	if got := metricValue(families, "llmtw_maintenance_failures_total", map[string]string{"resource": "budget"}); got != 1 {
 		t.Fatalf("budget maintenance failure count = %v, want 1", got)
-	}
-	if got := metricValue(families, "llmtw_postgres_pool_connections", map[string]string{"state": "max"}); got != 8 {
-		t.Fatalf("postgres max pool gauge = %v, want 8", got)
-	}
-	if got := metricValue(families, "llmtw_postgres_latency_seconds", map[string]string{"kind": "lock"}); got < 0 {
-		t.Fatalf("postgres lock latency = %v, want non-negative", got)
-	}
-	if got := metricValue(families, "llmtw_postgres_table_tuples", map[string]string{"resource": "cache", "state": "dead"}); got != 3 {
-		t.Fatalf("postgres dead tuples = %v, want 3", got)
 	}
 	if got := metricValue(families, "llmtw_cache_events_total", map[string]string{"event": "use"}); got != 1 {
 		t.Fatalf("cache use count = %v, want 1", got)
@@ -214,9 +200,6 @@ func TestMetricsNilBindingsAndDefaultBuiltInsAreSafe(t *testing.T) {
 	metrics.RecordConfigReload("success")
 	metrics.RecordMaintenance("secret-resource", "secret-outcome", 1, time.Second)
 	metrics.RecordMaintenanceFailure("secret-resource")
-	metrics.RecordPostgresPool(-1, -2, -3, -4)
-	metrics.RecordPostgresLatency("secret-kind", time.Second)
-	metrics.RecordPostgresTableTuples("secret-resource", -1, -2)
 	metrics.RecordCache("secret-event")
 	metrics.RecordPendingPoll("secret-outcome")
 	metrics.SetWorkerPolling(true)

@@ -4,7 +4,7 @@
 
 Callers that use Temporal should not need provider-specific request structs,
 retry behavior, pricing arithmetic, or continuation state. They need a stable
-Activity contract that can target multiple LLM APIs without pretending those
+workflow contract that can target multiple LLM APIs without pretending those
 APIs are identical.
 
 The worker solves that problem by acting as a small compiler and admission
@@ -21,7 +21,7 @@ controller:
 
 ## Intended users
 
-- Temporal workflow authors who want one inference Activity contract.
+- Temporal workflow authors who want typed generation and compaction calls.
 - Go services that want the same router, adapters, pricing, and budget layers
   without running a Temporal worker.
 - Platform teams that need centralized endpoint credentials and cost policy.
@@ -65,19 +65,22 @@ controller:
 - Sampling, stop sequences, output limits, and reasoning intent where supported.
 - Provider-state parts that remain opaque and byte-for-byte stable.
 - Strict and best-effort portability with machine-readable diagnostics.
-- One-shot `Generate` and a final normalized response only. No live streaming
-  or token-event API is supported in v1.
+- Generation and compaction workflows that return final normalized responses.
+  No live streaming or token-event API is supported in v1.
 - Exactly three request service classes: `economy`, `standard`, and `priority`.
 - Explicit ordered service-class fallback, disabled by default.
 - Durable continuation and endpoint pinning.
 - Configurable deterministic routing, bounded failover, and circuit breaking.
 - Versioned price catalogs and provider-reported cost reconciliation.
 - Multiple overlapping, conservatively enforced sliding-window budgets.
-- In-memory and Redis state implementations.
+- Generic cloud KV/blob persistence and shared Redis budgeting/provider state;
+  in-memory implementations for development and tests.
 
 ### Runtime and delivery
 
-- A named Temporal Activity, `llm.generate.v1`.
+- Public `llm.generate.workflow.v1` and `llm.compact.workflow.v1` workflows,
+  internal execution/budget workflows, and bounded v1 activities. See the
+  [runtime registration](reference/activity-runtime.md#worker-registration).
 - Docker and Kubernetes deployment artifacts.
 - Structured logging, Prometheus metrics, and OpenTelemetry tracing.
 - Separate pull-request and master GitHub Actions workflows.
@@ -125,9 +128,10 @@ leave the process. Missing or stale price data fails closed.
 ### One retry authority
 
 Provider SDK automatic retries are set to zero. The operation ledger and
-Temporal retry policy decide whether another dispatch is safe. A transport
-failure before bytes are written can be retried; a timeout after dispatch is
-ambiguous and is not retried automatically.
+Temporal workflows decide whether another dispatch is safe. A transport
+failure before bytes are written can be retried. After a possibly accepted
+submission loses its response, the original attempt remains outcome-unknown
+and charged; recovery may retry only with a new paid reservation.
 
 ### Continuation integrity
 
@@ -162,54 +166,38 @@ guaranteed properties of the design.
 
 ## Staged delivery and document authority
 
-The current v1 in-scope/out-of-scope lists describe shipped behavior. The new
-design is delivered in independently releasable phases; it is not one enlarged
-“initial release” gate:
+The implementation and release evidence are separate. Core cloud workflows,
+Redis budgeting, compaction, cache and typed OCaml clients are implemented.
+Production CLI caller authorization, deployed IAM/configuration and real
+DynamoDB/S3 backup/restore evidence remain outstanding. The
+[migration tracker](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/812)
+and [release gate](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/821)
+record those phase exits; a merged PR or local test is not deployment evidence.
 
-Accordingly, the current v1 readiness gate covers the shared Redis backend and
-the configured blob store used for oversized payloads and results. Worker-owned
-PostgreSQL readiness, the durable operation/budget journal, and PostgreSQL
-rebuild/restore proof belong to the staged Phase A/B targets below; they are not
-current v1 release prerequisites. The traceability catalog must not record those
-target requirements as current v1 evidence until their implementation and
-protected verification runs exist.
+1. **Durable conversation core:** generic cloud key-value/blob storage (AWS
+   DynamoDB/S3 initially) for requests, attempts, encrypted payloads and immutable
+   checkpoints. No worker SQL database, data import, journal or SQL fallback.
+2. **Compaction and budgets:** a separate compaction workflow shares the internal
+   execution and budget workflows. Redis owns reservations, claims and settlement;
+   JSON worker settings define the budget limits. Unused start authorization
+   expires after 15 minutes. Claimed uncertain work remains accounted for.
+3. **Exact-response cache:** successful completion determines freshness. Different
+   sample indexes separate cache identities; newer failures do not invalidate an
+   older eligible success. Compaction reuse binds source content and policy versions.
+4. **Control queries:** provider state and inventory live in Redis. Query reads
+   require independent authorization and cursor keys; audit hooks emit normal
+   structured logs. Missing budget/spend readers remain unsupported. Control
+   queries are a separate phase, not a prerequisite for paid workflow composition.
+5. **Deferred work:** cloud cleanup, unknown-cost reconciliation and managed secret
+   delivery have separate tickets. Retain referenced data until safe cleanup is
+   implemented. Cross-provider cache equivalence and FX remain future designs.
 
-1. **Phase A — durable conversation core:** worker-owned PostgreSQL namespace,
-   encrypted inline/blob payloads, operation/attempt ledger, immutable
-   checkpoints and forks, exact USD accounting, restart-safe provider polling,
-   and the natural two-layer OCaml Generate client. Existing Redis throttling
-   remains operational while these foundations land.
-2. **Phase B — compaction and budget materialization:** explicit/automatic
-   compaction, provider prompt-cache affinity, PostgreSQL budget journal, and
-   the self-validating Redis materialization/coordination optimization using
-   conservative nano-USD admission. This phase includes the loss/rebuild
-   runbook and restore proof.
-3. **Phase C — opt-in exact-response cache:** route-isolated cache identity,
-   variants, retention/usage accounting, and concurrent fill collapse for a
-   named staging workflow or incident-reproduction caller. It is not a
-   prerequisite for checkpoints or compaction.
-4. **Phase D — typed control queries:** the five typed query families, bounded
-   dedicated query audit rows, provider status/inventory projections, and the
-   OCaml GADT. Queries do not share the paid LLM operation/blob state machine.
-5. **Future ADRs only:** cross-provider cache equivalence and FX. Neither has
-   schema, runtime tasks, or a release gate until a concrete verifiable provider
-   pair or non-USD price sheet exists.
-
-Each phase runs its own focused acceptance gates and can ship before the next.
-The [implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
-owns phase ordering and file lists. The
-[PostgreSQL/control-plane design](architecture/postgresql-state-cache-and-control-plane.md)
-is the single normative home for storage ownership, budget-read conditions,
-workload envelope, and DDL. The
-[conversation design](architecture/conversation-checkpoints-and-compaction.md)
-owns Generate/Compact/cache semantics, and the
-[OCaml design](architecture/ocaml-conversation-and-query-client.md) owns the
-client API. Other chapters summarize current behavior or link to these owners;
-they must not restate competing normative rules.
-
-These design documents constrain implementation but are revisable. A latent
-specification defect or measured implementation evidence may be addressed by a
-short superseding ADR amendment that states the changed invariant, alternatives,
-schema/API impact, test updates, and why existing documents are being amended.
-The implementer must not silently diverge, but also must not knowingly implement
-a defect merely because the original prose said “do not redesign.”
+[State and storage](architecture/state-and-storage.md), the
+[cloud request reference](reference/cloud-request-repository.md), and
+[Redis budget leases](reference/redis-budget-leases.md) describe current storage
+ownership and recovery behavior. The previous PostgreSQL ADR, physical schema,
+SQL runbooks and SQL portions of older plans are historical and superseded.
+[Conversation design](architecture/conversation-checkpoints-and-compaction.md)
+and [OCaml client documentation](../ocaml/llm_temporal_worker/README.md) describe
+semantic/API contracts; current implementations and focused tests establish what
+is available. Keep the v1 names and do not expose a cancellation API.

@@ -68,7 +68,7 @@ func (function DependencyProbeFunc) Probe(ctx context.Context) ProbeResult { ret
 // dependencyIdentitySource is attached by the production factory to each
 // state-store probe. DependencyProbe intentionally remains a tiny interface
 // so embedders can supply their own probes, but the factory still needs a
-// non-I/O way to prove that a durable snapshot contains Redis, PostgreSQL,
+// non-I/O way to prove that a durable snapshot contains cloud request, Redis,
 // and blob-store gates before it can be published.
 type dependencyIdentitySource interface {
 	DependencyID() DependencyID

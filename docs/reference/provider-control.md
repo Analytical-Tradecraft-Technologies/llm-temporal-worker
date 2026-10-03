@@ -3,10 +3,7 @@
 The provider-control domain (`golang/control`) defines storage-neutral status,
 credit, and inventory models. Production runtime snapshots use
 `storage/redis.ProviderStateStore` for these records and their query readers.
-The previous `storage/postgres.ProviderStatusRepository` and
-`storage/postgres.InventoryRepository` remain legacy adapters during the
-staged SQL removal; production no longer selects them for provider state.
-No existing SQL data is migrated.
+The previous SQL adapters have been removed. No existing SQL data is migrated.
 
 ## Runtime composition
 
@@ -174,10 +171,10 @@ package does not add storage reads, provider refreshes, budget aggregation, or
 Activity registration; those remain composition work behind
 `control.QueryService`. For auditing, `QueryService.Audit` provides a best-effort callback after response
 and cursor validation; runtime composition logs audit metadata normally.
-`QueryRepositories` carries Redis provider readers, the optional Redis budget
-reader, and the remaining SQL spend reader. `PostgresQueryRepositories` is a
-compatibility alias for deployment builders. Missing optional capabilities
-continue to fail closed.
+`QueryRepositories` carries Redis provider readers and optional budget and
+spend readers. The production factory does not provide a spend aggregation
+reader; missing optional capabilities continue to fail closed. There is no
+SQL reader or SQL repository alias.
 
 `CursorCodec` signs a bounded opaque position with HMAC-SHA256. Its claims bind
 the query kind, full tenant/project/actor scope (including tags), canonical

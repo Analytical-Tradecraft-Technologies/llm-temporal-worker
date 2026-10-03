@@ -145,29 +145,13 @@ The `pricing.PriceResolver` applies the same boundary to in-process reloads:
 replacement leaves the previous snapshot in place. The compatibility `Reload`
 method is also fail-closed when its caller does not need the returned error.
 
-## PostgreSQL catalog snapshots
+## Catalog persistence
 
-`storage/postgres.PricingCatalogRepository` is the maintenance/control-plane
-writer and runtime snapshot reader for the `price_catalogs` and
-`price_entries` tables. `Store` validates the compiled digest again, requires
-both source and compiled SHA-256 digests, and inserts the catalog and every
-entry in one synchronous transaction. Repeating the same version and digests
-is idempotent; reusing a version or compiled digest for different content is a
-hard error. A successful newer snapshot retires older active snapshots in the
-same transaction, so readers never observe a half-published catalog.
+The SQL catalog repository has been removed. The runtime loads and verifies the
+configured catalog files into an immutable snapshot using the contracts above.
+No worker database, SQL catalog tables or catalog migration is required.
 
-The existing projection is intentionally strict about digest round-tripping:
-persisted entries must have a non-zero `effective_from`, no prose `provenance`,
-and an entry `version` equal to the catalog version. Catalogs carrying
-unrepresentable metadata are rejected instead of silently changing their
-compiled digest. A future-dated snapshot schedules predecessor retirement and
-`LoadActive` continues returning the predecessor until the replacement's
-effective time.
-
-The PostgreSQL projection is intentionally USD-only. Decimal values are bound
-as exact text to `NUMERIC(38,18)`; an explicitly quoted zero is stored as zero,
-while an omitted component is stored as `NULL` and listed in
-`unknown_component_codes`. `price_status` is therefore `exact`, `partial`, or
-`unknown` and the runtime cannot reinterpret `NULL` as free. The source
-document's prose provenance is represented by the source digest; the compiled
-digest remains authoritative when a snapshot is loaded.
+The exact `pricing.USD` representation remains independent of storage: explicit
+zero is distinct from an omitted price, and missing prices never authorize free
+paid work. A future catalog store must preserve the compiled/source digest and
+snapshot checks rather than silently reinterpret unknown prices.

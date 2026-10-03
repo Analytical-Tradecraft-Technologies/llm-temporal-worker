@@ -67,7 +67,7 @@ func USDFromNano(value NanoUSD) (USD, error) {
 
 // FloorNanoUSD materializes a non-negative exact USD limit conservatively.
 // Limits are rounded down so Redis cannot authorize more than the exact
-// PostgreSQL limit. Values above NanoUSDSafeLimit are rejected.
+// configured limit. Values above NanoUSDSafeLimit are rejected.
 func FloorNanoUSD(usd USD) (NanoUSD, error) {
 	if err := usd.valid(); err != nil {
 		return 0, err
@@ -82,7 +82,7 @@ func FloorNanoUSD(usd USD) (NanoUSD, error) {
 
 // CeilNanoUSD materializes a non-negative exact USD charge conservatively.
 // Positive fractional nano-dollars are rounded up so Redis cannot
-// under-account an exact PostgreSQL charge. Values above NanoUSDSafeLimit are
+// under-account an exact USD charge. Values above NanoUSDSafeLimit are
 // rejected instead of overflowing or wrapping.
 func CeilNanoUSD(usd USD) (NanoUSD, error) {
 	if err := usd.valid(); err != nil {

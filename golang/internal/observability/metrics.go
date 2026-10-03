@@ -65,9 +65,6 @@ type Metrics struct {
 	maintenanceRows      *prometheus.CounterVec
 	maintenanceFailures  *prometheus.CounterVec
 	maintenanceDuration  *prometheus.HistogramVec
-	postgresPool         *prometheus.GaugeVec
-	postgresLatency      *prometheus.HistogramVec
-	postgresTableTuples  *prometheus.GaugeVec
 	cacheEvents          *prometheus.CounterVec
 	pendingPolls         *prometheus.CounterVec
 	costStatus           *prometheus.CounterVec
@@ -125,9 +122,6 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.maintenanceRows = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_maintenance_rows_total", Help: "Bounded maintenance rows by resource and outcome."}, []string{"resource", "outcome"})
 	m.maintenanceFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_maintenance_failures_total", Help: "Bounded maintenance pass failures by resource."}, []string{"resource"})
 	m.maintenanceDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_maintenance_duration_seconds", Help: "Duration of bounded maintenance passes by resource."}, []string{"resource"})
-	m.postgresPool = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_postgres_pool_connections", Help: "PostgreSQL pool connections by bounded state."}, []string{"state"})
-	m.postgresLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_postgres_latency_seconds", Help: "PostgreSQL pool, lock, query, and maintenance boundary latency."}, []string{"kind"})
-	m.postgresTableTuples = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_postgres_table_tuples", Help: "Approximate PostgreSQL table tuples by bounded resource and liveness state."}, []string{"resource", "state"})
 	m.cacheEvents = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cache_events_total", Help: "Response cache hits, uses, fills, misses, and bounded failures."}, []string{"event"})
 	m.pendingPolls = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_poll_total", Help: "Provider-owned operation poll outcomes."}, []string{"outcome"})
 	m.costStatus = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_status_total", Help: "Exact and unknown cost accounting events; amounts remain in the durable ledger."}, []string{"endpoint", "model", "class", "status", "method"})
@@ -137,8 +131,8 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 		m.activityTotal, m.activityFailureTotal, m.activityDuration, m.providerAttemptTotal, m.providerDuration,
 		m.serviceClassActual, m.budgetAdmission, m.costExactTotal,
 		m.operationState, m.ambiguousTotal, m.continuationTotal, m.configReloadTotal,
-		m.maintenanceRows, m.maintenanceFailures, m.maintenanceDuration, m.postgresPool, m.postgresLatency,
-		m.postgresTableTuples, m.cacheEvents, m.pendingPolls, m.costStatus,
+		m.maintenanceRows, m.maintenanceFailures, m.maintenanceDuration,
+		m.cacheEvents, m.pendingPolls, m.costStatus,
 		m.workerPolling, m.heartbeatAge,
 	}
 	for _, collector := range collectors {
@@ -349,48 +343,6 @@ func (metrics *Metrics) RecordMaintenanceFailure(resource string) {
 	metrics.maintenanceFailures.WithLabelValues(metrics.builtIn(resource, resources)).Inc()
 }
 
-// RecordPostgresPool records only numeric pool state; it never accepts a
-// database, namespace, or tenant as a label.
-func (metrics *Metrics) RecordPostgresPool(total, acquired, idle, max int32) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.postgresPool.WithLabelValues("total").Set(float64(maxInt32(total)))
-	metrics.postgresPool.WithLabelValues("acquired").Set(float64(maxInt32(acquired)))
-	metrics.postgresPool.WithLabelValues("idle").Set(float64(maxInt32(idle)))
-	metrics.postgresPool.WithLabelValues("max").Set(float64(maxInt32(max)))
-}
-
-// RecordPostgresLatency records a bounded database boundary. Callers should
-// use one of pool, lock, query, or maintenance for kind.
-func (metrics *Metrics) RecordPostgresLatency(kind string, duration time.Duration) {
-	if metrics == nil {
-		return
-	}
-	kinds := map[string]struct{}{"pool": {}, "lock": {}, "query": {}, "maintenance": {}}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.postgresLatency.WithLabelValues(metrics.builtIn(kind, kinds)).Observe(nonNegativeDuration(duration).Seconds())
-}
-
-// RecordPostgresTableTuples records approximate pg_stat_user_tables values.
-// Resource names are fixed logical names, never physical relation names.
-func (metrics *Metrics) RecordPostgresTableTuples(resource string, live, dead int64) {
-	if metrics == nil {
-		return
-	}
-	resources := map[string]struct{}{
-		"cache": {}, "status": {}, "inventory": {}, "operation": {},
-		"budget": {}, "checkpoint": {}, "query_execution": {}, "outbox": {}, "blob": {},
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.postgresTableTuples.WithLabelValues(metrics.builtIn(resource, resources), "live").Set(float64(maxInt64(live)))
-	metrics.postgresTableTuples.WithLabelValues(metrics.builtIn(resource, resources), "dead").Set(float64(maxInt64(dead)))
-}
-
 // RecordCache records one bounded response-cache lifecycle event. Use and hit
 // are deliberately separate: a replayed operation can be a hit without
 // inserting a second use row.
@@ -425,20 +377,6 @@ func nonNegativeDuration(duration time.Duration) time.Duration {
 		return 0
 	}
 	return duration
-}
-
-func maxInt32(value int32) int32 {
-	if value < 0 {
-		return 0
-	}
-	return value
-}
-
-func maxInt64(value int64) int64 {
-	if value < 0 {
-		return 0
-	}
-	return value
 }
 
 func (metrics *Metrics) SetWorkerPolling(polling bool) {

@@ -79,7 +79,7 @@ type MaterializedState struct {
 }
 
 // CheckpointGraph is a concurrency-safe in-memory graph suitable for pure
-// tests and as the contract exercised by a durable repository. PostgreSQL
+// tests and as the contract exercised by a durable repository. Cloud
 // persistence intentionally lives in a separate implementation.
 type CheckpointGraph struct {
 	mu          sync.RWMutex

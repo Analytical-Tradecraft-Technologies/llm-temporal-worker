@@ -35,7 +35,7 @@ const (
 
 // ReservationEvent is the write-ahead record created after Redis accepts a
 // reservation and before a provider side effect. IDs are opaque at the domain
-// boundary; the PostgreSQL adapter validates them as UUIDs before binding.
+// boundary; cloud persistence and Redis validate their respective bindings.
 type ReservationEvent struct {
 	EventID             string
 	GenerationID        string
