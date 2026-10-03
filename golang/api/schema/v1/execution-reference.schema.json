@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-temporal-worker.dev/schema/llm.temporal/execution/v1/execution-reference.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "context"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^llmtw_req_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "llmtw_req_00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant",
+        "project",
+        "actor"
+      ],
+      "properties": {
+        "tenant": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

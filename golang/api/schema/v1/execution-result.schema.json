@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-temporal-worker.dev/schema/llm.temporal/execution/v1/execution-result.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^llmtw_req_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "const": "llmtw_req_00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "kind": {
+      "enum": [
+        "generate",
+        "compact"
+      ]
+    },
+    "state": {
+      "type": "string"
+    },
+    "retry_after_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "failure_code": {
+      "enum": [
+        "provider_error",
+        "provider_rejected",
+        "incomplete_response"
+      ]
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "generate": {
+      "$ref": "https://llm-temporal-worker.dev/schema/llm.temporal/v1/generate-response.json"
+    },
+    "compact": {
+      "$ref": "https://llm-temporal-worker.dev/schema/llm.temporal/compact/v1/compact-response.json"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "state": {
+          "const": "budget_required"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "retry_after_seconds"
+            ]
+          },
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "acquired"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "retry_after_seconds"
+            ]
+          },
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "budget_wait"
+        }
+      },
+      "required": [
+        "retry_after_seconds"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "cache_wait"
+        }
+      },
+      "required": [
+        "retry_after_seconds"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "pending"
+        }
+      },
+      "required": [
+        "retry_after_seconds"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "provider_completed"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "retry_after_seconds"
+            ]
+          },
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "completed"
+        },
+        "kind": {
+          "const": "generate"
+        }
+      },
+      "required": [
+        "generate"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "retry_after_seconds"
+            ]
+          },
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "completed"
+        },
+        "kind": {
+          "const": "compact"
+        }
+      },
+      "required": [
+        "compact"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "retry_after_seconds"
+            ]
+          },
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "failed"
+        }
+      },
+      "required": [
+        "failure_code"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "retry_after_seconds"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "const": "outcome_unknown"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "retry_after_seconds"
+            ]
+          },
+          {
+            "required": [
+              "failure_code"
+            ]
+          },
+          {
+            "required": [
+              "retryable"
+            ]
+          },
+          {
+            "required": [
+              "generate"
+            ]
+          },
+          {
+            "required": [
+              "compact"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
