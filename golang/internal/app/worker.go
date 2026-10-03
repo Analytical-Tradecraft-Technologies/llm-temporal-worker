@@ -10,6 +10,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/internal/httpserver"
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
+	"github.com/mfow/llm-temporal-worker/golang/workflows"
 	"go.temporal.io/sdk/client"
 	sdkworker "go.temporal.io/sdk/worker"
 )
@@ -27,7 +28,14 @@ type WorkerController interface {
 	Stop()
 }
 
-type WorkerFactory func(client.Client, string, sdkworker.Options) (WorkerController, sdkworker.ActivityRegistry, error)
+// WorkerRegistry requires both activity and workflow registration so a factory
+// cannot silently construct a worker unable to execute its public entry points.
+type WorkerRegistry interface {
+	sdkworker.ActivityRegistry
+	sdkworker.WorkflowRegistry
+}
+
+type WorkerFactory func(client.Client, string, sdkworker.Options) (WorkerController, WorkerRegistry, error)
 
 type WorkerOptions struct {
 	Client                         client.Client
@@ -101,6 +109,7 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 		if err := options.Activities.RegisterForTaskQueue(registry, options.TaskQueue); err != nil {
 			return nil, fmt.Errorf("register Temporal Activities: %w", err)
 		}
+		workflows.Register(registry)
 		return controller, nil
 	}
 	controller, err := build()
@@ -110,7 +119,7 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 	return &TemporalWorker{controller: controller, build: build, health: options.Health, metrics: options.Metrics}, nil
 }
 
-func defaultWorkerFactory(workflowClient client.Client, taskQueue string, options sdkworker.Options) (WorkerController, sdkworker.ActivityRegistry, error) {
+func defaultWorkerFactory(workflowClient client.Client, taskQueue string, options sdkworker.Options) (WorkerController, WorkerRegistry, error) {
 	if workflowClient == nil {
 		return nil, nil, fmt.Errorf("Temporal client is required")
 	}

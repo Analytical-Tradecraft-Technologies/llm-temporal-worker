@@ -2,6 +2,8 @@ package app_test
 
 import (
 	"errors"
+	"github.com/mfow/llm-temporal-worker/golang/workflows"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 type fakeWorker struct {
@@ -125,15 +128,26 @@ func closeWorkerGate(gate chan struct{}) func() {
 	}
 }
 
-type fakeRegistry struct{ name string }
+type fakeRegistry struct {
+	name       string
+	workflows  []string
+	activities []string
+}
 
 func (registry *fakeRegistry) RegisterActivity(value interface{}) {}
 func (registry *fakeRegistry) RegisterActivityWithOptions(_ interface{}, options activity.RegisterOptions) {
 	registry.name = options.Name
+	registry.activities = append(registry.activities, options.Name)
 }
 func (registry *fakeRegistry) RegisterDynamicActivity(interface{}, activity.DynamicRegisterOptions) {}
 
-var _ worker.ActivityRegistry = (*fakeRegistry)(nil)
+func (*fakeRegistry) RegisterWorkflow(interface{}) {}
+func (registry *fakeRegistry) RegisterWorkflowWithOptions(_ interface{}, options workflow.RegisterOptions) {
+	registry.workflows = append(registry.workflows, options.Name)
+}
+func (*fakeRegistry) RegisterDynamicWorkflow(interface{}, workflow.DynamicRegisterOptions) {}
+
+var _ app.WorkerRegistry = (*fakeRegistry)(nil)
 
 func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 	health := httpserver.NewHealthState()
@@ -145,7 +159,7 @@ func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 		TaskQueue: "queue-a", Identity: "identity-a", MaxConcurrentActivities: 3,
 		MaxConcurrentActivityTaskPolls: 2, GracefulStopTimeout: time.Second,
 		Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, queue string, options worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, queue string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			gotQueue, gotOptions = queue, options
 			return controller, registry, nil
 		},
@@ -155,6 +169,9 @@ func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 	}
 	if gotQueue != "queue-a" || gotOptions.Identity != "identity-a" || gotOptions.MaxConcurrentActivityExecutionSize != 3 || gotOptions.MaxConcurrentActivityTaskPollers != 2 {
 		t.Fatalf("worker options = %#v queue=%q", gotOptions, gotQueue)
+	}
+	if !reflect.DeepEqual(registry.workflows, []string{workflows.RequestWorkflowName, workflows.BudgetWorkflowName, workflows.GenerateWorkflowName, workflows.CompactWorkflowName}) {
+		t.Fatalf("registered workflows = %v", registry.workflows)
 	}
 	if registry.name != domainactivity.GenerateActivityName {
 		t.Fatalf("registered activity = %q", registry.name)
@@ -181,7 +198,7 @@ func TestWorkerRejectsUnsafeTaskQueueBeforeConstructingTemporalWorker(t *testing
 			_, err := app.NewWorker(app.WorkerOptions{
 				TaskQueue: taskQueue, MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 				GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-				Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+				Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 					factoryCalls.Add(1)
 					return &fakeWorker{}, &fakeRegistry{}, nil
 				},
@@ -203,7 +220,7 @@ func TestWorkerStartErrorLeavesReadinessFalse(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			return controller, registry, nil
 		},
 	})
@@ -223,7 +240,7 @@ func TestWorkerResumeRebuildsControllerAfterStartFailure(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			switch factoryCalls.Add(1) {
 			case 1:
 				return failed, &fakeRegistry{}, nil
@@ -262,7 +279,7 @@ func TestWorkerStartFailureSupportsNonComparableController(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			if factoryCalls.Add(1) == 1 {
 				return nonComparableWorker{1}, &fakeRegistry{}, nil
 			}
@@ -299,7 +316,7 @@ func TestWorkerResumeWaitsForFailedStartCleanup(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			if factoryCalls.Add(1) == 1 {
 				return failed, &fakeRegistry{}, nil
 			}
@@ -346,7 +363,7 @@ func TestWorkerStopWaitsForFailedStartCleanup(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			return failed, &fakeRegistry{}, nil
 		},
 	})
@@ -385,7 +402,7 @@ func TestWorkerPauseStopsPollingAndResumeBuildsFreshController(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			controller := &fakeWorker{}
 			controllers = append(controllers, controller)
 			return controller, &fakeRegistry{}, nil
@@ -427,7 +444,7 @@ func TestWorkerPauseReturnsBeforeDrainAndResumeWaitsForCompletion(t *testing.T) 
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			if len(controllers) == 0 {
 				controllers = append(controllers, first)
 				return first, &fakeRegistry{}, nil
@@ -483,7 +500,7 @@ func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			return first, &fakeRegistry{}, nil
 		},
 	})
@@ -545,7 +562,7 @@ func TestWorkerPauseDuringStartDrainsWithoutBlockingStartOrReplacingController(t
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			if len(controllers) == 0 {
 				controllers = append(controllers, first)
 				return first, &fakeRegistry{}, nil
@@ -609,7 +626,7 @@ func TestWorkerPauseDuringBuildPreventsUncommittedStart(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			switch factoryCalls.Add(1) {
 			case 1:
 				return initial, &fakeRegistry{}, nil
@@ -684,7 +701,7 @@ func TestWorkerStopDuringStartWaitsForControllerStop(t *testing.T) {
 	temporalWorker, err := app.NewWorker(app.WorkerOptions{
 		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, worker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			return first, &fakeRegistry{}, nil
 		},
 	})
@@ -723,5 +740,54 @@ func TestWorkerStopDuringStartWaitsForControllerStop(t *testing.T) {
 	waitForWorkerEvent(t, stopped, "Stop after the in-progress controller completed")
 	if first.stopCalls.Load() != 1 || health.Ready() || temporalWorker.Started() {
 		t.Fatalf("stop-during-start calls=%d ready=%v started=%v", first.stopCalls.Load(), health.Ready(), temporalWorker.Started())
+	}
+}
+
+// Registration does not invoke provider code. Embedding the runtime interface
+// lets this fixture prove the production v1 selection without fake paid work.
+type registrationRuntime struct{ domainactivity.V1Runtime }
+
+func TestWorkerRegistersV1WorkflowsAndActivitiesAgainAfterDrain(t *testing.T) {
+	var registries []*fakeRegistry
+	var controllers []*fakeWorker
+	value, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "v1-queue", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second,
+		Activities:          &domainactivity.Activities{V1Runtime: registrationRuntime{}},
+		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+			registry, controller := &fakeRegistry{}, &fakeWorker{}
+			registries = append(registries, registry)
+			controllers = append(controllers, controller)
+			return controller, registry, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(value.Stop)
+	if err := value.Start(); err != nil {
+		t.Fatal(err)
+	}
+	value.Pause()
+	resumeWorkerAfterDrain(t, value, "new workflow worker")
+	if len(registries) != 2 || !controllers[0].stopped.Load() || !controllers[1].started.Load() {
+		t.Fatal("worker was not replaced")
+	}
+	descriptors, err := domainactivity.V1ActivityDescriptors("v1-queue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedActivities := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		expectedActivities = append(expectedActivities, descriptor.Name)
+	}
+	expectedWorkflows := []string{workflows.RequestWorkflowName, workflows.BudgetWorkflowName, workflows.GenerateWorkflowName, workflows.CompactWorkflowName}
+	for _, registry := range registries {
+		if !reflect.DeepEqual(registry.workflows, expectedWorkflows) {
+			t.Fatalf("missing/duplicate workflows: %v", registry.workflows)
+		}
+		if !reflect.DeepEqual(registry.activities, expectedActivities) {
+			t.Fatalf("missing/duplicate activities: %v", registry.activities)
+		}
 	}
 }

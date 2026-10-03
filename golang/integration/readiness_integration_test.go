@@ -24,6 +24,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	sdkworker "go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 // TestReadinessIntegrationRedisRecovery exercises the runtime exactly as an
@@ -244,8 +245,8 @@ type readinessControllerFactory struct {
 	stops  atomic.Int32
 }
 
-func (factory *readinessControllerFactory) Build(client.Client, string, sdkworker.Options) (app.WorkerController, sdkworker.ActivityRegistry, error) {
-	return &readinessController{factory: factory}, readinessRegistry{}, nil
+func (factory *readinessControllerFactory) Build(client.Client, string, sdkworker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+	return &readinessController{factory: factory}, &readinessRegistry{}, nil
 }
 
 type readinessController struct{ factory *readinessControllerFactory }
@@ -271,3 +272,7 @@ func (readinessRegistry) RegisterActivity(any) {}
 func (readinessRegistry) RegisterActivityWithOptions(any, activity.RegisterOptions) {}
 
 func (readinessRegistry) RegisterDynamicActivity(any, activity.DynamicRegisterOptions) {}
+
+func (*readinessRegistry) RegisterWorkflow(any)                                         {}
+func (*readinessRegistry) RegisterWorkflowWithOptions(any, workflow.RegisterOptions)    {}
+func (*readinessRegistry) RegisterDynamicWorkflow(any, workflow.DynamicRegisterOptions) {}

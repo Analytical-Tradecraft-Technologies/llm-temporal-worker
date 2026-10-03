@@ -30,6 +30,7 @@ import (
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	sdkworker "go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
 
 // captureRegistry is the smallest useful Temporal ActivityRegistry fake. It
@@ -272,7 +273,7 @@ func newWorker(t *testing.T, activities *activity.Activities, health *httpserver
 		MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: 50 * time.Millisecond, Activities: activities,
 		Health: health, Metrics: metrics,
-		Factory: func(_ client.Client, queue string, options sdkworker.Options) (app.WorkerController, sdkworker.ActivityRegistry, error) {
+		Factory: func(_ client.Client, queue string, options sdkworker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 			if queue != "llmtw-integration" || options.MaxConcurrentActivityExecutionSize != 1 || options.MaxConcurrentActivityTaskPollers != 1 || options.WorkerStopTimeout != 50*time.Millisecond {
 				return nil, nil, fmt.Errorf("unexpected Temporal worker options")
 			}
@@ -496,3 +497,7 @@ func TestObservabilityRejectsContentAndTenantMarkersAcrossSinks(t *testing.T) {
 		t.Fatalf("unsafe metrics output: %s", encoded.String())
 	}
 }
+
+func (*captureRegistry) RegisterWorkflow(any)                                         {}
+func (*captureRegistry) RegisterWorkflowWithOptions(any, workflow.RegisterOptions)    {}
+func (*captureRegistry) RegisterDynamicWorkflow(any, workflow.DynamicRegisterOptions) {}
