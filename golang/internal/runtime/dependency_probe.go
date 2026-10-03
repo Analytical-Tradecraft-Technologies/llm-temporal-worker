@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -23,7 +22,6 @@ type DependencyID string
 const (
 	DependencyCloudRequests DependencyID = "cloud_requests"
 	DependencyRedis         DependencyID = "redis"
-	DependencyPostgres      DependencyID = "postgres"
 	DependencyBlobStore     DependencyID = "blob_store"
 )
 
@@ -115,11 +113,7 @@ func validateRequiredDependencyProbeSet(stateConfig config.StateConfig, probes [
 	if stateConfig.Kind != config.StateKindDurable {
 		return nil
 	}
-	requestDependency := DependencyPostgres
-	if stateConfig.Requests != nil {
-		requestDependency = DependencyCloudRequests
-	}
-	required := []DependencyID{DependencyRedis, requestDependency, DependencyBlobStore}
+	required := []DependencyID{DependencyRedis, DependencyCloudRequests, DependencyBlobStore}
 	seen := make(map[DependencyID]struct{}, len(probes))
 	for _, probe := range probes {
 		identity, ok := probe.(dependencyIdentitySource)
@@ -182,7 +176,7 @@ func CheckDependencyProbes(ctx context.Context, probes []DependencyProbe, timeou
 var errRequiredDependencyUnavailable = errors.New("required runtime dependency is unavailable")
 
 func normalizeProbeResult(result ProbeResult) ProbeResult {
-	if result.Dependency != DependencyRedis && result.Dependency != DependencyPostgres && result.Dependency != DependencyBlobStore && result.Dependency != DependencyCloudRequests {
+	if result.Dependency != DependencyRedis && result.Dependency != DependencyBlobStore && result.Dependency != DependencyCloudRequests {
 		return ProbeResult{Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
 	}
 	switch result.Status {
@@ -204,63 +198,6 @@ func normalizeProbeResult(result ProbeResult) ProbeResult {
 		}
 	}
 	return ProbeResult{Dependency: result.Dependency, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
-}
-
-// NewPostgresDependencyProbe constructs the read-only durable-state readiness
-// gate. Schema provisioning is intentionally separate (postgres.Install is a
-// deployment operation); a worker only verifies the configured database,
-// UTC session, and immutable schema contract before it polls work.
-func NewPostgresDependencyProbe(pool postgresHealthClient, namespace postgresstore.Namespace) (DependencyProbe, error) {
-	if pool == nil {
-		return nil, fmt.Errorf("PostgreSQL readiness client is required")
-	}
-	if err := namespace.Validate(); err != nil {
-		return nil, err
-	}
-	return &postgresDependencyProbe{pool: pool, namespace: namespace}, nil
-}
-
-type postgresHealthClient interface {
-	Health(context.Context, postgresstore.Namespace) error
-	Verify(context.Context, postgresstore.Namespace) error
-}
-
-type postgresDependencyProbe struct {
-	pool      postgresHealthClient
-	namespace postgresstore.Namespace
-}
-
-func (probe *postgresDependencyProbe) Probe(ctx context.Context) ProbeResult {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if probe == nil || probe.pool == nil {
-		return postgresUnavailable(ctx.Err())
-	}
-	if err := ctx.Err(); err != nil {
-		return postgresUnavailable(err)
-	}
-	if err := probe.pool.Health(ctx, probe.namespace); err != nil {
-		return postgresProbeFailure(ctx, err)
-	}
-	if err := probe.pool.Verify(ctx, probe.namespace); err != nil {
-		return postgresProbeFailure(ctx, err)
-	}
-	return ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusReady, Reason: ProbeReasonReady}
-}
-
-func postgresProbeFailure(ctx context.Context, err error) ProbeResult {
-	if ctx != nil && (errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)) {
-		return ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusTimeout, Reason: ProbeReasonTimeout}
-	}
-	return ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
-}
-
-func postgresUnavailable(err error) ProbeResult {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusTimeout, Reason: ProbeReasonTimeout}
-	}
-	return ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
 }
 
 type redisProbeClient interface {

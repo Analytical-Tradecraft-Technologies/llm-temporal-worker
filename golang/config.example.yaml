@@ -55,27 +55,21 @@ state:
     required_persistence: aof_and_rdb
     coordination_stream_enabled: true
     stream_trim_safety: 10m
-  postgres:
-    addresses: [postgres.example.internal:5432]
-    database: llm_worker
-    schema: llm_worker
-    table_prefix: ""
-    username:
+  requests:
+    provider:
+      type: aws
+      aws:
+        region: ap-southeast-2
+      key_value_stores:
+        requests: physical-requests
+      blob_stores:
+        payloads: physical-payloads
+    request_table: requests
+    payload_store: payloads
+    namespace: worker-v1
+    secret:
       kind: env
-      name: POSTGRES_USERNAME
-    password:
-      kind: file
-      path: /var/run/secrets/postgres-password
-    tls:
-      enabled: true
-      server_name: postgres.example.internal
-      ca_file: /var/run/ca/postgres.pem
-    min_connections: 8
-    max_connections: 64
-    dial_timeout: 2s
-    statement_timeout: 30s
-    lock_timeout: 2s
-    idle_transaction_timeout: 30s
+      name: CLOUD_REQUEST_KEY
 
 blob_store:
   kind: s3

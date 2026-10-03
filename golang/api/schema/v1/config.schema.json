@@ -139,7 +139,7 @@
         "continuation_retention": { "$ref": "#/$defs/duration" },
         "reservation_lease": { "$ref": "#/$defs/duration" },
         "redis": { "type": "object" },
-        "postgres": { "type": "object" }
+        "requests": { "$ref": "#/$defs/cloud_requests" }
       },
       "allOf": [
         {
@@ -152,13 +152,7 @@
         {
           "if": { "properties": { "kind": { "const": "durable" } }, "required": ["kind"] },
           "then": {
-            "required": ["postgres"],
-            "properties": {
-              "postgres": {
-                "$ref": "#/$defs/postgres",
-                "required": ["addresses", "database", "schema", "table_prefix", "username", "password", "tls", "min_connections", "max_connections", "dial_timeout", "statement_timeout", "lock_timeout", "idle_transaction_timeout"]
-              }
-            }
+            "required": ["requests"]
           }
         }
       ]
@@ -181,22 +175,82 @@
         "stream_trim_safety": { "$ref": "#/$defs/duration" }
       }
     },
-    "postgres": {
-      "type": "object", "additionalProperties": false,
-      "required": [],
+    "cloud_requests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "request_table",
+        "payload_store",
+        "namespace",
+        "secret"
+      ],
       "properties": {
-        "addresses": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-        "database": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
-        "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
-        "table_prefix": { "type": "string", "pattern": "^$|^[a-z][a-z0-9_]{0,22}_$", "maxLength": 24 },
-        "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" },
-        "tls": { "$ref": "#/$defs/tls" },
-        "min_connections": { "type": "integer", "minimum": 0 },
-        "max_connections": { "type": "integer", "minimum": 1 },
-        "dial_timeout": { "$ref": "#/$defs/duration" },
-        "statement_timeout": { "$ref": "#/$defs/duration" },
-        "lock_timeout": { "$ref": "#/$defs/duration" },
-        "idle_transaction_timeout": { "$ref": "#/$defs/duration" }
+        "provider": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "aws",
+            "key_value_stores",
+            "blob_stores"
+          ],
+          "properties": {
+            "type": {
+              "const": "aws"
+            },
+            "aws": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "region"
+              ],
+              "properties": {
+                "region": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "temp_directory": {
+                  "type": "string"
+                }
+              }
+            },
+            "key_value_stores": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "blob_stores": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "request_table": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload_store": {
+          "type": "string",
+          "minLength": 1
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "secret": {
+          "$ref": "#/$defs/secret"
+        }
       }
     },
     "blob_store": {

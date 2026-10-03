@@ -15,8 +15,8 @@ Kubernetes manifests live under `kubernetes/base` and include:
 - ConfigMap-mounted non-secret configuration/catalogs and externally provisioned
   Secret volumes for Redis/TLS/continuation material;
 - an ingress/egress NetworkPolicy that permits only probe/metrics traffic and
-  DNS, Redis, worker PostgreSQL, Temporal, and TLS egress. Redis (TCP 6379),
-  PostgreSQL (TCP 5432), and Temporal (TCP 7233) are a separate state/control
+  DNS, Redis, Temporal, and TLS egress. Redis (TCP 6379),
+  and Temporal (TCP 7233) are a separate state/control
   rule limited to namespaces explicitly labeled `llmtw.io/state-egress=allowed`.
   General HTTPS remains a separate TCP 443 rule, with the instance-metadata
   endpoint excluded;
@@ -28,7 +28,7 @@ external address. For in-cluster dependencies, apply the
 `llmtw.io/state-egress=allowed` label only to reviewed dependency namespaces.
 For private managed services, copy the `private-state-egress` example overlay
 and replace its `10.64.0.0/16` placeholder with the narrow RFC 1918 or IPv6 ULA
-CIDR allocated to the Redis, PostgreSQL, and Temporal endpoints. Split the
+CIDR allocated to the Redis and Temporal endpoints. Split the
 state/control rule further when those services occupy different network
 segments. The deployment-policy verifier rejects public/default-route CIDRs,
 empty selectors, all-port rules, and rules that combine state/control ports

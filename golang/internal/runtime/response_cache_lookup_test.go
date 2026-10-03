@@ -98,7 +98,6 @@ func newCacheLookupFixture(t *testing.T) *cacheLookupFixture {
 		},
 	}
 	composition := validCapabilityComposition()
-	composition.Identity.Postgres = durable.PostgresIdentity{}
 	composition.Identity.Cloud = durable.CloudIdentity{Provider: "aws", Namespace: "requests-v1", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}}
 	f.cap = V1RuntimeCapabilities{ConfigDigest: composition.Identity.ConfigDigest, CloudIdentity: composition.Identity.Cloud, composition: &composition, Responses: f.responses, ResponseFills: f.fills, Clock: func() time.Time { return f.now }}
 	var err error

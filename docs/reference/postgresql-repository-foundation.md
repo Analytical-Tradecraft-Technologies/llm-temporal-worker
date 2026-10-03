@@ -1,7 +1,11 @@
 # PostgreSQL repository foundation
 
+> Historical reference: the worker SQL implementation and its maintenance CLI
+> have been removed. These SQL procedures are not supported. Use
+> [cloud request storage](cloud-request-repository.md) for current persistence.
+
 The PostgreSQL repository slices are implemented in
-[`golang/storage/postgres`](../../golang/storage/postgres). They cover the
+[`golang/storage/postgres`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/tree/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres). They cover the
 connection, namespace, scope, encrypted-locator, exact USD codec, one-shot
 operation/attempt/result boundaries, and the landed Phase B write-only budget
 journal foundation. Checkpoints remain a separate delivery slice; response

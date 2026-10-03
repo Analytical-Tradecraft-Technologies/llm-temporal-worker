@@ -24,8 +24,6 @@ var supportedFamilies = map[string]struct{}{
 	"bedrock_converse":           {},
 }
 
-var postgresNamespacePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
-var postgresPrefixPattern = regexp.MustCompile(`^(|[a-z][a-z0-9_]{0,22}_)$`)
 var redisKeyPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 const maxAdmissionFieldBytes = 256
@@ -240,68 +238,8 @@ func (state StateConfig) validate(environment string) error {
 	if state.Requests != nil {
 		return nil
 	}
-	if err := state.Postgres.validate(environment, state.Kind == StateKindDurable); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (postgres PostgresConfig) validate(environment string, required bool) error {
-	if !postgresNamespacePattern.MatchString(postgres.Database) {
-		return fmt.Errorf("state.postgres.database must match [a-z][a-z0-9_]{0,62}")
-	}
-	if !postgresNamespacePattern.MatchString(postgres.Schema) {
-		return fmt.Errorf("state.postgres.schema must match [a-z][a-z0-9_]{0,62}")
-	}
-	if !postgresPrefixPattern.MatchString(postgres.TablePrefix) || len(postgres.TablePrefix) > 24 {
-		return fmt.Errorf("state.postgres.table_prefix must be empty or match [a-z][a-z0-9_]{0,22}_")
-	}
-	if required {
-		if len(postgres.Addresses) == 0 {
-			return fmt.Errorf("state.postgres.addresses must not be empty for durable state")
-		}
-		if postgres.Username.Kind == "" || postgres.Password.Kind == "" {
-			return fmt.Errorf("state.postgres.username and password are required for durable state")
-		}
-	}
-	for index, address := range postgres.Addresses {
-		if err := validateAddress(address, fmt.Sprintf("state.postgres.addresses[%d]", index)); err != nil {
-			return err
-		}
-	}
-	if environment == "production" && required && !postgres.TLS.Enabled {
-		return fmt.Errorf("state.postgres.tls.enabled must be true in production")
-	}
-	if postgres.TLS.Enabled {
-		if postgres.TLS.CAFile == "" || postgres.TLS.ServerName == "" {
-			return fmt.Errorf("state.postgres.tls.ca_file and server_name are required when TLS is enabled")
-		}
-	}
-	if postgres.Username.Kind != "" {
-		if err := postgres.Username.Validate("state.postgres.username"); err != nil {
-			return err
-		}
-	}
-	if postgres.Password.Kind != "" {
-		if err := postgres.Password.Validate("state.postgres.password"); err != nil {
-			return err
-		}
-	}
-	if postgres.MaxConnections <= 0 || postgres.MaxConnections > 100000 {
-		return fmt.Errorf("state.postgres.max_connections is outside safe bounds")
-	}
-	if postgres.MinConnections < 0 || postgres.MinConnections > postgres.MaxConnections {
-		return fmt.Errorf("state.postgres.min_connections must be between 0 and max_connections")
-	}
-	for name, value := range map[string]Duration{
-		"state.postgres.dial_timeout":             postgres.DialTimeout,
-		"state.postgres.statement_timeout":        postgres.StatementTimeout,
-		"state.postgres.lock_timeout":             postgres.LockTimeout,
-		"state.postgres.idle_transaction_timeout": postgres.IdleTransactionTimeout,
-	} {
-		if err := validatePositiveDuration(value, name); err != nil {
-			return err
-		}
+	if state.Kind == StateKindDurable {
+		return fmt.Errorf("state.requests is required for durable state")
 	}
 	return nil
 }

@@ -10,8 +10,9 @@ to an explicitly composed V1 activity runtime using `state.requests`. Generate
 and Compact record their inputs before execution and save completed responses
 before returning. The same configuration now supplies cloud checkpoint metadata,
 blob writes/reads, continuation materialization, and response-cache persistence.
-Concrete phase composition, spend queries and removal of the legacy SQL
-packages remain to be migrated. Budgets and provider status stay in Redis.
+The bounded runtime builder composes execution phases; production CLI authorization
+and spend aggregation remain separate integration steps. Budgets and provider
+status stay in Redis.
 There is no SQL data import: this service has not been deployed.
 
 [Durable cloud budget plans](cloud-budget-plans.md) now save the initial selected
@@ -46,12 +47,12 @@ state:
       name: LLMTW_REQUEST_STORAGE_KEY
 ```
 
-When `state.requests` is configured, `state.postgres` can be omitted. The worker
-ignores any remaining PostgreSQL settings, does not resolve its credentials or
-open its pool, and requires exactly Redis, the existing result blob store, and
-cloud request storage in its readiness probe set. Missing cloud capabilities or
-a failed cloud open reject the snapshot and drain its clients; there is no SQL
-fallback. Redis validation and durability policies remain required.
+Durable mode requires `state.requests`; the strict loader rejects the removed
+`state.postgres` section. No worker SQL credentials, pool, schema, maintenance
+binary or driver dependencies remain. Readiness requires Redis, the result
+blob store and cloud request storage. Missing capabilities or a failed cloud
+open reject the snapshot and drain its clients. There is no SQL fallback or
+SQL data migration.
 
 Cloud composition uses `durable.StateIdentity.Cloud` instead of a fabricated
 PostgreSQL namespace. Its comparable identity contains the provider type,
@@ -63,7 +64,7 @@ still binds the rest of the worker settings, including secret references.
 Automatic preflight supplies the expected cloud identity before constructing
 external clients. The complete runtime builder validates it again against the
 snapshot, and composition reuse checks it before either phase gets its ports.
-Missing, mixed SQL/cloud, or mismatched identities reject composition. This
+Missing or mismatched identities reject composition. This
 validates the declared storage binding; deployment callbacks must still supply
 ports backed by those stores. Both Generate and Compact share one validated
 composition per snapshot. Legacy SQL identities remain supported while their
@@ -130,12 +131,11 @@ execution without being treated as misses or exposing SDK error text. See
 [cloud cache execution](cloud-cache-execution.md) for planning, finalization,
 recovery, and remaining production composition requirements.
 
-Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
-pool, and readiness requirements. In cloud mode the spend reader is absent; query composition must keep spend
-unsupported unless it supplies an implementation of `control.SpendSummaryReader`.
-Query audits use normal structured logs and require no SQL repository. A complete V1 runtime builder is still required:
-this bootstrap change does not configure concrete execution phase factories or
-remove the SQL packages from the build.
+Without `state.requests`, durable configuration fails validation. Spend summary
+remains unsupported unless the deployment supplies a cloud aggregation reader
+implementing `control.SpendSummaryReader`. Query audits use structured logs.
+The bounded runtime builder is available; the CLI still requires explicit
+production authorization composition before it can poll for paid work.
 
 `secret` references standard base64 encoding of an independent, stable 32-byte
 key. File references are also accepted; workload tokens are not suitable for

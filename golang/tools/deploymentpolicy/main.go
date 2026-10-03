@@ -72,7 +72,7 @@ func verifyRendered(overlay string, rendered []byte) error {
 }
 
 var stateControlPorts = map[int64]struct{}{
-	5432: {}, // worker PostgreSQL state
+	5432: {}, // Database egress, if added, still requires reviewed destinations
 	6379: {}, // Redis state and cache
 	7233: {}, // Temporal frontend
 }
@@ -129,7 +129,7 @@ func verifyNetworkPolicy(deployment, networkPolicy map[string]any) error {
 		}
 	}
 
-	for _, port := range []int64{5432, 6379, 7233} {
+	for _, port := range []int64{6379, 7233} {
 		if !seenStateControlPorts[port] {
 			return fmt.Errorf("worker NetworkPolicy must declare reviewed state/control egress for TCP port %d", port)
 		}

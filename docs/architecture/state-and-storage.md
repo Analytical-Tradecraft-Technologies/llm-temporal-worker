@@ -1,25 +1,23 @@
 # State and Storage
 
-> This chapter describes current storage behavior. Target phase status and
-> authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
-> The exact PostgreSQL system-of-record/Redis materialization boundary, schema,
-> constraints, indexes, and transaction protocols are in
-> [PostgreSQL state, cache, accounting, and control plane](postgresql-state-cache-and-control-plane.md).
-> Temporal's own PostgreSQL schema is never modified.
+> Cloud key-value/blob storage and Redis are the current durable backends.
+> [Cloud request storage](../reference/cloud-request-repository.md) describes
+> the concrete implementation. SQL target designs are historical; worker SQL
+> persistence and its maintenance CLI have been removed. Temporal's own
+> PostgreSQL database is a separate service dependency.
 
 ## Storage responsibilities
 
-V1 persists three kinds of state behind separate domain ports:
+| State | Storage | Purpose |
+| --- | --- | --- |
+| Requests, attempts and pending index | Cloud key-value store | Durable identity, recovery and bounded pending discovery |
+| Checkpoints and cache successes | Cloud key-value/blob stores | Encrypted durable context, output and completion-based freshness |
+| Budget reservations, claims and settlement | Redis | Atomic admission across all matching windows and idempotent settlement |
+| Provider status, inventory and throttles | Redis | Shared operational state and bounded queries |
+| Audit events | Structured logs | Best-effort operational audit without a database repository |
 
-| State | Mutable | Contains model content | Atomicity requirement |
-| --- | --- | --- | --- |
-| Operation ledger and budget buckets | state-machine updates | no; completed result is a reference | one transaction across operation and all matching windows |
-| Continuation records | immutable after creation | canonical transcript and opaque provider state, size-bounded in the record | create-if-absent by child ID |
-| Result/blob objects | immutable | possibly | digest-verified put/get |
-
-Redis implements operation, budget, and continuation state. A blob-store port
-handles payloads that exceed safe Redis or Temporal inline limits; filesystem is
-development-only and object storage is the production example.
+The cloud provider currently uses DynamoDB and S3 with IAM authentication.
+Memory and Redis-only compositions remain development fixtures.
 
 The production S3 store uses a create-if-absent write keyed by tenant and
 SHA-256 digest. When S3 reports that the key already exists, the worker only
@@ -31,17 +29,10 @@ proven to match. Reads apply the same integrity boundary: the returned object
 must carry the reference's media type (and its bytes must still match the
 digest and length), otherwise the read fails closed as a digest mismatch.
 
-This is the current pre-release layout, not the accepted final division of
-responsibility. In the target design PostgreSQL is the durable system of record,
-while Redis is the required production optimization that materializes the
-complete active-window budget working set plus request, token, and concurrency
-throttles. Redis makes each reservation/reconciliation atomic and coordinates
-replicas; it does not become the durable financial record. Normal budget
-admission reads Redis only. Every accepted Redis reservation must be journaled
-to PostgreSQL before paid dispatch; a failed write releases Redis best-effort
-and never dispatches. Both dependencies fail closed for new paid work. Exact
-PostgreSQL decimals are conservatively represented as safe-integer nano-USD in
-Redis as specified by the target schema chapter.
+There is no SQL journal or SQL data migration. A Redis reservation authorizes
+only a bounded start window; used reservations are settled idempotently. Durable
+request and attempt records preserve the provider work and finalization context
+needed for workflow retries and recovery.
 
 The `storage/redis` implementation uses the official go-redis v9 client and
 one embedded, versioned Redis Function library for each admission mutation.

@@ -37,25 +37,10 @@ zero-cost catalog; production deployments must use external secret delivery,
 real catalog digests, and the release image digest. The worker exposes the
 same probes as Kubernetes: `/health/live`, `/health/ready`, and `/metrics`.
 
-For a storage-composition check, the opt-in `durable` profile adds a separate
-digest-pinned PostgreSQL 17.5 `worker-postgres` service with its own named
-`worker-postgres-data-v17` volume, database, and role. Temporal's PostgreSQL
-service remains a separate Temporal-owned dependency. The versioned volume is
-intentional: Compose will not try to open a PostgreSQL 16 data directory with
-the PostgreSQL 17 image. This local fixture has no migration path; discard a
-previous `worker-postgres-data` volume with `docker compose --profile durable
-down --volumes` (or remove that old volume explicitly) before starting fresh.
-`durable-worker` validates `durable-config.yaml` and waits for both that
-database and Redis (Redis remains the active budget/throttle dependency):
-
-```sh
-docker compose --profile durable run --rm durable-worker
-```
-
-This profile deliberately does not install the worker schema or start Temporal
-polling. Schema installation is an explicit deployment operation, and the
-existing `worker` profile remains the offline Redis-only parser/readiness
-fixture.
+Worker persistence uses the configured cloud key-value and blob stores plus
+Redis. The removed SQL worker profile and schema installer are no longer
+supported. Temporal's PostgreSQL service remains Temporal-owned and is not
+used by worker storage.
 
 The checked-in worker profile remains a
 parser/configuration/readiness fixture, not an end-to-end provider invocation

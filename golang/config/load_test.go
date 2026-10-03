@@ -70,13 +70,6 @@ func TestLoadCompleteExample(t *testing.T) {
 	if got, want := time.Duration(loaded.Temporal.Worker.HeartbeatKeepaliveInterval), time.Second; got != want {
 		t.Fatalf("worker heartbeat keepalive interval = %s, want %s", got, want)
 	}
-	postgres := loaded.State.Postgres
-	if postgres.MinConnections != 8 || postgres.MaxConnections != 64 {
-		t.Fatalf("PostgreSQL pool bounds = min %d max %d, want min 8 max 64", postgres.MinConnections, postgres.MaxConnections)
-	}
-	if got, want := time.Duration(postgres.IdleTransactionTimeout), 30*time.Second; got != want {
-		t.Fatalf("PostgreSQL idle transaction timeout = %s, want %s", got, want)
-	}
 	if loaded.State.Redis.CoordinationStreamEnabled == nil || !*loaded.State.Redis.CoordinationStreamEnabled {
 		t.Fatal("durable example must enable coordination stream readiness")
 	}
@@ -144,7 +137,7 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 		t.Fatalf("default coordination stream trim safety = %s, want %s", got, want)
 	}
 
-	fixture := strings.Replace(withoutStreamFields, "kind: durable", "kind: redis", 1)
+	fixture := strings.Replace(withoutCloudRequests(withoutStreamFields), "kind: durable", "kind: redis", 1)
 	fixture = strings.Replace(fixture, "environment: production", "environment: development", 1)
 	loaded, err = config.Load([]byte(fixture))
 	if err != nil {
@@ -391,32 +384,8 @@ func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	}
 }
 
-func TestLoadAppliesPostgresNamespaceEnvironmentOverrides(t *testing.T) {
-	t.Setenv("LLMTW_POSTGRES_DATABASE", "worker_db")
-	t.Setenv("LLMTW_POSTGRES_SCHEMA", "worker_state")
-	t.Setenv("LLMTW_POSTGRES_TABLE_PREFIX", "tenant_")
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.State.Postgres.Database != "worker_db" || loaded.State.Postgres.Schema != "worker_state" || loaded.State.Postgres.TablePrefix != "tenant_" {
-		t.Fatalf("unexpected PostgreSQL namespace: %#v", loaded.State.Postgres)
-	}
-}
-
-func TestLoadDefaultsPostgresIdleTransactionTimeout(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "    idle_transaction_timeout: 30s\n", "", 1)
-	loaded, err := config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := time.Duration(loaded.State.Postgres.IdleTransactionTimeout), 30*time.Second; got != want {
-		t.Fatalf("default PostgreSQL idle transaction timeout = %s, want %s", got, want)
-	}
-}
-
 func TestLoadRejectsRedisOnlyStateInProduction(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "  kind: durable\n", "  kind: redis\n", 1)
+	data := strings.Replace(withoutCloudRequests(string(exampleYAML(t))), "  kind: durable\n", "  kind: redis\n", 1)
 	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "state.kind redis") {
 		t.Fatalf("Redis-only production state was accepted: %v", err)
 	}
@@ -573,4 +542,10 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 			t.Errorf("accepted invalid %s", name)
 		}
 	}
+}
+
+func withoutCloudRequests(value string) string {
+	start := strings.Index(value, "  requests:\n")
+	end := strings.Index(value[start:], "\nblob_store:") + start
+	return value[:start] + value[end:]
 }
