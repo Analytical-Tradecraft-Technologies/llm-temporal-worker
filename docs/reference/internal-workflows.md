@@ -45,3 +45,35 @@ The workflows are available through `workflows.RegisterInternal`; this PR does
 not yet register them in production. Public generation/compaction workflows,
 production cloud runtime composition, and real dependency E2E verification follow.
 The tests use Temporal's workflow test environment and virtual timers.
+
+## Public workflows and compaction planning
+
+`llm.generate.workflow.v1` accepts a Generate v1 request and returns a Generate v1
+response. It calls `llm.generate.plan.v1` first. When required, it runs
+`llm.compact.workflow.v1` as a child, uses the returned checkpoint as the Generate
+parent, and delegates generation to `llm.request.execute.v1`. Append, settings
+patch, operation key, and final-answer cache freshness are preserved. A failed
+compaction stops generation. Application tool calls are returned unchanged.
+
+`llm.compact.workflow.v1` also accepts standalone Compact v1 requests. It delegates
+to the same internal request workflow and therefore shares cache, budget,
+provider polling, and completion behavior. Automatic compaction always enables
+its content/policy cache with no age limit; final-answer freshness does not expire
+an otherwise compatible summary. A deterministic child operation key derived
+from the original request prevents replay from creating independent summaries.
+
+The planning activity authorizes before materializing a parent. Roots and parents
+with no safe prefix skip compaction. Otherwise it evaluates inherited policy
+token/byte thresholds and the selected route's context-byte limit against the
+projected Generate input. Token counting uses the admission estimator's exact
+provider tokenizer when configured, or its UTF-8 byte estimate otherwise. This
+fallback is an estimate, not a guarantee that every provider context window fits.
+The parent's compaction policy governs this summary; a new Generate settings
+patch takes effect after compaction and governs subsequent turns.
+
+Planning performs no writes, reservations, claims, or provider requests. It
+returns only a boolean; materialized history stays out of its activity result.
+The public and internal workflow implementations are available through
+`workflows.Register`. Production registration and runtime composition remain the
+next integration step. The activity registry now advertises eight v1 activities,
+including the new planning activity.

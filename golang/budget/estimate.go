@@ -149,6 +149,13 @@ func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, 
 	return maximum, nil
 }
 
+// CountInputTokens shares the admission estimate with compaction planning. It
+// uses the configured exact tokenizer or the existing UTF-8 estimate, without
+// looking up prices or acquiring budget.
+func (estimator Estimator) CountInputTokens(request llm.Request, candidate routing.Candidate) (int64, error) {
+	return estimator.estimateInput(request, candidate)
+}
+
 func (estimator Estimator) estimateInput(request llm.Request, candidate routing.Candidate) (int64, error) {
 	if estimator.Tokenizer != nil {
 		inputTokens, err := estimator.Tokenizer(request, candidate)
@@ -160,7 +167,7 @@ func (estimator Estimator) estimateInput(request llm.Request, candidate routing.
 		}
 		return inputTokens, nil
 	}
-	data, err := llm.CanonicalJSON(mustRequestJSON(request))
+	data, err := llm.CanonicalJSONWithLimits(mustRequestJSON(request), 16<<20, 128)
 	if err != nil {
 		return 0, err
 	}
