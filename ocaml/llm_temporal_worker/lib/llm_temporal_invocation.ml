@@ -3,7 +3,6 @@ open Llm_temporal_models
 let ( let* ) = Result.bind
 
 let api_version = Llm_temporal_codec.api_version
-let activity_name = "llm.generate.v1"
 let workflow_name = "llm.generate.workflow.v1"
 
 let request_codec =
@@ -18,7 +17,7 @@ let response_codec =
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (generate_request, generate_response) Temporal.Activity.t ->
+  (generate_request, generate_response) Temporal.Workflow.t ->
   generate_request ->
   (generate_response, Temporal.Error.t) result
 
@@ -29,12 +28,28 @@ let activity_retry_policy =
   | Ok policy -> policy
   | Error error -> invalid_arg (Temporal.Error.message error)
 
+(* Validate raw records before a child command can be emitted. Encoders may
+   normalize the API version, so check the supplied version before encoding. *)
+let validated_encode ~version ~actual ~encode ~decode request =
+  if actual <> version then Error (Temporal.Error.codec ~message:"unsupported request API version")
+  else
+    let* payload = encode request in
+    let* _ = decode payload in
+    Ok payload
+
+let encode_generate (request : generate_request) =
+  validated_encode ~version:Llm_temporal_v1_codec.generate_api_version ~actual:request.api_version
+    ~encode:Llm_temporal_v1_codec.encode_generate_request ~decode:Llm_temporal_v1_codec.decode_generate_request request
+let encode_compact (request : compact_request) =
+  validated_encode ~version:Llm_temporal_v1_codec.compact_api_version ~actual:request.api_version
+    ~encode:Llm_temporal_v1_codec.encode_compact_request ~decode:Llm_temporal_v1_codec.decode_compact_request request
+
 let generate_v1_request_codec =
-  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_generate_request ~decode:Llm_temporal_v1_codec.decode_generate_request
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:encode_generate ~decode:Llm_temporal_v1_codec.decode_generate_request
 let generate_v1_response_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_generate_response ~decode:Llm_temporal_v1_codec.decode_generate_response
 let compact_v1_request_codec =
-  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_compact_request ~decode:Llm_temporal_v1_codec.decode_compact_request
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:encode_compact ~decode:Llm_temporal_v1_codec.decode_compact_request
 let compact_v1_response_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_compaction_response ~decode:Llm_temporal_v1_codec.decode_compaction_response
 let query_v1_request_codec =
@@ -42,8 +57,8 @@ let query_v1_request_codec =
 let query_v1_response_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_query_response ~decode:Llm_temporal_v1_codec.decode_query_response
 
-let generate_v1_activity = Temporal.Activity.remote ~name:activity_name ~input:generate_v1_request_codec ~output:generate_v1_response_codec
-let compact_v1_activity = Temporal.Activity.remote ~name:"llm.compact.v1" ~input:compact_v1_request_codec ~output:compact_v1_response_codec
+let generate_v1_workflow = Temporal.Workflow.remote ~name:workflow_name ~input:generate_v1_request_codec ~output:generate_v1_response_codec
+let compact_v1_workflow = Temporal.Workflow.remote ~name:"llm.compact.workflow.v1" ~input:compact_v1_request_codec ~output:compact_v1_response_codec
 let query_v1_activity = Temporal.Activity.remote ~name:"llm.query.v1" ~input:query_v1_request_codec ~output:query_v1_response_codec
 
 let conversion_error message = Error (Temporal.Error.codec ~message)
@@ -195,12 +210,12 @@ let legacy_request_to_generate (request : request) =
 (* [Request.make] remains source-compatible for callers that still construct
    the pre-checkpoint record.  This deprecated helper is the only path from
    that record into Temporal: it validates the fields that cannot be carried
-   by v1, then dispatches the canonical [llm.generate.v1] descriptor. *)
+   by v1, then dispatches the canonical [llm.generate.workflow.v1] descriptor. *)
 let invoke_once ?task_queue ~(dispatch : dispatcher) (input : request) =
   match legacy_request_to_generate input with
   | Error error -> Error error
   | Ok request ->
-      (match dispatch ?task_queue generate_v1_activity request with
+      (match dispatch ?task_queue generate_v1_workflow request with
        | Error error -> Error error
        | Ok response when
            not (String.equal
@@ -213,47 +228,30 @@ let invoke_once ?task_queue ~(dispatch : dispatcher) (input : request) =
                (Operation_key.to_string response.operation_key)))
        | Ok response -> Ok response)
 
-(* The facade's canonical one-shot descriptor is v1.  The deprecated
-   [invoke_once] function below converts its old constructor shape before
-   dispatch, so no public helper can pair the legacy wire codec with this
-   Activity name. *)
-let generate_activity = generate_v1_activity
-
-let execute ?task_queue input =
-  Temporal.Activity.execute
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:activity_retry_policy generate_v1_activity input
-
-let workflow ?task_queue () =
-  Temporal.Workflow.define ~name:workflow_name ~input:generate_v1_request_codec
-    ~output:generate_v1_response_codec
-    (fun input -> execute ?task_queue input)
-
-(* The low-level v1 helpers intentionally keep the wire records visible.  A
-   caller that needs the Conversation or Query invariants should use those
-   facades instead; these functions are useful for protocol tests and for
-   workflows that already own the exact request records. *)
+(* Generation and compaction run as child workflows. The caller supplies an
+   identity unique to this child start in the namespace, derived deterministically
+   from its own durable request identity. Paid work survives parent closure. *)
+let generate_workflow = generate_v1_workflow
+let workflow () = generate_v1_workflow
 let task_queue_string = Option.map Temporal_task_queue.to_string
 
-let start_generate ?task_queue request =
-  Temporal.Activity.start
-    ?task_queue:(task_queue_string task_queue)
-    ~retry_policy:activity_retry_policy generate_v1_activity request
+let start_child ~task_queue ~id definition request =
+  Temporal.Child_workflow.start
+    ~task_queue:(Temporal_task_queue.to_string task_queue) ~id
+    ~parent_close_policy:Temporal.Child_workflow.Parent_close_policy.Abandon
+    ~cancellation_type:Temporal.Child_workflow.Abandon
+    definition request
 
-let invoke_generate ?task_queue request =
-  Temporal.Activity.execute
-    ?task_queue:(task_queue_string task_queue)
-    ~retry_policy:activity_retry_policy generate_v1_activity request
+let start_generate ~task_queue ~id request =
+  start_child ~task_queue ~id generate_v1_workflow request
+let invoke_generate ~task_queue ~id request =
+  Temporal.Future.await (start_generate ~task_queue ~id request)
+let execute = invoke_generate
 
-let start_compact_v1 ?task_queue request =
-  Temporal.Activity.start
-    ?task_queue:(task_queue_string task_queue)
-    ~retry_policy:activity_retry_policy compact_v1_activity request
-
-let invoke_compact_v1 ?task_queue request =
-  Temporal.Activity.execute
-    ?task_queue:(task_queue_string task_queue)
-    ~retry_policy:activity_retry_policy compact_v1_activity request
+let start_compact_v1 ~task_queue ~id request =
+  start_child ~task_queue ~id compact_v1_workflow request
+let invoke_compact_v1 ~task_queue ~id request =
+  Temporal.Future.await (start_compact_v1 ~task_queue ~id request)
 
 let start_query_v1 ?task_queue envelope =
   Temporal.Activity.start
@@ -265,9 +263,9 @@ let invoke_query_v1 ?task_queue envelope =
     ?task_queue:(task_queue_string task_queue)
     ~retry_policy:activity_retry_policy query_v1_activity envelope
 
-let invoke_generate_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Activity.t -> generate_request -> (generate_response, Temporal.Error.t) result) input =
-  dispatch ?task_queue generate_v1_activity input
-let invoke_compact_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (compact_request, compaction_response) Temporal.Activity.t -> compact_request -> (compaction_response, Temporal.Error.t) result) input =
-  dispatch ?task_queue compact_v1_activity input
+let invoke_generate_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Workflow.t -> generate_request -> (generate_response, Temporal.Error.t) result) input =
+  dispatch ?task_queue generate_v1_workflow input
+let invoke_compact_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (compact_request, compaction_response) Temporal.Workflow.t -> compact_request -> (compaction_response, Temporal.Error.t) result) input =
+  dispatch ?task_queue compact_v1_workflow input
 let invoke_query_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (query_envelope, query_response) Temporal.Activity.t -> query_envelope -> (query_response, Temporal.Error.t) result) input =
   dispatch ?task_queue query_v1_activity input

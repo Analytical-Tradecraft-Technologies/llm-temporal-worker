@@ -1,4 +1,4 @@
-(** Immutable, typed helpers over the v1 Generate and Compact Activities. *)
+(** Immutable, typed helpers over the public v1 Generate and Compact child workflows. *)
 
 open Llm_temporal_models
 
@@ -87,28 +87,31 @@ val validate_cache_temperature :
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (generate_request, generate_response) Temporal.Activity.t ->
+  (generate_request, generate_response) Temporal.Workflow.t ->
   generate_request -> (generate_response, Temporal.Error.t) result
 
 val respond_with :
   ?task_queue:Temporal_task_queue.t -> dispatch:dispatcher ->
   ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> append:item list -> t -> (turn, Temporal.Error.t) result
+
+(** Supply the Go queue and a deterministic child ID unique in the namespace.
+    Paid work survives parent closure. No cancellation handle is exposed. *)
 val respond :
-  ?task_queue:Temporal_task_queue.t -> ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
+  task_queue:Temporal_task_queue.t -> id:string -> ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> append:item list -> t -> (turn, Temporal.Error.t) result
 
 (** The future's successful value is a [result] so protocol mismatches found
-    after Activity completion (including an unexpected operation key) remain
+    after child workflow completion (including an unexpected operation key) remain
     composable workflow data rather than being raised from a callback. *)
 val start_respond :
-  ?task_queue:Temporal_task_queue.t -> ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
+  task_queue:Temporal_task_queue.t -> id:string -> ?settings_patch:Settings.Patch.t -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> append:item list -> t ->
   ((turn, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
 type compact_dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (compact_request, compaction_response) Temporal.Activity.t ->
+  (compact_request, compaction_response) Temporal.Workflow.t ->
   compact_request -> (compaction_response, Temporal.Error.t) result
 
 val compact_with :
@@ -116,9 +119,9 @@ val compact_with :
   ?policy:compaction_policy -> ?cache:Cache_policy.t -> operation_key:Operation_key.t -> t ->
   (compaction_response * t, Temporal.Error.t) result
 val compact :
-  ?task_queue:Temporal_task_queue.t -> ?policy:compaction_policy -> ?cache:Cache_policy.t ->
+  task_queue:Temporal_task_queue.t -> id:string -> ?policy:compaction_policy -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> t -> (compaction_response * t, Temporal.Error.t) result
 val start_compact :
-  ?task_queue:Temporal_task_queue.t -> ?policy:compaction_policy -> ?cache:Cache_policy.t ->
+  task_queue:Temporal_task_queue.t -> id:string -> ?policy:compaction_policy -> ?cache:Cache_policy.t ->
   operation_key:Operation_key.t -> t ->
   ((compaction_response * t, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t

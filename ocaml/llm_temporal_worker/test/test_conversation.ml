@@ -29,7 +29,7 @@ let response (request : generate_request) ~kind ~handle =
     status = Completed;
     output = [ message "ok" ];
     checkpoint = { handle; parent; kind; depth };
-    cache = { disposition = Cache_disabled; variant = 0l; entry_age_seconds = None };
+    cache = { disposition = Cache_disabled; variant = (match request.cache with None -> 0l | Some c -> c.variant); entry_age_seconds = None };
     route = None; usage = None;
     cost = Exact_cost { actual_cost_usd = Usd_decimal.zero;
                         method_ = Control_query_zero; catalog_version = None };
@@ -65,11 +65,21 @@ let () =
   let calls = ref [] in
   let dispatch ?task_queue activity (request : generate_request) =
     (match task_queue with Some queue when Temporal_task_queue.to_string queue = "conversation-queue" -> () | _ -> failwith "task queue dropped");
-    if Temporal.Activity.name activity <> "llm.generate.v1" then failwith "wrong Generate descriptor";
+    if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then failwith "wrong Generate descriptor";
     calls := request :: !calls;
     let handle = checkpoint (Operation_key.to_string request.operation_key ^ "-checkpoint") in
     Ok (response request ~kind:Generation_checkpoint ~handle)
   in
+  let wrong_sample_dispatch ?task_queue activity request =
+    match dispatch ?task_queue activity request with
+    | Error error -> Error error
+    | Ok response -> Ok { response with cache = { response.cache with variant = 2l } }
+  in
+  require_codec_rejection "generate accepted another sample"
+    (Conversation.respond_with
+       ~task_queue:(Temporal_task_queue.of_string "conversation-queue") ~dispatch:wrong_sample_dispatch
+       ~operation_key:(operation_key "wrong-sample") ~append:[] parent);
+  calls := [];
   let zero_root = Conversation.root ~context ~model
       ~settings:(Conversation.Settings.make
         ~temperature:(expect_valid (Usd_decimal.of_string "0")) ()) ()
@@ -106,7 +116,7 @@ let () =
   if child_request.cache <> None then failwith "cache leaked between calls";
 
   let mismatched_dispatch ?task_queue:_ activity (request : generate_request) =
-    if Temporal.Activity.name activity <> "llm.generate.v1" then failwith "wrong Generate descriptor";
+    if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then failwith "wrong Generate descriptor";
     Ok { (response request ~kind:Generation_checkpoint
              ~handle:(checkpoint "mismatched-operation")) with
          operation_key = operation_key "different-operation" }
@@ -119,7 +129,7 @@ let () =
    | Ok _ -> failwith "mismatched Generate operation key was accepted");
 
   let malformed_generate_dispatch ?task_queue:_ activity (request : generate_request) =
-    if Temporal.Activity.name activity <> "llm.generate.v1" then failwith "wrong Generate descriptor";
+    if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then failwith "wrong Generate descriptor";
     Ok (response request ~kind:Compaction_checkpoint
           ~handle:(checkpoint "invalid-generate-checkpoint"))
   in
@@ -138,28 +148,38 @@ let () =
 
   let compact_dispatch ?task_queue activity (request : compact_request) =
     (match task_queue with Some queue when Temporal_task_queue.to_string queue = "compact-queue" -> () | _ -> failwith "compact task queue dropped");
-    if Temporal.Activity.name activity <> "llm.compact.v1" then failwith "wrong Compact descriptor";
+    if Temporal.Workflow.name activity <> "llm.compact.workflow.v1" then failwith "wrong Compact descriptor";
     let handle = checkpoint (Operation_key.to_string request.operation_key ^ "-compact") in
     Ok { api_version = V1_codec.compact_api_version; operation_key = request.operation_key;
          operation_id = Operation_id.of_string "compact-operation";
          checkpoint = { handle; parent = Some request.parent; kind = Compaction_checkpoint; depth = 2l };
-         cache = { disposition = Cache_disabled; variant = 0l; entry_age_seconds = None };
+         cache = { disposition = Cache_disabled; variant = (match request.cache with None -> 0l | Some c -> c.variant); entry_age_seconds = None };
          provenance = None; usage = None;
          cost = Exact_cost { actual_cost_usd = Usd_decimal.zero; method_ = Control_query_zero; catalog_version = None };
          diagnostics = [] }
   in
+  let wrong_sample_dispatch ?task_queue activity request =
+    match compact_dispatch ?task_queue activity request with
+    | Error error -> Error error
+    | Ok response -> Ok { response with cache = { response.cache with variant = 2l } }
+  in
+  require_codec_rejection "compact accepted another sample"
+    (Conversation.compact_with
+       ~task_queue:(Temporal_task_queue.of_string "compact-queue") ~dispatch:wrong_sample_dispatch
+       ~operation_key:(operation_key "wrong-sample") cleared.conversation);
+
   let sample_cache = expect_valid (Conversation.Cache_policy.accept_up_to ~max_age_seconds:60L ~variant:1l ()) in
   ignore (expect_ok (Conversation.compact_with
       ~task_queue:(Temporal_task_queue.of_string "compact-queue") ~dispatch:compact_dispatch ~cache:sample_cache
       ~operation_key:(operation_key "compact-sample") cleared.conversation));
 
   let malformed_compact_dispatch ?task_queue:_ activity (request : compact_request) =
-    if Temporal.Activity.name activity <> "llm.compact.v1" then failwith "wrong Compact descriptor";
+    if Temporal.Workflow.name activity <> "llm.compact.workflow.v1" then failwith "wrong Compact descriptor";
     let handle = checkpoint "invalid-compact-checkpoint" in
     Ok { api_version = V1_codec.compact_api_version; operation_key = request.operation_key;
          operation_id = Operation_id.of_string "invalid-compact-operation";
          checkpoint = { handle; parent = None; kind = Compaction_checkpoint; depth = 2l };
-         cache = { disposition = Cache_disabled; variant = 0l; entry_age_seconds = None };
+         cache = { disposition = Cache_disabled; variant = (match request.cache with None -> 0l | Some c -> c.variant); entry_age_seconds = None };
          provenance = None; usage = None;
          cost = Exact_cost { actual_cost_usd = Usd_decimal.zero;
                              method_ = Control_query_zero; catalog_version = None };
@@ -174,7 +194,7 @@ let () =
      the future-mapped path from advancing an unrelated branch. *)
   let wrong_parent_compact_dispatch ?task_queue:_ activity
       (request : compact_request) =
-    if Temporal.Activity.name activity <> "llm.compact.v1" then
+    if Temporal.Workflow.name activity <> "llm.compact.workflow.v1" then
       failwith "wrong Compact descriptor";
     let handle = checkpoint "wrong-parent-compact-checkpoint" in
     Ok { api_version = V1_codec.compact_api_version;
@@ -182,7 +202,7 @@ let () =
          operation_id = Operation_id.of_string "wrong-parent-compact-operation";
          checkpoint = { handle; parent = Some (checkpoint "another-branch");
                         kind = Compaction_checkpoint; depth = 2l };
-         cache = { disposition = Cache_disabled; variant = 0l;
+         cache = { disposition = Cache_disabled; variant = (match request.cache with None -> 0l | Some c -> c.variant);
                    entry_age_seconds = None };
          provenance = None; usage = None;
          cost = Exact_cost { actual_cost_usd = Usd_decimal.zero;
@@ -255,7 +275,7 @@ let () =
   (* Async compaction keeps local protocol validation in the successful
      value channel, just like the query facade does, so an invalid root does
      not schedule an Activity or raise from a workflow callback. *)
-  let invalid_compact = Conversation.start_compact
+  let invalid_compact = Conversation.start_compact ~task_queue:(Temporal_task_queue.of_string "llm-worker") ~id:"invalid"
       ~operation_key:(operation_key "compact-without-checkpoint") parent in
   (match Temporal.Future.peek invalid_compact with
    | Some (Ok (Error error)) when String.equal (Temporal.Error.message error)

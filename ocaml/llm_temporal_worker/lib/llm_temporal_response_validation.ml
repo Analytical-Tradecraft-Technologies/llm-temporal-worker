@@ -31,9 +31,17 @@ let validate_query_cost = function
 let checkpoint_equal left right =
   String.equal (Checkpoint.to_string left) (Checkpoint.to_string right)
 
+let validate_identity expected_key actual_key (cache : cache_policy option) variant =
+  if expected_key <> actual_key then
+    error "workflow response operation key does not match request"
+  else if variant <> (match cache with None -> 0l | Some policy -> policy.variant) then
+    error "workflow response sample index does not match request"
+  else Ok ()
+
 let validate_generate_response_for_request (request : generate_request)
     (response : generate_response) =
-  match validate_generate_response response with
+  match Result.bind (validate_identity request.operation_key response.operation_key request.cache response.cache.variant)
+          (fun () -> validate_generate_response response) with
   | Error error -> Error error
   | Ok () ->
       match request.parent, response.checkpoint.parent with
@@ -51,7 +59,8 @@ let validate_generate_response_for_request (request : generate_request)
 
 let validate_compaction_response_for_request (request : compact_request)
     (response : compaction_response) =
-  match validate_compaction_response response with
+  match Result.bind (validate_identity request.operation_key response.operation_key request.cache response.cache.variant)
+          (fun () -> validate_compaction_response response) with
   | Error error -> Error error
   | Ok () ->
       match response.checkpoint.parent with
