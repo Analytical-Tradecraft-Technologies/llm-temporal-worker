@@ -77,7 +77,14 @@ func (executor *CloudProviderExecution) Submit(ctx context.Context, call *CloudB
 	if !fresh {
 		return executor.settle(ctx, call.scope, call.id, saved)
 	}
-	claim, err := executor.admission.admit.claim(ctx, saved.Plan.Route, saved.Execution.Reservation)
+	var claim *durable.ClaimReceipt
+	if saved.Plan.RequiresReservation() {
+		value, claimErr := executor.admission.admit.claim(ctx, saved.Plan.Route, saved.Execution.Reservation)
+		err = claimErr
+		if err == nil {
+			claim = &value
+		}
+	}
 	if err != nil {
 		// Even a lost claim reply remains charged. Do not infer that the start
 		// permission was unused, and never refund or acquire a replacement here.
@@ -110,7 +117,7 @@ func (executor *CloudProviderExecution) Submit(ctx context.Context, call *CloudB
 		if err == nil {
 			err = executionError(provider.CodeProviderInvalidResponse)
 		}
-		saved.Execution.Claim = &claim
+		saved.Execution.Claim = claim
 	}
 	return executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, outcome, err, false)
 }
@@ -153,7 +160,7 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		if err != nil {
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderUnavailable)
 		}
-	} else if recovery, ok := planned.Adapter.(provider.IdempotencyRecovery); ok && saved.Execution.Claim != nil {
+	} else if recovery, ok := planned.Adapter.(provider.IdempotencyRecovery); ok && (saved.Execution.Claim != nil || !saved.Plan.RequiresReservation()) {
 		outcome, err = recovery.RecoverByIdempotencyKey(callCtx, planned.Call, provider.NopObserver{})
 		if err != nil {
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderUnavailable)
@@ -209,7 +216,7 @@ type executionObserver struct {
 	scope    cloudstate.Scope
 	id       cloudstate.RequestID
 	saved    cloudstate.SavedProviderExecution
-	claim    durable.ClaimReceipt
+	claim    *durable.ClaimReceipt
 	marked   bool
 	saveErr  error
 }
@@ -220,7 +227,7 @@ func (observer *executionObserver) BeforePossibleWrite(ctx context.Context) erro
 	}
 	next := observer.saved.Execution
 	next.Stage = cloudstate.ExecutionSubmitting
-	next.Claim = &observer.claim
+	next.Claim = observer.claim
 	result, err := observer.executor.save(ctx, observer.scope, observer.id, observer.saved, next)
 	if err != nil {
 		observer.saveErr = err
@@ -289,7 +296,12 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 	}
 	next.UpdatedAt = executor.clock().UTC()
 	if next.Stage == cloudstate.ExecutionSucceeded || next.Stage == cloudstate.ExecutionFailed {
-		next.Settlement = executionSettlement(next)
+		next.CompletedAt = next.UpdatedAt
+		if saved.Plan.RequiresReservation() {
+			next.Settlement = executionSettlement(next)
+		} else {
+			next.Settled = true
+		}
 	}
 	result, err := executor.save(ctx, scope, id, saved, next)
 	if err != nil {
@@ -349,7 +361,11 @@ func executionError(code provider.Code) error {
 
 func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) {
 	response.OperationID = string(plan.Route.OperationID)
-	response.Cost.ReservedCostUSD = &plan.Estimate.CostUSD
+	if plan.RequiresReservation() {
+		response.Cost.ReservedCostUSD = &plan.Estimate.CostUSD
+	} else {
+		response.Cost.ReservedCostUSD = nil
+	}
 	response.Cost.CatalogVersion = plan.Quote.Entry.Version
 	if response.Cost.Status == llm.CostStatusUnknown {
 		response.Cost.ActualCostUSD = nil
@@ -357,6 +373,10 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 	}
 	if response.Cost.ActualCostUSD != nil && response.Cost.ActualCostUSD.Validate() == nil {
 		response.Cost.Status, response.Cost.Method = llm.CostStatusKnown, string(pricing.CostProviderReported)
+		return
+	}
+	if plan.Unpriced {
+		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
 	usage := response.Usage

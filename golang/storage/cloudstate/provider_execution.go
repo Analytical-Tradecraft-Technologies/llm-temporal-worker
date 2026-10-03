@@ -36,7 +36,7 @@ type ExecutionFailure struct {
 	Dispatch provider.DispatchCertainty `json:"dispatch"`
 }
 
-// ProviderExecution is one paid attempt, never permission to submit it again.
+// ProviderExecution is one provider attempt, never permission to submit it again.
 // The original immutable BudgetPlan remains alongside it. A replacement paid
 // attempt needs a new request/operation identity and a fresh Redis reservation.
 type ProviderExecution struct {
@@ -49,6 +49,7 @@ type ProviderExecution struct {
 	StartedAt           time.Time                 `json:"started_at"`
 	RecoverAfter        time.Time                 `json:"recover_after"`
 	UpdatedAt           time.Time                 `json:"updated_at"`
+	CompletedAt         time.Time                 `json:"completed_at,omitempty"`
 	ProviderOperationID string                    `json:"provider_operation_id,omitempty"`
 	PollAfter           time.Time                 `json:"poll_after,omitempty"`
 	Response            *llm.Response             `json:"response,omitempty"`
@@ -67,8 +68,15 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 	if plan.Validate() != nil || execution.Version != 1 || execution.Revision == 0 || execution.Revision > maxRevisions ||
 		tokenErr != nil || startToken == uuid.Nil || startToken.String() != execution.StartToken ||
 		!validTime(execution.StartedAt) || execution.StartedAt.Before(plan.QuotedAt) || !validTime(execution.UpdatedAt) || execution.UpdatedAt.Before(execution.StartedAt) ||
-		!execution.RecoverAfter.Equal(execution.StartedAt.Add(durable.BudgetStartLease)) || !execution.Reservation.Accepted ||
-		execution.Reservation.Validate(plan.Reservation) != nil || !executionReservationMatches(plan, execution.Reservation) {
+		!execution.RecoverAfter.Equal(execution.StartedAt.Add(durable.BudgetStartLease)) {
+		return ErrInvalid
+	}
+	paid := plan.RequiresReservation()
+	if paid {
+		if !execution.Reservation.Accepted || execution.Reservation.Validate(plan.Reservation) != nil || !executionReservationMatches(plan, execution.Reservation) {
+			return ErrInvalid
+		}
+	} else if !equalExecutionJSON(execution.Reservation, durable.ReserveResult{}) || execution.Claim != nil || execution.Settlement != nil {
 		return ErrInvalid
 	}
 	if execution.Claim != nil && execution.Claim.Validate(execution.Reservation) != nil {
@@ -83,15 +91,15 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 			return ErrInvalid
 		}
 	case ExecutionSubmitting:
-		if execution.Claim == nil {
+		if paid && execution.Claim == nil {
 			return ErrInvalid
 		}
 	case ExecutionPending:
-		if execution.Claim == nil || execution.ProviderOperationID == "" || !validTime(execution.PollAfter) {
+		if (paid && execution.Claim == nil) || execution.ProviderOperationID == "" || !validTime(execution.PollAfter) {
 			return ErrInvalid
 		}
 	case ExecutionSucceeded:
-		if execution.Claim == nil || execution.Response == nil || execution.Failure != nil {
+		if (paid && execution.Claim == nil) || execution.Response == nil || execution.Failure != nil {
 			return ErrInvalid
 		}
 		if _, err := execution.Response.MarshalJSON(); err != nil {
@@ -113,7 +121,18 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 	if execution.Stage != ExecutionPending && !execution.PollAfter.IsZero() {
 		return ErrInvalid
 	}
-	if execution.Settled && execution.Settlement == nil {
+	if execution.Settled && paid && execution.Settlement == nil {
+		return ErrInvalid
+	}
+	terminal := execution.Stage == ExecutionSucceeded || execution.Stage == ExecutionFailed
+	if terminal {
+		if !validTime(execution.CompletedAt) || execution.CompletedAt.Before(execution.StartedAt) || execution.CompletedAt.After(execution.UpdatedAt) {
+			return ErrInvalid
+		}
+	} else if !execution.CompletedAt.IsZero() || execution.Settled {
+		return ErrInvalid
+	}
+	if !paid && terminal && !execution.Settled {
 		return ErrInvalid
 	}
 	if execution.Settlement != nil {
@@ -293,7 +312,7 @@ func (r *Repository) writeExecution(ctx context.Context, record Record, progress
 func validExecutionTransition(old, next ProviderExecution) bool {
 	if old.StartToken != next.StartToken || !old.StartedAt.Equal(next.StartedAt) || !old.RecoverAfter.Equal(next.RecoverAfter) || next.UpdatedAt.Before(old.UpdatedAt) ||
 		!equalExecutionJSON(old.Reservation, next.Reservation) || (old.Claim != nil && !equalExecutionJSON(old.Claim, next.Claim)) ||
-		(old.ProviderOperationID != "" && old.ProviderOperationID != next.ProviderOperationID) {
+		(old.ProviderOperationID != "" && old.ProviderOperationID != next.ProviderOperationID) || (!old.CompletedAt.IsZero() && !old.CompletedAt.Equal(next.CompletedAt)) {
 		return false
 	}
 	if old.Stage == ExecutionSucceeded || old.Stage == ExecutionFailed {

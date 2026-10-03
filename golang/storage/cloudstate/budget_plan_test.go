@@ -36,7 +36,7 @@ func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, R
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := BudgetPlan{Version: 1, Kind: op.Kind, ConfigDigest: [32]byte{1}, ConfigEpoch: "epoch/v1", RequestDigest: [32]byte{2},
+	plan := BudgetPlan{Mode: BudgetReserved, Version: 1, Kind: op.Kind, ConfigDigest: [32]byte{1}, ConfigEpoch: "epoch/v1", RequestDigest: [32]byte{2},
 		CapabilityVersion: "capability/v1", CompilerVersion: "compiler/v1", Family: entry.Family, ProviderTier: entry.ProviderTier,
 		RequestedClass: llm.ServiceClassPriority, AttemptedClass: llm.ServiceClassStandard, QuotedAt: op.Now.Add(time.Second),
 		Route: durable.RoutePlan{OperationID: "private-paid-attempt", GenerationID: "private-generation", RouteID: "private-route", EndpointID: entry.EndpointID,
@@ -376,5 +376,44 @@ func TestBudgetPlanPrivateFactsRemainEncrypted(t *testing.T) {
 		if strings.Contains(string(data), "private-") {
 			t.Fatal("private planning data leaked in blob storage")
 		}
+	}
+}
+
+func TestBudgetPlanExplicitUnreservedModes(t *testing.T) {
+	for _, mode := range []BudgetMode{BudgetFree, BudgetUnmatched} {
+		t.Run(string(mode), func(t *testing.T) {
+			r, table, blobs, record, plan := budgetPlanFixture(t)
+			plan.Mode = mode
+			plan.Reservation.Reservations = nil
+			if mode == BudgetFree {
+				plan.Quote.Entry.Prices = pricing.UnitPrices{}
+				plan.Estimate.CostUSD = pricing.MustUSD("0")
+				plan.Estimate.MicroUSD = 0
+			}
+			if err := r.SaveBudgetPlan(context.Background(), record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := reopen(t, table, blobs).LoadBudgetPlan(context.Background(), record.Request.Scope, record.Request.ID)
+			if err != nil || !equalExecutionJSON(plan, restored) {
+				t.Fatal("mode changed on restart", err)
+			}
+			for _, mutate := range []func(*BudgetPlan){
+				func(p *BudgetPlan) { p.Mode = "" },
+				func(p *BudgetPlan) { p.Mode = BudgetReserved },
+				func(p *BudgetPlan) { p.Unpriced = true },
+			} {
+				invalid := copyTestBudgetPlan(t, plan)
+				mutate(&invalid)
+				if invalid.Validate() == nil {
+					t.Fatal("malformed unreserved plan accepted")
+				}
+			}
+			if mode == BudgetFree {
+				plan.Quote.Entry.Prices.PerRequest = pricing.MustDecimalUSD("0.01")
+				if plan.Validate() == nil {
+					t.Fatal("zero estimate masked paid quote")
+				}
+			}
+		})
 	}
 }

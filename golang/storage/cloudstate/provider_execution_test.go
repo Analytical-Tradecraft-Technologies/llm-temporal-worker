@@ -17,12 +17,19 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
-func executionFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Record, BudgetPlan, durable.ReserveResult) {
+func executionFixture(t *testing.T, modes ...BudgetMode) (*Repository, *memoryTable, *memoryBlobs, Record, BudgetPlan, durable.ReserveResult) {
 	t.Helper()
 	r, table, blobs, record, plan := budgetPlanFixture(t)
 	ctx := context.Background()
+	if len(modes) > 0 {
+		plan.Mode = modes[0]
+		plan.Reservation.Reservations = nil
+	}
 	if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
 		t.Fatal(err)
+	}
+	if !plan.RequiresReservation() {
+		return r, table, blobs, record, plan, durable.ReserveResult{}
 	}
 	leaser, err := durable.NewReferenceBudgetMaterializer(plan.Route.GenerationID, "incarnation", func() time.Time { return plan.QuotedAt })
 	if err != nil {
@@ -105,6 +112,7 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 	}
 	saved = advanceExecution(t, restarted, record, saved, func(e *ProviderExecution) {
 		e.Stage = ExecutionSucceeded
+		e.CompletedAt = e.UpdatedAt.Add(time.Second)
 		e.PollAfter = time.Time{}
 		e.Response = &llm.Response{OperationKey: "operation", Status: llm.ResponseStatusToolCalls}
 	})
@@ -233,4 +241,48 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 		e.Failure = nil
 		e.PollAfter = plan.QuotedAt.Add(time.Minute)
 	})
+}
+
+func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(map[bool]string{false: "concurrent", true: "lost-ack"}[lost], func(t *testing.T) {
+			r, table, blobs, record, plan, reservation := executionFixture(t, BudgetUnmatched)
+			if lost {
+				table.hook = func(action string, item kv.KeyValueItem) (error, error) {
+					if action == "create" && strings.Contains(item.PartitionKey, "/request/") {
+						return nil, contracts.ErrOutcomeUnknown
+					}
+					return nil, nil
+				}
+				_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+				if err == nil || fresh {
+					t.Fatal("uncertain write authorized submission")
+				}
+				table.hook = nil
+			}
+			var group sync.WaitGroup
+			var winners atomic.Int32
+			for range 12 {
+				group.Add(1)
+				go func() {
+					defer group.Done()
+					_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+					if err != nil {
+						t.Error(err)
+					}
+					if fresh {
+						winners.Add(1)
+					}
+				}()
+			}
+			group.Wait()
+			expected := int32(1)
+			if lost {
+				expected = 0
+			}
+			if winners.Load() != expected {
+				t.Fatal("duplicate start permission", winners.Load())
+			}
+		})
+	}
 }

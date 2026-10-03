@@ -184,6 +184,9 @@ func (admission *CloudBudgetAdmission) Reserve(ctx context.Context, call *CloudB
 	if err := admission.verify(ctx, call); err != nil {
 		return durable.ReserveResult{}, err
 	}
+	if !call.plan.RequiresReservation() {
+		return durable.ReserveResult{}, nil
+	}
 	return admission.admit.reserve(ctx, call.plan.Route, call.Plan().Reservation, nil)
 }
 
@@ -192,6 +195,9 @@ func (admission *CloudBudgetAdmission) Reserve(ctx context.Context, call *CloudB
 func (admission *CloudBudgetAdmission) Claim(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult) (durable.ClaimReceipt, error) {
 	if err := admission.verify(ctx, call); err != nil {
 		return durable.ClaimReceipt{}, err
+	}
+	if !call.plan.RequiresReservation() {
+		return durable.ClaimReceipt{}, budgetPlanningError(provider.CodeInvalidArgument)
 	}
 	return admission.admit.claim(ctx, call.plan.Route, reservation)
 }

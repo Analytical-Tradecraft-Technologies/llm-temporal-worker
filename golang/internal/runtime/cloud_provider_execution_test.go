@@ -159,9 +159,9 @@ func executionResponse(call provider.Call) provider.ResumableResult {
 	return provider.ResumableResult{State: provider.ResumableCompleted, Dispatch: provider.DispatchAccepted, ProviderOperationID: "private-job", Result: provider.Result{Response: llm.Response{OperationKey: call.OperationKey, Status: llm.ResponseStatusCompleted, Usage: llm.Usage{InputTokens: 10, OutputTokens: 5}}}}
 }
 
-func newProviderExecutionFixture(t *testing.T, kind string, async bool) *providerExecutionFixture {
+func newProviderExecutionFixture(t *testing.T, kind string, async bool, configure ...func(*budgetPlanningFixture)) *providerExecutionFixture {
 	t.Helper()
-	f := &providerExecutionFixture{cloudAdmissionFixture: newCloudAdmissionFixture(t, kind)}
+	f := &providerExecutionFixture{cloudAdmissionFixture: newCloudAdmissionFixture(t, kind, configure...)}
 	f.now = f.attempt.QuotedAt
 	f.store = &executionTestStore{admissionPlanStore: f.cloudAdmissionFixture.store}
 	f.executor = &CloudProviderExecution{store: f.store, admission: f.helper, clock: func() time.Time { return f.now }}
@@ -207,7 +207,7 @@ func newProviderExecutionFixture(t *testing.T, kind string, async bool) *provide
 		t.Fatal(err)
 	}
 	f.reservation, err = f.helper.Reserve(context.Background(), f.call)
-	if err != nil || !f.reservation.Accepted {
+	if err != nil || f.reservation.Accepted != f.call.Plan().RequiresReservation() {
 		t.Fatal("reserve", err)
 	}
 	return f
@@ -335,8 +335,10 @@ func TestCloudProviderExecutionReplaysExactSettlementAfterLostRedisReply(t *test
 		}
 		return settle(ctx, request)
 	}
+	completedAt := f.now
+	f.now = f.now.Add(time.Hour)
 	result, err := f.resume(context.Background())
-	if err != nil || !result.Saved.Execution.Settled || f.submits.Load() != 1 {
+	if err != nil || !result.Saved.Execution.CompletedAt.Equal(completedAt) || !result.Saved.Execution.Settled || f.submits.Load() != 1 {
 		t.Fatal("settlement recovery resubmitted", err)
 	}
 }

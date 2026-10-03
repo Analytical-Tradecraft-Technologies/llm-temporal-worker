@@ -20,12 +20,22 @@ import (
 // referenced blobs, and invalid plans must never be treated as a planning miss.
 var ErrBudgetPlanMissing = fmt.Errorf("budget plan missing: %w", contracts.ErrNotFound)
 
-// BudgetPlan is the initial paid attempt's immutable preparation, saved before
-// Redis acceptance. It contains no SDK parameters, credentials or dispatch
+type BudgetMode string
+
+const (
+	BudgetReserved  BudgetMode = "reserved"
+	BudgetFree      BudgetMode = "free"
+	BudgetUnmatched BudgetMode = "unmatched"
+)
+
+// BudgetPlan is an attempt's immutable preparation, including whether its
+// captured policy requires Redis acceptance. It contains no SDK parameters, credentials or dispatch
 // permission. QuotedAt and Reservation.ExpiresAt are reused across retries.
 // A new paid attempt after an unknown outcome requires separate orchestration;
 // it must never replace this plan or reuse its operation ID/consumed claim.
 type BudgetPlan struct {
+	Mode              BudgetMode             `json:"mode"`
+	Unpriced          bool                   `json:"unpriced,omitempty"`
 	Version           int                    `json:"version"`
 	Kind              string                 `json:"kind"`
 	ConfigDigest      [32]byte               `json:"config_digest"`
@@ -44,9 +54,17 @@ type BudgetPlan struct {
 	QuotedAt          time.Time              `json:"quoted_at"`
 }
 
+func (plan BudgetPlan) RequiresReservation() bool { return plan.Mode == BudgetReserved }
+
 // Validate checks durable bindings without consulting current prices, settings,
 // budget balances or clocks. Exact USD values are authoritative.
 func (plan BudgetPlan) Validate() error {
+	if plan.Mode != BudgetReserved && plan.Mode != BudgetFree && plan.Mode != BudgetUnmatched {
+		return ErrInvalid
+	}
+	if plan.RequiresReservation() != (len(plan.Reservation.Reservations) > 0) || (plan.Unpriced && plan.Mode != BudgetUnmatched) {
+		return ErrInvalid
+	}
 	if plan.Version != 1 || (plan.Kind != "generate" && plan.Kind != "compact") ||
 		plan.ConfigDigest == ([32]byte{}) || plan.RequestDigest == ([32]byte{}) ||
 		!safeText(plan.ConfigEpoch, 256) || !safeText(plan.CapabilityVersion, 256) ||
@@ -64,10 +82,21 @@ func (plan BudgetPlan) Validate() error {
 		return ErrInvalid
 	}
 	for _, value := range []string{string(identity.Provider), plan.Route.RouteID, plan.Route.EndpointID, plan.Route.Provider, plan.Route.Model,
-		string(plan.Route.OperationID), string(plan.Route.GenerationID), plan.Route.PriceVersion, plan.Quote.CatalogVersion, plan.Estimate.CandidateID} {
+		string(plan.Route.OperationID), string(plan.Route.GenerationID), plan.Estimate.CandidateID} {
 		if !safeText(value, 512) {
 			return ErrInvalid
 		}
+	}
+	if plan.Unpriced {
+		// An absent price is allowed only by the captured unmatched-policy path.
+		// No synthetic zero quote may turn this into known-free work.
+		if !equalExecutionJSON(plan.Quote, pricing.Quote{}) || !equalExecutionJSON(plan.Estimate, budget.Estimate{CandidateID: plan.Estimate.CandidateID}) {
+			return ErrInvalid
+		}
+		return nil
+	}
+	if !safeText(plan.Route.PriceVersion, 512) || !safeText(plan.Quote.CatalogVersion, 512) {
+		return ErrInvalid
 	}
 	digest, err := hex.DecodeString(plan.Quote.CatalogDigest)
 	if err != nil || len(digest) != 32 || [32]byte(digest) == ([32]byte{}) || !entry.Active(plan.QuotedAt) ||
@@ -80,7 +109,8 @@ func (plan BudgetPlan) Validate() error {
 		return ErrInvalid
 	}
 	if plan.Estimate.InputTokens < 0 || plan.Estimate.OutputTokens < 0 || plan.Estimate.ReasoningTokens < 0 || plan.Estimate.CacheWriteTokens < 0 ||
-		plan.Estimate.MicroUSD < 0 || plan.Estimate.CostUSD.Validate() != nil || plan.Estimate.CostUSD.IsZero() || len(plan.Reservation.Reservations) == 0 {
+		plan.Estimate.MicroUSD < 0 || plan.Estimate.CostUSD.Validate() != nil ||
+		(plan.RequiresReservation() && plan.Estimate.CostUSD.IsZero()) || (plan.Mode == BudgetFree && !plan.Estimate.CostUSD.IsZero()) {
 		return ErrInvalid
 	}
 	for _, component := range []struct {
@@ -94,6 +124,13 @@ func (plan BudgetPlan) Validate() error {
 		{pricing.PriceComponentPerRequest, 1},
 	} {
 		if component.units > 0 && entry.ComponentUnknown(component.price) {
+			return ErrInvalid
+		}
+	}
+	if plan.Mode == BudgetFree {
+		cost, err := pricing.CostFromUsage(entry, pricing.Usage{InputTokens: plan.Estimate.InputTokens, OutputTokens: plan.Estimate.OutputTokens,
+			ReasoningTokens: plan.Estimate.ReasoningTokens, CacheWriteTokens: plan.Estimate.CacheWriteTokens})
+		if err != nil || !cost.USD.IsZero() || plan.Estimate.MicroUSD != 0 {
 			return ErrInvalid
 		}
 	}
