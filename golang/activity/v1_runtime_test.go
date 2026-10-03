@@ -115,14 +115,14 @@ func TestRegisterV1InstallsExactActivityNames(t *testing.T) {
 	registry := &v1Registry{}
 	activities := &Activities{V1Runtime: &v1RuntimeStub{}}
 	activities.Register(registry)
-	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName}
+	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName}
 	if fmt.Sprint(registry.names) != fmt.Sprint(want) {
 		t.Fatalf("registered names = %v, want %v", registry.names, want)
 	}
-	if _, ok := registry.funcs[0].(func(context.Context, llm.GenerateRequestV1) (*llm.GenerateResponseV1, error)); !ok {
+	if _, ok := registry.funcs[0].(func(context.Context, llm.GenerateRequestV1) (*llm.ExecutionResultV1, error)); !ok {
 		t.Fatalf("Generate registration has type %T", registry.funcs[0])
 	}
-	if _, ok := registry.funcs[1].(func(context.Context, llm.CompactRequestV1) (*llm.CompactResponseV1, error)); !ok {
+	if _, ok := registry.funcs[1].(func(context.Context, llm.CompactRequestV1) (*llm.ExecutionResultV1, error)); !ok {
 		t.Fatalf("Compact registration has type %T", registry.funcs[1])
 	}
 	if _, ok := registry.funcs[2].(func(context.Context, llm.QueryRequestV1) (*llm.QueryResponseV1, error)); !ok {
@@ -236,25 +236,24 @@ func TestV1GeneratePreservesHeartbeatLifecycleDuringRuntimeDispatch(t *testing.T
 }
 
 func TestRegisteredV1GenerateExecutesThroughTemporalEnvironment(t *testing.T) {
-	runtime := &v1RuntimeStub{}
+	runtime := &executionRuntimeStub{result: pendingExecution()}
 	activities := &Activities{V1Runtime: runtime}
 	registry := &v1Registry{}
 	activities.Register(registry)
 	generate := registry.funcs[0]
-
 	var suite testsuite.WorkflowTestSuite
 	environment := suite.NewTestActivityEnvironment()
 	environment.RegisterActivityWithOptions(generate, sdkactivity.RegisterOptions{Name: GenerateActivityName})
 	result, err := environment.ExecuteActivity(generate, validGenerateV1Request())
 	if err != nil {
-		t.Fatalf("Temporal Generate v1 execution error = %v", err)
+		t.Fatal(err)
 	}
-	var response llm.GenerateResponseV1
+	var response llm.ExecutionResultV1
 	if err := result.Get(&response); err != nil {
-		t.Fatalf("decode Temporal Generate v1 response: %v", err)
+		t.Fatal(err)
 	}
-	if response.OperationKey != "generate-1" || response.Checkpoint.Kind != "generation" || runtime.generateCalls != 1 {
-		t.Fatalf("response = %#v, runtime calls = %d", response, runtime.generateCalls)
+	if response.State != llm.ExecutionPending || runtime.calls != 1 {
+		t.Fatalf("result=%#v calls=%d", response, runtime.calls)
 	}
 }
 

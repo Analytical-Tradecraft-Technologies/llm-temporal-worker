@@ -224,23 +224,22 @@ func preferV1DispatchError(rawErr, ctxErr error) bool {
 	return errors.As(rawErr, &providerErr) && providerErr.Code == provider.CodeDeadlineExceeded && providerErr.Phase == provider.PhaseStateLoad
 }
 
-func (activities *Activities) generateV1Temporal(ctx context.Context, request llm.GenerateRequestV1) (*llm.GenerateResponseV1, error) {
-	return activities.GenerateV1(ctx, request)
+func (activities *Activities) generateV1Temporal(ctx context.Context, request llm.GenerateRequestV1) (*llm.ExecutionResultV1, error) {
+	return activities.GenerateStepV1(ctx, request)
 }
 
-func (activities *Activities) compactV1Temporal(ctx context.Context, request llm.CompactRequestV1) (*llm.CompactResponseV1, error) {
-	return activities.CompactV1(ctx, request)
+func (activities *Activities) compactV1Temporal(ctx context.Context, request llm.CompactRequestV1) (*llm.ExecutionResultV1, error) {
+	return activities.CompactStepV1(ctx, request)
 }
 
 func (activities *Activities) queryV1Temporal(ctx context.Context, request llm.QueryRequestV1) (*llm.QueryResponseV1, error) {
 	return activities.QueryV1(ctx, request)
 }
 
-// RegisterV1 installs the exact three versioned names. It is separate from
-// Register so callers that still exercise the pre-release direct helper in a
-// unit test cannot accidentally put that envelope on a production task
-// queue. New production composition calls RegisterV1 through Register when a
-// V1Runtime is present (including UnconfiguredV1Runtime's fail-closed seam).
+// RegisterV1 installs the bounded execution steps and the read-only query.
+// Generate and Compact retain their v1 names, but now return a step result.
+// A runtime lacking ExecutionRuntime fails closed rather than blocking on an
+// older one-shot implementation. Direct Go helpers remain available for tests.
 func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	if registry == nil {
 		return
@@ -248,6 +247,10 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	registry.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
 	registry.RegisterActivityWithOptions(activities.compactV1Temporal, sdkactivity.RegisterOptions{Name: CompactActivityName})
 	registry.RegisterActivityWithOptions(activities.queryV1Temporal, sdkactivity.RegisterOptions{Name: QueryActivityName})
+	registry.RegisterActivityWithOptions(activities.PrepareExecutionV1, sdkactivity.RegisterOptions{Name: PrepareActivityName})
+	registry.RegisterActivityWithOptions(activities.AcquireBudgetV1, sdkactivity.RegisterOptions{Name: AcquireBudgetActivityName})
+	registry.RegisterActivityWithOptions(activities.PollExecutionV1, sdkactivity.RegisterOptions{Name: PollActivityName})
+	registry.RegisterActivityWithOptions(activities.CompleteExecutionV1, sdkactivity.RegisterOptions{Name: CompleteActivityName})
 }
 
 func (activities *Activities) payloadLimits() PayloadLimits {

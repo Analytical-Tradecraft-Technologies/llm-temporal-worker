@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://llm-temporal-worker.dev/schema/llm.temporal/execution/v1/prepare-execution.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generate"
+      ],
+      "properties": {
+        "generate": {
+          "$ref": "https://llm-temporal-worker.dev/schema/llm.temporal/v1/generate-request.json"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compact"
+      ],
+      "properties": {
+        "compact": {
+          "$ref": "https://llm-temporal-worker.dev/schema/llm.temporal/compact/v1/compact-request.json"
+        }
+      }
+    }
+  ]
+}

@@ -23,15 +23,18 @@ type V1ActivityDescriptor struct {
 }
 
 const (
-	generateV1InputType  = "llm.GenerateRequestV1"
-	generateV1OutputType = "llm.GenerateResponseV1"
-	compactV1InputType   = "llm.CompactRequestV1"
-	compactV1OutputType  = "llm.CompactResponseV1"
-	queryV1InputType     = "llm.QueryRequestV1"
-	queryV1OutputType    = "llm.QueryResponseV1"
+	generateV1InputType   = "llm.GenerateRequestV1"
+	generateV1OutputType  = "llm.ExecutionResultV1"
+	compactV1InputType    = "llm.CompactRequestV1"
+	compactV1OutputType   = "llm.ExecutionResultV1"
+	prepareV1InputType    = "llm.PrepareExecutionV1"
+	referenceV1InputType  = "llm.ExecutionReferenceV1"
+	executionV1OutputType = "llm.ExecutionResultV1"
+	queryV1InputType      = "llm.QueryRequestV1"
+	queryV1OutputType     = "llm.QueryResponseV1"
 )
 
-// V1ActivityDescriptors returns the exact three one-shot Activities exposed
+// V1ActivityDescriptors returns the seven bounded Activities exposed
 // by a production v1 worker. The returned slice is newly allocated and can be
 // safely retained by a registry/introspection endpoint.
 func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
@@ -45,6 +48,10 @@ func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
 		{TaskQueue: taskQueue, Name: GenerateActivityName, InputType: generateV1InputType, OutputType: generateV1OutputType},
 		{TaskQueue: taskQueue, Name: CompactActivityName, InputType: compactV1InputType, OutputType: compactV1OutputType},
 		{TaskQueue: taskQueue, Name: QueryActivityName, InputType: queryV1InputType, OutputType: queryV1OutputType},
+		{TaskQueue: taskQueue, Name: PrepareActivityName, InputType: prepareV1InputType, OutputType: executionV1OutputType},
+		{TaskQueue: taskQueue, Name: AcquireBudgetActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
+		{TaskQueue: taskQueue, Name: PollActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
+		{TaskQueue: taskQueue, Name: CompleteActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
 	}
 	for _, descriptor := range descriptors {
 		if err := descriptor.Validate(); err != nil {
@@ -72,6 +79,14 @@ func (descriptor V1ActivityDescriptor) Validate() error {
 	case QueryActivityName:
 		if descriptor.InputType != queryV1InputType || descriptor.OutputType != queryV1OutputType {
 			return fmt.Errorf("Query v1 Activity descriptor types are invalid")
+		}
+	case PrepareActivityName:
+		if descriptor.InputType != prepareV1InputType || descriptor.OutputType != executionV1OutputType {
+			return fmt.Errorf("Prepare v1 Activity descriptor types are invalid")
+		}
+	case AcquireBudgetActivityName, PollActivityName, CompleteActivityName:
+		if descriptor.InputType != referenceV1InputType || descriptor.OutputType != executionV1OutputType {
+			return fmt.Errorf("execution v1 Activity descriptor types are invalid")
 		}
 	default:
 		return fmt.Errorf("unknown v1 Activity name %q", descriptor.Name)

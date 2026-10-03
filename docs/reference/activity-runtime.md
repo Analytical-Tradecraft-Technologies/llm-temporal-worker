@@ -1,12 +1,16 @@
 # v1 Activity runtime boundary
 
-The worker registers three exact names on its configured Temporal task queue:
+The worker registers seven exact names on its configured Temporal task queue:
 
 | Name | Input | Output |
 | --- | --- | --- |
-| `llm.generate.v1` | `llm.GenerateRequestV1` | `llm.GenerateResponseV1` |
-| `llm.compact.v1` | `llm.CompactRequestV1` | `llm.CompactResponseV1` |
+| `llm.generate.v1` | `llm.GenerateRequestV1` | `llm.ExecutionResultV1` |
+| `llm.compact.v1` | `llm.CompactRequestV1` | `llm.ExecutionResultV1` |
 | `llm.query.v1` | `llm.QueryRequestV1` | `llm.QueryResponseV1` |
+| `llm.request.prepare.v1` | `llm.PrepareExecutionV1` | `llm.ExecutionResultV1` |
+| `llm.budget.acquire.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
+| `llm.poll.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
+| `llm.complete.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
 
 The Go adapter exposes these same bindings through
 `activity.V1ActivityDescriptors(taskQueue)`. Each descriptor carries the
@@ -17,13 +21,13 @@ Temporal worker or adding any handler to its registry. The registry is still
 bound to one queue by
 the Temporal worker itself, so descriptors are an inspection and startup
 guard rather than a second payload codec. A configured v1 runtime registers
-all three descriptors in Generate/Compact/Query order; the checked-in
+all seven descriptors in the order above; the checked-in
 development fixture may retain only the legacy Generate helper while the
 durable runtime is intentionally absent.
 
 The Activity adapter rejects payload bytes over the configured application
 limit before JSON decoding, then validates the closed JSON record before
-calling the injected `activity.V1Runtime`. This ordering keeps malformed or
+calling the injected `activity.ExecutionRuntime` (or `V1Runtime` for Query). This ordering keeps malformed or
 adversarial oversized history entries from making the decoder allocate before
 the boundary has failed closed.
 Responses are validated against the same limit before Temporal serialization;
@@ -45,6 +49,56 @@ non-zero variant requires a positive temperature, while Compact accepts variant
 zero only. These checks are performed by the JSON schema gate where
 representable and by the Go contract validators before an Activity is
 dispatched.
+
+## Bounded execution results
+
+Generate and Compact keep their v1 names because this service has no deployed
+callers. Their registered result is now `ExecutionResultV1`. The older direct Go
+helpers still return their final response records, but are not registered on
+Temporal. A runtime that lacks `ExecutionRuntime` fails closed for all execution
+activities. The CLI production builder is not activated by this interface change;
+cloud composition, workflow registration, and the typed OCaml client follow in
+separate dependent changes.
+
+Prepare accepts exactly one Generate or Compact request. Budget acquisition
+attempts once and returns; polling makes one status retrieval and returns.
+Waiting belongs in workflow timers. Generate/Compact submit or recover a saved
+attempt, and Complete publishes its durable response. Implementations must
+resume an existing attempt when an activity repeats; they must not interpret an
+activity retry as permission to submit another paid request.
+
+Each result carries a canonical nonzero UUID prefixed with `llmtw_req_`, the
+request kind, and one closed state:
+
+| State | Meaning |
+| --- | --- |
+| `budget_required` | Call budget acquisition. |
+| `acquired` | Admission is ready for submission, including an authorized free call. |
+| `budget_wait` | Capacity is unavailable; wait before trying acquisition again. |
+| `cache_wait` | Another request owns the cache fill; wait before preparing again. |
+| `pending` | Paid provider work is still running; wait before polling once. |
+| `provider_completed` | Provider work is complete; publish the durable result. |
+| `completed` | The matching typed Generate or Compact response is present. |
+| `failed` | A closed failure code and optional retryability flag are present. |
+| `outcome_unknown` | Submission may have succeeded; the original paid attempt remains accounted for. |
+
+Only the three waiting states include `retry_after_seconds`, bounded to 1–86400.
+A failed result has `provider_error`, `provider_rejected`, or `incomplete_response`
+as its failure code. Retrying failed or unknown paid work requires a separate
+attempt and fresh budget; `retryable` never authorizes reusing its reservation.
+Completion includes exactly one response matching the request kind. All other
+states exclude response bodies. Provider job IDs, raw errors, and Redis lease
+receipts are not representable in these envelopes.
+
+Subsequent steps accept an `ExecutionReferenceV1` containing the internal request
+ID and caller context. An ID is not a bearer credential: each runtime step must
+authorize the caller before any lookup, including cached or completed reads.
+The snapshot proxy holds the configuration lease throughout every step, so a
+reload cannot close a client while that step uses it.
+
+The checked-in execution schemas and Go codecs reject unknown fields, malformed
+IDs, inconsistent result variants, and invalid wait intervals. Schema parity,
+Temporal serialization, sanitized errors, and configuration reloads are tested.
 
 `Activities.QueryService` is an independent seam for `llm.query.v1`. It may be
 provided before the Generate/Compact runtime is composed; the Activity still
