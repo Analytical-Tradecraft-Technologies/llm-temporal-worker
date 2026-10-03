@@ -84,7 +84,12 @@ func (admission *CloudBudgetAdmission) PrepareGenerate(ctx context.Context, scop
 	if err != nil {
 		return nil, err
 	}
-	return admission.prepare(ctx, record, request.OperationKey, attempt,
+	key, err := cloudProviderOperationKey(record, request.OperationKey)
+	if err != nil {
+		return nil, err
+	}
+	prepared.Request.OperationKey = key
+	return admission.prepare(ctx, record, key, attempt,
 		func() (PlannedBudgetCall, error) { return admission.planning.Generate(ctx, prepared, attempt) },
 		func(binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
 			return admission.recovery.Generate(ctx, prepared, binding)
@@ -104,7 +109,14 @@ func (admission *CloudBudgetAdmission) PrepareCompact(ctx context.Context, scope
 	if err != nil {
 		return nil, err
 	}
-	return admission.prepare(ctx, record, request.OperationKey, attempt,
+	key, err := cloudProviderOperationKey(record, request.OperationKey)
+	if err != nil {
+		return nil, err
+	}
+	if prepared.Request != nil {
+		prepared.Request.OperationKey = key
+	}
+	return admission.prepare(ctx, record, key, attempt,
 		func() (PlannedBudgetCall, error) { return admission.planning.Compact(ctx, prepared, attempt) },
 		func(binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
 			return admission.recovery.Compact(ctx, prepared, binding)
@@ -135,9 +147,13 @@ func (admission *CloudBudgetAdmission) prepare(ctx context.Context, record cloud
 	planNew func() (PlannedBudgetCall, error), reconstruct func(ProviderRecoveryBinding) (PlannedProviderCall, error),
 ) (*CloudBudgetCall, error) {
 	scope, id := record.Request.Scope, record.Request.ID
+	linked, err := cloudRequestAttempt(record)
+	if err != nil {
+		return nil, err
+	}
 	plan, err := admission.store.LoadBudgetPlan(ctx, scope, id)
 	if errors.Is(err, cloudstate.ErrBudgetPlanMissing) {
-		if attempt.QuotedAt.Before(record.Request.CreatedAt) {
+		if attempt.QuotedAt.Before(record.Request.CreatedAt) || (linked != nil && attempt.OperationID != durable.OperationID(linked.ID)) {
 			return nil, budgetPlanningError(provider.CodeInvalidArgument)
 		}
 		planned, planErr := planNew()
@@ -165,6 +181,9 @@ func (admission *CloudBudgetAdmission) prepare(ctx context.Context, record cloud
 		return nil, cloudRuntimeError(err, false)
 	}
 	if plan.Validate() != nil || plan.Kind != record.Request.Kind || plan.QuotedAt.Before(record.Request.CreatedAt) {
+		return nil, cloudRuntimeError(cloudstate.ErrCorrupt, false)
+	}
+	if linked != nil && plan.Route.OperationID != durable.OperationID(linked.ID) {
 		return nil, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
 	call, err := reconstruct(ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch,
