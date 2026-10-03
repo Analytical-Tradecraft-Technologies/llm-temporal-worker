@@ -13,7 +13,7 @@ import (
 )
 
 func TestV1GenerateAndCompactFixturesRoundTrip(t *testing.T) {
-	for _, name := range []string{"generate-root.json", "generate-delta.json"} {
+	for _, name := range []string{"generate-root.json", "generate-delta.json", "generate-cache-any-age.json"} {
 		data := readV1Fixture(t, name)
 		var request llm.GenerateRequestV1
 		if err := json.Unmarshal(data, &request); err != nil {
@@ -766,4 +766,20 @@ func mustCanonicalJSON(t *testing.T, data []byte) []byte {
 		t.Fatal(err)
 	}
 	return canonical
+}
+
+func TestCacheAgeOmissionIsUnrestrictedButZeroAndNullAreInvalid(t *testing.T) {
+	var policy llm.CachePolicyV1
+	if err := json.Unmarshal([]byte(`{}`), &policy); err != nil || policy.MaxAgeSeconds != 0 {
+		t.Fatalf("omitted age: %v", err)
+	}
+	encoded, err := json.Marshal(policy)
+	if err != nil || string(encoded) != `{}` {
+		t.Fatalf("unrestricted encoding: %s %v", encoded, err)
+	}
+	for _, input := range []string{`{"max_age_seconds":0}`, `{"max_age_seconds":null}`, `{"max_age_seconds":-1}`, `{"max_age_seconds":31536001}`} {
+		if err := json.Unmarshal([]byte(input), &policy); err == nil {
+			t.Fatalf("accepted %s", input)
+		}
+	}
 }

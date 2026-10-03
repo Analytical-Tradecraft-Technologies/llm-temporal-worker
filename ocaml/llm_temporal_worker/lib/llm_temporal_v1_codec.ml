@@ -131,12 +131,21 @@ let cache_disposition_of_json context value =
   Ok { disposition; variant; entry_age_seconds }
 
 let cache_policy_to_json value =
-  `Assoc (["max_age_seconds", `Intlit (Int64.to_string value.max_age_seconds)] @ if value.variant = 0l then [] else ["variant", `Intlit (Int32.to_string value.variant)])
+  let age = match value.max_age_seconds with
+    | None -> []
+    | Some age -> ["max_age_seconds", `Intlit (Int64.to_string age)]
+  in
+  `Assoc (age @ if value.variant = 0l then [] else ["variant", `Intlit (Int32.to_string value.variant)])
 
 let cache_policy_of_json context value =
   let* fields = closed context ["max_age_seconds"; "variant"] value in
-  let* age = required context "max_age_seconds" fields >>= int64 (context ^ ".max_age_seconds") in
-  let* () = if age < 1L || age > 31536000L then Error (errorf "%s must be between 1 and 31536000" (context ^ ".max_age_seconds")) else Ok () in
+  let* age = match optional "max_age_seconds" fields with
+    | None -> Ok None
+    | Some value ->
+      let* age = int64 (context ^ ".max_age_seconds") value in
+      if age < 1L || age > 31536000L then Error (errorf "%s must be between 1 and 31536000" (context ^ ".max_age_seconds"))
+      else Ok (Some age)
+  in
   let* variant = match optional "variant" fields with None -> Ok 0l | Some value -> int32 (context ^ ".variant") value in
   let* () = nonnegative (context ^ ".variant") (Int64.of_int32 variant) in
   Ok { max_age_seconds = age; variant }

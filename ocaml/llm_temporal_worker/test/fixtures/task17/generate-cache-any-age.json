@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"op-golden","context":{"tenant":"tenant","project":"project","actor":"actor"},"append":[],"settings_patch":{"temperature":{"set":"0.7"}},"cache":{}}

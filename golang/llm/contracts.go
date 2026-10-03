@@ -53,7 +53,8 @@ func (handle CheckpointHandle) valid() bool {
 }
 
 type CachePolicyV1 struct {
-	MaxAgeSeconds int64 `json:"max_age_seconds"`
+	// Zero means the field is omitted: eligible successes have no age limit.
+	MaxAgeSeconds int64 `json:"max_age_seconds,omitempty"`
 	Variant       int32 `json:"variant,omitempty"`
 }
 
@@ -155,13 +156,12 @@ func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "max_age_seconds", "variant"); err != nil {
 		return err
 	}
-	maxAgeRaw, err := requireField(fields, "max_age_seconds")
-	if err != nil {
-		return err
-	}
-	maxAge, err := decodeInt64(maxAgeRaw)
-	if err != nil {
-		return err
+	maxAge := int64(0)
+	if raw, present := fields["max_age_seconds"]; present {
+		maxAge, err = decodeInt64(raw)
+		if err != nil || maxAge <= 0 {
+			return fmt.Errorf("cache max_age_seconds must be a positive integer when specified")
+		}
 	}
 	variant := int32(0)
 	if raw, ok := fields["variant"]; ok {
@@ -178,8 +178,16 @@ func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (policy CachePolicyV1) MarshalJSON() ([]byte, error) {
+	if err := policy.validate(false); err != nil {
+		return nil, err
+	}
+	type wire CachePolicyV1
+	return json.Marshal(wire(policy))
+}
+
 func (policy CachePolicyV1) validate(compact bool) error {
-	if policy.MaxAgeSeconds <= 0 || policy.MaxAgeSeconds > 31536000 {
+	if policy.MaxAgeSeconds < 0 || policy.MaxAgeSeconds > 31536000 {
 		return fmt.Errorf("cache max_age_seconds must be between 1 and 31536000")
 	}
 	if policy.Variant < 0 || (compact && policy.Variant != 0) {
