@@ -185,6 +185,13 @@ func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope c
 	if record.Request.Scope != scope || record.Request.ID != id || record.Request.Kind != plan.Kind {
 		return PlannedProviderCall{}, executionError(provider.CodeStateCorrupt)
 	}
+	linked, err := cloudRequestAttempt(record)
+	if err != nil {
+		return PlannedProviderCall{}, err
+	}
+	if linked != nil && plan.Route.OperationID != durable.OperationID(linked.ID) {
+		return PlannedProviderCall{}, executionError(provider.CodeStateCorrupt)
+	}
 	binding := ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RequestDigest: plan.RequestDigest, CandidateID: plan.Estimate.CandidateID,
 		Route: plan.Route, Family: plan.Family, CapabilityVersion: plan.CapabilityVersion, ProviderTier: plan.ProviderTier, RequestedClass: plan.RequestedClass, AttemptedClass: plan.AttemptedClass}
 	if plan.Kind == "generate" {
@@ -196,7 +203,12 @@ func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope c
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}
-		binding.OperationKeyDigest = ProviderRecoveryOperationKeyDigest(request.OperationKey)
+		key, err := cloudProviderOperationKey(record, request.OperationKey)
+		if err != nil {
+			return PlannedProviderCall{}, err
+		}
+		prepared.Request.OperationKey = key
+		binding.OperationKeyDigest = ProviderRecoveryOperationKeyDigest(key)
 		return executor.admission.recovery.Generate(ctx, prepared, binding)
 	}
 	var request llm.CompactRequestV1
@@ -207,7 +219,14 @@ func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope c
 	if err != nil {
 		return PlannedProviderCall{}, err
 	}
-	binding.OperationKeyDigest = ProviderRecoveryOperationKeyDigest(request.OperationKey)
+	key, err := cloudProviderOperationKey(record, request.OperationKey)
+	if err != nil {
+		return PlannedProviderCall{}, err
+	}
+	if prepared.Request != nil {
+		prepared.Request.OperationKey = key
+	}
+	binding.OperationKeyDigest = ProviderRecoveryOperationKeyDigest(key)
 	return executor.admission.recovery.Compact(ctx, prepared, binding)
 }
 

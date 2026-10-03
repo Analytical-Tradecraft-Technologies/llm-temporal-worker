@@ -101,3 +101,32 @@ must remain available until outstanding requests have finished.
 This boundary is not yet registered as the production execution runtime. The
 remaining phase composition, workflow registration, and removal of legacy SQL
 packages remain migration work.
+
+## Independent paid attempts
+
+`cloudstate.Repository.BeginRequestAttempt` allocates a separate, discoverable
+child request for each paid attempt. The root keeps the caller's immutable
+manifest, materialized preparation, and active-child reference. The child copies
+that input and owns its own budget plan, provider execution and settlement.
+Allocation does not reserve budget or authorize a provider call.
+
+Pass an empty previous ID for initial allocation. Pass the current child ID to
+replace an expired, unused quote or an unknown paid outcome after its recovery
+interval. Compare-and-swap retirement fences a concurrent start; known pending
+or successful work cannot be replaced. Retrying a lost acknowledgement returns
+the same child and repairs discovery before returning. Child discovery is
+written before the root pointer or any admission effects.
+
+A replacement uses its own request ID as its budget operation ID and derives a
+separate provider idempotency key. The original public operation key and sample
+index stay unchanged, so a transport retry is not a different requested sample.
+Redis's materialization generation remains separate from this attempt identity.
+The admission boundary validates the child identity before persisting a new
+plan, and provider reconstruction validates the saved binding again.
+
+Retiring an unknown attempt does not release or reuse its charged reservation.
+The previous child remains independently discoverable even after the root
+returns a later success. Eventual recovery can still record its actual result
+and settlement without replacing the active child. A background recovery or
+cleanup service is deferred. These primitives do not themselves run retries or
+activate the production workflow.

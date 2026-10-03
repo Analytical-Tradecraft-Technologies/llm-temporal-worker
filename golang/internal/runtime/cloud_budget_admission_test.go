@@ -456,3 +456,44 @@ func TestCloudBudgetAdmissionWaitAndLeaseExpiryDoNotBecomeDispatchGrants(t *test
 	_, err = f.helper.Claim(ctx, call, accepted)
 	assertBudgetAdmissionError(t, err, provider.CodeBudgetDenied, provider.DispatchNotDispatched, provider.RetryAfter)
 }
+
+func TestCloudBudgetAdmissionIndependentAttemptsUseDifferentProviderKeys(t *testing.T) {
+	for _, kind := range []string{"generate", "compact"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newCloudAdmissionFixture(t, kind)
+			root, _ := cloudstate.NewRequestID()
+			var previous cloudstate.RequestID
+			var previousKey string
+			original := string(f.store.record.Request.Manifest)
+			for number := uint64(1); number <= 2; number++ {
+				id, _ := cloudstate.NewRequestID()
+				f.store.record.Request.ID = id
+				f.store.record.Progress, _ = json.Marshal(map[string]any{"version": 1, "attempt_parent": cloudstate.RequestAttempt{Version: 1, RootID: root, ID: id, PreviousID: previous, Number: number, CreatedAt: f.store.record.Request.CreatedAt}})
+				f.store.data = nil
+				attempt := f.attempt
+				attempt.OperationID = durable.OperationID(id)
+				wrong := attempt
+				wrong.OperationID = durable.OperationID(root)
+				if _, err := f.prepare(context.Background(), wrong); err == nil || f.store.data != nil {
+					t.Fatal("wrong attempt identity persisted a plan", err)
+				}
+				call, err := f.prepare(context.Background(), attempt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key := call.Provider().Call.OperationKey
+				if key == previousKey || key == f.gen.OperationKey || key == f.compact.OperationKey {
+					t.Fatal("paid attempts shared provider idempotency key")
+				}
+				replay, err := f.prepare(context.Background(), attempt)
+				if err != nil || replay.Provider().Call.OperationKey != key {
+					t.Fatal("recovery changed attempt key", err)
+				}
+				if string(f.store.record.Request.Manifest) != original {
+					t.Fatal("public operation key changed")
+				}
+				previous, previousKey = id, key
+			}
+		})
+	}
+}
