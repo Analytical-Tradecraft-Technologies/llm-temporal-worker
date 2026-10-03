@@ -32,9 +32,10 @@ const (
 	executionV1OutputType = "llm.ExecutionResultV1"
 	queryV1InputType      = "llm.QueryRequestV1"
 	queryV1OutputType     = "llm.QueryResponseV1"
+	planV1OutputType      = "llm.GenerationPlanV1"
 )
 
-// V1ActivityDescriptors returns the seven bounded Activities exposed
+// V1ActivityDescriptors returns the eight bounded Activities exposed
 // by a production v1 worker. The returned slice is newly allocated and can be
 // safely retained by a registry/introspection endpoint.
 func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
@@ -52,6 +53,7 @@ func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
 		{TaskQueue: taskQueue, Name: AcquireBudgetActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
 		{TaskQueue: taskQueue, Name: PollActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
 		{TaskQueue: taskQueue, Name: CompleteActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
+		{TaskQueue: taskQueue, Name: PlanGenerationActivityName, InputType: generateV1InputType, OutputType: planV1OutputType},
 	}
 	for _, descriptor := range descriptors {
 		if err := descriptor.Validate(); err != nil {
@@ -79,6 +81,10 @@ func (descriptor V1ActivityDescriptor) Validate() error {
 	case QueryActivityName:
 		if descriptor.InputType != queryV1InputType || descriptor.OutputType != queryV1OutputType {
 			return fmt.Errorf("Query v1 Activity descriptor types are invalid")
+		}
+	case PlanGenerationActivityName:
+		if descriptor.InputType != generateV1InputType || descriptor.OutputType != planV1OutputType {
+			return fmt.Errorf("generation plan Activity descriptor types are invalid")
 		}
 	case PrepareActivityName:
 		if descriptor.InputType != prepareV1InputType || descriptor.OutputType != executionV1OutputType {

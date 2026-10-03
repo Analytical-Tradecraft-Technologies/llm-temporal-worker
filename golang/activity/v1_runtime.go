@@ -251,6 +251,7 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	registry.RegisterActivityWithOptions(activities.AcquireBudgetV1, sdkactivity.RegisterOptions{Name: AcquireBudgetActivityName})
 	registry.RegisterActivityWithOptions(activities.PollExecutionV1, sdkactivity.RegisterOptions{Name: PollActivityName})
 	registry.RegisterActivityWithOptions(activities.CompleteExecutionV1, sdkactivity.RegisterOptions{Name: CompleteActivityName})
+	registry.RegisterActivityWithOptions(activities.PlanGenerationV1, sdkactivity.RegisterOptions{Name: PlanGenerationActivityName})
 }
 
 func (activities *Activities) payloadLimits() PayloadLimits {

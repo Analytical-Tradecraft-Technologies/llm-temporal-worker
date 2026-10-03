@@ -77,3 +77,20 @@ func (runtime *snapshotV1Runtime) CompleteExecutionV1(ctx context.Context, reque
 		return current.CompleteExecutionV1(ctx, request)
 	})
 }
+
+func (runtime *snapshotV1Runtime) PlanGenerationV1(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var result llm.GenerationPlanV1
+	err := runtime.with(ctx, func(current activity.V1Runtime) error {
+		planning, ok := current.(activity.GenerationPlanningRuntime)
+		if !ok {
+			return snapshotV1RuntimeUnavailable()
+		}
+		var err error
+		result, err = planning.PlanGenerationV1(ctx, request)
+		return err
+	})
+	return result, err
+}

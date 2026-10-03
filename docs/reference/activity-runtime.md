@@ -1,6 +1,6 @@
 # v1 Activity runtime boundary
 
-The worker registers seven exact names on its configured Temporal task queue:
+The worker registers eight exact names on its configured Temporal task queue:
 
 | Name | Input | Output |
 | --- | --- | --- |
@@ -11,6 +11,7 @@ The worker registers seven exact names on its configured Temporal task queue:
 | `llm.budget.acquire.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
 | `llm.poll.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
 | `llm.complete.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
+| `llm.generate.plan.v1` | `llm.GenerateRequestV1` | `llm.GenerationPlanV1` |
 
 The Go adapter exposes these same bindings through
 `activity.V1ActivityDescriptors(taskQueue)`. Each descriptor carries the
@@ -21,7 +22,7 @@ Temporal worker or adding any handler to its registry. The registry is still
 bound to one queue by
 the Temporal worker itself, so descriptors are an inspection and startup
 guard rather than a second payload codec. A configured v1 runtime registers
-all seven descriptors in the order above; the checked-in
+all eight descriptors in the order above; the checked-in
 development fixture may retain only the legacy Generate helper while the
 durable runtime is intentionally absent.
 
@@ -49,6 +50,11 @@ non-zero variant requires a positive temperature, while Compact accepts variant
 zero only. These checks are performed by the JSON schema gate where
 representable and by the Go contract validators before an Activity is
 dispatched.
+
+`llm.generate.plan.v1` authorizes and materializes the request, then returns
+only whether the inherited context needs compaction. It performs no writes,
+budget reservation, or provider calls. The public generation workflow uses
+this decision to run the compaction child before generation.
 
 ## Bounded execution results
 
