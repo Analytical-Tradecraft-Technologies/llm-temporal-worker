@@ -1,4 +1,6 @@
-(** Typed, one-shot bindings for the Go [llm.generate.v1] Temporal Activity.
+(** Typed clients and protocol bindings for the Go worker.
+    [Client] invokes the public generation and compaction workflows from an
+    application process; the other invocation helpers are workflow-native.
 
     Identifier modules intentionally wrap arbitrary strings nominally.  They
     preserve the wire protocol while preventing unrelated IDs from being
@@ -10,6 +12,7 @@ include module type of Llm_temporal_invocation
 module Conversation : module type of Llm_temporal_conversation
 module Query : module type of Llm_temporal_query
 module Generate : module type of Llm_temporal_generate
+module Client : module type of Llm_temporal_workflow_client
 module V1_codec : module type of Llm_temporal_v1_codec
 
 (** The ergonomic settings and cache modules are also available at the
