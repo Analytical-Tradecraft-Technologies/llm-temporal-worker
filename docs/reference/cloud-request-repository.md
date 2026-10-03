@@ -67,8 +67,7 @@ snapshot, and composition reuse checks it before either phase gets its ports.
 Missing or mismatched identities reject composition. This
 validates the declared storage binding; deployment callbacks must still supply
 ports backed by those stores. Both Generate and Compact share one validated
-composition per snapshot. Legacy SQL identities remain supported while their
-implementation is removed in later migration steps.
+composition per snapshot. SQL identities and implementations have been removed.
 
 Phase factories can now construct the parent-materialization callbacks with
 `V1RuntimeCapabilities.NewCheckpointReplay(resolveScope, limits)`. The returned
@@ -81,9 +80,9 @@ bindings. Generate roots authorize the caller and return an empty base;
 follow-ups and Compact load the parent without folding the current delta into it.
 
 This helper performs only parent materialization. Completed-operation and
-finalization-handoff replay remain in the outer cloud runtime. Pending-attempt
-recovery, route/cache/provider execution and finalization still need concrete
-phase composition; installing this helper alone does not authorize paid work.
+finalization-handoff replay remain in the outer cloud runtime. The bounded
+cloud runtime composes pending-attempt recovery, route/cache/provider execution
+and finalization; installing this helper alone does not authorize paid work.
 Missing capabilities and invalid limits reject construction. Scope, handle,
 transcript and storage failures stop before later phases, and raw resolver/SDK
 errors are excluded from the serialized provider error.
@@ -112,9 +111,9 @@ budget. Expired, unclaimed leases return a budget-wait error. Workflow timers
 and recovery policy remain outside these callbacks. No provider cancellation
 API is added. Planner/Redis error text is excluded from caller errors.
 
-This adapter supplies admission and claiming only. Concrete route/pricing
-planners, provider execution, cache/compaction composition and CLI registration
-remain required to run the cloud worker. Budget settlement still follows
+This adapter supplies admission and claiming only. The bounded runtime builder
+composes route/pricing planners, provider execution and cache/compaction phases.
+Production CLI authorization still requires explicit wiring. Budget settlement follows
 durable result finalization, rather than refunding on a submission uncertainty.
 
 For response-cache lookup, phase factories can construct
@@ -150,16 +149,15 @@ configured V1 runtime. A failed open rejects the snapshot and drains its existin
 clients. Readiness revalidates the named table/bucket and requires both a bounded
 table query and a blob read (a missing probe object is normal, a missing bucket
 is not). These checks establish read access, not write access;
-they do not provision or modify resources. A disabled `state.requests` section
-preserves the existing composition during this staged migration.
+they do not provision or modify resources. Durable mode rejects a missing
+`state.requests` section.
 
 This setting does **not** supply missing Generate/Compact phase factories or
 start a production worker on its own. An explicit durable V1 runtime is still
-required, even in development when request recording is enabled. PostgreSQL
-configuration remains required by the remaining durable/query composition.
-When cloud storage is enabled, the factory replaces the complete checkpoint
-bundle before invoking the V1 builder. It uses the snapshot's continuation
-keyring and never combines cloud checkpoint rows with SQL blob lookups.
+required, even in development when request recording is enabled. The factory
+supplies the complete cloud checkpoint bundle before invoking the V1 builder,
+using the snapshot's continuation keyring. No worker PostgreSQL configuration
+or backend remains.
 
 The operation binding includes tenant, project, activity kind, and
 `operation_key`. Its internal ID is a prefixed UUIDv8 derived using a separate
@@ -190,10 +188,13 @@ is saved with the configured, bounded `server.finalization_timeout`, even if its
 caller context has just ended. Different terminal responses cannot overwrite
 one another. Query calls pass through unchanged.
 
-Automatic cross-operation cache reuse, full workflow progress (including route, provider
-job, budget receipt and policy/configuration versions), finalizer composition,
-cleanup/recovery orchestration, and SQL removal remain subsequent
-migration work. No workflow or cancellation API is introduced here.
+The bounded cloud runtime now composes cross-operation cache reuse, persisted
+route/provider/budget progress, independent paid attempts, and finalization.
+Worker startup registers the public generation and compaction workflows and
+their internal execution and budget workflows; see
+[activity runtime](activity-runtime.md). Production authorization, deployment
+verification, and background cleanup/recovery orchestration remain separate
+work. No cancellation API is exposed.
 
 ## Checkpoint persistence
 
@@ -202,7 +203,7 @@ repository and blob-reader interfaces plus an immutable blob writer. The worker
 exposes these through `V1RuntimeCapabilities.Checkpoints`, including `BlobWriter`
 and an opaque-handle materializer. A custom cloud factory must provide
 `CloudCheckpointSource`; missing stores or handle verification reject the
-snapshot rather than silently using SQL checkpoints.
+snapshot; there is no fallback checkpoint backend.
 
 A finalizer encodes delta, response, settings and optional snapshot blobs with
 `state.CheckpointBlobCodec`, writes them using `BlobWriter.Write`, and places the
@@ -220,7 +221,7 @@ lineage references and every referenced blob. The complete checkpoint metadata,
 including provider-state references and cache affinities, is also encrypted.
 Operation/cache origin IDs remain finalizer-supplied provenance: the finalizer
 must bind them to an authorized operation/cache result. This adapter does not
-check a SQL foreign key or authorize a paid request.
+authorize a paid request.
 
 Publication uses only generic conditional `Create` operations:
 

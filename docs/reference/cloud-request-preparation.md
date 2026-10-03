@@ -98,9 +98,10 @@ rerouting an existing paid request; routing across configuration changes still
 requires the original compatible configuration. Publication's parent metadata
 must remain available until outstanding requests have finished.
 
-This boundary is not yet registered as the production execution runtime. The
-remaining phase composition, workflow registration, and removal of legacy SQL
-packages remain migration work.
+The bounded cloud runtime composes this boundary, and worker startup registers
+the public and internal workflows. SQL packages have been removed. Production
+CLI authorization and deployment verification remain integration gates; see
+[cloud workflow composition](../decisions/0010-durable-v1-runtime-composition.md#cloud-workflow-composition).
 
 ## Independent paid attempts
 
