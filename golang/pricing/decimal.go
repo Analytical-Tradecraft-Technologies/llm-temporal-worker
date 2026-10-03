@@ -375,6 +375,24 @@ func (decimal DecimalUSD) MarshalJSON() ([]byte, error) {
 	return json.Marshal(decimal.CanonicalString())
 }
 
+// UnmarshalJSON restores the exact decimal string emitted by MarshalJSON.
+// Numbers are rejected so decoding cannot silently pass through float64.
+func (decimal *DecimalUSD) UnmarshalJSON(data []byte) error {
+	if decimal == nil {
+		return fmt.Errorf("decimal price destination is nil")
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("decimal price must be encoded as a decimal string: %w", err)
+	}
+	parsed, err := ParseDecimalUSD(value)
+	if err != nil {
+		return err
+	}
+	*decimal = parsed
+	return nil
+}
+
 func (decimal DecimalUSD) valid() error {
 	if decimal.scale < 0 || decimal.scale > 18 || decimal.numerator.Sign() < 0 {
 		return fmt.Errorf("decimal price is invalid")

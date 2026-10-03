@@ -1,9 +1,62 @@
 package pricing
 
 import (
+	"encoding/json"
 	"math/big"
 	"testing"
 )
+
+func TestDecimalUSDJSONRoundTrip(t *testing.T) {
+	for _, value := range []string{
+		"0", "001.2300", "0.00000000015", "0.000000000000000001",
+		"9007199254740993.000000000000000001",
+		"99999999999999999999.999999999999999999",
+	} {
+		t.Run(value, func(t *testing.T) {
+			original := MustDecimalUSD(value)
+			encoded, err := json.Marshal(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded DecimalUSD
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := decoded.CanonicalString(), original.CanonicalString(); got != want {
+				t.Fatalf("round trip = %s, want %s", got, want)
+			}
+			originalCost, err := CeilUSD(original, 1, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decodedCost, err := CeilUSD(decoded, 1, 1)
+			if err != nil || decodedCost.Cmp(originalCost) != 0 {
+				t.Fatalf("round trip changed exact cost: %s, %v", decodedCost, err)
+			}
+		})
+	}
+}
+
+func TestDecimalUSDJSONRejectsInvalidValuesWithoutChangingDestination(t *testing.T) {
+	for _, value := range []string{
+		`0.1`, `null`, `true`, `{}`, `[]`, `""`, `"-1"`, `"1e-3"`,
+		`"0.0000000000000000001"`, `"100000000000000000000"`,
+	} {
+		t.Run(value, func(t *testing.T) {
+			decimal := MustDecimalUSD("1.23")
+			if err := json.Unmarshal([]byte(value), &decimal); err == nil {
+				t.Fatal("invalid decimal JSON accepted")
+			}
+			if got := decimal.CanonicalString(); got != "1.23" {
+				t.Fatalf("invalid input changed destination to %s", got)
+			}
+		})
+	}
+	var decimal *DecimalUSD
+	if err := decimal.UnmarshalJSON([]byte(`"1.23"`)); err == nil {
+		t.Fatal("nil destination accepted")
+	}
+}
 
 func TestCeilMicroUSDExact(t *testing.T) {
 	tests := []struct {
