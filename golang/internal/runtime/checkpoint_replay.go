@@ -67,26 +67,39 @@ func (replay *CheckpointReplay) Compact(ctx context.Context, request llm.Compact
 	return durable.CompactReplay{State: materialized}, err
 }
 
-func (replay *CheckpointReplay) materialize(ctx context.Context, caller llm.RequestContext, parent string) (state.MaterializedState, error) {
+func (replay *CheckpointReplay) authorize(ctx context.Context, caller llm.RequestContext) (string, error) {
 	if ctx == nil || replay == nil || replay.resolve == nil || isNilCapability(replay.materializer) {
-		return state.MaterializedState{}, checkpointReplayError(provider.CodeConfiguration)
+		return "", checkpointReplayError(provider.CodeConfiguration)
 	}
 	if err := ctx.Err(); err != nil {
-		return state.MaterializedState{}, err
+		return "", err
 	}
 	scope, err := replay.resolve(ctx, caller)
 	if ctx.Err() != nil {
-		return state.MaterializedState{}, ctx.Err()
+		return "", ctx.Err()
 	}
 	if err != nil {
-		return state.MaterializedState{}, checkpointReplayError(provider.CodePermissionDenied)
+		return "", checkpointReplayError(provider.CodePermissionDenied)
 	}
 	if !utf8.ValidString(scope) || scope == "" || len(scope) > 512 || strings.TrimSpace(scope) != scope || strings.ContainsAny(scope, "\x00\r\n") {
-		return state.MaterializedState{}, checkpointReplayError(provider.CodeInvalidArgument)
+		return "", checkpointReplayError(provider.CodeInvalidArgument)
 	}
 	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return scope, nil
+}
+
+func (replay *CheckpointReplay) materialize(ctx context.Context, caller llm.RequestContext, parent string) (state.MaterializedState, error) {
+	scope, err := replay.authorize(ctx, caller)
+	if err != nil {
 		return state.MaterializedState{}, err
 	}
+	return replay.materializeAuthorized(ctx, caller, parent, scope)
+}
+
+// materializeAuthorized is private to callers which have just resolved scope.
+func (replay *CheckpointReplay) materializeAuthorized(ctx context.Context, caller llm.RequestContext, parent, scope string) (state.MaterializedState, error) {
 	if parent == "" {
 		return state.MaterializedState{}, nil
 	}
