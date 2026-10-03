@@ -177,6 +177,17 @@ jobs:
       - name: Compile downstream workflow sample
         run: opam exec -- dune build --root ocaml/consumer_workflow_smoke
 
+      - name: Set up Go for OCaml workflow interoperability
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: golang/.go-version
+          cache: true
+          cache-dependency-path: golang/go.sum
+
+      - name: Test native OCaml clients and child workflows with Temporal and Redis
+        working-directory: golang
+        run: make cloud-workflow-ocaml-integration
+
   race:
     name: Test with race detector
     runs-on: ubuntu-latest

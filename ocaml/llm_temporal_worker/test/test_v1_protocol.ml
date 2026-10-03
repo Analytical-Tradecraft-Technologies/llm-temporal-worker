@@ -87,6 +87,18 @@ let () =
   error (V1_codec.encode_compact_request
     { compact with cache = Some { max_age_seconds = None; variant = -1l } });
   let compact_bytes = ok (V1_codec.encode_compaction_response compact_response) in
+  List.iter (fun (wire, source) ->
+      let provenance = `Assoc ["source", `String wire;
+        "policy_version", `String "policy-v1"; "prompt_version", `String "prompt-v1"] in
+      let fields = Yojson.Safe.Util.to_assoc (Yojson.Safe.from_string (Bytes.to_string compact_bytes)) in
+      let bytes = Bytes.of_string (Yojson.Safe.to_string (`Assoc (("provenance", provenance) :: fields))) in
+      let decoded = ok (V1_codec.decode_compaction_response bytes) in
+      let expected = Some { source; origin_operation_id = None; policy = None;
+        policy_version = Some "policy-v1"; prompt_version = Some "prompt-v1" } in
+      if decoded.provenance <> expected then failwith "cloud compaction provenance lost";
+      let repeated = ok (V1_codec.decode_compaction_response (ok (V1_codec.encode_compaction_response decoded))) in
+      if repeated.provenance <> expected then failwith "cloud compaction provenance round trip")
+    ["provider", Provider_provenance; "worker_cache", Worker_cache_provenance; "no_work", No_work_provenance];
   let compact_without_diagnostics = ok (V1_codec.decode_compaction_response (omit "diagnostics" compact_bytes)) in
   if compact_without_diagnostics.diagnostics <> [] then failwith "omitted compact diagnostics";
   error (V1_codec.encode_compaction_response

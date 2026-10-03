@@ -406,6 +406,16 @@ resumption, and terminal pending-index cleanup. The LLM adapter is deterministic
 and never contacts a paid provider. These results are not AWS integration or
 production authorization evidence.
 
+`make cloud-workflow-ocaml-integration` builds the nested OCaml package against
+its pinned Temporal SDK and uses the same isolated services. One native client
+process starts generation twice with identical request IDs; another resumes the
+saved execution after the Go worker restarts, checks repeated result observation,
+and runs compaction. An OCaml parent on a separate task queue also invokes both
+public child-workflow helpers. The test verifies actual child queue routing,
+`Abandon` parent-close policies, response identity/sample/lineage, provider call
+counts and settled Redis leases. The OCaml CI job runs this gate on PRs,
+merge-queue builds and master; ordinary Go tests do not require an OCaml compiler.
+
 `make cloud-workflow-aws-integration` runs the polling lifecycle against existing
 disposable DynamoDB and S3 resources. It requires explicit operator configuration:
 
