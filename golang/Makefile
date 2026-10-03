@@ -1,6 +1,8 @@
 SHELL := /bin/sh
 
 GO ?= go
+OPAM ?= opam
+CLOUD_WORKFLOW_TEST_FILTER ?= ^TestCloudWorkflowLive
 # Keep the security scan on the reviewed Go patch release. A moving `go env
 # GOVERSION` default can select an older runner toolchain than the documented
 # baseline and reintroduce fixed standard-library vulnerabilities.
@@ -18,7 +20,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: cloud-workflow-integration cloud-workflow-aws-integration fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: cloud-workflow-integration cloud-workflow-ocaml-integration cloud-workflow-aws-integration fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -458,7 +460,14 @@ cloud-workflow-integration:
 		LLMTW_TEMPORAL_ADDRESS="$$( $(COMPOSE) port temporal 7233 )" \
 		LLMTW_REDIS_ADDR="$$( $(COMPOSE) port redis 6379 )" \
 		LLMTW_CLOUD_TEST_PROVISION=1 LLMTW_CLOUD_TEST_AWS=0 \
-		$(GO) test -race -count=1 -timeout=10m -tags=cloudworkflowintegration ./internal/runtime -run '^TestCloudWorkflowLive'
+		$(GO) test -race -count=1 -timeout=10m -tags=cloudworkflowintegration ./internal/runtime -run '$(CLOUD_WORKFLOW_TEST_FILTER)'
+
+# Native OCaml callers and an OCaml parent workflow use the same isolated Go
+# worker gate. The parent and Go workers poll different queues.
+cloud-workflow-ocaml-integration:
+	cd ../ocaml/llm_temporal_worker && $(OPAM) exec -- dune build integration/live_client.exe
+	LLMTW_CLOUD_OCAML_CLIENT="$(abspath ../ocaml/llm_temporal_worker/_build/default/integration/live_client.exe)" \
+		$(MAKE) cloud-workflow-integration CLOUD_WORKFLOW_TEST_FILTER='^TestCloudWorkflowLiveOCaml$$'
 
 # Uses existing disposable AWS resources with ordinary IAM credentials. It
 # writes synthetic encrypted records in a random namespace and retains them;

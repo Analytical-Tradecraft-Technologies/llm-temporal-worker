@@ -386,14 +386,23 @@ let compact_request_of_json value =
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; policy; cache }
 
 let provenance_to_json (value : provenance) =
-  `Assoc (["source", `String (match value.source with Provider_provenance -> "provider" | Worker_cache_provenance -> "worker_cache")] @ option_field "origin_operation_id" (fun value -> `String (Operation_id.to_string value)) value.origin_operation_id @ option_field "policy" (fun value -> `String value) value.policy)
+  `Assoc (["source", `String (match value.source with Provider_provenance -> "provider" | Worker_cache_provenance -> "worker_cache" | No_work_provenance -> "no_work")]
+    @ option_field "origin_operation_id" (fun value -> `String (Operation_id.to_string value)) value.origin_operation_id
+    @ option_field "policy" (fun value -> `String value) value.policy
+    @ option_field "policy_version" (fun value -> `String value) value.policy_version
+    @ option_field "prompt_version" (fun value -> `String value) value.prompt_version)
 
 let provenance_of_json context value =
-  let* fields = closed context ["source"; "origin_operation_id"; "policy"] value in
-  let* source = required context "source" fields >>= string (context ^ ".source") >>= fun value -> match value with "provider" -> Ok Provider_provenance | "worker_cache" -> Ok Worker_cache_provenance | _ -> Error (errorf "%s.source is invalid" context) in
+  let* fields = closed context ["source"; "origin_operation_id"; "policy"; "policy_version"; "prompt_version"] value in
+  let* source = required context "source" fields >>= string (context ^ ".source") >>= fun value -> match value with "provider" -> Ok Provider_provenance | "worker_cache" -> Ok Worker_cache_provenance | "no_work" -> Ok No_work_provenance | _ -> Error (errorf "%s.source is invalid" context) in
   let* origin_operation_id = match optional "origin_operation_id" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".origin_operation_id") value in Ok (Some (Operation_id.of_string value)) in
-  let* policy = match optional "policy" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".policy") value in Ok (Some value) in
-  Ok { source; origin_operation_id; policy }
+  let optional_string name = match optional name fields with
+    | None | Some `Null -> Ok None
+    | Some value -> let* value = string (context ^ "." ^ name) value in Ok (Some value) in
+  let* policy = optional_string "policy" in
+  let* policy_version = optional_string "policy_version" in
+  let* prompt_version = optional_string "prompt_version" in
+  Ok { source; origin_operation_id; policy; policy_version; prompt_version }
 
 let compaction_response_to_json (value : compaction_response) =
   let* () = Llm_temporal_response_validation.validate_compaction_response value in

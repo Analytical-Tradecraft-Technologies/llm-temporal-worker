@@ -250,12 +250,14 @@ and cost_unknown_reason =
   | State_unavailable
   | Ambiguous_dispatch
 
-and checkpoint_provenance = Provider_provenance | Worker_cache_provenance
+and checkpoint_provenance = Provider_provenance | Worker_cache_provenance | No_work_provenance
 
 type provenance = {
   source : checkpoint_provenance;
   origin_operation_id : Operation_id.t option;
   policy : string option;
+  policy_version : string option;
+  prompt_version : string option;
 }
 
 type settings_patch = {
