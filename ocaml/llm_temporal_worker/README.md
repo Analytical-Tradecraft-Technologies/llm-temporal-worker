@@ -1,9 +1,15 @@
 # `llm-temporal-ocaml`
 
-Typed OCaml bindings for one durable, non-streaming `llm.generate.v1` Go
-Activity. The package contains no provider credentials, token streaming,
-continuation loop, polling, or application retry loop. The generated workflow
-schedules exactly one activity attempt.
+Typed OCaml bindings for the Go worker's public generation and compaction
+workflows, with exact request and response codecs and an immutable conversation
+facade. `Client` starts remote workflows from application processes and resumes
+waiting after a process restart. Provider polling, budget waiting, and paid
+retries are owned by the Go workflows.
+
+The older workflow-native `Generate.invoke`, `Conversation.respond`, and
+package-level invocation helpers still schedule activities directly. Their
+migration to child workflows is a separate follow-up; use the new process-level
+`Client` for the public workflow entry points below.
 
 The public v1 API uses exact request and response records: service classes are
 exactly `Economy | Standard | Priority`; request controls include portability,
@@ -35,6 +41,41 @@ builds that project against the installed public library, and runs its
 deterministic smoke test. This catches packaging, public-name, and basic
 runtime-dispatch regressions that a build from the source directory cannot
 detect; it never contacts Temporal or an LLM provider.
+
+## Remote workflow client
+
+Use `Llm_temporal.Client` outside deterministic workflow code:
+
+```ocaml
+let ( let* ) = Result.bind
+
+let generate client request =
+  let* handle = Client.start_generate client
+      ~task_queue:(Temporal_task_queue.of_string "llm-worker")
+      ~id:"invoice-42-workflow" ~request_id:"invoice-42-start" request in
+  let execution = Client.execution handle in
+  (* Persist [execution] together with [request] to resume after a restart. *)
+  let* response = Client.await handle in
+  Ok (execution, response)
+```
+
+Create the connection with `Client.create ~target_url ~namespace ()` and release
+it with `Client.shutdown`. Persist the workflow ID, start request ID, and request
+before starting. If the start response is lost, retry with the same values.
+`request_id` deduplicates Temporal start requests; the request's `operation_key`
+is worker idempotency, and `cache.variant` selects an independent cache sample.
+These identifiers serve different purposes.
+
+`Client.start_compact` returns a typed compaction handle. `resume_generate` and
+`resume_compact` attach to a saved execution without starting a workflow. They
+require the original request so completed results can be checked against its
+operation key, sample index, and checkpoint lineage.
+
+`Client.wait` preserves the exact run's typed terminal result. `Client.await`
+follows continue-as-new runs of the same workflow and returns its final decoded
+response or a `Temporal.Error.t`; it never restarts a failed workflow. The client
+does not expose cancellation. Neither method executes application tool calls
+returned in a model response.
 
 ## Use
 
@@ -149,14 +190,10 @@ let branch =
 in
 ```
 
-The facade enforces the cache-variant temperature rule before scheduling
-Generate: a positive `Cache_policy.variant` is rejected when the request
-explicitly sets `temperature` to zero. Inherited or otherwise unknown
-temperature remains server-authoritative, so a positive variant is allowed
-when the client cannot prove the effective value. `Generate.make` raises
-`Invalid_argument` for this construction-time error; `Conversation.respond`
-and `respond_with` return a typed `Temporal.Error.t` without dispatching an
-Activity.
+`Cache_policy.variant` is a nonnegative 32-bit sample index. Zero is the
+default; a different index selects a different cache identity without changing
+the provider's temperature. Generation and compaction both support independent
+samples, including requests with zero or inherited temperature.
 
 The synchronous `respond_with`, `compact_with`, and `Query.execute_with`
 helpers also bind an injected response to the request's `operation_key` before

@@ -6,6 +6,7 @@ include Llm_temporal_invocation
 module Conversation = Llm_temporal_conversation
 module Query = Llm_temporal_query
 module Generate = Llm_temporal_generate
+module Client = Llm_temporal_workflow_client
 module V1_codec = Llm_temporal_v1_codec
 
 module Settings = Llm_temporal_conversation.Settings
