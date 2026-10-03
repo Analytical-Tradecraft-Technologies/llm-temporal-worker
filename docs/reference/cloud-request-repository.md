@@ -388,3 +388,47 @@ replay after restart, staging/rollback, and expiry. Run
 These tests do not prove deployed IAM permissions, live DynamoDB/S3 behavior,
 Temporal recovery, or a SQL-free running worker. Those gates belong to the
 subsequent composition and deployment changes.
+
+## Workflow integration gates
+
+From `golang/`, run `make cloud-workflow-integration`. Docker Compose starts
+isolated, digest-pinned Temporal and Redis services on random loopback ports,
+then removes that test project's containers and volumes. PostgreSQL in this
+harness belongs to the Temporal server; the worker has no SQL backend. The gate
+runs on pull requests, merge-queue builds and master.
+
+The test uses real Temporal workflows, activities and Redis budget accounting,
+with the production cloud repository and encryption over in-memory generic KV
+and blob stores. It covers synchronous and polling generation, restart between
+submission and completion, exact operation replay, cache reuse, independent
+samples, compaction, denied scope access, exhausted budget followed by timer
+resumption, and terminal pending-index cleanup. The LLM adapter is deterministic
+and never contacts a paid provider. These results are not AWS integration or
+production authorization evidence.
+
+`make cloud-workflow-aws-integration` runs the polling lifecycle against existing
+disposable DynamoDB and S3 resources. It requires explicit operator configuration:
+
+- `LLMTW_CLOUD_TEST_AWS=1` enables AWS writes.
+- `LLMTW_CLOUD_TEST_CONFIG` contains the JSON adapter configuration shown above,
+  with disposable table and bucket aliases. The test replaces `namespace` with a
+  fresh UUID-based namespace and prints it for inspection.
+- `LLMTW_TEMPORAL_ADDRESS` and `LLMTW_REDIS_ADDR` address an existing test Temporal
+  namespace (`default`) and Redis. `LLMTW_REDIS_USERNAME`,
+  `LLMTW_REDIS_PASSWORD` and `LLMTW_REDIS_KEY_PREFIX` configure Redis access.
+- Ordinary AWS IAM credentials resolve through the AWS SDK. Redis must already
+  contain the matching admission Functions library; this target does not load or
+  replace shared server code and refuses CI execution.
+
+The AWS gate retains synthetic encrypted table/blob data for inspection; the
+operator owns deletion of the disposable resources. Redis cleanup is limited to
+that run's random hash tag. Test encryption keys are fixed synthetic fixtures,
+not deployment secrets. Neither gate creates cloud resources or calls an LLM.
+
+When a public operation completes, its active attempt is removed from pending
+recovery before the root publishes its terminal response. A provider attempt
+must have a successful, settled result; a cache-hit attempt must have no provider
+execution. Completion preserves the attempt's encrypted execution details and
+repairs uncertain event/index writes on replay. Older outcome-unknown paid
+attempts remain pending independently, even if a later cache hit or paid attempt
+completes the public operation.
