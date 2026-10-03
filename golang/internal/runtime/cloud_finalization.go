@@ -46,11 +46,16 @@ type CacheFinalizationEffects struct {
 	Use    cache.ResponseUse   `json:"use"`
 }
 
-// FinalizationEffects selects exactly one path: paid provider settlement or a
-// zero-cost cache-use receipt. The latter never touches Redis budget.
+// NoWorkFinalizationEffects marks a compaction which had no safe prefix to
+// summarize. It publishes a checkpoint without provider, cache or budget effects.
+type NoWorkFinalizationEffects struct{}
+
+// FinalizationEffects selects exactly one path: provider settlement, a cache-use
+// receipt, or a compaction that did not require a provider call.
 type FinalizationEffects struct {
 	Provider *ProviderFinalizationEffects `json:"provider,omitempty"`
 	Cache    *CacheFinalizationEffects    `json:"cache,omitempty"`
+	NoWork   *NoWorkFinalizationEffects   `json:"no_work,omitempty"`
 }
 
 type cloudFinalizationPayload struct {
@@ -128,6 +133,9 @@ func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, ki
 	handoff := cloudstate.FinalizationHandoff{CheckpointScope: checkpointScope, CheckpointID: checkpointID, Mode: "provider"}
 	if effects.Cache != nil {
 		handoff.Mode = "cache"
+	}
+	if effects.NoWork != nil {
+		handoff.Mode = "no_work"
 	}
 	operationID, err := validateFinalizationPayload(kind, key, index, handoff, payload)
 	if err != nil {
@@ -273,6 +281,9 @@ func (f *CloudFinalizer) CompleteCompact(ctx context.Context, request llm.Compac
 }
 
 func (f *CloudFinalizer) finish(ctx context.Context, effects FinalizationEffects) error {
+	if effects.NoWork != nil {
+		return nil
+	}
 	if paid := effects.Provider; paid != nil {
 		if isNilCapability(f.budgets) {
 			return cloudstate.ErrCorrupt
@@ -284,13 +295,20 @@ func (f *CloudFinalizer) finish(ctx context.Context, effects FinalizationEffects
 
 func validateFinalizationPayload(kind, key string, index int64, handoff cloudstate.FinalizationHandoff, payload cloudFinalizationPayload) (state.OperationID, error) {
 	invalid := cloudstate.ErrInvalid
-	if payload.Version != 1 || handoff.CheckpointScope == "" || handoff.CheckpointID == "" || (payload.Effects.Provider == nil) == (payload.Effects.Cache == nil) {
+	paths := 0
+	for _, selected := range []bool{payload.Effects.Provider != nil, payload.Effects.Cache != nil, payload.Effects.NoWork != nil} {
+		if selected {
+			paths++
+		}
+	}
+	if payload.Version != 1 || handoff.CheckpointScope == "" || handoff.CheckpointID == "" || paths != 1 {
 		return "", invalid
 	}
 	var operationID string
 	var disposition string
 	var cost llm.CostV1
 	var publishable bool
+	var noWork bool
 	switch kind {
 	case "generate":
 		var response llm.GenerateResponseV1
@@ -306,6 +324,10 @@ func validateFinalizationPayload(kind, key string, index int64, handoff cloudsta
 		}
 		operationID, disposition, cost = response.OperationID, response.Cache.Disposition, response.Cost
 		publishable = true
+		var provenance struct {
+			Source string `json:"source"`
+		}
+		noWork = json.Unmarshal(response.Provenance, &provenance) == nil && provenance.Source == "no_work" && response.Usage == nil && response.Checkpoint.Kind == "compaction"
 	default:
 		return "", invalid
 	}
@@ -344,6 +366,10 @@ func validateFinalizationPayload(kind, key string, index int64, handoff cloudsta
 		}
 		if paid.Entry != nil && (!publishable ||
 			paid.Entry.OriginCheckpointID != handoff.CheckpointID || !equalFinalizationJSON(paid.Entry.Response, payload.Response)) {
+			return "", invalid
+		}
+	} else if payload.Effects.NoWork != nil {
+		if handoff.Mode != "no_work" || kind != "compact" || !noWork || disposition != "disabled" || cost.Status != "exact" || cost.ActualCostUSD == nil || *cost.ActualCostUSD != "0" {
 			return "", invalid
 		}
 	} else {

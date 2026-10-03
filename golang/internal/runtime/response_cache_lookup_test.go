@@ -68,7 +68,7 @@ func newCacheLookupFixture(t *testing.T) *cacheLookupFixture {
 	f.gen.SettingsPatch.Model = llm.Patch[string]{Set: preparationPointer("model")}
 	f.gen.Cache = &llm.CachePolicyV1{MaxAgeSeconds: 60}
 	f.compact.Cache = &llm.CachePolicyV1{MaxAgeSeconds: 120}
-	f.compactReplay.State = materializer.result
+	f.compactReplay.State = replayCallerState(materializer.result, compact.Context)
 	f.compactReplay.State.Settings = state.RootModelState("model")
 	policy := compaction.DefaultPolicy()
 	policy.RecentTurns = 0

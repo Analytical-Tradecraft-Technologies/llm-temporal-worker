@@ -35,7 +35,7 @@ func checkpointReplayFixture(t *testing.T) (*CheckpointReplay, *checkpointReplay
 	t.Helper()
 	parent := llm.CheckpointHandle("cp1.opaque.parent")
 	caller := llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}
-	m := &checkpointReplayMaterializer{result: state.MaterializedState{Handle: state.Handle(parent), Tenant: caller.Tenant, Project: caller.Project, Items: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "parent message"}}}}}}
+	m := &checkpointReplayMaterializer{result: state.MaterializedState{Handle: state.Handle(parent), Tenant: "opaque-scope", Items: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "parent message"}}}}}}
 	r, err := replayCapabilities(m).NewCheckpointReplay(func(_ context.Context, got llm.RequestContext) (string, error) {
 		if !reflect.DeepEqual(got, caller) {
 			t.Fatal("lost caller scope")
@@ -61,11 +61,11 @@ func TestCheckpointReplayMaterializesBothPhasesAndPreservesDelta(t *testing.T) {
 	r, m, g, c := checkpointReplayFixture(t)
 	g.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "new delta"}}}}
 	base, err := r.Generate(context.Background(), g)
-	if err != nil || !reflect.DeepEqual(base.State, m.result) || base.Completed != nil || base.ReconciliationPending != nil {
+	if err != nil || !reflect.DeepEqual(base.State, replayCallerState(m.result, g.Context)) || base.Completed != nil || base.ReconciliationPending != nil {
 		t.Fatalf("Generate = %#v, %v", base, err)
 	}
 	compact, err := r.Compact(context.Background(), c)
-	if err != nil || !reflect.DeepEqual(compact.State, m.result) {
+	if err != nil || !reflect.DeepEqual(compact.State, replayCallerState(m.result, c.Context)) {
 		t.Fatalf("Compact = %#v, %v", compact, err)
 	}
 	if m.calls != 2 || m.scope != "opaque-scope" || m.handle != string(c.Parent) || m.limits != r.limits {
@@ -89,7 +89,7 @@ func TestCheckpointReplayRootAuthorizesWithoutLoadingParent(t *testing.T) {
 	assertCheckpointReplayError(t, err, provider.CodePermissionDenied)
 }
 func TestCheckpointReplayRejectsMissingBindingsAndInvalidLimits(t *testing.T) {
-	resolver := func(context.Context, llm.RequestContext) (string, error) { return "scope", nil }
+	resolver := func(context.Context, llm.RequestContext) (string, error) { return "opaque-scope", nil }
 	var typedNil *checkpointReplayMaterializer
 	for _, test := range []struct {
 		name    string
@@ -217,7 +217,7 @@ func TestCheckpointReplayRetainsOriginalSnapshotBinding(t *testing.T) {
 	_, first, g, _ := checkpointReplayFixture(t)
 	second := &checkpointReplayMaterializer{err: errors.New("new snapshot should not be consulted")}
 	capabilities := replayCapabilities(first)
-	resolver := func(context.Context, llm.RequestContext) (string, error) { return "scope", nil }
+	resolver := func(context.Context, llm.RequestContext) (string, error) { return "opaque-scope", nil }
 	limits := state.MaterializeLimits{MaxRows: 7}
 	old, err := capabilities.NewCheckpointReplay(resolver, limits)
 	if err != nil {
@@ -248,4 +248,9 @@ func TestCheckpointReplayCancellationDuringAuthorizationStopsBeforeRead(t *testi
 	if !errors.Is(err, context.Canceled) || m.calls != 0 {
 		t.Fatalf("canceled authorization: %v", err)
 	}
+}
+
+func replayCallerState(value state.MaterializedState, caller llm.RequestContext) state.MaterializedState {
+	value.Tenant, value.Project = caller.Tenant, caller.Project
+	return value
 }

@@ -204,7 +204,8 @@ func TestFinalizationHandoffCacheAndCompactKinds(t *testing.T) {
 	}{
 		{kind: "generate", mode: "cache", checkpointKind: state.CheckpointCacheReplay},
 		{kind: "compact", mode: "provider", checkpointKind: state.CheckpointCompaction},
-		{kind: "compact", mode: "cache", checkpointKind: state.CheckpointCacheReplay},
+		{kind: "compact", mode: "no_work", checkpointKind: state.CheckpointCompaction},
+		{kind: "compact", mode: "cache", checkpointKind: state.CheckpointCompaction},
 	} {
 		t.Run(variant.kind+"-"+variant.mode, func(t *testing.T) {
 			r, _, _, checkpoint := checkpointFixture(t)

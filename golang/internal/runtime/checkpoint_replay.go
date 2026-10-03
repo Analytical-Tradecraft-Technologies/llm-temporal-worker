@@ -101,9 +101,12 @@ func (replay *CheckpointReplay) materialize(ctx context.Context, caller llm.Requ
 		}
 		return state.MaterializedState{}, checkpointReplayError(code)
 	}
-	if materialized.Handle != state.Handle(parent) || materialized.Tenant != caller.Tenant || materialized.Project != caller.Project {
+	// The generic materializer knows only the authorized storage scope. Raw
+	// caller labels are attached here, after the scoped handle and graph read.
+	if materialized.Handle != state.Handle(parent) || materialized.Tenant != scope || materialized.Project != "" {
 		return state.MaterializedState{}, checkpointReplayError(provider.CodeStateCorrupt)
 	}
+	materialized.Tenant, materialized.Project = caller.Tenant, caller.Project
 	pending, err := state.ValidateTranscript(materialized.Items)
 	if err != nil || !equalCheckpointFrontier(pending, materialized.PendingToolCalls) {
 		return state.MaterializedState{}, checkpointReplayError(provider.CodeStateCorrupt)
