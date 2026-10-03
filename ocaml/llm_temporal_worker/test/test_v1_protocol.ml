@@ -56,7 +56,7 @@ let () =
   let request = {
     api_version = V1_codec.generate_api_version; operation_key = Operation_key.of_string "op-1"; context;
     parent = Some (checkpoint "cp-0"); append = [Message { actor = Human; content = [Text "hello"] }];
-    settings_patch = keep_patch; cache = Some { max_age_seconds = 60L; variant = 0l };
+    settings_patch = keep_patch; cache = Some { max_age_seconds = Some 60L; variant = 0l };
   } in
   let request' = ok (V1_codec.decode_generate_request (ok (V1_codec.encode_generate_request request))) in
   if request'.operation_key <> request.operation_key || request'.append <> request.append then failwith "generate round trip";
@@ -102,3 +102,9 @@ let () =
   assert_fixture "query-envelope.json" V1_codec.decode_query_envelope V1_codec.encode_query_envelope;
   assert_rejected "query-envelope.invalid-kind.json" V1_codec.decode_query_envelope;
   print_endline "v1 protocol tests passed"
+
+let () =
+  assert_fixture "generate-cache-any-age.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
+  assert_fixture "compact-cache-any-age.json" V1_codec.decode_compact_request V1_codec.encode_compact_request;
+  let cache = match Conversation.Cache_policy.any_age () with Ok value -> value | Error message -> failwith message in
+  if Conversation.Cache_policy.max_age_seconds cache <> None then failwith "unrestricted cache acquired an age limit"

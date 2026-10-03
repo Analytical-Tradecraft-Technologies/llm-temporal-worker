@@ -379,3 +379,7 @@ timestamp (the same format emitted by the Go worker). These cross-language
 invariants are checked during encode and decode so malformed values fail as a
 codec error before an Activity is scheduled or invalid data enters Temporal
 history.
+
+Use `Conversation.Cache_policy.any_age ()` to enable caching without an age limit.
+`accept_up_to` retains an explicit positive maximum age. The typed model stores
+`max_age_seconds` as an option; `None` omits that field on the wire.

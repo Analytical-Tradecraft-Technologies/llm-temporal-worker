@@ -60,7 +60,8 @@ end
 module Cache_policy : sig
   type t
   val accept_up_to : max_age_seconds:Int64.t -> ?variant:Int32.t -> unit -> (t, validation_error) result
-  val max_age_seconds : t -> Int64.t
+  val any_age : ?variant:Int32.t -> unit -> (t, validation_error) result
+  val max_age_seconds : t -> Int64.t option
   val variant : t -> Int32.t
 end
 

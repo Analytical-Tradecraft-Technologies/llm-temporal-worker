@@ -304,3 +304,7 @@ response sizes can grow only by the decimal digit count of that depth, never by
 the ancestor transcript length. The materialized transcript therefore stays in
 the worker's state store rather than growing Temporal history or Activity
 arguments with conversation depth.
+
+An enabled cache policy may omit `max_age_seconds` to reuse any eligible success,
+regardless of its completion age. An explicit age remains bounded to 1–31536000
+seconds; zero and null are invalid. Omitting `cache` still disables reuse.

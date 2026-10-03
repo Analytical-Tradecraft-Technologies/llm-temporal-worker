@@ -222,7 +222,7 @@ type checkpoint_metadata = {
 }
 
 type cache_policy = {
-  max_age_seconds : int64;
+  max_age_seconds : int64 option;
   variant : int32;
 }
 

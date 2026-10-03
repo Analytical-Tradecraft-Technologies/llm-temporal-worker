@@ -11,6 +11,8 @@ import (
 func TestV1ContractFixturesValidate(t *testing.T) {
 	cases := []struct{ schemaName, fixture string }{
 		{"generate-request.schema.json", "generate-root.json"},
+		{"generate-request.schema.json", "generate-cache-any-age.json"},
+		{"compact-request.schema.json", "compact-cache-any-age.json"},
 		{"generate-request.schema.json", "generate-delta.json"},
 		{"generate-response.schema.json", "generate-response.json"},
 		{"generate-response.schema.json", "generate-response-disabled-cache.json"},

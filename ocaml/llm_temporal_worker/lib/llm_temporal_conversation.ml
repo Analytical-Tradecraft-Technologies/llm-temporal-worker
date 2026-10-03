@@ -80,7 +80,11 @@ module Cache_policy = struct
     if max_age_seconds < 1L || max_age_seconds > 31_536_000L then
       Error "cache max_age_seconds must be between 1 and 31536000"
     else if Int32.compare variant 0l < 0 then Error "cache variant must not be negative"
-    else Ok { max_age_seconds; variant }
+    else Ok { max_age_seconds = Some max_age_seconds; variant }
+
+  let any_age ?(variant = 0l) () =
+    if variant < 0l then Error "cache variant must be nonnegative"
+    else Ok { max_age_seconds = None; variant }
 
   let max_age_seconds (value : t) = value.max_age_seconds
   let variant (value : t) = value.variant

@@ -65,8 +65,8 @@ func (lookup *ResponseCacheLookup) Generate(ctx context.Context, request llm.Gen
 	if err := validateCacheLookupPlan(ctx, lease, cache.OperationGenerate, int64(request.Cache.Variant), err); err != nil {
 		return durable.CacheDecision{}, err
 	}
-	maxAge := time.Duration(request.Cache.MaxAgeSeconds) * time.Second
-	decision, err := lookup.cache.PrepareGenerate(ctx, lease, &maxAge)
+	maxAge := cacheMaximumAge(request.Cache)
+	decision, err := lookup.cache.PrepareGenerate(ctx, lease, maxAge)
 	return decision, responseCacheLookupError(err)
 }
 
@@ -93,8 +93,8 @@ func (lookup *ResponseCacheLookup) Compact(ctx context.Context, request llm.Comp
 	if err := validateCacheLookupPlan(ctx, lease, cache.OperationCompact, 0, err); err != nil {
 		return durable.CompactCacheDecision{}, err
 	}
-	maxAge := time.Duration(request.Cache.MaxAgeSeconds) * time.Second
-	decision, err := lookup.cache.PrepareCompact(ctx, lease, &maxAge)
+	maxAge := cacheMaximumAge(request.Cache)
+	decision, err := lookup.cache.PrepareCompact(ctx, lease, maxAge)
 	return decision, responseCacheLookupError(err)
 }
 
@@ -139,4 +139,12 @@ func responseCacheLookupError(err error) error {
 
 func cacheLookupError(code provider.Code, retry provider.RetryDisposition) error {
 	return provider.NewError(code, provider.PhaseStateLoad, provider.DispatchNotDispatched, retry, "response cache lookup failed")
+}
+
+func cacheMaximumAge(policy *llm.CachePolicyV1) *time.Duration {
+	if policy == nil || policy.MaxAgeSeconds == 0 {
+		return nil
+	}
+	age := time.Duration(policy.MaxAgeSeconds) * time.Second
+	return &age
 }

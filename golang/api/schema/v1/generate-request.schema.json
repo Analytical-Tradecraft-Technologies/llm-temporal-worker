@@ -26,7 +26,7 @@
     },
     "cache": {
       "type": "object", "additionalProperties": false,
-      "required": ["max_age_seconds"],
+
       "properties": {
         "max_age_seconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
         "variant": {"type": "integer", "minimum": 0, "maximum": 2147483647, "default": 0}

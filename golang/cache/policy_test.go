@@ -22,7 +22,6 @@ func TestNewPolicyAndWireAge(t *testing.T) {
 		seconds int64
 		variant int32
 	}{
-		{name: "zero age", seconds: 0},
 		{name: "negative age", seconds: -1},
 		{name: "too old", seconds: int64(DefaultMaximumAge/time.Second) + 1},
 		{name: "negative variant", seconds: 1, variant: -1},
@@ -86,5 +85,18 @@ func TestValidateOptionalCachePolicy(t *testing.T) {
 func TestPolicyMaxAgeSecondsRejectsSubsecond(t *testing.T) {
 	if _, err := (Policy{MaxAge: time.Millisecond}).MaxAgeSeconds(); err == nil {
 		t.Fatal("subsecond policy unexpectedly converted to wire seconds")
+	}
+}
+
+func TestOmittedMaximumAgePolicy(t *testing.T) {
+	policy, err := NewPolicy(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := policy.Validate(OperationGenerate, nil); err != nil {
+		t.Fatal(err)
+	}
+	if seconds, err := policy.MaxAgeSeconds(); err != nil || seconds != 0 {
+		t.Fatalf("age=%d error=%v", seconds, err)
 	}
 }

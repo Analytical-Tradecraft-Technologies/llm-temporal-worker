@@ -13,8 +13,8 @@ const (
 	DefaultMaximumAge = 365 * 24 * time.Hour
 )
 
-// Policy is an explicit opt-in to the exact-response cache. A zero Policy is
-// not a valid enabled policy; callers represent omission with a nil *Policy.
+// Policy is an explicit opt-in to the exact-response cache. Zero MaxAge means
+// no age restriction; callers disable caching with a nil *Policy.
 // Variant is a cache discriminator and is never sent to a provider.
 type Policy struct {
 	MaxAge  time.Duration
@@ -25,8 +25,8 @@ type Policy struct {
 // here prevents integer-second multiplication from overflowing a duration and
 // gives all callers the same positive/bounded checks.
 func NewPolicy(maxAgeSeconds int64, variant int32) (Policy, error) {
-	if maxAgeSeconds <= 0 {
-		return Policy{}, fmt.Errorf("cache max age must be positive")
+	if maxAgeSeconds < 0 {
+		return Policy{}, fmt.Errorf("cache max age must not be negative")
 	}
 	if maxAgeSeconds > int64(DefaultMaximumAge/time.Second) {
 		return Policy{}, fmt.Errorf("cache max age must not exceed %s", DefaultMaximumAge)
@@ -54,8 +54,8 @@ func (policy Policy) ValidateWithMaximum(operation OperationKind, effectiveTempe
 	if maximumAge <= 0 || maximumAge > DefaultMaximumAge {
 		return fmt.Errorf("cache maximum age must be between 1ns and %s", DefaultMaximumAge)
 	}
-	if policy.MaxAge <= 0 || policy.MaxAge > maximumAge {
-		return fmt.Errorf("cache max age must be between 1ns and %s", maximumAge)
+	if policy.MaxAge < 0 || policy.MaxAge > maximumAge {
+		return fmt.Errorf("cache max age must be omitted or between 1ns and %s", maximumAge)
 	}
 	if policy.Variant < 0 {
 		return fmt.Errorf("cache variant must not be negative")
@@ -91,8 +91,8 @@ func ValidateOptional(policy *Policy, operation OperationKind, effectiveTemperat
 // useful when forwarding a policy to a v1 contract and never silently rounds a
 // sub-second duration.
 func (policy Policy) MaxAgeSeconds() (int64, error) {
-	if policy.MaxAge <= 0 || policy.MaxAge%time.Second != 0 {
-		return 0, fmt.Errorf("cache max age must be a positive whole number of seconds")
+	if policy.MaxAge < 0 || policy.MaxAge%time.Second != 0 {
+		return 0, fmt.Errorf("cache max age must be omitted or a positive whole number of seconds")
 	}
 	if policy.MaxAge > DefaultMaximumAge {
 		return 0, fmt.Errorf("cache max age must not exceed %s", DefaultMaximumAge)

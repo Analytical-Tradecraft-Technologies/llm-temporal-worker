@@ -254,7 +254,7 @@ func TestResponseCacheLookupRejectsInvalidRequestsAndPlansBeforeStorage(t *testi
 			case "expired":
 				f.now = f.genLease.ExpiresAt
 			case "age":
-				f.gen.Cache.MaxAgeSeconds = 0
+				f.gen.Cache.MaxAgeSeconds = -1
 				code = provider.CodeInvalidArgument
 			case "completed":
 				f.genReplay.Completed = &llm.GenerateResponseV1{}
@@ -651,5 +651,32 @@ func TestResponseCacheLookupRetainsOriginalSnapshot(t *testing.T) {
 	current, err := next.Generate(context.Background(), f.gen, f.genReplay)
 	if err != nil || current.Disposition != durable.CacheHit || newReads != 1 {
 		t.Fatalf("new snapshot was not captured: %+v, %v", current, err)
+	}
+}
+
+func TestResponseCacheLookupOmittedAgeReusesOldEligibleSuccess(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		f := newCacheLookupFixture(t)
+		f.gen.Cache.MaxAgeSeconds = 0
+		f.compact.Cache.MaxAgeSeconds = 0
+		entry := cacheLookupEntry(t, f, compact)
+		entry.CompletedAt = f.now.Add(-400 * 24 * time.Hour)
+		f.responses.lookup = func(_ context.Context, query cache.ResponseLookup) (*cache.ResponseEntry, error) {
+			if query.MaxAge != nil {
+				t.Fatal("omitted age acquired a freshness limit")
+			}
+			return &entry, nil
+		}
+		if compact {
+			result, err := f.helper.Compact(context.Background(), f.compact, f.compactReplay)
+			if err != nil || result.Disposition != durable.CacheHit {
+				t.Fatalf("Compact=%+v err=%v", result, err)
+			}
+		} else {
+			result, err := f.helper.Generate(context.Background(), f.gen, f.genReplay)
+			if err != nil || result.Disposition != durable.CacheHit {
+				t.Fatalf("Generate=%+v err=%v", result, err)
+			}
+		}
 	}
 }

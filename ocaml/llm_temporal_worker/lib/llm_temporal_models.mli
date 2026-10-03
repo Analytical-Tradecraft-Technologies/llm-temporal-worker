@@ -162,7 +162,7 @@ end
 type 'a patch = Keep | Set of 'a | Clear
 type checkpoint_kind = Generation_checkpoint | Compaction_checkpoint | Cache_replay_checkpoint
 type checkpoint_metadata = { handle : Checkpoint.t; parent : Checkpoint.t option; kind : checkpoint_kind; depth : int32 }
-type cache_policy = { max_age_seconds : int64; variant : int32 }
+type cache_policy = { max_age_seconds : int64 option; variant : int32 }
 type cache_disposition_kind = Cache_disabled | Cache_miss_populated | Cache_hit | Cache_miss_not_populated
 type cache_disposition = { disposition : cache_disposition_kind; variant : int32; entry_age_seconds : int64 option }
 type cost_method = Provider_reported | Catalog_usage | Control_query_zero
