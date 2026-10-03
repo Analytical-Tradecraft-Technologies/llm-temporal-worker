@@ -1342,8 +1342,8 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 		result.Provenance = copyRaw(raw)
 	}
 	if raw, ok := fields["usage"]; ok {
-		var usage Usage
-		if err := json.Unmarshal(raw, &usage); err != nil {
+		usage, err := decodeUsage(raw)
+		if err != nil {
 			return err
 		}
 		result.Usage = &usage

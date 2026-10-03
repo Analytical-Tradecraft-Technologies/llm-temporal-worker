@@ -783,3 +783,43 @@ func TestCacheAgeOmissionIsUnrestrictedButZeroAndNullAreInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestV1CompactResponseUsagePreservedAndValidated(t *testing.T) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(readV1Fixture(t, "compact-response.json"), &fields); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"input_tokens":9007199254740993,"output_tokens":12,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5,"provider_raw":{"tokens":9007199254740993}}`
+	fields["usage"] = json.RawMessage(valid)
+	data, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response llm.CompactResponseV1
+	if err := json.Unmarshal(data, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage == nil || response.Usage.InputTokens != 9007199254740993 || response.Usage.OutputTokens != 12 || response.Usage.ReasoningTokens != 3 || response.Usage.CacheReadTokens != 4 || response.Usage.CacheWriteTokens != 5 || string(response.Usage.ProviderRaw["tokens"]) != "9007199254740993" {
+		t.Fatalf("usage lost on decode: %+v", response.Usage)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var again llm.CompactResponseV1
+	if err := json.Unmarshal(encoded, &again); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := json.Marshal(response.Usage)
+	second, _ := json.Marshal(again.Usage)
+	if !bytes.Equal(first, second) {
+		t.Fatal("usage changed on round trip")
+	}
+	for _, invalid := range []string{`{"input_tokens":-1}`, `{"output_tokens":1.5}`, `{"reasoning_tokens":9223372036854775808}`, `{"unknown":1}`, `null`} {
+		fields["usage"] = json.RawMessage(invalid)
+		data, _ := json.Marshal(fields)
+		if err := json.Unmarshal(data, &response); err == nil {
+			t.Fatalf("accepted invalid usage %s", invalid)
+		}
+	}
+}
