@@ -198,3 +198,33 @@ Lookup adapter tests additionally exercise both real runners, disabled policies,
 sample and freshness binding, snapshot reloads, identical uncertain-acquisition
 retries, corrupt origins, and storage failures before budget/provider work.
 They do not establish live AWS, Redis, or Temporal behavior.
+
+
+## Results from independent paid attempts
+
+The bounded cloud execution path stores each paid attempt under its own child
+request ID. `CloudFinalizer.LoadAttemptResult` requires an already authorized
+scope and verifies the active child, immutable request manifest, saved
+configuration, terminal provider result and completed budget settlement. It
+returns the saved paid identity alongside a copy of the response projected to
+the original public operation ID and key. Checkpoint publication uses that
+public response; the underlying paid record keeps the child identity.
+
+Set `ProviderFinalizationEffects.AttemptID` to that child ID. For this path,
+`Lease.OperationID` is the public operation ID and `Lease.Attempt` is the child
+ID. Redis generation remains the budget materialization generation; it is not
+an attempt identifier. This differs from the legacy runner gate described
+above. Finalization revalidates the saved child both before persisting a handoff
+and before replaying its effects. The settlement must exactly match the child's
+saved receipt, including its operation, generation and event identities.
+
+When caching is disabled, set `Uncached`, omit the fill lease and entry, and use
+a `FillNotCacheable` completion with the provider's saved completion time. The
+helper performs only idempotent settlement. Free routes additionally set
+`Unreserved` and have no settlement. Incomplete generated responses can finish
+and settle, but cannot publish a successful cache entry. Cached paths retain
+the publication, settlement and fill-completion order.
+
+This finalization support does not activate production composition. The bounded
+runtime must authorize each call, recover existing attempts, acquire any fill
+lease, and publish the checkpoint before returning its completed response.

@@ -35,6 +35,11 @@ type CloudCheckpointFinalizationStore interface {
 // inputs. Do not regenerate timestamps, IDs or costs on a retry. Entry is nil
 // for an incomplete/otherwise uncacheable response. No new budget is acquired.
 type ProviderFinalizationEffects struct {
+	// AttemptID binds a child execution to this public operation. Its unique
+	// identity also owns the fill receipt; Redis generation is independent.
+	AttemptID cloudstate.RequestID `json:"attempt_id,omitempty"`
+	// Uncached bypasses fill publication only after verifying the child result.
+	Uncached   bool                     `json:"uncached,omitempty"`
 	Lease      cache.FillLease          `json:"lease"`
 	Completion cache.FillCompletion     `json:"completion"`
 	Entry      *cache.ResponseEntry     `json:"entry,omitempty"`
@@ -154,7 +159,7 @@ func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, ki
 	scope := cloudstate.Scope{Tenant: caller.Tenant, Project: caller.Project}
 	record, err := f.requests.BeginOperation(ctx, cloudstate.Operation{Scope: scope, Kind: kind, Key: key, RequestIndex: index, Manifest: input, Now: f.clock()})
 	if err == nil {
-		err = f.verifyUnreserved(ctx, scope, record.Request.ID, kind, payload)
+		err = f.verifyProviderFinalization(ctx, scope, record.Request.ID, kind, handoff.CheckpointScope, payload)
 	}
 	if err == nil {
 		if checkpoint == nil {
@@ -206,7 +211,7 @@ func (f *CloudFinalizer) replay(ctx context.Context, scope cloudstate.Scope, rec
 	if err != nil || operationID != handoff.OperationID {
 		return nil, true, cloudRuntimeError(cloudstate.ErrCorrupt, true)
 	}
-	if err := f.verifyUnreserved(ctx, scope, record.Request.ID, kind, payload); err != nil {
+	if err := f.verifyProviderFinalization(ctx, scope, record.Request.ID, kind, handoff.CheckpointScope, payload); err != nil {
 		return nil, true, cloudRuntimeError(err, true)
 	}
 	if resumeCheckpoint {
@@ -293,6 +298,15 @@ func (f *CloudFinalizer) finish(ctx context.Context, effects FinalizationEffects
 		return nil
 	}
 	if paid := effects.Provider; paid != nil {
+		if paid.Uncached {
+			if paid.Unreserved {
+				return nil
+			}
+			if isNilCapability(f.budgets) {
+				return cloudstate.ErrCorrupt
+			}
+			return f.budgets.Reconcile(ctx, paid.Budget)
+		}
 		if paid.Unreserved {
 			return f.cache.CompleteAttempt(ctx, paid.Lease, paid.Completion, paid.Entry, func(context.Context) error { return nil })
 		}
@@ -346,11 +360,16 @@ func validateFinalizationPayload(kind, key string, index int64, handoff cloudsta
 		return "", invalid
 	}
 	if paid := payload.Effects.Provider; paid != nil {
-		if handoff.Mode != "provider" || disposition == "hit" ||
-			paid.Lease.Key.ScopeID != handoff.CheckpointScope ||
-			string(paid.Lease.Key.Operation) != kind ||
-			paid.Lease.Key.RequestIndex != index ||
-			string(paid.Lease.OperationID) != operationID ||
+		if handoff.Mode != "provider" || disposition == "hit" {
+			return "", invalid
+		}
+		if paid.Uncached {
+			if paid.AttemptID == "" || disposition != "disabled" || paid.Entry != nil ||
+				!equalFinalizationValue(paid.Lease, cache.FillLease{}) || paid.Completion.Outcome != cache.FillNotCacheable || paid.Completion.EntryID != "" {
+				return "", invalid
+			}
+		} else if paid.Lease.Key.ScopeID != handoff.CheckpointScope || string(paid.Lease.Key.Operation) != kind ||
+			paid.Lease.Key.RequestIndex != index || string(paid.Lease.OperationID) != operationID ||
 			durable.ValidateAttemptCompletion(paid.Lease, paid.Completion, paid.Entry) != nil {
 			return "", invalid
 		}
@@ -358,7 +377,17 @@ func validateFinalizationPayload(kind, key string, index int64, handoff cloudsta
 			if !equalFinalizationValue(paid.Budget, durable.ReconcileRequest{}) {
 				return "", invalid
 			}
-		} else if string(paid.Budget.OperationID) != operationID || string(paid.Budget.GenerationID) != paid.Lease.Attempt || paid.Budget.Validate() != nil {
+		} else {
+			budgetID := operationID
+			if paid.AttemptID != "" {
+				budgetID = string(paid.AttemptID)
+			}
+			if string(paid.Budget.OperationID) != budgetID || paid.Budget.Validate() != nil ||
+				(paid.AttemptID == "" && string(paid.Budget.GenerationID) != paid.Lease.Attempt) {
+				return "", invalid
+			}
+		}
+		if paid.AttemptID != "" && !paid.Uncached && paid.Lease.Attempt != string(paid.AttemptID) {
 			return "", invalid
 		}
 		for _, event := range paid.Budget.Events {
