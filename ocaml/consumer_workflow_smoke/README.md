@@ -2,7 +2,7 @@
 
 This is an external Dune project, separate from the package sources. It imports
 only the installed `llm-temporal-ocaml` package and type-checks the
-architecture's one-shot, non-streaming workflow shape:
+public workflow orchestration shape:
 
 - all five typed `Query` constructors;
 - validated `Query.Filter` builders for each query kind;
@@ -11,8 +11,8 @@ architecture's one-shot, non-streaming workflow shape:
   each future's `(turn, Temporal.Error.t) result` value channel;
 - explicit `Conversation.compact`; and
 - a post-compaction `Conversation.respond` that restores application settings;
-- the documented low-level `generate_v1_activity`, `compact_v1_activity`, and
-  `query_v1_activity` execute calls with the package retry policy.
+- generation and compaction child workflows with explicit durable IDs and queues;
+- the one-attempt `query_v1_activity` call.
 
 The executable is compile-only and does not contact Temporal or an LLM
 provider. Run it with:

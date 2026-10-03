@@ -69,26 +69,13 @@ let exactly_three_results
    ergonomic facade below.  This function is never called: the fixture is a
    compile-only downstream consumer and must not contact Temporal or a
    provider at process startup. *)
-let low_level_activity_examples ~task_queue
+let low_level_workflow_examples ~task_queue ~generate_id ~compact_id
     (generation_request : generate_request)
     (compaction_request : compact_request)
     (query_envelope : query_envelope) =
-  let task_queue = Temporal_task_queue.to_string task_queue in
-  let generated =
-    Temporal.Activity.execute ~task_queue
-      ~retry_policy:activity_retry_policy
-      generate_v1_activity generation_request
-  in
-  let compacted =
-    Temporal.Activity.execute ~task_queue
-      ~retry_policy:activity_retry_policy
-      compact_v1_activity compaction_request
-  in
-  let queried =
-    Temporal.Activity.execute ~task_queue
-      ~retry_policy:activity_retry_policy
-      query_v1_activity query_envelope
-  in
+  let generated = invoke_generate ~task_queue ~id:generate_id generation_request in
+  let compacted = invoke_compact_v1 ~task_queue ~id:compact_id compaction_request in
+  let queried = invoke_query_v1 ~task_queue query_envelope in
   generated, compacted, queried
 
 let claim_workflow ~input_codec ~output_codec ~task_queue =
@@ -121,7 +108,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
             ~output:input.output ()) ()
       in
       let* first =
-        Conversation.respond ~task_queue
+        Conversation.respond ~task_queue ~id:(input.run_key ^ ":turn-1")
           ~operation_key:(operation_key input "turn-1") ~cache:cache_0
           ~append:[ message input.question ] root
       in
@@ -131,7 +118,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
         |> Settings.Patch.set_reasoning_effort High
       in
       let start_branch suffix cache =
-        Conversation.start_respond ~task_queue
+        Conversation.start_respond ~task_queue ~id:(input.run_key ^ ":" ^ suffix)
           ~operation_key:(operation_key input suffix)
           ~settings_patch:branch_patch ~cache
           ~append:[ message input.branch_instruction ]
@@ -149,11 +136,11 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
       let branches : Conversation.turn list = [ branch_0; branch_1; branch_2 ] in
       let chosen = branch_0 in
       let* (compaction, compacted) =
-        Conversation.compact ~task_queue ~operation_key:(operation_key input "compact")
+        Conversation.compact ~task_queue ~id:(input.run_key ^ ":compact") ~operation_key:(operation_key input "compact")
           ~cache:cache_0 chosen.conversation
       in
       let* final =
-        Conversation.respond ~task_queue
+        Conversation.respond ~task_queue ~id:(input.run_key ^ ":after-compaction")
           ~operation_key:(operation_key input "after-compaction") ~cache:cache_0
           ~append:[ message "Return the final structured answer." ] compacted
       in
@@ -204,4 +191,4 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
 (* Keep the definition reachable so Dune type-checks its full inferred type,
    while avoiding a workflow registration or Activity execution at process
    startup. *)
-let () = ignore (claim_workflow, low_level_activity_examples)
+let () = ignore (claim_workflow, low_level_workflow_examples)

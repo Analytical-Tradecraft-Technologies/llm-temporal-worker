@@ -37,7 +37,7 @@ let response (request : generate_request) =
     diagnostics = [] }
 
 let dispatch ?task_queue:_ activity request =
-  if Temporal.Activity.name activity <> "llm.generate.v1" then
+  if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then
     failwith "Generate dispatched the wrong Activity";
   Ok (response request)
 
@@ -51,7 +51,7 @@ let () =
   let actual = expect_ok (Generate.invoke_with ~dispatch request) in
   if actual.operation_key <> operation_key then failwith "Generate response operation key changed";
   let mismatched_dispatch ?task_queue:_ activity request =
-    if Temporal.Activity.name activity <> "llm.generate.v1" then
+    if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then
       failwith "Generate dispatched the wrong Activity";
     Ok { (response request) with
          operation_key = Operation_key.of_string "different-operation" }
@@ -62,7 +62,7 @@ let () =
    | Error error -> failf "unexpected operation key mismatch: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "mismatched Generate operation key was accepted");
   let malformed_checkpoint_dispatch ?task_queue:_ activity request =
-    if Temporal.Activity.name activity <> "llm.generate.v1" then
+    if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then
       failwith "Generate dispatched the wrong Activity";
     let value = response request in
     Ok { value with checkpoint = { value.checkpoint with kind = Compaction_checkpoint } }
@@ -70,7 +70,7 @@ let () =
   require_codec_rejection "Generate invocation accepted a compaction checkpoint"
     (Generate.invoke_with ~dispatch:malformed_checkpoint_dispatch request);
   let root_with_parent_dispatch ?task_queue:_ activity request =
-    if Temporal.Activity.name activity <> "llm.generate.v1" then
+    if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then
       failwith "Generate dispatched the wrong Activity";
     let value = response request in
     Ok { value with checkpoint =
@@ -82,7 +82,7 @@ let () =
     { request with parent = Some (Checkpoint.of_string_exn "expected-parent") }
   in
   let child_without_parent_dispatch ?task_queue:_ activity request =
-    if Temporal.Activity.name activity <> "llm.generate.v1" then
+    if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then
       failwith "Generate dispatched the wrong Activity";
     let value = response request in
     Ok { value with checkpoint = { value.checkpoint with parent = None } }
@@ -109,3 +109,19 @@ let () =
    | [] -> ()
    | failures -> failf "%s" (String.concat "; " failures));
   print_endline "one-shot Generate facade passed"
+
+
+let () =
+  let context = { tenant = Some (Tenant_id.of_string "tenant"); project = Some (Project_id.of_string "project"); actor = Some (Actor_id.of_string "actor"); tags = [] } in
+  let request = Generate.make ~operation_key:(Operation_key.of_string "invalid-start")
+      ~context ~model:(Model_selector.of_string "test") ~input:[] () in
+  let queue = Temporal_task_queue.of_string "llm-worker" in
+  let invalid = { request with api_version = "future-version" } in
+  (match Temporal.Future.peek (Generate.start ~task_queue:queue ~id:"invalid" invalid) with
+   | Some (Error error) when Temporal.Error.message error = "unsupported request API version" -> ()
+   | _ -> failwith "invalid raw request was not rejected before child scheduling");
+  (match Temporal.Codec.encode (Temporal.Workflow.input generate_v1_workflow)
+           { request with operation_key = Operation_key.of_string "" } with
+   | Error _ -> () | Ok _ -> failwith "empty operation key passed the child input codec");
+  (match Temporal.Future.peek (Generate.start ~task_queue:queue ~id:"" request) with
+   | Some (Error _) -> () | _ -> failwith "invalid child identity was accepted")

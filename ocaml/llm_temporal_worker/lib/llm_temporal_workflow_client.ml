@@ -12,33 +12,16 @@ type 'response handle = Handle : {
     validate : 'request -> 'response -> (unit, Temporal.Error.t) result;
   } -> 'response handle
 
-let generate_workflow = Temporal.Workflow.remote
-    ~name:"llm.generate.workflow.v1"
-    ~input:Llm_temporal_invocation.generate_v1_request_codec
-    ~output:Llm_temporal_invocation.generate_v1_response_codec
-let compact_workflow = Temporal.Workflow.remote
-    ~name:"llm.compact.workflow.v1"
-    ~input:Llm_temporal_invocation.compact_v1_request_codec
-    ~output:Llm_temporal_invocation.compact_v1_response_codec
+let generate_workflow = Llm_temporal_invocation.generate_v1_workflow
+let compact_workflow = Llm_temporal_invocation.compact_v1_workflow
 
 let create ?identity ~target_url ~namespace () =
   let* client = Temporal.Client.create ?identity ~target_url ~namespace () in
   Ok { client; namespace }
 let shutdown owner = Temporal.Client.shutdown owner.client
 
-let validate_identity expected_key actual_key (cache : cache_policy option) variant =
-  if expected_key <> actual_key then
-    Error (Temporal.Error.codec ~message:"workflow response operation key does not match request")
-  else if variant <> (match cache with None -> 0l | Some policy -> policy.variant) then
-    Error (Temporal.Error.codec ~message:"workflow response sample index does not match request")
-  else Ok ()
-
-let validate_generate (request : generate_request) (response : generate_response) =
-  let* () = validate_identity request.operation_key response.operation_key request.cache response.cache.variant in
-  Llm_temporal_response_validation.validate_generate_response_for_request request response
-let validate_compact (request : compact_request) (response : compaction_response) =
-  let* () = validate_identity request.operation_key response.operation_key request.cache response.cache.variant in
-  Llm_temporal_response_validation.validate_compaction_response_for_request request response
+let validate_generate = Llm_temporal_response_validation.validate_generate_response_for_request
+let validate_compact = Llm_temporal_response_validation.validate_compaction_response_for_request
 
 let validate_request workflow request =
   let* encoded = Temporal.Codec.encode (Temporal.Workflow.input workflow) request in

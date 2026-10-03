@@ -6,10 +6,18 @@ facade. `Client` starts remote workflows from application processes and resumes
 waiting after a process restart. Provider polling, budget waiting, and paid
 retries are owned by the Go workflows.
 
-The older workflow-native `Generate.invoke`, `Conversation.respond`, and
-package-level invocation helpers still schedule activities directly. Their
-migration to child workflows is a separate follow-up; use the new process-level
-`Client` for the public workflow entry points below.
+Inside deterministic OCaml workflows, `Generate.invoke`, `Conversation.respond`,
+and their asynchronous equivalents start the public Go child workflows. Supply
+`~task_queue` for the Go worker and `~id` for a deterministic child workflow ID
+unique within the Temporal namespace. Use a durable caller/run identity plus a
+per-call suffix; do not use a process clock or random generator. Reusing an ID
+for another active child start is a Temporal conflict, not a cache lookup.
+The request's operation key and sample index retain their separate meanings.
+
+These helpers use parent-close policy `Abandon`, so already-started paid work
+continues if its parent closes. They expose no cancellation handle and install
+no parent-side retry policy: the Go workflow owns budget waits, paid retries,
+and polling. Await the returned future when the parent needs the response.
 
 The public v1 API uses exact request and response records: service classes are
 exactly `Economy | Standard | Priority`; request controls include portability,
@@ -29,8 +37,8 @@ opam pin add --yes --kind=git llm-temporal-ocaml \
 opam install --yes llm-temporal-ocaml
 ```
 
-Its metadata pins `temporal-sdk` to the latest validated `master` commit
-`87d61c0639bf232b67e6d5a0f397d990e2468eb4`. Commit an application lock file
+Its metadata pins `temporal-sdk` to the validated child-workflow-routing SDK commit
+`89ed6b5b21f17f186a639b221a9fec1a7e39c3e3`. Commit an application lock file
 after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
@@ -99,7 +107,8 @@ let request =
     ()
 
 let result = Generate.invoke
-  ~task_queue:(Temporal_task_queue.of_string "go-activities") request
+  ~task_queue:(Temporal_task_queue.of_string "llm-worker")
+  ~id:"invoice-42-child" request
 (* Handle [result] in the application Workflow. *)
 ```
 
@@ -122,6 +131,7 @@ let root =
 in
 let branch = Llm_temporal.Conversation.fork root in
 match Llm_temporal.Conversation.respond
+        ~task_queue:(Temporal_task_queue.of_string "llm-worker") ~id:"conversation-42-turn-1"
         ~operation_key:(Llm_temporal.Operation_key.of_string "turn-1")
         ~append:[ Message { actor = Human; content = [ Text question ] } ]
         branch with
@@ -184,7 +194,8 @@ let cache =
     ~max_age_seconds:60L ~variant:1l ()
 in
 let branch =
-  Llm_temporal.Conversation.respond ~settings_patch:patch ?cache
+  Llm_temporal.Conversation.respond ~task_queue ~id:"conversation-42-turn-2"
+    ~settings_patch:patch ?cache
     ~operation_key:(Llm_temporal.Operation_key.of_string "turn-2")
     ~append:[ Message { actor = Human; content = [ Text "Continue." ] } ] branch
 in
@@ -199,9 +210,9 @@ The synchronous `respond_with`, `compact_with`, and `Query.execute_with`
 helpers also bind an injected response to the request's `operation_key` before
 exposing it to the caller. A dispatcher that returns a response for another
 operation is rejected as a typed codec error; this keeps deterministic test
-dispatchers subject to the same idempotency boundary as the remote Activity.
+dispatchers subject to the same idempotency boundary as the remote workflow.
 
-For a single non-streaming Generate Activity, `Llm_temporal.Generate` provides
+For a single generation request, `Llm_temporal.Generate` provides
 the same v1 request shape without requiring a synthetic conversation branch:
 
 ```ocaml
@@ -215,46 +226,39 @@ let request =
     ~input:[ Message { actor = Human; content = [ Text prompt ] } ]
     ()
 in
-match Llm_temporal.Generate.invoke request with
+match Llm_temporal.Generate.invoke ~task_queue ~id:"invoice-42-child" request with
 | Ok response -> handle_response response
 | Error error -> handle_temporal_error error
 ```
 
-`Generate.make` returns the exact `generate_request` record used by the
-`llm.generate.v1` Activity. `Generate.invoke_with` accepts the same typed
-dispatcher used by deterministic tests, and `Generate.start` returns a
-workflow-owned Temporal future. The package-level `execute` and `workflow`
-helpers now accept and schedule the same Generate v1 records and codecs. The
-pre-checkpoint `Request` and `invoke_once` names remain only as deprecated
-source-compatibility shims. `invoke_once` validates the old record, rejects
-context or controls which cannot be represented by v1, then converts it to
-the flat Generate v1 envelope before dispatching `llm.generate.v1`; it never
-sends the old nested `request` wire shape. New code should use `Generate`,
-`Conversation`, or the migrated package-level helpers, all of which emit the
-exact v1 wire shape.
+`Generate.make` returns the exact request record for `llm.generate.workflow.v1`.
+`Generate.invoke_with` accepts a typed workflow dispatcher for deterministic
+tests. `Generate.start` returns a future whose successful value is a
+`(generate_response, Temporal.Error.t) result`: the outer error represents
+Temporal execution or decoding failure; the inner error represents a response
+that fails request binding. The Conversation futures use the same convention.
+Generation and compaction responses are checked for the operation key, sample
+index, and checkpoint lineage before callers accept them.
 
-The synchronous `Generate.invoke_with` and `Generate.invoke` helpers also
-require the response `operation_key` to match the request key. A mismatched
-key is returned as a typed codec error before the response is exposed to the
-workflow, preserving the idempotency boundary used by the Conversation and
-Query facades.
+The package-level `execute` invokes the public child workflow. `workflow ()`
+returns its remote descriptor; it does not define a second OCaml implementation
+under the Go workflow name. The deprecated `Request` and `invoke_once` shim
+converts representable pre-checkpoint requests before invoking an injected
+workflow dispatcher. Generation/compaction Activity descriptors with the old
+final-response shape have been removed: those activities now return internal
+execution results and are orchestrated by the Go workflows.
 
 `Conversation.compact` creates an explicit compaction child from a checkpoint;
 the following Generate restores the branch's application tools and output
-configuration. The wrapper does not stream, retain a mutable implicit head, or
-schedule any Activity outside the exact `llm.generate.v1` and
-`llm.compact.v1` descriptors. The protocol layer also exposes exact Compact
-and typed Query v1 records and Yojson codecs; those low-level records remain
-separate from the ergonomic facade.
+configuration. The wrapper returns model tool calls to the application and
+does not execute them.
 
-Advanced workflow code that already owns exact wire records can use the three
-descriptors directly through `Llm_temporal.start_generate`,
-`Llm_temporal.start_compact_v1`, and `Llm_temporal.start_query_v1`. Each returns
-a workflow-owned `Temporal.Future.t`; the corresponding `invoke_generate`,
-`invoke_compact_v1`, and `invoke_query_v1` helpers schedule and await one
-Activity using the fixed one-attempt retry policy. These low-level helpers do
-not materialize inherited conversation state or reinterpret query result tags;
-use `Conversation` and `Query` when those invariants are needed.
+Advanced workflow code can use `generate_v1_workflow` and `compact_v1_workflow`,
+or `start_generate`/`start_compact_v1` and their `invoke_*` equivalents with
+`~task_queue` and `~id`. These low-level helpers return exact wire responses;
+use `Generate` and `Conversation` for request-bound response validation.
+`query_v1_activity`, `start_query_v1`, and `invoke_query_v1` remain one-attempt
+Activity calls. The query facade validates query result tags.
 
 `Conversation.of_checkpoint` intentionally treats the checkpoint's effective
 settings as unknown: a handle does not materialize worker state in Workflow
