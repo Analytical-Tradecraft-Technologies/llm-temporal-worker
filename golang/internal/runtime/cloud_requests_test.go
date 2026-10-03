@@ -358,7 +358,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 				V1RuntimeBuilder: func(_ context.Context, _ *config.Snapshot, _ llm.Engine, set app.ClientSet) (activity.V1Runtime, error) {
 					built = true
 					capabilities := set.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities()
-					if capabilities.Requests != repository || capabilities.Budgets == nil || capabilities.Finalizer == nil || capabilities.Checkpoints.Repository == nil || capabilities.Responses == nil || capabilities.ResponseFills == nil {
+					if capabilities.Requests != repository || capabilities.Budgets == nil || capabilities.Finalizer == nil || capabilities.Checkpoints.Repository == nil || capabilities.Responses == nil || capabilities.ResponseFills == nil || capabilities.CheckpointKeyring == nil || capabilities.CheckpointKeyring != set.(*productionClientSet).checkpointVerifier {
 						t.Fatal("incomplete cloud capabilities")
 					}
 					queries := set.(PostgresQueryRepositoriesSource).QueryRepositories()
