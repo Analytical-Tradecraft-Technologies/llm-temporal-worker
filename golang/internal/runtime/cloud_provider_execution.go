@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -352,6 +353,12 @@ func (executor *CloudProviderExecution) save(ctx context.Context, scope cloudsta
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	if err := executor.store.SaveProviderExecution(finalCtx, scope, id, saved.Execution.Revision, next); err != nil {
+		// Concurrent polls or settlement acknowledgements may advance this same
+		// execution. Retry observation through the durable fence; this is not a
+		// conflicting public request. The pre-HTTP write must still fail closed.
+		if errors.Is(err, contracts.ErrConflict) && next.Stage != cloudstate.ExecutionSubmitting {
+			return ProviderExecutionResult{}, executionError(provider.CodeStateUnavailable)
+		}
 		return ProviderExecutionResult{}, cloudRuntimeError(err, true)
 	}
 	saved.Execution = next
@@ -378,7 +385,9 @@ func (executor *CloudProviderExecution) result(saved cloudstate.SavedProviderExe
 	result := ProviderExecutionResult{Saved: saved}
 	until := saved.Execution.PollAfter
 	if saved.Execution.Stage == cloudstate.ExecutionClaiming || saved.Execution.Stage == cloudstate.ExecutionSubmitting {
-		until = saved.Execution.RecoverAfter
+		// Another caller may finish submission at any moment. Recheck saved
+		// progress promptly without changing the deadline that permits recovery.
+		until = minExecutionObservationTime(executor.clock(), saved.Execution.RecoverAfter)
 	}
 	if !until.IsZero() {
 		result.RetryAfter = until.Sub(executor.clock())
@@ -387,6 +396,13 @@ func (executor *CloudProviderExecution) result(saved cloudstate.SavedProviderExe
 		}
 	}
 	return result
+}
+
+func minExecutionObservationTime(now, recoverAfter time.Time) time.Time {
+	if next := now.Add(5 * time.Second); next.Before(recoverAfter) {
+		return next
+	}
+	return recoverAfter
 }
 
 func executionError(code provider.Code) error {

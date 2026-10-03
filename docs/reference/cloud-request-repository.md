@@ -391,6 +391,14 @@ subsequent composition and deployment changes.
 
 ## Workflow integration gates
 
+The concurrency gate starts 100 independent public workflow executions for one
+operation across two workers and verifies one provider submission and identical
+completed responses. It then checks 100 independent operations consuming that
+cached response, each with its own operation ID and checkpoint. Concurrent
+completion replays the saved winner; poll/settlement conflicts retry observation.
+Callers observing submission in progress recheck within five seconds without
+shortening the 15-minute deadline for uncertain-submission recovery.
+
 From `golang/`, run `make cloud-workflow-integration`. Docker Compose starts
 isolated, digest-pinned Temporal and Redis services on random loopback ports,
 then removes that test project's containers and volumes. PostgreSQL in this

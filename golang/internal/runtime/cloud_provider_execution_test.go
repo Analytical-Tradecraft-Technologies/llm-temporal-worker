@@ -274,6 +274,17 @@ func TestCloudProviderExecutionLostAcknowledgementsNeverResubmit(t *testing.T) {
 			}
 			f.store.after = nil
 			before := f.submits.Load()
+			if stage == cloudstate.ExecutionClaiming || stage == cloudstate.ExecutionSubmitting {
+				result, err := f.resume(context.Background())
+				if err != nil || result.Saved.Execution.Stage != stage || result.RetryAfter != 5*time.Second || f.submits.Load() != before || f.polls.Load() != 0 || f.settlements.Load() != 0 {
+					t.Fatal("observation delayed until recovery or performed provider work", result, err)
+				}
+				f.now = f.now.Add(durable.BudgetStartLease - time.Second)
+				result, err = f.resume(context.Background())
+				if err != nil || result.Saved.Execution.Stage != stage || result.RetryAfter != time.Second || f.submits.Load() != before || f.polls.Load() != 0 {
+					t.Fatal("observation changed the recovery deadline", result, err)
+				}
+			}
 			f.now = f.now.Add(16 * time.Minute)
 			result, err := f.resume(context.Background())
 			if err != nil {
@@ -288,6 +299,42 @@ func TestCloudProviderExecutionLostAcknowledgementsNeverResubmit(t *testing.T) {
 				}
 			} else if result.Saved.Execution.Stage != cloudstate.ExecutionSucceeded || !result.Saved.Execution.Settled {
 				t.Fatal("saved work did not complete")
+			}
+		})
+	}
+}
+
+func TestCloudProviderExecutionConcurrentObservationCanRetry(t *testing.T) {
+	for _, stage := range []cloudstate.ExecutionStage{cloudstate.ExecutionSucceeded, cloudstate.ExecutionFailed} {
+		t.Run(string(stage), func(t *testing.T) {
+			f := newProviderExecutionFixture(t, "generate", true)
+			ctx := context.Background()
+			if _, err := f.submit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			f.now = f.now.Add(time.Minute)
+			if stage == cloudstate.ExecutionFailed {
+				f.adapter.poll = func(_ context.Context, _ provider.Call, id string, _ provider.Observer) (provider.ResumableResult, error) {
+					return provider.ResumableResult{State: provider.ResumableFailed, Dispatch: provider.DispatchAccepted, ProviderOperationID: id, Failure: provider.NewError(provider.CodeProviderUnavailable, provider.PhasePoll, provider.DispatchAccepted, provider.RetryNever, "failed")}, nil
+				}
+			}
+			// A competing observer committed the result but won the CAS. Retrying
+			// the activity must only settle/replay that result, never dispatch.
+			f.store.after = func(next cloudstate.ProviderExecution) error {
+				if next.Stage == stage {
+					return contracts.ErrConflict
+				}
+				return nil
+			}
+			_, err := f.resume(ctx)
+			var mapped *provider.Error
+			if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+				t.Fatal("concurrent observation became a permanent request conflict", err)
+			}
+			f.store.after = nil
+			result, err := f.resume(ctx)
+			if err != nil || result.Saved.Execution.Stage != stage || !result.Saved.Execution.Settled || f.submits.Load() != 1 || f.settlements.Load() != 1 {
+				t.Fatal("retry did not replay and settle saved work", result, err)
 			}
 		})
 	}
