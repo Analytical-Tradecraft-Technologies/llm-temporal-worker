@@ -74,7 +74,30 @@ operation identity for replay. It must re-evaluate any cache plan whose source
 or route changed. Preparation does not authorize a caller-selected substitute
 checkpoint, settle paid attempts, or implement that compaction workflow.
 
-Concrete route/budget/cache identity planners, provider submission and recovery,
-remaining phase composition, CLI registration, and removal of legacy SQL
-packages are subsequent migration work. These helpers do not activate the
-production cloud runtime or change the public v1 schemas.
+## Durable preparation and recovery
+
+`V1RuntimeCapabilities.NewCloudRequestPreparation` creates the cloud preparation
+boundary with an explicit authorization callback. `Prepare` authorizes first,
+begins the discoverable operation, materializes and validates its parent, and
+saves the versioned parent snapshot before budget planning or provider effects.
+The original typed request remains in the immutable request manifest. Root
+generation saves no parent snapshot.
+
+The encrypted preparation has one immutable CAS winner. A retry after a lost
+write acknowledgement reads that winner and repairs its discovery entry before
+returning; storage errors never become permission to materialize again. Exact
+decimal settings and JSON integers retain their original precision. The parent
+snapshot is bounded at 4 MiB to leave room for later execution progress.
+
+`Load` authorizes the current caller before accessing storage and restores the
+saved input using its internal request identifier. The identifier is a locator,
+not authorization. Recovery does not reopen an expired parent. Completed
+operation replay needs neither the preparation nor the parent. A different
+configuration digest fails with a configuration error rather than silently
+rerouting an existing paid request; routing across configuration changes still
+requires the original compatible configuration. Publication's parent metadata
+must remain available until outstanding requests have finished.
+
+This boundary is not yet registered as the production execution runtime. The
+remaining phase composition, workflow registration, and removal of legacy SQL
+packages remain migration work.
