@@ -37,7 +37,7 @@ func TestOCamlTemporalPinCheckerRejectsMismatchedPrefetchHelperCommit(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	const approvedCommit = "87d61c0639bf232b67e6d5a0f397d990e2468eb4"
+	const approvedCommit = "89ed6b5b21f17f186a639b221a9fec1a7e39c3e3"
 	mutated := strings.Replace(string(helperContents), approvedCommit, strings.Repeat("0", 40), 1)
 	if mutated == string(helperContents) {
 		t.Fatal("prefetch helper fixture does not contain the approved Temporal SDK commit")

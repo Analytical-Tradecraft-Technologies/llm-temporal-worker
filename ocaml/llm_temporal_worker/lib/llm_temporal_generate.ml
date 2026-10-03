@@ -18,7 +18,7 @@ let make ~operation_key ~context ~model ?(settings = Settings.default) ?cache ~i
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (request, response) Temporal.Activity.t ->
+  (request, response) Temporal.Workflow.t ->
   request -> (response, Temporal.Error.t) result
 
 let operation_key_mismatch ~expected ~actual =
@@ -47,16 +47,16 @@ let invoke_with ?task_queue ~dispatch (request : request) =
            | Error error -> Error error
            | Ok () -> Ok response)
 
-let invoke_dispatch ?task_queue activity request =
-  Temporal.Activity.execute
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:Llm_temporal_invocation.activity_retry_policy activity request
+let invoke ~task_queue ~id request =
+  let dispatch ?task_queue:_ _workflow input =
+    Llm_temporal_invocation.invoke_generate ~task_queue ~id input
+  in
+  invoke_with ~task_queue ~dispatch request
 
-let invoke ?task_queue request =
-  invoke_with ?task_queue ~dispatch:invoke_dispatch request
-
-let start ?task_queue request =
-  Temporal.Activity.start
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:Llm_temporal_invocation.activity_retry_policy
-    Llm_temporal_invocation.generate_v1_activity request
+let start ~task_queue ~id request =
+  Temporal.Future.map
+    (fun response ->
+       match Llm_temporal_response_validation.validate_generate_response_for_request request response with
+       | Error error -> Error error
+       | Ok () -> Ok response)
+    (Llm_temporal_invocation.start_generate ~task_queue ~id request)

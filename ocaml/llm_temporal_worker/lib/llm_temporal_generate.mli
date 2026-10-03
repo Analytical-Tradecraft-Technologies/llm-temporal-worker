@@ -1,7 +1,4 @@
-(** Ergonomic one-shot helpers for the non-streaming [llm.generate.v1]
-    Temporal Activity.  This module is additive: the legacy [Request] API
-    remains available for compatibility, while new code can use the exact v1
-    request/response types. *)
+(** Typed calls to the public [llm.generate.workflow.v1] child workflow. *)
 
 open Llm_temporal_models
 
@@ -22,7 +19,7 @@ val make :
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (request, response) Temporal.Activity.t ->
+  (request, response) Temporal.Workflow.t ->
   request -> (response, Temporal.Error.t) result
 
 val invoke_with :
@@ -30,10 +27,14 @@ val invoke_with :
   dispatch:dispatcher ->
   request -> (response, Temporal.Error.t) result
 
+(** Supply the Go queue and a deterministic child ID unique in the namespace.
+    Paid work survives parent closure; no cancellation API is exposed. *)
 val invoke :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t -> id:string ->
   request -> (response, Temporal.Error.t) result
 
+(** Starts without waiting. The inner result reports response validation
+    errors; the outer future error reports child execution or codec failures. *)
 val start :
-  ?task_queue:Temporal_task_queue.t ->
-  request -> (response, Temporal.Error.t) Temporal.Future.t
+  task_queue:Temporal_task_queue.t -> id:string ->
+  request -> ((response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
