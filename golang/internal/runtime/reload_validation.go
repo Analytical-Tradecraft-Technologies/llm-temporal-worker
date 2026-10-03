@@ -48,9 +48,6 @@ func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 		{name: "telemetry.tracing.sample_ratio", changed: before.Telemetry.Tracing.SampleRatio != after.Telemetry.Tracing.SampleRatio},
 		{name: "telemetry.content_logging", changed: before.Telemetry.ContentLogging != after.Telemetry.ContentLogging},
 		{name: "state.redis.key_prefix", changed: before.State.Redis.KeyPrefix != after.State.Redis.KeyPrefix},
-		{name: "state.postgres.database", changed: before.State.Postgres.Database != after.State.Postgres.Database},
-		{name: "state.postgres.schema", changed: before.State.Postgres.Schema != after.State.Postgres.Schema},
-		{name: "state.postgres.table_prefix", changed: before.State.Postgres.TablePrefix != after.State.Postgres.TablePrefix},
 		{name: "endpoints.*.outbound_hosts", changed: !sameEndpointOutboundHosts(before.Endpoints, after.Endpoints)},
 	} {
 		if field.changed {

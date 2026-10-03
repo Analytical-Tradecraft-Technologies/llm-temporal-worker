@@ -44,11 +44,6 @@
       "source": "https://github.com/google/uuid"
     },
     {
-      "path": "github.com/jackc/pgx",
-      "license": "MIT",
-      "source": "https://github.com/jackc/pgx"
-    },
-    {
       "path": "github.com/openai/openai-go",
       "license": "Apache-2.0",
       "source": "https://github.com/openai/openai-go"

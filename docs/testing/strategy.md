@@ -97,101 +97,19 @@ passing admission-and-compilation measurement. It accepts only the typed,
 redacted measurement summary and verifies the memory and same-region Redis
 thresholds; it does not execute a benchmark or make a release claim.
 
-## PostgreSQL query-plan checks
+## Worker persistence checks
 
-The PostgreSQL integration suite includes representative-cardinality
-`EXPLAIN (FORMAT JSON, COSTS OFF)` gates for the production read shapes:
+The SQL backend and its database integration target have been removed. Ordinary
+Go verification exercises cloud request, pending-index, cache, checkpoint and
+budget contracts. Redis integration uses the isolated pinned daemon described
+above. Runtime tests check snapshot identity, authorization before storage,
+restart recovery, idempotent finalization and bounded polling.
 
-- `TestInventoryQueryPlansUseTheLatestIndex` loads 10,000 immutable inventory
-  snapshots across 100 endpoint routes and requires
-  `provider_inventory_latest_account_idx` for provider-filtered latest-account
-  reads, plus `provider_inventory_latest_idx` for the endpoint-only horizon
-  read.
-- `TestProviderQueryPlansUseProjectionIndexes` loads 10,000 route projections
-  and status events, then requires `provider_route_query_idx` (or the
-  equivalent generated route primary-key path) for the bounded route page and
-  `provider_route_credit_query_idx` for the DISTINCT-ON credit page. PostgreSQL
-  may choose the primary-key path because it has the same `(config_digest,
-  route_id)` leading keys; both are valid route-identity plans.
-- `TestSpendSummaryQueryPlanUsesLedgerIndexes` loads 10,000 completed
-  operations and query executions and requires `operations_scope_spend_idx` and
-  `query_executions_scope_time_idx` for the scoped spend-summary ledger scan.
-
-Each gate runs with normal planner settings and fails if PostgreSQL regresses to
-a sequential scan instead of the checked-in index path. These are index
-eligibility checks at bounded representative cardinality, not latency or
-production-SLO measurements.
-
-Provider inventory unit contracts also exercise the shared cursor collector:
-the two-page happy path, explicit unsupported adapters, repeated cursors,
-cross-page model ordering regressions, and cancellation before a provider
-request. This keeps management refresh bounded and deterministic before any
-snapshot is handed to the PostgreSQL repository.
-
-Each fixture is isolated by a unique configuration digest and removes its
-provider rows, ledger rows, and configuration rows before closing the
-integration pool. It runs through `make postgres-integration`, so local runs
-without `LLMTW_POSTGRES_ADDR` remain a deterministic skip while CI executes the
-real PostgreSQL plan.
-
-The same integration package includes `TestBudgetJournalIntegrationHasNoBudgetReads`.
-It attaches a `pgx.QueryTracer` to the real journal append/finalize pool and
-classifies every statement that names a budget relation. The allowlist accepts
-only `INSERT` and `UPDATE`, so a budget-table `SELECT` or an unknown statement
-shape fails closed. The tracer binds the active namespace's rendered relation
-names, and also rejects budget relations used as nested `FROM` or `JOIN` sources
-inside an otherwise write-shaped statement. This proves the PostgreSQL journal's
-write-only boundary at execution time; it does not claim that Redis admission,
-worker composition, or the future zero-read query gates are implemented.
-
-The PostgreSQL response-cache integration suite also includes
-`TestResponseCacheHundredWayMissHasOneFillAndOneUsePerOperation`. It starts
-100 durable operations against one cache identity at the same time and
-requires exactly one fill lease, then publishes one encrypted response and
-replays it from the other 99 operations concurrently. The durable entry must
-end with exactly 100 uses (the publish owner's use plus one use per replay),
-which proves fill de-duplication and per-operation use accounting under a
-real database race. This is a bounded cache proof; it does not claim the
-separate three-way checkpoint-fork or backup/restore gates in Task 21.
-
-`TestCheckpointRepositoryRestoresForksThroughPostgresAndBlobs` closes the
-corresponding bounded checkpoint read-side gap. It publishes one root and
-three immutable child branches through the real PostgreSQL repository, writes
-the versioned payloads to an immutable file-backed blob store, then constructs
-fresh PostgreSQL and blob-store clients before materializing every branch. It
-uses the scope-bound encrypted-locator and verified-byte read path, and checks
-that every restored branch retains its own prompt/response while sharing the
-immutable parent. It proves persistent repository/blob restart recovery; it
-does not claim a PostgreSQL backup procedure, a Temporal crash boundary, or
-end-to-end Generate/Compact runtime composition.
-
-`TestProviderOperationTamperingFailsClosed` exercises the complementary
-provider-poll recovery boundary. It verifies that a persisted provider
-operation ID is not plaintext in PostgreSQL and that changing either its
-authenticated ciphertext or binding HMAC makes the repository refuse to load
-it for resumption. This is a bounded encrypted-identifier integrity proof; it
-does not replace the engine's no-resubmission test, a full backup/restore drill,
-or a live provider contract.
-
-`TestPollProviderOperationRejectsMalformedPendingResult` covers the engine side
-of that boundary: a resumed poll that returns a pending state without its
-provider operation ID is treated as an ambiguous provider protocol failure.
-The engine performs no submit or retry, so malformed durable provider state
-cannot turn into a duplicate provider request.
-
-The staged Redis/PostgreSQL/conversation work has an unimplemented
-[production execution plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md)
-whose phase/status authority is centralized in
-[scope](../scope.md#staged-delivery-and-document-authority). It adds
-schema/index contracts, exact **NUMERIC(38,18)** round trips
-from sub-micro-dollar values through whole/$10/large values, nullable unknown
-price/cost invariants, concurrent fork/cache/budget tests, provider-poll crash
-recovery, all typed query shapes, query-plan gates, retention, and
-backup/restore proof, conservative nano-USD atomic Redis admission, the
-normative zero-steady-state-PostgreSQL-budget-read proof, adopt-if-intact cold
-start, and fenced rebuild proof for a verified new Redis incarnation that lost
-persistence. Redis remains in production as the coordination/materialization
-optimization.
+`TestWorkerHasNoSQLDependencies` checks the compiled worker's dependency graph.
+Configuration tests reject the removed SQL section and require cloud storage
+for durable mode. Temporal's local PostgreSQL service belongs to Temporal and
+is retained; the worker has no SQL database or schema installer. Real cloud
+and Temporal deployment evidence remains a separate integration gate.
 
 ## Local release gates
 

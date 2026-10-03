@@ -21,7 +21,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
@@ -43,7 +42,6 @@ import (
 	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 	"github.com/mfow/llm-temporal-worker/golang/storage/fileblob"
 	memorystore "github.com/mfow/llm-temporal-worker/golang/storage/memory"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	"github.com/mfow/llm-temporal-worker/golang/storage/s3blob"
 )
@@ -80,10 +78,6 @@ type EndpointProfile struct {
 
 type RedisFactory func(context.Context, config.RedisConfig, string, string) (redis.UniversalClient, error)
 
-// PostgresFactory builds the read-only durable-state dependency. Schema
-// installation is intentionally not part of this hook: deployment owns
-// provisioning, while workers only verify the immutable contract.
-type PostgresFactory func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error)
 type BlobFactory func(context.Context, config.Config) (blob.Store, io.Closer, error)
 type AWSConfigFactory func(context.Context, string) (aws.Config, error)
 type AzureCredentialFactory func(context.Context, config.EndpointConfig) (azcore.TokenCredential, error)
@@ -120,16 +114,9 @@ type ProductionFactoryOptions struct {
 	RedisKeySecret      []byte
 	RedisClient         redis.UniversalClient
 	RedisFactory        RedisFactory
-	PostgresFactory     PostgresFactory
 	BlobStore           blob.Store
 	BlobFactory         BlobFactory
 	BlobRefResolver     BlobRefResolver
-	// CheckpointBlobLocator resolves a PostgreSQL checkpoint blob ID to the
-	// object-store reference recorded for that immutable blob. It is separate
-	// from BlobRefResolver because checkpoint rows carry a UUID blob ID while
-	// result rows carry only a content digest/size/media reference. A missing
-	// locator deliberately leaves checkpoint replay fail-closed.
-	CheckpointBlobLocator state.BlobLocator
 
 	AWSConfigFactory          AWSConfigFactory
 	AzureCredentialFactory    AzureCredentialFactory
@@ -162,7 +149,7 @@ type ProductionFactoryOptions struct {
 	// the versioned Redis reader and its preloaded Function contract.
 	BudgetStatusReaderFactory BudgetStatusReaderFactory
 	// DurableCompositionFactory is an optional Task 19 binding for the complete
-	// snapshot-owned PostgreSQL/Redis durable state composition. It is not
+	// snapshot-owned cloud/Redis durable state composition. It is not
 	// inferred from the legacy admission stores; callers must supply every
 	// storage port and validate the returned Composition before enabling it. The
 	// built-in complete V1RuntimeBuilder requires this factory; a custom explicit
@@ -185,7 +172,7 @@ type productionClientSet struct {
 	close              func(context.Context) error
 	probes             []DependencyProbe
 	providerControl    engine.ProviderStatusRecorder
-	queryRepos         PostgresQueryRepositories
+	queryRepos         QueryRepositories
 	queryService       activity.QueryService
 	checkpoints        CheckpointCapabilities
 	checkpointVerifier state.CheckpointHandleVerifier
@@ -214,7 +201,7 @@ func (set *productionClientSet) DependencyProbes() []DependencyProbe {
 }
 
 // ProviderStatusRecorder exposes the snapshot-scoped recorder for adjacent
-// runtime/query composition without exposing PostgreSQL credentials or pools.
+// runtime/query composition without exposing storage credentials or clients.
 func (set *productionClientSet) ProviderStatusRecorder() engine.ProviderStatusRecorder {
 	if set == nil {
 		return nil
@@ -226,15 +213,15 @@ func (set *productionClientSet) ProviderStatusRecorder() engine.ProviderStatusRe
 // capabilities constructed for this configuration snapshot. Nil entries are
 // intentional capabilities: callers must fail closed when a query family has
 // not been provisioned.
-func (set *productionClientSet) QueryRepositories() PostgresQueryRepositories {
+func (set *productionClientSet) QueryRepositories() QueryRepositories {
 	if set == nil {
-		return PostgresQueryRepositories{}
+		return QueryRepositories{}
 	}
 	return set.queryRepos
 }
 
 // QueryService returns the optional typed control-plane service supplied by
-// the same snapshot-scoped PostgreSQL closer. It is nil until authorization,
+// the same snapshot-scoped client set. It is nil until authorization,
 // cursor signing, and concrete handlers are explicitly configured.
 func (set *productionClientSet) QueryService() activity.QueryService {
 	if set == nil {
@@ -300,9 +287,6 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 	}
 	if options.RedisClient == nil && options.RedisFactory == nil {
 		options.RedisFactory = defaultRedisFactory
-	}
-	if options.PostgresFactory == nil {
-		options.PostgresFactory = defaultPostgresFactory
 	}
 	if options.BlobStore == nil && options.BlobFactory == nil {
 		options.BlobFactory = defaultBlobFactory
@@ -394,33 +378,18 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis key namespace: %w", err)
 	}
-	postgresProbe, postgresCloser, err := factory.buildPostgres(ctx, value)
-	if err != nil {
-		closeOwned()
-		return nil, nil, err
-	}
-	postgresProbe = identifyDependencyProbe(DependencyPostgres, postgresProbe)
 	providerState, err := redisstore.NewProviderStateStore(redisstore.ProviderStateOptions{Client: redisClient, Keys: keyOptions, Clock: factory.options.Clock})
 	if err != nil {
-		if postgresCloser != nil {
-			_ = postgresCloser.Close()
-		}
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis provider state: %w", err)
 	}
 	var providerControl engine.ProviderStatusRecorder = providerState
-	queryRepos := queryRepositoriesFromCloser(postgresCloser)
+	queryRepos := QueryRepositories{}
 	queryRepos.ProviderStatus, queryRepos.Inventory = providerState, providerState
 	var queryService activity.QueryService
-	if source, ok := postgresCloser.(queryServiceSource); ok {
-		queryService = source.QueryService()
-	}
 	clock := factory.options.Clock
 	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: keyOptions, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
 	if err != nil {
-		if postgresCloser != nil {
-			_ = postgresCloser.Close()
-		}
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis admission store: %w", err)
 	}
@@ -431,9 +400,6 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if needBudgetKeys {
 		budgetKeys, err = redisstore.NewBudgetKeySpace(keyOptions)
 		if err != nil {
-			if postgresCloser != nil {
-				_ = postgresCloser.Close()
-			}
 			closeOwned()
 			return nil, nil, fmt.Errorf("construct Redis budget key namespace: %w", err)
 		}
@@ -445,18 +411,12 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
-			if postgresCloser != nil {
-				_ = postgresCloser.Close()
-			}
 			closeOwned()
 			return nil, nil, fmt.Errorf("construct Redis budget generation port: %w", err)
 		}
 	}
 	budgetStatusReader, err := composeBudgetStatusReader(ctx, snapshot, factory.options.Clock, value.State.Redis.AdmissionMode, redisClient, generationPort, budgetKeys, factory.options.BudgetStatusReaderFactory)
 	if err != nil {
-		if postgresCloser != nil {
-			_ = postgresCloser.Close()
-		}
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis budget status reader: %w", err)
 	}
@@ -474,43 +434,28 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		redisProbe, err = NewRedisDependencyProbe(redisClient, value.State.Redis)
 	}
 	if err != nil {
-		if postgresCloser != nil {
-			_ = postgresCloser.Close()
-		}
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis readiness probe: %w", err)
 	}
 	redisProbe = identifyDependencyProbe(DependencyRedis, redisProbe)
 	keyring, err := factory.continuationKeyring(ctx, value)
 	if err != nil {
-		if postgresCloser != nil {
-			_ = postgresCloser.Close()
-		}
 		closeOwned()
 		return nil, nil, err
 	}
 	continuationStore, err := redisstore.NewContinuationStore(redisstore.ContinuationOptions{Client: redisClient, Keys: keyOptions, Keyring: keyring, Clock: clock, MaxBytes: value.Limits.RequestBytes, MaxDepth: value.Limits.ContinuationDepth})
 	if err != nil {
-		if postgresCloser != nil {
-			_ = postgresCloser.Close()
-		}
 		closeOwned()
 		return nil, nil, fmt.Errorf("construct Redis continuation store: %w", err)
 	}
 	blobStore, blobCloser, err := factory.buildBlob(ctx, value)
 	if err != nil {
-		if postgresCloser != nil {
-			_ = postgresCloser.Close()
-		}
 		closeOwned()
 		return nil, nil, err
 	}
 	closeAll := func() {
 		if blobCloser != nil {
 			_ = blobCloser.Close()
-		}
-		if postgresCloser != nil {
-			postgresCloser.Close()
 		}
 		closeOwned()
 	}
@@ -575,19 +520,6 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		return nil, nil, fmt.Errorf("construct engine: %w", err)
 	}
 	probes := []DependencyProbe{redisProbe, blobProbe}
-	if postgresProbe != nil {
-		probes = append(probes, postgresProbe)
-	}
-	var checkpointBlobReader state.CheckpointBlobReader
-	if factory.options.CheckpointBlobLocator != nil {
-		checkpointBlobReader = state.ScopedBlobReader{
-			Store:    blobStore,
-			Resolve:  factory.options.CheckpointBlobLocator,
-			MaxBytes: int64(value.Limits.RequestBytes),
-			Now:      clock,
-		}
-	}
-	checkpointCapabilities := checkpointCapabilitiesFromCloserWithBindings(postgresCloser, checkpointBlobReader, keyring, clock)
 	// Stable identities across configuration reloads: Redis is authoritative.
 	// Policy limits change without replacing the accounting namespace.
 	budgets, err := redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
@@ -603,7 +535,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		providerControl:    providerControl,
 		queryRepos:         queryRepos,
 		queryService:       queryService,
-		checkpoints:        checkpointCapabilities,
+		checkpoints:        CheckpointCapabilities{},
 		checkpointVerifier: keyring,
 		budgets:            budgets,
 		v1Capabilities: V1RuntimeCapabilities{
@@ -613,7 +545,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			Adapters:                  capabilityAdapterRegistry,
 			BudgetEstimator:           copyBudgetEstimator(estimator),
 			MaxBudgetBucketsPerWindow: value.Limits.MaxBudgetBucketsPerWindow,
-			Checkpoints:               checkpointCapabilities,
+			Checkpoints:               CheckpointCapabilities{},
 			CheckpointKeyring:         keyring,
 			Budgets:                   budgets,
 			CompositionFactory:        factory.options.DurableCompositionFactory,
@@ -637,7 +569,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 
 // preflightAutomaticDurableComposition validates the composition installed by
 // this factory's built-in V1 runtime before loading the engine snapshot or
-// constructing any provider, Redis, PostgreSQL, or blob client. The automatic
+// constructing any provider, Redis, cloud storage, or blob client. The automatic
 // path therefore accepts only a composition factory that can validate its
 // deployment-owned ports without runtime-created capabilities. Explicit custom
 // V1RuntimeBuilder implementations retain their existing composition timing.
@@ -768,7 +700,7 @@ func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, c
 }
 
 // buildMemory composes the explicitly development-only, single-process state
-// mode. It deliberately does not construct Redis, PostgreSQL, or an external
+// mode. It deliberately does not construct Redis, cloud storage, or an external
 // blob store; all state is held by the process-local implementations and is
 // lost on restart. Provider adapters are still built normally because memory
 // mode changes state durability, not the provider contract.
@@ -838,44 +770,6 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 		},
 		close: func(context.Context) error { return nil },
 	}, nil
-}
-
-func (factory *ProductionEngineFactory) buildPostgres(ctx context.Context, value config.Config) (DependencyProbe, io.Closer, error) {
-	if value.State.Kind != config.StateKindDurable || value.State.Requests != nil {
-		return nil, nil, nil
-	}
-	if factory.options.PostgresFactory == nil {
-		return nil, nil, fmt.Errorf("%w: PostgreSQL factory is unavailable", ErrDependencyUnavailable)
-	}
-	if factory.options.Resolver == nil {
-		return nil, nil, fmt.Errorf("%w: secret resolver is unavailable", ErrDependencyUnavailable)
-	}
-	namespace, err := postgresstore.NewNamespace(value.State.Postgres.Database, value.State.Postgres.Schema, value.State.Postgres.TablePrefix)
-	if err != nil {
-		return nil, nil, fmt.Errorf("construct PostgreSQL namespace: %w", err)
-	}
-	username, err := factory.options.Resolver.Resolve(ctx, value.State.Postgres.Username)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve PostgreSQL username: %w", err)
-	}
-	password, err := factory.options.Resolver.Resolve(ctx, value.State.Postgres.Password)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve PostgreSQL password: %w", err)
-	}
-	probe, closer, err := factory.options.PostgresFactory(ctx, value.State.Postgres, namespace, string(username), string(password))
-	if err != nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, nil, fmt.Errorf("construct PostgreSQL durable-state dependency: %w", err)
-	}
-	if probe == nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, nil, fmt.Errorf("%w: PostgreSQL factory returned no readiness probe", ErrDependencyUnavailable)
-	}
-	return probe, closer, nil
 }
 
 func redisKeyOptions(value config.Config, keySecret []byte) (redisstore.KeyOptions, error) {
@@ -1472,80 +1366,6 @@ func defaultRedisFactory(_ context.Context, value config.RedisConfig, username, 
 	// go-redis uses -1, rather than zero, to disable retries. Redis admission
 	// mutations are not safely replayable after an ambiguous transport failure.
 	return redis.NewUniversalClient(&redis.UniversalOptions{Addrs: append([]string(nil), value.Addresses...), Username: username, Password: password, DialTimeout: time.Duration(value.DialTimeout), ReadTimeout: time.Duration(value.OperationTimeout), WriteTimeout: time.Duration(value.OperationTimeout), PoolSize: value.MaxConnections, MaxRetries: -1, TLSConfig: tlsConfig}), nil
-}
-
-func defaultPostgresFactory(ctx context.Context, value config.PostgresConfig, namespace postgresstore.Namespace, username, password string) (DependencyProbe, io.Closer, error) {
-	pool, err := postgresstore.NewPool(ctx, postgresPoolOptions(value, namespace, username, password))
-	if err != nil {
-		return nil, nil, err
-	}
-	client := &postgresProbeClient{pool: pool}
-	probe, err := NewPostgresDependencyProbe(client, namespace)
-	if err != nil {
-		pool.Close()
-		return nil, nil, err
-	}
-	return probe, postgresPoolCloser{pool: pool, namespace: namespace}, nil
-}
-
-// postgresPoolOptions is the one configuration-to-driver projection for the
-// durable PostgreSQL dependency. Keeping it separate makes it possible to
-// test that every bounded pool and session setting is carried through without
-// opening a live database.
-func postgresPoolOptions(value config.PostgresConfig, namespace postgresstore.Namespace, username, password string) postgresstore.PoolOptions {
-	return postgresstore.PoolOptions{
-		Namespace:        namespace,
-		Addresses:        append([]string(nil), value.Addresses...),
-		Username:         username,
-		Password:         password,
-		TLS:              postgresstore.TLSOptions{Enabled: value.TLS.Enabled, ServerName: value.TLS.ServerName, CAFile: value.TLS.CAFile},
-		MaxConnections:   int32(value.MaxConnections),
-		MinConnections:   int32(value.MinConnections),
-		DialTimeout:      time.Duration(value.DialTimeout),
-		StatementTimeout: time.Duration(value.StatementTimeout),
-		LockTimeout:      time.Duration(value.LockTimeout),
-		IdleTxTimeout:    time.Duration(value.IdleTransactionTimeout),
-		ApplicationName:  "llm-temporal-worker",
-	}
-}
-
-type postgresProbeClient struct{ pool *pgxpool.Pool }
-
-type postgresPoolCloser struct {
-	pool      *pgxpool.Pool
-	namespace postgresstore.Namespace
-}
-
-func (closer postgresPoolCloser) QueryRepositories() PostgresQueryRepositories {
-	spend := postgresstore.SpendSummaryRepository{Pool: closer.pool, Namespace: closer.namespace}
-	return PostgresQueryRepositories{SpendSummary: &spend}
-}
-
-// CheckpointRepository exposes only the storage-neutral repository contract.
-// The default factory cannot construct a blob reader because PostgreSQL
-// locator encryption keys and the object-store binding are deployment-owned;
-// custom closers may implement CheckpointBlobReader as well.
-func (closer postgresPoolCloser) CheckpointRepository() state.CheckpointRepository {
-	return snapshotCheckpointRepository{delegate: postgresstore.DurableCheckpointRepository{Pool: closer.pool, Namespace: closer.namespace}}
-}
-
-func (closer postgresPoolCloser) CheckpointBlobReader() state.CheckpointBlobReader {
-	return nil
-}
-
-func (closer postgresPoolCloser) Close() error {
-	if closer.pool != nil {
-		closer.pool.Close()
-	}
-	return nil
-}
-
-func (client *postgresProbeClient) Health(ctx context.Context, namespace postgresstore.Namespace) error {
-	return postgresstore.Health(ctx, client.pool, namespace)
-}
-
-func (client *postgresProbeClient) Verify(ctx context.Context, namespace postgresstore.Namespace) error {
-	return postgresstore.Verify(ctx, client.pool, namespace)
 }
 
 func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, io.Closer, error) {

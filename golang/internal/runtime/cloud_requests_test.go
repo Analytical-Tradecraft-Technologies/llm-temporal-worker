@@ -22,7 +22,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -307,7 +306,6 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 	}
 	snapshot, err := config.Compile(context.Background(), data, config.ReferenceResolverFunc(func(_ context.Context, c *config.Config) error {
 		c.State.Requests = testCloudConfig()
-		c.State.Postgres = config.PostgresConfig{}
 		c.Endpoints = map[string]config.EndpointConfig{"openai-prod": c.Endpoints["openai-prod"]}
 		for name, model := range c.Models {
 			model.Routes = model.Routes[:1]
@@ -345,10 +343,6 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 				BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
 					return &cloudBootstrapBlobStore{newTestBlobStore()}, cloudBootstrapCloser{func() { closed = true }}, nil
 				},
-				PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
-					t.Fatal("opened PostgreSQL")
-					return nil, nil, nil
-				},
 				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
 					if test.failOpen {
 						return nil, errors.New("cloud open failed")
@@ -361,7 +355,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 					if capabilities.Requests != repository || capabilities.Budgets == nil || capabilities.Finalizer == nil || capabilities.Checkpoints.Repository == nil || capabilities.Responses == nil || capabilities.ResponseFills == nil || capabilities.CheckpointKeyring == nil || capabilities.CheckpointKeyring != set.(*productionClientSet).checkpointVerifier {
 						t.Fatal("incomplete cloud capabilities")
 					}
-					queries := set.(PostgresQueryRepositoriesSource).QueryRepositories()
+					queries := set.(QueryRepositoriesSource).QueryRepositories()
 					if queries.SpendSummary != nil || queries.ProviderStatus == nil || queries.Inventory == nil {
 						t.Fatal("incorrect query backend capabilities")
 					}
@@ -420,7 +414,7 @@ func TestCloudReadinessRejectsIncompleteClientsBeforeRuntimeBuilder(t *testing.T
 	}{
 		{"missing Redis", cloudBaseTestProbes()[1:]},
 		{"missing blob store", cloudBaseTestProbes()[:1]},
-		{"unexpected SQL", append(cloudBaseTestProbes(), identifyDependencyProbe(DependencyPostgres, DependencyProbeFunc(func(context.Context) ProbeResult { return ProbeResult{} })))},
+		{"unexpected SQL", append(cloudBaseTestProbes(), identifyDependencyProbe(DependencyID("postgres"), DependencyProbeFunc(func(context.Context) ProbeResult { return ProbeResult{} })))},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			closed := false

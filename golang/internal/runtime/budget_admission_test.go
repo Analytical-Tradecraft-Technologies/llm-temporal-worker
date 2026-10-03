@@ -60,7 +60,6 @@ func newBudgetAdmissionFixture(t *testing.T) *budgetAdmissionFixture {
 	}
 	f.leaser = &admissionLeaser{BudgetLeaser: reference}
 	composition := validCapabilityComposition()
-	composition.Identity.Postgres = durable.PostgresIdentity{}
 	composition.Identity.Cloud = durable.CloudIdentity{Provider: "aws", Namespace: "requests-v1", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}}
 	composition.Materializer = f.leaser
 	f.cap = V1RuntimeCapabilities{ConfigDigest: composition.Identity.ConfigDigest, CloudIdentity: composition.Identity.Cloud, composition: &composition}

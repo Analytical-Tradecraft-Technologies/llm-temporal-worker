@@ -1,5 +1,9 @@
 # Maintenance contract
 
+> Historical reference: the worker SQL implementation and its maintenance CLI
+> have been removed. These SQL procedures are not supported. Use
+> [cloud request storage](cloud-request-repository.md) for current persistence.
+
 Maintenance is a bounded, separately operated concern. It is not a Temporal
 Activity and it must not run with the worker's `llmtw_runtime` role. Operators
 run the maintenance adapter with `llmtw_maintenance`, which is granted the
@@ -21,7 +25,7 @@ hooks emit the per-pass progress, failure, and latency metrics.
 
 The worker CLI intentionally does not open a maintenance-role connection. The
 repository ships the separately operated
-[`llmtw-maintenance`](../../golang/cmd/llmtw-maintenance/main.go) binary for
+[`llmtw-maintenance`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/cmd/llmtw-maintenance/main.go) binary for
 this adapter. Build it with `go build ./cmd/llmtw-maintenance` from `golang/`.
 It requires the dedicated `LLMTW_MAINTENANCE_POSTGRES_USERNAME` and
 `LLMTW_MAINTENANCE_POSTGRES_PASSWORD` environment variables; worker runtime
