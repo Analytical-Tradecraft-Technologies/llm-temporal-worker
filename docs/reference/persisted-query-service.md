@@ -2,7 +2,7 @@
 
 The runtime now exposes an explicit `runtime.NewPersistedQueryService`
 composition for Redis-backed provider-status, model-inventory, and credit-status,
-the remaining PostgreSQL spend-summary reader, and an explicitly supplied
+an optional spend-summary reader, and an explicitly supplied
 Redis budget-status reader. See [provider control](provider-control.md) for
 atomic updates, last-known inventory, and query-view retention. It binds every page to the immutable
 configuration snapshot digest and uses the storage pages only after the
@@ -57,8 +57,8 @@ The production factory accepts these choices through
 contract. It requires deployment-owned authorization and cursor key material,
 then logs completed queries through the optional supplied logger or normal
 snapshot-configured logs. The repository bundle no longer contains a SQL audit
-repository. A PostgreSQL closer may expose read
-capabilities through `PostgresQueryRepositoriesSource`; missing read
+repository. A snapshot client set exposes read
+capabilities through `QueryRepositoriesSource`; missing read
 repositories remain a permanent unsupported-capability response rather than
 an empty result.
 
@@ -88,13 +88,10 @@ incomplete Redis capability leaves `budget_status` unsupported; after a reader
 is configured, an unavailable generation or Function produces a propagated,
 fail-closed read error. Deployments must not infer the layout or treat a
 manifest-only read as a complete budget answer. The
-PostgreSQL `SpendSummaryRepository` provides the storage read seam for spend:
-it unions completed `operations` with completed `query_executions`, joins each
-operation to its highest-numbered durable attempt for provider and model
-grouping, uses the operation scope/time index plus a bounded lateral attempt
-lookup, and aggregates exact NUMERIC(38,18) amounts without treating unknown
-costs as zero. Its interval is half-open (`start_time <= completed_at <
-end_time`) and groups are ordered by their typed dimensions with NULLs first.
+SQL spend-summary implementation has been removed. Spend summary remains a
+typed unsupported capability until a deployment supplies an authenticated
+aggregation reader. No empty success or invented zero cost substitutes for the
+missing reader.
 
 ## Versioned budget-status reader contract
 
@@ -207,7 +204,7 @@ and `budget_status` fail-closed.
 
 Spend composition also requires `PersistedQueryOptions.ResolveScope`. This
 explicit resolver maps the already-authorized tenant/project pair to the
-opaque PostgreSQL scope UUID using the deployment's existing keyed scope
+opaque scope UUID using the deployment's existing keyed scope
 repository. The runtime rejects the query if the resolver is absent, fails, or
 returns the nil UUID; it never invents HMAC keys or creates a scope as a query
 side effect. An unconfigured deployment therefore fails closed rather than

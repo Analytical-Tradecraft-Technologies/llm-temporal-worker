@@ -79,27 +79,21 @@ state:
     dial_timeout: 2s
     operation_timeout: 3s
     required_persistence: aof_and_rdb
-  postgres:
-    addresses: [postgres.example.internal:5432]
-    database: llm_worker
-    schema: llm_worker
-    table_prefix: ""
-    username:
+  requests:
+    provider:
+      type: aws
+      aws:
+        region: ap-southeast-2
+      key_value_stores:
+        requests: physical-requests
+      blob_stores:
+        payloads: physical-payloads
+    request_table: requests
+    payload_store: payloads
+    namespace: worker-v1
+    secret:
       kind: env
-      name: LLMTW_POSTGRES_USERNAME
-    password:
-      kind: file
-      path: /var/run/secrets/llmtw-postgres-password
-    tls:
-      enabled: true
-      server_name: postgres.example.internal
-      ca_file: /var/run/ca/postgres.pem
-    min_connections: 8
-    max_connections: 64
-    dial_timeout: 2s
-    statement_timeout: 30s
-    lock_timeout: 2s
-    idle_transaction_timeout: 30s
+      name: CLOUD_REQUEST_KEY
 
 blob_store:
   kind: s3
@@ -416,37 +410,19 @@ resolved credentials.
 
 ## State namespace selection
 
-**state.kind** is **durable** or the legacy development-only **redis** fixture.
-Durable is the production default
-and still requires both **state.redis** and **state.postgres** while the
-checkpoint/query composition is migrated. Redis is authoritative for budgets
-and provider operational state. The optional **state.requests** section enables
-cloud-backed request/response recording around a configured V1 runtime; see
-[cloud request storage](cloud-request-repository.md#worker-integration) for its
-IAM provider configuration, store aliases, encryption secret, and current scope.
+**state.kind** is **durable** for production. It requires **state.redis** and
+**state.requests**. Redis owns budget reservations, claims, settlement,
+throttles and provider operational state. Cloud key-value/blob storage holds
+requests, attempts, pending records, response caches and continuation data.
+See [cloud request storage](cloud-request-repository.md#worker-integration)
+for IAM configuration, table/bucket aliases and the encryption secret.
 
-In durable mode the runtime constructs and probes both stores before admitting
-work. The PostgreSQL dependency probe checks the current database, UTC session
-timezone, and the installed schema contract for the configured namespace; the
-Redis probe performs its normal connectivity, clock, policy, and configured
-Function or Lua script identity checks. Production additionally reads the
-configured Redis keyspace's active budget-generation pointer and canonical,
-complete manifest. Readiness revalidates the manifest invariants and binds the
-pointer to the manifest digest and Redis incarnation even when a custom generation
-port is supplied; a missing, invalid, or unbound pointer/manifest keeps readiness
-closed. The probe is read-only and never publishes or rebuilds a generation. The validated
-`state.redis.key_prefix` is applied to every worker-owned key constructor and
-the active-generation read therefore also proves the configured namespace is
-being addressed. A failure or timeout keeps readiness closed, and both clients
-are closed during a failed build, configuration replacement, or worker
-shutdown. Schema installation remains a deployment concern (`postgres.Install`)
-and is never performed by a worker during readiness probing.
-
-The local durable composition is documented separately from the offline Redis
-fixture: `docker compose --profile durable run --rm durable-worker` validates
-`deploy/local/durable-config.yaml` against an isolated worker PostgreSQL
-database/role while retaining Redis for active budgets and throttles. It does
-not install the schema or start Temporal polling.
+Durable readiness requires Redis, cloud request storage and the result blob
+store. The worker validates Redis persistence, admission code and active budget
+generation before admitting work. It verifies the active budget-generation pointer
+and its canonical, complete manifest. Missing or mismatched state keeps readiness
+closed. It does not install schemas or create tables or buckets. There is no
+worker SQL pool, schema installer, SQL fallback or SQL data migration.
 
 `state.kind: redis` is retained only as a development/test fixture for the
 legacy Redis-only composition and is rejected in production. `state.kind:
@@ -467,7 +443,7 @@ blob_store:
 ~~~
 
 Memory mode is constructed by the production factory without dialing Redis or
-PostgreSQL and without creating an external blob client. It uses the shared
+cloud storage and without creating an external blob client. It uses the shared
 in-process admission and continuation implementations plus a bounded,
 content-addressed process-local blob map. Provider adapters are still built
 normally, so provider credentials and egress remain subject to the same
@@ -477,7 +453,7 @@ Operations, checkpoints, budget/throttle state, and blobs are process local;
 restart loses everything and provider-pending jobs cannot be recovered after
 process loss. The mode must not be used for durable continuation/recovery
 guarantees, multi-replica admission, backups, or production readiness. Redis
-and PostgreSQL addresses and credentials are ignored by the memory factory and
+addresses and credentials are ignored by the memory factory and
 should be omitted. `blob_store.kind: memory` is rejected unless
 `state.kind: memory` is also selected, and external blob kinds are rejected
 with memory state.
@@ -497,84 +473,11 @@ The effective prefix is immutable for the lifetime of a worker process: a
 configuration reload that changes it is rejected before new clients are built.
 Deploy a new worker process when moving to a different Redis namespace.
 
-The required PostgreSQL subsection has this shape:
-
-~~~yaml
-state:
-  postgres:
-    addresses: [postgres.example.internal:5432]
-    database: llm_worker
-    schema: llm_worker
-    table_prefix: ""
-    username:
-      kind: env
-      name: LLMTW_POSTGRES_USERNAME
-    password:
-      kind: file
-      path: /var/run/secrets/llmtw-postgres-password
-    tls:
-      enabled: true
-      server_name: postgres.example.internal
-      ca_file: /var/run/ca/postgres.pem
-    min_connections: 8
-    max_connections: 64
-    dial_timeout: 2s
-    statement_timeout: 30s
-    lock_timeout: 2s
-    idle_transaction_timeout: 30s
-~~~
-
-The database, schema, and relation prefix are independent:
-
-| Field | Default | Environment override | Meaning |
-| --- | --- | --- | --- |
-| **database** | **llm_worker** | **LLMTW_POSTGRES_DATABASE** | PostgreSQL database selected when opening the pool |
-| **schema** | **llm_worker** | **LLMTW_POSTGRES_SCHEMA** | Schema containing worker-owned objects |
-| **table_prefix** | empty | **LLMTW_POSTGRES_TABLE_PREFIX** | Prefix applied to every worker-owned schema object |
-
-`min_connections` and `max_connections` bound each worker replica's pgx pool;
-`min_connections` may be zero so startup does not wait for a warm pool. The
-worker still requires the PostgreSQL transaction/schema contract probe before
-it polls new work. `idle_transaction_timeout` is applied to every PostgreSQL
-session independently of `statement_timeout` and `lock_timeout`; it bounds
-sessions accidentally left inside a transaction and is never used as a
-readiness shortcut. All three timeout values must be positive and the minimum
-pool size cannot exceed the maximum.
-
-Environment overrides are read once before strict validation, appear in
-**print-effective-config**, and are included in **config_version**. They are
-not secret and are not hot-reloaded. Database and schema match
-**[a-z][a-z0-9_]{0,62}**. Table prefix is empty or matches
-**[a-z][a-z0-9_]{0,22}_**; the trailing underscore makes physical names
-unambiguous and the 24-byte maximum leaves room for the longest specified index
-name under PostgreSQL's 63-byte identifier limit. Schema-contract tests reject
-any generated name that would be truncated. Constraints use the architecture's
-readable deterministic
-`<prefix>c_<kind>_<table_abbrev>_<invariant_slug>` names rather than hashes or
-PostgreSQL-generated names.
-
-The recommended production layout is a dedicated database and schema with an
-empty table prefix. Sharing a PostgreSQL server is fully supported. Sharing a
-database is supported with a dedicated schema. A non-empty table prefix also
-permits an explicitly shared schema, but it is collision avoidance rather than
-a privilege boundary; dedicated roles/schema remain preferable. The worker
-must never resolve a physical relation to one owned by Temporal.
-
-These namespace choices only select where a clean initial schema is created.
-This unreleased change must not implement or document copying, backfill,
-dual-read, dual-write, legacy namespace fallback, or renaming between namespace
-choices. A post-release namespace change requires a separate migration design.
-
-The schema foundation lives in
-[`golang/storage/postgres`](../../golang/storage/postgres/namespace.go). The
-checked-in worker-object migration is rendered only after namespace validation
-and uses schema-qualified `pgx.Identifier` values. `Install` is reserved for
-an explicit provisioning step: it creates and locks down a missing dedicated
-schema, but leaves an existing schema's ACL untouched so an operator can use a
-shared schema with a dedicated table prefix. Startup verification remains
-read-only and never creates or alters a schema.
-Run `make postgres-integration` from `golang/` to exercise the namespace and
-contract gates against the pinned PostgreSQL service image.
+The former `state.postgres` section is rejected by the strict loader. The
+`LLMTW_POSTGRES_DATABASE`, `LLMTW_POSTGRES_SCHEMA` and
+`LLMTW_POSTGRES_TABLE_PREFIX` overrides are removed. Configure existing cloud
+tables and buckets through `state.requests`; deployments create those resources
+and grant the worker IAM access separately.
 
 ## Pricing and budget matching
 
@@ -688,22 +591,10 @@ Readiness checks Redis with `PING`, `TIME`, the configured persistence and
 `noeviction` policy, and configured admission code identity. Durable deployments
 also inspect the worker keyspace, active-generation manifest, and enabled
 coordination Stream with bounded read-only checks; malformed or mismatched
-records keep readiness closed. It also checks a bounded PostgreSQL read-only transaction,
-the configured physical namespace/schema contract, every relation and both
-explicit and constraint-backed indexes declared by that contract, and UTC
-session state. Runtime role grants remain
-deployment-owned and are exercised by the worker's normal least-privilege
-operations. It checks
-the configured S3 bucket with bucket metadata only; it never reads or writes a
-tenant object. Provider endpoints are intentionally excluded because one route
-can be unavailable while another eligible route remains.
-
-The explicit schema-install step also inventories the complete worker relation
-set before the first DDL statement. If a computed worker table or index already
-exists without the worker contract marker (for example, a Temporal-owned
-relation in a shared schema), installation fails closed with the colliding names;
-it never renames or adopts that relation. A safely isolated schema in the same
-database remains valid.
+records keep readiness closed. Cloud storage and the configured S3 bucket use
+bounded read-only probes; readiness never writes a tenant object. Provider
+endpoints are excluded because one route can be unavailable while another is
+eligible. Resource creation and IAM permissions are deployment-owned.
 
 `state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned

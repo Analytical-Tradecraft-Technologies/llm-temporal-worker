@@ -205,7 +205,7 @@ func TestNewPersistedQueryServiceBuilderBindsSnapshotRedisBudgetReader(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{
+	service, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{
 		BudgetStatus: reader,
 	})
 	if err != nil {
@@ -324,7 +324,7 @@ func budgetOrSpendFilter(kind llm.QueryKind) control.QueryFilter {
 }
 
 func TestNewPersistedQueryServiceRequiresSecuritySeams(t *testing.T) {
-	if _, err := NewPersistedQueryService(nil, PostgresQueryRepositories{}, PersistedQueryOptions{}); err == nil {
+	if _, err := NewPersistedQueryService(nil, QueryRepositories{}, PersistedQueryOptions{}); err == nil {
 		t.Fatal("nil snapshot unexpectedly accepted")
 	}
 }
@@ -399,12 +399,12 @@ func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
 	}
 	cursorKey[0] = 'X'
 
-	if _, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{}); err != nil {
+	if _, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{}); err != nil {
 		t.Fatalf("builder without audit repository error = %v", err)
 	}
 
 	scopeID := uuid.MustParse("019c9aaf-77f7-7d7f-92c0-b53eb2ed3c47")
-	service, err := builder(context.Background(), &config.Snapshot{}, PostgresQueryRepositories{
+	service, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{
 		ScopeResolver: func(context.Context, control.QueryScope) (uuid.UUID, error) {
 			return scopeID, nil
 		},

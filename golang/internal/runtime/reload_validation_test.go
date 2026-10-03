@@ -50,9 +50,6 @@ func TestRuntimeReplacementValidatorRejectsProcessLifetimeChanges(t *testing.T) 
 		{name: "tracing sample ratio", field: "telemetry.tracing.sample_ratio", mutate: func(value *config.Config) { value.Telemetry.Tracing.SampleRatio = "0.10" }},
 		{name: "content logging", field: "telemetry.content_logging", mutate: func(value *config.Config) { value.Telemetry.ContentLogging = "redacted" }},
 		{name: "Redis key prefix", field: "state.redis.key_prefix", mutate: func(value *config.Config) { value.State.Redis.KeyPrefix = "worker-b" }},
-		{name: "PostgreSQL database", field: "state.postgres.database", mutate: func(value *config.Config) { value.State.Postgres.Database = "worker_b" }},
-		{name: "PostgreSQL schema", field: "state.postgres.schema", mutate: func(value *config.Config) { value.State.Postgres.Schema = "worker_b" }},
-		{name: "PostgreSQL table prefix", field: "state.postgres.table_prefix", mutate: func(value *config.Config) { value.State.Postgres.TablePrefix = "next_" }},
 		{name: "endpoint membership", field: "endpoints.*.outbound_hosts", mutate: func(value *config.Config) {
 			value.Endpoints["openai-canary"] = value.Endpoints["openai-prod"]
 		}},
@@ -126,7 +123,6 @@ func TestRuntimeReplacementValidatorAllowsSnapshotScopedChanges(t *testing.T) {
 		value.Budgets.RequireMatch = false
 		value.BlobStore.InlineBytes++
 		value.State.Redis.Addresses = []string{"redis-2.example.internal:6379"}
-		value.State.Postgres.Addresses = []string{"postgres-2.example.internal:5432"}
 		endpoint := value.Endpoints["openai-prod"]
 		endpoint.BaseURL = "https://api.openai.com/v2"
 		endpoint.Timeout += config.Duration(time.Second)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"time"
 
@@ -20,7 +19,7 @@ import (
 )
 
 // QueryRepositories holds snapshot-owned capabilities. Provider state and inventory
-// use Redis; the remaining spend reader still uses SQL during the staged migration.
+// use Redis. Spend summary is unavailable until a cloud aggregation reader exists.
 type QueryRepositories struct {
 	ProviderStatus control.ProviderStatusReader
 	Inventory      control.InventoryReader
@@ -29,15 +28,13 @@ type QueryRepositories struct {
 	BudgetStatus   BudgetStatusReader
 }
 
-// PostgresQueryRepositories is retained for existing composition builders.
-type PostgresQueryRepositories = QueryRepositories
-
-type PostgresQueryRepositoriesSource interface {
+// QueryRepositoriesSource exposes the same snapshot-owned readers to builders.
+type QueryRepositoriesSource interface {
 	QueryRepositories() QueryRepositories
 }
 
 // CheckpointCapabilities is the storage-neutral checkpoint bundle owned by
-// one immutable runtime snapshot. The interfaces deliberately hide pgx pools,
+// one immutable runtime snapshot. The interfaces deliberately hide clients,
 // encryption keys, and object-store locators from Activity composition.
 // Blobs and Materializer may be nil when a deployment has not supplied the
 // complete scoped replay binding; callers must fail closed rather than
@@ -77,7 +74,7 @@ func (capabilities CheckpointCapabilities) Validate() error {
 }
 
 // RequireMaterializer is the fail-closed check used by a builder that needs
-// durable replay. The default PostgreSQL factory intentionally returns a
+// durable replay. A custom factory may return a
 // partial bundle until deployment supplies the scoped blob and handle
 // bindings, so callers must opt into this stronger requirement explicitly.
 func (capabilities CheckpointCapabilities) RequireMaterializer() error {
@@ -103,29 +100,9 @@ func isNilCapability(value any) bool {
 	}
 }
 
-// PostgresCheckpointCapabilitiesSource is implemented by PostgreSQL client
-// closers that construct checkpoint capabilities alongside their pool. The
-// runtime copies the typed bundle into the snapshot client set so reloads
-// cannot accidentally use a closed or newer checkpoint dependency.
-type PostgresCheckpointCapabilitiesSource interface {
-	CheckpointRepository() state.CheckpointRepository
-	CheckpointBlobReader() state.CheckpointBlobReader
-}
-
-// PostgresCheckpointMaterializerSource is an optional deployment-owned
-// binding for the complete checkpoint replay capability. The default factory
-// deliberately does not implement it: constructing a materializer requires
-// the scoped blob locator, encryption/key binding, and opaque-handle verifier
-// owned by the deployment. A source must return nil until all of those
-// dependencies are present; the runtime never fabricates an in-memory or
-// unscoped substitute.
-type PostgresCheckpointMaterializerSource interface {
-	CheckpointMaterializer() state.CheckpointHandleMaterializer
-}
-
 // CheckpointCapabilitiesSource is the client-set capability exposed to a
 // V1RuntimeBuilder through app.ClientSet. It intentionally has one aggregate
-// method so builders never need to know whether the snapshot uses PostgreSQL
+// method so builders never need to know which provider implements the snapshot
 // or another durable repository implementation.
 type CheckpointCapabilitiesSource interface {
 	CheckpointCapabilities() CheckpointCapabilities
@@ -173,7 +150,7 @@ type V1RuntimeCapabilities struct {
 	// that the returned durable state identity matches. A zero digest leaves the
 	// identity unbound for contract-only and explicitly custom builder tests.
 	ConfigDigest [32]byte
-	// CloudIdentity selects the expected cloud namespace. Zero retains legacy SQL composition.
+	// CloudIdentity selects the expected cloud namespace. It is required for durable composition.
 	CloudIdentity durablestore.CloudIdentity
 	// RedisIdentity binds the snapshot-owned budget authority without SQL ports.
 	RedisIdentity durablestore.RedisIdentity
@@ -387,9 +364,9 @@ type V1RuntimeCapabilitiesSource interface {
 	V1RuntimeCapabilities() V1RuntimeCapabilities
 }
 
-// snapshotCheckpointRepository deliberately erases the concrete PostgreSQL
+// snapshotCheckpointRepository deliberately erases the concrete provider
 // repository type before it enters the client set. In particular, callers
-// cannot type-assert the capability back to a value containing a pgx pool.
+// cannot type-assert the capability back to a value containing provider clients or credentials.
 type snapshotCheckpointRepository struct {
 	delegate state.CheckpointRepository
 }
@@ -442,77 +419,9 @@ func (materializer snapshotCheckpointMaterializer) MaterializeHandle(ctx context
 }
 
 // queryServiceSource lets an embedding supply the typed control-plane query
-// implementation from the same PostgreSQL pool. It is deliberately optional:
+// implementation from the same snapshot-owned clients. It is deliberately optional:
 // until handlers for a query kind are composed, QueryService remains nil and
 // the Activity fails closed.
 type queryServiceSource interface {
 	QueryService() activity.QueryService
-}
-
-func queryRepositoriesFromCloser(closer io.Closer) PostgresQueryRepositories {
-	if source, ok := closer.(PostgresQueryRepositoriesSource); ok {
-		return source.QueryRepositories()
-	}
-	return PostgresQueryRepositories{}
-}
-
-func checkpointCapabilitiesFromCloser(closer io.Closer) CheckpointCapabilities {
-	if closer == nil {
-		return CheckpointCapabilities{}
-	}
-	if source, ok := closer.(PostgresCheckpointCapabilitiesSource); ok {
-		capabilities := CheckpointCapabilities{}
-		if repository := source.CheckpointRepository(); !isNilCapability(repository) {
-			if wrapped, ok := repository.(snapshotCheckpointRepository); ok {
-				capabilities.Repository = wrapped
-			} else {
-				capabilities.Repository = snapshotCheckpointRepository{delegate: repository}
-			}
-		}
-		if blobs := source.CheckpointBlobReader(); !isNilCapability(blobs) {
-			if wrapped, ok := blobs.(snapshotCheckpointBlobReader); ok {
-				capabilities.Blobs = wrapped
-			} else {
-				capabilities.Blobs = snapshotCheckpointBlobReader{delegate: blobs}
-			}
-		}
-		if materializerSource, ok := closer.(PostgresCheckpointMaterializerSource); ok {
-			if materializer := materializerSource.CheckpointMaterializer(); !isNilCapability(materializer) && capabilities.Repository != nil && capabilities.Blobs != nil {
-				capabilities.Materializer = snapshotCheckpointMaterializer{delegate: materializer}
-			}
-		}
-		// Keep this guard adjacent to construction so a future source cannot
-		// accidentally publish a materializer with incomplete dependencies.
-		if err := capabilities.Validate(); err != nil {
-			return CheckpointCapabilities{}
-		}
-		return capabilities
-	}
-	return CheckpointCapabilities{}
-}
-
-// checkpointCapabilitiesFromCloserWithBindings completes the optional
-// PostgreSQL repository bundle with snapshot-owned blob and handle bindings.
-// The bindings are passed in by the production factory only after it has
-// constructed the immutable blob store and continuation keyring for the same
-// configuration snapshot. Missing bindings preserve an explicitly partial
-// bundle; they never result in an unscoped reader or an unsigned handle
-// materializer.
-func checkpointCapabilitiesFromCloserWithBindings(closer io.Closer, reader state.CheckpointBlobReader, verifier state.CheckpointHandleVerifier, now func() time.Time) CheckpointCapabilities {
-	capabilities := checkpointCapabilitiesFromCloser(closer)
-	if isNilCapability(capabilities.Blobs) && !isNilCapability(reader) {
-		capabilities.Blobs = snapshotCheckpointBlobReader{delegate: reader}
-	}
-	if isNilCapability(capabilities.Materializer) && !isNilCapability(capabilities.Repository) && !isNilCapability(capabilities.Blobs) && !isNilCapability(verifier) {
-		capabilities.Materializer = snapshotCheckpointMaterializer{delegate: &state.DurableCheckpointMaterializer{
-			Repository:     capabilities.Repository,
-			Blobs:          capabilities.Blobs,
-			HandleVerifier: verifier,
-			Now:            now,
-		}}
-	}
-	if err := capabilities.Validate(); err != nil {
-		return CheckpointCapabilities{}
-	}
-	return capabilities
 }

@@ -15,27 +15,6 @@ services:
       retries: 24
       start_period: 5s
 
-  # Worker state is isolated from Temporal's database and role. The durable
-  # worker profile uses PostgreSQL 17.5 for PostgreSQL-authoritative
-  # operations, continuations, results, and control-plane state; Redis remains
-  # the active budget/throttle dependency. Keep this pin independent from the
-  # Temporal-owned PostgreSQL service above.
-  worker-postgres:
-    profiles: [durable]
-    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
-    environment:
-      POSTGRES_USER: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}
-      POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
-      POSTGRES_DB: ${LLMTW_WORKER_POSTGRES_DATABASE:-llmtw_worker}
-    volumes:
-      - worker-postgres-data-v18:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-      start_period: 5s
-
   temporal:
     image: temporalio/auto-setup:1.29.3@sha256:9be7b8d98f60d00f4f2ff74731c071a17848d8182bbc8429e314a24c94ea105b
     depends_on:
@@ -243,47 +222,6 @@ services:
       start_period: 20s
     stop_grace_period: 90s
 
-  # This profile validates the durable worker configuration against the
-  # isolated worker database and Redis dependency model. Schema installation
-  # remains an explicit deployment step; the normal worker profile continues
-  # to use the offline Redis fixture above.
-  durable-worker:
-    profiles: [durable]
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        VERSION: local
-        REVISION: working-tree
-        BUILD_TIME: reproducible-local
-    image: ${LLMTW_WORKER_IMAGE:-llmtw/worker:local}
-    command: ["validate-config", "--config", "/etc/llmtw/durable-config.yaml"]
-    depends_on:
-      worker-postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      WORKER_POSTGRES_USERNAME: ${LLMTW_WORKER_POSTGRES_USER:-llmtw_worker}
-      WORKER_POSTGRES_PASSWORD: ${LLMTW_WORKER_POSTGRES_PASSWORD:-local-only}
-      LLMTW_REDIS_KEY_PREFIX: ${LLMTW_REDIS_KEY_PREFIX:-llmtw}
-    volumes:
-      - type: bind
-        source: ./deploy/local/durable-config.yaml
-        target: /etc/llmtw/durable-config.yaml
-        read_only: true
-      - type: bind
-        source: ./deploy/local/capabilities.yaml
-        target: /etc/llmtw/capabilities.yaml
-        read_only: true
-      - type: bind
-        source: ./deploy/local/prices.yaml
-        target: /etc/llmtw/prices.yaml
-        read_only: true
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop: [ALL]
 
 secrets:
   continuation_hmac:
@@ -293,4 +231,3 @@ volumes:
   blob-data:
   redis-data:
   temporal-postgres-data-v18:
-  worker-postgres-data-v18:

@@ -111,8 +111,8 @@ snapshot's separately authorized query service and fails closed if absent.
 
 This constructor does not infer authorization from tenant/project payloads and
 does not activate the CLI by itself. Deployment security policy and the process
-entrypoint's configuration are separate wiring. The earlier PostgreSQL phase
-builders remain transitional code pending removal of the SQL backend; the cloud
+entrypoint's configuration are separate wiring. The SQL backend has been removed. Generic one-shot phase builders remain for
+explicit embeddings; the cloud
 builder does not use them. Tests exercise factory-built synchronous and polling
 requests across runtime reconstruction, completed-result replay, rejected
 capabilities, query isolation and authorization before storage access.

@@ -74,7 +74,7 @@ func boundaryCompletion(request ReserveRequest, now time.Time) budget.Completion
 func newBoundary(materializer BudgetLeaser) BudgetBoundary {
 	return BudgetBoundary{
 		Identity: StateIdentity{
-			Postgres:     PostgresIdentity{Database: "llmtw", Schema: "worker", TablePrefix: "prod_"},
+			Cloud:        CloudIdentity{Provider: "aws", Namespace: "requests", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}},
 			Redis:        RedisIdentity{KeyPrefix: "llmtw", HashTag: "admission"},
 			ConfigDigest: sha256.Sum256([]byte("snapshot")),
 		},
@@ -356,7 +356,6 @@ func TestBudgetBoundaryClaimFailurePreventsDispatchWithoutSQL(t *testing.T) {
 		t.Run(claimError.Error(), func(t *testing.T) {
 			materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), claimErr: claimError}
 			boundary := newBoundary(materializer)
-			boundary.Identity.Postgres = PostgresIdentity{}
 			lifecycle := newLifecycle(t)
 			reserved, err := boundary.Reserve(context.Background(), lifecycle, request)
 			if err != nil {

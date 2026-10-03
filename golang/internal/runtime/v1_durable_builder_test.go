@@ -19,11 +19,15 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
-func completeDurableBuilderCapabilities(generate GeneratePortsFactory, compact CompactPortsFactory) V1RuntimeCapabilities {
+func completeDurableBuilderCapabilities(t *testing.T, generate GeneratePortsFactory, compact CompactPortsFactory) V1RuntimeCapabilities {
 	capabilities := completeGenerateCapabilities(generate)
 	capabilities.CompactPortsFactory = compact
+	capabilities.CloudIdentity, _ = cloudRequestIdentity(durableBuilderSnapshot(t).Config().State.Requests)
 	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
-		return validCapabilityComposition(), nil
+		composition := validCapabilityComposition()
+		composition.Identity.Cloud = capabilities.CloudIdentity
+		composition.Identity.ConfigDigest = durableBuilderSnapshot(t).Digest()
+		return composition, nil
 	}
 	return capabilities
 }
@@ -31,7 +35,7 @@ func completeDurableBuilderCapabilities(generate GeneratePortsFactory, compact C
 func TestDurableV1RuntimeBuilderComposesBothPhasesFromOneSnapshot(t *testing.T) {
 	var seen []string
 	clients := &generateBuilderClientSet{}
-	clients.capabilities = completeDurableBuilderCapabilities(
+	clients.capabilities = completeDurableBuilderCapabilities(t,
 		func(ctx context.Context, capabilities V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			value, err := capabilities.Snapshot.Current(ctx)
 			if err != nil {
@@ -50,7 +54,7 @@ func TestDurableV1RuntimeBuilderComposesBothPhasesFromOneSnapshot(t *testing.T) 
 		},
 	)
 
-	runtimeValue, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, clients)
+	runtimeValue, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, clients)
 	if err != nil {
 		t.Fatalf("builder error = %v", err)
 	}
@@ -64,7 +68,7 @@ func TestDurableV1RuntimeBuilderComposesBothPhasesFromOneSnapshot(t *testing.T) 
 
 func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *testing.T) {
 	var generateComposition, compactComposition durable.Composition
-	capabilities := completeDurableBuilderCapabilities(
+	capabilities := completeDurableBuilderCapabilities(t,
 		func(ctx context.Context, received V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			composition, ok := received.DurableComposition()
 			if !ok {
@@ -103,6 +107,8 @@ func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *test
 		},
 	)
 	want := validCapabilityComposition()
+	want.Identity.Cloud = capabilities.CloudIdentity
+	want.Identity.ConfigDigest = durableBuilderSnapshot(t).Digest()
 	compositionCalls := 0
 	capabilities.CompositionFactory = func(_ context.Context, received V1RuntimeCapabilities) (durable.Composition, error) {
 		compositionCalls++
@@ -111,7 +117,7 @@ func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *test
 		}
 		return want, nil
 	}
-	runtimeValue, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, &generateBuilderClientSet{capabilities: capabilities})
+	runtimeValue, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities})
 	if err != nil {
 		t.Fatalf("builder error = %v", err)
 	}
@@ -131,8 +137,8 @@ func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *test
 
 func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
 	compositionCalls := 0
-	wantDigest := [32]byte{9}
-	capabilities := completeDurableBuilderCapabilities(
+	wantDigest := durableBuilderSnapshot(t).Digest()
+	capabilities := completeDurableBuilderCapabilities(t,
 		func(_ context.Context, received V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			if received.ConfigDigest != wantDigest {
 				t.Fatalf("Generate capability config digest = %x, want %x", received.ConfigDigest, wantDigest)
@@ -154,6 +160,7 @@ func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
 		}
 		composition := validCapabilityComposition()
 		composition.Identity.ConfigDigest = wantDigest
+		composition.Identity.Cloud = capabilities.CloudIdentity
 		return composition, nil
 	}
 	preflight, err := capabilities.BuildDurableComposition(context.Background())
@@ -162,7 +169,7 @@ func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
 	}
 	capabilities.composition = &preflight
 
-	if _, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, &generateBuilderClientSet{capabilities: capabilities}); err != nil {
+	if _, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities}); err != nil {
 		t.Fatalf("builder error = %v", err)
 	}
 	if compositionCalls != 1 {
@@ -172,7 +179,7 @@ func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
 
 func TestDurableV1RuntimeBuilderRequiresCompositionBeforePhaseFactories(t *testing.T) {
 	generateCalled, compactCalled := false, false
-	capabilities := completeDurableBuilderCapabilities(
+	capabilities := completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			generateCalled = true
 			return validBuilderGeneratePorts(nil), nil
@@ -184,7 +191,7 @@ func TestDurableV1RuntimeBuilderRequiresCompositionBeforePhaseFactories(t *testi
 	)
 	capabilities.CompositionFactory = nil
 
-	_, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, &generateBuilderClientSet{capabilities: capabilities})
+	_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities})
 	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "durable composition factory is not configured") {
 		t.Fatalf("builder error = %v, want missing-composition failure", err)
 	}
@@ -204,7 +211,7 @@ func TestDurableV1RuntimeBuilderRejectsCompositionFromDifferentConfigSnapshot(t 
 	}
 
 	generateCalled, compactCalled := false, false
-	capabilities := completeDurableBuilderCapabilities(
+	capabilities := completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			generateCalled = true
 			return validBuilderGeneratePorts(nil), nil
@@ -239,7 +246,7 @@ func TestDurableV1RuntimeBuilderAcceptsCompositionBoundToConfigSnapshot(t *testi
 		t.Fatalf("compile example config: %v", err)
 	}
 
-	capabilities := completeDurableBuilderCapabilities(
+	capabilities := completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			return validBuilderGeneratePorts(nil), nil
 		},
@@ -250,6 +257,7 @@ func TestDurableV1RuntimeBuilderAcceptsCompositionBoundToConfigSnapshot(t *testi
 	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
 		composition := validCapabilityComposition()
 		composition.Identity.ConfigDigest = snapshot.Digest()
+		composition.Identity.Cloud = capabilities.CloudIdentity
 		return composition, nil
 	}
 	if _, err := NewDurableV1RuntimeBuilder()(context.Background(), snapshot, nil, &generateBuilderClientSet{capabilities: capabilities}); err != nil {
@@ -259,7 +267,7 @@ func TestDurableV1RuntimeBuilderAcceptsCompositionBoundToConfigSnapshot(t *testi
 
 func TestDurableV1RuntimeBuilderFailsBeforePhaseFactoriesOnInvalidComposition(t *testing.T) {
 	generateCalled, compactCalled := false, false
-	capabilities := completeDurableBuilderCapabilities(
+	capabilities := completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			generateCalled = true
 			return validBuilderGeneratePorts(nil), nil
@@ -272,7 +280,7 @@ func TestDurableV1RuntimeBuilderFailsBeforePhaseFactoriesOnInvalidComposition(t 
 	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
 		return durable.Composition{}, nil
 	}
-	_, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, &generateBuilderClientSet{capabilities: capabilities})
+	_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities})
 	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "validate durable composition") {
 		t.Fatalf("builder error = %v, want invalid-composition failure", err)
 	}
@@ -292,7 +300,7 @@ func TestDurableV1RuntimeBuilderRequiresBothPhaseFactories(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			capabilities := completeDurableBuilderCapabilities(
+			capabilities := completeDurableBuilderCapabilities(t,
 				func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 					return validBuilderGeneratePorts(nil), nil
 				},
@@ -302,7 +310,7 @@ func TestDurableV1RuntimeBuilderRequiresBothPhaseFactories(t *testing.T) {
 			)
 			test.mutate(&capabilities)
 			clients := &generateBuilderClientSet{capabilities: capabilities}
-			_, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, clients)
+			_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, clients)
 			if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("builder error = %v, want %q", err, test.want)
 			}
@@ -312,7 +320,7 @@ func TestDurableV1RuntimeBuilderRequiresBothPhaseFactories(t *testing.T) {
 
 func TestDurableV1RuntimeBuilderFailsClosedOnPhaseFactoryError(t *testing.T) {
 	compactCalled := false
-	clients := &generateBuilderClientSet{capabilities: completeDurableBuilderCapabilities(
+	clients := &generateBuilderClientSet{capabilities: completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			return durable.GeneratePorts{}, errors.New("postgres operation store unavailable")
 		},
@@ -321,7 +329,7 @@ func TestDurableV1RuntimeBuilderFailsClosedOnPhaseFactoryError(t *testing.T) {
 			return validCompactPorts(), nil
 		},
 	)}
-	_, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, clients)
+	_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, clients)
 	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "construct Generate ports") {
 		t.Fatalf("builder error = %v, want Generate factory failure", err)
 	}
@@ -331,7 +339,7 @@ func TestDurableV1RuntimeBuilderFailsClosedOnPhaseFactoryError(t *testing.T) {
 }
 
 func TestDurableV1RuntimeBuilderRejectsIncompletePhasePorts(t *testing.T) {
-	clients := &generateBuilderClientSet{capabilities: completeDurableBuilderCapabilities(
+	clients := &generateBuilderClientSet{capabilities: completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			return durable.GeneratePorts{}, nil
 		},
@@ -339,14 +347,14 @@ func TestDurableV1RuntimeBuilderRejectsIncompletePhasePorts(t *testing.T) {
 			return validCompactPorts(), nil
 		},
 	)}
-	_, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, clients)
+	_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, clients)
 	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "validate durable ports") {
 		t.Fatalf("builder error = %v, want invalid Generate port failure", err)
 	}
 }
 
 func TestDurableV1RuntimeBuilderRequiresCapabilitySource(t *testing.T) {
-	_, err := NewDurableV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, generateBuilderPlainClientSet{})
+	_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, generateBuilderPlainClientSet{})
 	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "V1RuntimeCapabilitiesSource") {
 		t.Fatalf("builder error = %v, want missing capability source", err)
 	}
@@ -456,6 +464,7 @@ func TestV1RuntimeCapabilitiesBuildDurableCompositionValidatesFactoryResult(t *t
 
 func TestV1RuntimeCapabilitiesBuildDurableCompositionUsesSnapshotOwnedPorts(t *testing.T) {
 	capabilities := completeGenerateCapabilities(nil)
+	capabilities.CloudIdentity = validCapabilityComposition().Identity.Cloud
 	capabilities.CompositionFactory = func(_ context.Context, received V1RuntimeCapabilities) (durable.Composition, error) {
 		if received.CompositionFactory == nil {
 			t.Fatal("factory did not receive the snapshot capability bundle")
@@ -483,7 +492,7 @@ type capabilityMaterializerStub struct{ durable.BudgetLeaser }
 func validCapabilityComposition() durable.Composition {
 	return durable.Composition{
 		Identity: durable.StateIdentity{
-			Postgres:     durable.PostgresIdentity{Database: "llmtw", Schema: "worker", TablePrefix: "prod_"},
+			Cloud:        durable.CloudIdentity{Provider: "aws", Namespace: "requests", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}},
 			Redis:        durable.RedisIdentity{KeyPrefix: "llmtw", HashTag: "admission"},
 			ConfigDigest: [32]byte{1},
 		},
@@ -513,11 +522,11 @@ func TestDurableBuilderBindsCloudIdentityToBothPhases(t *testing.T) {
 			check := func(cap V1RuntimeCapabilities) {
 				phases++
 				c, ok := cap.DurableComposition()
-				if !ok || c.Identity.Cloud != expected || c.Identity.Postgres != (durable.PostgresIdentity{}) {
+				if !ok || c.Identity.Cloud != expected {
 					t.Fatal("phase lost cloud identity")
 				}
 			}
-			capabilities := completeDurableBuilderCapabilities(
+			capabilities := completeDurableBuilderCapabilities(t,
 				func(_ context.Context, cap V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 					check(cap)
 					return validBuilderGeneratePorts(nil), nil
@@ -535,7 +544,6 @@ func TestDurableBuilderBindsCloudIdentityToBothPhases(t *testing.T) {
 			capabilities.CompositionFactory = func(_ context.Context, cap V1RuntimeCapabilities) (durable.Composition, error) {
 				compositions++
 				c := validCapabilityComposition()
-				c.Identity.Postgres = durable.PostgresIdentity{}
 				c.Identity.Cloud = cap.CloudIdentity
 				c.Identity.ConfigDigest = cap.ConfigDigest
 				return c, nil
@@ -550,4 +558,17 @@ func TestDurableBuilderBindsCloudIdentityToBothPhases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func durableBuilderSnapshot(t *testing.T) *config.Snapshot {
+	t.Helper()
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }

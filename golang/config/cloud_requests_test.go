@@ -26,7 +26,7 @@ const cloudRequestSettings = `  requests:
 `
 
 func TestCloudRequestConfigStrictParsingAndSnapshotIsolation(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "state:\n", "state:\n"+cloudRequestSettings, 1)
+	data := string(exampleYAML(t))
 	snapshot, err := config.Compile(context.Background(), []byte(data), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -59,40 +59,21 @@ func TestCloudRequestConfigStrictParsingAndSnapshotIsolation(t *testing.T) {
 	}
 }
 
-func TestCloudRequestConfigDoesNotRequirePostgres(t *testing.T) {
+func TestDurableConfigRequiresCloudAndRejectsRemovedSQL(t *testing.T) {
 	data := string(exampleYAML(t))
-	start, end := strings.Index(data, "  postgres:\n"), strings.Index(data, "\nblob_store:")
-	if start < 0 || end <= start {
-		t.Fatal("missing example PostgreSQL section")
+	if _, err := config.Load([]byte(strings.Replace(data, cloudRequestSettings, "", 1))); err == nil {
+		t.Fatal("durable mode accepted missing cloud requests")
 	}
-	data = data[:start] + data[end:]
-	if _, err := config.Load([]byte(data)); err == nil {
-		t.Fatal("legacy durable mode accepted missing PostgreSQL")
+	if _, err := config.Load([]byte(strings.Replace(data, "state:\n", "state:\n  postgres:\n    database: old_worker\n", 1))); err == nil {
+		t.Fatal("obsolete SQL config was ignored")
 	}
-	data = strings.Replace(data, "state:\n", "state:\n"+cloudRequestSettings, 1)
-	snapshot, err := config.Compile(context.Background(), []byte(data), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Config().State.Requests == nil {
-		t.Fatal("cloud backend missing")
-	}
-	dormant := strings.Replace(data, "state:\n", "state:\n  postgres:\n    addresses: [invalid-address]\n    max_connections: -1\n", 1)
-	if _, err := config.Load([]byte(dormant)); err != nil {
-		t.Fatalf("unused PostgreSQL configuration blocked cloud mode: %v", err)
-	}
-	for _, test := range []struct{ name, old, replacement string }{
-		{"cloud alias", "request_table: requests", "request_table: missing"},
-		{"Redis persistence", "required_persistence: aof_and_rdb", "required_persistence: none"},
-		{"Redis TLS", "enabled: true\n      server_name: redis.example.internal", "enabled: false\n      server_name: redis.example.internal"},
+	for _, test := range []struct{ old, replacement string }{
+		{"request_table: requests", "request_table: missing"},
+		{"required_persistence: aof_and_rdb", "required_persistence: none"},
+		{"enabled: true\n      server_name: redis.example.internal", "enabled: false\n      server_name: redis.example.internal"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			if !strings.Contains(data, test.old) {
-				t.Fatalf("missing example setting %q", test.old)
-			}
-			if _, err := config.Load([]byte(strings.Replace(data, test.old, test.replacement, 1))); err == nil {
-				t.Fatal("cloud mode accepted invalid required dependency")
-			}
-		})
+		if _, err := config.Load([]byte(strings.Replace(data, test.old, test.replacement, 1))); err == nil {
+			t.Fatalf("accepted invalid dependency %s", test.old)
+		}
 	}
 }

@@ -120,7 +120,7 @@ Reload changes the dynamic request snapshot (routes, catalogs, budgets, and
 provider/state clients). The environment, listener addresses, shutdown and
 dependency-monitor settings, inline Activity payload limit, Temporal
 connection/task-queue and worker settings, telemetry process wiring, Redis key
-prefix, PostgreSQL database/schema/table prefix, and endpoint outbound-host
+prefix, cloud request provider, namespace and table/blob aliases, and endpoint outbound-host
 allowlists are established at startup and require a restart. A replacement
 that changes one is rejected before replacement clients are built.
 Environment variables are not re-read during reload.

@@ -12,15 +12,13 @@ READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e8
 READINESS_REDIS_CONTAINER_PREFIX ?= llmtw-readiness-integration
 REDIS_INTEGRATION_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
 REDIS_INTEGRATION_CONTAINER_PREFIX ?= llmtw-redis-integration
-POSTGRES_INTEGRATION_IMAGE ?= postgres:17.5-alpine@sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa
-POSTGRES_INTEGRATION_CONTAINER_PREFIX ?= llmtw-postgres-integration
 IMAGE_VERIFY_TAG ?= llm-temporal-worker:image-verify
 IMAGE_VERIFY_VERSION ?= image-verify
 IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration postgres-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -160,21 +158,6 @@ redis-integration:
 		$(GO) test -count=1 ./storage/conformance ./storage/memory ./storage/redis; \
 		LLMTW_REDIS_ADDR="127.0.0.1:$$port" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_CONTAINER_PREFIX="$(REDIS_INTEGRATION_CONTAINER_PREFIX)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; \
 		echo "redis-integration passed (isolated pinned Redis)"
-
-# Runs the PostgreSQL namespace/schema gate against a fresh PostgreSQL 17
-# service. The schema installer is the only mutating operation; the container
-# and its temporary data are removed on every exit.
-postgres-integration:
-	@command -v docker >/dev/null 2>&1 || { echo "postgres-integration requires Docker" >&2; exit 2; }
-	@docker info >/dev/null 2>&1 || { echo "postgres-integration requires a running Docker daemon" >&2; exit 2; }
-	@set -eu; \
-		container="$(POSTGRES_INTEGRATION_CONTAINER_PREFIX)-$$(date +%s)-$$$$"; \
-		cleanup() { docker rm -f "$$container" >/dev/null 2>&1 || true; }; \
-		trap cleanup EXIT HUP INT TERM; \
-		docker run --detach --name "$$container" --env POSTGRES_USER=llmtw --env POSTGRES_PASSWORD=llmtw --env POSTGRES_DB=llm_worker --publish 127.0.0.1::5432 "$(POSTGRES_INTEGRATION_IMAGE)" >/dev/null; \
-		port="$$(docker inspect --format '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}' "$$container")"; \
-		for attempt in $$(seq 1 30); do docker exec "$$container" pg_isready -U llmtw -d llm_worker >/dev/null 2>&1 && break; sleep 1; done; \
-		LLMTW_POSTGRES_ADDR="127.0.0.1:$$port" LLMTW_POSTGRES_DATABASE=llm_worker LLMTW_POSTGRES_SCHEMA=llm_worker $(GO) test -count=1 ./storage/postgres
 
 # Builds a fresh local image from the checked-out revision, then delegates all
 # runtime assertions to the Docker-backed integration test. The test runs the

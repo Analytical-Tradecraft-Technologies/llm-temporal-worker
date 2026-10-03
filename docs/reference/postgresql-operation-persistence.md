@@ -1,5 +1,9 @@
 # PostgreSQL operation persistence
 
+> Historical reference: the worker SQL implementation and its maintenance CLI
+> have been removed. These SQL procedures are not supported. Use
+> [cloud request storage](cloud-request-repository.md) for current persistence.
+
 Task 5 adds the durable one-shot operation repository. The repository is
 implemented and integration-tested, but it is not yet wired into the
 production Temporal factory. `storage/postgres.OperationRepository`

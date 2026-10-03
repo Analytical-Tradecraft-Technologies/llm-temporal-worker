@@ -117,7 +117,6 @@ func newCloudAdmissionFixture(t *testing.T, kind string, configure ...func(*budg
 	f.leaser = &admissionLeaser{BudgetLeaser: reference}
 	composition := validCapabilityComposition()
 	composition.Identity.ConfigDigest = f.cap.ConfigDigest
-	composition.Identity.Postgres = durable.PostgresIdentity{}
 	composition.Identity.Cloud = durable.CloudIdentity{Provider: "aws", Namespace: "requests-v1", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}}
 	composition.Materializer = f.leaser
 	f.cap.CloudIdentity, f.cap.composition = composition.Identity.Cloud, &composition

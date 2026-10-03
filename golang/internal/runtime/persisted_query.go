@@ -1,9 +1,9 @@
 package runtime
 
 // This file composes the storage-neutral typed query contract with the
-// Redis provider state and remaining SQL spend pages. Budget status is exposed only when a snapshot-scoped
-// Redis generation reader is supplied. Spend is read from the PostgreSQL
-// ledgers when an authenticated deployment supplies the scope-ID resolver.
+// Redis provider state. Budget status is exposed only when a snapshot-scoped
+// Redis generation reader is supplied. Spend summary remains unsupported unless
+// a deployment supplies an authenticated aggregation reader.
 
 import (
 	"context"
