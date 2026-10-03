@@ -44,7 +44,7 @@ type attemptRetirement struct {
 
 // BeginRequestAttempt creates the first attempt when previous is empty, or
 // replaces exactly previous after its unused quote expires or its paid outcome
-// becomes unknown. Retrying an uncertain write returns the same winning child.
+// becomes unknown, or after a settled retryable failure. Retrying an uncertain write returns the same winning child.
 // The original request and materialized preparation never change. Child
 // discovery is committed before the root references it and before admission.
 func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootID, previous RequestID, now time.Time) (RequestAttempt, error) {
@@ -270,6 +270,11 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 				(retired.Reason != "unused_quote_expired" && retired.Reason != "outcome_unknown") {
 				return ErrCorrupt
 			}
+			return r.repairBudgetPlanIndex(ctx, record)
+		}
+		// Failed children are immutable. Settlement and retry classification must
+		// already have been saved before allocating a replacement reservation.
+		if execution != nil && execution.Stage == ExecutionFailed && execution.Settled && execution.Failure.Retryable && !now.Before(execution.Failure.RetryNotBefore) && record.Status == StatusFailed {
 			return r.repairBudgetPlanIndex(ctx, record)
 		}
 		if executionFinalizing(progress) || now.Before(record.UpdatedAt) {

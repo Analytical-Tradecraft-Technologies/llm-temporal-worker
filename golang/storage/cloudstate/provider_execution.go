@@ -32,8 +32,10 @@ const (
 // ExecutionFailure deliberately excludes messages, diagnostic causes and raw
 // provider metadata. The encrypted response/job ID remains internal too.
 type ExecutionFailure struct {
-	Code     provider.Code              `json:"code"`
-	Dispatch provider.DispatchCertainty `json:"dispatch"`
+	Code           provider.Code              `json:"code"`
+	Dispatch       provider.DispatchCertainty `json:"dispatch"`
+	Retryable      bool                       `json:"retryable,omitempty"`
+	RetryNotBefore time.Time                  `json:"retry_not_before,omitempty"`
 }
 
 // ProviderExecution is one provider attempt, never permission to submit it again.
@@ -111,6 +113,16 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 		}
 	default:
 		return ErrInvalid
+	}
+	if execution.Failure != nil {
+		failure := execution.Failure
+		if failure.Retryable {
+			if execution.Stage != ExecutionFailed || !validTime(failure.RetryNotBefore) || failure.RetryNotBefore.Before(execution.CompletedAt) {
+				return ErrInvalid
+			}
+		} else if !failure.RetryNotBefore.IsZero() {
+			return ErrInvalid
+		}
 	}
 	if execution.Stage != ExecutionSucceeded && execution.Response != nil {
 		return ErrInvalid

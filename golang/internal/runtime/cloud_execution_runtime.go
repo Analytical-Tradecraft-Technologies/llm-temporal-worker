@@ -24,6 +24,7 @@ type cloudExecutionStore interface {
 	CloudProviderExecutionStore
 	BeginRequestAttempt(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestID, time.Time) (cloudstate.RequestAttempt, error)
 	LoadRequestAttempt(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestAttempt, error)
+	FinishRequestFailure(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestID, llm.ExecutionResultV1, time.Time) error
 	CacheFingerprint(cache.Input) (cache.Fingerprint, error)
 }
 
@@ -154,6 +155,21 @@ func (r *CloudExecutionRuntime) advance(ctx context.Context, p PreparedCloudRequ
 			if err != nil {
 				return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 			}
+		} else if step == cloudAcquire && saved.Execution.Stage == cloudstate.ExecutionFailed && saved.Execution.Failure.Retryable {
+			result, err := r.execution.Resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay)
+			if err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
+			if _, err := r.finishProviderStep(ctx, p, attempt, result); err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
+			if r.now().Before(saved.Execution.Failure.RetryNotBefore) {
+				return cloudStatus(p, llm.ExecutionBudgetWait, saved.Execution.Failure.RetryNotBefore.Sub(r.now())), nil
+			}
+			attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
+			if err != nil {
+				return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+			}
 		} else {
 			result := r.execution.result(saved)
 			if step == cloudPoll || step == cloudSubmit || saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed {
@@ -250,11 +266,15 @@ func (r *CloudExecutionRuntime) finishProviderStep(ctx context.Context, p Prepar
 		if err := r.finishTerminalFill(ctx, p, attempt, result.Saved, outcome); err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
+		failure := r.providerResult(p, result)
 		if invalidSummary {
-			failure := cloudStatus(p, llm.ExecutionFailed, 0)
+			failure = cloudStatus(p, llm.ExecutionFailed, 0)
 			failure.FailureCode = "incomplete_response"
-			return failure, nil
 		}
+		if err := r.store.FinishRequestFailure(ctx, p.Record.Request.Scope, p.Record.Request.ID, attempt.ID, failure, r.now()); err != nil {
+			return llm.ExecutionResultV1{}, cloudRuntimeError(err, true)
+		}
+		return failure, nil
 	}
 	return r.providerResult(p, result), nil
 }
@@ -274,6 +294,7 @@ func (r *CloudExecutionRuntime) providerResult(p PreparedCloudRequest, result Pr
 	case cloudstate.ExecutionFailed:
 		failure := cloudStatus(p, llm.ExecutionFailed, 0)
 		failure.FailureCode = "provider_error"
+		failure.Retryable = result.Saved.Execution.Failure.Retryable
 		return failure
 	case cloudstate.ExecutionUnknown:
 		if r.now().Before(result.Saved.Execution.RecoverAfter) {
@@ -287,6 +308,15 @@ func (r *CloudExecutionRuntime) providerResult(p PreparedCloudRequest, result Pr
 func (r *CloudExecutionRuntime) replay(ctx context.Context, p PreparedCloudRequest) (llm.ExecutionResultV1, bool, error) {
 	var data []byte
 	var err error
+	if p.Record.Status == cloudstate.StatusFailed {
+		var progress struct {
+			Failure llm.ExecutionResultV1 `json:"execution_failure"`
+		}
+		if json.Unmarshal(p.Record.Progress, &progress) != nil || progress.Failure.Validate() != nil || progress.Failure.State != llm.ExecutionFailed || progress.Failure.Retryable || progress.Failure.RequestID != string(p.Record.Request.ID) || progress.Failure.Kind != p.Record.Request.Kind {
+			return llm.ExecutionResultV1{}, true, cloudRuntimeError(cloudstate.ErrCorrupt, false)
+		}
+		return progress.Failure, true, nil
+	}
 	if p.Record.Status == cloudstate.StatusCompleted {
 		var result cloudRuntimeResult
 		if json.Unmarshal(p.Record.Progress, &result) != nil || result.Version != 1 {

@@ -90,7 +90,7 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	if record.Request.Scope != scope || record.Request.Kind != kind || record.Request.RequestIndex != index {
 		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	if record.Status == cloudstate.StatusCompleted {
+	if record.Status == cloudstate.StatusCompleted || record.Status == cloudstate.StatusFailed {
 		return p.restore(ctx, record, cloudstate.RequestPreparation{}, checkpointScope)
 	}
 	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
@@ -145,7 +145,7 @@ func (p *CloudRequestPreparation) Load(ctx context.Context, reference llm.Execut
 	if record.Request.ID != cloudstate.RequestID(reference.RequestID) || record.Request.Scope != scope {
 		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	if record.Status == cloudstate.StatusCompleted {
+	if record.Status == cloudstate.StatusCompleted || record.Status == cloudstate.StatusFailed {
 		return p.restore(ctx, record, cloudstate.RequestPreparation{}, checkpointScope)
 	}
 	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
@@ -192,7 +192,7 @@ func (p *CloudRequestPreparation) restore(ctx context.Context, record cloudstate
 	if record.Request.Scope != (cloudstate.Scope{Tenant: caller.Tenant, Project: caller.Project}) || record.Request.RequestIndex != index {
 		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	if record.Status == cloudstate.StatusCompleted {
+	if record.Status == cloudstate.StatusCompleted || record.Status == cloudstate.StatusFailed {
 		return result, nil
 	}
 	if record.Status != cloudstate.StatusRunning && record.Status != cloudstate.StatusProviderPending && record.Status != cloudstate.StatusOutcomeUnknown {
