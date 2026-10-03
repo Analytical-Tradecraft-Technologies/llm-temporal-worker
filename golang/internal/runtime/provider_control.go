@@ -184,6 +184,9 @@ type V1RuntimeCapabilities struct {
 	BudgetEstimator           budget.Estimator
 	MaxBudgetBucketsPerWindow int
 	Checkpoints               CheckpointCapabilities
+	// CheckpointKeyring is owned by this snapshot and shared by verification
+	// and publication. It must never be captured from a different reload.
+	CheckpointKeyring *state.Keyring
 	// Budgets is the Redis authority for reserve, claim and settlement.
 	// Exposing it does not by itself activate V1 composition.
 	Budgets durablestore.BudgetLeaser
