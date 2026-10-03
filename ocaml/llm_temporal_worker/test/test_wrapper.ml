@@ -149,9 +149,9 @@ let () =
   if make_value.tool_policy <> { choice = Auto; parallel = false } then failwith "Request.make tool policy default";
   if make_value.output <> None || make_value.sampling <> None || make_value.reasoning <> None || make_value.continuation <> None then failwith "Request.make optional defaults";
   if make_value.extensions <> [] then failwith "Request.make extensions default";
-  assert_equal "llm.generate.v1" (Temporal.Activity.name generate_activity);
+  assert_equal "llm.generate.workflow.v1" (Temporal.Workflow.name generate_workflow);
   assert_equal "llm.generate.workflow.v1" (Temporal.Workflow.name (workflow ()));
-  if Temporal.Activity.implementation generate_activity <> None then failwith "remote Go activity has an OCaml implementation";
+  if Temporal.Workflow.implementation generate_workflow <> None then failwith "remote Go activity has an OCaml implementation";
   if Temporal.Activity.Retry_policy.maximum_attempts activity_retry_policy <> 1 then
     failwith "activity retry policy must permit exactly one attempt";
   if Temporal.Duration.to_ms (Temporal.Activity.Retry_policy.initial_interval activity_retry_policy) <> 1L then
@@ -494,7 +494,7 @@ let () =
   let dispatch ?task_queue activity (request : generate_request) =
     incr calls;
     assert_equal "go-activities" (Temporal_task_queue.to_string (Option.get task_queue));
-    assert_equal activity_name (Temporal.Activity.name activity);
+    assert_equal workflow_name (Temporal.Workflow.name activity);
     assert_equal "legacy-v1" (Operation_key.to_string request.operation_key);
     if request.parent <> None then failwith "legacy compatibility request unexpectedly has a parent";
     let payload = expect_ok (Temporal.Codec.encode generate_v1_request_codec request) in
@@ -520,7 +520,7 @@ let () =
   let default_queue_dispatch ?task_queue activity (request : generate_request) =
     incr default_queue_calls;
     if task_queue <> None then failwith "omitted task queue must remain omitted";
-    assert_equal activity_name (Temporal.Activity.name activity);
+    assert_equal workflow_name (Temporal.Workflow.name activity);
     assert_equal "legacy-v1" (Operation_key.to_string request.operation_key);
     Ok (generate_response_value request)
   in
@@ -574,7 +574,7 @@ let () =
                         frequency_penalty = None; stop_sequences = None } }
   in
   let decimal_dispatch ?task_queue:_ activity request =
-    if Temporal.Activity.name activity <> activity_name then
+    if Temporal.Workflow.name activity <> workflow_name then
       failwith "legacy temperature dispatched the wrong Activity";
     (match request.settings_patch.temperature with
      | Set value when String.equal (Decimal.to_string value) "0.0000000001" -> ()
@@ -607,7 +607,7 @@ let () =
    | Ok _ -> failwith "legacy compatibility silently changed disabled reasoning");
   if !rejected_calls <> 0 then failwith "disabled-reasoning rejection dispatched an Activity";
   let mismatched_dispatch ?task_queue:_ activity request =
-    if Temporal.Activity.name activity <> activity_name then
+    if Temporal.Workflow.name activity <> workflow_name then
       failwith "legacy compatibility dispatched the wrong Activity for mismatch test";
     Ok { (generate_response_value request) with
          operation_key = operation_key "different-operation" }

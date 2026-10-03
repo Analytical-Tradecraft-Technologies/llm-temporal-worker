@@ -35,7 +35,7 @@ let generation_response (request : generate_request) =
       kind = Generation_checkpoint;
       depth = (match request.parent with None -> 0l | Some _ -> 1l);
     };
-    cache = { disposition = Cache_disabled; variant = 0l; entry_age_seconds = None };
+    cache = { disposition = Cache_disabled; variant = (match request.cache with None -> 0l | Some c -> c.variant); entry_age_seconds = None };
     route = None;
     usage = None;
     cost = Exact_cost {
@@ -46,7 +46,7 @@ let generation_response (request : generate_request) =
     diagnostics = [] }
 
 let generate_dispatch ?task_queue:_ activity (request : generate_request) =
-  if not (String.equal (Temporal.Activity.name activity) "llm.generate.v1") then
+  if not (String.equal (Temporal.Workflow.name activity) "llm.generate.workflow.v1") then
     failwith "Conversation dispatched the wrong Activity";
   Ok (generation_response request)
 
@@ -60,7 +60,7 @@ let compaction_response (request : compact_request) =
       kind = Compaction_checkpoint;
       depth = 2l;
     };
-    cache = { disposition = Cache_disabled; variant = 0l; entry_age_seconds = None };
+    cache = { disposition = Cache_disabled; variant = (match request.cache with None -> 0l | Some c -> c.variant); entry_age_seconds = None };
     provenance = None;
     usage = None;
     cost = Exact_cost {
@@ -71,7 +71,7 @@ let compaction_response (request : compact_request) =
     diagnostics = [] }
 
 let compact_dispatch ?task_queue:_ activity (request : compact_request) =
-  if not (String.equal (Temporal.Activity.name activity) "llm.compact.v1") then
+  if not (String.equal (Temporal.Workflow.name activity) "llm.compact.workflow.v1") then
     failwith "Conversation dispatched the wrong Activity";
   Ok (compaction_response request)
 
@@ -122,11 +122,11 @@ let run_query query =
       query))
 
 (* This is deliberately a compile-only example of Temporal fan-out.  It is
-   not called by this smoke executable because Activity.start must run inside a
+   not called by this smoke executable because child workflow start must run inside a
    Workflow activation. *)
-let future_fanout (conversation : Conversation.t) =
+let future_fanout ~task_queue ~caller_id (conversation : Conversation.t) =
   let start suffix =
-    Conversation.start_respond
+    Conversation.start_respond ~task_queue ~id:(caller_id ^ ":" ^ suffix)
       ~operation_key:(operation suffix)
       ~append:[ message suffix ]
       (Conversation.fork conversation)

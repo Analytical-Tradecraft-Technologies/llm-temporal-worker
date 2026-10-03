@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-readonly temporal_sdk_commit="87d61c0639bf232b67e6d5a0f397d990e2468eb4"
+readonly temporal_sdk_commit="74b1a74805306ed3e5763f7ea2c14cd2a431a7e1"
 
 fail() {
   printf '%s\n' "prefetch-temporal-sdk-cargo: $*" >&2

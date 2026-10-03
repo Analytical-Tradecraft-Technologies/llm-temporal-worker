@@ -246,7 +246,7 @@ let accept_generate_response conversation (request : generate_request)
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (generate_request, generate_response) Temporal.Activity.t ->
+  (generate_request, generate_response) Temporal.Workflow.t ->
   generate_request -> (generate_response, Temporal.Error.t) result
 
 let respond_with ?task_queue ~dispatch ?settings_patch ?cache ~operation_key ~append conversation =
@@ -258,15 +258,13 @@ let respond_with ?task_queue ~dispatch ?settings_patch ?cache ~operation_key ~ap
       | Error error -> Error error
       | Ok response -> accept_generate_response conversation request response
 
-let activity_dispatch ?task_queue activity input =
-  Temporal.Activity.execute
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:Llm_temporal_invocation.activity_retry_policy activity input
+let respond ~task_queue ~id ?settings_patch ?cache ~operation_key ~append conversation =
+  let dispatch ?task_queue:_ _workflow input =
+    Llm_temporal_invocation.invoke_generate ~task_queue ~id input
+  in
+  respond_with ~task_queue ~dispatch ?settings_patch ?cache ~operation_key ~append conversation
 
-let respond ?task_queue ?settings_patch ?cache ~operation_key ~append conversation =
-  respond_with ?task_queue ~dispatch:activity_dispatch ?settings_patch ?cache ~operation_key ~append conversation
-
-let start_respond ?task_queue ?settings_patch ?cache ~operation_key ~append conversation =
+let start_respond ~task_queue ~id ?settings_patch ?cache ~operation_key ~append conversation =
   let request = to_request ?settings_patch ?cache ~operation_key ~append conversation in
   match validate_cache_temperature request.cache request.settings_patch with
   | Error message ->
@@ -274,10 +272,7 @@ let start_respond ?task_queue ?settings_patch ?cache ~operation_key ~append conv
       Temporal.Future.map (fun _ -> Error error) (Temporal.Future.all [])
   | Ok () ->
       let future =
-        Temporal.Activity.start
-          ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-          ~retry_policy:Llm_temporal_invocation.activity_retry_policy
-          Llm_temporal_invocation.generate_v1_activity request
+        Llm_temporal_invocation.start_generate ~task_queue ~id request
       in
       Temporal.Future.map
         (accept_generate_response conversation request)
@@ -285,7 +280,7 @@ let start_respond ?task_queue ?settings_patch ?cache ~operation_key ~append conv
 
 type compact_dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (compact_request, compaction_response) Temporal.Activity.t ->
+  (compact_request, compaction_response) Temporal.Workflow.t ->
   compact_request -> (compaction_response, Temporal.Error.t) result
 
 let compact_request ?policy ?cache ~operation_key conversation =
@@ -322,24 +317,19 @@ let compact_with ?task_queue ~dispatch ?policy ?cache ~operation_key conversatio
       | Error error -> Error error
       | Ok response -> accept_compaction_response conversation request response
 
-let compact_dispatch ?task_queue activity input =
-  Temporal.Activity.execute
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:Llm_temporal_invocation.activity_retry_policy activity input
+let compact ~task_queue ~id ?policy ?cache ~operation_key conversation =
+  let dispatch ?task_queue:_ _workflow input =
+    Llm_temporal_invocation.invoke_compact_v1 ~task_queue ~id input
+  in
+  compact_with ~task_queue ~dispatch ?policy ?cache ~operation_key conversation
 
-let compact ?task_queue ?policy ?cache ~operation_key conversation =
-  compact_with ?task_queue ~dispatch:compact_dispatch ?policy ?cache ~operation_key conversation
-
-let start_compact ?task_queue ?policy ?cache ~operation_key conversation =
+let start_compact ~task_queue ~id ?policy ?cache ~operation_key conversation =
   match compact_request ?policy ?cache ~operation_key conversation with
   | Error error ->
       Temporal.Future.map (fun _ -> Error error) (Temporal.Future.all [])
   | Ok request ->
       let future =
-        Temporal.Activity.start
-          ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-          ~retry_policy:Llm_temporal_invocation.activity_retry_policy
-          Llm_temporal_invocation.compact_v1_activity request
+        Llm_temporal_invocation.start_compact_v1 ~task_queue ~id request
       in
       Temporal.Future.map
         (accept_compaction_response conversation request)
