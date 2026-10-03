@@ -176,6 +176,12 @@ func TestCloudExecutionRuntimeGeneration(t *testing.T) {
 					if hit.Generate.Cache.Disposition != "hit" || hit.RequestID == result.RequestID || hit.Generate.Checkpoint.Handle == result.Generate.Checkpoint.Handle || f.submits.Load() != 1 {
 						t.Fatal("cache hit reused caller identity or dispatched")
 					}
+					for shard := range cloudstate.PendingShards {
+						page, err := f.repository.ListPending(context.Background(), shard, 100, "")
+						if err != nil || len(page.Requests) != 0 {
+							t.Fatalf("cache hit left unused pending attempts: %+v, err=%v", page.Requests, err)
+						}
+					}
 				}
 			})
 		}

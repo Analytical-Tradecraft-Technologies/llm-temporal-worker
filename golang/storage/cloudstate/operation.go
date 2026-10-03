@@ -132,6 +132,9 @@ func (r *Repository) CompleteOperation(ctx context.Context, scope Scope, id Requ
 		if record.Status != StatusRunning {
 			return Record{}, contracts.ErrConflict
 		}
+		if err := r.completeRequestAttempt(ctx, record, now); err != nil {
+			return Record{}, err
+		}
 		if now.Before(record.UpdatedAt) {
 			now = record.UpdatedAt
 		}
