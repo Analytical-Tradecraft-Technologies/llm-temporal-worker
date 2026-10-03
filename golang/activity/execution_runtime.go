@@ -33,37 +33,37 @@ func (activities *Activities) PrepareExecutionV1(ctx context.Context, request ll
 	if request.Generate != nil {
 		kind = "generate"
 	}
-	return executionStep(activities, ctx, request, kind, "", func(runtime ExecutionRuntime, ctx context.Context) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, kind, "", func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.PrepareExecutionV1(ctx, request)
 	})
 }
 func (activities *Activities) AcquireBudgetV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(activities, ctx, request, "", request.RequestID, func(runtime ExecutionRuntime, ctx context.Context) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "", request.RequestID, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.AcquireBudgetV1(ctx, request)
 	})
 }
 func (activities *Activities) GenerateStepV1(ctx context.Context, request llm.GenerateRequestV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(activities, ctx, request, "generate", "", func(runtime ExecutionRuntime, ctx context.Context) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "generate", "", func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.GenerateStepV1(ctx, request)
 	})
 }
 func (activities *Activities) CompactStepV1(ctx context.Context, request llm.CompactRequestV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(activities, ctx, request, "compact", "", func(runtime ExecutionRuntime, ctx context.Context) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "compact", "", func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.CompactStepV1(ctx, request)
 	})
 }
 func (activities *Activities) PollExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(activities, ctx, request, "", request.RequestID, func(runtime ExecutionRuntime, ctx context.Context) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "", request.RequestID, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.PollExecutionV1(ctx, request)
 	})
 }
 func (activities *Activities) CompleteExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(activities, ctx, request, "", request.RequestID, func(runtime ExecutionRuntime, ctx context.Context) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "", request.RequestID, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.CompleteExecutionV1(ctx, request)
 	})
 }
 
-func executionStep[T any](activities *Activities, ctx context.Context, request T, kind, requestID string, dispatch func(ExecutionRuntime, context.Context) (llm.ExecutionResultV1, error)) (*llm.ExecutionResultV1, error) {
+func executionStep[T any](ctx context.Context, activities *Activities, request T, kind, requestID string, dispatch func(context.Context, ExecutionRuntime) (llm.ExecutionResultV1, error)) (*llm.ExecutionResultV1, error) {
 	marshal := func(value T, limits PayloadLimits) ([]byte, error) { return marshalBounded(value, limits) }
 	if err := validateV1Request(ctx, marshal, request, activities); err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func executionStep[T any](activities *Activities, ctx context.Context, request T
 	var response llm.ExecutionResultV1
 	err := activities.runV1(ctx, func(ctx context.Context) error {
 		var err error
-		response, err = dispatch(runtime, ctx)
+		response, err = dispatch(ctx, runtime)
 		if err != nil {
 			return err
 		}
