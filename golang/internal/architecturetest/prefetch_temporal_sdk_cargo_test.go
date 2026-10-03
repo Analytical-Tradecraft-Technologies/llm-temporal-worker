@@ -10,7 +10,7 @@ import (
 
 func TestWorkflowTemporalSDKCargoPrefetchVerifiesPinnedCommitAndFetchesLocked(t *testing.T) {
 	const (
-		expectedCommit = "89ed6b5b21f17f186a639b221a9fec1a7e39c3e3"
+		expectedCommit = "74b1a74805306ed3e5763f7ea2c14cd2a431a7e1"
 	)
 	tempDir := t.TempDir()
 	fakeBin := filepath.Join(tempDir, "bin")
@@ -39,7 +39,7 @@ func TestWorkflowTemporalSDKCargoPrefetchVerifiesPinnedCommitAndFetchesLocked(t 
 	writeFakeCommand(t, fakeBin, "git", `
 printf 'git %s\n' "$*" >> "$FAKE_LOG"
 [[ "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]
-printf '%s\n' "${FAKE_GIT_COMMIT:-89ed6b5b21f17f186a639b221a9fec1a7e39c3e3}"
+printf '%s\n' "${FAKE_GIT_COMMIT:-74b1a74805306ed3e5763f7ea2c14cd2a431a7e1}"
 `)
 	writeFakeCommand(t, fakeBin, "cargo", `
 if [[ -f "${GITHUB_ENV}" ]] && grep -Fxq 'CARGO_NET_OFFLINE=true' "${GITHUB_ENV}"; then

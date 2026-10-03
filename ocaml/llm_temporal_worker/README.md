@@ -38,7 +38,7 @@ opam install --yes llm-temporal-ocaml
 ```
 
 Its metadata pins `temporal-sdk` to the validated child-workflow-routing SDK commit
-`89ed6b5b21f17f186a639b221a9fec1a7e39c3e3`. Commit an application lock file
+`74b1a74805306ed3e5763f7ea2c14cd2a431a7e1`. Commit an application lock file
 after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
