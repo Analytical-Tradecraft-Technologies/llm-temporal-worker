@@ -263,6 +263,19 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	}
 	if event.Availability == AvailabilityAvailable && event.Credit == CreditOK && event.Billing == BillingOK {
 		status.ConsecutiveDefiniteFailures = 0
+		status.Circuit = CircuitClosed
+	} else if event.Availability == AvailabilityUnavailable || event.Availability == AvailabilityDegraded {
+		// Unknown observations are not evidence of a definite endpoint failure.
+		// Bound the counter because this projection can live across many calls.
+		if status.ConsecutiveDefiniteFailures < 3 {
+			status.ConsecutiveDefiniteFailures++
+		}
+		if status.ConsecutiveDefiniteFailures >= 3 {
+			status.Circuit = CircuitOpen
+		}
+	}
+	if event.SafeErrorCode == "authentication" || event.SafeErrorCode == "permission_denied" || event.SafeErrorCode == "configuration" || event.Credit == CreditExhausted || event.Billing == BillingIssue {
+		status.Circuit = CircuitOpen
 	}
 	status.ConfigDigest, status.ConfigEpoch = event.ConfigDigest, event.ConfigEpoch
 	status.RouteID, status.EndpointID = event.RouteID, event.EndpointID
