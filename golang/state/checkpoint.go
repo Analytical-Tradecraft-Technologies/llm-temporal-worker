@@ -494,7 +494,7 @@ func cloneItems(values []llm.Item) []llm.Item {
 // Keep this copy local to the state package so callers still receive fully
 // detached slices and maps without paying serialization and decoding costs.
 func cloneItem(item llm.Item) llm.Item {
-	switch value := item.(type) {
+	switch value := itemValue(item).(type) {
 	case llm.Message:
 		value.Content = cloneParts(value.Content)
 		return value

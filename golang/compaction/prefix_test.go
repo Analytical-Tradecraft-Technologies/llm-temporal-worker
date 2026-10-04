@@ -148,3 +148,29 @@ func containsToolResult(items []llm.Item, id string) bool {
 	}
 	return false
 }
+
+func TestSelectPrefixPreservesPointerToolFrontiers(t *testing.T) {
+	items := []llm.Item{
+		&llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
+		&llm.ToolResult{CallID: "a"},
+	}
+	for _, test := range []struct {
+		name           string
+		length, retain int
+	}{
+		{"open", 1, 0}, {"resolved retained", 2, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := SelectPrefix(items[:test.length], test.retain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Prefix) != 0 || !reflect.DeepEqual(got.Retained, items[:test.length]) {
+				t.Fatalf("split pointer tool exchange: %#v", got)
+			}
+		})
+	}
+	if _, err := SelectPrefix(items[1:], 0); err == nil {
+		t.Fatal("accepted orphan pointer result")
+	}
+}
