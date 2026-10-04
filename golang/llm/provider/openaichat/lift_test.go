@@ -126,3 +126,41 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 		t.Fatalf("invalid JSON response error = %#v", err)
 	}
 }
+
+func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
+	for _, kind := range []llm.OutputKind{llm.OutputKindJSON, llm.OutputKindJSONSchema} {
+		format := llm.OutputFormat{Kind: kind}
+		if kind == llm.OutputKindJSONSchema {
+			format.Name = "answer"
+			format.Strict = true
+			format.Schema = json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
+		}
+
+		params, err := lowerRequest(llm.Request{Model: "chat-model", Output: &llm.OutputSpec{Format: format}}, testProfile(), "default")
+		if err != nil {
+			t.Fatal(err)
+		}
+		call := provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIChat, Model: "chat-model", OperationKey: "partial", ServiceClass: llm.ServiceClassStandard, SDKParams: params}
+		for _, reason := range []string{"length", "content_filter", "stop"} {
+			response := openai.ChatCompletion{ID: "partial", Model: "chat-model", ServiceTier: openai.ChatCompletionServiceTierDefault, Usage: openai.CompletionUsage{PromptTokens: 12, CompletionTokens: 4, TotalTokens: 16}, Choices: []openai.ChatCompletionChoice{{FinishReason: reason, Message: openai.ChatCompletionMessage{Content: `{"answer":`}}}}
+			result, err := testProfile().liftResponse(call, &response, "request")
+			if reason == "stop" {
+				if err == nil {
+					t.Fatalf("completed %s must still validate JSON", kind)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%s %s: %v", kind, reason, err)
+			}
+			want := llm.ResponseStatusLength
+			if reason == "content_filter" {
+				want = llm.ResponseStatusContentFiltered
+			}
+			text, ok := firstModelText(result.Output)
+			if result.Status != want || !ok || text != `{"answer":` || result.Usage.InputTokens != 12 || result.Usage.OutputTokens != 4 {
+				t.Fatalf("lost incomplete response: %+v", result)
+			}
+		}
+	}
+}

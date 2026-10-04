@@ -34,7 +34,7 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
-	if err := validateFinalJSON(call, output, hasToolCalls, hasRefusal); err != nil {
+	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
@@ -107,8 +107,10 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 // validateFinalJSON enforces the requested Responses text-format contract at
 // the semantic boundary. Provider-side structured-output promises are not a
 // substitute for validating the bytes that will enter Temporal history.
-func validateFinalJSON(call provider.Call, output []llm.Item, hasToolCalls, hasRefusal bool) error {
-	if hasToolCalls || hasRefusal || call.SDKParams == nil {
+func validateFinalJSON(call provider.Call, output []llm.Item, status llm.ResponseStatus, hasToolCalls, hasRefusal bool) error {
+	// Incomplete text is retained for callers and accounting, not validated
+	// as a promised complete JSON document. It remains ineligible for success caching.
+	if status != llm.ResponseStatusCompleted || hasToolCalls || hasRefusal || call.SDKParams == nil {
 		return nil
 	}
 	params, ok := call.SDKParams.(responses.ResponseNewParams)
