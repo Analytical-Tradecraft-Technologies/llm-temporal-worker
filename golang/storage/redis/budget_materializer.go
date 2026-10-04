@@ -42,6 +42,7 @@ type RedisBudgetMaterializer struct {
 	generation  durable.GenerationID
 	incarnation durable.IncarnationID
 	clock       func() time.Time
+	stream      bool
 }
 
 // RedisBudgetMaterializerOptions configures one snapshot-owned materializer.
@@ -57,6 +58,9 @@ type RedisBudgetMaterializerOptions struct {
 	GenerationID    durable.GenerationID
 	IncarnationID   durable.IncarnationID
 	Clock           func() time.Time
+	// CoordinationStreamEnabled publishes budget transitions in the same Redis
+	// invocation as their accounting changes. Events are hints, never grants.
+	CoordinationStreamEnabled bool
 }
 
 func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisBudgetMaterializer, error) {
@@ -96,7 +100,8 @@ func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisB
 	return &RedisBudgetMaterializer{
 		space: space, invoke: invoke, reader: reader, function: function,
 		generation: options.GenerationID, incarnation: options.IncarnationID,
-		clock: options.Clock,
+		clock:  options.Clock,
+		stream: options.CoordinationStreamEnabled,
 	}, nil
 }
 
@@ -196,7 +201,7 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 	if err != nil {
 		return durable.ReserveResult{}, fmt.Errorf("marshal Redis durable budget reservations: %w", err)
 	}
-	result, err := m.invoke.Run(ctx, m.function, keys,
+	result, err := m.run(ctx, keys,
 		"durable_reserve", string(request.GenerationID), string(m.incarnation), operation,
 		fingerprint, strconv.FormatInt(ttl, 10), m.clock().UTC().Format(time.RFC3339Nano), string(wire))
 	if err != nil {
@@ -293,7 +298,7 @@ func (m *RedisBudgetMaterializer) Claim(ctx context.Context, request durable.Cla
 	for _, reservation := range record.Reservations {
 		keys = append(keys, m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID), m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
 	}
-	result, err := m.invoke.Run(ctx, m.function, keys, "durable_claim", string(request.GenerationID), string(request.IncarnationID), string(request.OperationID))
+	result, err := m.run(ctx, keys, "durable_claim", string(request.GenerationID), string(request.IncarnationID), string(request.OperationID))
 	if err != nil {
 		return durable.ClaimReceipt{}, resolveMutationError(ctx, err)
 	}
@@ -392,7 +397,7 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 	if err != nil {
 		return fmt.Errorf("marshal Redis durable budget events: %w", err)
 	}
-	result, err := m.invoke.Run(ctx, m.function, keys,
+	result, err := m.run(ctx, keys,
 		"durable_reconcile", string(request.GenerationID), string(request.IncarnationID), string(request.OperationID), string(payload))
 	if err != nil {
 		return resolveMutationError(ctx, err)
@@ -419,6 +424,14 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 	default:
 		return mapDurableStatus(status)
 	}
+}
+
+func (m *RedisBudgetMaterializer) run(ctx context.Context, keys []string, args ...string) ([]any, error) {
+	if m.stream {
+		keys = append(keys, m.space.admissionPrefix()+BudgetEventsSuffix)
+		args = append(args, m.clock().UTC().Format(time.RFC3339Nano))
+	}
+	return m.invoke.Run(ctx, m.function, keys, args...)
 }
 
 func canonicalDurableReservations(operation durable.OperationID, generation durable.GenerationID, values []admission.WindowReservation, expiresAt, now time.Time) ([]durableReservation, error) {

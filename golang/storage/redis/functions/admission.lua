@@ -584,6 +584,66 @@ local DURABLE_SCHEMA = 'durable-budget/v1'
 local MAX_DURABLE_RESERVATIONS = 250
 local MAX_DURABLE_EVENTS = 250
 
+-- An optional final declared key and timestamp enable atomic Stream hints.
+-- Strip this envelope before interpreting the unchanged accounting contract.
+-- Validate Stream type and write permission before any bucket cleanup/write:
+-- Redis does not roll back earlier script writes after a command error.
+local durable_stream_key = nil
+local durable_stream_time = nil
+if ACTION == 'durable_reserve' or ACTION == 'durable_claim' or ACTION == 'durable_reconcile' then
+    local argument_count = ACTION == 'durable_reserve' and 8 or (ACTION == 'durable_claim' and 4 or 5)
+    if #ARGV == argument_count + 1 then
+        if not valid_invocation(4, 2 + 2 * MAX_DURABLE_RESERVATIONS, argument_count + 1) or #KEYS % 2 ~= 0 then
+            return {'invalid_request', ''}
+        end
+        local namespace = string.match(KEYS[1], '^(.*:{[^{}]+}:)durable%-budget%-operation:[a-f0-9]+$')
+        durable_stream_key = KEYS[#KEYS]
+        durable_stream_time = ARGV[#ARGV]
+        if not namespace or durable_stream_key ~= namespace .. 'budget:events' or
+            #durable_stream_time > 40 or not string.match(durable_stream_time, '^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d[.%d]*Z$') then
+            return {'invalid_request', ''}
+        end
+        for index = 1, #KEYS - 1 do
+            local digest = string.match(KEYS[index], ':([a-f0-9]+)$')
+            if not digest or #digest ~= 64 then return {'invalid_request', ''} end
+        end
+        local stream_type = redis.call('TYPE', durable_stream_key).ok
+        if (stream_type ~= 'none' and stream_type ~= 'stream') or
+            not redis.acl_check_cmd('XADD', durable_stream_key, '*', 'event', '{}') then
+            return {'state_unavailable', ''}
+        end
+        if stream_type == 'stream' then
+            local info = redis.call('XINFO', 'STREAM', durable_stream_key)
+            for index = 1, #info, 2 do
+                if info[index] == 'last-generated-id' and string.sub(info[index + 1], 1, 21) == '18446744073709551615-' then
+                    return {'state_unavailable', ''}
+                end
+            end
+        end
+        table.remove(KEYS)
+        table.remove(ARGV)
+    end
+end
+
+local function durable_publish(kind, operation_hash, bucket_key, revision, delta)
+    if not durable_stream_key then return end
+    -- Keep nano-USD integers exact: Lua cjson's default numeric precision can
+    -- truncate a large, otherwise safe integer. No raw application IDs enter
+    -- the Stream; both hashes are derived from the opaque accounting keys.
+    local event = '{"schema":"budget-event/v1","kind":' .. cjson.encode(kind) ..
+        ',"generation_id":' .. cjson.encode(ARGV[2]) ..
+        (operation_hash and ',"operation_hash":' .. cjson.encode(operation_hash) or '') ..
+        ',"member_hash":' .. cjson.encode(string.match(bucket_key, ':([a-f0-9]+)$')) ..
+        ',"revision":' .. string.format('%.0f', revision) ..
+        ',"nano_delta":' .. string.format('%.0f', delta) ..
+        ',"occurred_at":' .. cjson.encode(durable_stream_time) .. '}'
+    redis.call('XADD', durable_stream_key, '*', 'event', event)
+end
+
+local function durable_operation_hash()
+    return string.match(KEYS[1], ':([a-f0-9]+)$')
+end
+
 local function durable_int(value)
     local parsed = integer(value)
     if not parsed then return nil end
@@ -624,6 +684,9 @@ local function durable_cleanup(bucket_key, expiry_key, now)
             redis.call('HDEL', bucket_key, field, durable_limit_field(bucket))
         end
         redis.call('ZREM', expiry_key, member)
+        -- The expiry index has a request fingerprint, not an operation-key
+        -- digest. Invalidate the member without misidentifying an operation.
+        durable_publish('expire', nil, bucket_key, 0, value)
     end
     return true
 end
@@ -748,6 +811,7 @@ if ACTION == 'durable_reserve' then
                 events = {},
             }
             local encoded_denial = durable_encode(denial)
+            durable_publish('denial', durable_operation_hash(), bucket_key, 0, amount)
             return {'created', encoded_denial}
         end
         -- Include earlier buckets in this request without mutating shared state.
@@ -771,6 +835,7 @@ if ACTION == 'durable_reserve' then
         reservation.accounted_nano = '0'
         reservation.reservation_revision = 1
         reservation.status = 'reserved'
+        durable_publish('reserve', durable_operation_hash(), bucket_key, 1, amount)
     end
     local encoded = durable_encode(record)
     redis.call('SET', KEYS[1], encoded) -- Persistent tombstone prevents lease reuse.
@@ -804,6 +869,7 @@ if ACTION == 'durable_claim' then
         -- Claimed/ambiguous work retains its full reservation until settlement,
         -- including when its original budget bucket has rolled out of the window.
         redis.call('ZREM', KEYS[1 + index * 2], durable_expiry_member(record.fingerprint, reservation.bucket, reservation.amount_nano))
+        durable_publish('claim', durable_operation_hash(), KEYS[index * 2], 1, 0)
     end
     record.claimed = true
     redis.call('SET', KEYS[1], durable_encode(record))
@@ -944,6 +1010,9 @@ if ACTION == 'durable_reconcile' then
         reservation.reservation_revision = durable_int(event.reservation_revision)
         if event.kind == 'retain_ambiguous' or event.kind == 'finalize_unknown' then reservation.status = 'ambiguous' else reservation.status = 'finalized' end
         record.events[event.event_id] = event.fingerprint
+        local kind = item.new_total == 0 and 'release' or 'reconcile'
+        durable_publish(kind, durable_operation_hash(), item.bucket_key, reservation.reservation_revision,
+            math.abs(item.new_total - item.old_total))
     end
     local encoded = durable_encode(record)
     durable_restore_record(KEYS[1], encoded, 0)

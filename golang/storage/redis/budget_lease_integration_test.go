@@ -46,7 +46,10 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				t.Helper()
 				keys := liveKeyOptions("budget-lease")
 				cleanupLivePrefix(t, client, keys.Prefix)
-				m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: keys, GenerationID: "lease-gen", IncarnationID: "lease-inc"})
+				m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
+					Client: client, Mode: mode, Keys: keys, GenerationID: "lease-gen", IncarnationID: "lease-inc",
+					CoordinationStreamEnabled: true,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
