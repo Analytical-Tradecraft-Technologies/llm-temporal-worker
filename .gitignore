@@ -34,8 +34,10 @@ go.work.sum
 # retains only the validated redacted artifact; the working tree never tracks it.
 release-artifacts/
 
-# env file
+# Local credentials (including developer smoke-test credentials).
 .env
+.env.*
+!.env.example
 
 # Editor/IDE
 # .idea/
