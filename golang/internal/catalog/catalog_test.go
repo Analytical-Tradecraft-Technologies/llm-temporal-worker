@@ -59,6 +59,9 @@ entries:
 	if profile.OutputTokens != 32768 {
 		t.Fatalf("output ceiling = %d", profile.OutputTokens)
 	}
+	if profile.ContextTokens != 400000 {
+		t.Fatalf("context limit = %d", profile.ContextTokens)
+	}
 	if !ok {
 		t.Fatalf("profiles = %#v", catalog.Profiles)
 	}
@@ -101,6 +104,9 @@ profiles:
 	profile := catalog.Profiles["local-mock-v1"]
 	if profile.OutputTokens != 4096 {
 		t.Fatalf("output ceiling = %d", profile.OutputTokens)
+	}
+	if profile.ContextTokens != 32768 {
+		t.Fatalf("context limit = %d", profile.ContextTokens)
 	}
 	if !profile.Set.Supports(provider.FeatureText, true) || !profile.Set.Supports(provider.FeatureToolCall, true) {
 		t.Fatalf("compiled local features = %#v", profile.Set.Features)

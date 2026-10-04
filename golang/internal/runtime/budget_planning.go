@@ -99,6 +99,7 @@ func (planning *ProviderPlanning) NewBudgetPlanning(estimator budget.Estimator, 
 	}
 	providers := *planning
 	providers.outputLimit = estimator.MaxOutput
+	providers.contextEstimator = copyBudgetEstimator(estimator)
 	return &BudgetPlanning{providers: &providers, estimator: copyBudgetEstimator(estimator)}, nil
 }
 
@@ -199,7 +200,7 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 		return PlannedBudgetCall{}, false, ctx.Err()
 	}
 	if err != nil {
-		if errors.Is(err, budget.ErrUnusablePrice) {
+		if errors.Is(err, budget.ErrUnusablePrice) || errors.Is(err, budget.ErrContextLimit) {
 			return PlannedBudgetCall{}, false, nil
 		}
 		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeInvalidArgument)

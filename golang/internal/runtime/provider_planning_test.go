@@ -561,3 +561,46 @@ func TestProviderPlanningEnforcesOutputCeilingWithCustomPlanner(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderPlanningContextLimitFallbackBeforeCompile(t *testing.T) {
+	capabilities, source, adapter, request, _, _ := planningFixture()
+	model := source.value.Routes.Models["alias"]
+	model.Routes[0].ContextTokens = 29
+	larger := model.Routes[0]
+	larger.ID = "larger-context"
+	larger.ContextTokens = 30
+	larger.OutputTokens = 20
+	outputTooSmall := larger
+	outputTooSmall.ID = "small-output"
+	outputTooSmall.OutputTokens = 19
+	model.Routes = append(model.Routes, outputTooSmall, larger)
+	source.value.Routes.Models["alias"] = model
+	capabilities.BudgetEstimator.MaxOutput = 20
+	capabilities.BudgetEstimator.Tokenizer = func(llm.Request, routing.Candidate) (int64, error) { return 10, nil }
+	planning, err := capabilities.NewProviderPlanning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := planning.Generate(context.Background(), prepared)
+	if err != nil || result.Candidate.RouteID != larger.ID || len(adapter.inputs) != 1 {
+		t.Fatalf("fallback=%+v, compiles=%d, err=%v", result.Candidate, len(adapter.inputs), err)
+	}
+	capabilities.Planner = planningPlannerFunc(func(ctx context.Context, input routing.Input) (routing.Plan, error) {
+		plan, err := (routing.DeterministicPlanner{}).Plan(ctx, input)
+		for i := range plan.Candidates {
+			plan.Candidates[i].ContextTokens = 0
+		}
+		return plan, err
+	})
+	planning, err = capabilities.NewProviderPlanning(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planning.Generate(context.Background(), prepared); err == nil || len(adapter.inputs) != 1 {
+		t.Fatal("custom planner bypassed context limit")
+	}
+}

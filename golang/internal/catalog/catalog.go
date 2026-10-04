@@ -59,6 +59,7 @@ type CapabilityProfile struct {
 	Family                 provider.Family
 	Model                  string
 	VerifiedAt             time.Time
+	ContextTokens          int64
 	Set                    provider.CapabilitySet
 	ServiceClasses         []llm.ServiceClass
 	ServiceClassesDeclared bool

@@ -97,6 +97,9 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	if estimator.MaxReasoning > reasoningTokens {
 		reasoningTokens = estimator.MaxReasoning
 	}
+	if err := validateContextCounts(candidate.ContextTokens, inputTokens, outputTokens, reasoningTokens); err != nil {
+		return Estimate{}, err
+	}
 	cacheWrite := inputTokens
 	components := []struct {
 		component     pricing.PriceComponent

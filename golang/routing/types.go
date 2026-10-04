@@ -75,7 +75,10 @@ type Route struct {
 	ContextBytes   int
 	// OutputTokens is the model-specific output ceiling; zero means unspecified.
 	OutputTokens int64
-	Pinning      state.Pinning
+	// ContextTokens bounds estimated input plus reserved output and reasoning.
+	// Zero means no declared model limit. Admission evaluates this per candidate.
+	ContextTokens int64
+	Pinning       state.Pinning
 }
 
 type Candidate struct {
@@ -94,6 +97,7 @@ type Candidate struct {
 	AttemptedClass      llm.ServiceClass
 	FallbackIndex       int
 	RouteIndex          int
+	ContextTokens       int64
 	ProviderTier        string
 	CapabilityVersion   string
 	PriceVersion        string
@@ -180,6 +184,9 @@ func mustJSON(value any) []byte {
 func validateRouteShape(route Route) error {
 	if route.OutputTokens < 0 {
 		return fmt.Errorf("route %q has a negative output token limit", route.ID)
+	}
+	if route.ContextTokens < 0 {
+		return fmt.Errorf("route %q has a negative context token limit", route.ID)
 	}
 	if route.ID == "" || route.EndpointID == "" || route.Provider == "" || route.Model == "" || route.Family == "" {
 		return fmt.Errorf("route %q is incomplete", route.ID)

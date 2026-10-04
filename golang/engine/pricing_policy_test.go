@@ -259,3 +259,35 @@ func requireNoOperation(t *testing.T, harness testHarness, request llm.Request) 
 		t.Fatalf("admission Get(%q) error = %v, want ErrOperationNotFound", operationID, err)
 	}
 }
+
+func TestGenerateRejectsContextOverflowBeforePricedOrUnpricedDispatch(t *testing.T) {
+	for _, unpriced := range []bool{false, true} {
+		adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+		harness := newHarness(t, adapter)
+		snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
+		for name, model := range snapshot.Routes.Models {
+			for i := range model.Routes {
+				model.Routes[i].ContextTokens = 1
+			}
+			snapshot.Routes.Models[name] = model
+		}
+		request := baseRequest("context-overflow")
+		if unpriced {
+			snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
+			snapshot.RequirePriceWhenBudgeted = true
+			request.ServiceClass = llm.ServiceClassPriority
+		}
+		harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+		_, err := harness.engine.Generate(context.Background(), request)
+		var mapped *provider.Error
+		if !errors.As(err, &mapped) || mapped.Code != provider.CodeNoRoute || mapped.SafeDetails["reason"] != "context_limit" {
+			t.Fatalf("unpriced=%t: %v", unpriced, err)
+		}
+		adapter.mu.Lock()
+		calls := len(adapter.calls)
+		adapter.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("unpriced=%t: dispatched %d calls", unpriced, calls)
+		}
+	}
+}

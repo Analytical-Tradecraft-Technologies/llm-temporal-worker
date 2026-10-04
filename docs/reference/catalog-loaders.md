@@ -66,8 +66,21 @@ cap exceeds that ceiling; it can select another authorized route with a larger
 allowance. It never silently lowers the caller's cap. A positive ceiling also
 requires an explicit positive request cap; budgeted runtime preparation supplies
 the configured default when the caller omits it. Zero in the catalog means no
-declared model ceiling. Context-token and feature-byte declarations still need
-separate enforcement; they must not be relied on as admission guards yet.
+declared model ceiling. Per-feature byte limits are unsupported and rejected.
+
+Model `limits.context_tokens` (or `profiles.*.max_context_tokens`) is retained
+through routing and checked before new-request compilation or budget acquisition.
+Admission reserves the estimated input count, effective output cap, and the larger
+of the requested and configured reasoning budgets. A candidate that does not fit
+is skipped in favor of another authorized route; if none fits, admission fails
+without dispatch. Free and unpriced routes are checked too. Compaction preflight
+uses the same accounting to trigger compaction for an existing conversation.
+Previously submitted provider work can still be polled after a catalog change.
+
+Context checks use the configured deterministic tokenizer when supplied. Otherwise,
+they use the existing approximate UTF-8 input estimate used by budget reservation;
+this is not an exact provider token count or a guarantee of provider acceptance.
+Zero means no declared model limit. Separately bounded request sizes still apply.
 
 During runtime snapshot compilation, Bedrock Messages and Bedrock Converse
 routes are checked against an explicitly declared model service-class set. A
