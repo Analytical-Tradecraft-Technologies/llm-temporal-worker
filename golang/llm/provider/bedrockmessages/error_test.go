@@ -2,6 +2,7 @@ package bedrockmessages
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -51,5 +52,27 @@ func TestMapAPIErrorMapsRetryAfterDelay(t *testing.T) {
 	}
 	if got, want := mapped.SafeDetails["retry_after"], "2"; got != want {
 		t.Fatalf("safe retry after = %q, want %q", got, want)
+	}
+}
+
+func TestModelProcessingFailuresRemainAmbiguous(t *testing.T) {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusFailedDependency} {
+		cause := &anthropic.Error{StatusCode: status, RequestID: "request-id"}
+		mapped := mapError(fmt.Errorf("wrapped: %w", cause), "bedrock-messages")
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d became a rejection: %#v", status, mapped)
+		}
+		if !errors.Is(mapped, cause) || mapped.Provider.RequestID != "request-id" {
+			t.Fatal("provider error identity was lost")
+		}
+	}
+}
+
+func TestDefiniteMessagesRejectionsRemainRejected(t *testing.T) {
+	for _, status := range []int{400, 401, 403, 404, 422, 429} {
+		mapped := mapAPIError(&anthropic.Error{StatusCode: status}, "bedrock-messages")
+		if mapped.Dispatch != provider.DispatchRejected {
+			t.Fatalf("status %d became ambiguous", status)
+		}
 	}
 }
