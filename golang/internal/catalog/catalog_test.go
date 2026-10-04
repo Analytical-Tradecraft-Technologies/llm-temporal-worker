@@ -55,6 +55,9 @@ entries:
 		t.Fatalf("LoadCapabilities() error = %v", err)
 	}
 	profile, ok := catalog.Profiles["openai-prod"]
+	if profile.OutputTokens != 32768 {
+		t.Fatalf("output ceiling = %d", profile.OutputTokens)
+	}
 	if !ok {
 		t.Fatalf("profiles = %#v", catalog.Profiles)
 	}
@@ -95,6 +98,9 @@ profiles:
 		t.Fatalf("LoadCapabilities() error = %v", err)
 	}
 	profile := catalog.Profiles["local-mock-v1"]
+	if profile.OutputTokens != 4096 {
+		t.Fatalf("output ceiling = %d", profile.OutputTokens)
+	}
 	if !profile.Set.Supports(provider.FeatureText, true) || !profile.Set.Supports(provider.FeatureToolCall, true) {
 		t.Fatalf("compiled local features = %#v", profile.Set.Features)
 	}

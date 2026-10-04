@@ -556,3 +556,17 @@ func TestRoutingCapabilitiesOnlyProjectsSupportedProviderFeatures(t *testing.T) 
 		t.Fatal("provider-only image capability leaked into routing")
 	}
 }
+
+func TestCompileRoutesPreservesOutputCeiling(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	profile := bundle.Capabilities["profile-a"]
+	profile.OutputTokens = 1234
+	bundle.Capabilities["profile-a"] = profile
+	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := routes.Models["logical-model"].Routes[0].OutputTokens; got != 1234 {
+		t.Fatalf("output ceiling = %d", got)
+	}
+}

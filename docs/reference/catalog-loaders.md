@@ -55,6 +55,15 @@ transform. Family aliases used by config (`azure_openai_responses` and
 `bedrock_anthropic_messages`; `bedrock_converse` maps to the dedicated Bedrock
 Converse provider family) are normalized to their provider family.
 
+The model's `limits.output_tokens` (or `profiles.*.max_output_tokens`) is retained
+as a route ceiling. Routing excludes a model when the effective request output
+cap exceeds that ceiling; it can select another authorized route with a larger
+allowance. It never silently lowers the caller's cap. A positive ceiling also
+requires an explicit positive request cap; budgeted runtime preparation supplies
+the configured default when the caller omits it. Zero in the catalog means no
+declared model ceiling. Context-token and feature-byte declarations still need
+separate enforcement; they must not be relied on as admission guards yet.
+
 During runtime snapshot compilation, Bedrock Messages and Bedrock Converse
 routes are checked against an explicitly declared model service-class set. A
 route that advertises an undeclared class is rejected before any provider

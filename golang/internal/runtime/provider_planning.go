@@ -143,6 +143,9 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 		if !planning.containsCandidate(semantic, candidate) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
+		if !planning.catalog.Models[semantic.Model].Routes[candidate.RouteIndex].SupportsOutputLimit(semantic) {
+			continue
+		}
 		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
 		if err != nil {
 			return PlannedProviderCall{}, err

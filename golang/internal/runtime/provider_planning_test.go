@@ -532,3 +532,32 @@ func TestProviderPlanningSharesCacheRouteWithBothRunners(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderPlanningEnforcesOutputCeilingWithCustomPlanner(t *testing.T) {
+	for _, limit := range []int64{999, 1000} {
+		capabilities, source, adapter, request, _, _ := planningFixture()
+		source.value.Routes.Models["alias"].Routes[0].OutputTokens = limit
+		capabilities.BudgetEstimator.MaxOutput = 1000
+		capabilities.Planner = planningPlannerFunc(func(ctx context.Context, input routing.Input) (routing.Plan, error) {
+			// An injected planner cannot remove the snapshot's admission ceiling.
+			input.Catalog.Models["alias"].Routes[0].OutputTokens = 0
+			return (routing.DeterministicPlanner{}).Plan(ctx, input)
+		})
+		planning, err := capabilities.NewProviderPlanning(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = planning.Generate(context.Background(), prepared)
+		if limit < 1000 {
+			if err == nil || len(adapter.inputs) != 0 {
+				t.Fatal("oversize output reached compiler")
+			}
+		} else if err != nil || len(adapter.inputs) != 1 || *adapter.inputs[0].Request.Output.MaxTokens != 1000 {
+			t.Fatalf("boundary request failed: %v", err)
+		}
+	}
+}

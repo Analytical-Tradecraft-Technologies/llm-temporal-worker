@@ -73,7 +73,9 @@ type Route struct {
 	PriceAvailable bool
 	ExtensionNames []string
 	ContextBytes   int
-	Pinning        state.Pinning
+	// OutputTokens is the model-specific output ceiling; zero means unspecified.
+	OutputTokens int64
+	Pinning      state.Pinning
 }
 
 type Candidate struct {
@@ -176,6 +178,9 @@ func mustJSON(value any) []byte {
 }
 
 func validateRouteShape(route Route) error {
+	if route.OutputTokens < 0 {
+		return fmt.Errorf("route %q has a negative output token limit", route.ID)
+	}
 	if route.ID == "" || route.EndpointID == "" || route.Provider == "" || route.Model == "" || route.Family == "" {
 		return fmt.Errorf("route %q is incomplete", route.ID)
 	}
@@ -231,4 +236,14 @@ func sortedRejections(values []Rejection) {
 		}
 		return values[i].Path < values[j].Path
 	})
+}
+
+// SupportsOutputLimit requires an explicit positive cap when the route declares
+// a ceiling. Runtime callers materialize the budget estimator's default before
+// planning, so provider defaults cannot bypass the catalog limit.
+func (route Route) SupportsOutputLimit(request llm.Request) bool {
+	if route.OutputTokens == 0 {
+		return true
+	}
+	return route.OutputTokens > 0 && request.Output != nil && request.Output.MaxTokens != nil && *request.Output.MaxTokens > 0 && int64(*request.Output.MaxTokens) <= route.OutputTokens
 }

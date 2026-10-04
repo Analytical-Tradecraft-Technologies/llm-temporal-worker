@@ -121,6 +121,7 @@ func compileCapabilityEntry(version string, index int, entry capabilityEntryDocu
 	}
 	return CapabilityProfile{
 		ID:                     entry.ID,
+		OutputTokens:           entry.Limits.OutputTokens,
 		Family:                 family,
 		Model:                  entry.Model.Exact,
 		VerifiedAt:             entry.VerifiedAt,
@@ -189,6 +190,7 @@ func compileCapabilityProfile(version, id string, profile capabilityProfileFile)
 	}
 	return CapabilityProfile{
 		ID:                     id,
+		OutputTokens:           profile.MaxOutput,
 		Family:                 family,
 		Model:                  profile.Model,
 		Set:                    set,

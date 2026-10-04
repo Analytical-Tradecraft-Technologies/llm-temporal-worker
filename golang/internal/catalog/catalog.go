@@ -53,6 +53,8 @@ func (options Options) maxBytes() (int, error) {
 // an endpoint/model; Set is the provider-neutral capability contract consumed
 // by adapters.
 type CapabilityProfile struct {
+	// OutputTokens is the model-specific output ceiling; zero means unspecified.
+	OutputTokens           int64
 	ID                     string
 	Family                 provider.Family
 	Model                  string
