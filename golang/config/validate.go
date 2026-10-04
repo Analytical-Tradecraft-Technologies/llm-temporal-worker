@@ -226,15 +226,15 @@ func (state StateConfig) validate(environment string) error {
 	}
 	if state.Kind == StateKindMemory {
 		// Memory mode intentionally does not validate, resolve, or dial the
-		// Redis/PostgreSQL sections. Their addresses and credentials are ignored
+		// external storage sections. Their addresses and credentials are ignored
 		// and should normally be omitted from a development configuration.
 		return nil
 	}
 	if err := state.Redis.validate(environment); err != nil {
 		return err
 	}
-	// Cloud request storage replaces PostgreSQL. Its unused configuration and
-	// credentials must not prevent startup or trigger database access.
+	// Durable mode requires cloud request storage. Redis-only remains a
+	// development fixture and must not create a substitute durable backend.
 	if state.Requests != nil {
 		return nil
 	}

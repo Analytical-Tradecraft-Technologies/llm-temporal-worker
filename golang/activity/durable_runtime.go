@@ -18,7 +18,7 @@ type QueryV1Func func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1,
 // Activity boundary. It owns no clients and performs no composition itself;
 // callers must supply all snapshot-scoped ports and a separately authorized
 // Query callback. This keeps registration and Temporal lifecycle code reusable
-// while leaving deployment-specific PostgreSQL/Redis/provider wiring explicit.
+// while leaving deployment-specific cloud/Redis/provider wiring explicit.
 //
 // A zero value is deliberately fail-closed: Generate and Compact return the
 // runner's invalid-port error, while Query returns a configuration error when

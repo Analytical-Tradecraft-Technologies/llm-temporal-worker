@@ -1,5 +1,10 @@
 # Blob garbage-collection contract
 
+> Historical SQL design: the SQL implementation has been removed. Use the
+> [cloud request reference](cloud-request-repository.md) for the current runtime.
+> Cloud cleanup and unknown-cost reconciliation remain separately deferred;
+> the procedures below must not be used against the cloud stores.
+
 Blob metadata is retained in PostgreSQL while the encrypted locator is used by
 the external object store. Cleanup is therefore a fenced, two-phase state
 machine rather than a direct `DELETE`:

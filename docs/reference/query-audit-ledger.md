@@ -25,52 +25,12 @@ This does not change the durable lifecycle or cost records for paid generation
 and compaction attempts. Normal query reads no longer add entries to the SQL
 query-execution ledger or its historical spend totals.
 
-## Legacy SQL repository
+## Removed SQL repository
 
-`postgres.QueryExecutionRepository` remains available for direct callers until
-the SQL persistence migration removes it. It is not bound by the runtime audit
-builder. The following describes that legacy repository only.
-
-Each row stores bounded, canonicalized request and response JSON, a SHA-256
-digest over the canonical response bytes,
-the closed query kind and source, exact-or-unknown cost metadata, and UTC
-timestamps. Prompts, model output, credentials, provider bodies, and raw tool
-payloads are rejected recursively. Lookup columns use keyed HMACs; request JSON may still contain scope and
-operation values. These rows are not anonymous.
-
-Rows are idempotent on `(scope_id, operation_key_hmac)`. Repeating an operation
-with the same request fingerprint returns the persisted record. Reusing the
-operation key with a different fingerprint returns
-`ErrQueryExecutionConflict`, so a retry cannot silently overwrite audit data.
-
-Cost metadata is explicit. Exact rows carry a validated `pricing.USD` amount
-and one of `control_query_zero`, `provider_reported`, or `catalog_usage`;
-`control_query_zero` can only be zero. Unknown rows carry no amount or method
-and must provide a bounded lower-snake-case reason code. The repository applies
-the configured retention interval when a caller omits the expiry timestamp.
-PostgreSQL also enforces `retention_expires_at > completed_at`, so a direct
-writer cannot create an already-expired audit row that bypasses the bounded
-retention horizon.
-
-`QueryExecutionRepository.RecordAudit` adapts the storage-neutral
-`control.QueryService.Audit` callback to this ledger. It canonicalizes and
-fingerprint-checks the request, converts exact USD text without floating-point
-rounding, and delegates to `Record` for redaction, retention, and idempotency:
-
-```go
-queryService.Audit = repository.RecordAudit
-```
-
-`Record` also verifies that every request fingerprint matches the canonical
-request JSON before it writes the row, so direct repository callers cannot
-persist an audit identity that is detached from its request payload. On an
-idempotent replay it performs the same binding against the persisted request
-JSON and keyed fingerprint, so a direct database mutation cannot silently
-change the audit payload returned by a retry.
-
-The production factory still owns construction of the repository, query
-handlers, and authorization policy; this adapter does not select provider
-refreshes or implement query-specific read/index plans.
+The SQL query-execution repository and its runtime factory wiring have been
+removed. Audit logs are the current sink; no query-execution database or SQL
+retention job is required. A future durable audit sink can implement the
+existing best-effort hook without changing query success semantics.
 
 ## Runtime composition
 

@@ -1,5 +1,10 @@
 # Redis/PostgreSQL budget boundary
 
+> Historical SQL design: the SQL implementation has been removed. Use the
+> [cloud request reference](../reference/cloud-request-repository.md) for the current runtime.
+> Cloud cleanup and unknown-cost reconciliation remain separately deferred;
+> the procedures below must not be used against the cloud stores.
+
 `storage/durable.BudgetBoundary` is the first storage-neutral composition seam
 for the durable budget path. It binds one immutable `StateIdentity` to a Redis
 `BudgetMaterializer` and a PostgreSQL `Journal`.

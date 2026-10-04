@@ -622,17 +622,17 @@
       "source": {
         "path": "docs/index.md",
         "anchor": "#v1-completion-gate",
-        "quote": "The operation ledger returns a cached completed result on an Activity retry and refuses to replay an ambiguous provider dispatch."
+        "quote": "Completed operations replay their saved response. An uncertain submission retains its original budget claim; a retry uses a new paid attempt."
       },
       "implementation_paths": [
-        "golang/engine/engine_test.go",
-        "golang/storage/conformance/conformance.go",
-        "golang/storage/memory/conformance_test.go",
-        "golang/storage/redis/conformance_test.go"
+        "golang/internal/runtime/cloud_execution_runtime.go",
+        "golang/internal/runtime/cloud_execution_runtime_test.go",
+        "golang/internal/runtime/cloud_request_runtime_test.go",
+        "golang/internal/runtime/cloud_workflow_recovery_integration_test.go"
       ],
       "verification": {
         "make_targets": [
-          "redis-integration",
+          "cloud-workflow-integration",
           "test"
         ],
         "workflow_jobs": [
@@ -644,11 +644,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {

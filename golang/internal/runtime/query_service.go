@@ -11,7 +11,7 @@ import (
 
 // snapshotQueryService resolves the control-plane service from the same
 // immutable app snapshot that supplied the current engine. This prevents a
-// reload from leaving Query activities pointed at a closed PostgreSQL pool or
+// reload from leaving Query activities pointed at a closed storage client or
 // stale authorization policy while an in-flight Activity still uses the old
 // engine lease.
 type snapshotQueryService struct {

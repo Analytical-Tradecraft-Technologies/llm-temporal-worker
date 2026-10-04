@@ -1,15 +1,17 @@
 # PostgreSQL State, Cache, Accounting, and Control Plane
 
-> **Budget design superseded:** Redis now owns budget leases and settlement;
-> the SQL budget journal writer has been removed. The SQL budget rebuild and
-> automatic Stream broadcast described below are not the current runtime. See
-> [Redis budget leases](../reference/redis-budget-leases.md) for the implemented contract.
+> **Historical, superseded SQL design:** the worker SQL adapters, drivers,
+> configuration and maintenance CLI have been removed. There is no SQL dataset
+> to migrate or SQL budget fallback. Current ownership and recovery are defined by
+> [state and storage](../architecture/state-and-storage.md),
+> [cloud requests](../reference/cloud-request-repository.md), and
+> [Redis budget leases](../reference/redis-budget-leases.md).
 
 ## Status and database boundary
 
-This document is the normative home for the PostgreSQL/Redis responsibility
-split, budget-read rules, workload envelope, and physical schema. It is
-design-only until the applicable delivery phase is implemented. The unreleased
+This document preserves the former PostgreSQL/Redis responsibility split,
+budget-read rules, workload envelope and physical schema for historical context.
+It is not an implementation or deployment instruction. The unreleased
 Generate v1 contract changes in place; no compatibility-only v2 is created.
 The staged delivery and document-authority rules are defined in
 [scope](../scope.md#staged-delivery-and-document-authority); summaries elsewhere

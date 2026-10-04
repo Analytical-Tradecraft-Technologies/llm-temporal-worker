@@ -12,7 +12,7 @@ import (
 // snapshotV1Runtime keeps the worker's Activity registration stable while
 // resolving the implementation from the snapshot captured by each call. The
 // lease remains held for the complete method, so a reload cannot close the
-// Redis/PostgreSQL/provider clients while a v1 phase is still using them.
+// cloud/Redis/provider clients while a v1 phase is still using them.
 //
 // fallback is used only when a custom ClientSet does not implement
 // V1RuntimeSource. ProductionEngineFactory always implements the source and a

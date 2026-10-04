@@ -61,9 +61,10 @@ Generate and Compact keep their v1 names because this service has no deployed
 callers. Their registered result is now `ExecutionResultV1`. The older direct Go
 helpers still return their final response records, but are not registered on
 Temporal. A runtime that lacks `ExecutionRuntime` fails closed for all execution
-activities. The CLI production builder is not activated by this interface change;
-cloud composition and the typed OCaml client follow in
-separate dependent changes.
+activities. `runtime.NewCloudV1RuntimeBuilder` supplies that contract, and the
+typed OCaml client calls the public workflows. The normal production CLI still
+requires an explicit caller-authorization policy and installation of the cloud
+builder; those choices are not inferred from this interface.
 
 Prepare accepts exactly one Generate or Compact request. Budget acquisition
 attempts once and returns; polling makes one status retrieval and returns.
@@ -128,20 +129,20 @@ the response can be signed or audited: route ID for provider status,
 provider/endpoint/model for inventory, provider/endpoint for credit status,
 policy/window for budget windows, and operation/provider/model dimensions for
 spend buckets (with NULL dimensions ordered first). This keeps keyset pages
-stable even when a deployment supplies a custom `TypedHandler`; PostgreSQL
-repositories still retain their own deterministic `ORDER BY` contracts.
-The production client set forwards a query service only when it is supplied by
-the same snapshot-scoped PostgreSQL closer as its repositories; the default
-composition does not invent authorization, cursor keys, or handlers. Query
-families without a configured service therefore fail closed. The reusable
-storage composition using Redis for provider status, model inventory, and
-credit status, with PostgreSQL still supplying spend summary is documented in
-[persisted-query-service.md](persisted-query-service.md) and is installed only
-through an explicit `ProductionFactoryOptions.QueryServiceBuilder`. Spend
-summary additionally requires `PersistedQueryOptions.ResolveScope`, an
-authenticated deployment resolver for the opaque PostgreSQL scope UUID;
-missing, failed, or nil scope resolution fails closed. Refresh requests remain
-fail-closed until their management adapters are supplied.
+stable even when a deployment supplies a custom `TypedHandler`; each reader
+must preserve the same deterministic ordering.
+The production client set exposes snapshot-owned query capabilities, while
+`ProductionFactoryOptions.QueryServiceBuilder` supplies the explicit service.
+The default composition does not invent authorization, cursor keys or handlers.
+Query families without a configured service therefore fail closed. The reusable
+composition uses Redis for provider status, model inventory and credit status;
+spend summary requires a deployment-owned aggregation reader because its SQL
+implementation has been removed. See
+[persisted-query-service.md](persisted-query-service.md). Spend summary also
+requires `PersistedQueryOptions.ResolveScope`, an authenticated deployment
+resolver for the opaque storage scope; missing, failed or nil resolution fails
+closed. Refresh requests remain fail-closed until their management adapters are
+supplied.
 
 Budget status is enabled independently through the explicit per-snapshot
 `ProductionFactoryOptions.BudgetStatusReaderFactory` seam. The built-in
@@ -163,7 +164,7 @@ receives canonical redacted request/response envelopes, SHA-256 request and
 response digests, and exact-or-unknown cost metadata after all response and
 cursor checks. The hook is best effort: encoding or sink errors do not fail an otherwise
 successful response. `NewPersistedQueryServiceBuilder` uses normal structured
-logs and needs no `PostgresQueryRepositories.QueryAudit` capability.
+logs and needs no SQL audit repository.
 Authorization and cursor keys remain deployment-owned. Missing budget readers
 still leave budget status unsupported. See [query audit logging](query-audit-ledger.md).
 
@@ -209,45 +210,26 @@ checks; when the durable seam is absent it omits the v1 Activity registrations
 and cannot dispatch inference. It is not a development fallback for any other
 environment, and never silently falls back to the pre-release envelope.
 
-When a deployment has assembled the storage-neutral phase ports, it can wrap
-them with `activity.DurableV1Runtime`: Generate and Compact delegate to
-`storage/durable.GenerateV1` and `storage/durable.CompactV1`, while Query is an
-independent authorized callback. The wrapper owns no PostgreSQL, Redis, blob,
-provider, or credential clients and therefore cannot bypass the snapshot
-lease. A zero or partial port set remains fail-closed; this adapter is a bridge
-to the durable composition, not evidence that deployment wiring has been
-completed. The built-in complete runtime builder additionally requires one
-validated snapshot-owned `durable.Composition` before it invokes either phase
-factory, so those factories cannot select PostgreSQL/Redis ports independently.
-A deployment that provides only phase factories remains unconfigured rather
-than activating a partial runtime. The automatic production-factory path
-validates that composition before it loads an engine snapshot or constructs
-provider, Redis, PostgreSQL, or blob clients, then reuses the same validated
-value for both phases. Its composition factory receives the deterministic
-digest of the current configuration snapshot and must bind the returned durable
-identity to it while validating deployment-owned ports without runtime-created
-clients. The production factory validates that identity centrally. This
-preflight ordering applies only to the auto-installed builder; deployments that
-require a different construction order must provide an explicit custom
-`V1RuntimeBuilder`.
+`runtime.NewCloudV1RuntimeBuilder` constructs the bounded execution runtime
+from the same snapshot's cloud request/checkpoint/cache stores, Redis budget
+leaser, provider adapters and signing keys. Its required `ResolveScope` callback
+authorizes each request before storage access. It verifies the cloud identity,
+Redis namespace/hash tag and configuration digest before returning the runtime.
+The builder is installed explicitly through `ProductionFactoryOptions.V1RuntimeBuilder`;
+the normal CLI still needs its production authorization policy. See
+[durable runtime composition](durable-v1-runtime.md).
 
-The runtime capability bundle also exposes a separate
-`CompactPortsFactory` contract and `ValidateCompact` readiness check. The
-check requires the same snapshot-owned planner, adapters, checkpoint
-materializer, PostgreSQL journal, and clock needed by the Compact runner, plus
-an explicit constructor for all Compact callbacks. Defining this interface
-does not register Compact or synthesize a response: until a deployment
-supplies the complete callback set, the production builder must leave Compact
-fail-closed. Generate and Compact readiness are independent checks, so a
-partial Generate rollout cannot accidentally advertise the compaction
-Activity.
+Direct phase adapters such as `activity.DurableV1Runtime` and the separate
+Generate/Compact port factories remain available for contract tests. They
+validate storage-neutral callbacks without constructing clients. They do not
+replace the bounded `ExecutionRuntime` used by the registered activities.
 
-The Activity integration tests compose this wrapper with in-process phase
-ports and assert the complete one-shot order for both Generate and Compact,
-including replay, cache, route, Redis reservation, PostgreSQL journal,
-provider dispatch, finalization, and Redis reconciliation. These tests verify
-the boundary wiring without claiming protected live-provider or deployment
-evidence; those gates still require the release workflow's credentialed runs.
+Integration tests exercise replay, cache, routing, Redis admission, durable
+attempts, dispatch, finalization and settlement. The live workflow gate uses
+real Temporal and Redis with generic cloud-storage fixtures and deterministic
+provider adapters, including the typed OCaml client. The opt-in AWS gate,
+production authorization, provider calls and restore behavior require separate
+release evidence. There is no SQL journal or SQL data migration.
 
 The boundary is one-shot by design. It does not register or dispatch
 `llm.StreamingEngine`, token events, or provider stream decoders. Provider
@@ -272,24 +254,19 @@ scope identifier; raw tenant/project concatenation is intentionally not used.
 The snapshot client set exposes an optional typed `CheckpointCapabilities`
 bundle for that composition. Its fields are the storage-neutral checkpoint
 repository, scoped blob-reader, and complete handle-materializer interfaces;
-PostgreSQL pools, credentials, encryption keys, and raw blob locators never
+Provider clients, credentials, encryption keys, and raw blob locators never
 cross the runtime boundary. A builder obtains it from the exported
 `runtime.CheckpointCapabilitiesSource` client-set interface rather than
 depending on a concrete client-set type. `Validate()` permits an intentionally
 partial bundle for staged deployment but rejects a materializer that is missing
 either storage-neutral input. A builder that needs replay must call
 `RequireMaterializer()` and fail closed when the repository, scoped blob reader,
-or handle materializer is incomplete. The default PostgreSQL factory supplies
-the repository but leaves the blob reader unconfigured until a deployment
-composes its scoped locator and object-store binding. The complete materializer
-is exposed only by a deployment-owned PostgreSQL closer after the repository,
-blob reader, encryption/key binding, and opaque-handle verifier are all
-available. Private snapshot adapters erase concrete PostgreSQL/blob-reader
-types before publication so a capability consumer cannot recover a pool,
-locator, or key binding through a type assertion. The runtime never fabricates
-an in-memory or unscoped substitute. This bundle is a composition input, not
-evidence that the durable Generate/Compact/Query runtime or provider dispatch
-is complete.
+or handle materializer is incomplete. The cloud factory binds the generic
+checkpoint repository and scoped blob reader/writer to the configured request
+store, then constructs the materializer with the snapshot's handle verifier and
+clock. A missing store or verifier fails composition. The runtime never
+fabricates an in-memory or unscoped substitute. This bundle is a composition
+input, not evidence of production authorization or live cloud/provider behavior.
 
 After a successful materializer read, the Activity seam performs a second,
 storage-neutral contract check before dispatch. The returned handle and scope

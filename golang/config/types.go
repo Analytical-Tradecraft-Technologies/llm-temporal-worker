@@ -133,11 +133,9 @@ type StateConfig struct {
 }
 
 // StateKind identifies the storage composition selected for a worker.
-// Durable mode is the production composition: cloud requests select the
-// durable cloud backend, otherwise PostgreSQL is required. Redis owns active
-// budgets and provider state in either case. Redis-only
-// remains accepted for the pre-composition development fixture; new
-// production configurations must use Durable.
+// Durable mode requires the cloud request backend. Redis owns active budgets,
+// throttles and provider state. Redis-only remains accepted for the
+// pre-composition development fixture; production configurations must use Durable.
 const (
 	StateKindDurable = "durable"
 	StateKindMemory  = "memory"

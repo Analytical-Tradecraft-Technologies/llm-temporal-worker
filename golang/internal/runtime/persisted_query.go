@@ -58,8 +58,8 @@ type BudgetStatusReader interface {
 // builder returns. A nil reader is a valid fail-closed result: callers still
 // receive a query service, but budget_status remains unsupported.
 //
-// The factory is deliberately separate from QueryServiceBuilder. Redis and
-// PostgreSQL clients are created and drained by different composition paths;
+// The factory is deliberately separate from QueryServiceBuilder. Storage
+// clients are created and drained with each configuration snapshot;
 // this seam lets the production factory bind the Redis generation reader to
 // the same snapshot without allowing a process-lifetime query builder to
 // capture a reader across reloads.
