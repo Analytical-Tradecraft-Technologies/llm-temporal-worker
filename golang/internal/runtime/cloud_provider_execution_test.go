@@ -591,3 +591,62 @@ func TestCloudProviderExecutionRefusesHTTPWhenSubmissionStateCannotBeSaved(t *te
 		t.Fatal("HTTP crossed failed durable boundary", err)
 	}
 }
+
+func TestCloudProviderExecutionCanceledPossibleWriteRetainsBudget(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before dispatch", true: "after possible write"}[marked], func(t *testing.T) {
+			f := newProviderExecutionFixture(t, "generate", false)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f.adapter.invoke = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
+				if marked {
+					if err := observer.BeforePossibleWrite(ctx); err != nil {
+						return provider.Result{}, err
+					}
+				}
+				cancel()
+				return provider.Result{}, provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "cancelled")
+			}
+			result, err := f.submit(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if marked {
+				if result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || result.Saved.Execution.Settled || f.settlements.Load() != 0 {
+					t.Fatal("possibly paid cancellation released budget")
+				}
+			} else if !result.Saved.Execution.Settled || f.settlements.Load() != 1 {
+				t.Fatal("preflight cancellation was not settled")
+			}
+		})
+	}
+}
+
+func TestCloudProviderExecutionCertifiedPreDispatchReleasesBudget(t *testing.T) {
+	for name, cause := range map[string]error{
+		"no writable connection": provider.NewPreDispatchUnavailableError(provider.ErrProviderPreDispatch),
+		"egress denied":          provider.NewEgressDeniedError(provider.ErrProviderEgressDenied),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newProviderExecutionFixture(t, "generate", false)
+			f.adapter.invoke = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
+				if err := observer.BeforePossibleWrite(ctx); err != nil {
+					return provider.Result{}, err
+				}
+				return provider.Result{}, cause
+			}
+			result, err := f.submit(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Saved.Execution.Stage != cloudstate.ExecutionFailed || !result.Saved.Execution.Settled || f.settlements.Load() != 1 {
+				t.Fatal("certified pre-dispatch failure retained reservation")
+			}
+			for _, event := range result.Saved.Execution.Settlement.Events {
+				if event.ActualCostUSD == nil || !event.ActualCostUSD.IsZero() {
+					t.Fatal("certified pre-dispatch failure charged")
+				}
+			}
+		})
+	}
+}
