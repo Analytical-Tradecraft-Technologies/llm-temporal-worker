@@ -28,8 +28,13 @@ type Tracer struct {
 }
 
 func NewTracer(options TraceOptions) *Tracer {
+	if !options.Enabled {
+		// A zero-value Tracer uses the no-op path, including parent context
+		// propagation, without allocating an SDK provider or recording spans.
+		return &Tracer{}
+	}
 	providerOptions := make([]trace.TracerProviderOption, 0, 2)
-	if options.Enabled && options.Exporter != nil {
+	if options.Exporter != nil {
 		if options.SampleRatio != nil {
 			ratio := *options.SampleRatio
 			if ratio < 0 {
