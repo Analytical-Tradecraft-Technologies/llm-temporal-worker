@@ -135,6 +135,16 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		}
 		saved.Execution.Claim = claim
 	}
+	// An adapter cannot undo the durable possible-write boundary without
+	// transport evidence that the request never reached a writable connection.
+	var classified *provider.Error
+	if observer.marked && errors.As(err, &classified) && classified.Dispatch == provider.DispatchNotDispatched &&
+		!errors.Is(err, provider.ErrProviderPreDispatch) && !errors.Is(err, provider.ErrProviderEgressDenied) {
+		copy := *classified
+		copy.Dispatch = provider.DispatchAmbiguous
+		copy.Retry = provider.RetryNever
+		err = &copy
+	}
 	return executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, outcome, err, false)
 }
 
