@@ -85,7 +85,8 @@ requires:
 - a provider-wait keepalive interval that matches
   `temporal.worker.heartbeat_keepalive_interval` and is no more than one third
   of `HeartbeatTimeout` (the default cadence is `1s`);
-- retry horizon no longer than operation-record retention;
+- operation-record retention covering the emitted schedule-to-close deadline
+  (including queue delays and retries), and any longer declared retry horizon;
 - maximum attempts bounded;
 - no Temporal retry for application errors marked non-retryable;
 - the request's provider deadline shorter than Activity start-to-close, leaving
