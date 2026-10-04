@@ -83,19 +83,21 @@ func ParseUSD(value string) (USD, error) {
 	if !ok {
 		return USD{}, fmt.Errorf("USD %q cannot be parsed", value)
 	}
-	scale := int64(len(fraction)) - exponent
-	fixedShift := int64(USDScale) - scale
+	// Bound the exponent before arithmetic: a machine-sized exponent can
+	// otherwise wrap into a small, apparently valid fixed-point amount.
+	offset := int64(len(fraction)) - USDScale
+	if exponent > offset+1024 {
+		return USD{}, fmt.Errorf("USD %q exceeds NUMERIC(38,18)", value)
+	}
+	if exponent < offset-1024 {
+		return USD{}, fmt.Errorf("USD %q has more than 18 fractional digits", value)
+	}
+	fixedShift := exponent - offset
 	units := new(big.Int)
 	if fixedShift >= 0 {
-		if fixedShift > 1024 {
-			return USD{}, fmt.Errorf("USD %q exceeds NUMERIC(38,18)", value)
-		}
 		units.Mul(coefficient, new(big.Int).Exp(big.NewInt(10), big.NewInt(fixedShift), nil))
 	} else {
 		divisorShift := -fixedShift
-		if divisorShift > 1024 {
-			return USD{}, fmt.Errorf("USD %q has more than 18 fractional digits", value)
-		}
 		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(divisorShift), nil)
 		quotient, remainder := new(big.Int), new(big.Int)
 		quotient.QuoRem(coefficient, divisor, remainder)

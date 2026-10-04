@@ -235,6 +235,11 @@ entries:
     output_per_million: "12.000000"
     provenance: provider-price-sheet-2026-02
 `
+	// Removing the previous period's end makes the rotation ambiguous.
+	overlapping := strings.Replace(body, "    effective_until: 2026-02-01T00:00:00Z\n", "", 1)
+	if _, err := LoadPricing(writeCatalog(t, overlapping)); err == nil {
+		t.Fatal("YAML loader accepted overlapping price periods")
+	}
 	loaded, err := LoadPricing(writeCatalog(t, body))
 	if err != nil {
 		t.Fatal(err)

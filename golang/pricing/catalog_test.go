@@ -188,3 +188,49 @@ func TestCompileUSDRejectsDuplicatePricingIdentity(t *testing.T) {
 		t.Fatal("CompileUSD accepted duplicate pricing identities")
 	}
 }
+
+func TestCompileUSDPriceIntervals(t *testing.T) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	base := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard", EffectiveFrom: start, Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	for _, test := range []struct {
+		name                                           string
+		firstFrom, firstUntil, secondFrom, secondUntil time.Time
+		overlap                                        bool
+	}{
+		{"open ended", start, time.Time{}, start.Add(time.Hour), time.Time{}, true},
+		{"bounded overlap", start, start.Add(2 * time.Hour), start.Add(time.Hour), start.Add(3 * time.Hour), true},
+		{"nested", start, start.Add(3 * time.Hour), start.Add(time.Hour), start.Add(2 * time.Hour), true},
+		{"unbounded past", time.Time{}, start.Add(time.Hour), start, time.Time{}, true},
+		{"adjacent", start, start.Add(time.Hour), start.Add(time.Hour), time.Time{}, false},
+		{"gap", start, start.Add(time.Hour), start.Add(2 * time.Hour), time.Time{}, false},
+		{"adjacent unbounded", time.Time{}, start, start, time.Time{}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			a, b := base, base
+			a.EffectiveFrom, a.EffectiveUntil = test.firstFrom, test.firstUntil
+			b.EffectiveFrom, b.EffectiveUntil = test.secondFrom, test.secondUntil
+			b.Prices.InputPerMillion = MustDecimalUSD("10")
+			for _, entries := range [][]Entry{{a, b}, {b, a}} {
+				catalog, err := CompileUSD("v1", entries)
+				if (err != nil) != test.overlap {
+					t.Fatalf("overlap=%v, error=%v", test.overlap, err)
+				}
+				if err == nil {
+					quote, err := catalog.Resolve(Query{Provider: base.Provider, Family: base.Family, EndpointID: base.EndpointID, Model: base.Model, ProviderTier: base.ProviderTier, At: b.EffectiveFrom})
+					if err != nil || quote.Entry.Prices.InputPerMillion.String() != "10" {
+						t.Fatalf("boundary quote=%+v err=%v", quote, err)
+					}
+				}
+			}
+		})
+	}
+	for _, change := range []func(*Entry){
+		func(e *Entry) { e.Provider = "other" }, func(e *Entry) { e.Family = "other" }, func(e *Entry) { e.EndpointID = "other" }, func(e *Entry) { e.Region = "other" }, func(e *Entry) { e.Model = "other" }, func(e *Entry) { e.ProviderTier = "other" },
+	} {
+		other := base
+		change(&other)
+		if _, err := CompileUSD("v1", []Entry{base, other}); err != nil {
+			t.Fatalf("distinct route rejected: %v", err)
+		}
+	}
+}

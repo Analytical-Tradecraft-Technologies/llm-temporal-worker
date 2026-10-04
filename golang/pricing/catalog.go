@@ -90,6 +90,9 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 		}
 		seenIdentities[identity] = struct{}{}
 	}
+	if err := validatePriceIntervals(copyEntries); err != nil {
+		return Catalog{}, err
+	}
 	sort.SliceStable(copyEntries, func(i, j int) bool { return entryKey(copyEntries[i]) < entryKey(copyEntries[j]) })
 	canonical, err := json.Marshal(struct {
 		Version string  `json:"version"`
@@ -100,6 +103,34 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 	}
 	digest := sha256.Sum256(canonical)
 	return Catalog{Version: version, Entries: copyEntries, Digest: digest}, nil
+}
+
+// Each exact route has at most one active quote. Intervals are half-open;
+// omitted bounds mean the infinite past or future, respectively.
+func validatePriceIntervals(entries []Entry) error {
+	groups := make(map[[6]string][]Entry)
+	for _, entry := range entries {
+		route := [6]string{entry.Provider, entry.Family, entry.EndpointID, entry.Region, entry.Model, entry.ProviderTier}
+		groups[route] = append(groups[route], entry)
+	}
+	for route, intervals := range groups {
+		sort.Slice(intervals, func(i, j int) bool {
+			if intervals[i].EffectiveFrom.IsZero() {
+				return !intervals[j].EffectiveFrom.IsZero()
+			}
+			if intervals[j].EffectiveFrom.IsZero() {
+				return false
+			}
+			return intervals[i].EffectiveFrom.Before(intervals[j].EffectiveFrom)
+		})
+		for i := 1; i < len(intervals); i++ {
+			previous, current := intervals[i-1], intervals[i]
+			if previous.EffectiveUntil.IsZero() || current.EffectiveFrom.IsZero() || previous.EffectiveUntil.After(current.EffectiveFrom) {
+				return fmt.Errorf("pricing route %q has overlapping effective intervals", route)
+			}
+		}
+	}
+	return nil
 }
 
 func decimalUSDForComponent(prices UnitPrices, component PriceComponent) DecimalUSD {
