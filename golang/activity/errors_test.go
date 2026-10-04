@@ -184,3 +184,39 @@ func TestErrorMappingCollapsesUnknownProviderEnums(t *testing.T) {
 		t.Fatalf("provider-controlled error text leaked: %v", application)
 	}
 }
+
+func TestOperationContentionRetriesOnlyBeforeDispatch(t *testing.T) {
+	options, err := validPolicy().TemporalOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dispatch := range []provider.DispatchCertainty{provider.DispatchNotDispatched, provider.DispatchRejected, provider.DispatchAccepted, provider.DispatchAmbiguous} {
+		for _, retry := range []provider.RetryDisposition{provider.RetrySameOperation, provider.RetryNever, provider.RetryNextRoute} {
+			original := provider.NewError(provider.CodeOperationConflict, provider.PhaseAdmission, dispatch, retry, "sensitive operation details")
+			original.RetryAfter = 3 * time.Second
+			var mapped *temporal.ApplicationError
+			if !errors.As(ToTemporalError(original), &mapped) {
+				t.Fatal("missing application error")
+			}
+			wantRetry := dispatch == provider.DispatchNotDispatched && retry == provider.RetrySameOperation
+			blocked := mapped.NonRetryable()
+			for _, name := range options.RetryPolicy.NonRetryableErrorTypes {
+				if name == mapped.Type() {
+					blocked = true
+				}
+			}
+			if blocked == wantRetry {
+				t.Fatalf("dispatch=%s retry=%s: effective nonretryable=%v", dispatch, retry, blocked)
+			}
+			if wantRetry && mapped.NextRetryDelay() != 3*time.Second {
+				t.Fatal("retry hint lost")
+			}
+			if !wantRetry && mapped.Type() != ErrorTypeOperationConflict {
+				t.Fatalf("permanent conflict changed type: %s", mapped.Type())
+			}
+			if strings.Contains(mapped.Error(), "sensitive") {
+				t.Fatal("operation details leaked")
+			}
+		}
+	}
+}

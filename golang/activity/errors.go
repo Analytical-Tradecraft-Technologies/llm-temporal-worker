@@ -129,6 +129,12 @@ func classify(err *provider.Error) (string, bool) {
 		typeName, nonRetryable = ErrorTypeBudgetWait, false
 	case provider.CodeOperationConflict:
 		typeName, nonRetryable = ErrorTypeOperationConflict, true
+		// An identical operation owned by an unexpired pre-dispatch lease may
+		// safely wait and retry. Keep true digest conflicts and possible writes
+		// permanent, including in the Activity policy's type exclusion list.
+		if err.Phase == provider.PhaseAdmission && err.Dispatch == provider.DispatchNotDispatched && err.Retry == provider.RetrySameOperation {
+			typeName, nonRetryable = ErrorTypeProviderTransient, false
+		}
 	case provider.CodeAmbiguousDispatch:
 		typeName, nonRetryable = ErrorTypeAmbiguous, true
 	case provider.CodeStateCorrupt:
