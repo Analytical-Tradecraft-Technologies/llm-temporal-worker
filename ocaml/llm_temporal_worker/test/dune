@@ -30,3 +30,7 @@
 (test
  (name test_usd_decimal)
  (libraries llm_temporal))
+
+(test
+ (name test_codec_boundaries)
+ (libraries llm_temporal temporal-sdk yojson ptime))

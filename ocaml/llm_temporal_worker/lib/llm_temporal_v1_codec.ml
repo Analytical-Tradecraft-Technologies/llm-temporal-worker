@@ -66,6 +66,7 @@ let parse_json decoder bytes =
   with
   | Yojson.Json_error message -> Error (errorf "invalid JSON: %s" message)
   | Failure message -> Error (errorf "invalid JSON: %s" message)
+  | Invalid_argument message -> Error (errorf "invalid JSON value: %s" message)
 
 let to_bytes value =
   try Ok (Bytes.of_string (Yojson.Safe.to_string value)) with
@@ -433,7 +434,7 @@ let decode_compact_request bytes = parse_json compact_request_of_json bytes
 let encode_compaction_response value = let* value = compaction_response_to_json value in to_bytes value
 let decode_compaction_response bytes = parse_json compaction_response_of_json bytes
 
-let time_to_json value = `String (Ptime.to_rfc3339 value)
+let time_to_json value = `String (Ptime.to_rfc3339 ~frac_s:9 value)
 let time_of_json context value =
   let* value = string context value in
   match Ptime.of_rfc3339 value with Ok (time, _, _) -> Ok time | Error _ -> Error (errorf "%s is not a valid RFC3339 timestamp" context)
