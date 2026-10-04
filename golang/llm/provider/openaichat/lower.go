@@ -437,8 +437,10 @@ func lowerReasoning(reasoning llm.ReasoningSpec, target map[string]any) error {
 		return fmt.Errorf("reasoning summary %q is not supported by Chat Completions", reasoning.Summary)
 	}
 	effort := reasoning.Effort
-	if reasoning.Mode == llm.ReasoningModeDisabled || reasoning.Summary == llm.ReasoningSummaryNone {
-		effort = llm.ReasoningEffortMinimal
+	if reasoning.Mode == llm.ReasoningModeDisabled {
+		// Minimal still permits reasoning; preserve the explicit opt-out.
+		target["reasoning_effort"] = "none"
+		return nil
 	}
 	switch effort {
 	case "", llm.ReasoningEffortProviderDefault:

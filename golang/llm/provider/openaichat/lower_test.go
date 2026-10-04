@@ -109,3 +109,24 @@ func TestCompileRejectsToolResultWithoutPrecedingCall(t *testing.T) {
 // openaiChatParams is an alias kept in the test so the SDK type does not leak
 // into provider-neutral assertions.
 type openaiChatParams = openai.ChatCompletionNewParams
+
+func TestCompilePreservesDisabledReasoning(t *testing.T) {
+	for _, effort := range []llm.ReasoningEffort{"", llm.ReasoningEffortProviderDefault, llm.ReasoningEffortHigh} {
+		t.Run(string(effort), func(t *testing.T) {
+			adapter := testAdapter(t)
+			call, err := adapter.Compile(context.Background(), provider.CompileInput{
+				Request: llm.Request{OperationKey: "disabled-reasoning", Model: "chat-model", ServiceClass: llm.ServiceClassStandard,
+					Input:     []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+					Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: effort}},
+				Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := marshalWire(t, call.SDKParams)
+			if wire["reasoning_effort"] != "none" {
+				t.Fatalf("disabled reasoning wire effort = %#v", wire["reasoning_effort"])
+			}
+		})
+	}
+}
