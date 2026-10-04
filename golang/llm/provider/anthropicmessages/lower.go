@@ -181,10 +181,8 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 		if !json.Valid(value.Arguments) {
 			return nil, fmt.Errorf("tool call %q arguments are invalid JSON", value.ID)
 		}
-		var input any
-		if err := json.Unmarshal(value.Arguments, &input); err != nil {
-			return nil, fmt.Errorf("tool call %q arguments: %w", value.ID, err)
-		}
+		// Preserve numeric literals in historical tool arguments.
+		input := json.RawMessage(value.Arguments)
 		return map[string]any{
 			"role": "assistant",
 			"content": []any{map[string]any{

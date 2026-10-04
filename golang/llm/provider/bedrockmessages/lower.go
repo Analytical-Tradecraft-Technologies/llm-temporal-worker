@@ -152,10 +152,8 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 		if value.ID == "" || value.Name == "" || !json.Valid(value.Arguments) {
 			return nil, fmt.Errorf("tool call requires ID, name, and valid JSON arguments")
 		}
-		var input any
-		if err := json.Unmarshal(value.Arguments, &input); err != nil {
-			return nil, err
-		}
+		// Preserve numeric literals in historical tool arguments.
+		input := json.RawMessage(value.Arguments)
 		return map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": value.ID, "name": value.Name, "input": input}}}, nil
 	case llm.ToolResult:
 		if value.CallID == "" {

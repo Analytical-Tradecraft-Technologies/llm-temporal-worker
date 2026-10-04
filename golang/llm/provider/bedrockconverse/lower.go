@@ -1,12 +1,14 @@
 package bedrockconverse
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	smithydocumentjson "github.com/aws/smithy-go/document/json"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -108,8 +110,8 @@ func lowerItem(item llm.Item) (types.Message, error) {
 		if value.ID == "" || value.Name == "" || !json.Valid(value.Arguments) {
 			return types.Message{}, fmt.Errorf("tool call requires ID, name, and valid JSON arguments")
 		}
-		var input any
-		if err := json.Unmarshal(value.Arguments, &input); err != nil {
+		input, err := decodeDocument(value.Arguments)
+		if err != nil {
 			return types.Message{}, err
 		}
 		return types.Message{Role: types.ConversationRoleAssistant, Content: []types.ContentBlock{
@@ -219,3 +221,20 @@ func hasMixedInstructionLevels(instructions []llm.Instruction) bool {
 }
 
 func stringPtr(value string) *string { return &value }
+
+// decodeDocument preserves JSON numeric literals through the SDK document
+// serializer. json.Number alone is encoded as a string by Smithy's encoder;
+// its decoder converts those values to document.Number, including nested data.
+func decodeDocument(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var input any
+	if err := decoder.Decode(&input); err != nil {
+		return nil, err
+	}
+	var value any
+	if err := smithydocumentjson.NewDecoder().DecodeJSONInterface(input, &value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
