@@ -71,7 +71,7 @@ type streamSetup struct {
 // durable operation identity and can therefore deliver exactly one terminal.
 func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (streamSetup, error) {
 	normalizeCtx, normalizeSpan := engine.startTrace(ctx, "llmtw.normalize", requestTraceAttrs(request)...)
-	normalized, err := llm.NormalizeRequest(request)
+	normalized, err := engine.dependencies.Estimator.PrepareRequest(request)
 	if err != nil {
 		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
 		normalizeSpan.End()

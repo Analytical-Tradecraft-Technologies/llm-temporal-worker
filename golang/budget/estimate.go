@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -45,20 +46,49 @@ type Estimate struct {
 	CatalogVersion string
 }
 
+// PrepareRequest normalizes an independent request and materializes the output
+// limit used for its reservation. Callers must compile this same request so
+// provider defaults cannot exceed the authorized estimate.
+func (estimator Estimator) PrepareRequest(request llm.Request) (llm.Request, error) {
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		return llm.Request{}, err
+	}
+	limit, err := estimator.outputLimit(normalized)
+	if err != nil {
+		return llm.Request{}, err
+	}
+	if normalized.Output == nil {
+		normalized.Output = &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindText}}
+	}
+	value := int(limit)
+	normalized.Output.MaxTokens = &value
+	return normalized, nil
+}
+
+func (estimator Estimator) outputLimit(request llm.Request) (int64, error) {
+	limit := estimator.MaxOutput
+	if limit <= 0 {
+		limit = 1000
+	}
+	if request.Output != nil && request.Output.MaxTokens != nil {
+		limit = int64(*request.Output.MaxTokens)
+	}
+	// Some SDKs use int32. Zero can mean an omitted cap, not a zero-cost call.
+	if limit <= 0 || limit > math.MaxInt32 {
+		return 0, fmt.Errorf("output token limit must be between 1 and %d", int64(math.MaxInt32))
+	}
+	return limit, nil
+}
+
 func (estimator Estimator) EstimateCandidate(request llm.Request, candidate routing.Candidate, entry pricing.Entry) (Estimate, error) {
 	inputTokens, err := estimator.estimateInput(request, candidate)
 	if err != nil {
 		return Estimate{}, err
 	}
-	outputTokens := estimator.MaxOutput
-	if outputTokens <= 0 {
-		outputTokens = 1_000
-	}
-	if request.Output != nil && request.Output.MaxTokens != nil {
-		outputTokens = int64(*request.Output.MaxTokens)
-	}
-	if outputTokens < 0 {
-		return Estimate{}, fmt.Errorf("output token limit is negative")
+	outputTokens, err := estimator.outputLimit(request)
+	if err != nil {
+		return Estimate{}, err
 	}
 	reasoningTokens := int64(0)
 	if request.Reasoning != nil && request.Reasoning.TokenBudget != nil {

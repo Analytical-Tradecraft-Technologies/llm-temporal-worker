@@ -92,7 +92,7 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 		!binding.RequestedClass.Valid() || !binding.AttemptedClass.Valid() {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
-	semantic, err := llm.NormalizeRequest(request)
+	semantic, err := planning.normalizeRequest(request)
 	if err != nil || semantic.Continuation != nil {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
 	}

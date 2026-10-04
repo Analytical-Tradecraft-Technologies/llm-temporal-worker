@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -325,7 +326,7 @@ func TestGenerateRecoversDispatchingOperationWithoutResubmitting(t *testing.T) {
 		Result:              provider.Result{Response: recoveredResponse},
 	}}
 	harness := newHarness(t, adapter)
-	normalized, err := llm.NormalizeRequest(request)
+	normalized, err := (budget.Estimator{MaxOutput: 1}).PrepareRequest(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +371,7 @@ func TestGenerateFailsClosedForDispatchingAdapterWithoutRecovery(t *testing.T) {
 	request := baseRequest("resumable-dispatching-no-recovery")
 	adapter := &resumableEngineAdapter{}
 	harness := newHarness(t, adapter)
-	normalized, err := llm.NormalizeRequest(request)
+	normalized, err := (budget.Estimator{MaxOutput: 1}).PrepareRequest(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +416,7 @@ func TestGenerateFailsClosedForDispatchingAdapterWithoutRecovery(t *testing.T) {
 // without exposing the internal hash helper to the fixture package.
 func operationIDForTest(t *testing.T, request llm.Request) string {
 	t.Helper()
-	normalized, err := llm.NormalizeRequest(request)
+	normalized, err := (budget.Estimator{MaxOutput: 1}).PrepareRequest(request)
 	if err != nil {
 		t.Fatal(err)
 	}

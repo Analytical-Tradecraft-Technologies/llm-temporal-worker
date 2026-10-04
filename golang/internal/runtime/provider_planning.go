@@ -61,6 +61,7 @@ type ProviderPlanning struct {
 	configDigest   [32]byte
 	configEpoch    string
 	budgetSnapshot engine.Snapshot
+	outputLimit    int64
 }
 
 func (capabilities V1RuntimeCapabilities) NewProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
@@ -94,7 +95,7 @@ func (capabilities V1RuntimeCapabilities) captureProviderPlanning(ctx context.Co
 	return &ProviderPlanning{catalog: catalog, health: copyProviderHealth(snapshot.Health),
 		planner: capabilities.Planner, adapters: capabilities.Adapters,
 		configDigest: snapshot.ConfigDigest, configEpoch: snapshot.ConfigEpoch,
-		budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
+		outputLimit: capabilities.BudgetEstimator.MaxOutput, budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
 }
 
 func (planning *ProviderPlanning) Generate(ctx context.Context, prepared PreparedGenerateInput) (PlannedProviderCall, error) {
@@ -122,7 +123,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	if err := ctx.Err(); err != nil {
 		return PlannedProviderCall{}, err
 	}
-	semantic, err := llm.NormalizeRequest(request)
+	semantic, err := planning.normalizeRequest(request)
 	if err != nil || semantic.Continuation != nil {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
 	}
@@ -304,4 +305,13 @@ func copyProviderHealth(source routing.HealthView) routing.HealthView {
 		result.Routes[key] = value
 	}
 	return result
+}
+
+// Budgeted planning and recovery must use the same explicit provider limit.
+// Standalone planning without a configured budget retains its original defaults.
+func (planning *ProviderPlanning) normalizeRequest(request llm.Request) (llm.Request, error) {
+	if planning.outputLimit > 0 {
+		return (budget.Estimator{MaxOutput: planning.outputLimit}).PrepareRequest(request)
+	}
+	return llm.NormalizeRequest(request)
 }
