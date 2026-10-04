@@ -451,7 +451,7 @@ func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
 	}
 	switch mode {
 	case llm.ReasoningModeProviderDefault:
-		if reasoning.TokenBudget == nil && reasoning.Effort == "" && summary == llm.ReasoningSummaryProviderDefault {
+		if reasoning.TokenBudget == nil && (reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && summary == llm.ReasoningSummaryProviderDefault {
 			return nil, nil
 		}
 		if reasoning.TokenBudget != nil {
