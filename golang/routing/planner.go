@@ -45,11 +45,11 @@ func (planner DeterministicPlanner) Plan(ctx context.Context, input Input) (Plan
 	plan := Plan{Version: input.Catalog.Version, Model: request.Model}
 	for fallbackIndex, class := range classes {
 		for routeIndex, route := range model.Routes {
-			if len(plan.Rejections) < planner.limit() {
-				if err := validateRouteShape(route); err != nil {
+			if err := validateRouteShape(route); err != nil {
+				if len(plan.Rejections) < planner.limit() {
 					plan.Rejections = append(plan.Rejections, Rejection{Code: RejectInvalid, RouteID: route.ID, Detail: err.Error()})
-					continue
 				}
+				continue
 			}
 			candidate, rejection, eligible := planner.evaluate(request, input.Continuation, input.Health, route, requested, class, fallbackIndex, routeIndex, extensionDigest)
 			if !eligible {
