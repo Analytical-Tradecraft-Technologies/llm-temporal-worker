@@ -139,7 +139,6 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 		}
 		return map[string]any{
 			"type":      "function_call",
-			"id":        value.ID,
 			"call_id":   value.ID,
 			"name":      value.Name,
 			"arguments": string(value.Arguments),

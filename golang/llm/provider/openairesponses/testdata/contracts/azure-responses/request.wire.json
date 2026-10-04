@@ -4,7 +4,7 @@
     {"content": [{"text": "azure fixture policy", "type": "input_text"}], "role": "system", "type": "message"},
     {"content": [{"text": "azure fixture developer", "type": "input_text"}], "role": "developer", "type": "message"},
     {"content": [{"text": "describe the azure fixture", "type": "input_text"}, {"detail": "high", "image_url": "https://example.test/azure-fixture.png", "type": "input_image"}, {"file_data": "data:application/pdf;base64,cGRm", "filename": "azure-fixture.pdf", "type": "input_file"}], "role": "user", "type": "message"},
-    {"arguments": "{\"query\":\"azure fixture\"}", "call_id": "azure-call-input", "id": "azure-call-input", "name": "lookup", "type": "function_call"},
+    {"arguments": "{\"query\":\"azure fixture\"}", "call_id": "azure-call-input", "name": "lookup", "type": "function_call"},
     {"call_id": "azure-call-input", "output": "azure fixture result", "type": "function_call_output"}
   ],
   "max_output_tokens": 96,
