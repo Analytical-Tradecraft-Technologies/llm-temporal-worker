@@ -124,6 +124,13 @@ The cursor is decrypted only when reading a validated inventory record.
 
 ## Query pages
 
+Provider-status availability is `available`, `degraded`, `unavailable`, or
+`unknown`. Unknown means the stored observation does not establish availability;
+it is preserved in query responses and can be used as a query filter. It is not
+reported as healthy. Both provider-status and credit-status queries translate
+the stored billing incident `issue` to the public `blocked` billing state.
+The Go wire schemas and typed OCaml client share these values.
+
 `ListRouteStatuses`, `ListCreditStatuses`, and `ListInventoryModels` implement
 the neutral `control` page contracts with the existing filters and limits
 (default 100, maximum 1,000). Credit queries select the newest route projection

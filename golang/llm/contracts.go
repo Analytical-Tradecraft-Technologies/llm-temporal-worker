@@ -1485,7 +1485,7 @@ func validateQueryObject(kind QueryKind, raw json.RawMessage) error {
 		}
 	}
 	if raw, ok := fields["availability"]; ok {
-		if err := validateQueryEnum(raw, "availability", "available", "degraded", "unavailable"); err != nil {
+		if err := validateQueryEnum(raw, "availability", "available", "degraded", "unavailable", "unknown"); err != nil {
 			return err
 		}
 	}

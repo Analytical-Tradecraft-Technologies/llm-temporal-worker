@@ -328,7 +328,7 @@ type compaction_response = {
   diagnostics : diagnostic list;
 }
 
-type availability = Available | Degraded | Unavailable
+type availability = Available | Degraded | Unavailable | Availability_unknown
 (* The legacy constructor names remain source-compatible, but their wire
    spellings follow the Go query contract: [Active] means an available model
    and [Retired] means an unavailable model. [Unknown] is an explicit

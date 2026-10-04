@@ -46,10 +46,15 @@ func (status CreditStatus) Key() string { return status.Provider + "\x00" + stat
 // BillingWireState translates the domain's explicit incident state to the
 // query wire vocabulary without making callers depend on the storage value.
 func (status CreditStatus) BillingWireState() string {
-	if status.Billing == BillingIssue {
+	return status.Billing.WireState()
+}
+
+// WireState maps the stored billing incident to the public query vocabulary.
+func (billing BillingState) WireState() string {
+	if billing == BillingIssue {
 		return "blocked"
 	}
-	return string(status.Billing)
+	return string(billing)
 }
 
 // NewCreditStatus maps a persisted status event's source and safe fields to

@@ -253,7 +253,7 @@ func validateProviderRoute(fields map[string]json.RawMessage) error {
 			return err
 		}
 	}
-	if err := validateQueryEnum(fields["availability"], "availability", "available", "degraded", "unavailable"); err != nil {
+	if err := validateQueryEnum(fields["availability"], "availability", "available", "degraded", "unavailable", "unknown"); err != nil {
 		return err
 	}
 	for _, name := range []string{"observed_at", "stale_after"} {
