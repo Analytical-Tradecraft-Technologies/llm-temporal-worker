@@ -9,8 +9,9 @@ import (
 
 // ValidateTranscript enforces the tool-call frontier across an entire
 // materialized lineage. A child may resolve an outstanding frontier with
-// matching results, but cannot insert a message or a new call before those
-// results arrive. Tool-call IDs are unique for the lifetime of a lineage.
+// matching results. Model messages and parallel calls remain in the same turn
+// until results begin; user messages and new model output cannot interrupt
+// partially resolved results. Tool-call IDs are unique for a lineage.
 func ValidateTranscript(items []llm.Item) ([]string, error) {
 	return validateItems(items)
 }
@@ -32,14 +33,19 @@ func validateItems(items []llm.Item) ([]string, error) {
 			resultsStarted = false
 		}
 		if len(pending) > 0 {
-			switch item.(type) {
+			switch value := item.(type) {
 			case llm.ToolResult:
+			case llm.Message:
+				if value.Actor != llm.ActorModel || resultsStarted {
+					return nil, fmt.Errorf("transcript item %d starts a new turn before pending tool results", index)
+				}
+				// Providers may interleave text and tool calls in one response.
 			case llm.ToolCall:
 				if resultsStarted {
 					return nil, fmt.Errorf("transcript item %d starts a new tool-call turn before pending tool results", index)
 				}
-				// Parallel tool calls are one model turn and may arrive
-				// consecutively before any result.
+				// Parallel tool calls share one model turn, potentially
+				// interleaved with model text before any result.
 			default:
 				return nil, fmt.Errorf("transcript item %d starts a new turn before pending tool results", index)
 			}
