@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import uuid
 
@@ -31,8 +32,13 @@ def read_key(path):
 
 
 def run(command, env, secret, timeout=240):
+    if command[0] not in {"docker", "go"}:
+        raise ValueError("unsupported smoke executable")
+    executable = shutil.which(command[0])
+    if executable is None:
+        raise RuntimeError("required smoke executable is unavailable")
     try:
-        result = subprocess.run(command, cwd=ROOT / "golang", env=env,
+        result = subprocess.run([executable, *command[1:]], shell=False, cwd=ROOT / "golang", env=env,
                                 capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         raise RuntimeError("local smoke command timed out") from None
@@ -46,7 +52,7 @@ def run(command, env, secret, timeout=240):
             for line in output.splitlines():
                 if "openai_smoke_integration_test.go:" in line or line.startswith(("FAIL", "--- FAIL", "# ")):
                     print(line, file=sys.stderr)
-        raise RuntimeError("local smoke command failed: " + command[0])
+        raise RuntimeError(f"local smoke command failed: {command[0]}")
     return output
 
 
@@ -68,7 +74,7 @@ def main():
                LLMTW_REDIS_USERNAME="local", LLMTW_REDIS_PASSWORD="local-only",
                LLMTW_REDIS_KEY_PREFIX="llmtw", LLMTW_POSTGRES_PASSWORD="local-only")
     compose = ["docker", "compose", "--env-file", os.devnull, "-f", str(ROOT / "golang/compose.yaml"),
-               "-p", "llmtw-openai-smoke-" + uuid.uuid4().hex[:12]]
+               "-p", f"llmtw-openai-smoke-{uuid.uuid4().hex[:12]}"]
     run(["docker", "info", "--format", "{{.ServerVersion}}"], env, secret, timeout=15)
     try:
         print("Starting isolated local Temporal and Redis", flush=True)
@@ -78,7 +84,7 @@ def main():
                         LLMTW_TEMPORAL_ADDRESS=run(compose + ["port", "temporal", "7233"], env, secret).strip(),
                         LLMTW_REDIS_ADDR=run(compose + ["port", "redis", "6379"], env, secret).strip())
         print("Running gpt-6-luna smoke (one POST maximum, 256 output tokens)", flush=True)
-        run([os.environ.get("GO", "go"), "test", "-count=1", "-timeout=4m",
+        run(["go", "test", "-count=1", "-timeout=4m",
              "-tags=cloudworkflowintegration,openaismoke", "./internal/runtime", "-run", "^TestLocalOpenAISmoke$"], test_env, secret, timeout=270)
         print("PASS: real generation workflow, checkpoint and cache replay")
     finally:
@@ -90,5 +96,5 @@ if __name__ == "__main__":
         main()
     except (OSError, ValueError, RuntimeError) as error:
         # File/command exceptions can contain user-controlled text; do not echo it.
-        print("OpenAI smoke could not complete (" + type(error).__name__ + "). Check Docker, Go and the dotenv file.", file=sys.stderr)
+        print(f"OpenAI smoke could not complete ({type(error).__name__}). Check Docker, Go and the dotenv file.", file=sys.stderr)
         sys.exit(1)

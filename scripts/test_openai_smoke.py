@@ -14,6 +14,11 @@ spec.loader.exec_module(smoke)
 
 
 class SmokeTests(unittest.TestCase):
+    def setUp(self):
+        resolver = patch.object(smoke.shutil, "which", side_effect=lambda name: f"/tools/{name}")
+        resolver.start()
+        self.addCleanup(resolver.stop)
+
     def keyfile(self, directory, text):
         path = Path(directory) / ".env"
         path.write_text(text)
@@ -32,6 +37,7 @@ class SmokeTests(unittest.TestCase):
     def test_secret_only_enters_go_child_and_cleanup_is_scoped(self):
         calls = []
         def execute(command, **kwargs):
+            self.assertIs(kwargs["shell"], False)
             calls.append((command, dict(kwargs["env"])))
             output = "127.0.0.1:12345\n" if "port" in command else "ok\n"
             return subprocess.CompletedProcess(command, 0, output, "")
@@ -46,7 +52,7 @@ class SmokeTests(unittest.TestCase):
         for command, env in calls:
             self.assertNotIn("test-value", command)
             self.assertNotIn("COMPOSE_FILE", env)
-            if command[0] == "docker":
+            if Path(command[0]).name == "docker":
                 self.assertNotIn("OPENAI_API_KEY", env)
         down = calls[-1][0]
         self.assertIn("down", down)
@@ -68,6 +74,12 @@ class SmokeTests(unittest.TestCase):
                 self.assertNotIn("test-value", str(caught.exception))
                 self.assertNotIn("secret response body", str(caught.exception))
         self.assertIn("down", commands[-1])
+
+    def test_unexpected_executable_is_rejected_before_subprocess(self):
+        with patch.object(smoke.subprocess, "run") as execute:
+            with self.assertRaises(ValueError):
+                smoke.run(["sh", "-c", "unexpected"], {}, "test-value")
+            execute.assert_not_called()
 
     def test_docker_timeout_does_not_start_stack(self):
         with tempfile.TemporaryDirectory() as directory:
