@@ -177,3 +177,13 @@ func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 }
 
 func intPointer(value int) *int { return &value }
+
+func TestEstimateRejectsOverlappingReasoningPrices(t *testing.T) {
+	for _, family := range []string{"openai_chat", "openai_responses"} {
+		entry := pricing.Entry{Family: family, Prices: pricing.UnitPrices{ReasoningPerMillion: pricing.MustDecimalUSD("1")}}
+		_, err := (Estimator{}).EstimateCandidate(llm.Request{}, routing.Candidate{Family: family}, entry)
+		if !errors.Is(err, ErrUnusablePrice) {
+			t.Fatalf("%s error = %v, want unusable price", family, err)
+		}
+	}
+}

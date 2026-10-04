@@ -3,6 +3,9 @@ package pricing
 import "fmt"
 
 func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
+	if err := entry.ValidateUsagePricing(); err != nil {
+		return Cost{}, err
+	}
 	components := []struct {
 		component     PriceComponent
 		price         DecimalUSD
