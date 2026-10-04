@@ -37,11 +37,15 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 	if compact.Request == nil {
 		return llm.GenerationPlanV1{}, nil
 	}
+	providers := r.execution.admission.planning.providers
+	input.Request, err = providers.normalizeRequest(input.Request)
+	if err != nil {
+		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
+	}
 	encoded, err := json.Marshal(input.Request)
 	if err != nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 	}
-	providers := r.execution.admission.planning.providers
 	catalog, err := copyProviderCatalog(providers.catalog)
 	if err != nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeConfiguration)
