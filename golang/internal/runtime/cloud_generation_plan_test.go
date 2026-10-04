@@ -93,3 +93,38 @@ func TestCloudGenerationPlanLargeInputAndTokenizerFailure(t *testing.T) {
 		t.Fatal("tokenizer failure ignored")
 	}
 }
+
+func TestCloudGenerationPlanMaterializesOutputCap(t *testing.T) {
+	f := boundedCloud(t, false)
+	policy := json.RawMessage(`{"recent_turns":0}`)
+	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	parent := f.finish(t)
+	handle := parent.Generate.Checkpoint.Handle
+	f.request.Parent = &handle
+	f.request.OperationKey = "next-output-cap"
+	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.restart(t)
+	providers := f.runtime.execution.admission.planning.providers
+	providers.outputLimit = 1000
+	seen := false
+	providers.planner = planningPlannerFunc(func(ctx context.Context, input routing.Input) (routing.Plan, error) {
+		seen = true
+		if input.Request.Output == nil || input.Request.Output.MaxTokens == nil {
+			t.Fatal("preflight omitted effective output cap")
+		}
+		for name, model := range input.Catalog.Models {
+			for i := range model.Routes {
+				model.Routes[i].OutputTokens = int64(*input.Request.Output.MaxTokens)
+			}
+			input.Catalog.Models[name] = model
+		}
+		return (routing.DeterministicPlanner{}).Plan(ctx, input)
+	})
+	before := f.submits.Load()
+	if _, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil {
+		t.Fatal(err)
+	}
+	if !seen || f.submits.Load() != before {
+		t.Fatal("preflight skipped planning or performed paid work")
+	}
+}

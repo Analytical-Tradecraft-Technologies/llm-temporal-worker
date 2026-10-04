@@ -182,6 +182,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				AllowedTenants:      append([]string(nil), modelValue.AllowedTenants...),
 				AllowedRegions:      append([]string(nil), modelValue.DataRegions...),
 				Capabilities:        routingCapabilities(profile.Set),
+				OutputTokens:        profile.OutputTokens,
 				PriceVersion:        priceVersion,
 				PriceAvailable:      priceAvailable,
 				ExtensionNames:      extensions,

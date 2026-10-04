@@ -129,6 +129,9 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 			}
 		}
 	}
+	if !route.SupportsOutputLimit(request) {
+		return reject(RejectCapability, "output.max_tokens", "request output limit is missing or exceeds the route output ceiling")
+	}
 	if route.ContextBytes > 0 {
 		requestBytes, _ := llm.CanonicalJSON(mustRequestJSON(request))
 		if len(requestBytes) > route.ContextBytes {
