@@ -66,10 +66,10 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, err
 	}
-	if policy != nil {
+	if len(request.Tools) > 0 && policy != nil {
 		requestMap["tool_choice"] = policy
 	}
-	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
+	if len(request.Tools) > 0 {
 		requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
 	}
 	if request.Continuation != nil {
