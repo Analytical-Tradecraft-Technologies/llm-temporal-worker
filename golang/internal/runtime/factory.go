@@ -525,6 +525,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	budgets, err := redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
 		Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
 		FunctionVersion: value.State.Redis.AdmissionVersion, GenerationID: redisBudgetGeneration, IncarnationID: durablestore.IncarnationID(redisBudgetGeneration), Clock: clock,
+		CoordinationStreamEnabled: streamEnabled,
 	})
 	if err != nil {
 		closeAll()

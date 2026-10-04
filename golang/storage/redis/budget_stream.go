@@ -21,6 +21,8 @@ type BudgetStreamEventKind string
 
 const (
 	BudgetEventReserve          BudgetStreamEventKind = "reserve"
+	BudgetEventClaim            BudgetStreamEventKind = "claim"
+	BudgetEventExpire           BudgetStreamEventKind = "expire"
 	BudgetEventReconcile        BudgetStreamEventKind = "reconcile"
 	BudgetEventRelease          BudgetStreamEventKind = "release"
 	BudgetEventPolicyRefresh    BudgetStreamEventKind = "policy_refresh"
@@ -61,7 +63,7 @@ func (event BudgetStreamEvent) Validate() error {
 		return fmt.Errorf("unsupported budget stream event schema %q", event.Schema)
 	}
 	switch event.Kind {
-	case BudgetEventReserve, BudgetEventReconcile, BudgetEventRelease, BudgetEventPolicyRefresh, BudgetEventHorizonAdvance, BudgetEventGenerationSwitch, BudgetEventDenial:
+	case BudgetEventReserve, BudgetEventClaim, BudgetEventExpire, BudgetEventReconcile, BudgetEventRelease, BudgetEventPolicyRefresh, BudgetEventHorizonAdvance, BudgetEventGenerationSwitch, BudgetEventDenial:
 	default:
 		return fmt.Errorf("unsupported budget stream event kind %q", event.Kind)
 	}
@@ -79,10 +81,13 @@ func (event BudgetStreamEvent) Validate() error {
 	if event.OccurredAt.IsZero() {
 		return errors.New("budget stream event timestamp is required")
 	}
-	if event.Kind == BudgetEventReserve || event.Kind == BudgetEventReconcile || event.Kind == BudgetEventRelease {
+	if event.Kind == BudgetEventReserve || event.Kind == BudgetEventClaim || event.Kind == BudgetEventReconcile || event.Kind == BudgetEventRelease {
 		if event.OperationHash == "" || event.MemberHash == "" {
 			return errors.New("accounting event requires operation and member digests")
 		}
+	}
+	if event.Kind == BudgetEventExpire && event.MemberHash == "" {
+		return errors.New("expiry event requires a member digest")
 	}
 	return nil
 }

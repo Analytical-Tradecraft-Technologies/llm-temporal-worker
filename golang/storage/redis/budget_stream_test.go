@@ -115,3 +115,24 @@ func TestBudgetStreamEventRejectsRawOrUnboundedAccounting(t *testing.T) {
 		t.Fatal("unsafe nano delta accepted")
 	}
 }
+
+func TestBudgetStreamClaimAndExpiryRequireOpaqueMembers(t *testing.T) {
+	for _, kind := range []BudgetStreamEventKind{BudgetEventClaim, BudgetEventExpire} {
+		t.Run(string(kind), func(t *testing.T) {
+			event := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: kind, GenerationID: "generation", OccurredAt: time.Unix(1, 0)}
+			if err := event.Validate(); err == nil {
+				t.Fatal("missing member digest accepted")
+			}
+			event.MemberHash = strings.Repeat("b", 64)
+			if kind == BudgetEventClaim {
+				if err := event.Validate(); err == nil {
+					t.Fatal("claim without operation digest accepted")
+				}
+				event.OperationHash = strings.Repeat("a", 64)
+			}
+			if _, err := event.Marshal(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

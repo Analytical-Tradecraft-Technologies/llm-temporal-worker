@@ -1,10 +1,9 @@
 # Redis budget leases
 
-Redis is the authority for the durable v1 budget boundary. The SQL budget
-journal writer and its exact-cost correction writer have been removed.
-PostgreSQL operation, checkpoint, result, query, and legacy schema code remain
-for the next persistence migration; this change does not remove all SQL
-requirements from the worker.
+Redis is the authority for the durable v1 budget boundary. The worker no longer
+uses a SQL budget journal. Operations, checkpoints, results, and cache records
+use the configured cloud storage provider; none can rebuild lost Redis budget
+authority automatically.
 
 ## Acquisition and paid work
 
@@ -68,15 +67,38 @@ Changing the Redis namespace or policy/window identities is not a limit update:
 it selects different accounting keys. Window geometry changes need a separate
 migration policy.
 
-Workers using the same namespace see the same atomic budget state. The existing
-Redis Stream publisher and tailer contracts are not wired to these mutations or
-started automatically by the runtime. There is currently no automatic broadcast
-of every budget change. A readiness Stream setting does not enable publishing.
+Workers using the same namespace see the same atomic budget state. When
+`state.redis.coordination_stream_enabled` is true, the runtime publishes budget
+events to `<prefix>:{<admission_hash_tag>}:budget:events` in the same Redis
+Function or Lua invocation as the accounting change. The Stream and accounting
+keys share a Redis Cluster slot. Provision the updated admission library before
+starting workers; its digest is pinned in the example and deployment settings.
+Stream publication requires Redis 7 or later and permission for `XADD` and
+`XINFO STREAM`, in addition to the existing accounting commands. A wrong key
+type, denied `XADD`, or exhausted Stream ID is rejected before accounting writes.
 
-The deployment still needs complete Generate and Compact phase factories. See
-[durable runtime composition](durable-v1-runtime.md). This change supplies the
-Redis budget capability and removes the SQL journal phase; it does not create
-the planned budget-waiting or LLM orchestration workflows.
+Each affected budget member produces a `reserve`, `claim`, `reconcile`, or
+`release` hint. Idempotent acquisition and settlement replays do not republish;
+claim replays remain rejected. `denial` records each unsuccessful capacity check,
+so a later workflow retry may produce another denial. `expire` is emitted when
+bounded cleanup actually removes an unused reservation or aged settled cost,
+which happens during a later mutation rather than at the expiry instant.
+
+Events carry opaque member and operation digests, a generation, revision,
+timestamp, and non-negative nano-USD delta magnitude. Claims have zero delta;
+reconciliation deltas are absolute changes, so these hints cannot reconstruct an
+accounting ledger. Expiry has revision zero and no operation digest because the
+expiry index identifies a reservation fingerprint rather than an operation key.
+No raw policy, window, or operation identifiers are published.
+
+Every reader uses its own cursor through `BudgetEventPort`, allowing each worker
+to see the same events. A shared consumer group would distribute events instead
+and is unsuitable here. Publication does not start a background tailer in the
+runtime; wiring adoption and wake-ups remains separate work. The Stream never
+authorizes provider dispatch. No automatic trimming is enabled, so retention
+must account for Stream growth until cursor-aware maintenance is implemented.
+
+See [durable runtime composition](durable-v1-runtime.md) for workflow wiring.
 
 ## Verification
 
@@ -90,6 +112,8 @@ and Lua, with the race detector enabled locally, covering:
 - atomic multi-window failures and malformed Redis keys;
 - configuration reloads, wait/retry behavior, and ambiguous paid retries;
 - AOF restart recovery of claimed work, settled cost, and deduplication records.
+- atomic event publication, independent readers, and duplicate suppression after
+  lost replies, including wrong-type, ACL-denied, and exhausted-ID Streams.
 
 Run `make verify`, `make redis-integration`, and, for race-enabled integration,
 `GOFLAGS=-race make redis-integration` from `golang/`.

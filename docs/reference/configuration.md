@@ -95,7 +95,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: 311bccc51d07fc36631e3f919b5d0d2ca572f363095f12c7aa6dbe566f303999
+    admission_digest: 794fdf5c7d8ec351a5a207501e9073a7330f16dad408171bba8971d0a9dfaef2
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -634,7 +634,11 @@ both AOF and a non-empty RDB save policy, while `aof` and `rdb` require only
 their named mechanism. Any mismatch fails readiness closed.
 
 `coordination_stream_enabled` defaults to `true` in durable deployments and
-`false` for memory or Redis-only fixtures. `stream_trim_safety` defaults to
+`false` for memory or Redis-only fixtures. When enabled, durable budget
+mutations publish coordination hints in the same Redis invocation; see
+[Redis budget leases](redis-budget-leases.md#configuration-and-worker-coordination)
+for event and retry semantics. Runtime background consumption remains separate.
+`stream_trim_safety` defaults to
 `10m` when the Stream check is enabled and must be between one second and 30
 days. Readiness resolves the namespaced events key and performs `TYPE` and
 `XINFO STREAM` checks: the key must be a Stream with valid monotonic IDs, no

@@ -371,15 +371,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: 311bccc51d07fc36631e3f919b5d0d2ca572f363095f12c7aa6dbe566f303999",
-		"admission_digest: 311BCCC51D07FC36631E3F919B5D0D2CA572F363095F12C7AA6DBE566F303999",
+		"admission_digest: 794fdf5c7d8ec351a5a207501e9073a7330f16dad408171bba8971d0a9dfaef2",
+		"admission_digest: 794FDF5C7D8EC351A5A207501E9073A7330F16DAD408171BBA8971D0A9DFAEF2",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "311bccc51d07fc36631e3f919b5d0d2ca572f363095f12c7aa6dbe566f303999"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "794fdf5c7d8ec351a5a207501e9073a7330f16dad408171bba8971d0a9dfaef2"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -526,7 +526,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 311bccc51d07fc36631e3f919b5d0d2ca572f363095f12c7aa6dbe566f303999", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 794fdf5c7d8ec351a5a207501e9073a7330f16dad408171bba8971d0a9dfaef2", "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
