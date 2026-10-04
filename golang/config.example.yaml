@@ -25,6 +25,14 @@ temporal:
     graceful_stop_timeout: 30s
     heartbeat_keepalive_interval: 1s
 
+# Only use this policy with authenticated, trusted Temporal namespace callers.
+# Each caller may select any exact pair listed here.
+authorization:
+  mode: trusted_temporal
+  allowed_scopes:
+    - tenant: acme
+      project: invoice-processing
+
 state:
   kind: durable
   operation_terminal_retention: 45d

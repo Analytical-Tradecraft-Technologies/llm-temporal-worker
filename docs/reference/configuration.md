@@ -16,6 +16,23 @@ runtime construction, while `validate-config` and
 The effective non-secret configuration is canonicalized and hashed as
 `config_version`.
 
+## Caller authorization
+
+The production CLI requires `authorization.mode: trusted_temporal` and a
+non-empty `authorization.allowed_scopes` list of exact `{tenant, project}` pairs.
+Temporal must authenticate callers and restrict namespace access. Every trusted
+namespace caller can select any listed pair; this is not per-principal tenant
+authorization. Actor and tags are descriptive fields, not credentials.
+
+No wildcard or default grant is supported. Identifiers are case-sensitive,
+at most 256 UTF-8 bytes and cannot contain whitespace, control characters, `*`
+or `?`. Duplicate pairs and unknown fields are rejected. The policy participates
+in the configuration digest and reloads with its snapshot. An absent policy is
+accepted by the config library for custom embeddings with their own resolver,
+but production CLI startup rejects it. `llm.query.v1` remains independently
+configured and is not enabled by this policy. See
+[durable runtime composition](durable-v1-runtime.md) for scope and reload details.
+
 ## Complete shape
 
 This example shows the v1 fields. Names and model identifiers are illustrative;
@@ -48,6 +65,12 @@ temporal:
     max_concurrent_activity_task_polls: 8
     graceful_stop_timeout: 30s
     heartbeat_keepalive_interval: 1s
+
+authorization:
+  mode: trusted_temporal
+  allowed_scopes:
+    - tenant: acme
+      project: invoice-processing
 
 state:
   kind: durable

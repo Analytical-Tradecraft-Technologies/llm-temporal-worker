@@ -73,21 +73,22 @@ func parseDuration(value string) (time.Duration, error) {
 }
 
 type Config struct {
-	Version      string                    `yaml:"version" json:"version"`
-	Environment  string                    `yaml:"environment" json:"environment"`
-	Server       ServerConfig              `yaml:"server" json:"server"`
-	Temporal     TemporalConfig            `yaml:"temporal" json:"temporal"`
-	State        StateConfig               `yaml:"state" json:"state"`
-	BlobStore    BlobStoreConfig           `yaml:"blob_store" json:"blob_store"`
-	Limits       LimitsConfig              `yaml:"limits" json:"limits"`
-	Endpoints    map[string]EndpointConfig `yaml:"endpoints" json:"endpoints"`
-	Models       map[string]ModelConfig    `yaml:"models" json:"models"`
-	Capabilities CapabilityConfig          `yaml:"capabilities" json:"capabilities"`
-	Pricing      PricingConfig             `yaml:"pricing" json:"pricing"`
-	BudgetsJSON  string                    `yaml:"budgets_json,omitempty" json:"-"`
-	Budgets      BudgetsConfig             `yaml:"budgets" json:"budgets"`
-	Continuation ContinuationConfig        `yaml:"continuation" json:"continuation"`
-	Telemetry    TelemetryConfig           `yaml:"telemetry" json:"telemetry"`
+	Version       string                    `yaml:"version" json:"version"`
+	Environment   string                    `yaml:"environment" json:"environment"`
+	Server        ServerConfig              `yaml:"server" json:"server"`
+	Temporal      TemporalConfig            `yaml:"temporal" json:"temporal"`
+	Authorization *AuthorizationConfig      `yaml:"authorization,omitempty" json:"authorization,omitempty"`
+	State         StateConfig               `yaml:"state" json:"state"`
+	BlobStore     BlobStoreConfig           `yaml:"blob_store" json:"blob_store"`
+	Limits        LimitsConfig              `yaml:"limits" json:"limits"`
+	Endpoints     map[string]EndpointConfig `yaml:"endpoints" json:"endpoints"`
+	Models        map[string]ModelConfig    `yaml:"models" json:"models"`
+	Capabilities  CapabilityConfig          `yaml:"capabilities" json:"capabilities"`
+	Pricing       PricingConfig             `yaml:"pricing" json:"pricing"`
+	BudgetsJSON   string                    `yaml:"budgets_json,omitempty" json:"-"`
+	Budgets       BudgetsConfig             `yaml:"budgets" json:"budgets"`
+	Continuation  ContinuationConfig        `yaml:"continuation" json:"continuation"`
+	Telemetry     TelemetryConfig           `yaml:"telemetry" json:"telemetry"`
 }
 
 type ServerConfig struct {

@@ -321,7 +321,7 @@ func TestLoadRejectsWildcardOnlyBudgetMatchers(t *testing.T) {
 }
 
 func TestLoadAcceptsWildcardAlongsideBudgetRestriction(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "tenant: acme", "tenant: \"*\"", 1)
+	data := strings.Replace(string(exampleYAML(t)), "match:\n        tenant: acme", "match:\n        tenant: \"*\"", 1)
 	if _, err := config.Load([]byte(data)); err != nil {
 		t.Fatalf("rejected wildcard with environment restriction: %v", err)
 	}

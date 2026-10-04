@@ -4,8 +4,9 @@
 > authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
 > Worker request state uses generic cloud KV/blob storage; budgets and provider
 > observations use Redis. See [cloud request persistence](../reference/cloud-request-repository.md)
-> for the current composition and recovery contract. Production caller
-> authorization and CLI activation remain explicit deployment prerequisites.
+> for the current composition and recovery contract. The CLI requires an explicit
+> trusted Temporal caller policy; deployment must enforce Temporal authentication
+> and namespace access.
 
 ## Process modes
 
@@ -22,9 +23,10 @@ All three commands accept `--config PATH`, defaulting to
 secret references but never resolved secret values. `validate-config` checks
 the strict document without starting external dependencies. `worker` attempts
 the full production composition and starts Temporal polling only after
-deployment supplies a complete durable `V1RuntimeBuilder` and its phase
-callbacks. Until that deployment-owned seam is present, production startup
-fails closed before listeners or polling; the development fixture is limited to
+the configured durable cloud runtime and `trusted_temporal` caller policy are
+valid. Startup and reload check the CLI caller policy before resolving secret
+references. Missing policy or dependencies fail startup before listeners or polling;
+the development fixture is limited to
 parser/configuration/readiness checks. See the
 [command-line reference](../reference/cli.md) for exact behavior and exit
 statuses.
@@ -62,7 +64,7 @@ configured cloud KV/blob stores own requests, responses, and checkpoints.
 `make cloud-workflow-integration` exercises the cloud runtime with real Temporal
 and Redis over in-memory implementations of the generic KV/blob interfaces.
 The separate AWS gate requires explicit disposable DynamoDB/S3 resources. These
-tests do not activate the production CLI or supply deployment authorization;
+tests do not establish deployed Temporal authentication, IAM or provider access;
 see the [integration gates](../reference/cloud-request-repository.md).
 
 ## Kubernetes base
@@ -91,6 +93,12 @@ repository. Cloud storage uses workload IAM credentials and explicitly
 configured table and bucket aliases; the worker needs no SQL credentials.
 Service-account tokens are disabled in the base and enabled only by the
 workload-identity overlays.
+
+Replace `authorization.allowed_scopes` with the approved exact tenant/project
+pairs and align model and budget tenant constraints with those pairs. The base
+uses `replace-with-tenant` and `replace-with-project`; these are template values.
+Every authenticated caller with access to the Temporal namespace can select any
+listed pair. Authentication and namespace access must be enforced by Temporal.
 
 State and control traffic is not internet-wide. The base permits TCP 6379
 and 7233 only to namespaces labeled

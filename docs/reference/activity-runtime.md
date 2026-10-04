@@ -62,9 +62,9 @@ callers. Their registered result is now `ExecutionResultV1`. The older direct Go
 helpers still return their final response records, but are not registered on
 Temporal. A runtime that lacks `ExecutionRuntime` fails closed for all execution
 activities. `runtime.NewCloudV1RuntimeBuilder` supplies that contract, and the
-typed OCaml client calls the public workflows. The normal production CLI still
-requires an explicit caller-authorization policy and installation of the cloud
-builder; those choices are not inferred from this interface.
+typed OCaml client calls the public workflows. The normal production CLI installs
+the cloud builder with the explicit `trusted_temporal` authorization policy and
+its tenant/project allowlist.
 
 Prepare accepts exactly one Generate or Compact request. Budget acquisition
 attempts once and returns; polling makes one status retrieval and returns.
@@ -198,8 +198,8 @@ configuration reload therefore waits for in-flight query work before closing
 the old snapshot's query clients.
 
 `V1Runtime` is the seam for the durable checkpoint, cache, provider, and
-control-plane implementation. Production composition currently installs an
-explicit fail-closed runtime until that implementation is wired. In every
+control-plane implementation. The CLI composes the cloud runtime from configured
+storage and an explicit caller policy. In every
 environment other than the checked-in `development` fixture, runtime startup
 refuses to start listeners or Temporal polling when this seam is still
 unconfigured (`ErrV1RuntimeUnavailable`). This prevents a production process
@@ -215,8 +215,8 @@ from the same snapshot's cloud request/checkpoint/cache stores, Redis budget
 leaser, provider adapters and signing keys. Its required `ResolveScope` callback
 authorizes each request before storage access. It verifies the cloud identity,
 Redis namespace/hash tag and configuration digest before returning the runtime.
-The builder is installed explicitly through `ProductionFactoryOptions.V1RuntimeBuilder`;
-the normal CLI still needs its production authorization policy. See
+Embeddings install it through `ProductionFactoryOptions.V1RuntimeBuilder`;
+the CLI binds it to the same snapshot's `trusted_temporal` policy. See
 [durable runtime composition](durable-v1-runtime.md).
 
 Direct phase adapters such as `activity.DurableV1Runtime` and the separate

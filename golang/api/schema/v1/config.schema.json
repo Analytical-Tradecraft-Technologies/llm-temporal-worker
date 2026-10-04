@@ -13,6 +13,7 @@
     "environment": { "type": "string", "minLength": 1 },
     "server": { "$ref": "#/$defs/server" },
     "temporal": { "$ref": "#/$defs/temporal" },
+    "authorization": { "$ref": "#/$defs/authorization" },
     "state": { "$ref": "#/$defs/state" },
     "blob_store": { "$ref": "#/$defs/blob_store" },
     "limits": { "$ref": "#/$defs/limits" },
@@ -71,6 +72,29 @@
     }
   ],
   "$defs": {
+    "authorization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "allowed_scopes"],
+      "properties": {
+        "mode": { "const": "trusted_temporal" },
+        "allowed_scopes": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["tenant", "project"],
+            "properties": {
+              "tenant": { "$ref": "#/$defs/authorization_identifier" },
+              "project": { "$ref": "#/$defs/authorization_identifier" }
+            }
+          }
+        }
+      }
+    },
+    "authorization_identifier": {
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^[^\\s*?\\x00-\\x1f\\x7f]+$",
+      "description": "Exact identifier. Runtime additionally bounds UTF-8 byte length and rejects all Unicode whitespace and control characters."
+    },
     "duration": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)([0-9]+(ns|us|µs|ms|s|m|h|d))*$" },
     "secret": {
       "type": "object", "additionalProperties": false,
