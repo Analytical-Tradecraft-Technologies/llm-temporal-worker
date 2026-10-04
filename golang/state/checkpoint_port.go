@@ -1,8 +1,8 @@
 package state
 
 // This file defines the storage-neutral contract between checkpoint
-// materialization and a future durable repository.  It deliberately contains
-// no SQL, blob-store client, Temporal payload, or provider implementation.
+// materialization and durable repositories. It contains no storage client,
+// Temporal payload, or provider implementation.
 
 import (
 	"context"

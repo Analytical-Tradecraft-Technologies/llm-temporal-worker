@@ -105,7 +105,11 @@ budget contracts. Redis integration uses the isolated pinned daemon described
 above. Runtime tests check snapshot identity, authorization before storage,
 restart recovery, idempotent finalization and bounded polling.
 
-`TestWorkerHasNoSQLDependencies` checks the compiled worker's dependency graph.
+Architecture tests inspect all Go package/test dependencies, source imports
+(including build-tagged files) and explicit module requirements/replacements.
+They reject SQL connection APIs and drivers. UUID serialization's transitive
+`database/sql/driver` interfaces are the sole permitted interface-only exception;
+worker source cannot import that package directly.
 Configuration tests reject the removed SQL section and require cloud storage
 for durable mode. Temporal's local PostgreSQL service belongs to Temporal and
 is retained; the worker has no SQL database or schema installer. Real cloud
@@ -187,7 +191,7 @@ The storage-neutral durable checkpoint seam also has an offline recovery proof:
 one persisted parent and three immutable children, materializes one branch,
 reconstructs a replacement materializer, and replays the other branches. It
 asserts each branch retains its own delta/response and parent lineage. This
-proves restart-safe replay and fork isolation without PostgreSQL, Redis,
+proves restart-safe replay and fork isolation without cloud services, Redis,
 Temporal, provider credentials, or blob-network access. It is deliberately
 separate from the live backup/restore and concurrent database proofs in the
 forkable conversation-state plan; passing this test does not claim those
@@ -199,7 +203,7 @@ The same seam has a bounded scale regression in
 immutable parent into 100 concurrent children, and rebuilds a replacement graph
 from the published rows before replaying every branch. The snapshots are the
 storage-neutral artifact used by the compaction path; the test deliberately does
-not claim that PostgreSQL/blob backup restore, Temporal crash-boundary injection,
+not claim that cloud KV/blob backup restore, Temporal crash-boundary injection,
 or Redis generation rebuild has been exercised. Those remain integration gates
 in the production implementation plan.
 
@@ -220,7 +224,7 @@ replay tests by simulating an object-store restore that returns bytes different
 from the immutable locator digest. The scoped reader rejects the payload before
 decoding it, so a backup/restore exercise cannot silently materialize corrupted
 checkpoint state. This is a storage-reader integrity proof, not a substitute
-for the still-planned PostgreSQL, blob, and Redis backup/restore drill.
+for the still-planned cloud KV, blob, and Redis backup/restore drill.
 
 `memory.TestContinuationStoreHundredWaySameKeyReplay` complements that graph
 test with a 100-way retry storm. Distinct operation keys must create 100
@@ -228,16 +232,16 @@ independent immutable siblings, while 100 concurrent retries of one
 parent/operation key must all return one elected child handle. This test also
 guards the in-process contract against the check-then-publish race that could
 otherwise mint duplicate branches; it is an offline storage contract and does
-not claim durable PostgreSQL or Temporal execution evidence.
+not claim live cloud or Temporal execution evidence.
 
 The storage-neutral Generate runner also has a deterministic crash-boundary
-contract in `TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit`. The
-harness treats finalization as the durable PostgreSQL commit, injects a worker
+contract in `TestGenerateV1CrashAfterResultFinalizationDoesNotResubmit`. The
+harness treats finalization as the durable result commit, injects a worker
 failure before Redis reconciliation, then retries from the persisted pending
 identities. The retry performs reconciliation only, and a later replay returns
 the committed response; reservation, journal, provider dispatch, and
 finalization each occur exactly once. This proves the runner's no-resubmission
-boundary without claiming that a live Temporal worker, PostgreSQL backup, or
+boundary without claiming that a live Temporal worker, cloud backup, or
 provider has been exercised.
 
 ### Adapter contract tests
@@ -282,7 +286,7 @@ compaction requests and creates three siblings from the same checkpoint. Every
 wire record carries only a bounded append and checkpoint handle; the test
 rejects ancestor transcript data and records the largest Generate/Compact
 payload. This is an offline payload-boundary proof, not a substitute for the
-guarded Temporal/PostgreSQL crash, persistence, or backup/restore suites.
+guarded Temporal/cloud crash, persistence, or backup/restore suites.
 
 ### Property and fuzz tests
 

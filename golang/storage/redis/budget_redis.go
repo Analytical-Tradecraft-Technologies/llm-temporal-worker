@@ -26,7 +26,7 @@ var ErrBudgetStreamInvalid = errors.New("invalid budget stream state")
 
 // ErrBudgetStreamGap indicates that the requested cursor is older than the
 // retained Stream prefix. Callers must discard local hints and reload the
-// active generation; a Stream gap is never repaired from PostgreSQL online.
+// active generation directly from Redis.
 var ErrBudgetStreamGap = errors.New("budget stream cursor gap")
 
 const (

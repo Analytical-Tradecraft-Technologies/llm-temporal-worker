@@ -1,41 +1,17 @@
-# ADR 0015: Bounded budget bucket retention fence
+# ADR 0015: Budget retention requires accounting evidence
 
-- Status: Accepted implementation slice
-- Date: 2026-07-26
-- Complements: ADR 0007, ADR 0010, and Task 20 of the forkable conversation plan
+- Status: Superseded implementation; conservative retention principle retained
+- Original date: 2026-07-26
 
-## Context
+The former bucket-pruning adapter and its maintenance command have been removed.
+They are not supported operations on the current Redis accounting store.
 
-Task 20 deliberately leaves full operation and budget retention disabled until
-their foreign-key, journal, and cold-rebuild obligations are handled. A
-separate terminal-operation orphan pass is limited to inline, unreferenced,
-non-unknown-cost rows; it does not remove audit-bearing or budget-linked
-operations. Empty historical budget buckets are a smaller safe slice: they
-carry only a projection, while journal history remains the rebuild authority.
+Redis owns monetary reservations and settlement. Unclaimed authorizations can
+expire after their start deadline, but claimed or unresolved paid work cannot
+be refunded by a retention sweep. Operation identities and settlement event
+tombstones must continue to prevent old retries from granting or refunding
+budget again. Automatic cleanup of these records remains deferred.
 
-## Decision
-
-`MaintenanceRepository.PruneExpiredBudgetBuckets` performs a bounded,
-indexed PostgreSQL pass. The caller supplies a cutoff already constrained by
-the maximum configured window horizon. The query locks candidates with
-`FOR UPDATE SKIP LOCKED` and deletes only buckets whose reserved and accounted
-projections are exactly zero and which have no operation reservation row.
-Journal events are never deleted, and any reservation row—including finalized
-or released history—remains a fence until a future operation-retention design
-can account for its audit and foreign-key obligations.
-
-The method does not read Redis, infer the window horizon, or load the active
-budget working set into a worker. It is therefore safe to run as a bounded
-maintenance pass, but it does not claim that operation or journal retention is
-complete.
-
-## Evidence
-
-- `golang/storage/postgres/maintenance.go` implements the indexed, locked
-  deletion contract and reports bounded maintenance results.
-- `golang/storage/postgres/budget_bucket_retention_integration_test.go` proves
-  a remaining reservation row fences an empty bucket and that the bucket is
-  deleted only after the fence is removed.
-- `golang/storage/postgres/maintenance_integration_test.go` proves the
-  terminal-operation orphan pass deletes only an unreferenced row and retains
-  active, attempt-bearing, fresh, and unknown-cost operations.
+See [Redis budget leases](../reference/redis-budget-leases.md) and
+[maintenance](../reference/maintenance.md). Future retention must preserve these
+invariants and account for every supported retry horizon before deleting state.

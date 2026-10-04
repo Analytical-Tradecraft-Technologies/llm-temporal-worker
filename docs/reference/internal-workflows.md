@@ -41,10 +41,11 @@ and a 24-hour schedule-to-close retry horizon with exponential backoff capped at
 one minute. These are failure/recovery limits, not provider or budget wait loops.
 The provider timeout must leave time inside that activity window for accounting.
 
-The workflows are available through `workflows.RegisterInternal`; this PR does
-not yet register them in production. Public generation/compaction workflows,
-production cloud runtime composition, and real dependency E2E verification follow.
-The tests use Temporal's workflow test environment and virtual timers.
+`workflows.Register` registers these internal workflows alongside the public
+workflows in the worker. The normal durable CLI supplies the cloud execution
+runtime with explicit trusted-Temporal authorization. Tests use Temporal's
+workflow test environment and virtual timers; local service gates provide
+separate real Temporal/Redis evidence.
 
 ## Public workflows and compaction planning
 
@@ -73,10 +74,10 @@ patch takes effect after compaction and governs subsequent turns.
 
 Planning performs no writes, reservations, claims, or provider requests. It
 returns only a boolean; materialized history stays out of its activity result.
-The public and internal workflow implementations are available through
-`workflows.Register`. Production registration and runtime composition remain the
-next integration step. The activity registry now advertises eight v1 activities,
-including the new planning activity.
+The public and internal workflow implementations are registered through
+`workflows.Register`. The activity registry registers eight v1 activities,
+including planning. See the [implementation boundary](mvp-v1-status.md) for the
+complete list and remaining optional capabilities.
 
 ### Failed attempts and retry timing
 

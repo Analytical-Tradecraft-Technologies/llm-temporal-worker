@@ -107,10 +107,9 @@ func (event BudgetStreamEvent) Marshal() ([]byte, error) {
 	return data, nil
 }
 
-// BudgetGenerationPort is the explicit boundary used by readiness, adoption,
-// and the future fenced bootstrap coordinator. It does not expose a PostgreSQL
-// fallback: callers must prove an allowed rebuild condition before invoking a
-// recovery implementation.
+// BudgetGenerationPort reads and publishes Redis generation metadata.
+// Publishing a manifest alone does not prove the budget working set is intact
+// and must never authorize spending or recreate lost budget authority.
 type BudgetGenerationPort interface {
 	ActiveGeneration(context.Context) (ActiveBudgetGeneration, error)
 	LoadManifest(context.Context, ActiveBudgetGeneration) (BudgetManifest, error)

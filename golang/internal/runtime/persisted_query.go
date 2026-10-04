@@ -45,7 +45,7 @@ type inventoryReader interface {
 // status query. The reader owns the Redis generation/manifest/window
 // validation: it must reject a requested instant outside the active coverage,
 // bind the result to the active generation and Stream high-water mark, and
-// never consult PostgreSQL budget tables. Keeping this contract above the
+// read budget values only from Redis. Keeping this contract above the
 // storage package avoids inventing a Redis window-hash field layout before
 // the generation materializer publishes that format.
 type BudgetStatusReader interface {
@@ -68,7 +68,7 @@ type BudgetStatusReaderFactory func(context.Context, *config.Snapshot, redisstor
 // NewRedisBudgetStatusReaderFactory adapts the storage implementation to the
 // runtime query seam. Deployments may wrap or replace it when they need an
 // explicitly controlled Function invoker, but must return nil on unavailable
-// state rather than falling back to PostgreSQL.
+// state.
 func NewRedisBudgetStatusReaderFactory() BudgetStatusReaderFactory {
 	return func(_ context.Context, _ *config.Snapshot, options redisstore.BudgetStatusReaderOptions) (BudgetStatusReader, error) {
 		return redisstore.NewRedisBudgetStatusReader(options)
@@ -92,7 +92,7 @@ type PersistedQueryOptions struct {
 	Clock        func() time.Time
 	ResolveScope QueryScopeResolver
 	// BudgetStatus is required to expose budget_status. It must be backed by
-	// the active Redis generation and must not fall back to PostgreSQL.
+	// the active Redis generation.
 	BudgetStatus BudgetStatusReader
 }
 

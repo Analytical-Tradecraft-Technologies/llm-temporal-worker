@@ -270,7 +270,7 @@ the only run bound to the retained release-evidence artifact.
 | [#568](https://github.com/mfow/llm-temporal-worker/pull/568) listed merged validation through #567 | `1aae4ff2095a5adaf3fee13aa696d78d73616ddd` | [30795754773](https://github.com/mfow/llm-temporal-worker/actions/runs/30795754773) |
 
 PR #265 intentionally remains a storage read seam. The production query
-composition still requires an explicit PostgreSQL-authoritative builder for
+composition still requires an explicit authorized aggregation reader for
 spend summary and remains fail-closed when that builder is absent, as described
 in [the Activity runtime boundary](../reference/activity-runtime.md) and
 [persisted query composition](../reference/persisted-query-service.md). This

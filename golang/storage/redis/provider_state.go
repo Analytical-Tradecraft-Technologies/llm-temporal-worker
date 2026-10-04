@@ -73,7 +73,7 @@ func (store *ProviderStateStore) key(kind string, digest [32]byte) string {
 	return store.space.admissionKey("provider-"+kind, hex.EncodeToString(digest[:]))
 }
 
-// RecordProviderStatus implements the engine recorder without depending on SQL.
+// RecordProviderStatus implements the engine recorder using shared Redis state.
 func (store *ProviderStateStore) RecordProviderStatus(ctx context.Context, observation control.StatusObservation) error {
 	event, err := control.NewStatusEvent(observation)
 	if err != nil {

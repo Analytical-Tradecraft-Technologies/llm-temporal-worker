@@ -33,8 +33,8 @@ type MaterializedCompactRuntime interface {
 }
 
 // ScopeResolver maps the authenticated request context to the opaque durable
-// state scope. There is deliberately no default concatenation: PostgreSQL
-// scopes are stable identifiers, not raw tenant/project strings.
+// state scope. Scopes are stable identifiers derived by the trusted
+// composition, not raw concatenated tenant/project strings.
 type ScopeResolver func(llm.RequestContext) (string, error)
 
 // MaterializingV1Runtime is a narrow composition seam for the one-shot v1

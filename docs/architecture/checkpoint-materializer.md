@@ -36,7 +36,7 @@ that have already been resolved.
 
 The storage-neutral DTO and repository/UoW ports are documented in [Durable
 checkpoint repository port](../reference/checkpoint-repository-port.md). The
-PostgreSQL adapter now supplies scoped reads and immutable metadata/child-row
+cloud adapter supplies scoped reads and conditional immutable metadata
 publication through that port. Blob bytes must be uploaded first, and the
 adapter verifies blob scope and metadata before entering the checkpoint row.
 Operation/result publication, retention, Activity payload wiring, and
@@ -66,6 +66,7 @@ decodes every referenced delta/response/patch (and an optional verified
 self-contained snapshot), then delegates final validation to the existing
 bounded `CheckpointGraph` materializer. It can accept an opaque handle only
 through the scope-bound `CheckpointHandleVerifier`; the UUID hidden inside a
-verified handle is not exposed in the Activity payload. The adapter has no SQL
-transaction, blob publication, retention, provider call, or Generate/Compact
-dispatch path. Those runtime integrations remain explicitly unimplemented.
+verified handle is not exposed in the Activity payload. The materializer itself
+does not publish blobs, delete retained state or dispatch provider work. The
+cloud runtime composes it with those execution and publication boundaries;
+automatic production retention remains separate work.

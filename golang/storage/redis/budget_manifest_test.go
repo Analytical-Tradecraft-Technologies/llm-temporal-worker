@@ -96,18 +96,17 @@ func TestBudgetManifestRejectsMissingDuplicateOrUnprovenMembers(t *testing.T) {
 func TestBudgetManifestValidateAgainstExpectedCatalog(t *testing.T) {
 	manifest := testBudgetManifest(t)
 	expected := BudgetManifestExpectation{
-		GenerationID:         manifest.GenerationID,
-		IncarnationID:        manifest.IncarnationID,
-		ConfigVersion:        manifest.ConfigVersion,
-		PriceVersion:         manifest.PriceVersion,
-		PolicyHash:           manifest.PolicyHash,
-		WindowHash:           manifest.WindowHash,
-		CoverageStart:        manifest.CoverageStart,
-		CoverageEnd:          manifest.CoverageEnd,
-		StreamHighWaterMark:  manifest.StreamHighWaterMark,
-		RoundingVersion:      manifest.RoundingVersion,
-		JournalHighWaterMark: manifest.JournalHighWaterMark,
-		Members:              append([]BudgetManifestMember(nil), manifest.Members...),
+		GenerationID:        manifest.GenerationID,
+		IncarnationID:       manifest.IncarnationID,
+		ConfigVersion:       manifest.ConfigVersion,
+		PriceVersion:        manifest.PriceVersion,
+		PolicyHash:          manifest.PolicyHash,
+		WindowHash:          manifest.WindowHash,
+		CoverageStart:       manifest.CoverageStart,
+		CoverageEnd:         manifest.CoverageEnd,
+		StreamHighWaterMark: manifest.StreamHighWaterMark,
+		RoundingVersion:     manifest.RoundingVersion,
+		Members:             append([]BudgetManifestMember(nil), manifest.Members...),
 	}
 	if err := manifest.ValidateAgainst(expected); err != nil {
 		t.Fatalf("matching expectation rejected: %v", err)
@@ -186,7 +185,7 @@ func testBudgetManifest(t *testing.T) BudgetManifest {
 		ConfigVersion: "config-v1", PriceVersion: "prices-v1", PolicyHash: policyHash, WindowHash: windowHash,
 		RebuildComplete: true, CoverageStart: start, CoverageEnd: end, PolicyCount: 2, WindowCount: 2,
 		BucketCount: 8, StreamHighWaterMark: "42-0", RoundingVersion: BudgetRoundingVersion,
-		JournalHighWaterMark: 17, MemberCatalogDigest: catalog, Members: members,
+		MemberCatalogDigest: catalog, Members: members,
 	}
 }
 

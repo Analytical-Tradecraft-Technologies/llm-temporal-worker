@@ -200,7 +200,7 @@ func (s *checkpointStore) validateReferences(ctx context.Context, checkpoint sta
 	}
 	// Operation/cache IDs are provenance supplied by the finalizer. Their
 	// existence and request authorization belong to that composition, not to
-	// this adapter; they are not SQL foreign keys or paid-work authorization.
+	// this adapter; they do not independently authorize paid work.
 	return nil
 }
 

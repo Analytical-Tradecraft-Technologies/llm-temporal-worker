@@ -14,8 +14,8 @@ import (
 )
 
 // ResourceKind identifies the durable table whose retention policy is being
-// evaluated.  The values mirror the independent retention horizons in the
-// PostgreSQL design; a policy may leave any horizon unset.
+// evaluated.  Each resource has an independent retention horizon; a policy
+// may leave any horizon unset.
 type ResourceKind string
 
 const (
@@ -92,8 +92,8 @@ func (policy RetentionPolicy) Validate() error {
 }
 
 // Eligible applies the conservative, storage-neutral part of the policy.
-// SQL adapters must repeat the same predicates in their locked query rather
-// than relying on a previously returned RetentionRecord.
+// Adapters must atomically recheck these predicates when applying retention
+// rather than relying on a previously returned RetentionRecord.
 func (record RetentionRecord) Eligible(policy RetentionPolicy) bool {
 	if record.ID == "" || record.Active || record.HasRetainedDescendant || record.HasActiveFill || record.HasActiveUse || record.HasExternalBlobReference {
 		return false
@@ -142,7 +142,7 @@ type RetentionResult struct {
 	Skipped    int
 }
 
-// RetentionStore is implemented by PostgreSQL and development adapters.  The
+// RetentionStore defines the boundary for a future durable adapter. The
 // call is intentionally one bounded unit so claim, recheck, tombstone/delete,
 // and outbox publication can share one transaction where the backend supports
 // it.
@@ -151,9 +151,8 @@ type RetentionStore interface {
 }
 
 // InMemoryRetention is a deterministic adapter for unit tests and the memory
-// composition. It serializes the entire bounded pass, matching the atomic
-// recheck guarantee of the PostgreSQL implementation without pretending to be
-// a distributed lock.
+// composition. It serializes the entire bounded pass, providing an atomic
+// recheck within one process. It is not a distributed lock.
 type InMemoryRetention struct {
 	mu      sync.Mutex
 	records map[string]RetentionRecord

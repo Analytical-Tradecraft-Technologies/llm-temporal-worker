@@ -77,7 +77,7 @@ func (identity StateIdentity) Validate() error {
 	return identity.ValidateBudget()
 }
 
-// ValidateBudget does not require a SQL namespace.
+// ValidateBudget checks the Redis namespace independently of cloud state.
 func (identity StateIdentity) ValidateBudget() error {
 	if !redisPrefixPattern.MatchString(identity.Redis.KeyPrefix) {
 		return fmt.Errorf("%w: Redis key prefix is invalid", ErrInvalidIdentity)
@@ -109,7 +109,7 @@ func (id GenerationID) Validate() error  { return validateID(string(id), "genera
 func (id IncarnationID) Validate() error { return validateID(string(id), "incarnation id") }
 
 // BudgetMaterializer is the authoritative Redis accounting port. Reservations
-// and completions are atomic and idempotent; no SQL journal is involved.
+// and completions are atomic and idempotent.
 type BudgetMaterializer interface {
 	Accept(context.Context, ReserveRequest) (ReserveResult, error)
 	Reconcile(context.Context, ReconcileRequest) error

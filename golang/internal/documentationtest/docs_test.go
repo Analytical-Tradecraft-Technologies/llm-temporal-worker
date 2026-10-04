@@ -120,9 +120,6 @@ func fencedYAMLForSection(t *testing.T, document, heading string) string {
 func withoutConfigEnvironmentOverrides(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		"LLMTW_POSTGRES_DATABASE",
-		"LLMTW_POSTGRES_SCHEMA",
-		"LLMTW_POSTGRES_TABLE_PREFIX",
 		"LLMTW_REDIS_KEY_PREFIX",
 	} {
 		value, present := os.LookupEnv(name)
@@ -139,7 +136,7 @@ func withoutConfigEnvironmentOverrides(t *testing.T) {
 	}
 }
 
-func TestActivityRuntimeReferencesCurrentQueryPlan(t *testing.T) {
+func TestActivityRuntimeReferencesCurrentQueryContract(t *testing.T) {
 	root := repositoryRoot(t)
 	path := filepath.Join(root, "docs/reference/activity-runtime.md")
 	data, err := os.ReadFile(path)
@@ -147,9 +144,9 @@ func TestActivityRuntimeReferencesCurrentQueryPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := strings.Join(strings.Fields(string(data)), " ")
-	const taskLink = "[Task 14, typed Query service and Temporal Activity, of the forkable conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity)"
-	if !strings.Contains(text, taskLink) {
-		t.Fatalf("%s must link Task 14 to the current forkable conversation-state plan", path)
+	const queryLink = "[persisted query service](persisted-query-service.md)"
+	if !strings.Contains(text, queryLink) {
+		t.Fatalf("%s must link the current query service contract", path)
 	}
 	if strings.Contains(text, "Task 14 of the v1 plan") {
 		t.Fatalf("%s contains the stale v1-plan Task 14 reference", path)
@@ -280,8 +277,9 @@ func TestV1DocumentationStatesFinalResponseBoundary(t *testing.T) {
 			required: "No streaming or token-event API is supported in v1, including for reusable library callers.",
 		},
 		{
-			path:     "docs/architecture/system-overview.md",
-			required: "`Engine.Generate` is the only supported v1 inference entry point.",
+			path:      "docs/architecture/system-overview.md",
+			required:  "Public workflows return final responses; internal activities can return pending. No streaming or token-event API is supported in v1.",
+			forbidden: []string{"`Engine.Generate` is the only supported v1 inference entry point."},
 		},
 		{
 			path:      "docs/architecture/unified-api.md",

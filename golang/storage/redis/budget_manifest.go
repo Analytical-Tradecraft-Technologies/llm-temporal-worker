@@ -12,9 +12,8 @@ import (
 	"time"
 )
 
-// Budget manifest values are deliberately storage-neutral.  The Redis
-// Function and the PostgreSQL rebuild path can both consume the same bounded
-// record without importing a client or making a provider/runtime decision.
+// Budget manifest values describe one bounded Redis generation without
+// importing a client or making a provider/runtime decision.
 const (
 	BudgetManifestSchema   = "budget-manifest/v1"
 	BudgetRoundingVersion  = "nano_usd_conservative/v1"
@@ -76,24 +75,23 @@ func (member BudgetManifestMember) Key() string {
 // sorted member list. ManifestDigest computes a second SHA-256 over this full
 // record, including that catalog digest.
 type BudgetManifest struct {
-	Schema               string                 `json:"schema"`
-	GenerationID         BudgetGenerationID     `json:"generation_id"`
-	IncarnationID        BudgetIncarnationID    `json:"incarnation_id"`
-	ConfigVersion        string                 `json:"config_version"`
-	PriceVersion         string                 `json:"price_version"`
-	PolicyHash           string                 `json:"policy_hash"`
-	WindowHash           string                 `json:"window_hash"`
-	RebuildComplete      bool                   `json:"rebuild_complete"`
-	CoverageStart        time.Time              `json:"coverage_start"`
-	CoverageEnd          time.Time              `json:"coverage_end"`
-	PolicyCount          int                    `json:"policy_count"`
-	WindowCount          int                    `json:"window_count"`
-	BucketCount          int                    `json:"bucket_count"`
-	StreamHighWaterMark  string                 `json:"stream_high_water_mark"`
-	RoundingVersion      string                 `json:"rounding_version"`
-	JournalHighWaterMark int64                  `json:"journal_high_water_mark"`
-	MemberCatalogDigest  string                 `json:"member_catalog_digest"`
-	Members              []BudgetManifestMember `json:"members"`
+	Schema              string                 `json:"schema"`
+	GenerationID        BudgetGenerationID     `json:"generation_id"`
+	IncarnationID       BudgetIncarnationID    `json:"incarnation_id"`
+	ConfigVersion       string                 `json:"config_version"`
+	PriceVersion        string                 `json:"price_version"`
+	PolicyHash          string                 `json:"policy_hash"`
+	WindowHash          string                 `json:"window_hash"`
+	RebuildComplete     bool                   `json:"rebuild_complete"`
+	CoverageStart       time.Time              `json:"coverage_start"`
+	CoverageEnd         time.Time              `json:"coverage_end"`
+	PolicyCount         int                    `json:"policy_count"`
+	WindowCount         int                    `json:"window_count"`
+	BucketCount         int                    `json:"bucket_count"`
+	StreamHighWaterMark string                 `json:"stream_high_water_mark"`
+	RoundingVersion     string                 `json:"rounding_version"`
+	MemberCatalogDigest string                 `json:"member_catalog_digest"`
+	Members             []BudgetManifestMember `json:"members"`
 }
 
 // ActiveBudgetGeneration is the small pointer value read before a worker
@@ -110,18 +108,17 @@ type ActiveBudgetGeneration struct {
 // catalog. All non-zero fields are checked; Members, when supplied, must be
 // the complete expected set (order is insignificant).
 type BudgetManifestExpectation struct {
-	GenerationID         BudgetGenerationID
-	IncarnationID        BudgetIncarnationID
-	ConfigVersion        string
-	PriceVersion         string
-	PolicyHash           string
-	WindowHash           string
-	CoverageStart        time.Time
-	CoverageEnd          time.Time
-	StreamHighWaterMark  string
-	RoundingVersion      string
-	JournalHighWaterMark int64
-	Members              []BudgetManifestMember
+	GenerationID        BudgetGenerationID
+	IncarnationID       BudgetIncarnationID
+	ConfigVersion       string
+	PriceVersion        string
+	PolicyHash          string
+	WindowHash          string
+	CoverageStart       time.Time
+	CoverageEnd         time.Time
+	StreamHighWaterMark string
+	RoundingVersion     string
+	Members             []BudgetManifestMember
 }
 
 // Validate checks the invariant required before an active generation can be
@@ -188,9 +185,6 @@ func (manifest BudgetManifest) validate(expected BudgetManifestExpectation) erro
 	}
 	if manifest.RoundingVersion != BudgetRoundingVersion {
 		return fail("rounding_version %q is unsupported", manifest.RoundingVersion)
-	}
-	if manifest.JournalHighWaterMark < 0 {
-		return fail("journal_high_water_mark must be non-negative")
 	}
 	if manifest.PolicyCount <= 0 || manifest.PolicyCount > MaxBudgetManifestMembers {
 		return fail("policy_count is outside the bounded range")
@@ -311,9 +305,6 @@ func validateExpectation(manifest BudgetManifest, expected BudgetManifestExpecta
 	}
 	if !expected.CoverageEnd.IsZero() && !sameInstant(manifest.CoverageEnd, expected.CoverageEnd) {
 		return fmt.Errorf("coverage_end mismatch")
-	}
-	if expected.JournalHighWaterMark != 0 && manifest.JournalHighWaterMark != expected.JournalHighWaterMark {
-		return fmt.Errorf("journal_high_water_mark mismatch")
 	}
 	if expected.Members != nil {
 		if len(expected.Members) != len(manifest.Members) {

@@ -13,8 +13,8 @@ import (
 
 // OperationStore is the one-shot operation subset used by durable operation
 // repositories. It is deliberately separate from Stores: Redis remains a
-// budget/throttle implementation and is not required to emulate PostgreSQL's
-// encrypted request/result and attempt tables.
+// budget/throttle implementation and is not required to implement durable
+// encrypted request/result and attempt records.
 type OperationStore interface {
 	admission.AdmissionStore
 }
@@ -24,8 +24,8 @@ type providerPendingStore interface {
 }
 
 // RunOperation exercises replay, digest conflict, compare-and-set dispatch,
-// result persistence, and terminal expiry semantics for memory and
-// PostgreSQL operation stores. Callers should provide an isolated store.
+// result persistence, and terminal expiry semantics for operation
+// stores. Callers should provide an isolated store.
 func RunOperation(t *testing.T, store OperationStore, now time.Time) {
 	t.Helper()
 	if store == nil {

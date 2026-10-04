@@ -46,7 +46,7 @@ type quotedPlan struct {
 	maximum    pricing.MicroUSD
 	// maximumUSD carries the authoritative exact reservation alongside the
 	// legacy microUSD compatibility amount used by Redis admission stores.
-	// Keeping both values lets exact PostgreSQL operation records avoid a
+	// Keeping both values lets durable operation records avoid a
 	// lossy conversion while older stores continue to enforce their bounded
 	// integer representation.
 	maximumUSD pricing.USD

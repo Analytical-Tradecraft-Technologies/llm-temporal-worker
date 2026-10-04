@@ -1,118 +1,53 @@
 # ADR 0010: Durable v1 Runtime Composition
 
-- Status: Accepted guard; durable implementation pending
+- Status: Accepted; cloud execution composition implemented
 - Date: 2026-07-25
-- Complements: ADR 0006, ADR 0007, and ADR 0008
-
-## Context
-
-The Temporal boundary is three closed, one-shot Activities:
-`llm.generate.v1`, `llm.compact.v1`, and `llm.query.v1`. The reusable Go engine
-currently exposes the older `llm.Engine.Generate(llm.Request)` helper. That
-helper performs the legacy request normalization, routing, admission,
-provider dispatch, and result finalization flow. It is not a durable
-implementation of the v1 records.
-
-The v1 boundary has additional obligations that cannot be recovered from a
-legacy `llm.Engine` call:
-
-- checkpoint handles must be materialized and validated before Generate or
-  Compact dispatch;
-- Generate must sequence replay, bounded cache/compaction decisions, route
-  selection, Redis reservation, PostgreSQL journaling, provider state, and
-  durable checkpoint/cache/cost finalization;
-- Compact has a distinct request/response and lifecycle, not a Generate alias;
-- Query is a control-plane read with its own authorization, pagination, and
-  best-effort audit logging, and must never dispatch inference.
-
-`ProductionEngineFactory.Build` currently returns the reusable `llm.Engine`
-and its snapshot-owned clients. The process runtime therefore installs
-`activity.UnconfiguredV1Runtime` until an application supplies the explicit
-durable seam. This is intentional: adapting the legacy engine by type
-assertion, by wrapping Generate, or by returning empty Compact/Query responses
-would advertise a partially configured production worker and could bypass
-durable state or charge work twice.
+- Complements: ADR 0006, ADR 0007 and ADR 0008
 
 ## Decision
 
-Keep `activity.V1Runtime` as an explicit production composition requirement.
-The runtime must not infer a v1 implementation from `llm.Engine`, and
-`ProductionEngineFactory` must not provide a lossy adapter. Production and
-unknown environments fail closed before Temporal polling when the seam is
-absent. The development Compose profile may omit the v1 registrations because
-it is a configuration/readiness fixture only.
+Keep the v1 runtime an explicit composition requirement. The older
+`llm.Engine.Generate` helper cannot implement durable checkpoint materialization,
+independent compaction, workflow execution steps or typed control queries by
+being wrapped or type-asserted. Missing or typed-nil capabilities fail closed and
+drain the rejected snapshot's clients before Temporal polling begins.
 
-The factory also rejects a builder result that is a typed-nil `V1Runtime`
-interface. Snapshot-owned clients are drained before returning the composition
-error, so an incomplete custom builder cannot register Activities that would
-panic when invoked.
+The cloud implementation is `NewCloudV1RuntimeBuilder`. It requires an explicit
+scope authorizer, checkpoint retention and materialization limits. It takes
+request/cache/checkpoint stores, Redis budgets, provider planning and signing
+keys from one immutable snapshot, validating cloud identity, Redis identity and
+configuration digest before exposing any activity.
 
-The future durable implementation may be supplied in either of two equivalent
-ways:
-
-1. a snapshot-scoped object implementing all three `V1Runtime` methods; or
-2. a narrowly scoped composition adapter that owns the full phase order and
-   receives the same immutable storage/provider clients as the reusable
-   engine.
-
-Either form must also expose checkpoint-aware Generate/Compact materialization
-and the independent Query service where those capabilities are enabled. It
-must return bounded, redacted errors and preserve the existing Activity
-heartbeat/cancellation lifecycle. No implementation may call the legacy
-`Engine.Generate` as a substitute for Compact or Query, or bypass Redis and
-PostgreSQL durability before provider dispatch.
-
-## Evidence and guard
-
-The current boundary is visible in:
-
-- `golang/activity/v1_runtime.go`, which validates and dispatches only an
-  explicit `V1Runtime`;
-- `golang/internal/runtime/runtime.go`, which installs the fail-closed
-  `UnconfiguredV1Runtime` and rejects startup when it is unconfigured;
-- `golang/internal/runtime/factory.go`, whose `Build` result is only
-  `llm.Engine` plus snapshot clients; and
-- `golang/engine/generate.go`, whose legacy flow has no Compact or Query
-  contract.
-
-`TestProductionCompositionDoesNotAdaptLegacyEngineToV1` locks this boundary:
-when composition receives only the legacy engine, the v1 seam remains
-unconfigured and cannot be reported as production-ready. Existing runtime and
-Activity tests additionally prove startup fails before polling and that every
-unconfigured v1 operation is non-dispatched and redacted.
-
-## Consequences
-
-- The repository does not claim Task 15 is complete while only the legacy
-  engine is wired.
-- A future implementation has a clear, reviewable seam and cannot silently
-  regress to a lossy wrapper.
-- The reusable legacy engine remains available to non-Temporal callers and
-  pre-release tests.
-- The remaining work is implementation and protected integration evidence for
-  the durable v1 runtime; this ADR does not authorize provider dispatch.
-
-## Cloud workflow composition
-
-The cloud migration adds `NewCloudV1RuntimeBuilder`. Deployments supply an
-explicit scope authorizer, checkpoint retention duration and materialization
-limits. The builder takes signing keys, provider planning, cloud request/cache/
-checkpoint stores and Redis budgets from the immutable snapshot's client set.
-It rejects mismatched configuration, cloud and Redis identities before exposing
-activities. The Redis generation remains stable across configuration reloads.
-
-The returned runtime implements `activity.ExecutionRuntime` and
+The result implements `activity.ExecutionRuntime` and
 `activity.GenerationPlanningRuntime` together. The factory preserves these
-interfaces instead of applying the old one-shot request wrapper. Supplying just
-one of the interfaces is a composition error and drains the rejected client set.
-`llm.generate.v1` and `llm.compact.v1` use the bounded methods; the obsolete
-one-shot runtime methods remain unavailable. Query delegates only to the
-snapshot's separately authorized query service and fails closed if absent.
+interfaces instead of applying the old one-shot request wrapper. Supplying only
+one is a composition error. Registered Generate and Compact activities use the
+bounded methods; compatibility one-shot methods remain unavailable in this
+runtime. Query delegates only to its separately configured authorized service.
 
-This constructor does not infer authorization from tenant/project payloads and
-does not activate the CLI by itself. Deployment security policy and the process
-entrypoint's configuration are separate wiring. The SQL backend has been removed. Generic one-shot phase builders remain for
-explicit embeddings; the cloud
-builder does not use them. Tests exercise factory-built synchronous and polling
-requests across runtime reconstruction, completed-result replay, rejected
-capabilities, query isolation and authorization before storage access.
+The durable CLI installs the cloud builder with explicit trusted-Temporal scope
+policy. It does not infer caller authority from tenant/project payloads alone.
+The worker registers four workflows and eight activities; registration does not
+prove that every optional Query reader is configured or that cloud/provider
+integration has been qualified in a live environment.
+
+## Direct phase composition
+
+`NewDurableV1RuntimeBuilder`, `NewGenerateV1RuntimeBuilder` and
+`NewCompactV1RuntimeBuilder` remain for explicit embeddings and contract tests.
+They validate their phase callbacks but do not replace the bounded cloud runtime
+required by the registered generation and compaction activities. There is no
+legacy-engine fallback when cloud capabilities are unavailable.
+
+## Evidence
+
+The implementation resides in `golang/internal/runtime/v1_cloud_builder.go`,
+`factory.go`, `snapshot_v1_runtime.go` and the activity execution boundary.
+Factory and cloud-runtime tests cover capability completeness, identity binding,
+client cleanup, authorization before storage, restart replay and query isolation.
+`TestProductionCompositionDoesNotAdaptLegacyEngineToV1` preserves the original
+fail-closed boundary.
+
+See [durable runtime composition](../reference/durable-v1-runtime.md) for the
+current settings and [workflow behavior](../reference/internal-workflows.md)
+for the public and internal entry points.

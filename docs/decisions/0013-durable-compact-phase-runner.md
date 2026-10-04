@@ -1,6 +1,6 @@
 # ADR 0013: Durable Compact phase runner
 
-- Status: Accepted implementation slice
+- Status: Accepted direct-phase contract; production uses bounded cloud workflows
 - Date: 2026-07-25
 - Complements: ADR 0010, ADR 0011, and the forkable conversation plan Task 11
 
@@ -27,9 +27,9 @@ replay/materialize
   -> route-isolated Compact cache lookup (variant zero)
   -> route selection
   -> Redis reservation
-  -> PostgreSQL journal
+  -> Redis single-use claim
   -> one-shot summarizer dispatch
-  -> PostgreSQL checkpoint/cost finalization
+  -> durable checkpoint/cost finalization
   -> Redis reconciliation
 ```
 
@@ -55,12 +55,11 @@ does not claim compensation. The context error is returned directly where it
 is safe to stop so Temporal preserves its cancellation/deadline semantics; this
 does not roll back state already committed by a completed port.
 
-The runner does not construct Redis/PostgreSQL clients, select a provider, or
-claim that the production factory is wired. Provider adapters remain
-responsible for generic/native compaction policy, plain-text/tool isolation,
-usage decoding, and checkpoint publication. Those concrete ports and protected
-integration evidence remain required before `UnconfiguredV1Runtime` can be
-replaced.
+The runner does not construct Redis/cloud clients or select a provider. It is
+retained for explicit embeddings and phase-contract tests. Production compaction
+uses the bounded cloud execution runtime and separate compaction workflow;
+provider adapters still own generic/native policy, input isolation and usage
+decoding. See [ADR 0010](0010-durable-v1-runtime-composition.md).
 
 ## Evidence
 

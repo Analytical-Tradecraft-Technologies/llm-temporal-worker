@@ -155,10 +155,8 @@ low-level snapshot-scoped reader seam and must bind the requested instant to
 active generation/manifest/Stream provenance. The versioned window-hash field
 reader and its bounded Function read are implemented by the storage adapter;
 a manifest-only adapter is still rejected.
-Remaining
-complete Activity composition work is tracked in
-[Task 14, typed Query service and Temporal Activity, of the forkable
-conversation-state plan](../superpowers/plans/2026-07-18-forkable-conversation-state.md#task-14-implement-typed-query-service-and-temporal-activity).
+Current query capabilities and composition requirements are described in the
+[persisted query service](persisted-query-service.md).
 `QueryService.Audit` is the storage-neutral seam for audit observation: it
 receives canonical redacted request/response envelopes, SHA-256 request and
 response digests, and exact-or-unknown cost metadata after all response and
@@ -231,7 +229,7 @@ provider adapters, including the typed OCaml client. The opt-in AWS gate,
 production authorization, provider calls and restore behavior require separate
 release evidence. There is no SQL journal or SQL data migration.
 
-The boundary is one-shot by design. It does not register or dispatch
+Each activity step is bounded and non-streaming. It does not register or dispatch
 `llm.StreamingEngine`, token events, or provider stream decoders. Provider
 fragment decoders remain parser-regression code only.
 

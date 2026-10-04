@@ -195,8 +195,8 @@ record those phase exits; a merged PR or local test is not deployment evidence.
 [State and storage](architecture/state-and-storage.md), the
 [cloud request reference](reference/cloud-request-repository.md), and
 [Redis budget leases](reference/redis-budget-leases.md) describe current storage
-ownership and recovery behavior. The previous PostgreSQL ADR, physical schema,
-SQL runbooks and SQL portions of older plans are historical and superseded.
+ownership and recovery behavior. Obsolete database schemas, runbooks and
+superseded migration plans have been removed.
 [Conversation design](architecture/conversation-checkpoints-and-compaction.md)
 and [OCaml client documentation](../ocaml/llm_temporal_worker/README.md) describe
 semantic/API contracts; current implementations and focused tests establish what

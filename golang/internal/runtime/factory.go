@@ -144,9 +144,9 @@ type ProductionFactoryOptions struct {
 	// BudgetStatusReaderFactory is an optional per-snapshot Redis composition
 	// seam. When supplied, the factory receives the exact Redis client,
 	// generation port, and key space owned by the snapshot being built. A nil
-	// reader leaves budget_status unsupported; it never falls back to
-	// PostgreSQL. The default is intentionally nil until a deployment opts into
-	// the versioned Redis reader and its preloaded Function contract.
+	// reader leaves budget_status unsupported. The default is intentionally nil
+	// until a deployment opts into the versioned Redis reader and its preloaded
+	// Function contract.
 	BudgetStatusReaderFactory BudgetStatusReaderFactory
 	// DurableCompositionFactory is an optional Task 19 binding for the complete
 	// snapshot-owned cloud/Redis durable state composition. It is not
@@ -232,8 +232,8 @@ func (set *productionClientSet) QueryService() activity.QueryService {
 
 // CheckpointCapabilities returns the typed durable checkpoint bundle owned by
 // this immutable snapshot. A nil repository, blob reader, or handle
-// materializer is an explicit unconfigured capability; callers must not reach
-// into PostgreSQL or invent a process-local substitute.
+// materializer is an explicit unconfigured capability; callers must fail
+// closed rather than invent a process-local substitute.
 func (set *productionClientSet) CheckpointCapabilities() CheckpointCapabilities {
 	if set == nil {
 		return CheckpointCapabilities{}
@@ -712,9 +712,8 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 
 // composeBudgetStatusReader binds the Redis budget reader only when all of
 // the snapshot-owned capabilities required by its coherent read are present.
-// In particular, a missing Redis client or generation port is not repaired by
-// consulting PostgreSQL: the returned nil reader keeps budget_status typed
-// unsupported at the query boundary.
+// A missing Redis client or generation port returns a nil reader, keeping
+// budget_status typed unsupported at the query boundary.
 func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, clock func() time.Time, admissionMode string, client redis.UniversalClient, generation redisstore.BudgetGenerationPort, keys redisstore.BudgetKeySpace, factory BudgetStatusReaderFactory) (BudgetStatusReader, error) {
 	if factory == nil || client == nil || generation == nil {
 		return nil, nil

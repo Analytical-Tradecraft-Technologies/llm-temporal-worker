@@ -13,8 +13,8 @@ import (
 // DurableCheckpointMaterializer is the storage-neutral adapter that turns the
 // metadata-only CheckpointRepository port into the same MaterializedState
 // contract implemented by CheckpointGraph. It deliberately performs all blob
-// reads before building the in-memory graph and does not open a SQL
-// transaction, publish rows, or invoke Generate/Compact.
+// reads before building the in-memory graph and does not publish rows or
+// invoke Generate/Compact.
 type DurableCheckpointMaterializer struct {
 	Repository     CheckpointRepository
 	Blobs          CheckpointBlobReader

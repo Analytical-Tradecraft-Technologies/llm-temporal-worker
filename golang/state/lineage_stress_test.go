@@ -16,7 +16,7 @@ import (
 // taken every 500 turns (the same immutable artifact used by compaction), and
 // three children are then created from one immutable parent. A replacement
 // graph replays the published rows to model a worker restart/restore. This is
-// intentionally an offline proof: durable PostgreSQL/blob backup and Temporal
+// intentionally an offline proof: durable cloud table/blob backup and Temporal
 // crash-boundary tests remain separate integration gates.
 func TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks(t *testing.T) {
 	const (

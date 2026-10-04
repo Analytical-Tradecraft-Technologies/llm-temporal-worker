@@ -15,7 +15,7 @@ import (
 
 // These tests compose the Activity-facing DurableV1Runtime with the
 // storage-neutral phase runners. They intentionally use in-process ports:
-// provider credentials and live Redis/PostgreSQL are release evidence, not
+// provider credentials and live Redis/cloud storage are release evidence, not
 // pull-request prerequisites. The composition is nevertheless the exact
 // one-shot path an immutable runtime snapshot supplies to the Activity.
 

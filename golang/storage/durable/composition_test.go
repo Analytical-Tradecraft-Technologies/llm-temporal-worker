@@ -110,7 +110,7 @@ func TestCompositionBuilderBindsBudgetOrderingAndRecovery(t *testing.T) {
 		t.Fatalf("first finalization = %v, want ErrReconcilePending", err)
 	}
 	if current, _ := lifecycle.Current(); current != PhaseResultFinalized {
-		t.Fatalf("recovery lifecycle phase = %s, want postgres_finalized", current)
+		t.Fatalf("recovery lifecycle phase = %s, want result_finalized", current)
 	}
 	materializer.reconcileErr = nil
 	if err := boundary.Finalize(context.Background(), &lifecycle, reservation, []budget.CompletionEvent{completion}); err != nil {

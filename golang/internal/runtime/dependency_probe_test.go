@@ -324,7 +324,7 @@ func TestIdentifiedDependencyProbeRejectsMismatchedReadyIdentity(t *testing.T) {
 	}))
 	identity, ok := probe.(dependencyIdentitySource)
 	if !ok || identity.DependencyID() != DependencyCloudRequests {
-		t.Fatalf("identified probe identity = %#v/%T, want postgres", probe, probe)
+		t.Fatalf("identified probe identity = %#v/%T, want cloud_requests", probe, probe)
 	}
 	result := probe.Probe(context.Background())
 	if result != (ProbeResult{Dependency: DependencyCloudRequests, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}) {
@@ -346,7 +346,7 @@ func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *te
 		name   string
 		probes []DependencyProbe
 	}{
-		{name: "missing postgres", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyBlobStore)}},
+		{name: "missing cloud", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyBlobStore)}},
 		{name: "duplicate redis", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyRedis), ready(DependencyCloudRequests), ready(DependencyBlobStore)}},
 		{name: "unidentified", probes: []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult { return ProbeResult{} })}},
 	}
@@ -652,7 +652,7 @@ func TestValidateRequiredDependencyProbeSetSelectsCloudBackendWithoutIO(t *testi
 		{"mixed backend", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyID("postgres")}, false},
 		{"missing Redis", []DependencyID{DependencyBlobStore, DependencyCloudRequests}, false},
 		{"missing blobs", []DependencyID{DependencyRedis, DependencyCloudRequests}, false},
-		{"duplicate cloud", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyID("postgres")}, false},
+		{"duplicate cloud", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyCloudRequests}, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -667,6 +667,6 @@ func TestValidateRequiredDependencyProbeSetSelectsCloudBackendWithoutIO(t *testi
 		})
 	}
 	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, cloudBaseTestProbes()); err == nil {
-		t.Fatal("SQL mode accepted missing SQL probe")
+		t.Fatal("durable mode accepted incomplete cloud configuration")
 	}
 }

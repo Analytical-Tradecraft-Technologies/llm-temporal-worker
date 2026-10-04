@@ -191,7 +191,7 @@ func validateEventPayload(event Event) error {
 }
 
 // NewDeleteBlobEvent creates a safe, deterministic event for a blob locator.
-// The external worker can resolve the opaque aggregate ID from PostgreSQL;
+// An external worker must resolve the opaque aggregate ID through its store;
 // no locator or ciphertext is put in the event payload.
 func NewDeleteBlobEvent(id, blobID string, availableAt, createdAt time.Time) (Event, error) {
 	if id == "" || blobID == "" {

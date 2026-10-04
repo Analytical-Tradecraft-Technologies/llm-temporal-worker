@@ -3,7 +3,7 @@ package runtime
 import "github.com/mfow/llm-temporal-worker/golang/storage/durable"
 
 // The bounded cloud runtime binds Redis directly to the same immutable
-// snapshot. It does not need legacy SQL operation or checkpoint ports and
+// snapshot. It uses the authoritative Redis budget port and
 // never invokes a composition factory to obtain another budget authority.
 func (capabilities V1RuntimeCapabilities) cloudBudgetBoundary() (durable.BudgetBoundary, error) {
 	identity := durable.StateIdentity{Cloud: capabilities.CloudIdentity, Redis: capabilities.RedisIdentity, ConfigDigest: capabilities.ConfigDigest}

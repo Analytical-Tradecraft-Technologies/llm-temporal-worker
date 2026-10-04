@@ -1,15 +1,10 @@
 # Pricing and Budgets
 
-> **Budget design superseded:** Redis now owns budget leases and settlement;
-> the SQL budget journal writer has been removed. The SQL budget rebuild and
-> automatic Stream broadcast described below are not the current runtime. See
-> [Redis budget leases](../reference/redis-budget-leases.md) for the implemented contract.
-
-> Implementation status and phase authority are centralized in
-> [scope](../scope.md#staged-delivery-and-document-authority). This chapter
-> labels current behavior; the target storage split, budget-read rules, money
-> materialization, and workload envelope are normative only in the
-> [PostgreSQL/control-plane design](postgresql-state-cache-and-control-plane.md).
+Redis owns monetary authorization and settlement. Cloud request records preserve
+attempts and exact-or-unknown cost facts. The production workflow uses the
+[Redis budget lease contract](../reference/redis-budget-leases.md); the older
+`Begin`/`Continue` admission API described below remains a direct-engine
+compatibility boundary, not the cloud workflow path.
 
 ## Goals
 
@@ -156,8 +151,8 @@ billable at a time.
 
 At the engine admission boundary, the exact USD maximum is carried in
 `BeginRequest.ReservationUSD` (and `ContinueRequest.RemainingUSD`) alongside
-the bounded `MicroUSD` compatibility amount. Exact-capable durable stores use
-the USD value for operation and budget journal rows; legacy Redis admission
+the bounded `MicroUSD` compatibility amount. Durable request records retain
+the exact USD value; legacy Redis admission
 continues enforcing the independently validated microUSD projection. This
 prevents sub-micro-dollar estimates from being silently recorded as zero while
 preserving the conservative integer materialization required by Redis.
@@ -166,7 +161,7 @@ projection is present but diverges: every exact amount must match the scalar
 USD reservation and its MicroUSD amount is rounded up at the boundary, while a
 MicroUSD limit may only be more conservative than its exact USD limit. This
 keeps compatibility writes from under-reserving or over-admitting while
-leaving exact values authoritative in PostgreSQL and the durable journal.
+retaining exact values in the domain and durable request facts.
 If any component or the checked sum cannot be represented in Redis-safe
 microUSD, estimation fails closed rather than dropping that component from the
 compatibility reservation.
@@ -313,74 +308,59 @@ only once. Invalid envelopes fail before any bucket mutation; this keeps the
 legacy scalar compatibility field and the durable reservation vector
 conservative and unambiguous.
 
-## Target throttle and monetary-budget split
+## Production throttle and monetary-budget split
 
-Target Phase B does not retire Redis. It splits the current combined
-`AdmissionStore` responsibility into two explicitly sequenced ports:
-
-- `BudgetStore` in Redis holds every bucket/reservation needed for the complete
-  active horizon and atomically enforces a conservative monetary materialization alongside
-  request, token, and concurrency throttles.
-- `BudgetJournal` in PostgreSQL is the system of record and records each accepted reservation,
-  reconciliation, release, and exact/unknown actual cost before the associated
-  provider side effect. It is the rebuild/audit source, not a steady-state
-  budget-read path.
+`BudgetLeaser` in Redis owns reserve, single-use claim and settlement. Operational
+request, token and concurrency throttles use a separate `ThrottleStore`. Cloud
+request/attempt records preserve provider recovery and result facts; they are
+not a budget reconstruction journal.
 
 Redis uses checked safe-integer nano-USD derived without floating point: charges
-round up, limits round down, and transitions subtract the exact
-identity-keyed integer previously applied. PostgreSQL, Go, JSON, and OCaml keep
-exact `NUMERIC(38,18)` semantics. The Redis Stream provides optional
-cross-worker invalidation/wake-up coordination; it never authorizes a request.
+round up, limits round down, and transitions subtract the identity-keyed integer
+previously applied. Go, JSON and OCaml keep exact decimal USD semantics. The
+optional Redis Stream publishes hints atomically with budget mutations; it never
+authorizes dispatch and is not sufficient to reconstruct lost accounting.
 
-For new work the engine reserves Redis first, appends the PostgreSQL journal,
-then dispatches. PostgreSQL write failure triggers a best-effort Redis release; an
-unconfirmed release remains charged until its TTL, which is conservative.
-Completion commits exact/unknown cost in PostgreSQL before idempotently
-reconciling the Redis budget. Retry first resolves the durable PostgreSQL
-operation so a completed replay is never charged again. Both stores fail closed
-for new paid dispatches. This is not a shared cross-store transaction and no
-correctness claim depends on both writes committing atomically.
+Before a paid submission, acquisition reserves every matching window and claim
+consumes that authorization once within 15 minutes. Insufficient capacity returns
+wait with a retry hint, including requests larger than the current limit. The
+budget workflow uses a Temporal timer, then tries again. A waiting activity does
+not occupy a worker slot.
 
-## Denial and retry
-
-A denial reports:
-
-- every policy/window that denied;
-- current conservative usage, requested reservation, and limit;
-- the earliest time each window could admit if no new spend occurs;
-- a safe aggregate `retry_after`;
-- configuration and price versions.
-
-The Activity turns denial into a retryable Temporal application error only when
-the caller's schedule-to-close horizon can reach `retry_after` and retry policy
-permits it. Otherwise it is terminal for that Activity. Denial never contacts a
-provider.
+Completion persists its cloud result and retries Redis settlement idempotently.
+An uncertain paid submission retains its original charge. Retrying paid work
+requires a separate attempt and reservation; elapsed time cannot refund a
+claimed authorization. Only unused reservations expire by the start deadline.
+Cloud writes and Redis mutations are separate operations with explicit recovery
+states, not a distributed transaction.
 
 ## Durability modes
 
 | Mode | Use | Guarantee |
 | --- | --- | --- |
-| Memory | unit tests and explicitly single-process development | process-local only; restart loses state |
-| Redis plus PostgreSQL | production and multi-replica development | PostgreSQL is the durable system of record; Redis is the live conservative decision/coordination materialization |
+| Memory | Tests and explicit single-process development | Process-local only; restart loses state |
+| Redis-only legacy adapters | Direct-engine development and conformance fixtures | Not the production cloud workflow runtime |
+| Cloud KV/blob plus Redis | Durable workflow composition | Cloud request/artifact persistence and Redis accounting authority |
 
-Production Redis remains required and uses authentication/TLS, `noeviction`, AOF plus RDB, monitored
-persistence errors, and backups. `appendfsync always` provides the strongest
-reservation durability at higher latency; `everysec` may lose about a second of
-writes during a crash and must be an explicit risk acceptance. Redis or
-PostgreSQL failure causes new paid admission to fail closed.
+Production Redis requires the configured persistence, `noeviction`, monitoring
+and authority-marker checks. Dataset loss cannot be repaired from cloud records
+or Stream hints automatically. A permanent initialization receipt prevents an
+absent authority marker from being treated as a fresh installation. Partial loss
+and rollback still require separate recovery validation. See the
+[recovery boundary](../runbooks/redis-budget-generation-recovery.md).
 
 ## Conformance properties
 
-The current memory/Redis stores retain their existing conformance. The staged
-split adds conservative nano-USD Redis budget-state and PostgreSQL journal
-contracts plus end-to-end tests proving:
+The budget and cloud execution tests cover:
 
-- no accepted schedule exceeds a limit under concurrent Begin calls;
-- overlapping policies and windows are all charged atomically;
-- request replay never charges twice;
-- request digest conflicts never inherit another result;
-- completion/refund is idempotent and cannot make a bucket negative;
-- ambiguity retains the reservation;
-- exact-boundary buckets overcount rather than undercount;
-- time rollback, overflow, expired leases, and persistence errors fail closed;
-- the earliest retry calculation is conservative.
+- atomic reservation across overlapping policies and windows;
+- acquisition replay without another charge and rejection of payload conflicts;
+- single-use claims and a server-enforced start deadline;
+- idempotent settlement, including a lost reply after mutation;
+- retained uncertain paid work and fresh budget for a replacement attempt;
+- fail-closed overflow, malformed state and missing authority;
+- durable result recovery without another provider submission; and
+- conservative rounding and bounded expiry work.
+
+Live Redis tests exercise the actual Functions and preloaded Lua compatibility
+mode. Offline model tests alone do not prove persistence or restore behavior.

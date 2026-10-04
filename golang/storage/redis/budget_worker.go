@@ -228,7 +228,7 @@ func (store *BudgetWorkerLeaseStore) Renew(ctx context.Context, generation Budge
 	if !prior.LeaseExpiresAt.After(now) {
 		// A process may reconnect after its liveness TTL elapsed. The persistent
 		// roster proves this is the same in-memory session, so it may renew
-		// without a PostgreSQL read; a missing/mismatched roster fails closed.
+		// using Redis alone; a missing/mismatched roster fails closed.
 		rawRoster, rosterErr := store.client.HGet(ctx, store.keys.WorkersKey(), store.rosterField()).Result()
 		if errors.Is(rosterErr, redisclient.Nil) {
 			return BudgetWorkerLease{}, ErrBudgetWorkerLeaseExpired

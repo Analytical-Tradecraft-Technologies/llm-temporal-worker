@@ -29,7 +29,8 @@ schema-verify:
 	$(GO) test ./llm/schema ./config
 
 docs-verify:
-	$(GO) test ./internal/documentationtest
+	# Documentation lives outside this Go module and must be checked without caching.
+	$(GO) test -count=1 ./internal/documentationtest
 
 traceability-verify:
 	$(GO) test ./internal/architecturetest -run '^TestV1Traceability' -count=1

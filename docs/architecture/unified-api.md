@@ -21,7 +21,7 @@ by taking the last value. Canonical request hashing applies the same rule.
 > unimplemented delta, cache, exact USD, Compact, and Query contracts replace
 > it in place before the first release and are defined in
 > [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md)
-> and [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md).
+> and [State and storage](state-and-storage.md).
 > No compatibility-only v2 is introduced. The coordinated pre-release change
 > removes the generic downstream currency field.
 

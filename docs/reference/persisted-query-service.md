@@ -190,18 +190,13 @@ adapter has the method shape of
 `internal/runtime.BudgetStatusReader`, so deployments can pass it directly as
 the snapshot-owned `PersistedQueryOptions.BudgetStatus` seam.
 
-Migration is an explicit, fenced operation. A v1/legacy active pointer keeps
-`budget_status` unavailable; there is no in-place reinterpretation, automatic
-dual-read, or PostgreSQL fallback. The deployment must build a complete v2
-generation from an approved Redis authority recovery source under the documented
-replacement or cold-bootstrap fence, validate every member and operation index
-entry, and
-atomically switch the active pointer to v2. During a mixed rollout the reader
-accepts only a complete v2 generation, while v1 keys remain admission-owned
-until their bounded expiry/retention window has elapsed. Old generations are
-garbage-collected only after no lease, reservation, cursor, or audit reference
-can reach them. Any missing or ambiguous migration evidence leaves paid work
-and `budget_status` fail-closed.
+The generation reader is an optional composition contract. A legacy or missing
+active pointer keeps `budget_status` unavailable; the reader never reinterprets
+admission keys as a complete status generation. The worker does not provide a
+production rebuild/migration coordinator for these generation contracts. The
+normal budget authority initializer supplies a receipt and marker, not this
+status projection. Wiring a verified reader to the current accounting authority
+remains separate work; see [MVP status](mvp-v1-status.md).
 
 Spend composition also requires `PersistedQueryOptions.ResolveScope`. This
 explicit resolver maps the already-authorized tenant/project pair to the
@@ -232,10 +227,9 @@ retain them after the reader is drained. A deployment that enables spend summary
 `ScopeResolver` in the repository bundle. No `QueryAudit` repository is needed.
 
 Query composition exposes spend through `control.SpendSummaryReader` and
-`control.SpendSummaryListOptions`, not a concrete PostgreSQL repository. A
+`control.SpendSummaryListOptions`, independent of a concrete storage adapter. A
 provider receives an already-authorized opaque scope ID, a half-open time range,
-and grouping/operation filters. The existing SQL adapter implements this same
-contract during the migration. Cloud mode leaves spend unsupported until a
+and grouping/operation filters. Cloud mode leaves spend unsupported until a
 reader is explicitly supplied; nil and typed-nil readers fail closed. Query
 authorization and cursor handling remain independent of the chosen storage
 implementation; query audit logs remain best-effort.

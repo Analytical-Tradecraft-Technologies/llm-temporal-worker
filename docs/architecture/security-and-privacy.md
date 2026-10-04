@@ -1,11 +1,11 @@
 # Security and Privacy
 
 > Target phase status and authority are centralized in
-> [scope](../scope.md#staged-delivery-and-document-authority). Operation JSONB
-> contains content-free manifests only; prompt/tool/output payloads use
-> authenticated envelope-encrypted inline bytes or encrypted blobs. Cache
+> [scope](../scope.md#staged-delivery-and-document-authority). Request metadata
+> and indexes contain content-free references; prompt/tool/output payloads use
+> authenticated encrypted blobs. Cache
 > lookup uses tenant-scoped HMAC-SHA-256. See
-> [PostgreSQL state and control plane](postgresql-state-cache-and-control-plane.md).
+> [State and storage](state-and-storage.md).
 
 ## Trust boundaries
 
@@ -111,16 +111,15 @@ provider state are sensitive by default. The worker:
 - supports an external Temporal Payload Codec for encryption;
 - encrypts production blob/Redis traffic in transit and relies on configured
   at-rest encryption;
-- applies explicit retention/expiry and garbage collection;
+- records retention/expiry metadata; automatic production cleanup is deferred;
 - records provider storage/retention choices in endpoint profiles;
 - provides content-free audit events for access and deletion.
 
-The target Generate contract stores only a bounded, content-free request
-manifest as JSONB for audit and cache-key verification. Prompt, tool, output,
-and provider-state payloads use envelope-encrypted inline ciphertext or an
-immutable encrypted blob, with digest and key provenance in PostgreSQL. The
-runtime security principal can decrypt only through the configured key
-provider; database access alone does not reveal plaintext. Payloads are
+The cloud Generate contract stores bounded content-free metadata and references
+for recovery and cache verification. Prompt, tool, output and provider-state
+payloads use immutable encrypted blobs, with digest and key provenance in cloud
+metadata. The runtime can decrypt only with the configured keys; access to stored
+ciphertext alone does not reveal plaintext. Payloads are
 retention-governed and excluded from observability and indexes. Large or
 ancestral content remains in encrypted blobs referenced by digest rather than
 being duplicated into every cache row.

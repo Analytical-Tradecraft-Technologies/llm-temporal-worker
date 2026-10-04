@@ -32,7 +32,7 @@ type BudgetStreamCursorState struct {
 // return a concrete manifest high-water mark as Cursor. The tailer replaces
 // that historical watermark with a live position captured immediately before
 // the reload, so records published during the reload remain replayable.
-// PostgreSQL is intentionally not part of this callback.
+// Reloads must use Redis as the budget authority.
 type BudgetStreamReload func(context.Context) (BudgetStreamCursorState, error)
 
 // BudgetStreamCursorSource exposes the live Redis Stream position required
@@ -109,7 +109,7 @@ func NewBudgetStreamTailer(options BudgetStreamTailerOptions) (*BudgetStreamTail
 }
 
 // State returns a copy of the current checkpoint. The caller owns lease
-// persistence; this method never writes Redis or PostgreSQL.
+// persistence; this method performs no storage writes.
 func (tailer *BudgetStreamTailer) State() BudgetStreamCursorState {
 	if tailer == nil {
 		return BudgetStreamCursorState{}
