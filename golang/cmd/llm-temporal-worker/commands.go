@@ -33,7 +33,8 @@ type CommandOptions struct {
 	// validated bytes so the production runtime can watch the same file for
 	// SIGHUP and atomic replacement reloads. RunWorker remains a compatibility
 	// seam for small embeddings that own their lifecycle trigger.
-	RunWorkerFile func(context.Context, string, []byte, io.Writer) error
+	RunWorkerFile       func(context.Context, string, []byte, io.Writer) error
+	RunBudgetInitialize func(context.Context, []byte, bool, io.Writer) error
 }
 
 func Execute(ctx context.Context, args []string, options CommandOptions) int {
@@ -61,6 +62,8 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		return executeConfigCommand(ctx, args[1:], options, true)
 	case "worker":
 		return executeWorkerCommand(ctx, args[1:], options)
+	case "budget-initialize":
+		return executeBudgetInitializeCommand(ctx, args[1:], options)
 	case "healthcheck":
 		return executeHealthcheckCommand(ctx, args[1:], options)
 	case "help", "-h", "--help":
@@ -229,6 +232,33 @@ func executeWorkerCommand(ctx context.Context, args []string, options CommandOpt
 	return 0
 }
 
+func executeBudgetInitializeCommand(ctx context.Context, args []string, options CommandOptions) int {
+	flags := flag.NewFlagSet("budget-initialize", flag.ContinueOnError)
+	flags.SetOutput(options.ErrOut)
+	path := flags.String("config", defaultConfigPath, "worker configuration YAML path")
+	apply := flags.Bool("apply", false, "initialize an unused budget namespace; never reset existing budgets")
+	timeout := flags.Duration("timeout", 30*time.Second, "overall timeout, at most 5m")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *timeout <= 0 || *timeout > 5*time.Minute {
+		return 2
+	}
+	data, err := readConfig(*path)
+	if err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	if options.RunBudgetInitialize == nil {
+		writeCommandError(options.ErrOut, errWorkerRuntimeUnavailable)
+		return 1
+	}
+	bounded, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	if err := options.RunBudgetInitialize(bounded, data, *apply, options.Out); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	return 0
+}
+
 func readConfig(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("config path is required")
@@ -274,5 +304,5 @@ func writeCommandError(output io.Writer, err error) {
 }
 
 func writeUsage(output io.Writer) {
-	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|validate-config|print-effective-config|healthcheck>\n")
+	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|budget-initialize|validate-config|print-effective-config|healthcheck>\n")
 }

@@ -408,7 +408,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if streamEnabled {
 		streamKey = budgetKeys.EventsKey()
 	}
-	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if factory.options.BudgetStatusReaderFactory != nil && value.Environment == "production" && value.State.Kind == config.StateKindDurable {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
 			closeOwned()
@@ -424,10 +424,6 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	queryRepos.BudgetStatus = budgetStatusReader
 	var redisProbe DependencyProbe
 	switch {
-	case generationPort != nil && streamEnabled:
-		redisProbe, err = NewRedisDependencyProbeWithBudgetGenerationAndStream(redisClient, value.State.Redis, generationPort, streamKey)
-	case generationPort != nil:
-		redisProbe, err = NewRedisDependencyProbeWithBudgetGeneration(redisClient, value.State.Redis, generationPort)
 	case streamEnabled:
 		redisProbe, err = NewRedisDependencyProbeWithStream(redisClient, value.State.Redis, streamKey)
 	default:
@@ -519,6 +515,34 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeAll()
 		return nil, nil, fmt.Errorf("construct engine: %w", err)
 	}
+	var repository CloudRequestRepository
+	var initialization *budget.Initialization
+	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+		repository, err = factory.buildCloudRequests(ctx, value.State.Requests)
+		if err != nil {
+			closeAll()
+			return nil, nil, err
+		}
+		initializer, initErr := redisstore.NewRedisBudgetInitializer(redisClient, keyOptions, redisstore.AdmissionMode(value.State.Redis.AdmissionMode), value.State.Redis.AdmissionVersion)
+		if initErr != nil {
+			closeAll()
+			return nil, nil, initErr
+		}
+		store, ok := repository.(budget.InitializationStore)
+		if !ok || isNilCapability(store) {
+			closeAll()
+			return nil, nil, ErrBudgetInitializationRequired
+		}
+		readContext, cancel := context.WithTimeout(ctx, time.Duration(value.Server.ReadinessProbeTimeout))
+		receipt, initErr := readBudgetInitialization(readContext, store, initializer.Identity())
+		cancel()
+		if initErr != nil || !receipt.Ready {
+			closeAll()
+			return nil, nil, ErrBudgetInitializationRequired
+		}
+		initialization = &receipt
+		redisProbe = withBudgetAuthorityProbe(redisProbe, initializer, receipt)
+	}
 	probes := []DependencyProbe{redisProbe, blobProbe}
 	// Stable identities across configuration reloads: Redis is authoritative.
 	// Policy limits change without replacing the accounting namespace.
@@ -526,6 +550,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
 		FunctionVersion: value.State.Redis.AdmissionVersion, GenerationID: redisBudgetGeneration, IncarnationID: durablestore.IncarnationID(redisBudgetGeneration), Clock: clock,
 		CoordinationStreamEnabled: streamEnabled,
+		Initialization:            initialization,
 	})
 	if err != nil {
 		closeAll()
@@ -540,6 +565,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		checkpointVerifier: keyring,
 		budgets:            budgets,
 		v1Capabilities: V1RuntimeCapabilities{
+			Requests:                  repository,
 			ConfigDigest:              snapshot.Digest(),
 			Snapshot:                  snapshotSource,
 			Planner:                   planner,
@@ -614,10 +640,13 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 		}
 		return engineValue, clients, nil
 	}
-	repository, err := factory.buildCloudRequests(ctx, snapshot.Config().State.Requests)
-	if err != nil {
-		_ = clients.Close(context.Background())
-		return nil, nil, err
+	repository := clients.v1Capabilities.Requests
+	if repository == nil {
+		repository, err = factory.buildCloudRequests(ctx, snapshot.Config().State.Requests)
+		if err != nil {
+			_ = clients.Close(context.Background())
+			return nil, nil, err
+		}
 	}
 	clients.v1Capabilities.Requests = repository
 	if repository != nil {

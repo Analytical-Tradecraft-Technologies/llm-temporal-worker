@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
@@ -319,11 +320,34 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		failOpen bool
-	}{{"successful cloud build", false}, {"failed cloud open", true}} {
+		invalid  string
+	}{
+		{name: "successful cloud build"}, {name: "failed cloud open", failOpen: true},
+		{name: "missing initialization capability", invalid: "capability"},
+		{name: "missing initialization receipt", invalid: "missing"},
+		{name: "incomplete initialization receipt", invalid: "incomplete"},
+		{name: "wrong Redis identity", invalid: "identity"},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			redis := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
 			defer redis.Close()
-			repository := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}
+			receipt := testInitialization(testBudgetIdentity(t, snapshot.Config()), time.Now())
+			receipt.Ready = true
+			switch test.invalid {
+			case "missing":
+				receipt = budget.Initialization{}
+			case "incomplete":
+				receipt.Ready = false
+			case "identity":
+				receipt.Identity.KeyFingerprint = strings.Repeat("0", 64)
+			}
+			base := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}
+			var initializationCalls []string
+			var repository CloudRequestRepository = &testInitializedRequests{recordingCloudRequests: base, InitializationStore: &initializationTestStore{value: receipt, trace: &initializationCalls}}
+			if test.invalid == "capability" {
+				repository = base
+			}
+			opened := 0
 			built := false
 			closed := false
 			factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
@@ -344,6 +368,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 					return &cloudBootstrapBlobStore{newTestBlobStore()}, cloudBootstrapCloser{func() { closed = true }}, nil
 				},
 				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
+					opened++
 					if test.failOpen {
 						return nil, errors.New("cloud open failed")
 					}
@@ -366,9 +391,20 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, clients, err := factory.Build(context.Background(), snapshot)
-			if test.failOpen {
+			if opened != 1 {
+				t.Fatalf("opened cloud repository %d times", opened)
+			}
+			for _, call := range initializationCalls {
+				if call != "read" {
+					t.Fatalf("worker startup wrote initialization: %v", initializationCalls)
+				}
+			}
+			if test.failOpen || test.invalid != "" {
 				if err == nil || clients != nil || built || !closed {
 					t.Fatalf("failed cloud open did not reject and drain: err=%v built=%v closed=%v", err, built, closed)
+				}
+				if test.invalid != "" && !errors.Is(err, ErrBudgetInitializationRequired) {
+					t.Fatalf("initialization error = %v", err)
 				}
 				return
 			}
