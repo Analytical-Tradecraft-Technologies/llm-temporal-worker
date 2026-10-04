@@ -270,6 +270,9 @@ func (redis RedisConfig) validate(environment string) error {
 	if err := redis.Password.Validate("state.redis.password"); err != nil {
 		return err
 	}
+	if err := redis.KeySecret.Validate("state.redis.key_secret"); err != nil {
+		return err
+	}
 	if redis.AdmissionHashTag == "" || redis.FunctionLibrary == "" || redis.AdmissionVersion == "" {
 		return fmt.Errorf("state.redis.admission_hash_tag, function_library, and admission_version are required")
 	}

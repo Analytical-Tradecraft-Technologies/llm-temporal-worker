@@ -16,6 +16,23 @@ runtime construction, while `validate-config` and
 The effective non-secret configuration is canonicalized and hashed as
 `config_version`.
 
+## Redis namespace identity
+
+`state.redis.key_secret` references at least 32 bytes of stable HMAC key material.
+It is separate from `state.redis.username` and `state.redis.password`, which are
+only authentication credentials. All workers sharing a Redis prefix must use the
+same identity secret. Rotating the ACL credentials must leave it unchanged.
+A missing or short identity secret fails startup instead of selecting a new
+namespace. Do not rotate this key as an ordinary password rotation: that needs
+an explicit state migration.
+
+For an existing pre-release namespace that used password-derived keys, preserve
+its names by provisioning the **raw 32-byte SHA-256 digest** of the UTF-8 prefix
+`llmtw:redis-key-v1:` followed by the original Redis password as the new file
+secret, before changing the password. Do not use the digest's hexadecimal text.
+Keep that file stable afterward. New installations should use an independent
+random secret. The worker no longer derives namespace identity from a password.
+
 ## Caller authorization
 
 The production CLI requires `authorization.mode: trusted_temporal` and a
@@ -97,6 +114,9 @@ state:
     password:
       kind: file
       path: /var/run/secrets/redis-password
+    key_secret:
+      kind: file
+      path: /var/run/secrets/llmtw/redis-key-secret
     tls:
       enabled: true
       server_name: redis.example.internal

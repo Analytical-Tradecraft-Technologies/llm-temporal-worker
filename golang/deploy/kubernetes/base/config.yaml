@@ -48,6 +48,9 @@ state:
     password:
       kind: file
       path: /var/run/secrets/llmtw/redis-password
+    key_secret:
+      kind: file
+      path: /var/run/secrets/llmtw/redis-key-secret
     tls:
       enabled: true
       server_name: redis.example.internal

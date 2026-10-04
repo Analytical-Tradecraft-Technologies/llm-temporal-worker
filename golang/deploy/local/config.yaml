@@ -40,6 +40,9 @@ state:
     password:
       kind: env
       name: REDIS_PASSWORD
+    key_secret:
+      kind: env
+      name: REDIS_KEY_SECRET
     tls:
       enabled: false
       server_name: ""

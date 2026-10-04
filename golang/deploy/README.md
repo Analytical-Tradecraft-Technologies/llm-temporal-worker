@@ -84,3 +84,8 @@ because it does not construct worker dependencies.
 `make image-verify` requires a running Docker daemon. The image build context
 continues to exclude local credentials and runtime state through
 [`.dockerignore`](../.dockerignore).
+
+The worker Secret must include `redis-key-secret`, containing at least 32 bytes
+of stable namespace identity material. This is independent of `redis-password`;
+credential rotation must preserve it. These manifests are templates and do not
+provision or rotate either secret.
