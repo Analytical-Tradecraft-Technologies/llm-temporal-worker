@@ -570,3 +570,17 @@ func TestCompileRoutesPreservesOutputCeiling(t *testing.T) {
 		t.Fatalf("output ceiling = %d", got)
 	}
 }
+
+func TestCompileRoutesPreservesContextLimit(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	profile := bundle.Capabilities["profile-a"]
+	profile.ContextTokens = 4096
+	bundle.Capabilities["profile-a"] = profile
+	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := routes.Models["logical-model"].Routes[0].ContextTokens; got != 4096 {
+		t.Fatalf("context limit=%d", got)
+	}
+}

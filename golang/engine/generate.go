@@ -202,9 +202,18 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 	quoted := quotedPlan{candidates: make([]quotedCandidate, 0, len(plan.Candidates))}
 	skippedForBudgetMatch := false
 	skippedForPrice := false
+	skippedForContext := false
 	for _, candidate := range plan.Candidates {
 		if err := ctx.Err(); err != nil {
 			return quotedPlan{}, engineError(provider.CodeCanceled, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "pricing canceled", err)
+		}
+		// Check before price resolution so unpriced routes cannot bypass the cap.
+		if err := engine.dependencies.Estimator.ValidateContext(request, candidate); err != nil {
+			if errors.Is(err, budget.ErrContextLimit) {
+				skippedForContext = true
+				continue
+			}
+			return quotedPlan{}, engineError(provider.CodeInvalidArgument, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "candidate context estimate failed", err)
 		}
 		matches := budget.MatchPolicies(snapshot.BudgetPolicies, budget.ContextFor(request, candidate, snapshot.Environment))
 		if snapshot.RequireBudgetMatch && len(matches) == 0 {
@@ -232,6 +241,10 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 		}
 		estimate, err := engine.dependencies.Estimator.EstimateCandidate(request, candidate, entry)
 		if err != nil {
+			if errors.Is(err, budget.ErrContextLimit) {
+				skippedForContext = true
+				continue
+			}
 			if errors.Is(err, budget.ErrUnusablePrice) {
 				// A partial entry or a compatibility-boundary overflow is not a
 				// safe reservation for this candidate. Unlike a missing quote,
@@ -254,6 +267,9 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 	}
 	if len(quoted.candidates) == 0 {
 		reason, message := "no_eligible_price", "no candidate has a usable price"
+		if skippedForContext && !skippedForPrice && !skippedForBudgetMatch {
+			reason, message = "context_limit", "no candidate fits the model context limit"
+		}
 		if skippedForBudgetMatch && !skippedForPrice {
 			reason, message = "no_matching_budget_policy", "no candidate matches a budget policy"
 		}

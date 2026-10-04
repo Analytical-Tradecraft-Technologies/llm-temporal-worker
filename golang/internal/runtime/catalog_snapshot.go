@@ -186,6 +186,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				PriceVersion:        priceVersion,
 				PriceAvailable:      priceAvailable,
 				ExtensionNames:      extensions,
+				ContextTokens:       profile.ContextTokens,
 			})
 		}
 		models[modelName] = routing.Model{Name: modelName, Routes: routes}

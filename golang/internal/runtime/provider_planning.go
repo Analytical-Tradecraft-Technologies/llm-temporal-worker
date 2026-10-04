@@ -54,14 +54,15 @@ func (planned PlannedProviderCall) Route(operation durable.OperationID, generati
 // no operation state and never invokes a provider or touches budget/storage.
 // The injected planner and registry must themselves be snapshot-owned.
 type ProviderPlanning struct {
-	catalog        routing.Catalog
-	health         routing.HealthView
-	planner        routing.Planner
-	adapters       engine.AdapterRegistry
-	configDigest   [32]byte
-	configEpoch    string
-	budgetSnapshot engine.Snapshot
-	outputLimit    int64
+	catalog          routing.Catalog
+	health           routing.HealthView
+	planner          routing.Planner
+	adapters         engine.AdapterRegistry
+	configDigest     [32]byte
+	configEpoch      string
+	budgetSnapshot   engine.Snapshot
+	outputLimit      int64
+	contextEstimator budget.Estimator
 }
 
 func (capabilities V1RuntimeCapabilities) NewProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
@@ -95,7 +96,7 @@ func (capabilities V1RuntimeCapabilities) captureProviderPlanning(ctx context.Co
 	return &ProviderPlanning{catalog: catalog, health: copyProviderHealth(snapshot.Health),
 		planner: capabilities.Planner, adapters: capabilities.Adapters,
 		configDigest: snapshot.ConfigDigest, configEpoch: snapshot.ConfigEpoch,
-		outputLimit: capabilities.BudgetEstimator.MaxOutput, budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
+		outputLimit: capabilities.BudgetEstimator.MaxOutput, contextEstimator: copyBudgetEstimator(capabilities.BudgetEstimator), budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
 }
 
 func (planning *ProviderPlanning) Generate(ctx context.Context, prepared PreparedGenerateInput) (PlannedProviderCall, error) {
@@ -145,6 +146,12 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 		}
 		if !planning.catalog.Models[semantic.Model].Routes[candidate.RouteIndex].SupportsOutputLimit(semantic) {
 			continue
+		}
+		if err := planning.contextEstimator.ValidateContext(semantic, candidate); err != nil {
+			if errors.Is(err, budget.ErrContextLimit) {
+				continue
+			}
+			return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
 		}
 		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
 		if err != nil {
@@ -247,7 +254,7 @@ func (planning *ProviderPlanning) containsCandidate(request llm.Request, candida
 		provider.Family(candidate.Family).Valid() && candidate.Family == route.Family && candidate.Model == route.Model && candidate.ModelRevision == route.ModelRevision &&
 		candidate.EndpointAccountHMAC == route.EndpointAccountHMAC && candidate.Region == route.Region &&
 		candidate.CapabilityVersion != "" && candidate.CapabilityVersion == route.Capabilities.Version && candidate.ProviderTier != "" && candidate.ProviderTier == route.ProviderTiers[candidate.AttemptedClass] &&
-		candidate.PriceVersion == route.PriceVersion
+		candidate.PriceVersion == route.PriceVersion && candidate.ContextTokens == route.ContextTokens
 }
 
 func validPlannedCall(call provider.Call, candidate routing.Candidate, operationKey string, digest [32]byte) bool {
