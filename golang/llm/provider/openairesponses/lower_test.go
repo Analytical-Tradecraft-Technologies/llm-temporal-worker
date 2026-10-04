@@ -184,3 +184,21 @@ func TestLoweringReasoningSummaryPreservesEffort(t *testing.T) {
 		})
 	}
 }
+
+func TestReplayToolCallDoesNotInventProviderItemID(t *testing.T) {
+	params, err := lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: []llm.Item{
+		llm.ToolCall{ID: "call_abc", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+		llm.ToolResult{CallID: "call_abc", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "result"}}},
+	}}, llm.ServiceClassStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := marshalParams(t, params)["input"].([]any)
+	call := input[0].(map[string]any)
+	if _, exists := call["id"]; exists {
+		t.Fatalf("invented provider item id: %#v", call)
+	}
+	if call["call_id"] != "call_abc" || input[1].(map[string]any)["call_id"] != "call_abc" {
+		t.Fatalf("lost tool correlation: %#v", input)
+	}
+}
