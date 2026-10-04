@@ -24,7 +24,8 @@ secret references but never resolved secret values. `validate-config` checks
 the strict document without starting external dependencies. `worker` attempts
 the full production composition and starts Temporal polling only after
 the configured durable cloud runtime and `trusted_temporal` caller policy are
-valid. Missing policy or dependencies fail startup before listeners or polling;
+valid. Startup and reload check the CLI caller policy before resolving secret
+references. Missing policy or dependencies fail startup before listeners or polling;
 the development fixture is limited to
 parser/configuration/readiness checks. See the
 [command-line reference](../reference/cli.md) for exact behavior and exit
@@ -92,6 +93,12 @@ repository. Cloud storage uses workload IAM credentials and explicitly
 configured table and bucket aliases; the worker needs no SQL credentials.
 Service-account tokens are disabled in the base and enabled only by the
 workload-identity overlays.
+
+Replace `authorization.allowed_scopes` with the approved exact tenant/project
+pairs and align model and budget tenant constraints with those pairs. The base
+uses `replace-with-tenant` and `replace-with-project`; these are template values.
+Every authenticated caller with access to the Temporal namespace can select any
+listed pair. Authentication and namespace access must be enforced by Temporal.
 
 State and control traffic is not internet-wide. The base permits TCP 6379
 and 7233 only to namespaces labeled

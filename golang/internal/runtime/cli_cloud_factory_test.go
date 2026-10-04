@@ -8,6 +8,9 @@ import (
 	"errors"
 	"io"
 	"math"
+	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,6 +174,102 @@ func TestCLICloudPolicyPrecedesDependencies(t *testing.T) {
 	cancel()
 	if _, _, err := factory.Build(ctx, cloudSnapshot(t, "runtime-test")); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestProductionRuntimeRejectsMissingPolicyBeforeSecretResolution(t *testing.T) {
+	value := trustedTemporalTestConfig(t)
+	value.Authorization = nil
+	value.State.Redis.Username = config.SecretRef{Kind: "file", Path: t.TempDir() + "/missing-secret"}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime, err := newProductionRuntime(context.Background(), data); !errors.Is(err, ErrDurableV1Composition) || runtime != nil {
+		t.Fatalf("CLI did not reject missing policy before reading the missing secret: %v", err)
+	}
+}
+
+func TestCLIPolicyPreflightOnInitialConfigAndReload(t *testing.T) {
+	var resolved atomic.Int32
+	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
+	options.LogOutput = io.Discard
+	options.Resolver = newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+		resolved.Add(1)
+		return []byte("test-secret"), nil
+	}))
+	value := trustedTemporalTestConfig(t)
+	encode := func(value config.Config) []byte {
+		t.Helper()
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	invalid := []config.Config{value.Clone(), value.Clone()}
+	invalid[0].Authorization = nil
+	invalid[1].Authorization.AllowedScopes[0].Project = "*"
+	for _, candidate := range invalid {
+		if runtime, err := New(context.Background(), encode(candidate), options); err == nil || runtime != nil || resolved.Load() != 0 {
+			t.Fatalf("initial policy failure reached secret resolution: %v", err)
+		}
+	}
+	runtime, err := New(context.Background(), encode(value), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	before := resolved.Load()
+	if before == 0 {
+		t.Fatal("valid configuration skipped secret resolution")
+	}
+	previous := runtime.App.Current()
+	for _, candidate := range invalid {
+		if err := runtime.App.Reload(context.Background(), encode(candidate)); err == nil {
+			t.Fatal("accepted invalid CLI policy on reload")
+		}
+		if resolved.Load() != before || runtime.App.Current() != previous {
+			t.Fatal("rejected policy resolved secrets or replaced the active snapshot")
+		}
+	}
+	value.Authorization.AllowedScopes[0].Project = "updated-project"
+	if err := runtime.App.Reload(context.Background(), encode(value)); err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Load() <= before || runtime.App.Current() == previous {
+		t.Fatal("valid policy reload did not resolve and publish a new snapshot")
+	}
+}
+
+func TestCLIExamplePolicies(t *testing.T) {
+	for _, path := range []string{"../../deploy/kubernetes/base/config.yaml", "../../deploy/local/config.yaml"} {
+		t.Run(path, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var resolved int
+			snapshot, err := config.Compile(context.Background(), data, newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+				resolved++
+				return []byte("test-secret"), nil
+			})))
+			if err != nil || resolved == 0 {
+				t.Fatalf("example did not pass CLI policy before resolving references: %v", err)
+			}
+			value := snapshot.Config()
+			if strings.Contains(path, "kubernetes") {
+				policy, err := trustedTemporalCloudOptions(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := policy.ResolveScope(context.Background(), llm.RequestContext{Tenant: "replace-with-tenant", Project: "replace-with-project"}); err != nil {
+					t.Fatal("Kubernetes example has no replaceable allowed scope", err)
+				}
+			} else if !isCLIReadinessFixture(value) {
+				t.Fatal("local example no longer represents the development readiness fixture")
+			}
+		})
 	}
 }
 

@@ -25,6 +25,14 @@ temporal:
     graceful_stop_timeout: 45s
     heartbeat_keepalive_interval: 1s
 
+# All authenticated callers in this Temporal namespace may select any listed
+# pair. Replace both identifiers with the exact scopes approved for deployment.
+authorization:
+  mode: trusted_temporal
+  allowed_scopes:
+    - tenant: replace-with-tenant
+      project: replace-with-project
+
 state:
   kind: durable
   operation_terminal_retention: 45d

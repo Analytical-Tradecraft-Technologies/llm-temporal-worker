@@ -11,10 +11,31 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
+	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
+
+// Gate both initial compilation and reload before resolving any secret. The
+// engine factory repeats the check for callers that supply a compiled snapshot.
+func newCLIReferenceResolver(resolver secrets.Resolver) config.ReferenceResolver {
+	return config.ReferenceResolverFunc(func(ctx context.Context, value *config.Config) error {
+		if value == nil {
+			return fmt.Errorf("%w: configuration is required", ErrDurableV1Composition)
+		}
+		if !isCLIReadinessFixture(*value) {
+			if _, err := trustedTemporalCloudOptions(*value); err != nil {
+				return err
+			}
+		}
+		return (secrets.ConfigResolver{Resolver: resolver}).Resolve(ctx, value)
+	})
+}
+
+func isCLIReadinessFixture(value config.Config) bool {
+	return value.Environment == "development" && value.State.Kind != config.StateKindDurable && value.Authorization == nil
+}
 
 // newCLIEngineFactory binds policy and clients to the same immutable snapshot.
 // Validate policy before building clients, and build a new resolver on every
@@ -34,7 +55,7 @@ func newCLIEngineFactory(options ProductionFactoryOptions) (EngineFactory, error
 		value := snapshot.Config()
 		// Retain the existing development-only readiness fixture. It has no
 		// cloud runtime and registers no generation or compaction activities.
-		if value.Environment == "development" && value.State.Kind != config.StateKindDurable && value.Authorization == nil {
+		if isCLIReadinessFixture(value) {
 			return factory.Build(ctx, snapshot)
 		}
 		cloudOptions, err := trustedTemporalCloudOptions(value)
