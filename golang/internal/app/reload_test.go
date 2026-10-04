@@ -271,3 +271,71 @@ func TestReloadFileRejectsOversizedReplacementWithoutPublishingIt(t *testing.T) 
 		t.Fatal("oversized replacement changed the published snapshot")
 	}
 }
+
+func TestAcquireDuringRepeatedReloadKeepsClientsAlive(t *testing.T) {
+	initial := exampleConfig(t)
+	application, err := New(context.Background(), Options{
+		InitialConfig: initial, Builder: SnapshotBuilder{},
+		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) { return &fakeClients{}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := application.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	stop := make(chan struct{})
+	failures := make(chan error, 1)
+	var readers sync.WaitGroup
+	report := func(err error) {
+		select {
+		case failures <- err:
+		default:
+		}
+	}
+	for i := 0; i < 32; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				lease, err := application.Acquire()
+				if err != nil {
+					report(err)
+					return
+				}
+				clients := lease.Snapshot().Clients.(*fakeClients)
+				if clients.Count() != 0 {
+					report(errors.New("acquired clients already closed"))
+				}
+				lease.Release()
+			}
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		if err := application.Reload(context.Background(), initial); err != nil {
+			report(err)
+			break
+		}
+	}
+	close(stop)
+	readers.Wait()
+	select {
+	case err := <-failures:
+		t.Fatal(err)
+	default:
+	}
+	if err := application.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if lease, err := application.Acquire(); err == nil {
+		lease.Release()
+		t.Fatal("acquired after close")
+	}
+}

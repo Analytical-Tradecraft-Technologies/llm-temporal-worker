@@ -19,7 +19,7 @@ func (function ClientSetFunc) Close(ctx context.Context) error { return function
 
 // RuntimeSnapshot couples an immutable config snapshot to the clients created
 // from it. Acquired leases keep old clients alive while an Activity finishes;
-// reload marks the snapshot draining before publishing its replacement.
+// reload publishes a replacement before draining the old snapshot.
 type RuntimeSnapshot struct {
 	Config  *config.Snapshot
 	Clients ClientSet
@@ -203,6 +203,10 @@ func (app *App) Acquire() (*Lease, error) {
 	if app == nil {
 		return nil, fmt.Errorf("app is nil")
 	}
+	// Keep selection and lease acquisition atomic with publication/shutdown.
+	// Once this reference is acquired, draining must await its release.
+	app.lifecycleMu.Lock()
+	defer app.lifecycleMu.Unlock()
 	snapshot := app.current.Load()
 	if snapshot == nil {
 		return nil, fmt.Errorf("app has no active snapshot")
