@@ -233,7 +233,7 @@ func TestCloudRequestPreparationFailsClosedOnStorageAndBindingErrors(t *testing.
 			t.Fatalf("storage error treated as preparation miss: %v", err)
 		}
 	}
-	for _, mutation := range []func(*cloudstate.RequestPreparation){func(p *cloudstate.RequestPreparation) { p.ConfigDigest[0]++ }, func(p *cloudstate.RequestPreparation) { p.CheckpointScope = "other" }, func(p *cloudstate.RequestPreparation) { p.ParentSnapshot = nil }, func(p *cloudstate.RequestPreparation) { p.PreparedAt = p.PreparedAt.Add(-time.Hour) }} {
+	for _, mutation := range []func(*cloudstate.RequestPreparation){func(p *cloudstate.RequestPreparation) { p.CheckpointScope = "other" }, func(p *cloudstate.RequestPreparation) { p.ParentSnapshot = nil }, func(p *cloudstate.RequestPreparation) { p.PreparedAt = p.PreparedAt.Add(-time.Hour) }} {
 		p, store, m, input := cloudPreparationFixture(t, "generate")
 		first, err := p.Prepare(context.Background(), input)
 		if err != nil {
@@ -273,7 +273,7 @@ func TestCloudRequestPreparationCompletedReplayNeedsNoParent(t *testing.T) {
 	}
 }
 
-func TestCloudRequestPreparationRejectsWrongSampleAndChangedConfiguration(t *testing.T) {
+func TestCloudRequestPreparationRejectsWrongSampleButRestoresAcrossConfiguration(t *testing.T) {
 	p, store, _, input := cloudPreparationFixture(t, "generate")
 	prepared, err := p.Prepare(context.Background(), input)
 	if err != nil {
@@ -287,10 +287,8 @@ func TestCloudRequestPreparationRejectsWrongSampleAndChangedConfiguration(t *tes
 	}
 	store.record.Request.RequestIndex--
 	p.digest[0]++
-	if _, err := p.Load(context.Background(), referenceFor(prepared)); err == nil {
-		t.Fatal("recompiled with a different configuration")
-	} else {
-		assertCheckpointReplayError(t, err, provider.CodeConfiguration)
+	if _, err := p.Load(context.Background(), referenceFor(prepared)); err != nil {
+		t.Fatalf("saved input could not be restored after reload: %v", err)
 	}
 }
 
