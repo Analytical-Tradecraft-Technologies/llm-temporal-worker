@@ -20,9 +20,11 @@ type ActivityPolicy struct {
 	BackoffCoefficient         float64
 	MaximumRetry               time.Duration
 	MaximumAttempts            int32
-	RetryHorizon               time.Duration
-	OperationRetention         time.Duration
-	ProviderTimeout            time.Duration
+	// RetryHorizon may declare a longer application retry window. It cannot
+	// replace the emitted ScheduleToClose bound when validating retention.
+	RetryHorizon       time.Duration
+	OperationRetention time.Duration
+	ProviderTimeout    time.Duration
 }
 
 func (policy ActivityPolicy) Validate() error {
@@ -52,6 +54,11 @@ func (policy ActivityPolicy) Validate() error {
 	}
 	if policy.OperationRetention <= 0 {
 		return fmt.Errorf("operation retention must be positive")
+	}
+	// ScheduleToClose includes queue delays, all attempts and retry backoff.
+	// Comparing durations directly also avoids overflow in retry-sum arithmetic.
+	if policy.OperationRetention < policy.ScheduleToClose {
+		return fmt.Errorf("operation retention must cover schedule-to-close")
 	}
 	if policy.RetryHorizon < 0 || policy.RetryHorizon > policy.OperationRetention {
 		return fmt.Errorf("retry horizon must not exceed operation retention")
