@@ -46,7 +46,6 @@ type capabilityClaimFile struct {
 	Level     string `yaml:"level"`
 	Transform string `yaml:"transform"`
 	Reason    string `yaml:"reason"`
-	MaxBytes  int64  `yaml:"max_bytes"`
 	Pinned    bool   `yaml:"pinned"`
 	Dialect   string `yaml:"dialect"`
 }
@@ -253,9 +252,6 @@ func compileClaims(version string, claims map[string]capabilityClaimFile, path s
 		}
 		if state == provider.CapabilityEmulated && strings.TrimSpace(claim.Transform) == "" {
 			return provider.CapabilitySet{}, fmt.Errorf("%s.transform is required for emulated capability", path+"."+name)
-		}
-		if claim.MaxBytes < 0 {
-			return provider.CapabilitySet{}, fmt.Errorf("%s.max_bytes must not be negative", path+"."+name)
 		}
 		if existing, exists := features[feature]; exists {
 			if existing.State != state || existing.Transform != claim.Transform || existing.Reason != claim.Reason {

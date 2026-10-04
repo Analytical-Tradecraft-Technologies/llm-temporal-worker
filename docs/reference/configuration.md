@@ -701,7 +701,9 @@ default, because only the caller can authorize a cost/latency class change.
 
 ## Capability catalog shape
 
-Each entry binds claims to an exact profile/model matcher:
+Each entry binds claims to an exact profile/model matcher. Per-feature
+`max_bytes` declarations are unsupported and rejected during catalog loading;
+they must not be used as admission guards:
 
 ```yaml
 version: llmtw-capabilities/v1
@@ -713,7 +715,7 @@ entries:
     verified_at: 2026-07-13T00:00:00Z
     features:
       input.text: {level: native}
-      input.image: {level: native, max_bytes: 20971520}
+      input.image: {level: native}
       tools.auto: {level: native}
       tools.required: {level: native}
       tools.parallel: {level: native}

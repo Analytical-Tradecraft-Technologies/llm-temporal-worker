@@ -3,6 +3,7 @@ package catalog
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -456,4 +457,29 @@ func writeCatalog(t *testing.T, body string) config.CatalogRef {
 	}
 	digest := sha256.Sum256([]byte(body))
 	return config.CatalogRef{File: path, SHA256: hex.EncodeToString(digest[:])}
+}
+
+func TestLoadCapabilitiesRejectsUnenforcedFeatureByteLimits(t *testing.T) {
+	for _, feature := range []string{"input.text", "input.image", "input.document", "input.reference", "tools.auto", "output.json_schema", "service.standard"} {
+		for _, limit := range []int{0, -1, 1024} {
+			t.Run(fmt.Sprintf("%s/%d", feature, limit), func(t *testing.T) {
+				ref := writeCatalog(t, fmt.Sprintf(`version: capabilities/v1
+entries:
+  - id: model-profile
+    family: openai_responses
+    model: {exact: model}
+    features:
+      text: {level: native}
+      %s: {level: native, max_bytes: %d}
+`, feature, limit))
+				result, err := LoadCapabilities(ref)
+				if err == nil || !strings.Contains(err.Error(), "max_bytes") {
+					t.Fatalf("unsupported limit accepted: %#v, %v", result, err)
+				}
+				if len(result.Profiles) != 0 {
+					t.Fatal("failed load exposed a partial catalog")
+				}
+			})
+		}
+	}
 }
