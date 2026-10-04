@@ -67,7 +67,7 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 		requestSpan.End()
 	}()
 	normalizeCtx, normalizeSpan := engine.startTrace(ctx, "llmtw.normalize", requestTraceAttrs(request)...)
-	normalized, err := llm.NormalizeRequest(request)
+	normalized, err := engine.dependencies.Estimator.PrepareRequest(request)
 	if err != nil {
 		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
 		normalizeSpan.End()

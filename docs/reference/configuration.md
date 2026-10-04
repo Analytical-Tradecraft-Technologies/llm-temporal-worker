@@ -33,6 +33,16 @@ but production CLI startup rejects it. `llm.query.v1` remains independently
 configured and is not enabled by this policy. See
 [durable runtime composition](durable-v1-runtime.md) for scope and reload details.
 
+## Output reservations
+
+When a request omits `output.max_tokens`, budgeted execution inserts
+`limits.max_output_tokens` into the provider request before compiling it and
+estimating its cost. An explicit caller limit is preserved and reserved instead.
+The effective limit is part of the compiled request digest and is reconstructed
+for retries; recovery refuses a different limit under an existing reservation.
+Limits must be positive and fit the providers' signed 32-bit SDK fields. Zero is
+rejected because some adapters treat it as an omitted cap.
+
 ## Complete shape
 
 This example shows the v1 fields. Names and model identifiers are illustrative;
