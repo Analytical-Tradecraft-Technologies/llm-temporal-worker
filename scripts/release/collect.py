@@ -36,7 +36,7 @@ GATE_KINDS = {"test_summary", "race_summary", "fuzz_summary"}
 BENCHMARK_NAME = "BenchmarkGenerateMemoryAdmissionAndCompile"
 MEMORY_TARGET_MS = 25
 BENCHMARK_LINE = re.compile(
-    rf"^{BENCHMARK_NAME}-[0-9]+\s+([0-9]+)\s+([0-9]+(?:\.[0-9]+)?)\s+ns/op\s+"
+    rf"^{BENCHMARK_NAME}(?:-[0-9]+)?\s+([0-9]+)\s+([0-9]+(?:\.[0-9]+)?)\s+ns/op\s+"
     r"([0-9]+(?:\.[0-9]+)?)\s+p99_ms/op(?:\s.*)?$"
 )
 LOG_SERVICES = {

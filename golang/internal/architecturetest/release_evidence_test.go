@@ -2015,48 +2015,52 @@ func TestReleaseEvidenceCollectorRetainsMemoryBenchmarkMeasurement(t *testing.T)
 }
 
 func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
-	root := repositoryRoot(t)
-	inputPath := filepath.Join(t.TempDir(), "benchmark.out")
-	outputPath := filepath.Join(t.TempDir(), "benchmark-summary.json")
-	input := "goos: linux\n" +
-		"BenchmarkGenerateMemoryAdmissionAndCompile-14    4267    255245 ns/op         0.7286 p99_ms/op  350632 B/op    4851 allocs/op\n" +
-		"PASS\n"
-	writeReleaseArtifact(t, inputPath, []byte(input))
-	command := exec.Command(
-		"python3", filepath.Join(root, "scripts", "release", "collect.py"), "benchmark-summary",
-		"--kind", "benchmark_summary", "--input", inputPath, "--output", outputPath,
-	)
-	command.Dir = root
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("benchmark collector rejected valid output: %v\n%s", err, output)
-	}
-	document := readReleaseEvidenceJSONArtifact(t, filepath.Dir(outputPath), "benchmark_summary")
-	if document["scope"] != "memory" || document["target_status"] != "pass" || document["objective_status"] != "measurement_only" {
-		t.Fatalf("benchmark summary scope/status = %#v/%#v", document["scope"], document["objective_status"])
-	}
-	if document["p99_ms_per_op"] != 0.7286 {
-		t.Fatalf("benchmark summary p99 = %#v", document["p99_ms_per_op"])
-	}
+	for _, suffix := range []string{"", "-2", "-14"} {
+		t.Run("processors"+suffix, func(t *testing.T) {
+			root := repositoryRoot(t)
+			inputPath := filepath.Join(t.TempDir(), "benchmark.out")
+			outputPath := filepath.Join(t.TempDir(), "benchmark-summary.json")
+			input := "goos: linux\n" +
+				"BenchmarkGenerateMemoryAdmissionAndCompile" + suffix + "    4267    255245 ns/op         0.7286 p99_ms/op  350632 B/op    4851 allocs/op\n" +
+				"PASS\n"
+			writeReleaseArtifact(t, inputPath, []byte(input))
+			command := exec.Command(
+				"python3", filepath.Join(root, "scripts", "release", "collect.py"), "benchmark-summary",
+				"--kind", "benchmark_summary", "--input", inputPath, "--output", outputPath,
+			)
+			command.Dir = root
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("benchmark collector rejected valid output: %v\n%s", err, output)
+			}
+			document := readReleaseEvidenceJSONArtifact(t, filepath.Dir(outputPath), "benchmark_summary")
+			if document["scope"] != "memory" || document["target_status"] != "pass" || document["objective_status"] != "measurement_only" {
+				t.Fatalf("benchmark summary scope/status = %#v/%#v", document["scope"], document["objective_status"])
+			}
+			if document["p99_ms_per_op"] != 0.7286 {
+				t.Fatalf("benchmark summary p99 = %#v", document["p99_ms_per_op"])
+			}
 
-	writeReleaseArtifact(t, inputPath, []byte(input+"BenchmarkGenerateMemoryAdmissionAndCompile-14 1 1 ns/op 1 p99_ms/op\n"))
-	if err := os.Remove(outputPath); err != nil {
-		t.Fatal(err)
-	}
-	if output, err := command.CombinedOutput(); err == nil {
-		t.Fatalf("benchmark collector accepted multiple measurements:\n%s", output)
-	}
-	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-		t.Fatalf("benchmark collector retained output after rejecting multiple measurements: %v", err)
-	}
+			writeReleaseArtifact(t, inputPath, []byte(input+"BenchmarkGenerateMemoryAdmissionAndCompile"+suffix+" 1 1 ns/op 1 p99_ms/op\n"))
+			if err := os.Remove(outputPath); err != nil {
+				t.Fatal(err)
+			}
+			if output, err := command.CombinedOutput(); err == nil {
+				t.Fatalf("benchmark collector accepted multiple measurements:\n%s", output)
+			}
+			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+				t.Fatalf("benchmark collector retained output after rejecting multiple measurements: %v", err)
+			}
 
-	targetInput := "goos: linux\n" +
-		"BenchmarkGenerateMemoryAdmissionAndCompile-14 1 1 ns/op 25 p99_ms/op\nPASS\n"
-	writeReleaseArtifact(t, inputPath, []byte(targetInput))
-	if output, err := command.CombinedOutput(); err == nil {
-		t.Fatalf("benchmark collector accepted a p99 at the strict target boundary:\n%s", output)
-	}
-	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-		t.Fatalf("benchmark collector retained output after rejecting target miss: %v", err)
+			targetInput := "goos: linux\n" +
+				"BenchmarkGenerateMemoryAdmissionAndCompile" + suffix + " 1 1 ns/op 25 p99_ms/op\nPASS\n"
+			writeReleaseArtifact(t, inputPath, []byte(targetInput))
+			if output, err := command.CombinedOutput(); err == nil {
+				t.Fatalf("benchmark collector accepted a p99 at the strict target boundary:\n%s", output)
+			}
+			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+				t.Fatalf("benchmark collector retained output after rejecting target miss: %v", err)
+			}
+		})
 	}
 }
 
