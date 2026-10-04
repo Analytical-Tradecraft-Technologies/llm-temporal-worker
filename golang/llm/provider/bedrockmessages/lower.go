@@ -355,7 +355,7 @@ func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
 		return nil, fmt.Errorf("reasoning effort %q requires adaptive Bedrock thinking", reasoning.Effort)
 	}
 	if mode == llm.ReasoningModeProviderDefault {
-		if reasoning.TokenBudget == nil && reasoning.Effort == "" && summary == llm.ReasoningSummaryProviderDefault {
+		if reasoning.TokenBudget == nil && (reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && summary == llm.ReasoningSummaryProviderDefault {
 			return nil, nil
 		}
 		if reasoning.TokenBudget != nil {

@@ -182,3 +182,48 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		})
 	}
 }
+
+func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
+	budget := 1024
+	for _, test := range []struct {
+		name      string
+		reasoning *llm.ReasoningSpec
+		wantType  string
+	}{
+		{name: "absent"},
+		{name: "zero", reasoning: &llm.ReasoningSpec{}},
+		{name: "mode and summary default", reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeProviderDefault, Summary: llm.ReasoningSummaryProviderDefault}},
+		{name: "effort default", reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortProviderDefault}},
+		{name: "all explicit defaults", reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeProviderDefault, Summary: llm.ReasoningSummaryProviderDefault, Effort: llm.ReasoningEffortProviderDefault}},
+		{name: "adaptive with default effort", reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortProviderDefault}, wantType: "adaptive"},
+		{name: "budget with default effort", reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortProviderDefault, TokenBudget: &budget}, wantType: "enabled"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning}
+			params, err := lowerRequest(request, mustBedrockProfile(t, ""), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := marshalBedrockWire(t, params)
+			thinking, exists := wire["thinking"]
+			if test.wantType == "" {
+				if exists {
+					t.Fatalf("default reasoning emitted thinking = %#v", thinking)
+				}
+				if config, ok := wire["output_config"].(map[string]any); ok {
+					if effort, exists := config["effort"]; exists {
+						t.Fatalf("default effort emitted override = %#v", effort)
+					}
+				}
+				return
+			}
+			config, ok := thinking.(map[string]any)
+			if !ok || config["type"] != test.wantType {
+				t.Fatalf("thinking = %#v, want %s", thinking, test.wantType)
+			}
+			if test.wantType == "enabled" && config["budget_tokens"] != float64(budget) {
+				t.Fatalf("thinking budget = %#v", config)
+			}
+		})
+	}
+}
