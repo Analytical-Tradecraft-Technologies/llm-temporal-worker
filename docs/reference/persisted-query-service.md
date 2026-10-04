@@ -193,8 +193,9 @@ the snapshot-owned `PersistedQueryOptions.BudgetStatus` seam.
 Migration is an explicit, fenced operation. A v1/legacy active pointer keeps
 `budget_status` unavailable; there is no in-place reinterpretation, automatic
 dual-read, or PostgreSQL fallback. The deployment must build a complete v2
-generation from the durable journal under the documented Redis replacement or
-cold-bootstrap fence, validate every member and operation index entry, and
+generation from an approved Redis authority recovery source under the documented
+replacement or cold-bootstrap fence, validate every member and operation index
+entry, and
 atomically switch the active pointer to v2. During a mixed rollout the reader
 accepts only a complete v2 generation, while v1 keys remain admission-owned
 until their bounded expiry/retention window has elapsed. Old generations are

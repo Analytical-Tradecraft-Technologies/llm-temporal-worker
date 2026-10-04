@@ -1,99 +1,88 @@
 # Durable v1 runtime composition
 
-`activity.NewDurableV1Runtime` is the boundary adapter for a snapshot's
-storage-neutral durable phase ports. It requires complete `GeneratePorts` and
-`CompactPorts` values and returns an error during composition when any phase
-callback is missing. Query remains optional because deployments may bind the
-independent control-plane implementation through `Activities.QueryService`.
+`runtime.NewCloudV1RuntimeBuilder` composes the bounded Generate and Compact
+activities from cloud storage, Redis and provider capabilities owned by one
+immutable configuration snapshot. Pass the resulting builder through
+`ProductionFactoryOptions.V1RuntimeBuilder`. It implements the
+`activity.ExecutionRuntime` and `activity.GenerationPlanningRuntime` contracts
+used by the registered activities; the legacy engine is not a fallback.
 
-The bounded production composition exposes a complete builder:
-`runtime.NewDurableV1RuntimeBuilder`. It requires the client set to expose
-`V1RuntimeCapabilitiesSource`, and then requires a complete snapshot-owned
-source, planner, adapter registry, checkpoint materializer, Redis budget
-leaser, clock, and both `GeneratePortsFactory` and
-`CompactPortsFactory` callbacks. Each callback receives the same copied
-capability bundle and must construct every durable phase callback from those
-immutable adapters and stores. No missing callback is synthesized, and the
-legacy `llm.Engine` is never adapted. A successful composition returns
-`activity.DurableV1Runtime`; Query remains an independent authorization
-contract on `Activities.QueryService`.
+The builder requires deployment policy through `CloudV1RuntimeOptions`:
 
-`runtime.NewGenerateV1RuntimeBuilder` and
-`runtime.NewCompactV1RuntimeBuilder` remain available for contract tests and
-phase-specific deployment assembly. They return phase-only values that the
-production readiness guard treats as unconfigured. When both phase factories
-are supplied and no explicit `V1RuntimeBuilder` is set,
-`NewProductionEngineFactory` installs `NewDurableV1RuntimeBuilder`
-automatically. A missing or partial factory set remains unconfigured and
-fails closed before Temporal polling. The production factory also rejects a
-durable snapshot before constructing provider, Redis, or PostgreSQL clients
-when no `V1RuntimeBuilder` is present. This early guard prevents an
-`EngineFactory` caller from mistaking the legacy continuation/result stores
-for the Task 19 durable composition; it does not provide the missing
-PostgreSQL/Redis wiring.
+- `ResolveScope` authorizes the caller and returns the opaque scope used for
+  request records, checkpoint signing and materialization. Tenant/project
+  fields in an activity payload are not proof of authorization.
+- `CheckpointTTL` is positive and controls checkpoint retention metadata.
+- `Limits` sets the bounded checkpoint materialization limits. Negative limits
+  are rejected; the materializer applies its defaults to omitted limits.
 
-`runtime.NewCompactV1RuntimeBuilder` provides the corresponding contract-only
-Compact composition. It requires the same snapshot-owned capabilities plus a
-`CompactPortsFactory` and returns `activity.CompactOnlyV1Runtime`; Generate and
-Query remain unavailable by design. This helper makes Compact validation and
-testing independent without pretending that a partial runtime is safe to
-register in production. A complete worker must compose both phase ports before
-starting Temporal polling.
+The constructor validates these options locally. When a snapshot is built, the
+returned callback requires `V1RuntimeCapabilitiesSource` and verifies that the
+cloud identity, Redis namespace/hash tag and configuration digest match that
+snapshot. It then constructs `CloudExecutionRuntime` from the same request,
+checkpoint, cache, budget, provider and signing capabilities. Missing or
+inconsistent capabilities fail snapshot construction; no in-memory storage,
+unscoped resolver or legacy inference runtime is invented.
 
-The runtime readiness guard treats both phase-only runtime values as
-unconfigured, so accidentally installing either builder cannot mark a
-production worker ready or start polling. Only a complete durable runtime (or
-an explicitly supplied equivalent implementation) may cross that boundary.
+The normal worker CLI does not yet select a production caller-authorization
+policy or install this builder. Production startup therefore remains
+fail-closed until that policy is configured and the builder is explicitly
+wired. The checked-in development fixture is limited to configuration and
+readiness checks. Passing library and integration tests does not establish that
+the production CLI can dispatch work.
 
-The constructor performs only local validation. It does not construct clients,
-read PostgreSQL or Redis, resolve provider credentials, or dispatch an
-Activity. A deployment should call it from its per-snapshot runtime builder
-after composing the real PostgreSQL operation/result/checkpoint/cache ports,
-Redis budget materializer, provider dispatch, and reconciliation callbacks.
-Those callbacks remain owned by the immutable snapshot and must be safe across
-Temporal retries.
+## Storage and execution boundaries
 
-`GeneratePorts.Validate` and `CompactPorts.Validate` are also available when a
-builder needs to validate ports before assembling additional wrappers. The
-validation rejects both a missing callback and a typed-nil function callback;
-the latter would otherwise pass through an `interface{}` check and panic only
-after polling began. This is a composition guard, not evidence of live
-PostgreSQL, Redis, or provider contract execution.
+The worker has no SQL persistence backend. Generic cloud table/blob contracts
+store durable requests, attempts, provider recovery context, results,
+checkpoints and response-cache artifacts; the initial provider is DynamoDB/S3.
+Redis owns budget reservations, claims, settlement and provider state. Budget
+configuration comes from the immutable JSON settings snapshot. See
+[state and storage](../architecture/state-and-storage.md).
 
-## Snapshot-owned Task 19 state boundary
+The bounded execution runtime authorizes every step before reading request
+state, including completed results and cache hits. Prepare saves the context
+needed for recovery, budget acquisition attempts once, Generate/Compact submit
+or resume the saved attempt, Poll makes one provider status request, and
+Complete publishes the durable response. Workflow timers own budget and
+provider waits. Public generation can call the separate compaction workflow;
+both use the internal request and budget workflows described in
+[internal workflows](internal-workflows.md).
 
-The storage-neutral `durable.CompositionBuilder` is the narrow Task 19 seam
-for assembling the PostgreSQL operation/continuation/result ports and the
-Redis budget leaser from one immutable
-snapshot. `Build` performs only local validation and returns a value bound to
-one `StateIdentity`; it never creates clients, reads PostgreSQL budget state,
-or dispatches a provider request. `Composition.BudgetBoundary()` and
-`Composition.NewLifecycle()` expose the reserve/claim/dispatch/settlement ordering and
-recovery helpers without allowing a reload to mix stores from another
-snapshot.
+Budget acquisition and claim use Redis directly; there is no SQL budget
+journal. An unused reservation authorizes starting work within 15 minutes. Retrying
+an activity recovers its existing attempt, while an explicitly requested retry
+of an unknown paid submission needs a new attempt and new budget. The older
+uncertain charge remains accounted for. See
+[Redis budget leases](redis-budget-leases.md) and
+[cloud provider execution](cloud-provider-execution.md).
 
-Runtime capability bundles may carry an optional
-`DurableCompositionFactory`. Calling
-`V1RuntimeCapabilities.BuildDurableComposition` invokes that factory once and
-validates the complete returned composition before a caller can attach it to
-an Activity. Missing factories, missing ports, typed-nil ports, and invalid
-identities fail closed; no legacy Redis store or in-memory substitute is
-created. The seam is intentionally optional until deployment-owned
-PostgreSQL/Redis bindings and protected recovery evidence are available.
+## Snapshot ownership and Query
 
-`runtime.NewDurableV1RuntimeBuilder` now invokes the optional composition
-factory exactly once per snapshot. It passes the validated composition by
-value to both phase factories through `V1RuntimeCapabilities.DurableComposition`,
-so Generate and Compact cannot accidentally bind different PostgreSQL/Redis
-identities. For a compiled configuration snapshot, it also requires the
-composition's `StateIdentity.ConfigDigest` to match that snapshot before either
-phase factory runs; a valid composition from a previous reload therefore fails
-closed instead of being attached to the new Activity runtime. A custom
-`V1RuntimeBuilder` may use the same helper explicitly;
-supplying a composition factory alone still does not install a v1 runtime or
-relax the production readiness guard.
+The runtime's snapshot proxy holds the configuration lease for the whole
+activity step. A configuration reload cannot close that step's cloud, Redis,
+provider or signing clients. The builder checks identity before exposing the
+runtime, so clients from a previous snapshot cannot be attached to a new
+configuration accidentally.
 
-Budget acquisition and claim use Redis directly; there is no SQL budget journal
-phase. `GeneratePorts.Claim` and `CompactPorts.Claim` must return the matching
-single-use claim receipt before dispatch. See [Redis budget leases](redis-budget-leases.md)
-for expiration, retry, settlement, and persistence behavior.
+`llm.query.v1` has independent authorization and cursor policy. A deployment
+may supply `ProductionFactoryOptions.QueryServiceBuilder`; the cloud execution
+builder does not infer that policy or enable missing query readers. An
+unconfigured Query capability fails closed. See
+[persisted query composition](persisted-query-service.md).
+
+## Direct phase adapters
+
+`activity.DurableV1Runtime`, `NewDurableV1RuntimeBuilder`,
+`NewGenerateV1RuntimeBuilder` and `NewCompactV1RuntimeBuilder` remain available
+for direct phase composition and contract tests. They validate explicit phase
+callbacks and snapshot-owned storage-neutral capabilities. Supplying only a
+Generate or Compact phase is not a complete production runtime, and these
+direct adapters do not replace the bounded `ExecutionRuntime` required by the
+registered generation and compaction activities.
+
+`durable.CompositionBuilder` binds storage-neutral request lifecycle ports and
+the Redis budget leaser to one `StateIdentity`. Its validation does not create
+clients or dispatch paid work. This remains a composition seam, not evidence
+of live DynamoDB/S3, Redis restoration, caller authorization or provider
+behavior; those require separate release evidence.
