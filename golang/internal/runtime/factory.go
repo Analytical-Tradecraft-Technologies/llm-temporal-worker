@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -839,18 +838,23 @@ func (factory *ProductionEngineFactory) buildRedis(ctx context.Context, value co
 }
 
 func (factory *ProductionEngineFactory) redisKeySecret(ctx context.Context, value config.Config) ([]byte, error) {
-	if len(factory.options.RedisKeySecret) >= 32 {
+	if len(factory.options.RedisKeySecret) != 0 {
+		if len(factory.options.RedisKeySecret) < 32 {
+			return nil, fmt.Errorf("%w: Redis key secret requires at least 32 bytes", ErrDependencyUnavailable)
+		}
 		return append([]byte(nil), factory.options.RedisKeySecret...), nil
 	}
-	password, err := factory.options.Resolver.Resolve(ctx, value.State.Redis.Password)
+	if err := value.State.Redis.KeySecret.Validate("state.redis.key_secret"); err != nil {
+		return nil, err
+	}
+	secret, err := factory.options.Resolver.Resolve(ctx, value.State.Redis.KeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Redis key secret: %w", err)
 	}
-	if len(password) == 0 {
-		return nil, fmt.Errorf("%w: Redis key secret is empty", ErrDependencyUnavailable)
+	if len(secret) < 32 {
+		return nil, fmt.Errorf("%w: Redis key secret requires at least 32 bytes", ErrDependencyUnavailable)
 	}
-	digest := sha256.Sum256(append([]byte("llmtw:redis-key-v1:"), password...))
-	return digest[:], nil
+	return append([]byte(nil), secret...), nil
 }
 
 func (factory *ProductionEngineFactory) continuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, error) {

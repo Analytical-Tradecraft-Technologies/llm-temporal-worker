@@ -54,3 +54,9 @@ make real provider requests from a local worker, use a private local
 configuration with a reviewed public HTTPS provider hostname and its matching
 `outbound_hosts` entry; do not weaken the policy for a Docker-private
 destination.
+
+The local worker uses `LLMTW_REDIS_KEY_SECRET` for stable Redis key identity,
+with a public local-only default in Compose. Keep it fixed while rotating
+`LLMTW_REDIS_PASSWORD`. Non-local installations must provision an independent
+secret of at least 32 bytes; see the configuration reference for existing
+namespace compatibility.

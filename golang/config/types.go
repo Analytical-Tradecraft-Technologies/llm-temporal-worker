@@ -144,10 +144,12 @@ const (
 )
 
 type RedisConfig struct {
-	Addresses           []string  `yaml:"addresses" json:"addresses"`
-	KeyPrefix           string    `yaml:"key_prefix" json:"key_prefix"`
-	Username            SecretRef `yaml:"username" json:"username"`
-	Password            SecretRef `yaml:"password" json:"password"`
+	Addresses []string  `yaml:"addresses" json:"addresses"`
+	KeyPrefix string    `yaml:"key_prefix" json:"key_prefix"`
+	Username  SecretRef `yaml:"username" json:"username"`
+	Password  SecretRef `yaml:"password" json:"password"`
+	// KeySecret is stable namespace identity material, independent of Redis ACL credentials.
+	KeySecret           SecretRef `yaml:"key_secret" json:"key_secret"`
 	TLS                 TLSConfig `yaml:"tls" json:"tls"`
 	AdmissionHashTag    string    `yaml:"admission_hash_tag" json:"admission_hash_tag"`
 	AdmissionMode       string    `yaml:"admission_mode" json:"admission_mode"`

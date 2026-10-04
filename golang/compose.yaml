@@ -184,6 +184,7 @@ services:
       MOCK_API_KEY: local-only
       REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}
       REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}
+      REDIS_KEY_SECRET: ${LLMTW_REDIS_KEY_SECRET:-local-only-stable-redis-identity-key}
       LLMTW_REDIS_KEY_PREFIX: ${LLMTW_REDIS_KEY_PREFIX:-llmtw}
       AWS_EC2_METADATA_DISABLED: "true"
     secrets:
