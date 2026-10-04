@@ -23,7 +23,12 @@ failed load never returns a partial catalog.
 
 ## Capability documents
 
-The production shape is a versioned `entries` list:
+The production shape is a versioned `entries` list. Per-feature `max_bytes`
+is not supported: the strict decoder rejects it, including on reference or
+service-class claims, instead of accepting an unenforced limit. This is separate
+from the catalog file-size bound above.
+
+The entry shape is:
 
 ```yaml
 version: llmtw-capabilities/v1
