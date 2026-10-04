@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -89,5 +90,40 @@ func TestPlannerDoesNotTrustCallerBudgetedTagForPricePolicy(t *testing.T) {
 	}
 	if len(plan.Candidates) != 1 || plan.Candidates[0].RouteID != "unpriced" {
 		t.Fatalf("plan candidates = %#v, want unpriced route", plan.Candidates)
+	}
+}
+
+// A diagnostic cap must never change which routes are eligible.
+func TestPlannerValidatesRoutesAfterRejectionLimit(t *testing.T) {
+	for _, limit := range []int{1, 2, 256} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			valid := Route{ID: "valid", EndpointID: "ep", Provider: "openai", Family: "responses", Model: "model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, Capabilities: testCapabilities()}
+			routes := make([]Route, limit)
+			for i := range routes {
+				routes[i] = valid
+				routes[i].ID = fmt.Sprintf("blocked-%d", i)
+				routes[i].AllowedTenants = []string{"another-tenant"}
+			}
+			invalid := valid
+			invalid.ID = "missing-endpoint"
+			invalid.EndpointID = ""
+			routes = append(routes, invalid, valid)
+			input := Input{Request: llm.Request{OperationKey: "op", Model: "logical"}, Catalog: Catalog{Version: "v1", Models: map[string]Model{"logical": {Routes: routes}}}}
+			plan, err := (DeterministicPlanner{MaxRejections: limit}).Plan(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Rejections) != limit {
+				t.Fatalf("got %d rejections, want %d", len(plan.Rejections), limit)
+			}
+			if len(plan.Candidates) != 1 || plan.Candidates[0].RouteID != "valid" {
+				t.Fatalf("invalid route admitted after diagnostic cap: %#v", plan.Candidates)
+			}
+			input.Catalog.Models["logical"] = Model{Routes: routes[:len(routes)-1]}
+			plan, err = (DeterministicPlanner{MaxRejections: limit}).Plan(context.Background(), input)
+			if err == nil || len(plan.Candidates) != 0 {
+				t.Fatalf("expected no eligible routes, got %#v, %v", plan.Candidates, err)
+			}
+		})
 	}
 }
