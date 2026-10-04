@@ -164,3 +164,45 @@ func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestLiftToolCallsWithStopReason(t *testing.T) {
+	for _, test := range []struct {
+		name, reason, refusal string
+		want                  llm.ResponseStatus
+	}{
+		{name: "stop with tool call", reason: "stop", want: llm.ResponseStatusToolCalls},
+		{name: "explicit tool call", reason: "tool_calls", want: llm.ResponseStatusToolCalls},
+		{name: "truncated tool call", reason: "length", want: llm.ResponseStatusLength},
+		{name: "filtered tool call", reason: "content_filter", want: llm.ResponseStatusContentFiltered},
+		{name: "refusal takes precedence", reason: "stop", refusal: "Cannot comply", want: llm.ResponseStatusRefused},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var response openai.ChatCompletion
+			if err := json.Unmarshal([]byte(`{"id":"chat-tool","model":"model","service_tier":"default","choices":[{"index":0,"message":{"role":"assistant","content":"Checking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"Sydney\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`), &response); err != nil {
+				t.Fatal(err)
+			}
+			response.Choices[0].FinishReason = test.reason
+			response.Choices[0].Message.Refusal = test.refusal
+			got, err := testProfile().liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &response, "req")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != test.want {
+				t.Fatalf("status=%s want %s", got.Status, test.want)
+			}
+			if got.Provider.FinishReason != test.reason {
+				t.Fatal("raw finish reason lost")
+			}
+			if len(got.Output) != 2 {
+				t.Fatalf("output=%#v", got.Output)
+			}
+			call, ok := got.Output[1].(llm.ToolCall)
+			if !ok || call.ID != "call-1" || call.Name != "lookup" || string(call.Arguments) != `{"q":"Sydney"}` {
+				t.Fatalf("tool call=%#v", got.Output[1])
+			}
+			if got.Usage.InputTokens != 2 || got.Usage.OutputTokens != 3 {
+				t.Fatalf("usage=%#v", got.Usage)
+			}
+		})
+	}
+}
