@@ -94,6 +94,15 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	if record.Status == cloudstate.StatusCompleted || record.Status == cloudstate.StatusFailed {
 		return p.restore(ctx, record, cloudstate.RequestPreparation{}, checkpointScope)
 	}
+	prepared, err := p.prepareActive(ctx, record, caller, parent, checkpointScope)
+	if err != nil {
+		return p.completedAfterError(ctx, record, checkpointScope, err)
+	}
+	return prepared, nil
+}
+
+func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string) (PreparedCloudRequest, error) {
+	scope := record.Request.Scope
 	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
 	if errors.Is(err, cloudstate.ErrRequestPreparationMissing) {
 		materialized, loadErr := p.replay.materializeAuthorized(ctx, caller, parent, checkpointScope)
@@ -151,9 +160,28 @@ func (p *CloudRequestPreparation) Load(ctx context.Context, reference llm.Execut
 	}
 	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
 	if err != nil {
-		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
+		return p.completedAfterError(ctx, record, checkpointScope, cloudRuntimeError(err, false))
 	}
-	return p.restore(ctx, record, preparation, checkpointScope)
+	prepared, err := p.restore(ctx, record, preparation, checkpointScope)
+	if err != nil {
+		return p.completedAfterError(ctx, record, checkpointScope, err)
+	}
+	return prepared, nil
+}
+
+// Completion replaces intermediate progress with the immutable final response.
+// An already-authorized caller can therefore lose a preparation/finalization
+// read to a successful concurrent caller. Replay only that completed operation;
+// preserve the original error if no matching durable success is available.
+func (p *CloudRequestPreparation) completedAfterError(ctx context.Context, original cloudstate.Record, checkpointScope string, cause error) (PreparedCloudRequest, error) {
+	current, err := p.store.Read(ctx, original.Request.Scope, original.Request.ID)
+	if err != nil || current.Status != cloudstate.StatusCompleted {
+		return PreparedCloudRequest{}, cause
+	}
+	if !equalFinalizationValue(current.Request, original.Request) {
+		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
+	}
+	return p.restore(ctx, current, cloudstate.RequestPreparation{}, checkpointScope)
 }
 
 func (p *CloudRequestPreparation) authorize(ctx context.Context, caller llm.RequestContext) (string, error) {

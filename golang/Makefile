@@ -1,6 +1,8 @@
 SHELL := /bin/sh
 
 GO ?= go
+OPAM ?= opam
+CLOUD_WORKFLOW_TEST_FILTER ?= ^TestCloudWorkflowLive
 # Keep the security scan on the reviewed Go patch release. A moving `go env
 # GOVERSION` default can select an older runner toolchain than the documented
 # baseline and reintroduce fixed standard-library vulnerabilities.
@@ -18,7 +20,7 @@ IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 
-.PHONY: fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
+.PHONY: cloud-workflow-integration cloud-workflow-ocaml-integration cloud-workflow-aws-integration fmt-check schema-verify docs-verify traceability-verify workflow-verify vet test build benchmark redis-benchmark-compile redis-benchmark slo-evidence-verify integration readiness-integration redis-integration image-verify compose-smoke compose-live-integration deployment-policy-verify kustomize-verify adapter-contracts routing-contracts routing-fuzz live-contract-verify security-pr-verify security-verify fuzz-smoke mutation-verify release-verify verify
 
 fmt-check:
 	@bash scripts/check-go-format.sh
@@ -443,3 +445,34 @@ release-verify:
 	bash ../scripts/release/verify.sh --artifact-dir "release-artifacts" --evidence "release-artifacts/evidence.json"
 
 verify: fmt-check schema-verify docs-verify vet test build redis-benchmark-compile
+
+# Isolated real Temporal + Redis workflow gate. KV/blob storage is in memory;
+# the separately authorized AWS target below exercises DynamoDB and S3.
+cloud-workflow-integration:
+	@command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { echo "cloud-workflow-integration requires Docker" >&2; exit 2; }
+	@set -eu; \
+		export COMPOSE_PROJECT_NAME="llmtw-cloud-test-$$$$"; \
+		export LLMTW_COMPOSE_TEMPORAL_PORT=0 LLMTW_COMPOSE_TEMPORAL_UI_PORT=0 LLMTW_COMPOSE_REDIS_PORT=0; \
+		export LLMTW_REDIS_USERNAME=local LLMTW_REDIS_PASSWORD=local-only LLMTW_REDIS_KEY_PREFIX=llmtw LLMTW_POSTGRES_PASSWORD=local-only; \
+		cleanup() { $(COMPOSE) down --volumes --remove-orphans --timeout 10 >/dev/null 2>&1 || true; }; \
+		trap cleanup EXIT; trap 'exit 130' HUP INT TERM; \
+		$(COMPOSE) up --detach --wait --wait-timeout 180 temporal redis; \
+		LLMTW_TEMPORAL_ADDRESS="$$( $(COMPOSE) port temporal 7233 )" \
+		LLMTW_REDIS_ADDR="$$( $(COMPOSE) port redis 6379 )" \
+		LLMTW_CLOUD_TEST_PROVISION=1 LLMTW_CLOUD_TEST_AWS=0 \
+		$(GO) test -race -count=1 -timeout=10m -tags=cloudworkflowintegration ./internal/runtime -run '$(CLOUD_WORKFLOW_TEST_FILTER)'
+
+# Native OCaml callers and an OCaml parent workflow use the same isolated Go
+# worker gate. The parent and Go workers poll different queues.
+cloud-workflow-ocaml-integration:
+	cd ../ocaml/llm_temporal_worker && $(OPAM) exec -- dune build integration/live_client.exe
+	LLMTW_CLOUD_OCAML_CLIENT="$(abspath ../ocaml/llm_temporal_worker/_build/default/integration/live_client.exe)" \
+		$(MAKE) cloud-workflow-integration CLOUD_WORKFLOW_TEST_FILTER='^TestCloudWorkflowLiveOCaml$$'
+
+# Uses existing disposable AWS resources with ordinary IAM credentials. It
+# writes synthetic encrypted records in a random namespace and retains them;
+# the operator owns cleanup of the disposable table/bucket. The LLM adapter is deterministic; no LLM provider is called.
+cloud-workflow-aws-integration:
+	@test "$${LLMTW_CLOUD_TEST_AWS:-}" = "1" && test -n "$${LLMTW_CLOUD_TEST_CONFIG:-}" || { echo "AWS gate requires explicit LLMTW_CLOUD_TEST_AWS=1 and LLMTW_CLOUD_TEST_CONFIG" >&2; exit 2; }
+	@test -z "$${CI:-}" || { echo "AWS gate is operator-only" >&2; exit 2; }
+	LLMTW_CLOUD_TEST_PROVISION=0 $(GO) test -race -count=1 -timeout=5m -tags=cloudworkflowintegration ./internal/runtime -run '^TestCloudWorkflowAWSLifecycle$$'

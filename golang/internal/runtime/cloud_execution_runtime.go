@@ -126,6 +126,14 @@ func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.Execu
 func (r *CloudExecutionRuntime) advance(ctx context.Context, p PreparedCloudRequest, step cloudStep) (llm.ExecutionResultV1, error) {
 	for tries := 0; tries < 16; tries++ {
 		result, err := r.advanceAttempt(ctx, p, step)
+		if err != nil {
+			completed, recoveryErr := r.preparation.completedAfterError(ctx, p.Record, p.Preparation.CheckpointScope, err)
+			if recoveryErr == nil {
+				result, _, replayErr := r.replay(ctx, completed)
+				return result, replayErr
+			}
+			err = recoveryErr
+		}
 		if !errors.Is(err, errCloudAttemptAdvanced) {
 			return result, err
 		}
@@ -189,21 +197,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 				return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 			}
 		} else {
-			result := r.execution.result(saved)
-			if step == cloudPoll || step == cloudSubmit || saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed {
-				result, err = r.execution.Resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay)
-				if err != nil {
-					return llm.ExecutionResultV1{}, err
-				}
-			}
-			if result.Saved.Execution.Stage == cloudstate.ExecutionSucceeded && step == cloudComplete {
-				checked, err := r.finishProviderStep(ctx, p, attempt, result)
-				if err != nil || checked.State == llm.ExecutionFailed {
-					return checked, err
-				}
-				return r.finishAttempt(ctx, p, attempt, result.Saved)
-			}
-			return r.finishProviderStep(ctx, p, attempt, result)
+			return r.resumeAttempt(ctx, p, attempt, saved, step)
 		}
 	} else if !errors.Is(loadErr, cloudstate.ErrProviderExecutionMissing) && !errors.Is(loadErr, cloudstate.ErrBudgetPlanMissing) {
 		return llm.ExecutionResultV1{}, cloudRuntimeError(loadErr, false)
@@ -224,7 +218,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		call, err = r.execution.admission.PrepareCompact(ctx, root.Scope, attempt.ID, p.CompactReplay, budgetAttempt)
 	}
 	if err != nil {
-		return llm.ExecutionResultV1{}, err
+		return r.resumeAdmissionWinner(ctx, p, attempt, step, err)
 	}
 	lease, err := r.cacheLease(ctx, p, attempt, call.plan)
 	if err != nil {
@@ -241,7 +235,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	}
 	reservation, err := r.execution.admission.Reserve(ctx, call)
 	if err != nil {
-		return llm.ExecutionResultV1{}, err
+		return r.resumeAdmissionWinner(ctx, p, attempt, step, err)
 	}
 	if call.plan.RequiresReservation() && !reservation.Accepted {
 		return cloudStatus(p, llm.ExecutionBudgetWait, reservation.RetryAfter), nil
@@ -265,6 +259,42 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	result, err := r.execution.submit(ctx, call, reservation, start)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
+	}
+	return r.finishProviderStep(ctx, p, attempt, result)
+}
+
+// Admission is fenced as soon as another caller starts the same attempt. A
+// read of "not started" can race either plan preparation or Reserve's recheck.
+// Recover only with durable evidence of that exact attempt's execution, and
+// only before this invocation has reached the dispatch path. Resume never
+// submits or acquires a replacement paid attempt, even if the parent advanced.
+func (r *CloudExecutionRuntime) resumeAdmissionWinner(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, step cloudStep, cause error) (llm.ExecutionResultV1, error) {
+	var classified *provider.Error
+	if !errors.As(cause, &classified) || classified.Code != provider.CodeOperationConflict || classified.Dispatch != provider.DispatchNotDispatched {
+		return llm.ExecutionResultV1{}, cause
+	}
+	saved, err := r.store.LoadProviderExecution(ctx, p.Record.Request.Scope, attempt.ID)
+	if err != nil {
+		return llm.ExecutionResultV1{}, cause
+	}
+	return r.resumeAttempt(ctx, p, attempt, saved, step)
+}
+
+func (r *CloudExecutionRuntime) resumeAttempt(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution, step cloudStep) (llm.ExecutionResultV1, error) {
+	result := r.execution.result(saved)
+	if step == cloudPoll || step == cloudSubmit || saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed {
+		var err error
+		result, err = r.execution.Resume(ctx, p.Record.Request.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay)
+		if err != nil {
+			return llm.ExecutionResultV1{}, err
+		}
+	}
+	if result.Saved.Execution.Stage == cloudstate.ExecutionSucceeded && step == cloudComplete {
+		checked, err := r.finishProviderStep(ctx, p, attempt, result)
+		if err != nil || checked.State == llm.ExecutionFailed {
+			return checked, err
+		}
+		return r.finishAttempt(ctx, p, attempt, result.Saved)
 	}
 	return r.finishProviderStep(ctx, p, attempt, result)
 }

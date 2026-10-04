@@ -305,3 +305,73 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 	}
 	return contracts.ErrConflict
 }
+
+// completeRequestAttempt removes the current finished child from recovery before
+// the root drops its execution metadata. The committed handoff makes this
+// recoverable: retries repair the child index before completing the root.
+// Older unknown paid children remain discoverable.
+func (r *Repository) completeRequestAttempt(ctx context.Context, root Record, now time.Time) error {
+	progress, handoff, err := handoffProgress(root.Progress)
+	if err != nil {
+		return err
+	}
+	if handoff == nil {
+		return nil
+	}
+	if err := r.verifyHandoffCheckpoint(ctx, root, *handoff); err != nil {
+		return err
+	}
+	active, err := r.decodeRequestAttempt(root, progress["request_attempt"])
+	if err != nil || active == nil {
+		return err
+	}
+	if _, err := r.verifyRequestAttempt(ctx, root, *active); err != nil {
+		return err
+	}
+	for tries := 0; tries < 16; tries++ {
+		child, err := r.Read(ctx, root.Request.Scope, active.ID)
+		if err != nil {
+			return err
+		}
+		var childProgress map[string]json.RawMessage
+		if json.Unmarshal(child.Progress, &childProgress) != nil || childProgress == nil {
+			return ErrCorrupt
+		}
+		if handoff.Mode == "provider" {
+			_, _, execution, err := executionProgress(child)
+			if err != nil {
+				return err
+			}
+			if execution == nil || execution.Stage != ExecutionSucceeded || !execution.Settled {
+				return contracts.ErrConflict
+			}
+		} else if childProgress["provider_execution"] != nil {
+			// A cache hit or no-work checkpoint cannot erase a paid attempt.
+			return contracts.ErrConflict
+		}
+		var completedRoot RequestID
+		if data := childProgress["attempt_completed"]; data != nil {
+			if json.Unmarshal(data, &completedRoot) != nil || completedRoot != root.Request.ID || child.Status != StatusCompleted {
+				return ErrCorrupt
+			}
+			return r.advanceIndex(ctx, child)
+		}
+		if child.Status != StatusRunning || executionFinalizing(childProgress) {
+			return contracts.ErrConflict
+		}
+		childProgress["attempt_completed"], _ = json.Marshal(root.Request.ID)
+		data, err := json.Marshal(childProgress)
+		if err != nil || len(data) > maxPayloadBytes {
+			return ErrInvalid
+		}
+		if now.Before(child.UpdatedAt) {
+			now = child.UpdatedAt
+		}
+		_, err = r.TryUpdate(ctx, root.Request.Scope, active.ID, Update{ExpectedRevision: child.Revision, Token: "attempt-complete", Status: StatusCompleted, Progress: data, UpdatedAt: now})
+		if errors.Is(err, contracts.ErrConflict) {
+			continue
+		}
+		return err
+	}
+	return contracts.ErrConflict
+}
