@@ -254,7 +254,7 @@ func TestDockerBuildInstructionsUseGoModuleContext(t *testing.T) {
 	}
 }
 
-func TestV1DocumentationStatesGenerateOnlyBoundary(t *testing.T) {
+func TestV1DocumentationStatesFinalResponseBoundary(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, test := range []struct {
 		path      string
@@ -263,7 +263,7 @@ func TestV1DocumentationStatesGenerateOnlyBoundary(t *testing.T) {
 	}{
 		{
 			path:      "docs/index.md",
-			required:  "The v1 public contract exposes only one-shot `Generate` and a final normalized response; live streaming and token-event APIs are not supported",
+			required:  "Public workflows return final normalized responses; create/poll activity results may be pending. Live streaming and token-event APIs are not supported",
 			forbidden: []string{"Optional typed stream APIs are for reusable-library callers"},
 		},
 		{
