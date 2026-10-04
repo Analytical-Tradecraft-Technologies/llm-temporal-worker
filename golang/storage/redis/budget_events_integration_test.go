@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -193,6 +194,35 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 					rows[1].Event.NanoDelta != 10_000_000 || rows[1].Event.OperationHash != "" ||
 					rows[1].Event.MemberHash != rows[0].Event.MemberHash {
 					t.Fatalf("expiry events = %#v", rows)
+				}
+			})
+			t.Run("wildcard IDs carry an exhausted sequence into the next millisecond", func(t *testing.T) {
+				m, space, req := fixture(t)
+				future := time.Now().Add(time.Hour).UnixMilli()
+				seed := strconv.FormatInt(future, 10) + "-18446744073709551615"
+				if err := client.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), ID: seed, Values: map[string]any{"event": "{}"}}).Err(); err != nil {
+					t.Fatal(err)
+				}
+				// XADD * can advance the millisecond component. It differs from
+				// XADD <milliseconds>-*, which must fail when its sequence fills.
+				r := acquire(t, m, req)
+				if _, err := m.Claim(ctx, claim(r)); err != nil {
+					t.Fatal(err)
+				}
+				if err := m.Reconcile(ctx, settle(r, "0.004")); err != nil {
+					t.Fatal(err)
+				}
+				rows, err := client.XRange(ctx, space.EventsKey(), "("+seed, "+").Result()
+				if err != nil || len(rows) != 3 {
+					t.Fatalf("accounting events after sequence rollover: %#v, %v", rows, err)
+				}
+				for i, kind := range []BudgetStreamEventKind{BudgetEventReserve, BudgetEventClaim, BudgetEventReconcile} {
+					var event BudgetStreamEvent
+					wire, ok := rows[i].Values["event"].(string)
+					wantID := strconv.FormatInt(future+1, 10) + "-" + strconv.Itoa(i)
+					if !ok || json.Unmarshal([]byte(wire), &event) != nil || event.Validate() != nil || event.Kind != kind || rows[i].ID != wantID {
+						t.Fatalf("event %d after sequence rollover = %#v", i, rows[i])
+					}
 				}
 			})
 			t.Run("stream failures precede accounting writes", func(t *testing.T) {
