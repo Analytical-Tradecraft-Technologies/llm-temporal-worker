@@ -40,9 +40,10 @@ const maxDurationSeconds int64 = 9223372036
 type QueryAvailability string
 
 const (
-	QueryAvailable   QueryAvailability = "available"
-	QueryDegraded    QueryAvailability = "degraded"
-	QueryUnavailable QueryAvailability = "unavailable"
+	QueryAvailable           QueryAvailability = "available"
+	QueryDegraded            QueryAvailability = "degraded"
+	QueryUnavailable         QueryAvailability = "unavailable"
+	QueryAvailabilityUnknown QueryAvailability = "unknown"
 )
 
 type QueryLifecycle string

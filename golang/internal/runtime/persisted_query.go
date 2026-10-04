@@ -320,7 +320,7 @@ func (handler *persistedQueryHandler) providerStatus(ctx context.Context, reques
 	for _, status := range page.Routes {
 		row := control.ProviderStatusRow{RouteID: control.RouteID(status.RouteID), Provider: control.ProviderID(status.Provider), Endpoint: control.EndpointID(status.EndpointID), Availability: control.QueryAvailability(status.Availability), ObservedAt: status.ObservedAt.UTC(), StaleAfter: status.StaleAfter.UTC()}
 		credit := control.QueryCreditState(status.Credit)
-		billing := control.QueryBillingState(status.Billing)
+		billing := control.QueryBillingState(status.Billing.WireState())
 		circuit := control.QueryCircuitState(status.Circuit)
 		row.Credit, row.Billing, row.Circuit = &credit, &billing, &circuit
 		rows = append(rows, row)

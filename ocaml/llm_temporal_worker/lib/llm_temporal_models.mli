@@ -237,7 +237,7 @@ type compaction_response = {
   diagnostics : diagnostic list;
 }
 
-type availability = Available | Degraded | Unavailable
+type availability = Available | Degraded | Unavailable | Availability_unknown
 type model_lifecycle = Active | Deprecated | Retired | Unknown
 type model_capability = Model_capability.t
 type inventory_source = Provider_api_inventory | Operator_inventory | Unknown_inventory_source

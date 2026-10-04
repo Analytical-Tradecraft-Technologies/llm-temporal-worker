@@ -700,6 +700,18 @@ let () =
     stale_after = time "2026-01-01T01:00:00Z";
     safe_code = Some (Safe_code.of_string "provider-degraded");
   } in
+  List.iter (fun availability ->
+    let request = Provider_status_request { (provider_filter ()) with availability = Some availability } in
+    (match ok (V1_codec.decode_query_request (ok (V1_codec.encode_query_request request))) with
+     | Provider_status_request { availability = Some actual; _ } when actual = availability -> ()
+     | _ -> failwith "availability filter did not round-trip");
+    let row = { provider_status with availability; billing_state = Billing_blocked } in
+    let decoded = ok (V1_codec.decode_query_response
+      (ok (V1_codec.encode_query_response (response (Provider_status_result { routes = [row] }))))) in
+    match decoded.result with
+    | Provider_status_result { routes = [actual] } when actual.availability = availability && actual.billing_state = Billing_blocked -> ()
+    | _ -> failwith "provider availability or billing status did not round-trip")
+    [Available; Degraded; Unavailable; Availability_unknown];
   let provider_status_round_trip =
     ok (V1_codec.decode_query_response
           (ok (V1_codec.encode_query_response

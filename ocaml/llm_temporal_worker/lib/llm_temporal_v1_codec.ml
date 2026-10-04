@@ -438,8 +438,8 @@ let time_of_json context value =
   let* value = string context value in
   match Ptime.of_rfc3339 value with Ok (time, _, _) -> Ok time | Error _ -> Error (errorf "%s is not a valid RFC3339 timestamp" context)
 
-let availability_to_string = function Available -> "available" | Degraded -> "degraded" | Unavailable -> "unavailable"
-let availability_of_string context = function "available" -> Ok Available | "degraded" -> Ok Degraded | "unavailable" -> Ok Unavailable | _ -> Error (errorf "%s has invalid availability" context)
+let availability_to_string = function Available -> "available" | Degraded -> "degraded" | Unavailable -> "unavailable" | Availability_unknown -> "unknown"
+let availability_of_string context = function "available" -> Ok Available | "degraded" -> Ok Degraded | "unavailable" -> Ok Unavailable | "unknown" -> Ok Availability_unknown | _ -> Error (errorf "%s has invalid availability" context)
 let lifecycle_to_string = function
   | Active -> "available"
   | Deprecated -> "deprecated"

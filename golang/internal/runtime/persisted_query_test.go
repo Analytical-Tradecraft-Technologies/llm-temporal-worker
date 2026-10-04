@@ -496,3 +496,43 @@ func TestPersistedQueryTypedNilSpendReaderIsUnsupported(t *testing.T) {
 }
 
 var _ control.SpendSummaryReader = (*fakeSpendSummary)(nil)
+
+func TestProviderStatusPreservesUnknownAvailabilityAndBillingIncident(t *testing.T) {
+	observed := time.Date(2026, time.July, 21, 23, 0, 0, 0, time.UTC)
+	for _, availability := range []control.Availability{control.AvailabilityAvailable, control.AvailabilityDegraded, control.AvailabilityUnavailable, control.AvailabilityUnknown} {
+		for _, billing := range []control.BillingState{control.BillingOK, control.BillingIssue, control.BillingUnknown} {
+			t.Run(string(availability)+"/"+string(billing), func(t *testing.T) {
+				reader := &fakePersistedProvider{status: control.ProviderStatusPage{Routes: []control.RouteStatus{{RouteID: "route", EndpointID: "endpoint", Provider: "provider", Availability: availability, Credit: control.CreditUnknown, Billing: billing, Circuit: control.CircuitClosed, ObservedAt: observed, StaleAfter: observed.Add(time.Hour)}}}}
+				service := persistedQueryTestService(t, reader, func(context.Context, control.QueryAuditRecord) error { return nil })
+				filterAvailability := control.QueryAvailability(availability)
+				request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "query-op", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: llm.QueryProviderStatus, Filter: control.ProviderStatusQuery{Availability: &filterAvailability, IncludeHealthy: boolPtr(true), Page: control.QueryPage{Size: 10}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, err := service.Execute(context.Background(), request)
+				if reader.lastOpts.Availability != availability {
+					t.Fatalf("filter lost availability: %+v", reader.lastOpts)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded, err := control.DecodeQueryResponse(response)
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := decoded.Result.(control.ProviderStatusResult)
+				if len(result.Routes) != 1 {
+					t.Fatalf("routes=%v", result.Routes)
+				}
+				row := result.Routes[0]
+				expectedBilling := string(billing)
+				if billing == control.BillingIssue {
+					expectedBilling = "blocked"
+				}
+				if string(row.Availability) != string(availability) || row.Billing == nil || string(*row.Billing) != expectedBilling {
+					t.Fatalf("incorrect route status: %+v", row)
+				}
+			})
+		}
+	}
+}

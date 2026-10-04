@@ -241,7 +241,7 @@ func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 		name  string
 		query string
 	}{
-		{name: "availability", query: `{"availability":"unknown"}`},
+		{name: "availability", query: `{"availability":"invalid"}`},
 		{name: "lifecycle", query: `{"lifecycle":"future"}`},
 		{name: "missing spend interval", query: `{}`},
 		{name: "malformed spend interval", query: `{"start_time":"not-a-time","end_time":"2026-07-19T00:00:00Z"}`},
