@@ -935,7 +935,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		return openairesponses.NewOpenAIAdapter(openaiClient, endpointID, capabilities.Version)
+		return openairesponses.NewOpenAIAdapter(openaiClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
 	case "azure_openai_responses":
 		apiVersion := factory.azureAPIVersion(endpointID, endpoint)
 		if apiVersion == "" {
@@ -951,7 +951,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version)
+			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
 		case "bearer_env", "header_env":
 			key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 			if err != nil {
@@ -961,7 +961,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version)
+			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
 		default:
 			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
 		}

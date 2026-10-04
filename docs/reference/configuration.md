@@ -796,3 +796,12 @@ reference and client-construction checks during runtime composition; catalog
 and deployment verification are separate gates.
 
 Reload performs the same checks and publishes only a complete valid snapshot.
+
+### Responses provider storage policy
+
+For OpenAI and Azure Responses endpoints, `provider_storage.permitted: false`
+(the default) explicitly sends `store: false`. Requests that enable `store` or
+`background`, or use a stored-response continuation ID, are rejected before
+provider dispatch. Returned responses do not expose provider continuation
+handles under this policy. Set `permitted: true` to permit those provider
+storage features; callers may still explicitly request `store: false`.
