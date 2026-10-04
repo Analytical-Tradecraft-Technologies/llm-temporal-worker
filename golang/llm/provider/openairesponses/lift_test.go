@@ -205,3 +205,47 @@ func decodeOutputItems(t *testing.T, raw string) []responses.ResponseOutputItemU
 	}
 	return items
 }
+
+func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
+	for _, kind := range []llm.OutputKind{llm.OutputKindJSON, llm.OutputKindJSONSchema} {
+		format := llm.OutputFormat{Kind: kind}
+		if kind == llm.OutputKindJSONSchema {
+			format.Name = "answer"
+			format.Strict = true
+			format.Schema = json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
+		}
+
+		params, err := lowerRequest(llm.Request{Model: "gpt", Output: &llm.OutputSpec{Format: format}}, llm.ServiceClassStandard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		call := provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "partial", ServiceClass: llm.ServiceClassStandard, SDKParams: params}
+		for _, reason := range []string{"max_output_tokens", "content_filter", "completed"} {
+			response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusIncomplete)
+			response.IncompleteDetails.Reason = reason
+			if reason == "completed" {
+				response.Status = responses.ResponseStatusCompleted
+			}
+			response.Usage = responses.ResponseUsage{InputTokens: 12, OutputTokens: 4, TotalTokens: 16}
+			response.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"{\"answer\":","annotations":[]}]}]`)
+			result, err := liftResponse(call, &response, "request")
+			if reason == "completed" {
+				if err == nil {
+					t.Fatalf("completed %s must still validate JSON", kind)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%s %s: %v", kind, reason, err)
+			}
+			want := llm.ResponseStatusLength
+			if reason == "content_filter" {
+				want = llm.ResponseStatusContentFiltered
+			}
+			text, ok := firstModelText(result.Output)
+			if result.Status != want || !ok || text != `{"answer":` || result.Usage.InputTokens != 12 || result.Usage.OutputTokens != 4 {
+				t.Fatalf("lost incomplete response: %+v", result)
+			}
+		}
+	}
+}

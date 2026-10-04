@@ -41,7 +41,7 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
-	if err := validateFinalJSON(call, output, hasToolCalls, hasRefusal); err != nil {
+	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
@@ -104,8 +104,10 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 // response_format validation is not sufficient for the semantic boundary.
 // The compiled SDK parameters are the source of truth for the requested
 // response format and remain inside this adapter package.
-func validateFinalJSON(call provider.Call, output []llm.Item, hasToolCalls, hasRefusal bool) error {
-	if hasToolCalls || hasRefusal || call.SDKParams == nil {
+func validateFinalJSON(call provider.Call, output []llm.Item, status llm.ResponseStatus, hasToolCalls, hasRefusal bool) error {
+	// Incomplete text is retained for callers and accounting, not validated
+	// as a promised complete JSON document. It remains ineligible for success caching.
+	if status != llm.ResponseStatusCompleted || hasToolCalls || hasRefusal || call.SDKParams == nil {
 		return nil
 	}
 	params, ok := call.SDKParams.(openai.ChatCompletionNewParams)
