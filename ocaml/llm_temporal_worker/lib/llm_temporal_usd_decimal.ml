@@ -59,7 +59,9 @@ let to_string value =
 
 let compare a b =
   let scale = max a.scale b.scale in
-  let pad value = value.digits ^ String.make (scale - value.scale) '0' in
+  (* Scaling zero must not introduce significant digits into length comparison. *)
+  let pad value = strip_leading_zeroes
+      (value.digits ^ String.make (scale - value.scale) '0') in
   let left = pad a and right = pad b in
   if String.length left <> String.length right then Stdlib.compare (String.length left) (String.length right)
   else String.compare left right
