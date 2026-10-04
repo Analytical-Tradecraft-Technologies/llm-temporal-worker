@@ -43,6 +43,11 @@ func (config Config) Validate() error {
 	if err := config.Temporal.validate(); err != nil {
 		return err
 	}
+	if config.Authorization != nil {
+		if err := config.Authorization.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := validateShutdownBudget(config.Server, config.Temporal.Worker); err != nil {
 		return err
 	}

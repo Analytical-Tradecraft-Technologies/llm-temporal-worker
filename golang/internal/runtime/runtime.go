@@ -688,7 +688,7 @@ func RunWorkerFile(ctx context.Context, path string, data []byte, _ io.Writer) e
 func newProductionRuntime(ctx context.Context, data []byte) (*Runtime, error) {
 	secretResolver := secrets.New(secrets.Options{})
 	references := secrets.ConfigResolver{Resolver: secretResolver}
-	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+	factory, err := newCLIEngineFactory(ProductionFactoryOptions{
 		Resolver:       secretResolver,
 		SnapshotLoader: CatalogSnapshotLoader{},
 	})

@@ -52,9 +52,10 @@ continue to use `worker --config /etc/llmtw/config.yaml`.
 
 Attempt to start the production composition, including the configured provider
 and state backends, Temporal client, health and metrics listeners, and Activity
-worker. Temporal polling begins only when deployment supplies a complete durable
-`V1RuntimeBuilder` and its phase callbacks; otherwise startup fails closed
-before listeners or polling:
+worker. The CLI installs the cloud runtime using the explicit
+`authorization.mode: trusted_temporal` policy and its tenant/project allowlist.
+Missing policy or incomplete durable storage configuration fails closed before
+listeners or polling:
 
 ```sh
 llm-temporal-worker worker --config /etc/llmtw/config.yaml

@@ -24,12 +24,29 @@ checkpoint, cache, budget, provider and signing capabilities. Missing or
 inconsistent capabilities fail snapshot construction; no in-memory storage,
 unscoped resolver or legacy inference runtime is invented.
 
-The normal worker CLI does not yet select a production caller-authorization
-policy or install this builder. Production startup therefore remains
-fail-closed until that policy is configured and the builder is explicitly
-wired. The checked-in development fixture is limited to configuration and
-readiness checks. Passing library and integration tests does not establish that
-the production CLI can dispatch work.
+The normal worker CLI installs this builder when `state.kind: durable` and an
+explicit `authorization.mode: trusted_temporal` policy are configured. Every
+authenticated caller allowed to use the Temporal namespace is trusted to select
+any exact tenant/project pair in `authorization.allowed_scopes`. The Temporal
+service must enforce caller authentication and namespace access. The worker does
+not receive the original caller's authenticated principal in an activity and
+does not authenticate the tenant/project fields independently.
+
+There is no default grant or wildcard. Missing or invalid policy fails before
+external client construction. The checkpoint scope is a versioned SHA-256 hash of the
+environment, Temporal namespace, tenant and project encoded as a JSON tuple.
+Actor, tags and unrelated configuration changes do not change this scope. Each
+snapshot owns its allowlist, so a reload leaves in-flight steps on their original
+policy and applies the new policy to subsequent activity steps. Revoking a pair
+also denies polling and terminal replay; drain paid work before revoking access.
+This policy does not cancel workflows or release their already-paid reservations.
+
+Checkpoint TTL comes from `state.continuation_retention`; maximum depth comes
+from `limits.continuation_depth` (at most 2,147,483,647). Other materialization
+limits retain the bounded defaults: 512 rows, 4,096 items and 16 MiB. The separate
+development fixture without this policy remains limited to configuration and
+readiness checks. Deployment authentication, IAM and live provider behavior still
+require release verification.
 
 ## Storage and execution boundaries
 
