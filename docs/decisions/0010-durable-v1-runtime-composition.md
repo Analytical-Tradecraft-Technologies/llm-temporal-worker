@@ -91,3 +91,28 @@ unconfigured v1 operation is non-dispatched and redacted.
   pre-release tests.
 - The remaining work is implementation and protected integration evidence for
   the durable v1 runtime; this ADR does not authorize provider dispatch.
+
+## Cloud workflow composition
+
+The cloud migration adds `NewCloudV1RuntimeBuilder`. Deployments supply an
+explicit scope authorizer, checkpoint retention duration and materialization
+limits. The builder takes signing keys, provider planning, cloud request/cache/
+checkpoint stores and Redis budgets from the immutable snapshot's client set.
+It rejects mismatched configuration, cloud and Redis identities before exposing
+activities. The Redis generation remains stable across configuration reloads.
+
+The returned runtime implements `activity.ExecutionRuntime` and
+`activity.GenerationPlanningRuntime` together. The factory preserves these
+interfaces instead of applying the old one-shot request wrapper. Supplying just
+one of the interfaces is a composition error and drains the rejected client set.
+`llm.generate.v1` and `llm.compact.v1` use the bounded methods; the obsolete
+one-shot runtime methods remain unavailable. Query delegates only to the
+snapshot's separately authorized query service and fails closed if absent.
+
+This constructor does not infer authorization from tenant/project payloads and
+does not activate the CLI by itself. Deployment security policy and the process
+entrypoint's configuration are separate wiring. The earlier PostgreSQL phase
+builders remain transitional code pending removal of the SQL backend; the cloud
+builder does not use them. Tests exercise factory-built synchronous and polling
+requests across runtime reconstruction, completed-result replay, rejected
+capabilities, query isolation and authorization before storage access.

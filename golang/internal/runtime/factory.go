@@ -90,8 +90,8 @@ type AzureCredentialFactory func(context.Context, config.EndpointConfig) (azcore
 type AnthropicAWSClientFactory func(context.Context, anthropicmessages.AWSClientConfig) (*anthropicmessages.Client, error)
 
 // V1RuntimeBuilder is the snapshot-scoped composition seam for the durable
-// one-shot Activity boundary. It runs only after the ProductionEngineFactory
-// has constructed the engine and every client owned by that immutable
+// Activity boundary, including bounded workflow steps. It runs only after
+// ProductionEngineFactory has constructed the engine and every client owned by the
 // snapshot. The builder may inspect the engine/client bundle and return a
 // runtime that owns no independent copy of those resources; the production
 // client set closes them when the snapshot drains.
@@ -592,7 +592,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	// Policy limits change without replacing the accounting namespace.
 	budgets, err := redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
 		Client: redisClient, Keys: keyOptions, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode),
-		FunctionVersion: value.State.Redis.AdmissionVersion, GenerationID: "redis-budget-v1", IncarnationID: "redis-budget-v1", Clock: clock,
+		FunctionVersion: value.State.Redis.AdmissionVersion, GenerationID: redisBudgetGeneration, IncarnationID: durablestore.IncarnationID(redisBudgetGeneration), Clock: clock,
 	})
 	if err != nil {
 		closeAll()
@@ -614,6 +614,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			BudgetEstimator:           copyBudgetEstimator(estimator),
 			MaxBudgetBucketsPerWindow: value.Limits.MaxBudgetBucketsPerWindow,
 			Checkpoints:               checkpointCapabilities,
+			CheckpointKeyring:         keyring,
 			Budgets:                   budgets,
 			CompositionFactory:        factory.options.DurableCompositionFactory,
 			composition:               precomposed,
@@ -732,7 +733,15 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 		_ = clients.Close(context.Background())
 		return nil, nil, fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid)
 	}
-	if repository != nil {
+	_, executes := v1Runtime.(activity.ExecutionRuntime)
+	_, plans := v1Runtime.(activity.GenerationPlanningRuntime)
+	if executes != plans {
+		_ = clients.Close(context.Background())
+		return nil, nil, fmt.Errorf("%w: bounded execution and generation planning must be composed together", ErrProductionFactoryInvalid)
+	}
+	// The bounded runtime owns its durable steps and finalization. Wrapping it
+	// in the legacy one-shot adapter would hide both workflow interfaces.
+	if repository != nil && !executes {
 		v1Runtime = &cloudRequestRuntime{inner: v1Runtime, requests: repository, finalizer: clients.v1Capabilities.Finalizer, clock: factory.options.Clock, finalizationTimeout: time.Duration(snapshot.Config().Server.FinalizationTimeout)}
 	}
 	clients.v1Runtime = v1Runtime
