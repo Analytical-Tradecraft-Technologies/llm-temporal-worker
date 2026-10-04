@@ -50,6 +50,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		option.WithAPIKey(config.APIKey),
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(config.HTTPClient),
+		option.WithRequestTimeout(clientconfig.MessagesRequestTimeout(config.HTTPClient)),
 		option.WithMaxRetries(0),
 	)
 	return &Client{sdk: sdk, messages: &sdk.Messages, baseURL: baseURL}, nil
@@ -120,6 +121,7 @@ func NewAWSClient(ctx context.Context, config AWSClientConfig) (*Client, error) 
 	options := []option.RequestOption{
 		option.WithoutEnvironmentDefaults(),
 		option.WithHTTPClient(config.HTTPClient),
+		option.WithRequestTimeout(clientconfig.MessagesRequestTimeout(config.HTTPClient)),
 		option.WithMaxRetries(0),
 	}
 	client, err := anthropicaws.NewClient(ctx, config.AWSConfig, options...)
