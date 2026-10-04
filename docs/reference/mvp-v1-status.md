@@ -28,7 +28,12 @@ Synchronous providers hold the submission activity through the HTTP response.
 Resumable providers return pending and are polled by later activities. Provider
 identifiers and budget receipts stay inside durable runtime storage. Unknown
 paid outcomes acquire a new reservation before another submission; the original
-attempt remains accounted and pending. No service cancellation API is exposed.
+attempt remains accounted and pending. `limits.route_attempts` bounds provider
+executions per request (default six), including unknown outcomes. Unused quote
+renewals do not consume attempts. At exhaustion the root returns a terminal
+`provider_error`; unknown children remain accounted and discoverable for recovery.
+Retries prefer eligible candidates with fewer prior attempts, preserving route
+priority when counts tie. No service cancellation API is exposed.
 See [workflow behavior](internal-workflows.md) and [activity contracts](activity-runtime.md).
 
 ## Storage and callers
