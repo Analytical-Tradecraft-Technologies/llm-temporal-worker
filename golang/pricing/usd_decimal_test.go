@@ -104,3 +104,11 @@ func TestUSDUnknownIsDistinctFromKnownZero(t *testing.T) {
 		t.Fatal("unknown and known-free USD states were not distinct")
 	}
 }
+
+func TestUSDRejectsExtremeExponentsWithoutOverflow(t *testing.T) {
+	for _, input := range []string{"1e9223372036854775790", "1e9223372036854775807", "1e-9223372036854775808", "1.1e9223372036854775790", "1e2048", "1e-2048"} {
+		if got, err := ParseUSD(input); err == nil {
+			t.Errorf("ParseUSD(%q) unexpectedly returned %s", input, got.String())
+		}
+	}
+}
