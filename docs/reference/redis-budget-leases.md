@@ -5,6 +5,63 @@ uses a SQL budget journal. Operations, checkpoints, results, and cache records
 use the configured cloud storage provider; none can rebuild lost Redis budget
 authority automatically.
 
+## Initialization and readiness
+
+Before the first production worker starts, deployment automation must provision
+the pinned admission Function or Lua script and then run
+[`budget-initialize --apply`](cli.md#budget-initialize). Keep workers stopped
+during this step, including older binaries that do not enforce the marker.
+The command checks Redis persistence, `noeviction`, time, and code identity,
+then conditionally creates a small receipt through the generic cloud KV store.
+It scans the unused Redis namespace outside Lua and writes the ready marker
+and first `initialize` Stream event atomically. A final cloud conditional update
+marks the receipt ready. The full Redis readiness checks must pass before the
+command reports `ready`.
+
+The cloud receipt uses partition `<state.requests.namespace>/budget-initialization`
+and sort key SHA-256 of the literal Redis namespace. It contains only a schema,
+namespace, key-secret fingerprint, UUID epoch, creation time, and ready flag.
+It has no TTL and records no balances, limits, operations, or journal events;
+budget accounting remains entirely in Redis. Limits and the payload encryption
+key are excluded from its identity so changing them cannot reset accounting.
+The Redis marker is `<prefix>:{<admission_hash_tag>}:budget:authority`, a string
+without expiry. A changed Redis key secret fails the identity check and needs
+a separately designed migration. The default CLI derives that key secret from
+the Redis password, so password rotation also requires preserving accounting
+identity through an explicit migration.
+
+Production startup reads the ready receipt once for its snapshot. Readiness
+then checks the matching persistent **budget authority marker** using read-only
+Redis calls. Every reserve, claim, and settlement also checks that marker inside
+its atomic Redis invocation, before any balance, expiry, or event changes.
+Missing, preparing, expiring, wrongly typed, or mismatched markers fail closed,
+including when coordination events are disabled. Startup and readiness never
+initialize or repair state. Non-production fixtures and callers constructing a
+materializer directly must explicitly opt into this guard with a ready receipt.
+
+Only the process that receives an acknowledged conditional receipt creation
+may send the first Redis marker creation, once, without transport retries.
+Other invocations can resume using an existing preparing/ready marker but can
+never recreate an absent marker. This prevents a delayed initializer from
+treating a lost dataset as a fresh installation. A lost create acknowledgement,
+or a crash before that one Redis write, therefore requires investigation rather
+than automatic retry from empty state. A lost final Redis/cloud response is
+safe to retry while the matching marker survives. Initialization refuses an
+already occupied namespace, never deletes keys, and never resets spending.
+
+The initializer needs the existing cloud table's conditional create/read/update
+permissions and Redis `SCAN`, `TYPE`, `GET`, `PTTL`, `SET`, and `XADD`, plus the
+normal readiness and Function/Lua execution permissions. Scans use bounded pages
+and the command deadline; Redis Cluster scans all primaries. No table, bucket,
+Redis code, or SQL schema is created by this command.
+
+This receipt detects marker loss; it is not a recovery journal or proof that
+every accounting key survived. Restoring an older Redis snapshot, or losing
+individual budget keys while preserving the marker, requires separate recovery
+validation. Full recovery after data loss remains tracked in
+[#856](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/856).
+Never delete receipts or manually reset markers to reopen spending.
+
 ## Acquisition and paid work
 
 `durable.BudgetLeaser` exposes `Accept`, `Claim`, and `Reconcile`. Both Generate
@@ -114,6 +171,9 @@ and Lua, with the race detector enabled locally, covering:
 - AOF restart recovery of claimed work, settled cost, and deduplication records.
 - atomic event publication, independent readers, and duplicate suppression after
   lost replies, including wrong-type, ACL-denied, and exhausted-ID Streams.
+- concurrent initialization, interrupted writes, immutable cloud receipts,
+  startup rejection, read-only readiness, and atomic refusal of spending when
+  the authority marker is missing, expiring, preparing, or mismatched.
 
 Run `make verify`, `make redis-integration`, and, for race-enabled integration,
 `GOFLAGS=-race make redis-integration` from `golang/`.

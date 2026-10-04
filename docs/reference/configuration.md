@@ -95,7 +95,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: 794fdf5c7d8ec351a5a207501e9073a7330f16dad408171bba8971d0a9dfaef2
+    admission_digest: c030680a921b24872bcc935f4d3110c9ea83ae89609e3595ce4d1f03ee623950
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -441,10 +441,12 @@ See [cloud request storage](cloud-request-repository.md#worker-integration)
 for IAM configuration, table/bucket aliases and the encryption secret.
 
 Durable readiness requires Redis, cloud request storage and the result blob
-store. The worker validates Redis persistence, admission code and active budget
-generation before admitting work. It verifies the active budget-generation pointer
-and its canonical, complete manifest. Missing or mismatched state keeps readiness
-closed. It does not install schemas or create tables or buckets. There is no
+store. Production startup requires a ready cloud initialization receipt;
+readiness checks its matching persistent budget authority marker in Redis,
+alongside persistence and admission code. Missing or mismatched state keeps
+readiness closed. Run the explicit `budget-initialize` command before first
+startup; see [initialization](redis-budget-leases.md#initialization-and-readiness).
+The worker does not install schemas or create tables or buckets. There is no
 worker SQL pool, schema installer, SQL fallback or SQL data migration.
 
 `state.kind: redis` is retained only as a development/test fixture for the
@@ -612,8 +614,8 @@ starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
 `noeviction` policy, and configured admission code identity. Durable deployments
-also inspect the worker keyspace, active-generation manifest, and enabled
-coordination Stream with bounded read-only checks; malformed or mismatched
+also inspect the budget authority marker and enabled coordination Stream with
+bounded read-only checks; malformed or mismatched
 records keep readiness closed. Cloud storage and the configured S3 bucket use
 bounded read-only probes; readiness never writes a tenant object. Provider
 endpoints are excluded because one route can be unavailable while another is
@@ -644,30 +646,18 @@ days. Readiness resolves the namespaced events key and performs `TYPE` and
 `XINFO STREAM` checks: the key must be a Stream with valid monotonic IDs, no
 consumer groups, and a deletion high-water mark older than the trim-safety
 window. These checks are read-only and fail closed; disabling the coordination
-Stream is an explicit fixture choice and does not change budget authority. A
-Stream gap or an explicitly disabled tailer discards local hints and reloads the
-manifest/policy state directly from Redis. A recoverable cursor gap does not
-invalidate an otherwise complete budget generation once the storage and
-recovery validators have proved it.
+Stream is an explicit fixture choice and does not change budget authority.
+Stream hints never authorize spending or reconstruct balances.
 
-The active-generation manifest is a bounded `budget-manifest/v1` value. Its
-immutable generation and Redis-incarnation IDs, configuration/price versions,
-policy/window hashes, journal and Stream high-water marks, coverage bounds,
-rounding version, member-count catalog digest, and complete policy/window
-member set are validated before adoption. Every member must cover the same
-positive horizon, have matching provenance, and account for its complete
-bucket count; duplicate or missing members, non-concrete Stream IDs, digest
-mismatches, and oversized values fail closed. The current Go validator is
-storage-neutral and does not itself publish a Redis pointer or run an atomic
-budget Function; deployment wiring must still perform those operations under
-the recovery procedure below.
-
-The generation/Stream contracts above remain available for deployment assembly;
-they do not automatically publish budget events or start worker tailers. The
-current durable budget leaser uses shared atomic Redis state directly and has
-no SQL budget journal or SQL rebuild fallback. See
-[Redis budget leases](redis-budget-leases.md) for the active contract and the
-remaining recovery and cleanup work.
+The current durable v1 leaser uses shared atomic Redis state, with a persistent
+initialization marker checked inside every mutation. It has no finite manifest
+coverage horizon, SQL journal, or SQL rebuild fallback. Older
+`budget-manifest/v1` generation/recovery interfaces remain available to custom
+embeddings, but production readiness does not require that unrelated format.
+Initialization is explicit and cannot reopen a lost budget dataset. It does not
+verify survival of every accounting key or recover a stale Redis snapshot; see
+[Redis budget leases](redis-budget-leases.md) for the remaining recovery,
+worker-tail, and cleanup work.
 
 ## Service-class rules
 

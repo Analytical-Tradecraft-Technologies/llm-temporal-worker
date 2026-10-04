@@ -276,6 +276,13 @@ func TestCLIExamplePolicies(t *testing.T) {
 func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 	f := boundedCloud(t, false)
 	value := trustedTemporalTestConfig(t)
+	preparation, err := f.repository.PrepareBudgetInitialization(context.Background(), testBudgetIdentity(t, value), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repository.CompleteBudgetInitialization(context.Background(), preparation.Receipt); err != nil {
+		t.Fatal(err)
+	}
 	value.Endpoints = map[string]config.EndpointConfig{"endpoint": value.Endpoints["openai-prod"]}
 	value.Models = map[string]config.ModelConfig{"alias": {AllowedTenants: []string{"tenant"}, Routes: []config.RouteConfig{{ID: "route", Endpoint: "endpoint", Model: "provider-model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}}}
 	source, err := f.cap.Snapshot.Current(context.Background())

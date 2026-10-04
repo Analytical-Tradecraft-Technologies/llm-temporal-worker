@@ -43,6 +43,7 @@ type RedisBudgetMaterializer struct {
 	incarnation durable.IncarnationID
 	clock       func() time.Time
 	stream      bool
+	authority   string
 }
 
 // RedisBudgetMaterializerOptions configures one snapshot-owned materializer.
@@ -61,6 +62,9 @@ type RedisBudgetMaterializerOptions struct {
 	// CoordinationStreamEnabled publishes budget transitions in the same Redis
 	// invocation as their accounting changes. Events are hints, never grants.
 	CoordinationStreamEnabled bool
+	// Initialization requires the matching persistent Redis marker inside
+	// every mutation. Production durable workers must supply a Ready receipt.
+	Initialization *budget.Initialization
 }
 
 func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisBudgetMaterializer, error) {
@@ -97,11 +101,20 @@ func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisB
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
+	var authority string
+	if value := options.Initialization; value != nil {
+		keys := BudgetKeySpace{space: space}
+		if value.Validate() != nil || !value.Ready || value.Identity != keys.InitializationIdentity() {
+			return nil, ErrBudgetAuthorityUnavailable
+		}
+		authority = "ready:" + value.Marker()
+	}
 	return &RedisBudgetMaterializer{
 		space: space, invoke: invoke, reader: reader, function: function,
 		generation: options.GenerationID, incarnation: options.IncarnationID,
-		clock:  options.Clock,
-		stream: options.CoordinationStreamEnabled,
+		clock:     options.Clock,
+		stream:    options.CoordinationStreamEnabled,
+		authority: authority,
 	}, nil
 }
 
@@ -431,6 +444,10 @@ func (m *RedisBudgetMaterializer) run(ctx context.Context, keys []string, args .
 		keys = append(keys, m.space.admissionPrefix()+BudgetEventsSuffix)
 		args = append(args, m.clock().UTC().Format(time.RFC3339Nano))
 	}
+	if m.authority != "" {
+		keys = append(keys, m.space.admissionPrefix()+budgetAuthoritySuffix)
+		args = append(args, m.authority)
+	}
 	return m.invoke.Run(ctx, m.function, keys, args...)
 }
 
@@ -658,6 +675,8 @@ func mapDurableStatus(status string) error {
 		return ErrRedisBudgetReservationFinalized
 	case "state_unavailable":
 		return ErrUnavailable
+	case "authority_unavailable":
+		return ErrBudgetAuthorityUnavailable
 	default:
 		return fmt.Errorf("Redis durable budget Function returned status %q", status)
 	}

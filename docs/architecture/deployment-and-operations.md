@@ -130,13 +130,15 @@ The runtime's required state checks are bounded by the configured readiness
 timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
 configured AOF/RDB policy, and expose the exact configured budget Function
 library/version/digest. Durable production workers additionally perform a
-bounded, read-only check of the configured worker keyspace: the active
-budget-generation pointer must resolve to its canonical, complete manifest.
-The runtime revalidates the manifest invariants and pointer digest/incarnation
-binding at this boundary, so a custom generation port cannot bypass the contract.
-A missing, malformed, or mismatched pointer/manifest keeps readiness false;
-readiness never publishes a generation or rebuilds state. Development and Redis-only
-fixtures continue to omit this durable-generation check. The default Function
+bounded, read-only check of the budget authority marker against the ready cloud
+initialization receipt read during snapshot construction. The marker must have
+the exact identity and epoch and no expiry. A missing, malformed, or mismatched
+marker keeps readiness false; readiness never initializes or rebuilds state.
+Each budget mutation also checks the marker atomically. Run the explicit
+[`budget-initialize`](../reference/cli.md#budget-initialize) command with workers
+stopped before first installation. This does not recover individual lost budget
+keys or validate an older restored snapshot. Development and Redis-only fixtures
+continue to omit this production authority check. The default Function
 path is provisioned by deployment automation before the worker starts; the
 runtime only verifies and calls it. Durable deployments also use an enabled
 coordination Stream check: `TYPE`/`XINFO STREAM` must report valid

@@ -73,6 +73,40 @@ The worker resolves referenced secrets and catalog files while constructing the
 production runtime. A failure in that phase is fatal; the process must not
 start polling with an incomplete provider or state configuration.
 
+## `budget-initialize`
+
+Inspect or initialize the Redis budget namespace before starting a production
+durable worker. It uses the same configuration, IAM cloud storage access, Redis
+TLS/CA settings, and file/environment secret references as the worker. It does
+not connect to Temporal, resolve provider credentials, load provider catalogs,
+or submit LLM requests. It requires the worker's trusted Temporal authorization
+configuration and durable cloud storage settings.
+
+```sh
+llm-temporal-worker budget-initialize --config /etc/llmtw/config.yaml
+llm-temporal-worker budget-initialize --config /etc/llmtw/config.yaml --apply --timeout 30s
+```
+
+Without `--apply`, the command performs reads only and reports JSON with
+`status` equal to `initialization_required`, `incomplete`, or `ready` and
+`applied: false`. The default overall timeout is 30 seconds; `--timeout` must
+be positive and at most five minutes. Inspection still requires the pinned
+Redis code, persistence policy, and access to the cloud receipt.
+
+`--apply` conditionally creates a permanent cloud receipt, verifies that the
+Redis namespace is unused, and writes a persistent Redis marker and initial
+coordination event. Repeating a completed initialization only verifies it;
+it never resets balances or re-creates a lost marker. An incomplete installation
+can resume only if its preparing or ready Redis marker remains present.
+Keep all workers stopped during first initialization. Provision the exact
+admission Function or Lua script separately before running the command.
+
+There is no reset flag or automatic data-loss recovery. A lost cloud-create
+reply or a crash before the first Redis write requires operator investigation;
+do not delete the receipt or change namespaces to get past the error. See
+[budget initialization](redis-budget-leases.md#initialization-and-readiness)
+for ordering, permissions, and recovery limits.
+
 ## `validate-config`
 
 Parse and validate the strict YAML shape without starting the worker:

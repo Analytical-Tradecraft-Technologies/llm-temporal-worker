@@ -580,9 +580,68 @@ end
 -- Operation records retain the generation/incarnation fence and event
 -- fingerprints. Bucket hashes hold aggregate totals while a per-bucket
 -- expiry ZSET lets the Function remove expired reservations atomically.
+
+-- First-install authority uses the same pre-provisioned immutable library.
+-- A cloud receipt fences reinitialization after loss; these operations alone
+-- cannot establish that a dataset is new. The explicit initializer owns that
+-- proof and scans the unused namespace while the preparing marker blocks work.
+if ACTION == 'durable_authority_prepare' or ACTION == 'durable_authority_commit' or ACTION == 'durable_authority_check' then
+    local arguments = ACTION == 'durable_authority_check' and 2 or 3
+    if not valid_invocation(2, 2, arguments) then return {'invalid_request', ''} end
+    local namespace = string.match(KEYS[1], '^(.*:{[^{}]+}:)budget:authority$')
+    local marker = ARGV[2]
+    if not namespace or KEYS[2] ~= namespace .. 'budget:events' or
+        not bounded_string(marker, 256, true) or not string.match(marker, '^budget%-initialization/v1:[a-f0-9%-]+:[a-f0-9]+:[a-f0-9]+$') then
+        return {'invalid_request', ''}
+    end
+    local key_type = redis.call('TYPE', KEYS[1]).ok
+    if key_type ~= 'none' and key_type ~= 'string' then return {'authority_unavailable', ''} end
+    local current = redis.call('GET', KEYS[1])
+    if current and redis.call('PTTL', KEYS[1]) ~= -1 then return {'authority_unavailable', ''} end
+    if current == 'ready:' .. marker then return {'ready', ''} end
+    if ACTION == 'durable_authority_check' then return {'authority_unavailable', ''} end
+    if current and current ~= 'preparing:' .. marker then return {'authority_unavailable', ''} end
+    if ACTION == 'durable_authority_prepare' then
+        if ARGV[3] ~= 'create' and ARGV[3] ~= 'resume' then return {'invalid_request', ''} end
+        if not current then
+            if ARGV[3] ~= 'create' then return {'authority_unavailable', ''} end
+            redis.call('SET', KEYS[1], 'preparing:' .. marker, 'NX')
+        end
+        return {'preparing', ''}
+    end
+    if not current or redis.call('TYPE', KEYS[2]).ok ~= 'none' or
+        not bounded_string(ARGV[3], 8192, true) or
+        not redis.acl_check_cmd('XADD', KEYS[2], '*', 'event', ARGV[3]) or
+        not redis.acl_check_cmd('SET', KEYS[1], 'ready:' .. marker) then
+        return {'authority_unavailable', ''}
+    end
+    -- Validate every fallible precondition before the first write. No budget
+    -- balances are written during initialization, even on an interrupted run.
+    redis.call('XADD', KEYS[2], '*', 'event', ARGV[3])
+    redis.call('SET', KEYS[1], 'ready:' .. marker)
+    return {'ready', ''}
+end
+
 local DURABLE_SCHEMA = 'durable-budget/v1'
 local MAX_DURABLE_RESERVATIONS = 250
 local MAX_DURABLE_EVENTS = 250
+
+-- Production mutations carry their snapshot's authority as a final declared
+-- key/value. Check it in the same invocation as accounting, before even expiry
+-- cleanup. A readiness check outside Redis cannot close this race by itself.
+if ACTION == 'durable_reserve' or ACTION == 'durable_claim' or ACTION == 'durable_reconcile' then
+    local namespace = string.match(KEYS[1] or '', '^(.*:{[^{}]+}:)durable%-budget%-operation:[a-f0-9]+$')
+    if namespace and KEYS[#KEYS] == namespace .. 'budget:authority' then
+        local expected = ARGV[#ARGV]
+        if not bounded_string(expected, 262, true) or string.sub(expected, 1, #'ready:budget-initialization/v1:') ~= 'ready:budget-initialization/v1:' or
+            redis.call('TYPE', KEYS[#KEYS]).ok ~= 'string' or
+            redis.call('GET', KEYS[#KEYS]) ~= expected or redis.call('PTTL', KEYS[#KEYS]) ~= -1 then
+            return {'authority_unavailable', ''}
+        end
+        table.remove(KEYS)
+        table.remove(ARGV)
+    end
+end
 
 -- An optional final declared key and timestamp enable atomic Stream hints.
 -- Strip this envelope before interpreting the unchanged accounting contract.

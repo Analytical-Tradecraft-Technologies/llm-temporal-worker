@@ -21,6 +21,7 @@ type BudgetStreamEventKind string
 
 const (
 	BudgetEventReserve          BudgetStreamEventKind = "reserve"
+	BudgetEventInitialize       BudgetStreamEventKind = "initialize"
 	BudgetEventClaim            BudgetStreamEventKind = "claim"
 	BudgetEventExpire           BudgetStreamEventKind = "expire"
 	BudgetEventReconcile        BudgetStreamEventKind = "reconcile"
@@ -63,7 +64,7 @@ func (event BudgetStreamEvent) Validate() error {
 		return fmt.Errorf("unsupported budget stream event schema %q", event.Schema)
 	}
 	switch event.Kind {
-	case BudgetEventReserve, BudgetEventClaim, BudgetEventExpire, BudgetEventReconcile, BudgetEventRelease, BudgetEventPolicyRefresh, BudgetEventHorizonAdvance, BudgetEventGenerationSwitch, BudgetEventDenial:
+	case BudgetEventInitialize, BudgetEventReserve, BudgetEventClaim, BudgetEventExpire, BudgetEventReconcile, BudgetEventRelease, BudgetEventPolicyRefresh, BudgetEventHorizonAdvance, BudgetEventGenerationSwitch, BudgetEventDenial:
 	default:
 		return fmt.Errorf("unsupported budget stream event kind %q", event.Kind)
 	}
