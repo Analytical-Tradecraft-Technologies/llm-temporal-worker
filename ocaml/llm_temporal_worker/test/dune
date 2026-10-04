@@ -26,3 +26,7 @@
 (test
  (name test_workflow_client)
  (libraries llm_temporal temporal-sdk yojson))
+
+(test
+ (name test_usd_decimal)
+ (libraries llm_temporal))
