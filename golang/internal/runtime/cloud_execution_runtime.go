@@ -210,7 +210,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 		}
 	}
-	budgetAttempt := BudgetAttempt{OperationID: durable.OperationID(attempt.ID), GenerationID: r.options.BudgetGeneration, QuotedAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}
+	budgetAttempt := BudgetAttempt{PriorCandidates: append([]string(nil), attempt.PriorCandidates...), OperationID: durable.OperationID(attempt.ID), GenerationID: r.options.BudgetGeneration, QuotedAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}
 	var call *CloudBudgetCall
 	if p.Generate != nil {
 		call, err = r.execution.admission.PrepareGenerate(ctx, root.Scope, attempt.ID, p.GenerateReplay, budgetAttempt)

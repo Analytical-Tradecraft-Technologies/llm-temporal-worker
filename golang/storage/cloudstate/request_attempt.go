@@ -19,18 +19,29 @@ var ErrRequestAttemptMissing = errors.New("request attempt missing")
 // paid attempts retain their own pending index even when a later attempt wins.
 // Neither this reference nor allocating it authorizes a provider submission.
 type RequestAttempt struct {
-	Version    int       `json:"version"`
-	RootID     RequestID `json:"root_id"`
-	ID         RequestID `json:"id"`
-	PreviousID RequestID `json:"previous_id,omitempty"`
-	Number     uint64    `json:"number"`
-	CreatedAt  time.Time `json:"created_at"`
+	// PriorCandidates records one entry per retired provider execution, including
+	// unknown outcomes. Unused quote renewals do not consume a provider attempt.
+	PriorCandidates []string  `json:"prior_candidates,omitempty"`
+	Version         int       `json:"version"`
+	RootID          RequestID `json:"root_id"`
+	ID              RequestID `json:"id"`
+	PreviousID      RequestID `json:"previous_id,omitempty"`
+	Number          uint64    `json:"number"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func (a RequestAttempt) Validate() error {
 	if a.Version != 1 || !a.RootID.valid() || !a.ID.valid() || a.RootID == a.ID || a.Number == 0 || a.Number > maxRevisions || !validTime(a.CreatedAt) ||
 		(a.Number == 1 && a.PreviousID != "") || (a.Number > 1 && (!a.PreviousID.valid() || a.PreviousID == a.ID || a.PreviousID == a.RootID)) {
 		return ErrInvalid
+	}
+	if uint64(len(a.PriorCandidates)) >= a.Number {
+		return ErrInvalid
+	}
+	for _, candidate := range a.PriorCandidates {
+		if !safeText(candidate, 512) {
+			return ErrInvalid
+		}
 	}
 	return nil
 }
@@ -81,6 +92,7 @@ func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootI
 			return RequestAttempt{}, contracts.ErrConflict
 		}
 		number := uint64(1)
+		var priorCandidates []string
 		if previous == "" {
 			if active != nil {
 				return RequestAttempt{}, contracts.ErrConflict
@@ -95,12 +107,19 @@ func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootI
 			if err := r.retireRequestAttempt(ctx, scope, *active, now); err != nil {
 				return RequestAttempt{}, err
 			}
+			priorCandidates = append([]string(nil), active.PriorCandidates...)
+			previousExecution, loadErr := r.LoadProviderExecution(ctx, scope, active.ID)
+			if loadErr == nil {
+				priorCandidates = append(priorCandidates, previousExecution.Plan.Estimate.CandidateID)
+			} else if !errors.Is(loadErr, ErrProviderExecutionMissing) && !errors.Is(loadErr, ErrBudgetPlanMissing) {
+				return RequestAttempt{}, loadErr
+			}
 			number = active.Number + 1
 		}
 		if number > maxRevisions {
 			return RequestAttempt{}, ErrInvalid
 		}
-		proposal := RequestAttempt{Version: 1, RootID: rootID, ID: r.requestAttemptID(root, number), PreviousID: previous, Number: number}
+		proposal := RequestAttempt{Version: 1, RootID: rootID, ID: r.requestAttemptID(root, number), PreviousID: previous, Number: number, PriorCandidates: priorCandidates}
 		child, err := r.createRequestAttempt(ctx, root, *preparation, proposal, now)
 		if errors.Is(err, contracts.ErrConflict) {
 			continue
