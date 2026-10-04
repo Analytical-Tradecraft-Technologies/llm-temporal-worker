@@ -170,6 +170,24 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		}
 	}
 	root := p.Record.Request
+	// Saved terminal provider results need no current adapter or routing config.
+	// Other work must wait for a compatible worker; never poison its operation
+	// key or dispatch under a different configuration during a rollout.
+	if p.Preparation.ConfigDigest != r.preparation.digest {
+		attempt, err := r.store.LoadRequestAttempt(ctx, root.Scope, root.ID)
+		if err == nil {
+			saved, loadErr := r.store.LoadProviderExecution(ctx, root.Scope, attempt.ID)
+			if loadErr == nil && (saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed) {
+				return r.resumeAttempt(ctx, p, attempt, saved, step)
+			}
+			if loadErr != nil && !errors.Is(loadErr, cloudstate.ErrProviderExecutionMissing) && !errors.Is(loadErr, cloudstate.ErrBudgetPlanMissing) {
+				return llm.ExecutionResultV1{}, cloudRuntimeError(loadErr, false)
+			}
+		} else if !errors.Is(err, cloudstate.ErrRequestAttemptMissing) {
+			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+		}
+		return llm.ExecutionResultV1{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
+	}
 	attempt, err := r.store.LoadRequestAttempt(ctx, root.Scope, root.ID)
 	if errors.Is(err, cloudstate.ErrRequestAttemptMissing) {
 		attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, "", r.now())

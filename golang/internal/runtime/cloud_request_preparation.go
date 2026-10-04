@@ -232,9 +232,6 @@ func (p *CloudRequestPreparation) restore(ctx context.Context, record cloudstate
 		(parent == "") != (len(preparation.ParentSnapshot) == 0) {
 		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	if preparation.ConfigDigest != p.digest {
-		return PreparedCloudRequest{}, checkpointReplayError(provider.CodeConfiguration)
-	}
 	var materialized state.MaterializedState
 	if parent != "" {
 		codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxPreparedParentBytes}

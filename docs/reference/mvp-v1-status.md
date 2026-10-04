@@ -50,6 +50,13 @@ calling the public workflows and decoding their final responses. Tests cover
 workflow composition, retries, cache and compaction with deterministic adapters;
 local service gates distinguish real Temporal/Redis from in-memory cloud stores.
 
+Configuration reloads do not prevent finalization of a saved terminal provider
+result. Pending provider work and new budget admission require the original
+configuration digest; an incompatible worker returns a retryable state-unavailable
+error. Restore compatible settings to resume that work without resubmission.
+Route-specific compatibility across different configuration digests remains
+tracked in [#958](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/958).
+
 ## Separate or deferred capabilities
 
 - Authenticated query composition, budget-status wiring and provider management
