@@ -414,6 +414,15 @@ resumption, and terminal pending-index cleanup. The LLM adapter is deterministic
 and never contacts a paid provider. These results are not AWS integration or
 production authorization evidence.
 
+Recovery cases also cover an unused authorization expiring on Redis's clock,
+lost responses from both synchronous and create/poll providers, and loss of a
+Redis settlement acknowledgement. Aged request records are created through the
+normal runtime clock seam; the production 15-minute deadlines and Redis clock
+are unchanged. Fresh workers and Temporal callers must use a new paid attempt
+after an uncertain submission, retain the original claim and pending index,
+and replay settlement without another provider call or refund. Tests inspect
+both the lease records and the aggregate Redis budget totals.
+
 `make cloud-workflow-ocaml-integration` builds the nested OCaml package against
 its pinned Temporal SDK and uses the same isolated services. One native client
 process starts generation twice with identical request IDs; another resumes the
