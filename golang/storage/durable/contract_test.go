@@ -16,7 +16,7 @@ import (
 
 func validIdentity() StateIdentity {
 	return StateIdentity{
-		Postgres:     PostgresIdentity{Database: "llmtw", Schema: "worker", TablePrefix: "prod_"},
+		Cloud:        CloudIdentity{Provider: "aws", Namespace: "requests", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}},
 		Redis:        RedisIdentity{KeyPrefix: "llmtw", HashTag: "admission"},
 		ConfigDigest: sha256.Sum256([]byte("snapshot")),
 	}
@@ -262,7 +262,7 @@ func (compositionMaterializerStub) Claim(context.Context, ClaimRequest) (ClaimRe
 	return ClaimReceipt{}, nil
 }
 
-func TestCloudStateIdentityRequiresExactlyOneBackend(t *testing.T) {
+func TestCloudStateIdentityRequiresCloudBackend(t *testing.T) {
 	cloud := CloudIdentity{Provider: "aws", Namespace: "requests-v1", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: sha256.Sum256([]byte("provider"))}
 	for _, test := range []struct {
 		name   string
@@ -270,7 +270,6 @@ func TestCloudStateIdentityRequiresExactlyOneBackend(t *testing.T) {
 		valid  bool
 	}{
 		{"cloud without SQL", func(*StateIdentity) {}, true},
-		{"mixed backends", func(i *StateIdentity) { i.Postgres = validIdentity().Postgres }, false},
 		{"missing backend", func(i *StateIdentity) { i.Cloud = CloudIdentity{} }, false},
 		{"missing provider", func(i *StateIdentity) { i.Cloud.Provider = "" }, false},
 		{"unsafe namespace", func(i *StateIdentity) { i.Cloud.Namespace = "../other" }, false},
@@ -282,7 +281,6 @@ func TestCloudStateIdentityRequiresExactlyOneBackend(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			identity := validIdentity()
-			identity.Postgres = PostgresIdentity{}
 			identity.Cloud = cloud
 			test.modify(&identity)
 			err := identity.Validate()
@@ -295,7 +293,6 @@ func TestCloudStateIdentityRequiresExactlyOneBackend(t *testing.T) {
 		})
 	}
 	composition := validComposition()
-	composition.Identity.Postgres = PostgresIdentity{}
 	composition.Identity.Cloud = cloud
 	if err := composition.Validate(); err != nil {
 		t.Fatal(err)

@@ -17,7 +17,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/state"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 )
 
 var (
@@ -30,19 +29,6 @@ var (
 )
 
 var redisPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
-
-// PostgresIdentity identifies the worker-owned PostgreSQL namespace. The
-// namespace is validated by postgresstore.Namespace; credentials and DSNs are
-// deliberately not part of the identity.
-type PostgresIdentity struct {
-	Database    string
-	Schema      string
-	TablePrefix string
-}
-
-func (identity PostgresIdentity) Namespace() (postgresstore.Namespace, error) {
-	return postgresstore.NewNamespace(identity.Database, identity.Schema, identity.TablePrefix)
-}
 
 // RedisIdentity identifies the worker-owned Redis keyspace. KeyPrefix is
 // intentionally the only clear-text key component; operation and tenant IDs
@@ -79,22 +65,14 @@ func (identity CloudIdentity) Validate() error {
 // StateIdentity binds the selected durable backend and Redis to one immutable configuration
 // snapshot. A worker must not combine stores with different identities.
 type StateIdentity struct {
-	Postgres     PostgresIdentity
 	Cloud        CloudIdentity
 	Redis        RedisIdentity
 	ConfigDigest [32]byte
 }
 
 func (identity StateIdentity) Validate() error {
-	if identity.Cloud != (CloudIdentity{}) {
-		if identity.Postgres != (PostgresIdentity{}) {
-			return fmt.Errorf("%w: cloud and PostgreSQL identities cannot be combined", ErrInvalidIdentity)
-		}
-		if err := identity.Cloud.Validate(); err != nil {
-			return err
-		}
-	} else if _, err := identity.Postgres.Namespace(); err != nil {
-		return fmt.Errorf("%w: postgres namespace: %v", ErrInvalidIdentity, err)
+	if err := identity.Cloud.Validate(); err != nil {
+		return err
 	}
 	return identity.ValidateBudget()
 }
@@ -262,7 +240,7 @@ func (request ClaimRequest) Validate() error {
 
 // Composition is the snapshot-owned seam consumed by a runtime factory when
 // the durable split is wired. Operation/continuation/result state
-// currently uses PostgreSQL; Redis owns budget reservations, claims and settlement.
+// uses cloud key-value/blob stores; Redis owns budget reservations, claims and settlement.
 type Composition struct {
 	Identity      StateIdentity
 	Operations    admission.AdmissionStore

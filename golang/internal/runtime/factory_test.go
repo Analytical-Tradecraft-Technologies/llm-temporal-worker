@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -82,92 +80,6 @@ func TestComposeBudgetStatusReaderBindsSnapshotOwnedRedisCapabilities(t *testing
 	}
 	if reader, err := composeBudgetStatusReader(context.Background(), snapshot, time.Now, "function", client, nil, keys, factory); err != nil || reader != nil || calls != 0 {
 		t.Fatalf("missing generation should remain unavailable: reader=%T err=%v calls=%d", reader, err, calls)
-	}
-}
-
-func TestBuildPostgresResolvesDurableNamespaceAndKeepsSecretsOutOfProbe(t *testing.T) {
-	var got config.PostgresConfig
-	var gotNamespace postgresstore.Namespace
-	var gotUsername, gotPassword string
-	probe := DependencyProbeFunc(func(context.Context) ProbeResult {
-		return ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusReady, Reason: ProbeReasonReady}
-	})
-	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
-			switch ref.Name {
-			case "POSTGRES_USER":
-				return []byte("worker-user"), nil
-			case "POSTGRES_PASSWORD":
-				return []byte("worker-password"), nil
-			default:
-				return nil, fmt.Errorf("unexpected secret %q", ref.Name)
-			}
-		}),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
-		PostgresFactory: func(_ context.Context, value config.PostgresConfig, namespace postgresstore.Namespace, username, password string) (DependencyProbe, io.Closer, error) {
-			got, gotNamespace, gotUsername, gotPassword = value, namespace, username, password
-			return probe, nil, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	value := config.Config{State: config.StateConfig{Kind: config.StateKindDurable, Postgres: config.PostgresConfig{
-		Addresses: []string{"postgres:5432"}, Database: "worker_db", Schema: "worker_state", TablePrefix: "tenant_",
-		Username: config.SecretRef{Kind: config.SecretEnv, Name: "POSTGRES_USER"}, Password: config.SecretRef{Kind: config.SecretEnv, Name: "POSTGRES_PASSWORD"},
-		MinConnections: 3, MaxConnections: 12, IdleTransactionTimeout: config.Duration(17 * time.Second),
-	}}}
-	gotProbe, closer, err := factory.buildPostgres(context.Background(), value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if closer != nil {
-		t.Fatal("test Postgres factory unexpectedly returned a closer")
-	}
-	if gotProbe == nil || gotUsername != "worker-user" || gotPassword != "worker-password" {
-		t.Fatalf("Postgres factory inputs probe=%#v username=%q password=%q", gotProbe, gotUsername, gotPassword)
-	}
-	if gotNamespace.String() != "worker_db/worker_state/tenant_" || got.Database != "worker_db" || got.MinConnections != 3 || got.MaxConnections != 12 || time.Duration(got.IdleTransactionTimeout) != 17*time.Second {
-		t.Fatalf("Postgres namespace/config = %s/%#v", gotNamespace, got)
-	}
-}
-
-func TestPostgresPoolOptionsCarryConfiguredBoundsAndTimeouts(t *testing.T) {
-	namespace, err := postgresstore.NewNamespace("worker_db", "worker_state", "tenant_")
-	if err != nil {
-		t.Fatal(err)
-	}
-	value := config.PostgresConfig{
-		Addresses:      []string{"postgres:5432"},
-		TLS:            config.TLSConfig{Enabled: true, ServerName: "postgres.example.internal", CAFile: "/var/run/ca/postgres.pem"},
-		MinConnections: 3, MaxConnections: 12,
-		DialTimeout: config.Duration(2 * time.Second), StatementTimeout: config.Duration(30 * time.Second),
-		LockTimeout: config.Duration(2 * time.Second), IdleTransactionTimeout: config.Duration(17 * time.Second),
-	}
-	options := postgresPoolOptions(value, namespace, "worker", "password")
-	if options.Namespace != namespace || options.Username != "worker" || options.Password != "password" {
-		t.Fatalf("pool identity = %#v", options)
-	}
-	if options.MinConnections != 3 || options.MaxConnections != 12 || options.DialTimeout != 2*time.Second || options.StatementTimeout != 30*time.Second || options.LockTimeout != 2*time.Second || options.IdleTxTimeout != 17*time.Second {
-		t.Fatalf("pool bounds/timeouts = %#v", options)
-	}
-	if !options.TLS.Enabled || options.TLS.ServerName != "postgres.example.internal" || options.TLS.CAFile != "/var/run/ca/postgres.pem" {
-		t.Fatalf("pool TLS = %#v", options.TLS)
-	}
-}
-
-func TestBuildPostgresSkipsRedisOnlyComposition(t *testing.T) {
-	called := false
-	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { called = true; return nil, nil }),
-		PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
-			called = true
-			return nil, nil, nil
-		},
-	}}
-	probe, closer, err := factory.buildPostgres(context.Background(), config.Config{State: config.StateConfig{Kind: config.StateKindRedis}})
-	if err != nil || probe != nil || closer != nil || called {
-		t.Fatalf("Redis-only composition built PostgreSQL: probe=%#v closer=%#v err=%v called=%v", probe, closer, err, called)
 	}
 }
 
@@ -238,38 +150,6 @@ func TestProductionFactoryRejectsTypedNilV1RuntimeAndClosesSnapshotClients(t *te
 	}
 }
 
-func TestPostgresCloserOnlyExposesRemainingSQLRepositories(t *testing.T) {
-	namespace, err := postgresstore.NewNamespace("worker", "state", "tenant_")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closer := postgresPoolCloser{namespace: namespace}
-	repositories := queryRepositoriesFromCloser(closer)
-	if repositories.ProviderStatus != nil || repositories.Inventory != nil {
-		t.Fatal("SQL closer exposed migrated provider state")
-	}
-	if repositories.SpendSummary == nil {
-		t.Fatal("SQL spend reader missing")
-	}
-	checkpoints := checkpointCapabilitiesFromCloser(closer)
-	checkpointRepository, ok := checkpoints.Repository.(snapshotCheckpointRepository)
-	if !ok {
-		t.Fatalf("checkpoint repository = %T, want snapshot-scoped repository wrapper", checkpoints.Repository)
-	}
-	if checkpointRepository.delegate == nil {
-		t.Fatal("snapshot checkpoint repository wrapper omitted delegate")
-	}
-	if checkpoints.Blobs != nil {
-		t.Fatal("default closer exposed an unconfigured checkpoint blob reader")
-	}
-	if err := checkpoints.Validate(); err != nil {
-		t.Fatalf("partial checkpoint capabilities failed optional validation: %v", err)
-	}
-	if err := checkpoints.RequireMaterializer(); err == nil {
-		t.Fatal("partial checkpoint capabilities unexpectedly satisfied materializer requirement")
-	}
-}
-
 type checkpointBlobReaderStub struct{}
 
 func (checkpointBlobReaderStub) Read(context.Context, string, state.CheckpointBlobReference) ([]byte, error) {
@@ -286,107 +166,10 @@ func (*checkpointMaterializerStub) MaterializeHandle(context.Context, string, st
 	return state.MaterializedState{}, nil
 }
 
-type checkpointCompositionCloser struct {
-	postgresPoolCloser
-	blobs        state.CheckpointBlobReader
-	materializer state.CheckpointHandleMaterializer
-}
-
-func (closer checkpointCompositionCloser) CheckpointBlobReader() state.CheckpointBlobReader {
-	return closer.blobs
-}
-
-func (closer checkpointCompositionCloser) CheckpointMaterializer() state.CheckpointHandleMaterializer {
-	return closer.materializer
-}
-
-func TestCheckpointCapabilitiesCopyTypedBundleFromPostgresCloser(t *testing.T) {
-	reader := checkpointBlobReaderStub{}
-	closer := checkpointCompositionCloser{blobs: reader}
-	capabilities := checkpointCapabilitiesFromCloser(closer)
-	if capabilities.Repository == nil {
-		t.Fatal("checkpoint capability bundle omitted repository")
-	}
-	wrappedReader, ok := capabilities.Blobs.(snapshotCheckpointBlobReader)
-	if !ok {
-		t.Fatalf("checkpoint blob reader = %T, want snapshot-scoped reader wrapper", capabilities.Blobs)
-	}
-	if wrappedReader.delegate != reader {
-		t.Fatalf("checkpoint blob reader delegate = %T, want supplied reader", wrappedReader.delegate)
-	}
-	if got := (&productionClientSet{checkpoints: capabilities}).CheckpointCapabilities(); got.Repository == nil || got.Blobs == nil {
-		t.Fatalf("snapshot client set checkpoint capabilities = %#v, want copied bundle", got)
-	}
-	if got := (&productionClientSet{}).CheckpointCapabilities(); got.Repository != nil || got.Blobs != nil {
-		t.Fatalf("empty snapshot client set checkpoint capabilities = %#v", got)
-	}
-}
-
-type checkpointCapabilitiesSourceStub struct {
-	repository   state.CheckpointRepository
-	blobs        state.CheckpointBlobReader
-	materializer state.CheckpointHandleMaterializer
-}
-
-func (source checkpointCapabilitiesSourceStub) CheckpointRepository() state.CheckpointRepository {
-	return source.repository
-}
-
-func (source checkpointCapabilitiesSourceStub) CheckpointBlobReader() state.CheckpointBlobReader {
-	return source.blobs
-}
-
-func (source checkpointCapabilitiesSourceStub) CheckpointMaterializer() state.CheckpointHandleMaterializer {
-	return source.materializer
-}
-
-func (source checkpointCapabilitiesSourceStub) Close() error { return nil }
-
-func TestCheckpointMaterializerCapabilityRequiresCompleteDependencies(t *testing.T) {
-	reader := checkpointBlobReaderStub{}
-	materializer := &checkpointMaterializerStub{}
-	base := postgresPoolCloser{}
-	complete := checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader, materializer: materializer}
-	capabilities := checkpointCapabilitiesFromCloser(complete)
-	wrapped, ok := capabilities.Materializer.(snapshotCheckpointMaterializer)
-	if !ok {
-		t.Fatalf("checkpoint materializer = %T, want private snapshot wrapper", capabilities.Materializer)
-	}
-	if wrapped.delegate != materializer {
-		t.Fatalf("checkpoint materializer delegate = %T, want supplied materializer", wrapped.delegate)
-	}
-	wrappedReader, ok := capabilities.Blobs.(snapshotCheckpointBlobReader)
-	if capabilities.Repository == nil || !ok || wrappedReader.delegate != reader {
-		t.Fatalf("complete checkpoint capabilities = %#v, want repository and blob reader", capabilities)
-	}
-	if err := capabilities.RequireMaterializer(); err != nil {
-		t.Fatalf("complete checkpoint capabilities failed validation: %v", err)
-	}
-	if got := (&productionClientSet{checkpoints: capabilities, v1Capabilities: V1RuntimeCapabilities{Checkpoints: capabilities}}).CheckpointCapabilities().Materializer; got == nil {
-		t.Fatal("snapshot client set omitted complete checkpoint materializer")
-	}
-
-	missingBlobs := checkpointCompositionCloser{postgresPoolCloser: base, materializer: materializer}
-	if got := checkpointCapabilitiesFromCloser(missingBlobs).Materializer; got != nil {
-		t.Fatalf("materializer with missing blob reader = %T, want nil", got)
-	}
-	missingRepository := checkpointCapabilitiesSourceStub{blobs: reader, materializer: materializer}
-	if got := checkpointCapabilitiesFromCloser(missingRepository).Materializer; got != nil {
-		t.Fatalf("materializer with missing repository = %T, want nil", got)
-	}
-	missingMaterializer := checkpointCompositionCloser{postgresPoolCloser: base, blobs: reader}
-	if got := checkpointCapabilitiesFromCloser(missingMaterializer).Materializer; got != nil {
-		t.Fatalf("nil supplied materializer = %T, want nil", got)
-	}
-	if got := checkpointCapabilitiesFromCloser(nil); got.Repository != nil || got.Blobs != nil || got.Materializer != nil {
-		t.Fatalf("nil closer capabilities = %#v, want zero value", got)
-	}
-}
-
 func TestCheckpointCapabilitiesRejectsIncompleteMaterializerBundles(t *testing.T) {
 	materializer := &checkpointMaterializerStub{}
 	reader := checkpointBlobReaderStub{}
-	repository := checkpointCompositionCloser{}.CheckpointRepository()
+	repository := builderCheckpointRepository{}
 	tests := []struct {
 		name         string
 		capabilities CheckpointCapabilities
@@ -408,92 +191,6 @@ func TestCheckpointCapabilitiesRejectsIncompleteMaterializerBundles(t *testing.T
 				}
 			}
 		})
-	}
-}
-
-type checkpointMaterializerClosingCloser struct {
-	postgresPoolCloser
-	blobs        state.CheckpointBlobReader
-	materializer state.CheckpointHandleMaterializer
-	closed       bool
-}
-
-func (closer *checkpointMaterializerClosingCloser) CheckpointBlobReader() state.CheckpointBlobReader {
-	return closer.blobs
-}
-
-func (closer *checkpointMaterializerClosingCloser) CheckpointMaterializer() state.CheckpointHandleMaterializer {
-	return closer.materializer
-}
-
-func (closer *checkpointMaterializerClosingCloser) Close() error {
-	closer.closed = true
-	return nil
-}
-
-func TestCheckpointMaterializerCapabilityKeepsSnapshotOwnerLifecycle(t *testing.T) {
-	closer := &checkpointMaterializerClosingCloser{
-		blobs:        checkpointBlobReaderStub{},
-		materializer: &checkpointMaterializerStub{},
-	}
-	capabilities := checkpointCapabilitiesFromCloser(closer)
-	if capabilities.Materializer == nil {
-		t.Fatal("complete checkpoint materializer capability is nil")
-	}
-	set := &productionClientSet{
-		checkpoints: capabilities,
-		close:       func(context.Context) error { return closer.Close() },
-	}
-	if err := set.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if !closer.closed {
-		t.Fatal("snapshot client close did not close checkpoint materializer owner")
-	}
-	if set.CheckpointCapabilities().Materializer == nil {
-		t.Fatal("snapshot checkpoint materializer capability changed after owner close")
-	}
-}
-
-func TestCheckpointCapabilitiesBindSnapshotBlobReaderAndHandleKeyring(t *testing.T) {
-	keyring, err := state.NewKeyring([]state.Key{{ID: "checkpoint-v1", Secret: []byte("01234567890123456789012345678901"), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader := checkpointBlobReaderStub{}
-	capabilities := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, reader, keyring, nowFunc(time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)))
-	if err := capabilities.RequireMaterializer(); err != nil {
-		t.Fatalf("bound checkpoint capabilities failed validation: %v", err)
-	}
-	wrappedReader, ok := capabilities.Blobs.(snapshotCheckpointBlobReader)
-	if !ok || wrappedReader.delegate != reader {
-		t.Fatalf("bound blob reader = %#v, want private snapshot wrapper around supplied reader", capabilities.Blobs)
-	}
-	wrappedMaterializer, ok := capabilities.Materializer.(snapshotCheckpointMaterializer)
-	if !ok {
-		t.Fatalf("bound materializer = %T, want private snapshot wrapper", capabilities.Materializer)
-	}
-	durable, ok := wrappedMaterializer.delegate.(*state.DurableCheckpointMaterializer)
-	if !ok {
-		t.Fatalf("bound materializer delegate = %T, want state.DurableCheckpointMaterializer", wrappedMaterializer.delegate)
-	}
-	if _, ok := durable.Repository.(snapshotCheckpointRepository); !ok {
-		t.Fatalf("durable materializer repository = %T, want snapshot repository wrapper", durable.Repository)
-	}
-	if _, ok := durable.Blobs.(snapshotCheckpointBlobReader); !ok {
-		t.Fatalf("durable materializer blob reader = %T, want snapshot blob-reader wrapper", durable.Blobs)
-	}
-	if durable.HandleVerifier != keyring {
-		t.Fatalf("durable materializer verifier = %T, want snapshot keyring", durable.HandleVerifier)
-	}
-
-	missingReader := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, nil, keyring, nil)
-	if missingReader.Materializer != nil {
-		t.Fatal("checkpoint materializer published without a blob reader")
-	}
-	missingVerifier := checkpointCapabilitiesFromCloserWithBindings(postgresPoolCloser{}, reader, nil, nil)
-	if missingVerifier.Materializer != nil {
-		t.Fatal("checkpoint materializer published without an opaque-handle verifier")
 	}
 }
 
@@ -595,40 +292,10 @@ func TestSnapshotAdapterRegistryOwnsPrivateMap(t *testing.T) {
 	}
 }
 
-type queryCompositionCloser struct {
-	postgresPoolCloser
-	repositories PostgresQueryRepositories
-	service      activity.QueryService
-}
-
 type queryServiceStub struct{}
 
 func (queryServiceStub) Execute(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
 	return llm.QueryResponseV1{}, nil
-}
-
-func (closer queryCompositionCloser) QueryRepositories() PostgresQueryRepositories {
-	return closer.repositories
-}
-
-func (closer queryCompositionCloser) QueryService() activity.QueryService { return closer.service }
-
-func TestProductionClientSetRetainsSnapshotQueryBundleAndService(t *testing.T) {
-	var service activity.QueryService = queryServiceStub{}
-	queryCloser := queryCompositionCloser{
-		repositories: PostgresQueryRepositories{Inventory: &postgresstore.InventoryRepository{}},
-		service:      service,
-	}
-	set := &productionClientSet{queryRepos: queryRepositoriesFromCloser(queryCloser), queryService: queryCloser.QueryService()}
-	if set.QueryRepositories().Inventory == nil {
-		t.Fatal("inventory repository was not retained in snapshot client set")
-	}
-	if set.QueryService() != service {
-		t.Fatal("query service was not retained in snapshot client set")
-	}
-	if got := (&productionClientSet{}).QueryRepositories(); got.ProviderStatus != nil || got.Inventory != nil {
-		t.Fatalf("nil capability set = %#v", got)
-	}
 }
 
 func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
@@ -645,10 +312,6 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 		RedisFactory: func(context.Context, config.RedisConfig, string, string) (redisclient.UniversalClient, error) {
 			called = true
 			return nil, errors.New("Redis must not be constructed for memory state")
-		},
-		PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
-			called = true
-			return nil, nil, errors.New("PostgreSQL must not be constructed for memory state")
 		},
 		BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
 			called = true
@@ -960,26 +623,4 @@ func azureOpenAIChatSnapshot() engine.Snapshot {
 	return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "azure-chat", Capabilities: routing.CapabilitySet{Version: "azure-chat/v1"}}}},
 	}}}
-}
-
-func TestBuildPostgresSkipsCloudComposition(t *testing.T) {
-	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
-			t.Fatal("cloud mode resolved PostgreSQL credentials")
-			return nil, nil
-		}),
-		PostgresFactory: func(context.Context, config.PostgresConfig, postgresstore.Namespace, string, string) (DependencyProbe, io.Closer, error) {
-			t.Fatal("cloud mode opened PostgreSQL")
-			return nil, nil, nil
-		},
-	}}
-	value := config.Config{State: config.StateConfig{Kind: config.StateKindDurable, Requests: testCloudConfig()}}
-	probe, closer, err := factory.buildPostgres(context.Background(), value)
-	if err != nil || probe != nil || closer != nil {
-		t.Fatalf("cloud mode built PostgreSQL: probe=%T closer=%T error=%v", probe, closer, err)
-	}
-	factory.options = ProductionFactoryOptions{}
-	if _, _, err := factory.buildPostgres(context.Background(), value); err != nil {
-		t.Fatal(err)
-	}
 }

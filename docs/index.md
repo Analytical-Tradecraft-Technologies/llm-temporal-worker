@@ -25,6 +25,15 @@ is the single status/authority index:
 - [Production implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
 - [Maintenance retention and outbox contract](reference/maintenance.md)
 
+## Current worker persistence
+
+Worker SQL persistence has been removed. Durable deployments use cloud
+key-value/blob storage for requests, attempts, cache successes and checkpoints,
+and Redis for budgets, throttles and provider state. SQL design documents and
+maintenance procedures linked above are historical. There is no SQL data
+migration; the service has no deployed SQL data. See the
+[cloud request repository](reference/cloud-request-repository.md).
+
 ## Non-negotiable v1 decisions
 
 | Area | Decision |

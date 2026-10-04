@@ -264,6 +264,7 @@ func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t 
 			seen[capabilities.ConfigDigest]++
 			composition := validCapabilityComposition()
 			composition.Identity.ConfigDigest = capabilities.ConfigDigest
+			composition.Identity.Cloud = capabilities.CloudIdentity
 			return composition, nil
 		},
 	})
@@ -403,12 +404,8 @@ func TestCloudCompositionPreflightValidatesBackendBeforeExternalWork(t *testing.
 		valid  bool
 	}{
 		{"cloud without SQL", func(*durablestore.Composition) {}, true},
-		{"SQL instead of cloud", func(c *durablestore.Composition) {
+		{"missing cloud backend", func(c *durablestore.Composition) {
 			c.Identity.Cloud = durablestore.CloudIdentity{}
-			c.Identity.Postgres = validCapabilityComposition().Identity.Postgres
-		}, false},
-		{"mixed backends", func(c *durablestore.Composition) {
-			c.Identity.Postgres = validCapabilityComposition().Identity.Postgres
 		}, false},
 		{"stale namespace", func(c *durablestore.Composition) { c.Identity.Cloud.Namespace = "previous" }, false},
 		{"stale provider mapping", func(c *durablestore.Composition) { c.Identity.Cloud.ProviderDigest[0] ^= 1 }, false},
@@ -435,7 +432,6 @@ func TestCloudCompositionPreflightValidatesBackendBeforeExternalWork(t *testing.
 				DurableCompositionFactory: func(_ context.Context, cap V1RuntimeCapabilities) (durablestore.Composition, error) {
 					calls++
 					c := validCapabilityComposition()
-					c.Identity.Postgres = durablestore.PostgresIdentity{}
 					c.Identity.Cloud = cap.CloudIdentity
 					c.Identity.ConfigDigest = cap.ConfigDigest
 					test.modify(&c)
@@ -447,7 +443,7 @@ func TestCloudCompositionPreflightValidatesBackendBeforeExternalWork(t *testing.
 			}
 			if test.valid {
 				c, err := factory.preflightAutomaticDurableComposition(context.Background(), snapshot)
-				if err != nil || c == nil || c.Identity.Postgres != (durablestore.PostgresIdentity{}) {
+				if err != nil || c == nil {
 					t.Fatalf("cloud preflight: %v", err)
 				}
 			} else {
@@ -469,7 +465,6 @@ func TestBoundCloudCompositionRevalidatesIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := validCapabilityComposition()
-	c.Identity.Postgres = durablestore.PostgresIdentity{}
 	c.Identity.Cloud = expected
 	capabilities := V1RuntimeCapabilities{CloudIdentity: expected, ConfigDigest: c.Identity.ConfigDigest, composition: &c}
 	if _, err := capabilities.BuildDurableComposition(context.Background()); err != nil {

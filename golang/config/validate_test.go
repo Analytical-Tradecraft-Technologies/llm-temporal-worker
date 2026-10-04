@@ -80,7 +80,7 @@ func TestConfigSchemaAcceptsDevelopmentMemoryState(t *testing.T) {
 	loaded.Environment = "development"
 	loaded.State.Kind = config.StateKindMemory
 	loaded.State.Redis = config.RedisConfig{}
-	loaded.State.Postgres = config.PostgresConfig{}
+	loaded.State.Requests = nil
 	loaded.BlobStore.Kind = "memory"
 	loaded.BlobStore.File = config.FileBlobConfig{}
 	loaded.BlobStore.S3 = config.S3Config{}
@@ -430,5 +430,45 @@ func TestConfigAcceptsAzureOpenAIChatFamily(t *testing.T) {
 	}
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range []string{"missing-cloud", "obsolete-sql"} {
+		t.Run(variant, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(encoded, &document); err != nil {
+				t.Fatal(err)
+			}
+			state := document["state"].(map[string]any)
+			if variant == "missing-cloud" {
+				delete(state, "requests")
+			} else {
+				state["postgres"] = map[string]any{"database": "old_worker"}
+			}
+			invalid, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := compiled.Validate(invalid); err == nil {
+				t.Fatal("schema accepted invalid durable storage")
+			}
+		})
 	}
 }

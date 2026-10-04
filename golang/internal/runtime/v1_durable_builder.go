@@ -18,7 +18,7 @@ var ErrDurableV1Composition = errors.New("durable v1 composition is unavailable"
 // NewDurableV1RuntimeBuilder returns the complete one-shot v1 composition.
 // Both phase factories run against the same copied capability bundle, so a
 // reload cannot mix Generate dependencies from one snapshot with Compact
-// dependencies from another. The factories own all PostgreSQL, Redis,
+// dependencies from another. The factories own all cloud storage, Redis,
 // provider, checkpoint, and result-port wiring; this helper only validates
 // their contracts and adapts the resulting ports to the Activity boundary.
 // Query remains an independent authorization seam on Activities.QueryService.

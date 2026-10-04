@@ -113,9 +113,6 @@ func (resolver ConfigResolver) Resolve(ctx context.Context, value *config.Config
 	if value.State.Kind != config.StateKindMemory {
 		refs = append(refs, value.State.Redis.Username, value.State.Redis.Password)
 	}
-	if value.State.Kind == config.StateKindDurable {
-		refs = append(refs, value.State.Postgres.Username, value.State.Postgres.Password)
-	}
 	for _, key := range value.Continuation.HandleKeys {
 		refs = append(refs, key.Secret)
 	}

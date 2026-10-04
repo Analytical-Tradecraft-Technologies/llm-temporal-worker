@@ -103,8 +103,9 @@ durable fill coordinator plus separate paid-attempt authorization.
 There is no automatic TTL, deletion or garbage collection. Losing publications
 can leave encrypted orphan objects, and superseded entries remain addressable
 for receipts. Do not independently expire these rows, origin checkpoints or
-referenced objects. Cleanup, cache phase composition, zero-cost response
-construction and remaining SQL removal are subsequent migration work tracked
+referenced objects. The bounded cloud runtime composes cache replay and
+zero-cost consuming responses; worker SQL persistence has been removed.
+Cleanup and production deployment verification remain follow-up work tracked
 under [#815](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/815)
 and [#812](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/812).
 Managed secrets/key rotation are tracked in

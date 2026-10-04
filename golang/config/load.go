@@ -39,7 +39,6 @@ func Load(data []byte) (Config, error) {
 		config.BudgetsJSON = "" // The effective parsed policies participate in snapshot hashing.
 	}
 	applyDefaults(&config)
-	applyPostgresEnvOverrides(&config)
 	applyEnvironmentOverrides(&config)
 	canonicalize(&config)
 	if err := config.Validate(); err != nil {
@@ -100,29 +99,6 @@ func applyDefaults(config *Config) {
 	}
 	if config.State.ReservationLease == 0 {
 		config.State.ReservationLease = Duration(15 * time.Minute)
-	}
-	if config.State.Postgres.Database == "" {
-		config.State.Postgres.Database = "llm_worker"
-	}
-	if config.State.Postgres.Schema == "" {
-		config.State.Postgres.Schema = "llm_worker"
-	}
-	if config.State.Postgres.MaxConnections == 0 {
-		config.State.Postgres.MaxConnections = 32
-	}
-	// A zero minimum is intentional: startup must not wait for a warm pool;
-	// the readiness probe establishes the dependency contract separately.
-	if config.State.Postgres.DialTimeout == 0 {
-		config.State.Postgres.DialTimeout = Duration(2 * time.Second)
-	}
-	if config.State.Postgres.StatementTimeout == 0 {
-		config.State.Postgres.StatementTimeout = Duration(30 * time.Second)
-	}
-	if config.State.Postgres.LockTimeout == 0 {
-		config.State.Postgres.LockTimeout = Duration(2 * time.Second)
-	}
-	if config.State.Postgres.IdleTransactionTimeout == 0 {
-		config.State.Postgres.IdleTransactionTimeout = Duration(30 * time.Second)
 	}
 	if config.State.Redis.KeyPrefix == "" {
 		config.State.Redis.KeyPrefix = "llmtw"
@@ -197,21 +173,6 @@ func applyDefaults(config *Config) {
 			endpoint.Timeout = Duration(115 * time.Second)
 			config.Endpoints[name] = endpoint
 		}
-	}
-}
-
-func applyPostgresEnvOverrides(config *Config) {
-	if config == nil {
-		return
-	}
-	if value, ok := os.LookupEnv("LLMTW_POSTGRES_DATABASE"); ok {
-		config.State.Postgres.Database = value
-	}
-	if value, ok := os.LookupEnv("LLMTW_POSTGRES_SCHEMA"); ok {
-		config.State.Postgres.Schema = value
-	}
-	if value, ok := os.LookupEnv("LLMTW_POSTGRES_TABLE_PREFIX"); ok {
-		config.State.Postgres.TablePrefix = value
 	}
 }
 

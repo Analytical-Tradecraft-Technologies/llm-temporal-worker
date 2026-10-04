@@ -10,8 +10,9 @@ to an explicitly composed V1 activity runtime using `state.requests`. Generate
 and Compact record their inputs before execution and save completed responses
 before returning. The same configuration now supplies cloud checkpoint metadata,
 blob writes/reads, continuation materialization, and response-cache persistence.
-Concrete phase composition, spend queries and removal of the legacy SQL
-packages remain to be migrated. Budgets and provider status stay in Redis.
+The bounded runtime builder composes execution phases; production CLI authorization
+and spend aggregation remain separate integration steps. Budgets and provider
+status stay in Redis.
 There is no SQL data import: this service has not been deployed.
 
 [Durable cloud budget plans](cloud-budget-plans.md) now save the initial selected
@@ -46,12 +47,12 @@ state:
       name: LLMTW_REQUEST_STORAGE_KEY
 ```
 
-When `state.requests` is configured, `state.postgres` can be omitted. The worker
-ignores any remaining PostgreSQL settings, does not resolve its credentials or
-open its pool, and requires exactly Redis, the existing result blob store, and
-cloud request storage in its readiness probe set. Missing cloud capabilities or
-a failed cloud open reject the snapshot and drain its clients; there is no SQL
-fallback. Redis validation and durability policies remain required.
+Durable mode requires `state.requests`; the strict loader rejects the removed
+`state.postgres` section. No worker SQL credentials, pool, schema, maintenance
+binary or driver dependencies remain. Readiness requires Redis, the result
+blob store and cloud request storage. Missing capabilities or a failed cloud
+open reject the snapshot and drain its clients. There is no SQL fallback or
+SQL data migration.
 
 Cloud composition uses `durable.StateIdentity.Cloud` instead of a fabricated
 PostgreSQL namespace. Its comparable identity contains the provider type,
@@ -63,11 +64,10 @@ still binds the rest of the worker settings, including secret references.
 Automatic preflight supplies the expected cloud identity before constructing
 external clients. The complete runtime builder validates it again against the
 snapshot, and composition reuse checks it before either phase gets its ports.
-Missing, mixed SQL/cloud, or mismatched identities reject composition. This
+Missing or mismatched identities reject composition. This
 validates the declared storage binding; deployment callbacks must still supply
 ports backed by those stores. Both Generate and Compact share one validated
-composition per snapshot. Legacy SQL identities remain supported while their
-implementation is removed in later migration steps.
+composition per snapshot. SQL identities and implementations have been removed.
 
 Phase factories can now construct the parent-materialization callbacks with
 `V1RuntimeCapabilities.NewCheckpointReplay(resolveScope, limits)`. The returned
@@ -80,9 +80,9 @@ bindings. Generate roots authorize the caller and return an empty base;
 follow-ups and Compact load the parent without folding the current delta into it.
 
 This helper performs only parent materialization. Completed-operation and
-finalization-handoff replay remain in the outer cloud runtime. Pending-attempt
-recovery, route/cache/provider execution and finalization still need concrete
-phase composition; installing this helper alone does not authorize paid work.
+finalization-handoff replay remain in the outer cloud runtime. The bounded
+cloud runtime composes pending-attempt recovery, route/cache/provider execution
+and finalization; installing this helper alone does not authorize paid work.
 Missing capabilities and invalid limits reject construction. Scope, handle,
 transcript and storage failures stop before later phases, and raw resolver/SDK
 errors are excluded from the serialized provider error.
@@ -111,9 +111,9 @@ budget. Expired, unclaimed leases return a budget-wait error. Workflow timers
 and recovery policy remain outside these callbacks. No provider cancellation
 API is added. Planner/Redis error text is excluded from caller errors.
 
-This adapter supplies admission and claiming only. Concrete route/pricing
-planners, provider execution, cache/compaction composition and CLI registration
-remain required to run the cloud worker. Budget settlement still follows
+This adapter supplies admission and claiming only. The bounded runtime builder
+composes route/pricing planners, provider execution and cache/compaction phases.
+Production CLI authorization still requires explicit wiring. Budget settlement follows
 durable result finalization, rather than refunding on a submission uncertainty.
 
 For response-cache lookup, phase factories can construct
@@ -130,12 +130,11 @@ execution without being treated as misses or exposing SDK error text. See
 [cloud cache execution](cloud-cache-execution.md) for planning, finalization,
 recovery, and remaining production composition requirements.
 
-Without `state.requests`, durable mode retains the legacy PostgreSQL configuration,
-pool, and readiness requirements. In cloud mode the spend reader is absent; query composition must keep spend
-unsupported unless it supplies an implementation of `control.SpendSummaryReader`.
-Query audits use normal structured logs and require no SQL repository. A complete V1 runtime builder is still required:
-this bootstrap change does not configure concrete execution phase factories or
-remove the SQL packages from the build.
+Without `state.requests`, durable configuration fails validation. Spend summary
+remains unsupported unless the deployment supplies a cloud aggregation reader
+implementing `control.SpendSummaryReader`. Query audits use structured logs.
+The bounded runtime builder is available; the CLI still requires explicit
+production authorization composition before it can poll for paid work.
 
 `secret` references standard base64 encoding of an independent, stable 32-byte
 key. File references are also accepted; workload tokens are not suitable for
@@ -150,16 +149,15 @@ configured V1 runtime. A failed open rejects the snapshot and drains its existin
 clients. Readiness revalidates the named table/bucket and requires both a bounded
 table query and a blob read (a missing probe object is normal, a missing bucket
 is not). These checks establish read access, not write access;
-they do not provision or modify resources. A disabled `state.requests` section
-preserves the existing composition during this staged migration.
+they do not provision or modify resources. Durable mode rejects a missing
+`state.requests` section.
 
 This setting does **not** supply missing Generate/Compact phase factories or
 start a production worker on its own. An explicit durable V1 runtime is still
-required, even in development when request recording is enabled. PostgreSQL
-configuration remains required by the remaining durable/query composition.
-When cloud storage is enabled, the factory replaces the complete checkpoint
-bundle before invoking the V1 builder. It uses the snapshot's continuation
-keyring and never combines cloud checkpoint rows with SQL blob lookups.
+required, even in development when request recording is enabled. The factory
+supplies the complete cloud checkpoint bundle before invoking the V1 builder,
+using the snapshot's continuation keyring. No worker PostgreSQL configuration
+or backend remains.
 
 The operation binding includes tenant, project, activity kind, and
 `operation_key`. Its internal ID is a prefixed UUIDv8 derived using a separate
@@ -190,10 +188,13 @@ is saved with the configured, bounded `server.finalization_timeout`, even if its
 caller context has just ended. Different terminal responses cannot overwrite
 one another. Query calls pass through unchanged.
 
-Automatic cross-operation cache reuse, full workflow progress (including route, provider
-job, budget receipt and policy/configuration versions), finalizer composition,
-cleanup/recovery orchestration, and SQL removal remain subsequent
-migration work. No workflow or cancellation API is introduced here.
+The bounded cloud runtime now composes cross-operation cache reuse, persisted
+route/provider/budget progress, independent paid attempts, and finalization.
+Worker startup registers the public generation and compaction workflows and
+their internal execution and budget workflows; see
+[activity runtime](activity-runtime.md). Production authorization, deployment
+verification, and background cleanup/recovery orchestration remain separate
+work. No cancellation API is exposed.
 
 ## Checkpoint persistence
 
@@ -202,7 +203,7 @@ repository and blob-reader interfaces plus an immutable blob writer. The worker
 exposes these through `V1RuntimeCapabilities.Checkpoints`, including `BlobWriter`
 and an opaque-handle materializer. A custom cloud factory must provide
 `CloudCheckpointSource`; missing stores or handle verification reject the
-snapshot rather than silently using SQL checkpoints.
+snapshot; there is no fallback checkpoint backend.
 
 A finalizer encodes delta, response, settings and optional snapshot blobs with
 `state.CheckpointBlobCodec`, writes them using `BlobWriter.Write`, and places the
@@ -220,7 +221,7 @@ lineage references and every referenced blob. The complete checkpoint metadata,
 including provider-state references and cache affinities, is also encrypted.
 Operation/cache origin IDs remain finalizer-supplied provenance: the finalizer
 must bind them to an authorized operation/cache result. This adapter does not
-check a SQL foreign key or authorize a paid request.
+authorize a paid request.
 
 Publication uses only generic conditional `Create` operations:
 

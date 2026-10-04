@@ -134,11 +134,11 @@ func TestBaseNetworkPolicyScopesStateAndControlEgress(t *testing.T) {
 	}
 	config := readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")
 
-	if !strings.Contains(config, "addresses: [postgres.example.internal:5432]") {
-		t.Fatal("base configuration must use the worker PostgreSQL endpoint on port 5432")
+	if strings.Contains(config, "postgres:") || !strings.Contains(config, "request_table: requests") {
+		t.Fatal("base configuration must use cloud request storage")
 	}
 
-	sensitive := map[int]bool{5432: true, 6379: true, 7233: true}
+	sensitive := map[int]bool{6379: true, 7233: true}
 	seen := make(map[int]bool, len(sensitive))
 	for _, rule := range policy.Spec.Egress {
 		if len(rule.Ports) == 0 {

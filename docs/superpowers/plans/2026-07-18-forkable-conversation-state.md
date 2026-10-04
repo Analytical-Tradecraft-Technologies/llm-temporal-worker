@@ -95,15 +95,15 @@ Implemented repository slices include:
   evidence.
 - **Task 20, PostgreSQL maintenance primitives.** Bounded retention, blob GC,
   outbox fencing, and conservative operation/checkpoint/cache safety are
-  implemented in [`storage/postgres/maintenance.go`](../../../golang/storage/postgres/maintenance.go),
-  [`storage/postgres/blob_gc.go`](../../../golang/storage/postgres/blob_gc.go),
-  and [`storage/postgres/retention_batch.go`](../../../golang/storage/postgres/retention_batch.go),
+  implemented in [`storage/postgres/maintenance.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/maintenance.go),
+  [`storage/postgres/blob_gc.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/blob_gc.go),
+  and [`storage/postgres/retention_batch.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/retention_batch.go),
   with integration coverage in
-  [`maintenance_integration_test.go`](../../../golang/storage/postgres/maintenance_integration_test.go)
-  and [`blob_gc_integration_test.go`](../../../golang/storage/postgres/blob_gc_integration_test.go).
+  [`maintenance_integration_test.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/maintenance_integration_test.go)
+  and [`blob_gc_integration_test.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/blob_gc_integration_test.go).
   Query-plan and budget-read classifier fixtures are present in
-  [`query_plan_integration_test.go`](../../../golang/storage/postgres/query_plan_integration_test.go)
-  and [`sql_classifier_integration_test.go`](../../../golang/storage/postgres/sql_classifier_integration_test.go).
+  [`query_plan_integration_test.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/query_plan_integration_test.go)
+  and [`sql_classifier_integration_test.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/sql_classifier_integration_test.go).
 - **Task 6, Redis recovery contract.** The storage-neutral
   [`budget_bootstrap.go`](../../../golang/storage/redis/budget_bootstrap.go)
   coordinator and deterministic tests now encode Redis-only adoption,
@@ -115,11 +115,11 @@ Implemented repository slices include:
 - **Tasks 3-5, PostgreSQL operation foundation.** The worker schema, scoped
   pgx repository, encrypted operation manifests/provider IDs, replay conflict
   handling, and per-route attempt rows are implemented in
-  [`storage/postgres`](../../../golang/storage/postgres). Terminal completion
+  [`storage/postgres`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/tree/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres). Terminal completion
   and failure now close the corresponding attempt row in the same transaction
   as the operation transition, retaining exact-or-unknown cost facts for
   attempt-level audit. The integration fixture
-  [`operation_integration_test.go`](../../../golang/storage/postgres/operation_integration_test.go)
+  [`operation_integration_test.go`](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/blob/52fab9e15b803f8366e713cafec7b8a3fe6b6b1c/golang/storage/postgres/operation_integration_test.go)
   covers replay, provider-pending recovery, retries, and terminal attempt
   state/cost persistence; protected production conformance remains separate.
 

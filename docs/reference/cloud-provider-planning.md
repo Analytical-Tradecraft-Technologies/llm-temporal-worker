@@ -70,7 +70,9 @@ Compact with a nil prepared request fails before routing; the phase's no-work
 path must handle it without budget or provider work. The helper is available to
 phase factories and does not install production factories, authorize scope,
 quote/claim budget, persist attempts, invoke providers or implement polling.
-Those composition steps and remaining SQL removal are subsequent work.
+The bounded cloud runtime supplies those composition steps, and SQL
+persistence has been removed. Production CLI authorization and deployment
+verification remain separate gates.
 
 Offline tests cover actual preparation, deterministic routing and the real
 OpenAI Responses compiler for both phases with a transport counting unexpected

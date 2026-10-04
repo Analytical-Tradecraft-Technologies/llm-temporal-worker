@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
-	postgresstore "github.com/mfow/llm-temporal-worker/golang/storage/postgres"
 	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -200,48 +199,6 @@ func TestRedisDependencyProbeRequiresBudgetGenerationPort(t *testing.T) {
 	}
 }
 
-func TestPostgresDependencyProbeVerifiesHealthAndSchemaWithoutMutation(t *testing.T) {
-	namespace, err := postgresstore.NewNamespace("worker_db", "worker_state", "tenant_")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &fakePostgresProbeClient{}
-	probe, err := NewPostgresDependencyProbe(client, namespace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := probe.Probe(context.Background())
-	if result != (ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusReady, Reason: ProbeReasonReady}) {
-		t.Fatalf("PostgreSQL probe result = %#v", result)
-	}
-	if client.healthCalls != 1 || client.verifyCalls != 1 {
-		t.Fatalf("PostgreSQL probe calls health=%d verify=%d, want one each", client.healthCalls, client.verifyCalls)
-	}
-}
-
-func TestPostgresDependencyProbeFailsClosedOnSchemaMismatch(t *testing.T) {
-	namespace, err := postgresstore.NewNamespace("worker_db", "worker_state", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &fakePostgresProbeClient{verifyErr: errors.New("contract mismatch")}
-	probe, err := NewPostgresDependencyProbe(client, namespace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := probe.Probe(context.Background())
-	if result.Dependency != DependencyPostgres || result.Status != ProbeStatusUnavailable || result.Reason != ProbeReasonUnavailable {
-		t.Fatalf("schema mismatch result = %#v", result)
-	}
-}
-
-func TestNormalizeProbeResultAcceptsPostgres(t *testing.T) {
-	result := normalizeProbeResult(ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusReady, Reason: ProbeReasonReady})
-	if result.Dependency != DependencyPostgres || result.Status != ProbeStatusReady {
-		t.Fatalf("normalized PostgreSQL result = %#v", result)
-	}
-}
-
 func TestRedisDependencyProbeRejectsEveryConfiguredPolicyMismatch(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -362,15 +319,15 @@ func TestDependencyProbeReportsOnlySafeFailureReasons(t *testing.T) {
 }
 
 func TestIdentifiedDependencyProbeRejectsMismatchedReadyIdentity(t *testing.T) {
-	probe := identifyDependencyProbe(DependencyPostgres, DependencyProbeFunc(func(context.Context) ProbeResult {
+	probe := identifyDependencyProbe(DependencyCloudRequests, DependencyProbeFunc(func(context.Context) ProbeResult {
 		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
 	}))
 	identity, ok := probe.(dependencyIdentitySource)
-	if !ok || identity.DependencyID() != DependencyPostgres {
+	if !ok || identity.DependencyID() != DependencyCloudRequests {
 		t.Fatalf("identified probe identity = %#v/%T, want postgres", probe, probe)
 	}
 	result := probe.Probe(context.Background())
-	if result != (ProbeResult{Dependency: DependencyPostgres, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}) {
+	if result != (ProbeResult{Dependency: DependencyCloudRequests, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}) {
 		t.Fatalf("mismatched probe result = %#v", result)
 	}
 }
@@ -381,7 +338,7 @@ func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *te
 			return ProbeResult{Dependency: id, Status: ProbeStatusReady, Reason: ProbeReasonReady}
 		}))
 	}
-	complete := []DependencyProbe{ready(DependencyRedis), ready(DependencyPostgres), ready(DependencyBlobStore)}
+	complete := []DependencyProbe{ready(DependencyRedis), ready(DependencyCloudRequests), ready(DependencyBlobStore)}
 	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, complete); err != nil {
 		t.Fatalf("complete durable probe set rejected: %v", err)
 	}
@@ -390,7 +347,7 @@ func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *te
 		probes []DependencyProbe
 	}{
 		{name: "missing postgres", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyBlobStore)}},
-		{name: "duplicate redis", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyRedis), ready(DependencyPostgres), ready(DependencyBlobStore)}},
+		{name: "duplicate redis", probes: []DependencyProbe{ready(DependencyRedis), ready(DependencyRedis), ready(DependencyCloudRequests), ready(DependencyBlobStore)}},
 		{name: "unidentified", probes: []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult { return ProbeResult{} })}},
 	}
 	for _, test := range tests {
@@ -547,23 +504,6 @@ type fakeBucketProbe struct {
 	err   error
 }
 
-type fakePostgresProbeClient struct {
-	healthErr   error
-	verifyErr   error
-	healthCalls int
-	verifyCalls int
-}
-
-func (client *fakePostgresProbeClient) Health(context.Context, postgresstore.Namespace) error {
-	client.healthCalls++
-	return client.healthErr
-}
-
-func (client *fakePostgresProbeClient) Verify(context.Context, postgresstore.Namespace) error {
-	client.verifyCalls++
-	return client.verifyErr
-}
-
 func (probe *fakeBucketProbe) ProbeBucket(context.Context) error {
 	probe.calls++
 	return probe.err
@@ -708,11 +648,11 @@ func TestValidateRequiredDependencyProbeSetSelectsCloudBackendWithoutIO(t *testi
 	}{
 		{"complete", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests}, true},
 		{"missing cloud", []DependencyID{DependencyRedis, DependencyBlobStore}, false},
-		{"obsolete SQL", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyPostgres}, false},
-		{"mixed backend", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyPostgres}, false},
+		{"obsolete SQL", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyID("postgres")}, false},
+		{"mixed backend", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyID("postgres")}, false},
 		{"missing Redis", []DependencyID{DependencyBlobStore, DependencyCloudRequests}, false},
 		{"missing blobs", []DependencyID{DependencyRedis, DependencyCloudRequests}, false},
-		{"duplicate cloud", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyCloudRequests}, false},
+		{"duplicate cloud", []DependencyID{DependencyRedis, DependencyBlobStore, DependencyCloudRequests, DependencyID("postgres")}, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -1,5 +1,9 @@
 # PostgreSQL response-cache repository
 
+> Historical reference: the worker SQL implementation and its maintenance CLI
+> have been removed. These SQL procedures are not supported. Use
+> [cloud request storage](cloud-request-repository.md) for current persistence.
+
 `postgres.ResponseCacheRepository` is the first bounded implementation slice
 of the exact-response cache described by [ADR 0007](../decisions/0007-postgresql-authoritative-state-and-response-cache.md)
 and the [checkpoint/cache design](../architecture/conversation-checkpoints-and-compaction.md).

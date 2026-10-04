@@ -82,8 +82,9 @@ building cache fingerprints and fill leases. Choosing a different route after
 acquiring a fill would break its identity fence. Cache lookup may short-circuit
 before any actual admission. The planning helper does not acquire fills or
 automatically invoke plan persistence, install phase factories, submit providers
-or poll. Production wiring, paid-attempt recovery and remaining SQL removal are
-subsequent work.
+or poll. The bounded cloud runtime composes these phases and paid-attempt
+recovery, and SQL persistence has been removed. Production CLI authorization
+and deployment verification remain integration gates.
 
 Offline tests exercise both activities, exact sub-micro prices, all matched
 windows, alias/class resolution, fallback, snapshot mutation/reload, invalid

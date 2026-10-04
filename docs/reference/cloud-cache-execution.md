@@ -170,18 +170,18 @@ accounting and completion timestamps across restarts and configuration reloads.
 Malformed, incompatible or unreadable saved handoffs fail closed. In particular,
 a missing referenced checkpoint cannot turn a saved handoff into a cache miss.
 
-Phase factories still need to write content blobs, construct checkpoints and
-call this finalizer, and recover the interval between provider completion and
-publication-plan persistence. This change does not activate production cloud
-phase factories or remove the remaining SQL path. A missing handoff and plan
+The bounded cloud runtime writes content blobs, constructs checkpoints and
+calls this finalizer, recovering the interval between provider completion and
+publication-plan persistence from saved provider execution. Production CLI
+authorization still requires explicit composition. A missing handoff and plan
 are not permission to dispatch again: the inner
 runner's replay and single-use Redis claim remain responsible for that interval.
 No automatic release is performed on runner errors, and a started fill never
 becomes dispatchable just because time has passed. See
 [fill ownership](cloud-cache-fills.md).
 
-Workflow timers, provider polling/recovery composition, and removal of the
-remaining SQL runtime dependencies are follow-ups. The tests exercise the real
+The registered workflows own timers and invoke bounded provider polling and
+recovery; worker SQL dependencies have been removed. The tests exercise the real
 Generate/Compact runners and cloud cache implementation with shared in-memory
 KV/blob adapters and counted Redis/provider ports. They cover concurrent
 independent misses and retries, restart/expiry, lost start acknowledgements,
@@ -272,4 +272,5 @@ and polling providers, both request kinds, no-work and free paths, restart,
 concurrent submissions, budget/cache waits, large semantic inputs, sample
 isolation, uncertain paid work, lost start acknowledgements, expired unused
 attempts and authorization. These tests do not establish live dependency behavior.
-Production activation and Temporal workflow registration remain separate changes.
+Worker startup registers the Temporal workflows. Production activation still
+requires explicit CLI authorization and deployment verification.
