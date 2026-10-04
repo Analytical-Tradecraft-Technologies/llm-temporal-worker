@@ -127,6 +127,9 @@ func TestRequestAttemptExpiredQuoteUsesNewBudgetAndFencesOldStart(t *testing.T) 
 	if err != nil || next.ID == first.ID || next.Number != 2 || next.PreviousID != first.ID {
 		t.Fatal("renewal", err)
 	}
+	if len(next.PriorCandidates) != 0 {
+		t.Fatal("unused quote counted as provider attempt")
+	}
 	retired, err := r.Read(ctx, scope, first.ID)
 	if err != nil || retired.Status != StatusFailed {
 		t.Fatal("old attempt was not fenced", err)
@@ -170,6 +173,13 @@ func TestRequestAttemptUnknownPaidWorkRemainsDiscoverableAfterRootCompletion(t *
 	next, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter)
 	if err != nil || next.Number != 2 {
 		t.Fatal(err)
+	}
+	if len(next.PriorCandidates) != 1 || next.PriorCandidates[0] != plan.Estimate.CandidateID {
+		t.Fatalf("unknown attempt history = %#v", next.PriorCandidates)
+	}
+	replayed, err := reopen(t, table, blobs).LoadRequestAttempt(ctx, scope, root.Request.ID)
+	if err != nil || !equalExecutionJSON(replayed, next) {
+		t.Fatal("history lost on reopen", err)
 	}
 	old, err := r.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || !equalExecutionJSON(saved, old) {
@@ -334,5 +344,44 @@ func TestRequestAttemptRetiredUnknownCanRecoverLater(t *testing.T) {
 	}
 	if _, err := r.BeginRequestAttempt(ctx, scope, next.ID, "", next.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
 		t.Fatal("allowed a nested paid attempt", err)
+	}
+}
+
+func TestRequestAttemptHistorySurvivesUnusedRenewalsAndReplay(t *testing.T) {
+	r, table, blobs, root, template := requestAttemptFixture(t)
+	template.Quote.Entry.EffectiveUntil = root.Request.CreatedAt.Add(24 * time.Hour)
+	ctx, scope := context.Background(), root.Request.Scope
+	active := initialRequestAttempt(t, r, root)
+	for paid := 1; paid <= 3; paid++ {
+		child, plan, reservation := saveAttemptPlan(t, r, scope, active, template)
+		saved := startExecution(t, r, child, plan, reservation)
+		saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
+			e.Stage = ExecutionUnknown
+			e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
+		})
+		next, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, active.ID, saved.Execution.RecoverAfter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(next.PriorCandidates) != paid {
+			t.Fatalf("history=%v, paid attempts=%d", next.PriorCandidates, paid)
+		}
+		for _, candidate := range next.PriorCandidates {
+			if candidate != plan.Estimate.CandidateID {
+				t.Fatal("candidate identity lost")
+			}
+		}
+		replay, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, active.ID, next.CreatedAt)
+		if err != nil || !equalExecutionJSON(replay, next) {
+			t.Fatal("retry duplicated history", err)
+		}
+		renewed, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, next.ID, next.CreatedAt.Add(durable.BudgetStartLease))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(renewed.PriorCandidates) != paid {
+			t.Fatal("unused quote renewal consumed provider attempt")
+		}
+		active = renewed
 	}
 }
