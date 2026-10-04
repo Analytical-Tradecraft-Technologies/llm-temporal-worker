@@ -26,6 +26,7 @@ type cloudExecutionStore interface {
 	BeginRequestAttempt(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestID, time.Time) (cloudstate.RequestAttempt, error)
 	LoadRequestAttempt(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestAttempt, error)
 	FinishRequestFailure(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestID, llm.ExecutionResultV1, time.Time) error
+	FinishRequestExhausted(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestID, int, time.Time) (llm.ExecutionResultV1, error)
 	CacheFingerprint(cache.Input) (cache.Fingerprint, error)
 }
 
@@ -37,6 +38,7 @@ type CloudExecutionOptions struct {
 	Limits           state.MaterializeLimits
 	CheckpointTTL    time.Duration
 	BudgetGeneration durable.GenerationID
+	MaxAttempts      int
 }
 
 // CloudExecutionRuntime implements the bounded activity state machine. All
@@ -55,6 +57,12 @@ type CloudExecutionRuntime struct {
 var _ activity.ExecutionRuntime = (*CloudExecutionRuntime)(nil)
 
 func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, options CloudExecutionOptions) (*CloudExecutionRuntime, error) {
+	if options.MaxAttempts < 0 {
+		return nil, executionError(provider.CodeConfiguration)
+	}
+	if options.MaxAttempts == 0 {
+		options.MaxAttempts = 6
+	}
 	store, ok := c.Requests.(cloudExecutionStore)
 	if !ok || isNilCapability(store) || c.Finalizer == nil || isNilCapability(c.Responses) || isNilCapability(c.ResponseFills) || options.CheckpointTTL <= 0 || options.BudgetGeneration.Validate() != nil {
 		return nil, executionError(provider.CodeConfiguration)
@@ -177,6 +185,13 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			if err := r.finishUnknownFill(ctx, p, attempt, saved); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
+			if len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
+				failure, err := r.store.FinishRequestExhausted(ctx, root.Scope, root.ID, attempt.ID, r.options.MaxAttempts, r.now())
+				if err != nil {
+					return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+				}
+				return failure, nil
+			}
 			attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
 			if err != nil {
 				return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
@@ -191,6 +206,13 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			}
 			if r.now().Before(saved.Execution.Failure.RetryNotBefore) {
 				return cloudStatus(p, llm.ExecutionBudgetWait, saved.Execution.Failure.RetryNotBefore.Sub(r.now())), nil
+			}
+			if len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
+				failure, err := r.store.FinishRequestExhausted(ctx, root.Scope, root.ID, attempt.ID, r.options.MaxAttempts, r.now())
+				if err != nil {
+					return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+				}
+				return failure, nil
 			}
 			attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
 			if err != nil {
@@ -210,7 +232,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 		}
 	}
-	budgetAttempt := BudgetAttempt{OperationID: durable.OperationID(attempt.ID), GenerationID: r.options.BudgetGeneration, QuotedAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}
+	budgetAttempt := BudgetAttempt{PriorCandidates: append([]string(nil), attempt.PriorCandidates...), OperationID: durable.OperationID(attempt.ID), GenerationID: r.options.BudgetGeneration, QuotedAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}
 	var call *CloudBudgetCall
 	if p.Generate != nil {
 		call, err = r.execution.admission.PrepareGenerate(ctx, root.Scope, attempt.ID, p.GenerateReplay, budgetAttempt)

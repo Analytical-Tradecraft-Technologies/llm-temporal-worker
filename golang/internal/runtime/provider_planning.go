@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"sort"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
@@ -117,7 +118,7 @@ func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request)
 
 // selectCall permits the budget planner to reject a compiled candidate before
 // it wins selection. Neither callback nor compilation may perform paid work.
-func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, accept func(PlannedProviderCall) (bool, error)) (PlannedProviderCall, error) {
+func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, accept func(PlannedProviderCall) (bool, error), priorCandidates ...string) (PlannedProviderCall, error) {
 	if ctx == nil || planning == nil || isNilCapability(planning.planner) || isNilCapability(planning.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
@@ -138,6 +139,16 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	}
 	if err != nil || len(plan.Candidates) == 0 {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetryNever)
+	}
+	// Preserve normal route priority among equally tried candidates, while
+	// giving alternatives a chance before retrying an earlier failed route.
+	if len(priorCandidates) > 0 {
+		counts := make(map[string]int, len(priorCandidates))
+		for _, id := range priorCandidates {
+			counts[id]++
+		}
+		plan.Candidates = append([]routing.Candidate(nil), plan.Candidates...)
+		sort.SliceStable(plan.Candidates, func(i, j int) bool { return counts[plan.Candidates[i].ID] < counts[plan.Candidates[j].ID] })
 	}
 	lastPhase := provider.PhaseCompile
 	for _, candidate := range plan.Candidates {
