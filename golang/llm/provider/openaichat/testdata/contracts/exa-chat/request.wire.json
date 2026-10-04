@@ -2,6 +2,5 @@
   "extra_body": {"text": true},
   "messages": [{"content": [{"text": "fixture exa chat", "type": "text"}], "role": "user"}],
   "model": "exa",
-  "parallel_tool_calls": false,
   "service_tier": "standard"
 }
