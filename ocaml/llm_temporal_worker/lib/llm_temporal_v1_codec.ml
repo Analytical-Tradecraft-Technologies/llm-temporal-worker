@@ -193,6 +193,7 @@ let settled_cost_of_json context value =
   | _ -> Error (errorf "%s has an invalid cost status" context)
 
 let context_to_v1_json context =
+  let* () = if context.tags = [] then Ok () else Error (errorf "context.tags is not supported by v1") in
   let one name = function Some value -> Ok (name, `String value) | None -> Error (errorf "context.%s is required" name) in
   let* tenant = one "tenant" (Option.map Tenant_id.to_string context.tenant) in
   let* project = one "project" (Option.map Project_id.to_string context.project) in
