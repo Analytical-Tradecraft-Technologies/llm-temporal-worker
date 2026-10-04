@@ -299,7 +299,7 @@ func cloudBaseTestProbes() []DependencyProbe {
 }
 
 // Construction exercises the real factory with in-process storage doubles;
-// the resolver and PostgreSQL factory reject any attempt to use the old backend.
+// the resolver rejects any attempt to request credentials for the removed backend.
 func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 	data, err := os.ReadFile("../../config.example.yaml")
 	if err != nil {

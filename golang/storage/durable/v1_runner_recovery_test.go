@@ -10,13 +10,13 @@ import (
 
 var errSimulatedWorkerCrash = errors.New("simulated worker crash before Redis reconciliation")
 
-// TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit proves the
+// TestGenerateV1CrashAfterResultFinalizationDoesNotResubmit proves the
 // Task 21 crash boundary without requiring a live provider or database. The
-// fake store treats Finalize as the durable PostgreSQL commit, then injects a
+// fake store treats Finalize as the durable result commit, then injects a
 // worker failure before Redis reconciliation. A retry replays the committed
 // identities and only invokes Reconcile; provider dispatch, reservation,
-// journaling, and finalization each remain exactly once.
-func TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit(t *testing.T) {
+// claiming, and finalization each remain exactly once.
+func TestGenerateV1CrashAfterResultFinalizationDoesNotResubmit(t *testing.T) {
 	request := testGenerateRequest()
 	store := &generateCrashRecoveryStore{
 		request:     request,
@@ -33,7 +33,7 @@ func TestGenerateV1CrashAfterPostgresFinalizationDoesNotResubmit(t *testing.T) {
 		t.Fatalf("first attempt returned response after simulated crash: %#v", first)
 	}
 	if !store.finalized {
-		t.Fatal("simulated PostgreSQL finalization did not commit before crash")
+		t.Fatal("simulated result finalization did not commit before crash")
 	}
 
 	second, err := GenerateV1(context.Background(), request, ports)

@@ -1,194 +1,57 @@
-# Redis Budget Generation Recovery
+# Redis budget authority and recovery boundary
 
-> **Budget design superseded:** Redis now owns budget leases and settlement;
-> the SQL budget journal writer has been removed. The SQL budget rebuild and
-> automatic Stream broadcast described below are not the current runtime. See
-> [Redis budget leases](../reference/redis-budget-leases.md) for the implemented contract.
+Redis is the authoritative budget store. Cloud requests retain execution and
+provider recovery context, but they are not a complete accounting ledger. The
+Redis Stream is a coordination feed and cannot be replayed as permission to
+spend. Losing accounting data must not turn paid work into fresh capacity.
 
-> **Design-time runbook:** the recovery commands, metric names, and deployment
-> controls do not exist yet. The implementation must replace every named
-> placeholder below with tested, environment-specific commands before enabling
-> production paid work. This runbook never authorizes direct Redis key edits,
-> `FLUSHDB`, or an unfenced PostgreSQL rebuild.
+## Supported initialization and checks
 
-The Go `storage/redis` package provides the bounded, storage-neutral
-`budget-manifest/v1` record and deterministic validator used by this runbook's
-manifest checks. It verifies generation/incarnation provenance, config/price
-and policy/window hashes, concrete journal/Stream high-water marks, complete
-coverage, every expected member, catalog identity, and the conservative
-rounding version. `RedisBudgetGenerationPort` atomically stores an immutable
-manifest and switches the active pointer, while `RedisBudgetEventPort` tails
-the coordination Stream without consumer groups. `BudgetStreamTailer` now
-provides the worker-side bounded poll contract: each worker owns an independent
-cursor, disabled consumption and retained-stream gaps perform a Redis-only
-manifest reload, and a generation-switch hint is never applied to the old
-local plan. Recovery captures the live Stream last entry immediately before
-the reload instead of reusing the manifest's historical high-water mark; this
-prevents a retained-prefix gap from looping forever and preserves hints
-appended while the reload runs. A reload with no concrete current cursor fails
-closed. The tailer returns its latest cursor for the runtime owner to persist
-in the worker lease; hints remain non-authoritative and every paid decision
-still goes through the atomic Redis Function.
+The worker's `budget-initialize` command defaults to a read-only check.
+`--apply` is only for the first initialization of an unused namespace, with all
+writers stopped. It conditionally creates a permanent cloud receipt, writes a
+matching persistent Redis marker and initial stream event, then marks the cloud
+receipt ready. See [CLI](../reference/cli.md#budget-initialize) and
+[Redis budget leases](../reference/redis-budget-leases.md#initialization-and-readiness)
+for the exact contract.
 
-These adapters do not materialize window keys or execute the Redis admission
-Function; runtime composition and the fenced recovery coordinator remain
-subject to the procedures below. The event adapter and tailer intentionally
-never trim the Stream: a separate retention coordinator must use the minimum
-non-expired worker cursor plus a configured safety margin.
+Only the initializer that receives an acknowledged creation of the cloud receipt
+can send the first Redis marker creation. A retry may finish initialization only
+while the matching marker survives. A receipt with an absent marker is not a
+fresh installation, even if Redis appears empty.
 
-The package now also contains a storage-neutral
-`BudgetBootstrapCoordinator`. It attempts Redis-only adoption first, requires a
-complete working-set proof, blocks same-incarnation loss, and permits a
-PostgreSQL-backed candidate only after an explicit cold-start or verified-new-
-incarnation fleet proof and a non-empty bootstrap fence. Its
-`PublishAndSwitch` boundary is intentionally deployment-owned: until a Redis
-Function atomically commits the candidate, pointer, and generation-switch
-event, the coordinator is not wired into paid-work readiness.
+Production startup checks the receipt. Readiness and every reserve, claim and
+settlement check the matching persistent marker. Missing, preparing, expiring,
+wrongly typed or mismatched markers keep paid work unavailable. Readiness never
+repairs or initializes accounting state.
 
-`BudgetWorkerLeaseStore` now provides the worker-side lease/roster boundary.
-Each process constructs one store, which generates a random session ID once
-and reuses it across Redis reconnects. `Register` writes the generation and
-cursor into the namespaced `budget:workers` hash, `Renew` advances the cursor
-only monotonically, and `Release` removes only the liveness field while
-retaining the persistent roster entry. A session may renew after its liveness
-TTL has elapsed when its roster still proves the same generation/session; a
-new process has a new random session and cannot claim that lease. `Live` is a
-read-only view for recovery classification and `PruneExpired` removes only a
-bounded number of expired lease fields, never roster entries. The tailer's
-returned cursor should be passed to `Renew` after each successful poll; these
-records remain coordination hints and never authorize paid work.
+## Data loss or uncertain initialization
 
-## Purpose and safety invariant
+Keep paid work stopped when accounting integrity is uncertain. Preserve the
+receipt, marker and affected Redis data for investigation. Do not delete a
+receipt, reset a marker, change the namespace, or rerun first initialization to
+reopen spending. Do not guess missing balances from provider result records.
 
-PostgreSQL is the durable financial system of record. Redis is the required
-production optimization that holds a conservative nano-USD materialization for
-fast atomic admission and coordinates worker replicas. A Redis failure is
-therefore recoverable, but recovery must never expose budget capacity twice.
+The receipt detects loss of the authority marker. It does not prove every
+budget key survived, detect an older snapshot restored together with its marker,
+or provide a complete recovery journal. Partial key loss and rollback require
+separate reconciliation before spending can resume. An ambiguous first receipt
+or marker write also needs investigation if the matching marker cannot be read.
 
-The invariant is: paid provider dispatch remains stopped until every active
-budget window and open reservation is represented in one verified Redis
-generation, bound to the current Redis dataset incarnation and caught up
-through a recorded PostgreSQL journal sequence.
+Capture content-free evidence: worker/configuration versions, incident times,
+readiness reason codes, Redis persistence/restore history and the initialization
+stage. Keep credentials, encryption material, prompts, outputs and provider IDs
+out of logs. Recovery must account for claimed paid work that could have happened
+after a restored snapshot before establishing any new budget authority.
 
-Read-only diagnostics may continue. Generate, Compact, cache fills, and any
-provider-management refresh that could spend money fail closed while the
-budget generation is untrusted. The optional Redis Stream may speed worker
-wake-up, but its availability or contents are never recovery authority.
+## Remaining implementation
 
-## Evidence to capture first
+Full data-loss recovery is tracked in [#856](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/856)
+and the broader budget work in [#814](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/814).
+There is no automatic rebuild coordinator or supported data-loss repair command.
 
-Before changing deployment state, record a content-free incident bundle:
-
-- incident start time in UTC, deployment/config epoch, worker build, and
-  namespace prefixes;
-- Redis endpoint identity, server run ID, dataset-incarnation ID, persistence
-  status, active-generation ID, manifest digest, journal high-water mark, and
-  worker lease/session-roster counts;
-- which manifest/member/digest/horizon validation failed;
-- PostgreSQL budget-journal maximum sequence and the count of open reservations
-  in the configured active horizon, without prompt or provider-response data;
-- Temporal task-queue backlog and whether paid-work polling is paused;
-- Redis/KMS/PostgreSQL health and the last persistence/restore event.
-
-Do not log credentials, raw Redis values, tenant identifiers, prompts, outputs,
-provider request IDs, or unkeyed cache/budget identifiers. Preserve the failed
-generation and evidence until the incident owner closes the investigation.
-
-## Classify the condition
-
-1. **Intact generation, including after scale-to-zero or a persistent Redis
-   restart.** Manifest, incarnation binding, member catalog, horizon sentinels,
-   digests, and high-water mark all validate. Adopt it with Redis-only reads;
-   do not query PostgreSQL budget tables or manufacture a new generation.
-2. **Verified new empty/incomplete dataset incarnation.** Redis proves that its
-   prior persisted dataset was not retained. A fenced cold rebuild is allowed.
-3. **Same-incarnation partial loss or unexplained mismatch.** Do not infer an
-   empty dataset and do not read PostgreSQL as an online fallback. Restore the
-   Redis dataset from its persistence/backup first. If that cannot succeed,
-   perform the deliberate replacement procedure below, which requires a full
-   fleet quiescence and creates a new dataset incarnation.
-4. **Live or reconnecting worker sessions remain.** Do not rebuild. Restore the
-   intact generation or quiesce the entire fleet and prove all old sessions can
-   no longer write before considering replacement.
-5. **PostgreSQL, Redis, blob encryption/KMS, or the journal fence is unhealthy.**
-   Keep paid work stopped and escalate; there is no degraded paid-write mode.
-
-## Adopt an intact generation
-
-1. Keep paid polling paused while one worker performs the full manifest check.
-2. Compare the configured namespace/config epoch, Redis incarnation, member
-   catalog, active-horizon sentinels, safe-integer bounds, manifest digest, and
-   stored journal high-water mark.
-3. Register the new in-memory worker session and lease without changing the
-   active generation.
-4. Have every replica independently verify the same manifest. A Stream event
-   may wake replicas, but replicas reload the active-generation pointer and
-   manifest directly from Redis.
-   If a worker's cursor predates the retained Stream prefix, the adapter
-   reports a gap and the worker discards its hints before reloading the
-   manifest; it never treats a partial Stream read as authorization state.
-5. Resume paid polling only after readiness reports the adopted generation.
-   Confirm that this path executed zero PostgreSQL budget-table SELECTs.
-
-## Fenced rebuild for a verified new incarnation
-
-1. Prove either a new empty/incomplete Redis dataset incarnation or a cold fleet
-   with zero live/reconnecting worker sessions after intact-generation adoption
-   failed. Elect exactly one coordinator with the namespaced bootstrap fence;
-   all other workers wait with paid polling disabled.
-2. Create candidate generation keys under a new immutable generation ID. Never
-   overwrite or delete the previous generation in place.
-3. Under the exceptional recovery repository path, read from PostgreSQL only
-   the active budget horizon, open reservations, and ordered journal tail. Apply
-   the versioned conservative conversion: positive amounts round up to nano-USD
-   and limits round down. Preserve each operation's applied integer so release
-   and reconciliation never recompute it.
-4. Verify candidate counts, digests, non-negative balances, safe-integer bounds,
-   policy/config epoch, incarnation binding, and journal sequence.
-5. Acquire the PostgreSQL advisory fence also taken in shared mode by journal
-   writers. Capture the final sequence, idempotently apply every missing journal
-   event, re-run the verification, and atomically switch the Redis
-   `budget:active-generation` pointer. Append a generation-switch Stream hint.
-6. Release the PostgreSQL and Redis fences. Each worker reloads and independently
-   verifies the active pointer/manifest before readiness and paid polling resume.
-7. Retain the old generation through the incident rollback window. Garbage
-   collection may remove it only after no lease, cursor, reservation, or audit
-   reference remains.
-
-## Deliberate replacement after same-incarnation corruption
-
-This is an operator-authorized outage procedure, not automatic fallback:
-
-1. Pause paid-work polling and quiesce every Go worker. Prove the Redis lease set
-   and persistent session roster contain no process that can reconnect and
-   mutate the old generation. If that proof is unavailable, stop and escalate.
-2. Preserve/export the corrupted dataset and evidence. Do not repair individual
-   members or clear the shared database.
-3. Provision an empty Redis dataset with a new verified incarnation under the
-   configured persistence, `noeviction`, TLS/auth, ACL, key-prefix, and Function
-   digest requirements.
-4. Start the fleet in recovery mode and follow the fenced-new-incarnation rebuild
-   above. Normal readiness must reject recovery mode after the flip succeeds.
-
-## Verification before closure
-
-- exactly one generation is active and every replica reports its ID/digest;
-- the generation is caught up through the PostgreSQL journal maximum observed
-  under the final advisory fence;
-- active reservations and accounted charges remain conservative and no window
-  exceeds its limit;
-- replayed journal IDs changed Redis state at most once;
-- no provider dispatch occurred while paid polling was paused;
-- PostgreSQL budget SELECT instrumentation shows reads only in the approved
-  fenced rebuild, not during adoption or normal restart;
-- a budget-status query uses Redis and labels values
-  `nano_usd_conservative`; and
-- the Stream-disabled verification path reaches the same decision.
-
-If verification fails before the active pointer flips, abandon the candidate
-and keep the old generation/outage state. If it fails after the flip, pause paid
-polling immediately; flip back only when the preserved old generation is still
-fully valid for the same incarnation and doing so is protected by the same
-fences. Otherwise perform another new-generation rebuild. Escalate any ambiguous
-dispatch, missing journal range, unsafe integer, or inability to prove fleet
-quiescence; never guess a balance or mark an unknown cost as zero.
+Generation manifests, stream tailers and worker-lease contracts remain available
+for future coordination. Publishing a manifest alone does not prove a complete
+working set. Tailers use Redis-only reloads after stream gaps; their cursors and
+hints never authorize paid work. Automatic fleet consumer lifecycle and bounded
+stream retention require their own integration and evidence.

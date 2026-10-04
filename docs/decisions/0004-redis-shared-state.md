@@ -1,73 +1,43 @@
-# ADR 0004: Redis Shared State
+# ADR 0004: Redis shared state
 
-- Status: Accepted
+- Status: Accepted; storage ownership refined by ADR 0007
 - Date: 2026-07-13
-
-> This remains part of staged Phase B. ADR 0007 narrows Redis to the complete
-> active budget/throttle working set and adds PostgreSQL durable state/journaling;
-> it does not retire Redis.
-
-## Context
-
-Horizontal workers must share overlapping-window budget reservations and
-operational throttles. Admission must check and update all matching windows
-atomically. Durable operation deduplication and continuation records live in
-PostgreSQL under ADR 0007; the live admission access pattern remains small
-key-value state with time-indexed buckets.
 
 ## Decision
 
-Use Redis as the production atomic budget/throttle materialization and
-coordination optimization. Keep an explicitly non-durable **memory** mode for
-unit/conformance tests and single-process local development; configuration
-validation rejects it in production or multi-replica mode. Implement admission as a
-versioned Redis Function (Lua script fallback), use Redis server time,
-conservative checked nano-USD integers derived from exact PostgreSQL decimals,
-and one
-configured cluster hash tag for all budget keys. The active generation includes
-complete bucket coverage, reservation indexes, a manifest, worker leases, and
-one broadcast Redis Stream for optional cross-worker invalidation and wake-up.
-The Stream is an optimization; only the atomic Function authorizes. Every worker-owned key also
-uses one validated configurable prefix, defaulting to **llmtw** and overridable
-by **LLMTW_REDIS_KEY_PREFIX** at process start.
+Horizontal workers share monetary reservations, claims, settlement, operational
+throttles and provider observations in Redis. Every paid decision checks all
+matching budget windows in one atomic Function or explicitly provisioned Lua
+script. Redis server time governs authorization expiry. Limits and policy come
+from the worker configuration; clients cannot grant themselves budget.
 
-PostgreSQL is the system of record and stores the durable operation/budget
-journal before provider dispatch,
-but normal budget decisions and status queries read Redis only. PostgreSQL
-budget-read/adoption/rebuild rules are specified only in the
-[control-plane design](../architecture/postgresql-state-cache-and-control-plane.md#the-only-postgresql-budget-read-conditions).
+Budget transitions publish coordination events in the same atomic operation.
+Events may wake consumers or invalidate local hints; only the authoritative
+Redis mutation can authorize work. Runtime stream consumption is a separate
+feature from publication.
 
-The embedded admission Function is also a defensive boundary: every action
-checks its exact argument arity, key count, key/value byte bounds, reservation
-count, and Redis-safe integer range before reading or mutating shared state.
-Operation and attempt fields are length-bounded as well. This keeps malformed
-direct `FCALL`/preloaded-Lua invocations fail-closed instead of allowing a
-missing key or oversized value to become a Redis runtime error after a partial
-mutation. The supported envelope is at most 253 reservation windows per
-operation, with at most 510 old-plus-new windows in one continuation (the
-remaining Redis key slots carry operation indexes). Route/endpoint/model
-fields are 256 bytes, provider fields 128 bytes, and provider request IDs
-512 bytes.
+Every worker key uses a validated configurable prefix. Keys participating in
+one atomic budget mutation share a configured Redis Cluster hash tag. The
+single-slot throughput limit is an intentional v1 constraint.
 
-Production fails closed on Redis errors. Require TLS/auth, `noeviction`, explicit
-AOF durability choice plus RDB, persistence monitoring, backups, and restore
-tests.
+Production requires authentication, persistence, no eviction and fail-closed
+readiness. A permanent cloud initialization receipt binds the Redis authority
+marker to its original namespace and epoch. A missing marker cannot be treated
+as a new empty budget. Neither cloud request records nor the stream are a
+replacement accounting ledger.
+
+Memory mode remains limited to tests and single-process development. Cloud
+stores hold durable requests, checkpoints and results as described in
+[ADR 0007](0007-cloud-storage-and-redis.md).
 
 ## Consequences
 
-- Admission is atomic and low latency across replicas.
-- Memory mode and the Redis Function share one atomic-budget state-transition
-  conformance suite; durable/restart behavior is intentionally absent in memory
-  mode and production authorization always uses Redis.
-- The single budget hash slot is intentional under the normative
-  [workload envelope](../architecture/postgresql-state-cache-and-control-plane.md#the-only-postgresql-budget-read-conditions).
-- `appendfsync everysec` has an acknowledged crash-loss window; stronger
-  durability costs latency.
-- Durable blobs still require a separate object-store port at larger sizes.
+- Concurrent workers cannot each spend against independent local counters.
+- Unused reservations expire; claimed paid work remains accounted until settlement.
+- Persistence and HA are necessary; recovery after data loss requires explicit
+  accounting reconciliation rather than reinitialization.
+- A slower consumer or a stream gap cannot grant extra spending capacity.
 
-## Rejected alternatives
-
-- Per-process counters allow aggregate overspend.
-- Eventual counter reconciliation does not enforce a hard budget.
-- Multiple Redis Cluster slots cannot provide the required v1 atomic Function.
-- Using worker clocks creates cross-replica window disagreement.
+See [Redis budget leases](../reference/redis-budget-leases.md) for the current
+implementation and [recovery](../runbooks/redis-budget-generation-recovery.md)
+for its limits.

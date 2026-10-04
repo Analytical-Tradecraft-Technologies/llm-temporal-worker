@@ -3,7 +3,7 @@
 `control.ReplayRouteStatus` rebuilds the domain-level `RouteStatus` for one
 route from a bounded read of the persisted status-event ledger. It is a
 storage-neutral helper: the caller supplies `PersistedStatusEvent` values with
-their positive database `EventID`s and must provide them in strictly ascending
+their positive `EventID`s and must provide them in strictly ascending
 ledger order. Replay intentionally does not sort by `ObservedAt`; the same
 ordered sequence is what `RouteStatus.Apply` sees during live persistence.
 
@@ -25,12 +25,12 @@ stable snapshot or watermark when concurrent writes or late inserts are
 possible. Consumers must not present an incomplete replay as historical truth.
 
 Replay verifies structural invariants and requires a non-zero stored digest,
-but does not recompute the digest. PostgreSQL `timestamptz` values have
-microsecond precision, so recomputing from a rounded read could reject an event
-whose digest was created before insertion. The append path remains responsible
-for authenticating the digest before it is persisted.
+but does not recompute the digest. The caller must authenticate the digest
+before supplying persisted events and account for any serialization precision
+changes at its storage boundary.
 
 Replay returns only the `RouteStatus` domain projection. It does not recreate
-SQL-only counters or timestamps, projection versions, last-event storage
-metadata, provider evidence, or a public continuation cursor. Those remain
-responsibilities of the PostgreSQL repository and query boundary.
+storage-specific counters, projection versions, provider evidence or a public
+continuation cursor. The current Redis provider store retains its operational
+projection rather than an append-only historical event ledger. This helper does
+not imply that production historical replay is configured.

@@ -2,19 +2,18 @@
 
 ## Status and boundary
 
-This is an accepted pre-release design and an implementation contract, not a
-description of behavior currently shipped. The current code exposes an
-unreleased **llm.generate.v1** and Redis-backed continuations. The design
-replaces that contract in place and adds **llm.compact.v1** with the PostgreSQL
-state design in
-[ADR 0007](../decisions/0007-postgresql-authoritative-state-and-response-cache.md).
-There is no v1-to-v2 compatibility phase: schemas, fixtures, Go types, and the
-existing OCaml wrapper all change together before the first release.
+The cloud workflow runtime implements immutable checkpoints, response caching
+and compaction under the existing v1 API names. Public Generate and Compact
+workflows return final typed responses; their bounded activities may return
+pending while a resumable provider finishes. See
+[workflow behavior](../reference/internal-workflows.md) and
+[cloud storage](../reference/cloud-request-repository.md) for the implemented
+execution boundary.
 
-The worker still performs one LLM turn per Generate Activity. A response may
-contain tool calls, but the caller's Temporal Workflow executes tools and
-submits their results in a later Activity. The worker stores conversation state;
-it does not own the agent loop.
+A response may contain application tool calls. The caller executes those tools
+and supplies their results in a later request; the worker does not own the agent
+loop. Schema, fixture, Go and OCaml changes remain coordinated before the first
+release.
 
 ## Why a checkpoint graph
 
@@ -142,41 +141,29 @@ all other fields required by the semantic validator. Provider defaults that
 would make cache validation ambiguous are represented as unknown rather than
 invented values.
 
-### Cache policy and variant validation
+### Cache policy and request index
 
 The **cache** object is opt-in:
 
 | Request form | Exact-response cache behavior |
 | --- | --- |
-| **cache** omitted | Do not read and do not populate the worker cache |
-| **cache.max_age_seconds** present | Read a matching entry no older than the bound; on miss, populate after success |
+| **cache** omitted | Do not read or populate the worker cache |
+| **cache: {}** | Enable reuse without an age restriction |
+| **cache.max_age_seconds** present | Reuse a matching success within that positive age bound |
 
-The age must be positive and bounded by an operator maximum. The worker obtains
-one PostgreSQL time for the eligibility transaction. It compares
-**completed_at** with that time minus the requested age; **last_used_at** never
-makes stale output fresh.
+Age is measured from successful completion against the lookup's single supplied
+clock instant. Reading or using an entry never refreshes it; newer failures do
+not invalidate an older eligible success.
 
-**variant** is a non-negative signed 32-bit integer and defaults to zero. It is
-part of the cache key but not provider input. Validation uses the materialized
-temperature:
+The public **cache.variant** is the non-negative int32 request index, normally
+zero. It participates in internal request/cache identity and separates samples;
+it is not provider input or a seed and does not guarantee different output.
+It is independent of temperature, including omitted or zero temperature.
+Compaction uses its compatible content/policy identity and variant zero.
 
-- temperature exactly zero requires variant zero;
-- temperature explicitly greater than zero permits any non-negative int32
-  variant;
-- an absent/provider-default temperature permits only variant zero; and
-- negative values or overflow are invalid.
-
-This gives callers deterministic cache slots for repeated staging workflow
-verification, incident reproduction, and expensive end-to-end smoke runs. They
-may request variants 0, 1, and 2 to retain three observed samples, while a
-repeat of one slot is virtually free. It does not promise provider-level seeded
-reproducibility. This is a deliberately deferred, opt-in phase rather than a
-dependency of checkpoints or compaction; ordinary unit/integration tests should
-still prefer record/replay fixtures.
-
-If authoritative cache state is unavailable for an opted-in operation, the
-Activity fails before provider dispatch. Silently bypassing the cache could
-turn an intended free test into a paid call.
+Unavailable or corrupt opted-in cache state is an error, not a miss that silently
+creates another paid request. Truncated or incomplete output is not cached as a
+normal success; valid application tool-call output can be successful.
 
 ### Generate v1 response
 
@@ -247,11 +234,9 @@ A checkpoint row contains immutable metadata and content-addressed references:
 - optional compaction provenance.
 
 Large canonical item arrays, output, binary parts, and provider artifacts stay
-in the configured encrypted blob store. PostgreSQL stores digests, bounded
-metadata, and immutable locators. Small response cache templates may use
-bounded envelope-encrypted ciphertext in **bytea** with a wrapping-key ID and
-PostgreSQL TOAST, but an operator cap moves larger objects to the encrypted blob
-store. Neither path stores plaintext model output in PostgreSQL.
+in the configured encrypted blob store. The cloud KV store holds bounded
+metadata, digests and immutable references. Cache response templates also use
+encrypted blobs; the KV metadata does not contain plaintext model output.
 
 Materialization walks parent links only until the newest compaction base or
 materialized snapshot. It then:
@@ -310,13 +295,11 @@ Changing semantic normalization, route identity, or a provider compiler
 requires a cache epoch bump. Old entries may coexist until retention removes
 them.
 
-PostgreSQL lookup uses that fixed-size HMAC-SHA-256 value plus scope, version,
-and the separate int32 variant. The complete cache key therefore includes
-variant exactly once. The cache row also retains a bounded canonical
-request-manifest
-JSONB and its digest for audit and verification after a match. The manifest
-contains content-addressed lineage/blob references rather than copying the full
-ancestor transcript. JSONB is not searched or broadly indexed.
+Cloud cache lookup uses a scoped keyed identity that includes operation kind,
+resolved route, semantic fingerprint and request index. Metadata and digests bind
+published successes to their origin checkpoint and response artifact. Encrypted
+artifacts contain the canonical content; lookup does not scan or index prompt
+JSON. See [cloud response caching](../reference/cloud-response-cache.md).
 
 The entry stores a normalized response template, not provider SDK bytes. It
 includes output, usage provenance, route facts, portable checkpoint delta,
@@ -522,7 +505,7 @@ exists. Metrics expose eligible, deleted, skipped-in-use, and failed counts.
 - Corrupt lineage/digest/blob: non-retryable state-corrupt plus alert.
 - Settings patch or effective validation failure: non-retryable invalid
   argument before cache/budget/provider work.
-- Cache opted in but PostgreSQL unavailable: retryable state unavailable;
+- Cache opted in but cloud storage unavailable: retryable state unavailable;
   never bypass to a paid call.
 - Concurrent identical misses: one fill owner; waiters resolve the completed
   entry or use their own deadline without dispatching duplicates.

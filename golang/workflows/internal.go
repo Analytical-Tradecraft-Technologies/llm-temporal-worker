@@ -20,8 +20,8 @@ const (
 )
 
 // RegisterInternal registers implementation workflows, not client entry points.
-// Production registers these together with the public generation/compaction
-// workflows after its cloud execution runtime is available.
+// The worker registers these together with the public generation/compaction
+// workflows. Runtime startup verifies the required execution capabilities.
 func RegisterInternal(registry worker.WorkflowRegistry) {
 	registry.RegisterWorkflowWithOptions(ExecuteRequest, workflow.RegisterOptions{Name: RequestWorkflowName})
 	registry.RegisterWorkflowWithOptions(WaitForBudget, workflow.RegisterOptions{Name: BudgetWorkflowName})

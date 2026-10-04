@@ -322,7 +322,7 @@ func TestDurableV1RuntimeBuilderFailsClosedOnPhaseFactoryError(t *testing.T) {
 	compactCalled := false
 	clients := &generateBuilderClientSet{capabilities: completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			return durable.GeneratePorts{}, errors.New("postgres operation store unavailable")
+			return durable.GeneratePorts{}, errors.New("cloud operation store unavailable")
 		},
 		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
 			compactCalled = true
@@ -482,7 +482,7 @@ func TestV1RuntimeCapabilitiesBuildDurableCompositionUsesSnapshotOwnedPorts(t *t
 
 // The capability stubs intentionally embed the narrow interfaces. The
 // composition builder validates their presence without invoking a client,
-// which keeps this factory test independent of Redis, PostgreSQL, and any
+// which keeps this factory test independent of Redis, cloud storage, and any
 // provider credentials.
 type capabilityAdmissionStub struct{ admission.AdmissionStore }
 type capabilityContinuationStub struct{ state.ContinuationStore }

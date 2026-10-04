@@ -12,7 +12,7 @@ import (
 
 const (
 	// USDScale is the fixed number of fractional digits in the public money
-	// contract. It matches PostgreSQL NUMERIC(38,18).
+	// contract. The whole part is bounded separately to 20 digits.
 	USDScale       = 18
 	usdWholeDigits = 20
 )

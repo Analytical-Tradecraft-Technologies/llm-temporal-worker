@@ -100,7 +100,7 @@ type BeginRequest struct {
 	LeaseUntil     time.Time
 	ExpiresAt      time.Time
 	// Durable operation metadata. Legacy stores may ignore these optional
-	// fields; the PostgreSQL store persists them as the normalized request
+	// fields; durable stores retain them as the normalized request
 	// envelope required for replay.
 	OperationKind        string
 	APIVersion           string

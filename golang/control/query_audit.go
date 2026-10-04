@@ -18,8 +18,7 @@ const MaxQueryAuditJSONBytes = 256 * 1024
 // QueryAuditRecord is the storage-neutral record emitted after a query result
 // has passed response and cursor validation. RequestJSON and ResponseJSON are
 // canonical closed control envelopes; they contain no provider prompt/body or
-// credential material. A PostgreSQL adapter can map these fields to
-// storage.QueryExecutionRequest at the composition boundary.
+// credential material. The runtime emits these records through structured logs.
 type QueryAuditRecord struct {
 	Tenant                string
 	Project               string

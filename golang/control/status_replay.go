@@ -46,7 +46,7 @@ type StatusReplayCoverage struct {
 }
 
 // StatusReplayResult contains only the RouteStatus domain projection. It does
-// not reconstruct SQL-only counters, success/failure timestamps, projection
+// not reconstruct storage-specific counters, success/failure timestamps, projection
 // versions, or query evidence selected from the event ledger.
 type StatusReplayResult struct {
 	Status   RouteStatus

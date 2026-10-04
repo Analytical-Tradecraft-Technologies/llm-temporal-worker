@@ -1,119 +1,64 @@
 # Temporal Worker
 
-> This chapter describes current worker behavior. Target phase status and
-> authority are centralized in [scope](../scope.md#staged-delivery-and-document-authority).
-> The current v1 composition registers **llm.generate.v1**,
-> **llm.compact.v1**, and **llm.query.v1** as one-shot Activities. The staged
-> design continues that boundary while adding the durable implementations
-> behind it; caller Workflows still execute tools and own agent loops. See
-> [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md)
-> and [the typed OCaml client](ocaml-conversation-and-query-client.md).
+The worker registers four workflows and eight activities on its configured task
+queue. Public callers normally start `llm.generate.workflow.v1` or
+`llm.compact.workflow.v1` and receive a final typed response. Application tool
+execution and agent loops remain the caller's responsibility.
 
-## Activity boundary
+## Workflow and activity boundary
 
-The production v1 registration installs three exact versioned Activities on the
-configured task queue:
+| Workflow | Role |
+| --- | --- |
+| `llm.generate.workflow.v1` | Plan compaction, run its child when needed, then generate |
+| `llm.compact.workflow.v1` | Standalone or child compaction through shared execution |
+| `llm.request.execute.v1` | Internal cache, budget, submit, poll and completion orchestration |
+| `llm.budget.wait.v1` | Internal acquisition loop with Temporal timers |
 
-```text
-llm.generate.v1
-llm.compact.v1
-llm.query.v1
-```
+| Activity | Role |
+| --- | --- |
+| `llm.generate.plan.v1` | Authorize and inspect inherited context for compaction |
+| `llm.request.prepare.v1` | Prepare or recover a durable request and eligible cached result |
+| `llm.budget.acquire.v1` | Attempt budget acquisition once |
+| `llm.generate.v1` | Claim and submit/resume a generation attempt |
+| `llm.compact.v1` | Claim and submit/resume compaction, or finish a no-work compaction |
+| `llm.poll.v1` | Retrieve status once for the stored provider work |
+| `llm.complete.v1` | Publish result/checkpoint/cache and finish accounting |
+| `llm.query.v1` | Independently authorized typed control-plane read |
 
-`llm.generate.v1` performs exactly one inference turn and may return model
-output or tool calls. `llm.compact.v1` returns one final compacted checkpoint
-response. `llm.query.v1` returns one final control-plane response. None of these
-Activities executes tools, owns an agent loop, or exposes token events; agent
-orchestration belongs in caller Workflows so every tool result and decision is
-durable and visible. The closed request/response records and registration
-behavior are specified in the [v1 Activity runtime boundary](../reference/activity-runtime.md).
+Generate and Compact activities return execution state; they do not necessarily
+return a finished model response. Synchronous provider HTTP requests remain in
+the submission activity, while resumable providers return pending. Workflow
+timers handle provider polling and budget waits. See
+[workflow behavior](../reference/internal-workflows.md) and the
+[activity boundary](../reference/activity-runtime.md).
 
-The reusable engine remains usable without Temporal. The v1 Activity adapter
-receives its durable implementation through a one-shot runtime seam:
+The normal durable CLI constructs `NewCloudV1RuntimeBuilder` with explicit
+trusted-Temporal scope authorization. It binds cloud, Redis, signing and provider
+capabilities to one immutable snapshot. Each activity acquires that snapshot for
+its whole step. Reload cannot drain clients still used by an in-flight step.
+Missing or inconsistent capabilities fail closed before polling.
 
-```go
-type V1Runtime interface {
-	GenerateV1(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error)
-	CompactV1(context.Context, llm.CompactRequestV1) (llm.CompactResponseV1, error)
-	QueryV1(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
-}
-
-type QueryService interface {
-	Execute(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error)
-}
-```
-
-`QueryService` is an independent query-only seam. When it is supplied, it is
-used for `llm.query.v1`; it cannot dispatch Generate or Compact work. The
-Activity layer validates the closed records, applies payload limits, converts
-errors to bounded Temporal details, and never constructs clients, reads
-environment variables, or mutates global state. `Activities.Register` uses this
-three-name v1 registration whenever a v1 runtime or query service is present.
-Only an Activity assembled without either seam uses the legacy direct
-`llm.generate.v1` engine helper, which is retained for pre-release callers and
-tests and does not register Compact or Query.
-
-The process-level composition lives in `internal/runtime`. It validates and
-publishes one non-secret configuration snapshot, creates the Temporal client
-with TLS roots loaded from bounded regular files, starts separate health and
-metrics listeners, and injects the Activity's engine through a snapshot lease.
-Provider/state construction is an explicit `EngineFactory` seam. The CLI uses
-`ProductionEngineFactory` to compose verified catalogs, provider adapters,
-Redis state, and blob-backed results; tests and custom deployments can inject a
-different factory, and unsupported configured dependencies still fail closed
-before a worker starts. The durable implementation for the `V1Runtime` seam is
-an additional required composition input for every environment except the
-checked-in `development` fixture: until it is supplied, `Runtime.Start`
-returns `ErrV1RuntimeUnavailable` before opening listeners or allowing
-Temporal polling. This keeps production readiness truthful while the v1
-Activity names remain registered for contract inspection and fail-closed
-behavior. The local Compose worker mounts `environment: development`
-specifically as a parser/configuration/readiness fixture. When that
-development composition has no durable v1 implementation, it omits the v1
-Activity registrations entirely; it does not dispatch inference or advertise
-a partially configured v1 worker. Any other environment value, including
-`production`, remains fail-closed.
-
-The explicit composition guard is recorded in
-[ADR 0010](../decisions/0010-durable-v1-runtime-composition.md). In
-particular, the production factory's reusable `llm.Engine` is not a v1
-runtime: it cannot be losslessly adapted to Compact or Query, nor can it
-perform checkpoint materialization and the required Redis/PostgreSQL phase
-ordering. A durable v1 implementation must therefore be supplied separately
-or through an adapter that owns the complete phase order and one validated
-snapshot-owned durable state composition. The automatic built-in production
-adapter supplies the current deterministic configuration digest and validates
-that composition before it builds an engine snapshot or external provider/state
-clients. A deployment that needs runtime-created clients during composition
-must provide and own an explicit custom adapter instead; the early preflight
-does not apply to arbitrary explicit builders.
+Query retains a separate `QueryService` seam and its own authorization/cursor
+policy. Registration alone does not enable every optional query reader. The
+legacy `V1Runtime` one-shot helpers and reusable engine remain for explicit
+embeddings; production generation and compaction use `ExecutionRuntime` and
+`GenerationPlanningRuntime` together. See
+[ADR 0010](../decisions/0010-durable-v1-runtime-composition.md).
 
 ## Payload contract
 
-Each v1 Activity has a closed request and response record in the `llm` package:
-`llm.GenerateRequestV1`/`llm.GenerateResponseV1`,
-`llm.CompactRequestV1`/`llm.CompactResponseV1`, and
-`llm.QueryRequestV1`/`llm.QueryResponseV1`. The legacy `GenerateRequest` and
-`GenerateResponse` envelope remains only for the direct engine helper.
+Public workflow inputs are `llm.GenerateRequestV1` and `llm.CompactRequestV1`;
+outputs are their corresponding typed response records. Internal activities
+exchange bounded execution-state records and scoped internal request references.
+Provider identifiers and budget receipts remain in durable runtime storage.
+`llm.query.v1` uses its separate tagged request/response union.
 
-Provider SDK types, clients, secrets, raw prompts in errors, and unbounded binary
-content never enter Temporal payloads. Inline payload limits default well below
-Temporal's service limits. Larger inputs and completed responses use immutable
-`BlobRef` values containing store, locator, digest, byte length, media type, and
-expiry. The worker verifies the digest after reading.
-
-Checkpoint-aware Generate and Compact requests carry only an opaque parent
-handle. The Activity adapter materializes ancestor deltas inside the worker,
-then passes the replayed state to the runtime; ancestor items are never copied
-into the Temporal request or response. This keeps Activity I/O bounded and
-independent of whether a lineage contains one turn or thousands. Cancellation
-and deadline errors from state loading retain their Temporal cancellation or
-retry semantics instead of being reported as an unrelated generic state
-failure.
-
-Installations that require history confidentiality configure a Temporal Payload
-Codec outside the worker. The worker's contract remains codec-agnostic and does
-not claim that a Data Converter alone encrypts data.
+Checkpoint-aware calls send an opaque parent handle and the new delta/settings
+patch. Materialization loads ancestors inside the worker rather than copying
+lineage into workflow payloads. Inputs and outputs still contain caller content,
+so history confidentiality requires an independently configured Temporal Payload
+Codec; a Data Converter alone is not encryption. Errors and heartbeats carry
+bounded, redacted details rather than provider payloads or secrets.
 
 ## Required caller options
 
@@ -152,21 +97,17 @@ orchestration concern. It is never derived from the request's
 
 ## Retry ownership
 
-Provider SDK retries are set to zero. One Activity attempt may traverse safe
-route candidates under the engine's bounded plan, but it never resubmits after
-an ambiguous write. Temporal retries an Activity only after the common error
-classifier marks the outcome safe.
+Provider SDK retries are disabled. Activity retries recover the same durable
+attempt and never silently authorize another paid submission. Completed results
+replay, pending provider identifiers resume polling, and unknown paid outcomes
+remain accounted for. A retryable failure or unknown submission returns control
+to the request workflow, which obtains a new budget reservation for a distinct
+attempt before resubmitting. See [Redis budget leases](../reference/redis-budget-leases.md).
 
-On Activity retry:
-
-1. the same `operation_key` and normalized request digest reach `Begin`;
-2. a completed operation returns its stored result;
-3. a reserved operation with a proven expired pre-dispatch lease can resume;
-4. a dispatching/ambiguous operation returns a non-retryable ambiguity error;
-5. a conflicting digest returns a non-retryable conflict.
-
-This makes worker crashes recoverable without assuming an external provider has
-exactly-once semantics.
+There is no service cancellation API. Disconnected workflow contexts and child
+abandon policies protect already-paid work from caller cancellation. An
+administrator can terminate a workflow, so pending discovery remains independent
+of Temporal history; automatic orphan cleanup is deferred.
 
 ## Heartbeats
 
@@ -342,8 +283,8 @@ checks liveness and readiness through the worker binary, scrapes the
 `llmtw_worker_polling` gauge, stops Redis while the worker runs, and requires
 readiness to become unavailable, liveness to remain available, and polling to
 transition from `1` to `0` before polling returns to `1` after Redis returns.
-This current Compose lifecycle evidence is Redis-only; it does not stop and
-restore worker PostgreSQL.
+This Compose lifecycle evidence is Redis-only; it does not prove cloud
+backup or restoration of the production accounting authority.
 
 The same gate runs a real Temporal SDK Activity with two worker replicas and a
 shared Redis admission store. Its adapter is content-free and in-process: it

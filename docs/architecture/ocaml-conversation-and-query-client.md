@@ -138,7 +138,7 @@ end
 ~~~
 
 The accepted spelling is a non-negative canonical base-10 decimal with at most
-18 fractional digits and within PostgreSQL **NUMERIC(38,18)**. JSON uses a
+18 fractional digits and 20 integer digits. JSON uses a
 string. The OCaml implementation uses an exact decimal/big-integer
 representation or a checked coefficient plus scale; **float** is absent from
 constructors and records. There is no **currency** value, string, or enum in
@@ -491,8 +491,9 @@ domain.
 The `Budget_status` result source is a closed `Redis_budget_generation`
 constructor rather than a generic persisted-state string. It proves the Go
 Activity read the current Redis working set. The OCaml API offers no option to
-request a PostgreSQL budget fallback. `Spend_summary` remains a PostgreSQL
-operation-cost query and does not expose budget-journal rows.
+request an alternate budget authority. `Spend_summary` requires an explicitly
+configured, authorized aggregation reader. Missing readers return typed errors;
+the wire type alone does not prove that a deployment supports that query.
 
 ## Ergonomic immutable Conversation API
 

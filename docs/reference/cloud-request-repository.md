@@ -386,8 +386,9 @@ replay after restart, staging/rollback, and expiry. Run
 `go test -race ./storage/cloudstate` from `golang`.
 
 These tests do not prove deployed IAM permissions, live DynamoDB/S3 behavior,
-Temporal recovery, or a SQL-free running worker. Those gates belong to the
-subsequent composition and deployment changes.
+or production backup/restore behavior. Workflow composition is checked in;
+the service gates below provide separate Temporal/Redis evidence and must not
+be confused with live AWS or deployed-service qualification.
 
 ## Workflow integration gates
 

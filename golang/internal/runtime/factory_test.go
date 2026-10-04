@@ -345,7 +345,7 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 		t.Fatalf("memory composition omitted v1 capability: %#v", capabilities)
 	}
 	if capabilities.Budgets != nil {
-		t.Fatal("memory composition exposed a PostgreSQL journal capability")
+		t.Fatal("memory composition exposed a durable budget capability")
 	}
 	if capabilities.BudgetEstimator.MaxOutput != 16 || capabilities.BudgetEstimator.SafetyRatio.RatString() != "1" || capabilities.MaxBudgetBucketsPerWindow != 100 {
 		t.Fatal("memory composition omitted configured budget estimation settings")

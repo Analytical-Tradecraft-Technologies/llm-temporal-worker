@@ -30,7 +30,7 @@ type CloudRequestFactory func(context.Context, cloudstate.Config, []byte) (Cloud
 
 // CloudCheckpointSource supplies checkpoint persistence from the same opened
 // cloud stores. Enabling cloud requests replaces the entire checkpoint bundle;
-// it must never mix cloud rows with a PostgreSQL blob reader or materializer.
+// every reader and materializer must use the same cloud store binding.
 type CloudCheckpointSource interface {
 	Checkpoints() state.CheckpointStore
 }

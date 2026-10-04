@@ -56,7 +56,7 @@ func (set ProviderCacheAffinitySet) Clone() ProviderCacheAffinitySet {
 	return result
 }
 
-// Validate checks the persistence invariants shared by PostgreSQL and the
+// Validate checks the persistence invariants shared by durable stores and the
 // in-memory route planner. now is used only for optional expiry validation.
 func (affinity ProviderCacheAffinity) Validate(now time.Time) error {
 	// Validation intentionally does not depend on wall-clock expiry: expired

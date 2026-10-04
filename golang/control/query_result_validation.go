@@ -127,7 +127,7 @@ func spendBucketResultKey(bucket SpendBucket) string {
 	}
 	// Spend dimensions are canonicalized by their wire names before the
 	// repository is called (model, operation_kind, provider). Keep the same
-	// order here so the common typed boundary agrees with SQL's NULLS FIRST
+	// order here so the common typed boundary uses absent dimensions first
 	// ordering regardless of which dimensions the caller selected.
 	return strings.Join([]string{
 		spendGroupValue(bucket.Group.Model),

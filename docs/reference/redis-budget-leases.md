@@ -70,8 +70,8 @@ and Compact require a successful claim before provider dispatch.
 1. `Accept` atomically checks all matching budget windows and reserves the
    conservative request bound. Insufficient capacity returns a wait result with
    a retry hint, including when the request exceeds the current limit. It does
-   not store a permanent denial. The future workflow can wait with a Temporal
-   timer and try again; this boundary does not sleep while waiting for budget.
+   not store a permanent denial. The budget workflow waits with a Temporal
+   timer and tries again; this boundary does not sleep while waiting for budget.
 2. `Claim` consumes the authorization once, immediately before submission. Redis
    time limits the start deadline to 15 minutes from acquisition. An explicit
    shorter deadline is supported. Replaying acquisition never renews it.

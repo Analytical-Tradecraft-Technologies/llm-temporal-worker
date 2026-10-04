@@ -191,7 +191,7 @@ func TestLifecycleRequiresClaimBeforeDispatchAndReconcileLast(t *testing.T) {
 		t.Fatalf("advance Redis acceptance: %v", err)
 	}
 	if err := lifecycle.Advance(PhaseDispatched); !errors.Is(err, ErrClaimRequired) {
-		t.Fatalf("dispatch without PostgreSQL journal returned %v, want %v", err, ErrClaimRequired)
+		t.Fatalf("dispatch without Redis claim returned %v, want %v", err, ErrClaimRequired)
 	}
 	for _, phase := range []Phase{PhaseOperationReplay, PhaseRedisAccepted, PhaseRedisClaimed, PhaseDispatched, PhaseResultFinalized, PhaseRedisReconciled} {
 		// The first two phases were already recorded above.
@@ -210,7 +210,7 @@ func TestLifecycleRequiresClaimBeforeDispatchAndReconcileLast(t *testing.T) {
 	}
 }
 
-func TestReconcileFailureIsRetryableOnlyAfterPostgresFinalization(t *testing.T) {
+func TestReconcileFailureIsRetryableOnlyAfterResultFinalization(t *testing.T) {
 	var lifecycle Lifecycle
 	for _, phase := range []Phase{PhaseOperationReplay, PhaseRedisAccepted, PhaseRedisClaimed, PhaseDispatched, PhaseResultFinalized} {
 		if err := lifecycle.Advance(phase); err != nil {

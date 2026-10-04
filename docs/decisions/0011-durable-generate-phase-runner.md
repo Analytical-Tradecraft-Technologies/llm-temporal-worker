@@ -1,6 +1,6 @@
 # ADR 0011: Durable Generate phase runner
 
-- Status: Accepted implementation slice
+- Status: Accepted direct-phase contract; production uses bounded cloud workflows
 - Date: 2026-07-25
 - Complements: ADR 0010, ADR 0006, and ADR 0007
 
@@ -23,13 +23,13 @@ replay/materialize
   -> compaction decision and (when required) Compact child/rematerialization
   -> route selection
   -> Redis reservation
-  -> PostgreSQL journal
+  -> Redis single-use claim
   -> one-shot provider dispatch
-  -> PostgreSQL finalization
+  -> durable result finalization
   -> Redis reconciliation
 ```
 
-The runner validates operation, generation, reservation, journal, and bounded
+The runner validates operation, generation, reservation, claim, and bounded
 response identities at every phase boundary. Every newly finalized checkpoint
 is also bound to its effective replay branch: a root response omits its parent,
 a non-compacted response names the request parent, and a response produced
@@ -50,7 +50,7 @@ operation/checkpoint or an unmarked finalization. Reservation denial is a
 typed, retry-after budget error. A reconciliation failure is returned as a typed retryable
 `ErrReconcilePending` condition after finalization so Temporal can retry
 reconciliation without silently rerunning provider work. Replay therefore
-returns a bounded `GenerateReconciliation` handoff when PostgreSQL has already
+returns a bounded `GenerateReconciliation` handoff when durable storage has already
 committed the response but Redis completion is still pending; the runner
 validates its operation, generation, reservation, and response identities,
 reconciles it, and only then returns the committed response. Ports must be
@@ -63,7 +63,7 @@ another pre-dispatch side effect or return a cache/finalization result as a
 success. Automatic Compact is a committed child boundary: cancellation after
 that child returns stops before the parent Generate admission so a retry can
 reuse the child. Once Redis accepts a reservation or a provider dispatch
-returns, this slice deliberately leaves the existing journal/finalization
+returns, this slice deliberately leaves the existing claim/finalization
 behavior unchanged; it does not claim compensation or cancellation-safe
 cleanup for those committed boundaries. The guard returns the context error
 directly where it is safe to stop, preserving Temporal cancellation/deadline
@@ -82,15 +82,13 @@ child replay must name the exact requested parent handle, and every
 materialized handle must carry the request's tenant and project. Automatic
 Compact may replace the parent with its newly materialized child, but it may
 not change that tenant/project scope. These checks fail before cache lookup,
-routing, Redis reservation, PostgreSQL journaling, or provider dispatch.
+routing, Redis reservation, Redis single-use claim, or provider dispatch.
 
-This slice intentionally does not construct clients or claim that V1 is
-production-complete. Concrete Redis/PostgreSQL/provider ports, snapshot
-factory wiring, and the query-only control-plane service remain required
-before `UnconfiguredV1Runtime` can be replaced. The distinct Compact
-orchestration seam is recorded in [ADR 0013](0013-durable-compact-phase-runner.md);
-its concrete storage/provider composition and protected integration evidence
-remain pending.
+This direct-phase runner does not construct clients or serve as the production
+workflow runtime. The cloud builder now provides separate bounded execution
+steps, including workflow-owned compaction, budget waiting and polling. See
+[ADR 0010](0010-durable-v1-runtime-composition.md). The distinct direct Compact
+runner remains documented in [ADR 0013](0013-durable-compact-phase-runner.md).
 
 ## Evidence
 

@@ -12,23 +12,23 @@ identify remaining hardening and release evidence; the current code and its
 tests are the source of truth for behavior that has already been implemented.
 
 The cloud request, budget, cache and workflow implementations are checked in,
-including typed OCaml callers. Production CLI authorization, deployment and
-real AWS/restore evidence remain release gates. [Scope](scope.md#staged-delivery-and-document-authority)
+including typed OCaml callers and explicit trusted-Temporal CLI authorization.
+Deployment and real AWS/restore evidence remain separate release gates. [Scope](scope.md#staged-delivery-and-document-authority)
 separates those gates from implemented behavior.
 
 - [Cloud request repository and workflow integration](reference/cloud-request-repository.md)
 - [Redis budget leases](reference/redis-budget-leases.md)
 - [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)
 - [OCaml workflow clients](../ocaml/llm_temporal_worker/README.md)
-- [Production implementation plan](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+- [MVP v1 implementation status](reference/mvp-v1-status.md)
 
 ## Current worker persistence
 
 Worker SQL persistence has been removed. Durable deployments use cloud
 key-value/blob storage for requests, attempts, cache successes and checkpoints,
-and Redis for budgets, throttles and provider state. SQL design documents and
-maintenance procedures are historical. There is no SQL data
-migration; the service has no deployed SQL data. See the
+and Redis for budgets, throttles and provider state. Obsolete SQL design and
+maintenance documents have been removed. There is no data migration from a
+worker database; the service has no deployed SQL data. See the
 [cloud request repository](reference/cloud-request-repository.md).
 
 ## Non-negotiable v1 decisions
@@ -66,7 +66,7 @@ migration; the service has no deployed SQL data. See the
 14. [Target conversation/cache/control design](architecture/conversation-checkpoints-and-compaction.md)
 15. [Cloud request persistence and recovery](reference/cloud-request-repository.md)
 16. [Target OCaml client design](architecture/ocaml-conversation-and-query-client.md)
-17. [Staged target implementation sequence](superpowers/plans/2026-07-18-forkable-conversation-state.md)
+17. [MVP v1 implementation status](reference/mvp-v1-status.md)
 
 ## Reference material
 
