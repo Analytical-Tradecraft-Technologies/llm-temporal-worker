@@ -278,6 +278,9 @@ func liftStatus(reason types.StopReason, hasToolCalls bool) (llm.ResponseStatus,
 
 func requiredFeatures(request llm.Request) []provider.Feature {
 	features := []provider.Feature{provider.FeatureText, provider.FeatureUsage}
+	if request.Output != nil && (request.Output.Format.Kind == llm.OutputKindJSON || request.Output.Format.Kind == llm.OutputKindJSONSchema) {
+		features = append(features, provider.FeatureStructuredOutput)
+	}
 	for _, item := range request.Input {
 		switch item.(type) {
 		case llm.ToolCall, llm.ToolResult:

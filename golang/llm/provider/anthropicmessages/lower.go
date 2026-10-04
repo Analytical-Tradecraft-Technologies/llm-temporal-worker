@@ -101,7 +101,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		if choice != nil {
 			requestMap["tool_choice"] = choice
 		}
-	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto {
+	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto && request.ToolPolicy.Mode != llm.ToolChoiceNone {
 		return anthropic.MessageNewParams{}, fmt.Errorf("tool policy %q requires at least one tool", request.ToolPolicy.Mode)
 	}
 	if err := lowerExtensions(profile, request.Extensions, requestMap); err != nil {

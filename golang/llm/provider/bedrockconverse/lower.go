@@ -17,6 +17,12 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 	if strict && hasMixedInstructionLevels(request.Instructions) {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("instruction hierarchy cannot be preserved by Bedrock Converse in strict portability mode")
 	}
+	if request.Output != nil && (request.Output.Format.Kind == llm.OutputKindJSON || request.Output.Format.Kind == llm.OutputKindJSONSchema) {
+		return bedrockruntime.ConverseInput{}, fmt.Errorf("structured output is not implemented by the Bedrock Converse adapter")
+	}
+	if sampling := request.Sampling; sampling != nil && (sampling.TopK != nil || sampling.Seed != nil || sampling.PresencePenalty != nil || sampling.FrequencyPenalty != nil) {
+		return bedrockruntime.ConverseInput{}, fmt.Errorf("top_k, seed and penalty sampling controls are not implemented by the Bedrock Converse adapter")
+	}
 	input := bedrockruntime.ConverseInput{ModelId: stringPtr(request.Model), ServiceTier: &types.ServiceTier{Type: types.ServiceTierType(serviceTier)}}
 	if err := lowerInstructions(request.Instructions, &input); err != nil {
 		return bedrockruntime.ConverseInput{}, err
@@ -44,6 +50,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 			inference.MaxTokens = &maxTokens
 		}
 		if request.Sampling != nil {
+			inference.StopSequences = append([]string(nil), request.Sampling.StopSequences...)
 			if request.Sampling.Temperature != nil {
 				value := float32(*request.Sampling.Temperature)
 				inference.Temperature = &value
@@ -56,6 +63,11 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		input.InferenceConfig = inference
 	}
 	if len(request.Tools) > 0 {
+		// Converse has no native none choice. Retaining definitions without a
+		// choice defaults to auto, so refuse instead of permitting forbidden calls.
+		if request.ToolPolicy.Mode == llm.ToolChoiceNone {
+			return bedrockruntime.ConverseInput{}, fmt.Errorf("tool policy none with tool definitions is unsupported by Bedrock Converse")
+		}
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
 			return bedrockruntime.ConverseInput{}, err
