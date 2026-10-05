@@ -95,6 +95,11 @@ func TestReviewedGoToolchainPinsStayAligned(t *testing.T) {
 			want: "ARG GO_IMAGE=docker.io/library/golang:" + reviewedGoPatch,
 		},
 		{
+			name: "module toolchain",
+			path: filepath.Join(module, "go.mod"),
+			want: "\ntoolchain go" + reviewedGoPatch + "\n",
+		},
+		{
 			name: "security verifier",
 			path: filepath.Join(module, "Makefile"),
 			want: "SECURITY_GO_TOOLCHAIN ?= go" + reviewedGoPatch,
