@@ -162,7 +162,11 @@ func (graph *CheckpointGraph) put(checkpoint Checkpoint) error {
 		}
 	}
 	value := checkpoint.clone()
-	value.RequestDigest = checkpointRequestDigest(value)
+	digest, err := checkpointRequestDigest(value, int(graph.limits.MaxBytes))
+	if err != nil {
+		return err
+	}
+	value.RequestDigest = digest
 	graph.mu.Lock()
 	defer graph.mu.Unlock()
 	if existing, exists := graph.checkpoints[value.Handle]; exists {
@@ -198,7 +202,13 @@ func scopedOperationKey(tenant, project, operation string) string {
 	return key
 }
 
-func checkpointRequestDigest(checkpoint Checkpoint) [32]byte {
+// checkpointRequestDigest identifies the immutable request content used for
+// idempotent retry and conflict detection. Any failure is returned rather than
+// collapsed into a sentinel digest: a shared zero digest would make distinct
+// oversized checkpoints compare equal and silently accept a conflicting write.
+// The request envelope is bounded by the graph's materialization byte limit so
+// the write path and replay path enforce one explicit size budget.
+func checkpointRequestDigest(checkpoint Checkpoint, maxBytes int) ([32]byte, error) {
 	data, err := json.Marshal(struct {
 		Schema        string
 		Tenant        string
@@ -210,13 +220,16 @@ func checkpointRequestDigest(checkpoint Checkpoint) [32]byte {
 		SettingsPatch SettingsPatch
 	}{checkpointSchemaVersion, checkpoint.Tenant, checkpoint.Project, checkpoint.Parent, checkpoint.OperationKey, checkpoint.Delta, checkpoint.Output, checkpoint.SettingsPatch})
 	if err != nil {
-		return [32]byte{}
+		return [32]byte{}, fmt.Errorf("encode checkpoint request digest: %w", err)
 	}
-	canonical, err := llm.CanonicalJSON(data)
+	if len(data) > maxBytes {
+		return [32]byte{}, fmt.Errorf("checkpoint request exceeds byte limit: %w", ErrLimitExceeded)
+	}
+	canonical, err := llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
 	if err != nil {
-		return [32]byte{}
+		return [32]byte{}, fmt.Errorf("canonicalize checkpoint request digest: %w", err)
 	}
-	return sha256.Sum256(canonical)
+	return sha256.Sum256(canonical), nil
 }
 
 func (graph *CheckpointGraph) Get(handle Handle) (Checkpoint, error) {
