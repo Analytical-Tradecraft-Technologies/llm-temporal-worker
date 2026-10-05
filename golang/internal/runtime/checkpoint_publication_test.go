@@ -334,3 +334,62 @@ func TestCheckpointPublicationRejectsWrongBlobReference(t *testing.T) {
 		t.Fatal("corrupt blob accepted")
 	}
 }
+
+func TestCheckpointPublicationSnapshotCadence(t *testing.T) {
+	p, replay, store, identity, request, result := publicationFixture(t)
+	capabilities := V1RuntimeCapabilities{Checkpoints: p.checkpoints}
+	if _, err := capabilities.NewCheckpointPublication(p.keyring, state.MaterializeLimits{SnapshotInterval: -1}); err == nil {
+		t.Fatal("negative snapshot interval accepted")
+	}
+	root, response := publishRoot(t, p, store, identity, request, result)
+	if root.MaterializedSnapshotBlob != nil {
+		t.Fatal("root wrote a snapshot")
+	}
+	request.Parent = &response.Checkpoint.Handle
+	request.OperationKey = "child"
+	request.SettingsPatch = llm.SettingsPatchV1{}
+	request.Append = []llm.Item{preparationMessage("follow up")}
+	base, err := replay.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript, err := state.CheckpointBlobCodec{}.EncodeDelta(append(append(append([]llm.Item(nil), base.State.Items...), request.Append...), result.Output...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.OperationKey = request.OperationKey
+	for name, test := range map[string]struct {
+		limits   state.MaterializeLimits
+		snapshot bool
+	}{
+		"default cadence skips depth one": {state.MaterializeLimits{}, false},
+		"boundary":                        {state.MaterializeLimits{SnapshotInterval: 1}, true},
+		// The transcript fits the blob bound but the snapshot, which also holds
+		// settings and lineage, does not: the paid result still publishes.
+		"oversized snapshot": {state.MaterializeLimits{SnapshotInterval: 1, MaxBytes: int64(len(transcript)) + 16}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			publication, err := capabilities.NewCheckpointPublication(p.keyring, test.limits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			identity := nextPublication(identity)
+			result := result
+			result.OperationID = string(identity.OperationID)
+			child, out, err := publication.Generate(context.Background(), identity, request, base, result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
+			if err != nil || child.Depth != 1 || (child.MaterializedSnapshotBlob != nil) != test.snapshot {
+				t.Fatalf("child depth=%d snapshot=%t err=%v", child.Depth, child.MaterializedSnapshotBlob != nil, err)
+			}
+			again, _, err := publication.Generate(context.Background(), identity, request, base, result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
+			if err != nil || !reflect.DeepEqual(child, again) {
+				t.Fatal("retry changed the snapshot decision", err)
+			}
+			store.rows[child.ID] = child
+			next := request
+			next.Parent = &out.Checkpoint.Handle
+			if got, err := replay.Generate(context.Background(), next); err != nil || len(got.State.Items) != 4 || got.State.Depth != 1 || len(got.State.Lineage) != 2 {
+				t.Fatal(got, err)
+			}
+		})
+	}
+}
