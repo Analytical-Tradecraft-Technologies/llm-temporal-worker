@@ -63,6 +63,11 @@ account token mounting, unrestricted state/control egress, and probe paths that
 diverge from the worker contract.
 Replace the example image/config/catalog/identity values in a reviewed overlay
 before production use; no credentials belong in this tree.
+The base `capabilities.yaml` and `prices.yaml` load as shipped, but describe only
+the `replace-with-model` placeholder with zero prices. When you set the route
+model in `config.yaml`, add a matching capability profile and price entries for
+every service class (including `provider_tier`), then update both `sha256` pins.
+A route whose model has no matching price entry is not usable.
 
 ## Hardened image verification
 
