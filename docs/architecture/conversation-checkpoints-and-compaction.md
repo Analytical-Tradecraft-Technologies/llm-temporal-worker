@@ -419,7 +419,10 @@ The generic path is a durable sub-operation with a deterministic key derived
 from the Generate operation and compaction policy. It:
 
 1. selects a complete prefix ending before the configured recent-turn window;
-2. never splits an unmatched tool call/result pair or a provider-state unit;
+2. never splits an unmatched tool call/result pair or a provider-state unit,
+   and keeps `reference` annotations with the item they follow instead of
+   counting them as turns. References from summarized turns are not summarizer
+   input: they are carried verbatim, in order, directly after the summary;
 3. preserves instructions, tool definitions, settings, schemas, durable facts,
    open tasks, citations, and recent turns outside the lossy summary;
 4. constructs an internal compaction request with the application's tools
@@ -449,6 +452,19 @@ cannot call an application tool, emit a tool call, or be constrained by the
 application's final-answer JSON schema. A provider response that contains a
 tool call or structured-output artifact during compaction is invalid and never
 becomes a checkpoint.
+
+The summarizer prompt and summary style are policy-level instructions placed
+ahead of the conversation's own instructions. Some routes cannot keep the two
+levels apart: Anthropic Messages, Bedrock Messages and Bedrock Converse have a
+single system prompt, and a Chat endpoint whose profile sends application
+instructions with the `system` role (Azure, OpenRouter, Exa and generic
+compatible servers) has the same limit. For those candidates the worker lowers
+its two injected instructions to application level when every conversation
+instruction is application level, so strict portability still compiles the
+summarizer call. Selection, budget quoting and exact-route recovery derive the
+request digest from that same adjusted request. Only the worker-built
+summarizer request is adjusted; an ordinary Generate that mixes the levels on
+such a route is still rejected in strict mode.
 
 ### Provider-native compaction
 

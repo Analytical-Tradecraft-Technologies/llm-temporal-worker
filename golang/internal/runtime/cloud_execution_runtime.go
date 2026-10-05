@@ -341,21 +341,33 @@ func (r *CloudExecutionRuntime) resumeAttempt(ctx context.Context, p PreparedClo
 
 // A terminal failure also releases cache ownership, without replacing any
 // older successful entry. Invalid summaries must never become checkpoints.
+// Generate output that cannot extend the transcript is closed the same way as
+// soon as the paid response is saved: publication would reject it on every
+// retry, leaving the settled response stranded behind a running request.
 func (r *CloudExecutionRuntime) finishProviderStep(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, result ProviderExecutionResult) (llm.ExecutionResultV1, error) {
 	outcome := cache.FillFailed
 	failed := result.Saved.Execution.Stage == cloudstate.ExecutionFailed
-	invalidSummary := false
+	unpublishable := false
 	if p.Compact != nil && result.Saved.Execution.Stage == cloudstate.ExecutionSucceeded {
 		_, err := compaction.PlainTextSummary(*result.Saved.Execution.Response, int(r.publication.limits.MaxBytes))
-		invalidSummary = err != nil
+		unpublishable = err != nil
 		outcome = cache.FillNotCacheable
 	}
-	if failed || invalidSummary {
+	if p.Generate != nil && result.Saved.Execution.Stage == cloudstate.ExecutionSucceeded {
+		prepared, err := PrepareGenerateInput(ctx, *p.Generate, p.GenerateReplay)
+		if err != nil {
+			return llm.ExecutionResultV1{}, err
+		}
+		_, err = state.ValidateTranscript(append(append([]llm.Item(nil), prepared.Request.Input...), result.Saved.Execution.Response.Output...))
+		unpublishable = err != nil
+		outcome = cache.FillNotCacheable
+	}
+	if failed || unpublishable {
 		if err := r.finishTerminalFill(ctx, p, attempt, result.Saved, outcome); err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
 		failure := r.providerResult(p, result)
-		if invalidSummary {
+		if unpublishable {
 			failure = cloudStatus(p, llm.ExecutionFailed, 0)
 			failure.FailureCode = "incomplete_response"
 		}

@@ -17,10 +17,13 @@ const (
 	CompactWorkflowName  = "llm.compact.workflow.v1"
 )
 
-func Register(registry worker.WorkflowRegistry) {
-	RegisterInternal(registry)
-	registry.RegisterWorkflowWithOptions(Generate, workflow.RegisterOptions{Name: GenerateWorkflowName})
-	registry.RegisterWorkflowWithOptions(Compact, workflow.RegisterOptions{Name: CompactWorkflowName})
+// Register installs the public and internal workflows. Each accepts the raw
+// Temporal payload and applies limits and the strict v1 decode in workflow
+// code, so an invalid request fails as a typed llm_invalid_argument.
+func Register(registry worker.WorkflowRegistry, limits activity.PayloadLimits) {
+	RegisterInternal(registry, limits)
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Generate), workflow.RegisterOptions{Name: GenerateWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Compact), workflow.RegisterOptions{Name: CompactWorkflowName})
 }
 func childContext(ctx workflow.Context) workflow.Context {
 	return workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON, WaitForCancellation: false})
@@ -31,7 +34,7 @@ func childContext(ctx workflow.Context) workflow.Context {
 // remain untouched; application tool calls are returned to the caller.
 func Generate(ctx workflow.Context, input llm.GenerateRequestV1) (*llm.GenerateResponseV1, error) {
 	if _, err := input.MarshalJSON(); err != nil {
-		return nil, invalidState()
+		return nil, invalidInput()
 	}
 	ctx = executionContext(ctx)
 	var plan llm.GenerationPlanV1
@@ -64,7 +67,7 @@ func Generate(ctx workflow.Context, input llm.GenerateRequestV1) (*llm.GenerateR
 // It shares caching, budget acquisition, polling and accounting with Generate.
 func Compact(ctx workflow.Context, input llm.CompactRequestV1) (*llm.CompactResponseV1, error) {
 	if _, err := input.MarshalJSON(); err != nil {
-		return nil, invalidState()
+		return nil, invalidInput()
 	}
 	result, err := executeChild(executionContext(ctx), llm.PrepareExecutionV1{Compact: &input})
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"strings"
 )
@@ -61,7 +60,7 @@ func (message Message) MarshalJSON() ([]byte, error) {
 }
 
 func decodeMessage(data []byte) (Message, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return Message{}, err
 	}
@@ -122,7 +121,7 @@ func (call ToolCall) MarshalJSON() ([]byte, error) {
 }
 
 func decodeToolCall(data []byte) (ToolCall, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return ToolCall{}, err
 	}
@@ -188,7 +187,7 @@ func (result ToolResult) MarshalJSON() ([]byte, error) {
 }
 
 func decodeToolResult(data []byte) (ToolResult, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return ToolResult{}, err
 	}
@@ -249,7 +248,7 @@ func (state ProviderState) MarshalJSON() ([]byte, error) {
 }
 
 func decodeProviderState(data []byte) (ProviderState, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return ProviderState{}, err
 	}
@@ -279,8 +278,8 @@ func decodeProviderState(data []byte) (ProviderState, error) {
 	if err != nil {
 		return ProviderState{}, err
 	}
-	var opaque []byte
-	if err := decodeJSON(opaqueRaw, &opaque); err != nil {
+	opaque, err := decodeBytesJSON(opaqueRaw)
+	if err != nil {
 		return ProviderState{}, fmt.Errorf("provider state opaque: %w", err)
 	}
 	return ProviderState{
@@ -318,7 +317,7 @@ func (reference Reference) MarshalJSON() ([]byte, error) {
 }
 
 func decodeReference(data []byte) (Reference, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return Reference{}, err
 	}
@@ -354,8 +353,12 @@ func decodeReference(data []byte) (Reference, error) {
 	return Reference{URI: uri, Metadata: metadata}, nil
 }
 
+// decodeItem and the item, part and blob decoders it dispatches to decode
+// sub-values of a document whose entry point (DecodeItems or an UnmarshalJSON
+// method) already rejected duplicate keys at every depth, so they split
+// objects with decodeVerifiedObject instead of rescanning each subtree.
 func decodeItem(data []byte) (Item, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return nil, err
 	}
@@ -383,8 +386,8 @@ func decodeItems(data []byte) ([]Item, error) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return nil, fmt.Errorf("items must be an array")
 	}
-	var values []json.RawMessage
-	if err := decodeJSON(data, &values); err != nil {
+	values, err := decodeVerifiedArray(data)
+	if err != nil {
 		return nil, err
 	}
 	items := make([]Item, 0, len(values))
@@ -400,7 +403,12 @@ func decodeItems(data []byte) ([]Item, error) {
 
 // DecodeItems decodes a JSON item array through the canonical kind-dispatch
 // path used by requests and responses.
-func DecodeItems(data []byte) ([]Item, error) { return decodeItems(data) }
+func DecodeItems(data []byte) ([]Item, error) {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return nil, err
+	}
+	return decodeItems(data)
+}
 
 type PartKind string
 
@@ -430,7 +438,7 @@ func (part TextPart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeTextPart(data []byte) (TextPart, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return TextPart{}, err
 	}
@@ -471,7 +479,7 @@ func (blob BlobRef) MarshalJSON() ([]byte, error) {
 }
 
 func decodeBlobRef(data []byte) (*BlobRef, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +541,7 @@ func (part ImagePart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeImagePart(data []byte) (ImagePart, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return ImagePart{}, err
 	}
@@ -553,7 +561,8 @@ func decodeImagePart(data []byte) (ImagePart, error) {
 	}
 	var bytesValue []byte
 	if raw, ok := fields["bytes"]; ok {
-		if err := decodeJSON(raw, &bytesValue); err != nil {
+		bytesValue, err = decodeBytesJSON(raw)
+		if err != nil {
 			return ImagePart{}, fmt.Errorf("image bytes: %w", err)
 		}
 	}
@@ -611,7 +620,7 @@ func (part DocumentPart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeDocumentPart(data []byte) (DocumentPart, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return DocumentPart{}, err
 	}
@@ -631,7 +640,8 @@ func decodeDocumentPart(data []byte) (DocumentPart, error) {
 	}
 	var bytesValue []byte
 	if raw, ok := fields["bytes"]; ok {
-		if err := decodeJSON(raw, &bytesValue); err != nil {
+		bytesValue, err = decodeBytesJSON(raw)
+		if err != nil {
 			return DocumentPart{}, fmt.Errorf("document bytes: %w", err)
 		}
 	}
@@ -672,7 +682,7 @@ func (part JSONPart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeJSONPart(data []byte) (JSONPart, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return JSONPart{}, err
 	}
@@ -713,7 +723,7 @@ func (part RefusalPart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeRefusalPart(data []byte) (RefusalPart, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return RefusalPart{}, err
 	}
@@ -762,7 +772,7 @@ func (part ProviderStatePart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeProviderStatePart(data []byte) (ProviderStatePart, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return ProviderStatePart{}, err
 	}
@@ -792,15 +802,15 @@ func decodeProviderStatePart(data []byte) (ProviderStatePart, error) {
 	if err != nil {
 		return ProviderStatePart{}, err
 	}
-	var opaque []byte
-	if err := decodeJSON(opaqueRaw, &opaque); err != nil {
+	opaque, err := decodeBytesJSON(opaqueRaw)
+	if err != nil {
 		return ProviderStatePart{}, fmt.Errorf("provider state part opaque: %w", err)
 	}
 	return ProviderStatePart{Provider: provider, EndpointFamily: family, MediaType: mediaType, Opaque: copyBytes(opaque)}, nil
 }
 
 func decodePart(data []byte) (Part, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeVerifiedObject(data)
 	if err != nil {
 		return nil, err
 	}
@@ -830,8 +840,8 @@ func decodeParts(data []byte) ([]Part, error) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return nil, fmt.Errorf("parts must be an array")
 	}
-	var values []json.RawMessage
-	if err := decodeJSON(data, &values); err != nil {
+	values, err := decodeVerifiedArray(data)
+	if err != nil {
 		return nil, err
 	}
 	parts := make([]Part, 0, len(values))
@@ -863,7 +873,11 @@ func validateMediaSource(rawURL string, data []byte, blob *BlobRef, mediaType, k
 	sources := 0
 	if rawURL != "" {
 		sources++
-		if err := validateMediaURL(rawURL); err != nil {
+		// Only the structural check runs here because this also decodes stored
+		// transcripts. The remote-media host policy is a request ingress check
+		// (ValidateMediaURLs); applying it here would make checkpoints written
+		// under an earlier policy undecodable.
+		if err := validateURI(rawURL); err != nil {
 			return fmt.Errorf("%s url: %w", kind, err)
 		}
 	}
@@ -885,44 +899,6 @@ func validateMediaSource(rawURL string, data []byte, blob *BlobRef, mediaType, k
 	return nil
 }
 
-// validateMediaURL applies the remote-media policy to caller-supplied image
-// and document URLs. The worker never fetches them, but providers do, inside
-// their own network, so URLs that address local, private or metadata
-// destinations, or that carry credentials, are rejected.
-func validateMediaURL(raw string) error {
-	if err := validateURI(raw); err != nil {
-		return err
-	}
-	parsed, _ := url.Parse(raw)
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return fmt.Errorf("media URL scheme %q is not allowed; use https or http", parsed.Scheme)
-	}
-	if parsed.User != nil {
-		return fmt.Errorf("media URL must not contain user information")
-	}
-	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
-	if host == "" {
-		return fmt.Errorf("media URL must include a host")
-	}
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return fmt.Errorf("media URL host is not allowed")
-	}
-	if address, err := netip.ParseAddr(host); err == nil {
-		address = address.Unmap()
-		if !address.IsGlobalUnicast() || address.IsPrivate() || mediaMetadataAddresses[address] {
-			return fmt.Errorf("media URL host is not allowed")
-		}
-	}
-	return nil
-}
-
-var mediaMetadataAddresses = map[netip.Addr]bool{
-	netip.MustParseAddr("100.100.100.200"): true, // Alibaba metadata service.
-	netip.MustParseAddr("168.63.129.16"):   true, // Azure platform metadata service.
-	netip.MustParseAddr("169.254.169.254"): true, // AWS, GCP and compatible metadata.
-	netip.MustParseAddr("fd00:ec2::254"):   true, // AWS IMDS IPv6 endpoint.
-}
-
 func validateURI(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" {
@@ -939,8 +915,8 @@ func requiredInt64(fields map[string]json.RawMessage, key string) (int64, error)
 	if err != nil {
 		return 0, err
 	}
-	var result int64
-	if err := decodeJSON(value, &result); err != nil {
+	result, err := decodeIntJSON[int64](value)
+	if err != nil {
 		return 0, fmt.Errorf("%s: %w", key, err)
 	}
 	return result, nil

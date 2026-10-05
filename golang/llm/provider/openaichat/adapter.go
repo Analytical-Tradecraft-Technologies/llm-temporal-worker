@@ -81,6 +81,12 @@ func (adapter *Adapter) Profile() Profile {
 	return copy
 }
 
+// PreservesInstructionHierarchy reports whether policy and application
+// instructions lower to different Chat roles on this endpoint profile.
+func (adapter *Adapter) PreservesInstructionHierarchy() bool {
+	return adapter == nil || adapter.profile.applicationInstructionRole() != "system"
+}
+
 func (adapter *Adapter) Capabilities(ctx context.Context, query provider.CapabilityQuery) (provider.CapabilitySet, error) {
 	if adapter == nil {
 		return provider.CapabilitySet{}, fmt.Errorf("openai chat: adapter is nil")

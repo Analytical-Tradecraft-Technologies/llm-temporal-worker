@@ -30,6 +30,14 @@ type Adapter interface {
 	Invoke(context.Context, Call, Observer) (Result, error)
 }
 
+// InstructionHierarchyReporter is implemented by adapters whose ability to
+// keep policy and application instructions apart depends on the endpoint
+// profile rather than on the family alone. The answer must be a fixed fact of
+// the configured profile: planning binds request digests that depend on it.
+type InstructionHierarchyReporter interface {
+	PreservesInstructionHierarchy() bool
+}
+
 // EventSource is a one-way source of provider-neutral stream events. It owns
 // the provider response body and must stop promptly when either context is
 // canceled or Close is called. Once it returns a provider terminal event, its

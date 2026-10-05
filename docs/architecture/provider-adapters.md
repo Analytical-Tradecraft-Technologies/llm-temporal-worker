@@ -106,11 +106,21 @@ break both.
 
 ## Lowering rules
 
+`reference` items are output annotations, such as the citations lifted from an
+Exa response. They stay in the v1 response and in the checkpoint transcript,
+but no endpoint family has a wire form for them, so every adapter leaves them
+out when it lowers a replayed transcript. Omitting one never changes how the
+surrounding messages, tool calls and tool results are grouped. `provider_state`
+items are unaffected: an adapter still replays its own state and rejects any
+other.
+
 ### OpenAI Responses
 
 - Instructions lower to the supported top-level instruction/developer form.
 - Semantic messages, tool calls, and tool results become separate typed input
   items; they are never concatenated.
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content.
 - A continuation may use a stored response/conversation identifier only when it
   is pinned to the same endpoint, account, family, and compatible model.
 - Strict structured output uses the provider's JSON Schema form after local
@@ -150,12 +160,39 @@ usage/cost lifter.
 - Instructions lower to top-level system blocks in order.
 - Human/model messages lower to user/assistant messages; tool use and tool
   result blocks retain their IDs.
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content. The
+  Bedrock Messages and Bedrock Converse adapters do the same.
 - Consecutive-role merging is permitted only as an explicit, proven transform
   and is recorded as a diagnostic.
 - Thinking, redacted-thinking, and signatures are opaque provider-state. They
   round-trip byte-for-byte and stay pinned to the compatible Anthropic route.
 - JSON Schema constraints are lowered through native output/tool facilities
   only when the exact endpoint profile supports the required strictness.
+
+Reasoning controls lower the same way on Anthropic Messages and Bedrock
+Messages:
+
+- Effort is sent as `output_config.effort`, which the API accepts
+  independently of `thinking`. `low`, `medium` and `high` map by name,
+  `maximum` maps to `max`, and `minimal` maps to `low` because the provider has
+  no lower value. An effort with no reasoning mode never adds a `thinking`
+  object; an absent or `provider_default` effort sends no override.
+- The reasoning mode alone decides `thinking`: `adaptive`, `enabled` (requires
+  a token budget of at least 1024; a budget with no mode implies `enabled`) and
+  `disabled` map to the matching `thinking.type`. With no mode and no budget
+  the `thinking` object is omitted and the model default applies. The v1
+  contract carries only effort and summary, so a v1 request never sends
+  `thinking`. An effort combined with an `enabled` or `disabled` mode is
+  rejected.
+- The summary maps to `thinking.display`, whose only values are `summarized`
+  (the provider default) and `omitted`: `none` sends `omitted` and `auto`
+  sends `summarized`. `concise` and `detailed` cannot express their detail
+  level; strict portability rejects them and best-effort sends `summarized`.
+  `display` exists only inside an explicit `thinking` object, so with no
+  reasoning mode a summary preference is not sent and never turns thinking on.
+  This is lossless in strict mode too: thinking is opt-in, so a request with
+  no `thinking` object returns no thinking blocks to summarize or omit.
 
 ## Response lifting
 
@@ -185,6 +222,12 @@ the total are rejected as invalid provider responses.
 
 An unrecognized actual provider tier maps to no public class and returns a
 diagnostic. It must not be mislabeled as `standard`.
+
+Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
+a string, and some compatible providers send an empty string for a tool that
+takes no arguments; an empty or whitespace-only string lifts as the empty
+object `{}` rather than failing the paid response. A call cut off by the output
+limit is still dropped and the response keeps its `length` status.
 
 ## Model inventory pagination
 

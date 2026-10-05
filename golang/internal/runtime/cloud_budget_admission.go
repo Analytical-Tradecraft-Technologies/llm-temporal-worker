@@ -38,6 +38,8 @@ type CloudBudgetCall struct {
 	id       cloudstate.RequestID
 	plan     cloudstate.BudgetPlan
 	provider PlannedProviderCall
+	// transcript is the Generate input the provider output must extend.
+	transcript []llm.Item
 }
 
 // Provider returns the invocation-local compiled call. Only a successful Claim
@@ -86,11 +88,16 @@ func (admission *CloudBudgetAdmission) PrepareGenerate(ctx context.Context, scop
 		return nil, err
 	}
 	prepared.Request.OperationKey = key
-	return admission.prepare(ctx, record, key, attempt,
+	call, err := admission.prepare(ctx, record, key, attempt,
 		func() (PlannedBudgetCall, error) { return admission.planning.Generate(ctx, prepared, attempt) },
 		func(binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
 			return admission.recovery.Generate(ctx, prepared, binding)
 		})
+	if err != nil {
+		return nil, err
+	}
+	call.transcript = prepared.Request.Input
+	return call, nil
 }
 
 func (admission *CloudBudgetAdmission) PrepareCompact(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, replay durable.CompactReplay, attempt BudgetAttempt) (*CloudBudgetCall, error) {

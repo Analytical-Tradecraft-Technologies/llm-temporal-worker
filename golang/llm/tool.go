@@ -141,6 +141,23 @@ func (policy ToolPolicy) MarshalJSON() ([]byte, error) {
 	return marshalObject(fields)
 }
 
+// decodeToolPolicyPatch decodes a settings patch value. The published schema
+// requires mode and parallel there, so a partial object is rejected instead of
+// being completed with defaults; decodeToolPolicy keeps those defaults for the
+// provider-neutral request model.
+func decodeToolPolicyPatch(data []byte) (ToolPolicy, error) {
+	fields, err := decodeObject(data)
+	if err != nil {
+		return ToolPolicy{}, err
+	}
+	for _, name := range []string{"mode", "parallel"} {
+		if _, ok := fields[name]; !ok {
+			return ToolPolicy{}, fmt.Errorf("tool policy %s is required", name)
+		}
+	}
+	return decodeToolPolicy(data)
+}
+
 func decodeToolPolicy(data []byte) (ToolPolicy, error) {
 	fields, err := decodeObject(data)
 	if err != nil {

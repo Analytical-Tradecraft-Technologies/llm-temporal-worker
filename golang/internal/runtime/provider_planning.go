@@ -19,8 +19,9 @@ import (
 )
 
 // cloudCompilerVersion changes when this projection/lowering contract changes.
-// It is independent of the public activity version.
-const cloudCompilerVersion = "cloud-v1"
+// It is independent of the public activity version. cloud-v2 flattens the
+// summarizer instructions for candidates that cannot keep the levels apart.
+const cloudCompilerVersion = "cloud-v2"
 
 // PlannedProviderCall is an invocation-local compiled call, not a dispatch grant
 // or a persistable recovery record. SDKParams and Adapter stay in this process.
@@ -233,14 +234,7 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	if capability.Version != candidate.CapabilityVersion {
 		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 	}
-	resolved, _ := llm.NormalizeRequest(semantic)
-	// The adapter needs the provider model and attempted class, not the
-	// logical alias or the originally requested fallback class.
-	resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
-	resolved.ServiceClassFallbacks = nil
-	if !preservesInstructionHierarchy(provider.Family(candidate.Family)) {
-		resolved = compaction.FlattenSummarizerInstructions(resolved)
-	}
+	resolved := resolveCandidateRequest(semantic, candidate, adapter)
 	digest, err := llm.RequestDigest(resolved)
 	if err != nil {
 		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
@@ -360,16 +354,56 @@ func (planning *ProviderPlanning) normalizeRequest(request llm.Request) (llm.Req
 	return llm.NormalizeRequest(request)
 }
 
-// preservesInstructionHierarchy reports whether a provider family can carry
-// policy and application instructions separately. Messages and Converse have a
-// single system prompt and reject mixed levels in strict portability, so
-// worker-built summarizer requests are flattened for them; the decision
-// depends only on the candidate, which keeps exact-route recovery stable.
-func preservesInstructionHierarchy(family provider.Family) bool {
+// resolveCandidateRequest is the one place that turns the semantic request into
+// the request a candidate compiles, prices and binds. Selection, budget quoting
+// and exact-route recovery must all derive their digest from it; a second
+// derivation that skips a step makes the bound digest unreproducible.
+func resolveCandidateRequest(semantic llm.Request, candidate routing.Candidate, adapter provider.Adapter) llm.Request {
+	resolved := candidateRequest(semantic, candidate)
+	if !preservesInstructionHierarchy(provider.Family(candidate.Family), adapter) {
+		// Only a worker-built summarizer request changes; any other request
+		// is returned as is and keeps the adapter's strict rejection.
+		resolved = compaction.FlattenSummarizerInstructions(resolved)
+	}
+	return resolved
+}
+
+func candidateRequest(semantic llm.Request, candidate routing.Candidate) llm.Request {
+	resolved, _ := llm.NormalizeRequest(semantic)
+	// The adapter needs the provider model and attempted class, not the
+	// logical alias or the originally requested fallback class.
+	resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
+	resolved.ServiceClassFallbacks = nil
+	return resolved
+}
+
+// plausibleCandidateDigest reports whether digest is one resolveCandidateRequest
+// could produce for this input and candidate, without resolving the adapter.
+// Recovery uses it to reject changed input early; it is not the final check.
+func plausibleCandidateDigest(semantic llm.Request, candidate routing.Candidate, digest [32]byte) bool {
+	resolved := candidateRequest(semantic, candidate)
+	for _, request := range []llm.Request{resolved, compaction.FlattenSummarizerInstructions(resolved)} {
+		if got, err := llm.RequestDigest(request); err == nil && got == digest {
+			return true
+		}
+	}
+	return false
+}
+
+// preservesInstructionHierarchy reports whether a candidate can carry policy
+// and application instructions separately. Messages and Converse have a single
+// system prompt and reject mixed levels in strict portability, so worker-built
+// summarizer requests are flattened for them. A Chat endpoint decides through
+// its profile: one that sends application instructions with the system role
+// has the same limitation. The decision depends only on the candidate family
+// and the configured endpoint profile, which keeps exact-route recovery stable.
+func preservesInstructionHierarchy(family provider.Family, adapter provider.Adapter) bool {
 	switch family {
 	case provider.FamilyAnthropicMessages, provider.FamilyBedrockMessages, provider.FamilyBedrockConverse:
 		return false
-	default:
-		return true
 	}
+	if reporter, ok := adapter.(provider.InstructionHierarchyReporter); ok {
+		return reporter.PreservesInstructionHierarchy()
+	}
+	return true
 }

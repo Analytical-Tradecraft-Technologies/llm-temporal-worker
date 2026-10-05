@@ -34,6 +34,11 @@ cannot begin until the frontier is empty, after which the next item starts a
 new turn. Call IDs remain unique across the complete lineage, including calls
 that have already been resolved.
 
+Before the first result, the open turn may also contain model messages,
+`ProviderState` and `Reference` items between or after its calls: a provider
+can emit reasoning state ahead of each call and citations after them. Once
+results have started, only the remaining matching results are valid.
+
 The storage-neutral DTO and repository/UoW ports are documented in [Durable
 checkpoint repository port](../reference/checkpoint-repository-port.md). The
 cloud adapter supplies scoped reads and conditional immutable metadata

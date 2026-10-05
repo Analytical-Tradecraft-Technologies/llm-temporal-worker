@@ -3,12 +3,16 @@
 package workflows
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -24,9 +28,30 @@ const (
 // RegisterInternal registers implementation workflows, not client entry points.
 // The worker registers these together with the public generation/compaction
 // workflows. Runtime startup verifies the required execution capabilities.
-func RegisterInternal(registry worker.WorkflowRegistry) {
-	registry.RegisterWorkflowWithOptions(ExecuteRequest, workflow.RegisterOptions{Name: RequestWorkflowName})
-	registry.RegisterWorkflowWithOptions(WaitForBudget, workflow.RegisterOptions{Name: BudgetWorkflowName})
+//
+// Every workflow is registered with a raw payload argument and decoded inside
+// workflow code (see rawWorkflow); limits is the worker's inline payload limit.
+func RegisterInternal(registry worker.WorkflowRegistry, limits activity.PayloadLimits) {
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, ExecuteRequest), workflow.RegisterOptions{Name: RequestWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, WaitForBudget), workflow.RegisterOptions{Name: BudgetWorkflowName})
+}
+
+// rawWorkflow adapts a typed workflow to the registered raw-payload signature.
+// Letting the SDK decode a typed argument before workflow code runs would fail
+// an invalid or oversize input as an untyped, retryable wrapper error whose
+// message echoes decoder text (and therefore caller values) into history.
+// Decoding here is a pure function of the recorded input, so it is
+// deterministic on replay, and the wire format is unchanged: callers still
+// send the typed v1 JSON record.
+func rawWorkflow[T, R any](limits activity.PayloadLimits, run func(workflow.Context, T) (R, error)) func(workflow.Context, converter.RawValue) (R, error) {
+	return func(ctx workflow.Context, raw converter.RawValue) (R, error) {
+		input, ok := activity.DecodeBoundedPayload[T](limits, raw)
+		if !ok {
+			var zero R
+			return zero, invalidInput()
+		}
+		return run(ctx, input)
+	}
 }
 
 // BudgetRequest includes the expected operation kind so a corrupt/misrouted
@@ -39,12 +64,33 @@ type BudgetRequest struct {
 	Waits int `json:"waits,omitempty"`
 }
 
+// UnmarshalJSON makes the budget workflow input a closed record like the v1
+// requests: JSON null, unknown fields, an unknown kind, a
+// negative wait count or an invalid reference are rejected at decode, before
+// the workflow can schedule an acquisition.
+func (request *BudgetRequest) UnmarshalJSON(data []byte) error {
+	type record BudgetRequest
+	var decoded *record
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil || decoded == nil || !BudgetRequest(*decoded).valid() {
+		return errors.New("budget request is invalid")
+	}
+	*request = BudgetRequest(*decoded)
+	return nil
+}
+
+func (request BudgetRequest) valid() bool {
+	_, err := request.Reference.MarshalJSON()
+	return err == nil && (request.Kind == "generate" || request.Kind == "compact") && request.Waits >= 0
+}
+
 // WaitForBudget acquires once per activity, then waits using a Temporal timer.
 // Acquisition may find a cached response or an already dispatched attempt; such
 // results go straight back to the request workflow without a second submission.
 func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResultV1, error) {
-	if _, err := input.Reference.MarshalJSON(); err != nil || (input.Kind != "generate" && input.Kind != "compact") || input.Waits < 0 {
-		return llm.ExecutionResultV1{}, invalidState()
+	if !input.valid() {
+		return llm.ExecutionResultV1{}, invalidInput()
 	}
 	ctx = executionContext(ctx)
 	for steps := 0; ; steps++ {
@@ -83,7 +129,7 @@ func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResu
 // reservation is carried in workflow history.
 func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
 	if _, err := input.MarshalJSON(); err != nil {
-		return llm.ExecutionResultV1{}, invalidState()
+		return llm.ExecutionResultV1{}, invalidInput()
 	}
 	ctx = executionContext(ctx)
 	kind, caller := "compact", llm.RequestContext{}
@@ -208,6 +254,13 @@ func responseMatches(input llm.PrepareExecutionV1, result llm.ExecutionResultV1)
 		return result.Generate != nil && result.Generate.OperationKey == input.Generate.OperationKey
 	}
 	return result.Compact != nil && result.Compact.OperationKey == input.Compact.OperationKey
+}
+
+// invalidInput is the stable, content-free failure for a workflow input that
+// cannot be decoded, exceeds the inline limit, or is not a valid v1 request.
+func invalidInput() error {
+	return temporal.NewNonRetryableApplicationError("workflow input is invalid or exceeds its limit", activity.ErrorTypeInvalidArgument, nil,
+		activity.SafeErrorDetails{Code: "invalid_argument", Phase: "decode", Dispatch: "not_dispatched"})
 }
 func invalidState() error {
 	return temporal.NewNonRetryableApplicationError("invalid request execution state", activity.ErrorTypeStateCorrupt, nil)

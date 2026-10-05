@@ -63,7 +63,7 @@ func (codec CheckpointBlobCodec) encode(kind CheckpointBlobKind, payload any) ([
 	}
 	canonicalPayload, err := llm.CanonicalJSONWithLimits(encodedPayload, codec.MaxBytes, codec.MaxDepth)
 	if err != nil {
-		return nil, fmt.Errorf("canonicalize %s checkpoint blob: %w", kind, err)
+		return nil, fmt.Errorf("canonicalize %s checkpoint blob: %w", kind, typedCanonicalLimit(err))
 	}
 	encoded, err := json.Marshal(checkpointBlobEnvelope{Version: CheckpointBlobCodecVersion, Kind: kind, Payload: canonicalPayload})
 	if err != nil {
@@ -71,7 +71,7 @@ func (codec CheckpointBlobCodec) encode(kind CheckpointBlobKind, payload any) ([
 	}
 	canonical, err := llm.CanonicalJSONWithLimits(encoded, codec.MaxBytes, codec.MaxDepth)
 	if err != nil {
-		return nil, fmt.Errorf("canonicalize %s checkpoint blob envelope: %w", kind, err)
+		return nil, fmt.Errorf("canonicalize %s checkpoint blob envelope: %w", kind, typedCanonicalLimit(err))
 	}
 	return canonical, nil
 }
@@ -80,7 +80,7 @@ func (codec CheckpointBlobCodec) decode(kind CheckpointBlobKind, data []byte, ta
 	codec = codec.withDefaults()
 	canonical, err := llm.CanonicalJSONWithLimits(data, codec.MaxBytes, codec.MaxDepth)
 	if err != nil {
-		return fmt.Errorf("canonicalize %s checkpoint blob: %w", kind, err)
+		return fmt.Errorf("canonicalize %s checkpoint blob: %w", kind, typedCanonicalLimit(err))
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(canonical, &fields); err != nil {
@@ -104,7 +104,7 @@ func (codec CheckpointBlobCodec) decode(kind CheckpointBlobKind, data []byte, ta
 		return fmt.Errorf("decode %s checkpoint blob: payload is required", kind)
 	}
 	if _, err := llm.CanonicalJSONWithLimits(payload, codec.MaxBytes, codec.MaxDepth); err != nil {
-		return fmt.Errorf("decode %s checkpoint blob payload: %w", kind, err)
+		return fmt.Errorf("decode %s checkpoint blob payload: %w", kind, typedCanonicalLimit(err))
 	}
 	if err := json.Unmarshal(payload, target); err != nil {
 		return fmt.Errorf("decode %s checkpoint blob payload: %w", kind, err)
@@ -392,7 +392,7 @@ func (reader ScopedBlobReader) Read(ctx context.Context, scopeID string, referen
 		return nil, err
 	}
 	if reader.MaxBytes > 0 && reference.ByteLength > reader.MaxBytes {
-		return nil, fmt.Errorf("checkpoint blob exceeds reader byte limit")
+		return nil, fmt.Errorf("checkpoint blob exceeds reader byte limit: %w", ErrLimitExceeded)
 	}
 	ref, err := reader.Resolve(ctx, scopeID, reference.ID)
 	if err != nil {

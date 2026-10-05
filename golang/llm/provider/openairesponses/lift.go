@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/openai/openai-go/v3/responses"
 
@@ -254,15 +255,25 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 			if call.CallID == "" || call.Name == "" {
 				return nil, false, false, fmt.Errorf("function call output item %d is missing call ID or name", index)
 			}
-			// encoding/json accepts duplicate keys but a normalized tool call
-			// does not, so arguments must also be canonicalizable.
+			// Some providers send an empty string for a zero-argument tool.
+			// That is the empty object, not a malformed call. A call cut off
+			// by the output limit keeps the truncation handling below, and a
+			// call the provider itself marks unfinished is never completed
+			// here: its blank arguments stay invalid.
+			cutOff := truncated && call.Status != responses.ResponseFunctionToolCallStatusCompleted
+			unfinished := call.Status != "" && call.Status != responses.ResponseFunctionToolCallStatusCompleted
+			if strings.TrimSpace(call.Arguments) == "" && !cutOff && !unfinished {
+				call.Arguments = "{}"
+			}
+			// encoding/json accepts duplicate keys but a normalized tool call does
+			// not, so arguments must also be canonicalizable.
 			if _, err := llm.CanonicalJSON([]byte(call.Arguments)); err != nil {
 				// Keep the paid incomplete response as a length truncation and
 				// drop only the cut-off call.
 				// Only the item that was itself cut off may be dropped; a
 				// completed call with invalid arguments is still a malformed
 				// provider response.
-				if truncated && call.Status != responses.ResponseFunctionToolCallStatusCompleted {
+				if cutOff {
 					continue
 				}
 				return nil, false, false, fmt.Errorf("function call %q arguments are invalid JSON", call.CallID)

@@ -54,7 +54,9 @@ func (r *Repository) FinishRequestFailure(ctx context.Context, scope Scope, root
 				return ErrInvalid
 			}
 		case ExecutionSucceeded:
-			if failure.Kind != "compact" || failure.FailureCode != "incomplete_response" || failure.Retryable {
+			// A paid response the worker cannot publish: an invalid compaction
+			// summary, or Generate output that cannot extend the transcript.
+			if failure.FailureCode != "incomplete_response" || failure.Retryable {
 				return ErrInvalid
 			}
 		default:
