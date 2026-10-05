@@ -227,6 +227,28 @@ const (
 	OutputKindJSONSchema OutputKind = "json_schema"
 )
 
+// DefaultOutputFormatName is the json_schema name sent to providers that
+// require one when the caller omitted it. It is a constant so the wire body
+// stays deterministic.
+const DefaultOutputFormatName = "response"
+
+// validateOutputFormatName applies the strictest provider rule for a
+// json_schema name (OpenAI Responses and Chat: a-z, A-Z, 0-9, underscores and
+// dashes, at most 64 characters). The name itself stays optional.
+func validateOutputFormatName(name string) error {
+	if len(name) > 64 {
+		return fmt.Errorf("output format name must contain at most 64 ASCII characters")
+	}
+	for _, char := range name {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' || char == '-' {
+			continue
+		}
+		return fmt.Errorf("output format name contains invalid character %q", char)
+	}
+	return nil
+}
+
 type OutputFormat struct {
 	Kind        OutputKind
 	Name        string
@@ -242,6 +264,9 @@ func (format OutputFormat) MarshalJSON() ([]byte, error) {
 	}
 	if kind != OutputKindText && kind != OutputKindJSON && kind != OutputKindJSONSchema {
 		return nil, fmt.Errorf("output format kind %q is invalid", kind)
+	}
+	if err := validateOutputFormatName(format.Name); err != nil {
+		return nil, err
 	}
 	fields := map[string]any{"kind": kind}
 	if format.Name != "" {
@@ -285,6 +310,9 @@ func decodeOutputFormat(data []byte) (OutputFormat, error) {
 	}
 	name, _, err := optionalString(fields, "name")
 	if err != nil {
+		return OutputFormat{}, err
+	}
+	if err := validateOutputFormatName(name); err != nil {
 		return OutputFormat{}, err
 	}
 	description, _, err := optionalString(fields, "description")

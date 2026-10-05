@@ -175,6 +175,24 @@ let () =
                          format = Json_schema_format {
                            name = "result"; description = None; schema = `Bool true;
                            strict = true; } } });
+  (* The provider json_schema name rule: 1-64 of A-Z, a-z, 0-9, _ and -. *)
+  List.iter (fun name ->
+    expect_error
+      (Temporal.Codec.encode request_codec
+         { request_value with
+           output = Some { max_tokens = None;
+                           format = Json_schema_format {
+                             name; description = None; schema = `Assoc [];
+                             strict = true; } } }))
+    [ ""; "claim summary"; "claim.summary"; String.make 65 'a' ];
+  (match Temporal.Codec.encode request_codec
+     { request_value with
+       output = Some { max_tokens = None;
+                       format = Json_schema_format {
+                         name = "Claim_summary-2"; description = None; schema = `Assoc [];
+                         strict = true; } } } with
+   | Ok _ -> ()
+   | Error _ -> failwith "valid output schema name rejected");
   expect_error
     (Temporal.Codec.encode request_codec
        { request_value with

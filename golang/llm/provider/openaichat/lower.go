@@ -428,8 +428,13 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
 			return fmt.Errorf("output schema: %w", err)
 		}
+		// The provider requires a name; v1 leaves it optional.
+		name := output.Format.Name
+		if name == "" {
+			name = llm.DefaultOutputFormatName
+		}
 		jsonSchema := map[string]any{
-			"name":   output.Format.Name,
+			"name":   name,
 			"schema": schema,
 			"strict": output.Format.Strict,
 		}

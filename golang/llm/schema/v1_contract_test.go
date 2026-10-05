@@ -3,6 +3,7 @@ package schema_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm/schema"
@@ -109,6 +110,7 @@ func TestV1ContractFixtureMatrix(t *testing.T) {
 		{"generate-request.schema.json", "negative-generate-compaction-scalar.json"},
 		{"generate-request.schema.json", "negative-generate-extensions-null.json"},
 		{"generate-request.schema.json", "negative-generate-null-append.json"},
+		{"generate-request.schema.json", "negative-generate-output-name.json"},
 		{"generate-response.schema.json", "negative-generate-null-output.json"},
 		{"generate-response.schema.json", "negative-generate-cost-enum.json"},
 		{"generate-response.schema.json", "negative-generate-cost-cross-variant.json"},
@@ -126,6 +128,35 @@ func TestV1ContractFixtureMatrix(t *testing.T) {
 			compiled := readV1Schema(t, test.schemaName)
 			if err := compiled.Validate(readV1Fixture(t, test.fixture)); err == nil {
 				t.Fatal("negative fixture was accepted")
+			}
+		})
+	}
+}
+
+// The output-name fixture is rejected for its name alone: the same document
+// is accepted once the name fits the provider pattern or is omitted.
+func TestV1ContractOutputFormatNamePattern(t *testing.T) {
+	compiled := readV1Schema(t, "generate-request.schema.json")
+	negative := string(readV1Fixture(t, "negative-generate-output-name.json"))
+	const invalid = `"name":"claim summary",`
+	if !strings.Contains(negative, invalid) {
+		t.Fatalf("fixture does not contain %s", invalid)
+	}
+	for name, test := range map[string]struct {
+		replacement string
+		valid       bool
+	}{
+		"fixture":          {replacement: invalid},
+		"omitted":          {replacement: ``, valid: true},
+		"provider charset": {replacement: `"name":"Claim_summary-2",`, valid: true},
+		"64 characters":    {replacement: `"name":"` + strings.Repeat("a", 64) + `",`, valid: true},
+		"65 characters":    {replacement: `"name":"` + strings.Repeat("a", 65) + `",`},
+		"dot":              {replacement: `"name":"claim.summary",`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := compiled.Validate([]byte(strings.Replace(negative, invalid, test.replacement, 1)))
+			if test.valid != (err == nil) {
+				t.Fatalf("schema validation error = %v, want valid=%t", err, test.valid)
 			}
 		})
 	}

@@ -91,6 +91,6 @@
     },
     "tool": {"type": "object", "additionalProperties": false, "required": ["name", "description", "input_schema"], "properties": {"kind": {"enum": ["function", "provider", "remote_mcp"]}, "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}, "description": {"type": "string"}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}},
     "tool_policy": {"type": "object", "additionalProperties": false, "required": ["mode", "parallel"], "properties": {"mode": {"enum": ["none", "auto", "required", "named"]}, "name": {"type": "string"}, "parallel": {"type": "boolean"}}},
-    "output": {"type": "object", "additionalProperties": false, "required": ["format"], "properties": {"max_tokens": {"type": "integer", "minimum": 0}, "format": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["text", "json", "json_schema"]}, "name": {"type": "string"}, "description": {"type": "string"}, "schema": {"type": "object"}, "strict": {"type": "boolean"}}}}}
+    "output": {"type": "object", "additionalProperties": false, "required": ["format"], "properties": {"max_tokens": {"type": "integer", "minimum": 0}, "format": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["text", "json", "json_schema"]}, "name": {"type": "string", "pattern": "^[A-Za-z0-9_-]{0,64}$"}, "description": {"type": "string"}, "schema": {"type": "object"}, "strict": {"type": "boolean"}}}}}
   }
 }
