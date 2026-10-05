@@ -293,6 +293,8 @@ guarded Temporal/cloud crash, persistence, or backup/restore suites.
 Fuzz targets include:
 
 - canonical JSON parse/encode idempotence and duplicate-key rejection;
+- agreement between the fast JSON decode paths and the `encoding/json` Decoder
+  reference paths on acceptance, decoded value, and error text;
 - request normalization idempotence;
 - semantic item encode/decode;
 - schema depth/size/subset validation;
