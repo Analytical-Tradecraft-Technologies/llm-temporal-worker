@@ -25,9 +25,9 @@ type PrefixSelection struct {
 // logical turns. A turn begins whenever the tool frontier is empty. Tool calls
 // and all of their results form one atomic turn, including an unresolved final
 // frontier. This makes every returned boundary frontier-empty and prevents a
-// compaction request from splitting a tool exchange. Provider-state items are
-// ordinary atomic items and are never split because selection only cuts between
-// items.
+// compaction request from splitting a tool exchange. Provider-state items
+// (such as thinking blocks) are grouped with the item that follows them, so a
+// cut never separates them from their model output or tool call.
 //
 // The transcript is validated using the checkpoint materializer's canonical
 // tool-frontier rules. recentTurns must be non-negative. If an open tool
@@ -79,13 +79,17 @@ type turnRange struct {
 // splitTurns uses the same frontier transitions as state.ValidateTranscript.
 // A ToolCall starts a turn when the frontier is empty; subsequent calls and
 // matching results remain in that turn until the frontier is resolved. Every
-// other item with an empty frontier is a single atomic turn.
+// other item with an empty frontier is a single atomic turn, except that
+// provider-state items join the turn of the item that follows them.
 func splitTurns(items []llm.Item) []turnRange {
 	turns := make([]turnRange, 0, len(items))
 	start := 0
 	pending := make(map[string]struct{})
 	for index, item := range items {
-		if index > start && len(pending) == 0 {
+		// Provider state (for example a thinking block) belongs to the model
+		// output or tool call that follows it, so never end a turn directly
+		// after it: a cut there would separate thinking from its tool_use.
+		if index > start && len(pending) == 0 && !isProviderState(items[index-1]) {
 			turns = append(turns, turnRange{start: start, end: index})
 			start = index
 		}
@@ -102,4 +106,13 @@ func splitTurns(items []llm.Item) []turnRange {
 	}
 	turns = append(turns, turnRange{start: start, end: len(items)})
 	return turns
+}
+
+func isProviderState(item llm.Item) bool {
+	switch item.(type) {
+	case llm.ProviderState, *llm.ProviderState:
+		return true
+	default:
+		return false
+	}
 }
