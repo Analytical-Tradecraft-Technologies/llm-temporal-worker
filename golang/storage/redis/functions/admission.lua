@@ -69,6 +69,17 @@ local function integer(value)
     return result
 end
 
+-- Lua 5.1 tostring() formats numbers with %.14g, so an integer of 1e14 or more
+-- (USD 100,000 in nano-USD) becomes scientific notation that neither Redis
+-- integer commands nor the Go decoders accept. Every number-to-string
+-- conversion in this Function therefore goes through decimal(). Callers pass
+-- only integers of magnitude at most MAX_SAFE, which %.0f prints exactly and,
+-- below 1e14, identically to tostring(): hash fields and sorted-set members
+-- written by an earlier Function version still match.
+local function decimal(value)
+    return string.format('%.0f', value)
+end
+
 local function valid_attempt(value)
     if type(value) ~= 'table' or
         not bounded_string(value.route_id, 256, false) or
@@ -171,7 +182,7 @@ local function valid_reservation_envelope(reservations, expected)
         if not amount_value or amount_value ~= expected_value then
             return false
         end
-        local identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. tostring(bucket)
+        local identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. decimal(bucket)
         if seen[identity] then
             return false
         end
@@ -196,7 +207,7 @@ local function active_for(reservation, budget_key, now)
     local last = math.floor(now / bucket_us)
     local active = 0
     for index = first, last do
-        local value = redis.call('HGET', budget_key, tostring(index))
+        local value = redis.call('HGET', budget_key, decimal(index))
         if value then
             local parsed = integer(value)
             if not parsed then
@@ -250,7 +261,7 @@ local function expire_budget(key, duration_ns, ttl)
         -- A longer-lived operation must never be shortened by a later write
         -- to the same shared budget hash. -1 means persistent by policy.
         if current == -2 or (current >= 0 and current < desired) then
-            redis.call('EXPIRE', key, tostring(desired))
+            redis.call('EXPIRE', key, decimal(desired))
         end
     end
 end
@@ -261,7 +272,7 @@ local function can_increment_reservations(reservations, key_offset)
         if not amount_value then
             return false
         end
-        local current = redis.call('HGET', KEYS[key_offset + index - 1], tostring(bucket))
+        local current = redis.call('HGET', KEYS[key_offset + index - 1], decimal(bucket))
         local parsed = current and integer(current) or 0
         if parsed == nil or parsed > MAX_SAFE - amount_value then
             return false
@@ -276,7 +287,7 @@ local function increment_reservations(reservations, key_offset, ttl)
         if not amount_value then
             return false
         end
-        local next_value = redis.call('HINCRBY', KEYS[key_offset + index - 1], tostring(bucket), tostring(amount_value))
+        local next_value = redis.call('HINCRBY', KEYS[key_offset + index - 1], decimal(bucket), decimal(amount_value))
         if integer(next_value) == nil then
             return false
         end
@@ -291,7 +302,7 @@ local function can_reconcile(reservations, key_offset, actual)
         if not amount_value then
             return false
         end
-        local current = redis.call('HGET', KEYS[key_offset + index - 1], tostring(bucket))
+        local current = redis.call('HGET', KEYS[key_offset + index - 1], decimal(bucket))
         local parsed = current and integer(current) or 0
 		local actual_value = integer(actual)
 		if parsed == nil or parsed < amount_value or not actual_value or actual_value > MAX_SAFE - (parsed - amount_value) then
@@ -310,7 +321,7 @@ local function reconcile(reservations, key_offset, actual, ttl)
         local _, amount_value, bucket = reservation_fields(reservation)
         local key = KEYS[key_offset + index - 1]
         local delta = actual_value - amount_value
-        local next_value = redis.call('HINCRBY', key, tostring(bucket), tostring(delta))
+        local next_value = redis.call('HINCRBY', key, decimal(bucket), decimal(delta))
         if integer(next_value) == nil or integer(next_value) < 0 then
             return false
         end
@@ -340,7 +351,7 @@ local function set_record(key, record, ttl)
         end
     end
     if restore_ttl and restore_ttl >= 0 then
-        redis.call('EXPIRE', key, tostring(restore_ttl))
+        redis.call('EXPIRE', key, decimal(restore_ttl))
     end
     return encoded
 end
@@ -399,8 +410,8 @@ if ACTION == 'begin' then
     local encoded = set_record(KEYS[3], incoming, ttl)
     redis.call('SET', KEYS[1], KEYS[3])
     redis.call('SET', KEYS[2], KEYS[3])
-    redis.call('EXPIRE', KEYS[1], tostring(ttl))
-    redis.call('EXPIRE', KEYS[2], tostring(ttl))
+    redis.call('EXPIRE', KEYS[1], decimal(ttl))
+    redis.call('EXPIRE', KEYS[2], decimal(ttl))
     return {'created', encoded}
 end
 
@@ -468,8 +479,8 @@ if ACTION == 'continue' then
     if not accepted then
         if denial_response[1] == 'denied' then
             record.state = 'definite_failed'
-            record.incurred_micro_usd = tostring(incurred)
-            record.final_micro_usd = tostring(incurred)
+            record.incurred_micro_usd = decimal(incurred)
+            record.final_micro_usd = decimal(incurred)
             record.reserved_micro_usd = '0'
             record.updated_at = now_string()
             local encoded = set_record(KEYS[2], record, ARGV[8])
@@ -488,9 +499,9 @@ if ACTION == 'continue' then
     attempt.attempt_number = integer(attempt.attempt_number) or 0
     record.state = 'reserved'
     record.reservations = reservations
-    record.reserved_micro_usd = tostring(remaining)
+    record.reserved_micro_usd = decimal(remaining)
     record.attempt = attempt
-    record.dispatch_token = record.dispatch_token .. '-' .. tostring(attempt.attempt_number + 1)
+    record.dispatch_token = record.dispatch_token .. '-' .. decimal(attempt.attempt_number + 1)
     record.lease_until = ARGV[6]
     record.expires_at = ARGV[7]
     record.updated_at = now_string()
@@ -522,8 +533,8 @@ if ACTION == 'complete' then
         return {'state_unavailable', ''}
     end
     record.state = 'completed'
-    record.incurred_micro_usd = tostring(actual)
-    record.final_micro_usd = tostring(actual)
+    record.incurred_micro_usd = decimal(actual)
+    record.final_micro_usd = decimal(actual)
     record.reserved_micro_usd = '0'
     record.result_ref = result
     attempt.dispatch = 'accepted'
@@ -562,13 +573,13 @@ if ACTION == 'fail' then
             return {'state_unavailable', ''}
         end
         record.state = 'definite_failed'
-        record.final_micro_usd = tostring(incurred)
+        record.final_micro_usd = decimal(incurred)
         record.reserved_micro_usd = '0'
     else
         record.state = 'ambiguous'
         record.final_micro_usd = record.reserved_micro_usd
     end
-    record.incurred_micro_usd = tostring(incurred)
+    record.incurred_micro_usd = decimal(incurred)
     attempt.dispatch = certainty
     record.attempt = attempt
     record.updated_at = now_string()
@@ -726,7 +737,7 @@ end
 -- remaining expired members are conservatively left in the aggregate until a
 -- subsequent mutation cleans them up.
 local function durable_cleanup(bucket_key, expiry_key, now)
-    local members = redis.call('ZRANGEBYSCORE', expiry_key, '-inf', tostring(now), 'LIMIT', 0, 1024)
+    local members = redis.call('ZRANGEBYSCORE', expiry_key, '-inf', decimal(now), 'LIMIT', 0, 1024)
     for _, member in ipairs(members) do
         local fingerprint, bucket, amount = string.match(member, '^([^|]+)|([^|]+)|([^|]+)$')
         local value = durable_int(amount)
@@ -738,7 +749,7 @@ local function durable_cleanup(bucket_key, expiry_key, now)
         if not current or current < value then
             return false
         end
-        local next_value = redis.call('HINCRBY', bucket_key, field, tostring(-value))
+        local next_value = redis.call('HINCRBY', bucket_key, field, decimal(-value))
         if durable_int(next_value) == 0 then
             redis.call('HDEL', bucket_key, field, durable_limit_field(bucket))
         end
@@ -758,9 +769,9 @@ local function durable_restore_record(key, encoded, ttl)
     local current = redis.call('TTL', key)
     redis.call('SET', key, encoded)
     if current >= 0 then
-        redis.call('EXPIRE', key, tostring(current))
+        redis.call('EXPIRE', key, decimal(current))
     elseif ttl and ttl > 0 then
-        redis.call('EXPIRE', key, tostring(ttl))
+        redis.call('EXPIRE', key, decimal(ttl))
     end
     return encoded
 end
@@ -866,7 +877,7 @@ if ACTION == 'durable_reserve' then
                 incarnation_id = incarnation, fingerprint = fingerprint, status = 'denied',
                 occurred_at = occurred_at, reservations = reservations,
                 denial = {policy_id = reservation.policy_id, window_id = reservation.window_id,
-                    limit_nano = reservation.limit_nano, active_nano = tostring(active or 0), requested_nano = reservation.amount_nano},
+                    limit_nano = reservation.limit_nano, active_nano = decimal(active), requested_nano = reservation.amount_nano},
                 events = {},
             }
             local encoded_denial = durable_encode(denial)
@@ -888,8 +899,8 @@ if ACTION == 'durable_reserve' then
         local amount = durable_int(reservation.amount_nano)
         local expires = start_by
         redis.call('HSET', bucket_key, durable_limit_field(bucket), reservation.limit_nano)
-        redis.call('HINCRBY', bucket_key, durable_bucket_field(bucket), tostring(amount))
-        redis.call('ZADD', expiry_key, tostring(expires), durable_expiry_member(fingerprint, bucket, tostring(amount)))
+        redis.call('HINCRBY', bucket_key, durable_bucket_field(bucket), decimal(amount))
+        redis.call('ZADD', expiry_key, decimal(expires), durable_expiry_member(fingerprint, bucket, decimal(amount)))
         reservation.reserved_nano = reservation.amount_nano
         reservation.accounted_nano = '0'
         reservation.reservation_revision = 1
@@ -1032,7 +1043,7 @@ if ACTION == 'durable_reconcile' then
                 -- Expiry cleanup may already have removed this operation. Never
                 -- subtract another operation's contribution from the same bucket.
                 if old_total > 0 and (not record.claimed or old_reserved == 0) and
-                    not redis.call('ZSCORE', expiry_key, durable_expiry_member(record.fingerprint, bucket, tostring(old_total))) then
+                    not redis.call('ZSCORE', expiry_key, durable_expiry_member(record.fingerprint, bucket, decimal(old_total))) then
                     return {'not_found', ''}
                 end
                 if not durable_int(reservation.window_expires_millis) then return {'state_unavailable', ''} end
@@ -1052,20 +1063,20 @@ if ACTION == 'durable_reconcile' then
         local event = item.event
         local reservation = record.reservations[item.reservation_index]
         if item.old_total > 0 then
-            local decreased = redis.call('HINCRBY', item.bucket_key, durable_bucket_field(item.bucket), tostring(-item.old_total))
+            local decreased = redis.call('HINCRBY', item.bucket_key, durable_bucket_field(item.bucket), decimal(-item.old_total))
             if durable_int(decreased) == 0 then
                 redis.call('HDEL', item.bucket_key, durable_bucket_field(item.bucket), durable_limit_field(item.bucket))
             end
-            redis.call('ZREM', item.expiry_key, durable_expiry_member(record.fingerprint, item.bucket, tostring(item.old_total)))
+            redis.call('ZREM', item.expiry_key, durable_expiry_member(record.fingerprint, item.bucket, decimal(item.old_total)))
         end
         if item.new_total > 0 then
-            redis.call('HINCRBY', item.bucket_key, durable_bucket_field(item.bucket), tostring(item.new_total))
+            redis.call('HINCRBY', item.bucket_key, durable_bucket_field(item.bucket), decimal(item.new_total))
             if event.kind ~= 'retain_ambiguous' then
-                redis.call('ZADD', item.expiry_key, tostring(reservation.window_expires_millis), durable_expiry_member(record.fingerprint, item.bucket, tostring(item.new_total)))
+                redis.call('ZADD', item.expiry_key, decimal(durable_int(reservation.window_expires_millis)), durable_expiry_member(record.fingerprint, item.bucket, decimal(item.new_total)))
             end
         end
-        reservation.reserved_nano = tostring(item.new_reserved)
-        reservation.accounted_nano = tostring(item.new_accounted)
+        reservation.reserved_nano = decimal(item.new_reserved)
+        reservation.accounted_nano = decimal(item.new_accounted)
         reservation.reservation_revision = durable_int(event.reservation_revision)
         if event.kind == 'retain_ambiguous' or event.kind == 'finalize_unknown' then reservation.status = 'ambiguous' else reservation.status = 'finalized' end
         record.events[event.event_id] = event.fingerprint
