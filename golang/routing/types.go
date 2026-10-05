@@ -181,6 +181,19 @@ func digestCandidate(route Route, requested, attempted llm.ServiceClass, fallbac
 	return hex.EncodeToString(digest[:]), digest, nil
 }
 
+// PinnedPriceID returns the ID this candidate carried when its route was
+// compiled with priceVersion pinned. Route selection must be the candidate's
+// own route. Recovery uses it to recognise a selection a previous snapshot
+// recorded before the route stopped pinning a price version.
+func (candidate Candidate) PinnedPriceID(route Route, priceVersion string) (string, error) {
+	if priceVersion == "" || route.ID != candidate.RouteID || route.EndpointID != candidate.EndpointID {
+		return "", fmt.Errorf("pinned price identity requires the candidate's route and a price version")
+	}
+	route.ModelLineage, route.PriceVersion = candidate.ModelLineage, priceVersion
+	id, _, err := digestCandidate(route, candidate.RequestedClass, candidate.AttemptedClass, candidate.FallbackIndex, candidate.RouteIndex, candidate.ExtensionDigest)
+	return id, err
+}
+
 func mustJSON(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data

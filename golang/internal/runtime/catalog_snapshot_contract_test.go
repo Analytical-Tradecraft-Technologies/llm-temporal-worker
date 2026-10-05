@@ -16,6 +16,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
+	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
 func testPriceEntry(endpointID, model, tier string) pricing.Entry {
@@ -582,5 +583,134 @@ func TestCompileRoutesPreservesContextLimit(t *testing.T) {
 	}
 	if got := routes.Models["logical-model"].Routes[0].ContextTokens; got != 4096 {
 		t.Fatalf("context limit=%d", got)
+	}
+}
+
+func TestCompileRoutesLeavesScheduledPriceVersionChangeUnpinned(t *testing.T) {
+	boundary := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	intervals := func(before, after string) []pricing.Entry {
+		first, second := testPriceEntry("endpoint-a", "gpt-test", "standard"), testPriceEntry("endpoint-a", "gpt-test", "standard")
+		first.Version, first.EffectiveUntil = before, boundary
+		second.Version, second.EffectiveFrom = after, boundary
+		return []pricing.Entry{first, second}
+	}
+	for name, test := range map[string]struct {
+		before, after, want string
+	}{
+		"changed version":   {before: "prices-v1", after: "prices-v2", want: ""},
+		"inherited version": {before: "", after: "prices-v2", want: ""},
+		"same version":      {before: "prices-v2", after: "prices-v2", want: "prices-v2"},
+		"omitted versions":  {before: "", after: "", want: "prices-v1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, bundle := testRouteInputs(t)
+			bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", intervals(test.before, test.after))
+			// The pin must not depend on which side of the boundary the load ran.
+			for _, loadedAt := range []time.Time{boundary.Add(-time.Hour), boundary, boundary.Add(time.Hour)} {
+				routes, err := compileRoutes(value, bundle, loadedAt)
+				if err != nil {
+					t.Fatalf("compileRoutes() error = %v", err)
+				}
+				route := routes.Models["logical-model"].Routes[0]
+				if !route.PriceAvailable || route.PriceVersion != test.want {
+					t.Fatalf("loaded at %s: price version = %q available = %t, want %q", loadedAt, route.PriceVersion, route.PriceAvailable, test.want)
+				}
+			}
+		})
+	}
+}
+
+// scheduledPriceRoutes gives the budget planning fixture a catalog whose price
+// version changes from price/v1 to price/v2 at boundary, with routes compiled
+// by the real compileRoutes two hours before it.
+func scheduledPriceRoutes(t *testing.T, b *budgetPlanningFixture, boundary time.Time) {
+	t.Helper()
+	first, second := b.entry, b.entry
+	first.Version, first.EffectiveUntil = "price/v1", boundary
+	second.Version, second.EffectiveFrom = "price/v2", boundary
+	entries := []pricing.Entry{first, second}
+	value := config.Config{
+		Version: "config-v1",
+		Endpoints: map[string]config.EndpointConfig{"endpoint": {
+			Family: string(provider.FamilyOpenAIResponses), Region: "region", CapabilityProfile: "profile", PriceCatalog: "prices",
+			ServiceClasses: map[llm.ServiceClass]config.TierConfig{llm.ServiceClassStandard: {ProviderValue: "default"}},
+		}},
+		Models: map[string]config.ModelConfig{"alias": {AllowedTenants: []string{"tenant"}, Routes: []config.RouteConfig{
+			{ID: "route", Endpoint: "endpoint", Model: "provider-model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}}},
+	}
+	bundle := catalog.Bundle{
+		Capabilities: map[string]catalog.CapabilityProfile{"profile": {ID: "profile", Family: provider.FamilyOpenAIResponses, Model: "provider-model",
+			Set: provider.CapabilitySet{Version: "profile/v1", Features: map[provider.Feature]provider.Capability{provider.FeatureText: {State: provider.CapabilityNative}}}}},
+		Pricing: map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices/v1", entries)},
+	}
+	routes, err := compileRoutes(value, bundle, boundary.Add(-2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.source.value.Routes = routes
+	b.prices(t, entries)
+}
+
+// The catalog is compiled by the real compileRoutes before the boundary and the
+// same snapshot then serves requests on both sides of it, as a worker whose
+// configuration file never changes does.
+func TestCloudExecutionCompletesAcrossScheduledPriceVersionBoundary(t *testing.T) {
+	boundary := time.Date(2026, 10, 4, 2, 0, 0, 0, time.UTC)
+	f := boundedCloud(t, false, func(b *budgetPlanningFixture) { scheduledPriceRoutes(t, b, boundary) })
+	if !f.now.Before(boundary) {
+		t.Fatal("fixture clock does not start before the boundary")
+	}
+	if result := f.finish(t); result.Generate == nil || f.submits.Load() != 1 {
+		t.Fatal("request before the boundary did not complete once")
+	}
+	f.now = boundary.Add(time.Hour)
+	f.request.OperationKey = "operation-after-boundary"
+	if result := f.finish(t); result.Generate == nil || f.submits.Load() != 2 {
+		t.Fatal("request after the boundary did not complete once")
+	}
+}
+
+// A worker built before routes with a scheduled price version change compiled
+// unpinned recorded the pinned candidate ID in its budget plans. The upgraded
+// worker must still dispatch those admitted plans after a rolling restart.
+func TestCloudExecutionRecoversPlanAdmittedUnderPinnedPriceVersion(t *testing.T) {
+	boundary := time.Date(2026, 10, 4, 2, 0, 0, 0, time.UTC)
+	var b *budgetPlanningFixture
+	f := boundedCloud(t, false, func(fixture *budgetPlanningFixture) {
+		b = fixture
+		scheduledPriceRoutes(t, b, boundary)
+	})
+	pin := func(version string) {
+		model := b.source.value.Routes.Models["alias"]
+		model.Routes[0].PriceVersion = version
+		b.source.value.Routes.Models["alias"] = model
+		f.restart(t)
+	}
+	ctx := context.Background()
+	pin("price/v1") // the previous binary pinned the load-time version
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	pin("") // rolling upgrade: the same configuration now compiles unpinned
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.restart(t)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	if boundedState(t, v, err, llm.ExecutionCompleted).Generate == nil || f.submits.Load() != 1 {
+		t.Fatal("admitted plan was not dispatched exactly once by the upgraded worker")
+	}
+	// Only the bound price version is accepted as the pinned identity.
+	other := ProviderRecoveryBinding{Route: durable.RoutePlan{PriceVersion: "price/v9"}}
+	candidate := routing.Candidate{RouteID: "route", EndpointID: "endpoint"}
+	route := b.source.value.Routes.Models["alias"].Routes[0]
+	if id, err := candidate.PinnedPriceID(route, "price/v1"); err != nil || id == "" {
+		t.Fatalf("pinned identity = %q, %v", id, err)
+	} else if alt, _ := candidate.PinnedPriceID(route, other.Route.PriceVersion); alt == id {
+		t.Fatal("pinned identity ignored the price version")
+	}
+	if _, err := candidate.PinnedPriceID(route, ""); err == nil {
+		t.Fatal("unpinned identity has no pinned form")
 	}
 }

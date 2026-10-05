@@ -53,7 +53,10 @@ Historical snapshot loading is outside this helper. Snapshot catalogs and
 health are detached from later mutations; the injected registry must also belong
 to the captured snapshot. The recovered candidate retains its configured price
 version: use the saved route and exact quote/reservation for admission, including
-any price version supplied by the original quote.
+any price version supplied by the original quote. A route that now compiles
+without a price version, because its catalog schedules a version change, also
+recovers a selection recorded under the candidate ID it carried while the bound
+price version was still pinned, so plans admitted before an upgrade dispatch.
 
 A reconstructed `PlannedProviderCall` is invocation-local compilation data.
 It does not establish whether the old attempt was submitted or consumed a claim.
