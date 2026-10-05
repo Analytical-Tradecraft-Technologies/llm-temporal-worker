@@ -34,12 +34,19 @@ func (transport cannedConverseTransport) RoundTrip(request *http.Request) (*http
 // client and the adapter, so SDK decoding is part of what is exercised.
 func invokeCannedConverse(t *testing.T, body string) (provider.Result, error) {
 	t.Helper()
+	return invokeRealConverse(t, cannedConverseTransport{body: body}, fixtureCredentials)
+}
+
+func fixtureCredentials(context.Context) (aws.Credentials, error) {
+	return aws.Credentials{AccessKeyID: "fixture", SecretAccessKey: "fixture"}, nil
+}
+
+func invokeRealConverse(t *testing.T, transport http.RoundTripper, credentials func(context.Context) (aws.Credentials, error)) (provider.Result, error) {
+	t.Helper()
 	client, err := NewClient(context.Background(), ClientConfig{
 		BaseURL:    "https://bedrock-runtime.us-east-1.amazonaws.com",
-		HTTPClient: &http.Client{Transport: cannedConverseTransport{body: body}},
-		AWSConfig: aws.Config{Region: "us-east-1", Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
-			return aws.Credentials{AccessKeyID: "fixture", SecretAccessKey: "fixture"}, nil
-		})},
+		HTTPClient: &http.Client{Transport: transport},
+		AWSConfig:  aws.Config{Region: "us-east-1", Credentials: aws.CredentialsProviderFunc(credentials)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,16 +88,72 @@ func (panickingConverse) Converse(context.Context, *bedrockruntime.ConverseInput
 	panic("sdk decode failure")
 }
 
-func TestConverseSDKPanicIsAcceptedInvalidResponse(t *testing.T) {
-	adapter, err := New(&Client{converse: panickingConverse{}}, "endpoint", DefaultProfile("nova"))
-	if err != nil {
-		t.Fatal(err)
+type panickingTransport struct{}
+
+func (panickingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	panic("transport failure")
+}
+
+// A panic is classified by how far the request got, not by assumption: only
+// a panic after a response arrived is a paid, accepted response. A panic
+// before the request reached the transport was never dispatched and stays
+// retryable on another route; one in the transport itself is ambiguous.
+func TestConverseSDKPanicIsClassifiedByDispatchEvidence(t *testing.T) {
+	type want struct {
+		code     provider.Code
+		dispatch provider.DispatchCertainty
+		retry    provider.RetryDisposition
 	}
-	call := provider.Call{EndpointID: "endpoint", Family: provider.FamilyBedrockConverse, OperationKey: "op-panic", SDKParams: bedrockruntime.ConverseInput{}}
-	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAccepted || mapped.OperationID != "op-panic" {
-		t.Fatalf("error = %v, want an accepted invalid response", err)
+	tests := map[string]struct {
+		invoke func(t *testing.T) error
+		want   want
+	}{
+		"before the request is sent": {
+			invoke: func(t *testing.T) error {
+				_, err := invokeRealConverse(t, cannedConverseTransport{body: "{}"}, func(context.Context) (aws.Credentials, error) {
+					panic("credential lookup failure")
+				})
+				return err
+			},
+			want: want{code: provider.CodeInternal, dispatch: provider.DispatchNotDispatched, retry: provider.RetryNextRoute},
+		},
+		"outside the middleware stack": {
+			invoke: func(t *testing.T) error {
+				adapter, err := New(&Client{converse: panickingConverse{}}, "endpoint", DefaultProfile("nova"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = adapter.Invoke(context.Background(), provider.Call{EndpointID: "endpoint", Family: provider.FamilyBedrockConverse, OperationKey: "op-decode", SDKParams: bedrockruntime.ConverseInput{}}, provider.NopObserver{})
+				return err
+			},
+			want: want{code: provider.CodeInternal, dispatch: provider.DispatchNotDispatched, retry: provider.RetryNextRoute},
+		},
+		"in the transport": {
+			invoke: func(t *testing.T) error {
+				_, err := invokeRealConverse(t, panickingTransport{}, fixtureCredentials)
+				return err
+			},
+			want: want{code: provider.CodeInternal, dispatch: provider.DispatchAmbiguous, retry: provider.RetryNever},
+		},
+		"while decoding the response": {
+			invoke: func(t *testing.T) error {
+				_, err := invokeCannedConverse(t, `{"output":{"message":{"role":"assistant","content":[{"futureBlock":{"value":1}}]}},"stopReason":"end_turn"}`)
+				return err
+			},
+			want: want{code: provider.CodeProviderInvalidResponse, dispatch: provider.DispatchAccepted, retry: provider.RetryNever},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := test.invoke(t)
+			var mapped *provider.Error
+			if !errors.As(err, &mapped) {
+				t.Fatalf("error = %v, want a classified provider error", err)
+			}
+			if mapped.Code != test.want.code || mapped.Dispatch != test.want.dispatch || mapped.Retry != test.want.retry || mapped.OperationID != "op-decode" {
+				t.Fatalf("error = %#v, want %+v", mapped, test.want)
+			}
+		})
 	}
 }
 
