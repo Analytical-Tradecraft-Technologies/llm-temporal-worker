@@ -477,3 +477,8 @@ cloud-workflow-aws-integration:
 	@test "$${LLMTW_CLOUD_TEST_AWS:-}" = "1" && test -n "$${LLMTW_CLOUD_TEST_CONFIG:-}" || { echo "AWS gate requires explicit LLMTW_CLOUD_TEST_AWS=1 and LLMTW_CLOUD_TEST_CONFIG" >&2; exit 2; }
 	@test -z "$${CI:-}" || { echo "AWS gate is operator-only" >&2; exit 2; }
 	LLMTW_CLOUD_TEST_PROVISION=0 $(GO) test -race -count=1 -timeout=5m -tags=cloudworkflowintegration ./internal/runtime -run '^TestCloudWorkflowAWSLifecycle$$'
+
+# Compile the paid gate without executing it or contacting a provider.
+.PHONY: openai-smoke-compile
+openai-smoke-compile:
+	$(GO) test -tags=cloudworkflowintegration,openaismoke ./internal/runtime -run '^TestOpenAISmokePlanning$$'

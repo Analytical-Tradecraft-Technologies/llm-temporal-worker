@@ -174,3 +174,32 @@ func TestSelectPrefixPreservesPointerToolFrontiers(t *testing.T) {
 		t.Fatal("accepted orphan pointer result")
 	}
 }
+
+func TestSelectPrefixKeepsMixedToolResponseAtomic(t *testing.T) {
+	items := []llm.Item{
+		textMessage(llm.ActorHuman, "question"),
+		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
+		textMessage(llm.ActorModel, "Checking another source"),
+		llm.ToolCall{ID: "b", Name: "lookup", Arguments: []byte("{}")},
+		llm.ToolResult{CallID: "a"},
+		llm.ToolResult{CallID: "b"},
+		textMessage(llm.ActorModel, "done"),
+	}
+	for _, test := range []struct {
+		name                string
+		length, retain, cut int
+	}{
+		{"open", 4, 0, 1}, {"partially resolved", 5, 0, 1},
+		{"retain exchange", 7, 2, 1}, {"compact exchange", 7, 1, 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			selection, err := SelectPrefix(items[:test.length], test.retain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(selection.Prefix, items[:test.cut]) || !reflect.DeepEqual(selection.Retained, items[test.cut:test.length]) {
+				t.Fatalf("selection split the mixed tool exchange: %#v", selection)
+			}
+		})
+	}
+}

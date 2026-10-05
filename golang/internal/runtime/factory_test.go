@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -422,6 +423,26 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 	}
 	if adapter == nil || adapter.Name() != "openai.responses" {
 		t.Fatalf("adapter = %#v, want openai.responses adapter", adapter)
+	}
+
+	for _, permitted := range []bool{false, true} {
+		endpoint := value.Endpoints["openai"]
+		endpoint.ProviderStorage.Permitted = permitted
+		value.Endpoints["openai"] = endpoint
+		adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = adapter.Compile(context.Background(), provider.CompileInput{
+			Request: llm.Request{OperationKey: "policy", Model: "model", Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)}},
+			Query:   provider.CapabilityQuery{EndpointID: "openai", Family: provider.FamilyOpenAIResponses, Model: "model"},
+		})
+		if permitted && err != nil {
+			t.Fatalf("permitted storage rejected: %v", err)
+		}
+		if !permitted && err == nil {
+			t.Fatal("factory ignored endpoint storage policy")
+		}
 	}
 }
 

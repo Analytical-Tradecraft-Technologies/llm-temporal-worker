@@ -214,6 +214,8 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 	if response.Usage != nil {
 		usage.InputTokens = int64Value(response.Usage.InputTokens)
 		usage.OutputTokens = int64Value(response.Usage.OutputTokens)
+		usage.CacheReadTokens = int64Value(response.Usage.CacheReadInputTokens)
+		usage.CacheWriteTokens = int64Value(response.Usage.CacheWriteInputTokens)
 	}
 	return llm.Response{APIVersion: llm.APIVersion, OperationKey: call.OperationKey, Status: status, Output: output,
 		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model},
@@ -223,7 +225,7 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 
 func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 	message, ok := output.(*types.ConverseOutputMemberMessage)
-	if !ok {
+	if !ok || message == nil {
 		return nil, false, fmt.Errorf("provider response omitted a message output")
 	}
 	items := make([]llm.Item, 0, len(message.Value.Content))
@@ -238,11 +240,17 @@ func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 	for index, block := range message.Value.Content {
 		switch value := block.(type) {
 		case *types.ContentBlockMemberText:
+			if value == nil {
+				return nil, false, fmt.Errorf("content block %d text is invalid", index)
+			}
 			text.WriteString(value.Value)
 		case *types.ContentBlockMemberToolUse:
 			flushText()
+			if value == nil || value.Value.Input == nil || value.Value.ToolUseId == nil || *value.Value.ToolUseId == "" || value.Value.Name == nil || *value.Value.Name == "" {
+				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
+			}
 			arguments, err := value.Value.Input.MarshalSmithyDocument()
-			if err != nil || !json.Valid(arguments) || value.Value.ToolUseId == nil || value.Value.Name == nil {
+			if err != nil || !json.Valid(arguments) {
 				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
 			}
 			hasToolCalls = true

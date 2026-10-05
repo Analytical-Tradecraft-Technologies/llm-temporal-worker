@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"sort"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
@@ -51,17 +53,20 @@ func (planned PlannedProviderCall) Route(operation durable.OperationID, generati
 }
 
 // ProviderPlanning captures routing inputs once per runtime snapshot. It holds
-// no operation state and never invokes a provider or touches budget/storage.
+// no operation state and never invokes a provider or changes budget/storage. Shared health is read per selection.
 // The injected planner and registry must themselves be snapshot-owned.
 type ProviderPlanning struct {
-	catalog        routing.Catalog
-	health         routing.HealthView
-	planner        routing.Planner
-	adapters       engine.AdapterRegistry
-	configDigest   [32]byte
-	configEpoch    string
-	budgetSnapshot engine.Snapshot
-	outputLimit    int64
+	routeStatus      ProviderRouteStatusReader
+	clock            func() time.Time
+	catalog          routing.Catalog
+	health           routing.HealthView
+	planner          routing.Planner
+	adapters         engine.AdapterRegistry
+	configDigest     [32]byte
+	configEpoch      string
+	budgetSnapshot   engine.Snapshot
+	outputLimit      int64
+	contextEstimator budget.Estimator
 }
 
 func (capabilities V1RuntimeCapabilities) NewProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
@@ -92,10 +97,14 @@ func (capabilities V1RuntimeCapabilities) captureProviderPlanning(ctx context.Co
 	if err != nil {
 		return nil, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
-	return &ProviderPlanning{catalog: catalog, health: copyProviderHealth(snapshot.Health),
+	clock := capabilities.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	return &ProviderPlanning{routeStatus: capabilities.ProviderRouteStatus, clock: clock, catalog: catalog, health: copyProviderHealth(snapshot.Health),
 		planner: capabilities.Planner, adapters: capabilities.Adapters,
 		configDigest: snapshot.ConfigDigest, configEpoch: snapshot.ConfigEpoch,
-		outputLimit: capabilities.BudgetEstimator.MaxOutput, budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
+		outputLimit: capabilities.BudgetEstimator.MaxOutput, contextEstimator: copyBudgetEstimator(capabilities.BudgetEstimator), budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
 }
 
 func (planning *ProviderPlanning) Generate(ctx context.Context, prepared PreparedGenerateInput) (PlannedProviderCall, error) {
@@ -116,7 +125,7 @@ func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request)
 
 // selectCall permits the budget planner to reject a compiled candidate before
 // it wins selection. Neither callback nor compilation may perform paid work.
-func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, accept func(PlannedProviderCall) (bool, error)) (PlannedProviderCall, error) {
+func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, accept func(PlannedProviderCall) (bool, error), priorCandidates ...string) (PlannedProviderCall, error) {
 	if ctx == nil || planning == nil || isNilCapability(planning.planner) || isNilCapability(planning.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
@@ -138,12 +147,37 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	if err != nil || len(plan.Candidates) == 0 {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetryNever)
 	}
+	healthBlocked := false
+	// Preserve normal route priority among equally tried candidates, while
+	// giving alternatives a chance before retrying an earlier failed route.
+	if len(priorCandidates) > 0 {
+		counts := make(map[string]int, len(priorCandidates))
+		for _, id := range priorCandidates {
+			counts[id]++
+		}
+		plan.Candidates = append([]routing.Candidate(nil), plan.Candidates...)
+		sort.SliceStable(plan.Candidates, func(i, j int) bool { return counts[plan.Candidates[i].ID] < counts[plan.Candidates[j].ID] })
+	}
 	lastPhase := provider.PhaseCompile
 	for _, candidate := range plan.Candidates {
 		if !planning.containsCandidate(semantic, candidate) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
 		if !planning.catalog.Models[semantic.Model].Routes[candidate.RouteIndex].SupportsOutputLimit(semantic) {
+			continue
+		}
+		if err := planning.contextEstimator.ValidateContext(semantic, candidate); err != nil {
+			if errors.Is(err, budget.ErrContextLimit) {
+				continue
+			}
+			return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
+		}
+		blocked, healthErr := planning.routeBlocked(ctx, candidate)
+		if healthErr != nil {
+			return PlannedProviderCall{}, healthErr
+		}
+		if blocked {
+			healthBlocked = true
 			continue
 		}
 		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
@@ -167,6 +201,9 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			}
 		}
 		return planned, nil
+	}
+	if healthBlocked {
+		return PlannedProviderCall{}, providerPlanningError(provider.CodeProviderUnavailable, provider.PhasePlan, provider.RetrySameOperation)
 	}
 	return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, lastPhase, provider.RetryNever)
 }
@@ -247,7 +284,7 @@ func (planning *ProviderPlanning) containsCandidate(request llm.Request, candida
 		provider.Family(candidate.Family).Valid() && candidate.Family == route.Family && candidate.Model == route.Model && candidate.ModelRevision == route.ModelRevision &&
 		candidate.EndpointAccountHMAC == route.EndpointAccountHMAC && candidate.Region == route.Region &&
 		candidate.CapabilityVersion != "" && candidate.CapabilityVersion == route.Capabilities.Version && candidate.ProviderTier != "" && candidate.ProviderTier == route.ProviderTiers[candidate.AttemptedClass] &&
-		candidate.PriceVersion == route.PriceVersion
+		candidate.PriceVersion == route.PriceVersion && candidate.ContextTokens == route.ContextTokens
 }
 
 func validPlannedCall(call provider.Call, candidate routing.Candidate, operationKey string, digest [32]byte) bool {

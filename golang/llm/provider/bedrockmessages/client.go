@@ -53,6 +53,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	opts := []option.RequestOption{
 		option.WithoutEnvironmentDefaults(),
 		option.WithHTTPClient(config.HTTPClient),
+		option.WithRequestTimeout(clientconfig.MessagesRequestTimeout(config.HTTPClient)),
 		option.WithMaxRetries(0),
 		bedrock.WithConfig(config.AWSConfig),
 	}

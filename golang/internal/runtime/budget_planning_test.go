@@ -545,3 +545,41 @@ func TestBudgetPlanningQuotesReachAdmissionAndUncertainAcceptanceReplaysIdentica
 		})
 	}
 }
+
+func TestBudgetPlanningPrefersLessTriedCandidates(t *testing.T) {
+	f := newBudgetPlanningFixture(t)
+	model := f.source.value.Routes.Models["alias"]
+	alternate := model.Routes[0]
+	alternate.ID, alternate.EndpointID = "alternate", "alternate-endpoint"
+	model.Routes = append(model.Routes, alternate)
+	f.source.value.Routes.Models["alias"] = model
+	f.cap.Adapters.(engine.AdapterMap)["alternate-endpoint"] = f.adapter
+	f.source.value.BudgetPolicies[0].Match.EndpointID = ""
+	entry := f.entry
+	entry.EndpointID = "alternate-endpoint"
+	f.prices(t, []pricing.Entry{f.entry, entry})
+	planning := f.planning(t)
+	first, err := planning.Generate(context.Background(), f.generate, f.attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Route.EndpointID != "endpoint" {
+		t.Fatal("initial priority changed")
+	}
+	f.attempt.PriorCandidates = []string{first.Provider.Candidate.ID}
+	second, err := planning.Generate(context.Background(), f.generate, f.attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Route.EndpointID != "alternate-endpoint" {
+		t.Fatal("failed candidate starved alternative")
+	}
+	f.attempt.PriorCandidates = append(f.attempt.PriorCandidates, second.Provider.Candidate.ID)
+	third, err := planning.Generate(context.Background(), f.generate, f.attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Route.EndpointID != "endpoint" {
+		t.Fatal("equal attempt counts lost configured priority")
+	}
+}

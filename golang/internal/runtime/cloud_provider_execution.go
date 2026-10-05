@@ -10,6 +10,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -28,9 +29,10 @@ type CloudProviderExecutionStore interface {
 // never sleeps, selects a replacement route, or retries paid submission. Scope
 // is supplied by the authorized runtime; provider IDs never leave this layer.
 type CloudProviderExecution struct {
-	store     CloudProviderExecutionStore
-	admission *CloudBudgetAdmission
-	clock     func() time.Time
+	statusRecorder engine.ProviderStatusRecorder
+	store          CloudProviderExecutionStore
+	admission      *CloudBudgetAdmission
+	clock          func() time.Time
 }
 
 // ProviderExecutionResult is internal runtime state, not a Temporal payload.
@@ -53,7 +55,7 @@ func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.
 	if clock == nil {
 		clock = time.Now
 	}
-	return &CloudProviderExecution{store: store, admission: admission, clock: clock}, nil
+	return &CloudProviderExecution{statusRecorder: capabilities.ProviderStatusRecorder, store: store, admission: admission, clock: clock}, nil
 }
 
 // Submit accepts only a prepared local call and its accepted reservation. The
@@ -134,6 +136,16 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 			err = executionError(provider.CodeProviderInvalidResponse)
 		}
 		saved.Execution.Claim = claim
+	}
+	// An adapter cannot undo the durable possible-write boundary without
+	// transport evidence that the request never reached a writable connection.
+	var classified *provider.Error
+	if observer.marked && errors.As(err, &classified) && classified.Dispatch == provider.DispatchNotDispatched &&
+		!errors.Is(err, provider.ErrProviderPreDispatch) && !errors.Is(err, provider.ErrProviderEgressDenied) {
+		copy := *classified
+		copy.Dispatch = provider.DispatchAmbiguous
+		copy.Retry = provider.RetryNever
+		err = &copy
 	}
 	return executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, outcome, err, false)
 }
@@ -366,6 +378,7 @@ func (executor *CloudProviderExecution) save(ctx context.Context, scope cloudsta
 }
 
 func (executor *CloudProviderExecution) settle(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {
+	executor.recordRouteStatus(ctx, saved)
 	if saved.Execution.Settlement == nil || saved.Execution.Settled {
 		return executor.result(saved), nil
 	}

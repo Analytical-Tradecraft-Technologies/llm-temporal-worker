@@ -10,3 +10,14 @@ release-verify:
 
 %:
 	$(MAKE) -C golang $@
+
+# Explicit paid local gate. The dotenv contents never become Make variables.
+OPENAI_SMOKE_ENV_FILE ?= $(CURDIR)/.env
+.PHONY: openai-smoke
+openai-smoke:
+	python3 scripts/openai-smoke.py --env-file "$(OPENAI_SMOKE_ENV_FILE)"
+
+.PHONY: openai-smoke-check
+openai-smoke-check:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_openai_smoke.py'
+	$(MAKE) -C golang openai-smoke-compile

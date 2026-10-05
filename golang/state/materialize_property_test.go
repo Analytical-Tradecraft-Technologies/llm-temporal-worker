@@ -439,3 +439,53 @@ func TestMaterializationRejectsToolCallAfterParallelResultsBegin(t *testing.T) {
 }
 
 func ptr(value string) *string { return &value }
+
+func TestMaterializationAllowsTextWithinParallelToolResponse(t *testing.T) {
+	graph := NewCheckpointGraph(MaterializeLimits{})
+	root := rootCheckpoint("mixed", "tenant-a", "mixed-root")
+	root.Output = []llm.Item{
+		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
+		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "Checking another source"}}},
+		llm.ToolCall{ID: "b", Name: "lookup", Arguments: []byte("{}")},
+	}
+	if err := graph.PutRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	materialized, err := graph.Materialize("tenant-a", root.Handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(materialized.PendingToolCalls, []string{"a", "b"}) {
+		t.Fatalf("pending = %v", materialized.PendingToolCalls)
+	}
+	child := childCheckpoint("mixed-child", root.Handle.String(), "tenant-a", "mixed-child-op", "")
+	child.Delta = []llm.Item{llm.ToolResult{CallID: "b"}, llm.ToolResult{CallID: "a"}}
+	child.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "Done"}}}}
+	if err := graph.PutChild(child); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := graph.Materialize("tenant-a", child.Handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.PendingToolCalls) != 0 {
+		t.Fatalf("pending = %v", resolved.PendingToolCalls)
+	}
+}
+
+func TestTranscriptRejectsMessagesDuringUnresolvedToolExchange(t *testing.T) {
+	calls := []llm.Item{
+		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
+		llm.ToolCall{ID: "b", Name: "lookup", Arguments: []byte("{}")},
+	}
+	for _, actor := range []llm.Actor{llm.ActorHuman, llm.ActorModel} {
+		items := append([]llm.Item{}, calls...)
+		if actor == llm.ActorModel {
+			items = append(items, llm.ToolResult{CallID: "a"})
+		}
+		items = append(items, llm.Message{Actor: actor, Content: []llm.Part{llm.TextPart{Text: "new turn"}}})
+		if _, err := ValidateTranscript(items); err == nil {
+			t.Fatalf("accepted premature %s message", actor)
+		}
+	}
+}

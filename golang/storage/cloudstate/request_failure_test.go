@@ -114,7 +114,7 @@ func TestRequestFailureRenewalRequiresSettledRetryableChild(t *testing.T) {
 		}
 		next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now)
 		if retryable {
-			if err != nil || next.Number != 2 || next.PreviousID != a.ID {
+			if err != nil || next.Number != 2 || next.PreviousID != a.ID || len(next.PriorCandidates) != 1 {
 				t.Fatal("retry could not renew", err)
 			}
 		} else if !errors.Is(err, contracts.ErrConflict) {

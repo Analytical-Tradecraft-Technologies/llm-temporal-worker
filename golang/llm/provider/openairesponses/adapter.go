@@ -19,6 +19,7 @@ type Adapter struct {
 	client            *Client
 	endpointID        string
 	capabilityVersion string
+	storageDenied     bool
 }
 
 // ModelListerAdapter is the direct OpenAI Responses adapter with its optional
@@ -29,18 +30,18 @@ type ModelListerAdapter struct{ *Adapter }
 // NewOpenAIAdapter constructs an adapter for the direct OpenAI Responses API.
 // The separate constructor keeps the management capability explicit; generic
 // New remains a one-shot adapter for compatible endpoints.
-func NewOpenAIAdapter(client *Client, endpointID, capabilityVersion string) (*ModelListerAdapter, error) {
+func NewOpenAIAdapter(client *Client, endpointID, capabilityVersion string, options ...AdapterOption) (*ModelListerAdapter, error) {
 	if client == nil || !client.directOpenAI {
 		return nil, fmt.Errorf("openai responses: client is not verified for direct OpenAI management")
 	}
-	base, err := New(client, endpointID, capabilityVersion)
+	base, err := New(client, endpointID, capabilityVersion, options...)
 	if err != nil {
 		return nil, err
 	}
 	return &ModelListerAdapter{Adapter: base}, nil
 }
 
-func New(client *Client, endpointID, capabilityVersion string) (*Adapter, error) {
+func New(client *Client, endpointID, capabilityVersion string, options ...AdapterOption) (*Adapter, error) {
 	if client == nil {
 		return nil, fmt.Errorf("openai responses: client is required")
 	}
@@ -50,12 +51,18 @@ func New(client *Client, endpointID, capabilityVersion string) (*Adapter, error)
 	if capabilityVersion == "" {
 		capabilityVersion = defaultCapabilityVersion
 	}
-	return &Adapter{client: client, endpointID: endpointID, capabilityVersion: capabilityVersion}, nil
+	adapter := &Adapter{client: client, endpointID: endpointID, capabilityVersion: capabilityVersion}
+	for _, option := range options {
+		if option != nil {
+			option(adapter)
+		}
+	}
+	return adapter, nil
 }
 
 // NewAdapter is an explicit alias used by route construction code.
-func NewAdapter(client *Client, endpointID, capabilityVersion string) (*Adapter, error) {
-	return New(client, endpointID, capabilityVersion)
+func NewAdapter(client *Client, endpointID, capabilityVersion string, options ...AdapterOption) (*Adapter, error) {
+	return New(client, endpointID, capabilityVersion, options...)
 }
 
 func (adapter *Adapter) Name() string { return adapterName }
@@ -114,6 +121,9 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}
+	if err := adapter.enforceStoragePolicy(&params); err != nil {
+		return provider.Call{}, compileError(err.Error())
+	}
 	digest := input.Metadata.SchemaDigest
 	if digest == ([32]byte{}) {
 		digest, err = llm.RequestDigest(normalized)
@@ -164,6 +174,10 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if !ok {
 		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}
+	if err := adapter.enforceStoragePolicy(&params); err != nil {
+		return provider.Result{}, dispatchError(err.Error(), provider.DispatchNotDispatched)
+	}
+	call.SDKParams = params
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}

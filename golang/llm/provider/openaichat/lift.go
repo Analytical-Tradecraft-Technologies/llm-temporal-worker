@@ -215,6 +215,9 @@ func liftStatus(finishReason string, hasToolCalls, hasRefusal bool) (llm.Respons
 		if hasRefusal {
 			return llm.ResponseStatusRefused, nil
 		}
+		if hasToolCalls {
+			return llm.ResponseStatusToolCalls, nil
+		}
 		return llm.ResponseStatusCompleted, nil
 	case "tool_calls", "function_call":
 		if !hasToolCalls {

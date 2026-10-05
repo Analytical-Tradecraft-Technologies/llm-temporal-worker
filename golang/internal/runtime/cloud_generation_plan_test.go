@@ -13,7 +13,7 @@ import (
 )
 
 func TestCloudGenerationPlan(t *testing.T) {
-	for _, mode := range []string{"root", "short", "no-prefix", "tokens", "bytes", "provider-limit"} {
+	for _, mode := range []string{"root", "short", "no-prefix", "tokens", "bytes", "provider-limit", "provider-token-limit"} {
 		t.Run(mode, func(t *testing.T) {
 			f := boundedCloud(t, false)
 			policy := json.RawMessage(`{"recent_turns":0}`)
@@ -38,18 +38,22 @@ func TestCloudGenerationPlan(t *testing.T) {
 				f.cap.BudgetEstimator.Tokenizer = func(llm.Request, routing.Candidate) (int64, error) { return 50000, nil }
 			}
 			f.restart(t)
-			if mode == "provider-limit" {
+			if mode == "provider-limit" || mode == "provider-token-limit" {
 				providers := f.runtime.execution.admission.planning.providers
 				for name, model := range providers.catalog.Models {
 					for i := range model.Routes {
-						model.Routes[i].ContextBytes = 1
+						if mode == "provider-limit" {
+							model.Routes[i].ContextBytes = 1
+						} else {
+							model.Routes[i].ContextTokens = 1
+						}
 					}
 					providers.catalog.Models[name] = model
 				}
 			}
 			before := f.submits.Load()
 			decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request)
-			want := mode == "tokens" || mode == "bytes" || mode == "provider-limit"
+			want := mode == "tokens" || mode == "bytes" || mode == "provider-limit" || mode == "provider-token-limit"
 			if err != nil || decision.CompactBeforeGenerate != want {
 				t.Fatalf("decision=%+v want=%t err=%v", decision, want, err)
 			}

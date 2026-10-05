@@ -58,6 +58,13 @@ func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
 	if wire["model"] != "chat-model" || wire["service_tier"] != "priority" {
 		t.Fatalf("wire identity = %#v", wire)
 	}
+	if wire["parallel_tool_calls"] != true {
+		t.Fatalf("declared tools lost parallel control: %#v", wire)
+	}
+	choice, ok := wire["tool_choice"].(map[string]any)
+	if !ok || choice["type"] != "function" {
+		t.Fatalf("declared tools lost named choice: %#v", wire["tool_choice"])
+	}
 	messages := wire["messages"].([]any)
 	if messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "developer" {
 		t.Fatalf("instruction roles = %#v", messages[:2])
@@ -128,5 +135,29 @@ func TestCompilePreservesDisabledReasoning(t *testing.T) {
 				t.Fatalf("disabled reasoning wire effort = %#v", wire["reasoning_effort"])
 			}
 		})
+	}
+}
+
+func TestCompileOmitsToolControlsWithoutTools(t *testing.T) {
+	for _, mode := range []llm.ToolChoiceMode{"", llm.ToolChoiceAuto, llm.ToolChoiceNone} {
+		for _, parallel := range []bool{false, true} {
+			request := llm.Request{
+				OperationKey: "tool-less", Model: "chat-model",
+				Input:      []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Summarize this text"}}}},
+				ToolPolicy: llm.ToolPolicy{Mode: mode, Parallel: parallel},
+			}
+			call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
+				Request: request, Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire := marshalWire(t, call.SDKParams)
+			for _, key := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
+				if value, ok := wire[key]; ok {
+					t.Fatalf("mode=%q parallel=%v: unexpected %s=%#v", mode, parallel, key, value)
+				}
+			}
+		}
 	}
 }

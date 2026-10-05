@@ -49,6 +49,9 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 	seenIdentities := make(map[string]struct{}, len(copyEntries))
 	for index := range copyEntries {
 		entry := &copyEntries[index]
+		if err := entry.ValidateUsagePricing(); err != nil {
+			return Catalog{}, fmt.Errorf("pricing entry %d: %w", index, err)
+		}
 		if entry.Provider == "" || entry.Family == "" || entry.EndpointID == "" || entry.Model == "" || entry.ProviderTier == "" {
 			return Catalog{}, fmt.Errorf("pricing entry %d identity is incomplete", index)
 		}

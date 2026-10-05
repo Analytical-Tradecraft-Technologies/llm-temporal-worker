@@ -365,3 +365,43 @@ func TestLiveRedisProviderFilteringEndpointSelectionAndFailures(t *testing.T) {
 		t.Fatalf("wrong type did not fail closed: %v", err)
 	}
 }
+
+func TestLiveRedisProviderCircuitVisibleAcrossWorkers(t *testing.T) {
+	first, client, now := liveProviderStore(t)
+	secondClient := redisclient.NewClient(client.Options())
+	defer secondClient.Close()
+	second, err := NewProviderStateStore(ProviderStateOptions{Client: secondClient, Keys: KeyOptions{Prefix: first.space.prefix, HashTag: first.space.tag, KeySecret: first.space.secret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	var last control.StatusEvent
+	for i := 0; i < 3; i++ {
+		last = providerTestEvent(t, now.Add(time.Duration(i)*time.Second), "route", func(o *control.StatusObservation) {
+			o.Availability = control.AvailabilityUnavailable
+			o.SafeErrorCode = "provider_unavailable"
+		})
+		writer := first
+		if i%2 != 0 {
+			writer = second
+		}
+		if _, err := writer.PersistStatusEvent(ctx, last); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, err := second.GetRouteStatus(ctx, last.ConfigDigest, "route")
+	if err != nil || status.Circuit != control.CircuitOpen || status.ConsecutiveDefiniteFailures != 3 {
+		t.Fatal("circuit not shared", status, err)
+	}
+	if applied, err := second.PersistStatusEvent(ctx, last); err != nil || applied {
+		t.Fatal("replay counted twice", err)
+	}
+	success := providerTestEvent(t, now.Add(4*time.Second), "route", nil)
+	if _, err := second.PersistStatusEvent(ctx, success); err != nil {
+		t.Fatal(err)
+	}
+	status, err = first.GetRouteStatus(ctx, last.ConfigDigest, "route")
+	if err != nil || status.Circuit != control.CircuitClosed || status.ConsecutiveDefiniteFailures != 0 {
+		t.Fatal("recovery not shared", status, err)
+	}
+}

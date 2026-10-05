@@ -1,6 +1,9 @@
 package pricing
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type UnitPrices struct {
 	InputPerMillion      DecimalUSD
@@ -93,4 +96,16 @@ type Cost struct {
 	MicroUSD       MicroUSD
 	Method         CostMethod
 	CatalogVersion string
+}
+
+// ValidateUsagePricing rejects additive prices for overlapping usage counters.
+// Chat and Responses report reasoning inside their inclusive output total.
+func (entry Entry) ValidateUsagePricing() error {
+	switch entry.Family {
+	case "openai_chat", "openai_responses":
+		if entry.Prices.ReasoningPerMillion.numerator.Sign() != 0 {
+			return fmt.Errorf("%s reasoning price must be zero: reasoning tokens are included in output usage", entry.Family)
+		}
+	}
+	return nil
 }

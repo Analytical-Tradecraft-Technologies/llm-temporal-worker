@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -74,6 +76,12 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 	decision, err := compact.Policy.EvaluateTrigger(compaction.TriggerInput{ProjectedTokens: int(tokens), ProjectedBytes: int64(len(encoded)), ProjectedItems: len(input.Request.Input)})
 	if err != nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
+	}
+	if err := r.capabilities.BudgetEstimator.ValidateContext(resolved, candidate); err != nil {
+		if !errors.Is(err, budget.ErrContextLimit) {
+			return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
+		}
+		decision.ShouldCompact = true
 	}
 	for _, route := range providers.catalog.Models[input.Request.Model].Routes {
 		if route.ID == candidate.RouteID && route.ContextBytes > 0 && len(encoded) >= route.ContextBytes {

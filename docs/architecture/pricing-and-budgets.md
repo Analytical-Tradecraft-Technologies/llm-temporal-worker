@@ -364,3 +364,14 @@ The budget and cloud execution tests cover:
 
 Live Redis tests exercise the actual Functions and preloaded Lua compatibility
 mode. Offline model tests alone do not prove persistence or restore behavior.
+
+### Inclusive OpenAI output usage
+
+The `openai_chat` and `openai_responses` adapters preserve the provider's
+inclusive output-token count, which already contains reasoning tokens. Their
+catalog entries must therefore use an explicit zero `reasoning_per_million`;
+`output_per_million` pays for the entire output, including reasoning. The
+reasoning counter remains available for reporting. Nonzero additive reasoning
+prices are rejected during catalog compilation, reservation estimation, and
+usage settlement to prevent charging the same tokens twice. Supporting separate
+reasoning rates for these families requires disjoint usage normalization first.

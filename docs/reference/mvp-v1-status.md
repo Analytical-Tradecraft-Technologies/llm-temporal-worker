@@ -28,7 +28,12 @@ Synchronous providers hold the submission activity through the HTTP response.
 Resumable providers return pending and are polled by later activities. Provider
 identifiers and budget receipts stay inside durable runtime storage. Unknown
 paid outcomes acquire a new reservation before another submission; the original
-attempt remains accounted and pending. No service cancellation API is exposed.
+attempt remains accounted and pending. `limits.route_attempts` bounds provider
+executions per request (default six), including unknown outcomes. Unused quote
+renewals do not consume attempts. At exhaustion the root returns a terminal
+`provider_error`; unknown children remain accounted and discoverable for recovery.
+Retries prefer eligible candidates with fewer prior attempts, preserving route
+priority when counts tie. No service cancellation API is exposed.
 See [workflow behavior](internal-workflows.md) and [activity contracts](activity-runtime.md).
 
 ## Storage and callers
@@ -44,6 +49,13 @@ valid cloud/Redis configuration. The typed OCaml client supports starting or
 calling the public workflows and decoding their final responses. Tests cover
 workflow composition, retries, cache and compaction with deterministic adapters;
 local service gates distinguish real Temporal/Redis from in-memory cloud stores.
+
+Configuration reloads do not prevent finalization of a saved terminal provider
+result. Pending provider work and new budget admission require the original
+configuration digest; an incompatible worker returns a retryable state-unavailable
+error. Restore compatible settings to resume that work without resubmission.
+Route-specific compatibility across different configuration digests remains
+tracked in [#958](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/958).
 
 ## Separate or deferred capabilities
 

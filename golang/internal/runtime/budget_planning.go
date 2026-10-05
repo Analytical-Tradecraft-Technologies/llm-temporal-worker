@@ -21,10 +21,11 @@ import (
 // ExpiresAt bounds unused admission; Redis owns the separate 15-minute start
 // deadline and retains consumed reservations until settlement/window expiry.
 type BudgetAttempt struct {
-	OperationID  durable.OperationID
-	GenerationID durable.GenerationID
-	QuotedAt     time.Time
-	ExpiresAt    time.Time
+	PriorCandidates []string
+	OperationID     durable.OperationID
+	GenerationID    durable.GenerationID
+	QuotedAt        time.Time
+	ExpiresAt       time.Time
 }
 
 // PlannedBudgetCall is invocation-local data, not a dispatch grant. The price,
@@ -99,6 +100,7 @@ func (planning *ProviderPlanning) NewBudgetPlanning(estimator budget.Estimator, 
 	}
 	providers := *planning
 	providers.outputLimit = estimator.MaxOutput
+	providers.contextEstimator = copyBudgetEstimator(estimator)
 	return &BudgetPlanning{providers: &providers, estimator: copyBudgetEstimator(estimator)}, nil
 }
 
@@ -142,7 +144,7 @@ func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, a
 			result = quoted
 		}
 		return usable, err
-	})
+	}, attempt.PriorCandidates...)
 	if err != nil {
 		return PlannedBudgetCall{}, err
 	}
@@ -199,7 +201,7 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 		return PlannedBudgetCall{}, false, ctx.Err()
 	}
 	if err != nil {
-		if errors.Is(err, budget.ErrUnusablePrice) {
+		if errors.Is(err, budget.ErrUnusablePrice) || errors.Is(err, budget.ErrContextLimit) {
 			return PlannedBudgetCall{}, false, nil
 		}
 		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeInvalidArgument)

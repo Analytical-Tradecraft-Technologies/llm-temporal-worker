@@ -27,7 +27,7 @@ func mapError(err error, profileName string) *provider.Error {
 		return mapped
 	}
 	if errors.Is(err, context.Canceled) {
-		mapped := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "provider request canceled")
+		mapped := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request canceled")
 		mapped.Cause = err
 		return mapped
 	}

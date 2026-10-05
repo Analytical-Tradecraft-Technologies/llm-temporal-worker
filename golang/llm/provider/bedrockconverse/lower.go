@@ -32,7 +32,14 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		if err != nil {
 			return bedrockruntime.ConverseInput{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		input.Messages = append(input.Messages, message)
+		// A model turn can be split into text and tool-call items internally.
+		// Converse requires those blocks (and parallel tool results) together.
+		last := len(input.Messages) - 1
+		if last >= 0 && input.Messages[last].Role == message.Role {
+			input.Messages[last].Content = append(input.Messages[last].Content, message.Content...)
+		} else {
+			input.Messages = append(input.Messages, message)
+		}
 	}
 	if len(input.Messages) == 0 {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("at least one input message is required")
@@ -197,7 +204,11 @@ func lowerTools(tools []llm.Tool) ([]types.Tool, error) {
 		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
 			return nil, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
 		}
-		result = append(result, &types.ToolMemberToolSpec{Value: types.ToolSpecification{Name: stringPtr(tool.Name), Description: stringPtr(tool.Description), InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)}}})
+		var description *string
+		if tool.Description != "" {
+			description = stringPtr(tool.Description)
+		}
+		result = append(result, &types.ToolMemberToolSpec{Value: types.ToolSpecification{Name: stringPtr(tool.Name), Description: description, InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)}}})
 	}
 	return result, nil
 }

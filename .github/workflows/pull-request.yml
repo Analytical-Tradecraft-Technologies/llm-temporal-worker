@@ -392,6 +392,10 @@ jobs:
         working-directory: golang
         run: go vet ./...
 
+      - name: Check local OpenAI smoke offline
+        if: steps.go.outputs.present == 'true'
+        run: make openai-smoke-check
+
       - name: Compile guarded live-provider harness
         if: steps.go.outputs.present == 'true'
         working-directory: golang

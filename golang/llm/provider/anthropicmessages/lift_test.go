@@ -7,8 +7,10 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
 func TestLiftPreservesThinkingToolOrderUsageAndActualTier(t *testing.T) {
@@ -165,5 +167,42 @@ func TestLiftRejectsMalformedToolArgumentsAndUnknownStopReason(t *testing.T) {
 	_, err = profile.liftResponse(call, &unknown, "req")
 	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse {
 		t.Fatalf("unknown stop reason error = %#v", err)
+	}
+}
+
+func TestMixedToolResponseSupportsCheckpointAndCompaction(t *testing.T) {
+	var response anthropic.Message
+	err := json.Unmarshal([]byte(`{
+ "id":"mixed", "type":"message", "role":"assistant", "model":"claude-contract",
+ "content":[
+ {"type":"tool_use","id":"a","name":"lookup","input":{}},
+ {"type":"text","text":"Checking another source"},
+ {"type":"tool_use","id":"b","name":"lookup","input":{}}
+ ], "stop_reason":"tool_use", "usage":{"input_tokens":5,"output_tokens":5,"service_tier":"standard"}
+ }`), &response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := mustProfile(t, testProfile())
+	call := provider.Call{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "mixed", ServiceClass: llm.ServiceClassStandard}
+	lifted, err := profile.liftResponse(call, &response, "request-mixed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifted.Status != llm.ResponseStatusToolCalls {
+		t.Fatalf("status = %v", lifted.Status)
+	}
+	pending, err := state.ValidateTranscript(lifted.Output)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("pending = %v, error = %v", pending, err)
+	}
+	items := append([]llm.Item{}, lifted.Output...)
+	items = append(items, llm.ToolResult{CallID: "a"}, llm.ToolResult{CallID: "b"})
+	selection, err := compaction.SelectPrefix(items, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selection.Prefix) != len(items) || len(selection.Retained) != 0 {
+		t.Fatalf("selection = %#v", selection)
 	}
 }

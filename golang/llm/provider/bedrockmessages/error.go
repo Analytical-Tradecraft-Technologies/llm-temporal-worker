@@ -27,7 +27,7 @@ func mapError(err error, profileName string) *provider.Error {
 		return mapped
 	}
 	if errors.Is(err, context.Canceled) {
-		mapped := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "provider request canceled")
+		mapped := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request canceled")
 		mapped.Cause = err
 		return mapped
 	}
@@ -52,6 +52,10 @@ func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {
 	switch {
 	case status >= http.StatusMultipleChoices && status < http.StatusBadRequest:
 		dispatch, retry, safe = provider.DispatchAmbiguous, provider.RetryNever, "provider redirect response is ambiguous"
+	case status == http.StatusRequestTimeout || status == http.StatusFailedDependency:
+		// Bedrock reports model processing failures with these 4xx statuses.
+		// They do not prove rejection or zero usage: a new attempt needs budget.
+		dispatch, safe = provider.DispatchAmbiguous, "provider model processing failed"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
 	case status == http.StatusForbidden:

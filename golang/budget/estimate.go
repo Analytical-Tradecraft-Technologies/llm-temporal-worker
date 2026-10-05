@@ -82,6 +82,9 @@ func (estimator Estimator) outputLimit(request llm.Request) (int64, error) {
 }
 
 func (estimator Estimator) EstimateCandidate(request llm.Request, candidate routing.Candidate, entry pricing.Entry) (Estimate, error) {
+	if err := entry.ValidateUsagePricing(); err != nil {
+		return Estimate{}, fmt.Errorf("%w: %v", ErrUnusablePrice, err)
+	}
 	inputTokens, err := estimator.estimateInput(request, candidate)
 	if err != nil {
 		return Estimate{}, err
@@ -96,6 +99,9 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	}
 	if estimator.MaxReasoning > reasoningTokens {
 		reasoningTokens = estimator.MaxReasoning
+	}
+	if err := validateContextCounts(candidate.ContextTokens, inputTokens, outputTokens, reasoningTokens); err != nil {
+		return Estimate{}, err
 	}
 	cacheWrite := inputTokens
 	components := []struct {

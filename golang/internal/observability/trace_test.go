@@ -9,6 +9,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 func TestTracerDropsUnsafeAttributesAndHashesTenant(t *testing.T) {
@@ -214,5 +215,52 @@ func TestTracerBoundsSpanNamesAndNoopContextPaths(t *testing.T) {
 	}
 	if err := tracer.Shutdown(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDisabledTracerDoesNotRecordOrCreateTraceContext(t *testing.T) {
+	exporter := &observability.MemoryExporter{}
+	for _, test := range []struct {
+		name   string
+		tracer *observability.Tracer
+	}{
+		{"disabled", observability.NewTracer(observability.TraceOptions{})},
+		{"disabled with exporter", observability.NewTracer(observability.TraceOptions{Exporter: exporter, Batch: true})},
+		{"unbound", observability.FromContext(context.Background())},
+		{"nil", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, span := test.tracer.Start(context.Background(), "worker.event", attribute.String("tenant", "tenant-a"))
+			if span.IsRecording() || span.SpanContext().IsSampled() || span.SpanContext().IsValid() {
+				t.Fatal("disabled tracer created a recording or valid root span")
+			}
+			test.tracer.RecordError(span, context.Canceled)
+			span.End()
+			if err := test.tracer.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.tracer.Shutdown(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if len(exporter.Spans()) != 0 {
+		t.Fatal("disabled tracer exported spans")
+	}
+}
+
+func TestDisabledTracerPreservesExistingParentContext(t *testing.T) {
+	parent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID: oteltrace.TraceID{1}, SpanID: oteltrace.SpanID{2}, TraceFlags: oteltrace.FlagsSampled, Remote: true,
+	})
+	ctx := oteltrace.ContextWithRemoteSpanContext(context.Background(), parent)
+	tracer := observability.NewTracer(observability.TraceOptions{})
+	child, span := tracer.Start(ctx, "worker.event")
+	defer span.End()
+	if span.IsRecording() {
+		t.Fatal("disabled child records")
+	}
+	if !span.SpanContext().Equal(parent) || !oteltrace.SpanContextFromContext(child).Equal(parent) {
+		t.Fatal("disabled tracer replaced incoming trace context")
 	}
 }

@@ -53,5 +53,9 @@ func (adapter *Adapter) capabilities(ctx context.Context, query provider.Capabil
 	if err := validateQuery(query, adapter.endpointID); err != nil {
 		return provider.CapabilitySet{}, err
 	}
-	return capabilities(adapter.capabilityVersion), nil
+	result := capabilities(adapter.capabilityVersion)
+	if adapter.storageDenied {
+		result.Features[provider.FeatureContinuation] = provider.Capability{State: provider.CapabilityUnsupported, Reason: "endpoint forbids provider storage"}
+	}
+	return result, nil
 }
