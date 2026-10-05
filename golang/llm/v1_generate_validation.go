@@ -48,6 +48,18 @@ func validateGenerateRequestV1Bounds(request GenerateRequestV1) error {
 	return nil
 }
 
+// validateGenerateRequestV1MediaURLs is the request ingress point of the
+// remote-media URL policy. It covers every position where a Generate request
+// can introduce content: appended items and instructions set by the settings
+// patch. Compact requests carry no content.
+func validateGenerateRequestV1MediaURLs(request GenerateRequestV1) error {
+	var instructions []Instruction
+	if request.SettingsPatch.Instructions.Set != nil {
+		instructions = *request.SettingsPatch.Instructions.Set
+	}
+	return ValidateMediaURLs(instructions, request.Append)
+}
+
 func validateCodePointLength(name, value string, minimum, maximum int) error {
 	length := utf8.RuneCountInString(value)
 	if length < minimum || length > maximum {
