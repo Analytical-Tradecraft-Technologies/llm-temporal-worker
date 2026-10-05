@@ -2,6 +2,7 @@ package openairesponses
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v3/responses"
@@ -31,6 +32,15 @@ func TestIncompleteResponseDropsCutOffFunctionCall(t *testing.T) {
 	}
 	if _, err := liftResponse(call, &control, "req"); err == nil {
 		t.Fatal("invalid function arguments accepted on a completed response")
+	}
+
+	// An incomplete response must not hide a completed call's invalid arguments.
+	var completedCall responses.Response
+	if err := json.Unmarshal([]byte(strings.Replace(body, `"status":"incomplete"}]`, `"status":"completed"}]`, 1)), &completedCall); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := liftResponse(call, &completedCall, "req"); err == nil {
+		t.Fatal("completed function call with invalid arguments was dropped")
 	}
 }
 

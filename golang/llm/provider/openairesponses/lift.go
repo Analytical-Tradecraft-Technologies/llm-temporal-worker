@@ -257,7 +257,10 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 			if !json.Valid([]byte(call.Arguments)) {
 				// Keep the paid incomplete response as a length truncation and
 				// drop only the cut-off call.
-				if truncated {
+				// Only the item that was itself cut off may be dropped; a
+				// completed call with invalid arguments is still a malformed
+				// provider response.
+				if truncated && call.Status != responses.ResponseFunctionToolCallStatusCompleted {
 					continue
 				}
 				return nil, false, false, fmt.Errorf("function call %q arguments are invalid JSON", call.CallID)
