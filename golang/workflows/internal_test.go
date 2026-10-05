@@ -293,3 +293,48 @@ func TestRequestWorkflowContinuesOnlyBetweenCompletedSteps(t *testing.T) {
 	f = workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionAcquired), step(activity.GenerateActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted))
 	f.run(t)
 }
+
+func TestBudgetWorkflowBacksOffConsecutiveDenials(t *testing.T) {
+	steps := make([]workflowStep, 0, 12)
+	for i := 0; i < 11; i++ {
+		steps = append(steps, step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait))
+	}
+	steps = append(steps, step(activity.AcquireBudgetActivityName, llm.ExecutionAcquired))
+	f := workflowTest(t, "generate", steps...)
+	var timers []time.Duration
+	f.env.SetOnTimerScheduledListener(func(_ string, duration time.Duration) {
+		timers = append(timers, duration)
+	})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate"})
+	if err := f.env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture hints three seconds, which wins over the first two backoffs.
+	want := []time.Duration{3 * time.Second, 3 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 64 * time.Second, 128 * time.Second, 256 * time.Second, maxBudgetBackoff, maxBudgetBackoff}
+	if !reflect.DeepEqual(timers, want) {
+		t.Fatalf("budget wait timers = %v, want %v", timers, want)
+	}
+}
+
+func TestBudgetBackoffHonoursLongerHintAndCarriedWaits(t *testing.T) {
+	if got := budgetBackoff(llm.ExecutionResultV1{RetryAfterSeconds: 900}, 0); got != 15*time.Minute {
+		t.Fatalf("hinted backoff = %v", got)
+	}
+	if got := budgetBackoff(llm.ExecutionResultV1{RetryAfterSeconds: 1}, 3); got != 8*time.Second {
+		t.Fatalf("carried backoff = %v", got)
+	}
+	if got := budgetBackoff(llm.ExecutionResultV1{}, 1000); got != maxBudgetBackoff {
+		t.Fatalf("capped backoff = %v", got)
+	}
+}
+
+func TestBudgetWorkflowRejectsNegativeWaits(t *testing.T) {
+	f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait))
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate", Waits: -1})
+	if f.env.GetWorkflowError() == nil {
+		t.Fatal("negative denial count accepted")
+	}
+	if got := budgetBackoff(llm.ExecutionResultV1{}, -1); got != maxBudgetBackoff {
+		t.Fatalf("negative waits backoff = %v", got)
+	}
+}
