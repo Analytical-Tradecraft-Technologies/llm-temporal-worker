@@ -201,6 +201,11 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 			return nil, false, false, fmt.Errorf("choice tool call %d is missing ID or name", index)
 		}
 		if !json.Valid([]byte(call.Function.Arguments)) {
+			// The output limit can cut a call off mid-arguments. Keep the paid
+			// response as a length truncation and drop only the incomplete call.
+			if choice.FinishReason == "length" {
+				continue
+			}
 			return nil, false, false, fmt.Errorf("tool call %q arguments are invalid JSON", call.ID)
 		}
 		hasToolCalls = true
