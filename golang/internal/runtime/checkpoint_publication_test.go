@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
+	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
@@ -204,7 +205,7 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 			}
 			want := base.State.Items
 			if !noWork {
-				want = append(append([]llm.Item(nil), result.Output...), prepared.Selection.Retained...)
+				want = append([]llm.Item{compaction.SummaryItem(publishedSummaryText(t, result))}, prepared.Selection.Retained...)
 			}
 			if !reflect.DeepEqual(next.State.Items, want) || !reflect.DeepEqual(next.State.Settings, base.State.Settings) {
 				t.Fatal("compaction changed suffix or application settings")
@@ -288,7 +289,7 @@ func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append(append([]llm.Item(nil), result.Output...), prepared.Selection.Retained...)
+	want := append([]llm.Item{compaction.SummaryItem(publishedSummaryText(t, result))}, prepared.Selection.Retained...)
 	if !reflect.DeepEqual(next.State.Items, want) || !reflect.DeepEqual(next.State.Settings, base.State.Settings) {
 		t.Fatal("cached compaction lost consumer state")
 	}
@@ -392,4 +393,15 @@ func TestCheckpointPublicationSnapshotCadence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// publishedSummaryText is the summarizer text a compaction checkpoint wraps
+// in its leading human-role summary item.
+func publishedSummaryText(t *testing.T, result llm.Response) string {
+	t.Helper()
+	summary, err := compaction.PlainTextSummary(result, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return summary
 }
