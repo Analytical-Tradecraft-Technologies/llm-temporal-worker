@@ -237,16 +237,25 @@ same path; an atomic file replacement is therefore read as one complete
 candidate before validation. At startup the watcher also compares the current
 file once with the already validated bytes, so a replacement that wins the
 race between startup validation and watcher initialization cannot leave a
-stale snapshot serving silently. Repeated notifications are coalesced.
+stale snapshot serving silently. The watcher notifies a change only after two
+consecutive polls agree on the file's identity, metadata and content digest,
+and a watcher-triggered reload publishes only that content, so an in-place
+write caught halfway is never compiled; `SIGHUP` reloads immediately. Repeated
+notifications are coalesced.
 Environment variables are not hot-reloaded.
 
 Reload updates the request snapshot and its provider/state clients only.
 The environment, listener addresses, shutdown and monitor settings, inline
 Activity payload limit, Temporal client/task-queue and worker settings,
-telemetry process wiring, Redis key prefix, and endpoint outbound-host allowlists
+telemetry process wiring, durable state identity (state kind, Redis key
+prefix, admission hash tag and key-secret reference, the cloud request
+provider, table, payload store, namespace and secret reference, and the result
+blob store location), and endpoint outbound-host allowlists
 remain process-lifetime settings. The replacement validator rejects changes to
 those fields before constructing replacement clients; a rollout is required
-to change them.
+to change them. A rejected reload logs a bounded `cause` and, for validation
+and process-lifetime rejections, the `config_field` schema path; see the
+[CLI reference](../reference/cli.md#configuration-reload).
 
 ## Required metrics
 

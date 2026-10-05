@@ -138,7 +138,7 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 	}
 
 	fixture := strings.Replace(withoutCloudRequests(withoutStreamFields), "kind: durable", "kind: redis", 1)
-	fixture = strings.Replace(fixture, "environment: production", "environment: development", 1)
+	fixture = strings.Replace(fixture, "environment: production", "environment: development", -1)
 	loaded, err = config.Load([]byte(fixture))
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 }
 
 func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", 1)
+	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", -1)
 	data = strings.Replace(data, `blob_store:
   kind: s3
   inline_bytes: 262144
@@ -224,7 +224,7 @@ func TestLoadRejectsProductionRedisWithoutTLS(t *testing.T) {
 }
 
 func TestLoadAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
-	data := strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", 1)
+	data := strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)
 	if _, err := config.Load([]byte(data)); err != nil {
 		t.Fatalf("development Redis without TLS error = %v", err)
 	}
@@ -249,7 +249,7 @@ func redisTLSDisabledYAML(t *testing.T) []byte {
 
 func developmentFileBlobYAML(t *testing.T) []byte {
 	t.Helper()
-	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", 1)
+	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", -1)
 	data = strings.Replace(data, `blob_store:
   kind: s3
   inline_bytes: 262144
@@ -270,7 +270,7 @@ func TestLoadBudgetPolicyAcceptsEveryDocumentedMatcher(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
 		"match:\n        tenant: acme\n        environment: production",
-		"match:\n        project: critical-workload\n        actor_prefix: service-\n        logical_model: reasoning\n        endpoint: openai-prod\n        service_class: priority",
+		"match:\n        project: invoice-processing\n        actor_prefix: service-\n        logical_model: invoice-summarizer\n        endpoint: openai-prod\n        service_class: priority",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
@@ -278,7 +278,7 @@ func TestLoadBudgetPolicyAcceptsEveryDocumentedMatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	match := loaded.Budgets.Policies[0].Match
-	if match.Project != "critical-workload" || match.ActorPrefix != "service-" || match.LogicalModel != "reasoning" || match.EndpointID != "openai-prod" || match.ServiceClass != llm.ServiceClassPriority {
+	if match.Project != "invoice-processing" || match.ActorPrefix != "service-" || match.LogicalModel != "invoice-summarizer" || match.EndpointID != "openai-prod" || match.ServiceClass != llm.ServiceClassPriority {
 		t.Fatalf("budget matcher = %#v", match)
 	}
 	if match.Tenant != "" || match.Environment != "" {
@@ -371,15 +371,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: c030680a921b24872bcc935f4d3110c9ea83ae89609e3595ce4d1f03ee623950",
-		"admission_digest: C030680A921B24872BCC935F4D3110C9EA83AE89609E3595CE4D1F03EE623950",
+		"admission_digest: e7bcf1ce68509895586301dd6db9b4906ca505b2d933ece78163b68581c09717",
+		"admission_digest: E7BCF1CE68509895586301DD6DB9B4906CA505B2D933ECE78163B68581C09717",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "c030680a921b24872bcc935f4d3110c9ea83ae89609e3595ce4d1f03ee623950"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "e7bcf1ce68509895586301dd6db9b4906ca505b2d933ece78163b68581c09717"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -526,7 +526,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: c030680a921b24872bcc935f4d3110c9ea83ae89609e3595ce4d1f03ee623950", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: e7bcf1ce68509895586301dd6db9b4906ca505b2d933ece78163b68581c09717", "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),

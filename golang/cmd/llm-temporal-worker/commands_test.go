@@ -281,3 +281,38 @@ func TestConfigCommandsRejectWorkloadIdentityTheBinaryCannotResolve(t *testing.T
 		}
 	}
 }
+
+// Every row is a setting that validate-config used to accept and that then
+// failed at worker start or on every matching request.
+func TestValidateConfigRejectsSettingsThatFailAfterValidation(t *testing.T) {
+	example, err := os.ReadFile(exampleConfigPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct{ name, old, replacement, want string }{
+		{"window bucket count", "bucket: 1h", "bucket: 1s", "budgets.policies[0].windows[2] needs 2592002 buckets"},
+		{"limit above the Redis range", `limit_usd: "25.000000000000000000"`, `limit_usd: "99999999999999999999"`, "budgets.policies[0].windows[0].limit_usd must not exceed"},
+		{"policy ID of 127 bytes", "id: acme-production", "id: " + strings.Repeat("p", 127), "budgets.policies[0].windows[0] identity"},
+		{"limit below one nano-USD", `limit_usd: "25.000000000000000000"`, `limit_usd: "0.0000000001"`, "budgets.policies[0].windows[0].limit_usd must be at least"},
+		{"second document", "", "\n---\nbudgets:\n  require_match: false\n", "configuration YAML"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			if !strings.Contains(string(example), row.old) {
+				t.Fatalf("example configuration no longer contains %q", row.old)
+			}
+			data := strings.Replace(string(example), row.old, row.replacement, 1)
+			if row.old == "" {
+				data = string(example) + row.replacement
+			}
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var output, errorsOut bytes.Buffer
+			code := Execute(context.Background(), []string{"validate-config", "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut})
+			if code != 1 || !strings.Contains(errorsOut.String(), row.want) {
+				t.Fatalf("validate-config code=%d out=%q error=%q, want error naming %q", code, output.String(), errorsOut.String(), row.want)
+			}
+		})
+	}
+}

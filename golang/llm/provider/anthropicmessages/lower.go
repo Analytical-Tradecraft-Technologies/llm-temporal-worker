@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
@@ -25,9 +26,18 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		return anthropic.MessageNewParams{}, err
 	}
 	for index, item := range request.Input {
+		// A reference is an output annotation (for example a citation) that
+		// a replayed transcript still carries. It has no wire form, so it is
+		// left out instead of failing every later turn.
+		if _, annotation := item.(llm.Reference); annotation {
+			continue
+		}
 		message, err := lowerItem(item)
 		if err != nil {
 			return anthropic.MessageNewParams{}, fmt.Errorf("input item %d: %w", index, err)
+		}
+		if emptyModelMessage(item) {
+			continue
 		}
 		messages = append(messages, message)
 	}
@@ -48,7 +58,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 			}
 			requestMap["max_tokens"] = *request.Output.MaxTokens
 		}
-		if err := lowerOutput(*request.Output, requestMap); err != nil {
+		if err := lowerOutput(*request.Output, requestMap, strict); err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
 	}
@@ -72,7 +82,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		}
 	}
 	if request.Reasoning != nil {
-		thinking, err := lowerReasoning(*request.Reasoning)
+		thinking, err := lowerReasoning(*request.Reasoning, strict)
 		if err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
@@ -160,6 +170,14 @@ func lowerInstructionParts(parts []llm.Part) ([]any, error) {
 		}
 	}
 	return blocks, nil
+}
+
+// emptyModelMessage reports a replayed model turn with no parts (for example a
+// lifted content_filter or empty stop reply). Anthropic Messages rejects an assistant message
+// without content, and it carries no history to preserve.
+func emptyModelMessage(item llm.Item) bool {
+	message, ok := item.(llm.Message)
+	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
 }
 
 func lowerItem(item llm.Item) (map[string]any, error) {
@@ -385,7 +403,7 @@ func lowerToolPolicy(policy llm.ToolPolicy) (map[string]any, error) {
 	return choice, nil
 }
 
-func lowerOutput(output llm.OutputSpec, target map[string]any) error {
+func lowerOutput(output llm.OutputSpec, target map[string]any, strict bool) error {
 	switch output.Format.Kind {
 	case "", llm.OutputKindText:
 		return nil
@@ -394,12 +412,12 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 		// not valid and would otherwise constrain the answer to {}.
 		return fmt.Errorf("output format %q without a schema is not supported by Anthropic Messages", output.Format.Kind)
 	case llm.OutputKindJSONSchema:
-		var schema map[string]any
-		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
-			return fmt.Errorf("output schema: %w", err)
-		}
-		if schema == nil {
-			return fmt.Errorf("output schema must be an object")
+		// Structured output returns a 400 for keywords outside its subset, so
+		// the wire carries a lowered schema; the lift validates the final
+		// JSON against the caller's original.
+		schema, err := anthropicschema.Lower(output.Format.Schema, strict)
+		if err != nil {
+			return err
 		}
 		target["output_config"] = map[string]any{"format": map[string]any{
 			"type":   "json_schema",
@@ -430,50 +448,51 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 	return nil
 }
 
-func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
-	result := map[string]any{}
+// lowerReasoning returns the Messages thinking object, or nil when the request
+// leaves thinking to the model default. Effort is lowered separately to
+// output_config.effort, which the API accepts independently of thinking, so an
+// effort or summary preference alone never turns thinking on.
+func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
 	mode := reasoning.Mode
 	if mode == "" {
 		mode = llm.ReasoningModeProviderDefault
 	}
-	summary := reasoning.Summary
-	if summary == "" {
-		summary = llm.ReasoningSummaryProviderDefault
-	}
-	if summary != llm.ReasoningSummaryProviderDefault && summary != llm.ReasoningSummaryNone {
-		return nil, fmt.Errorf("reasoning summary %q is not supported by Anthropic Messages", summary)
-	}
-	if reasoning.Effort != "" && reasoning.Effort != llm.ReasoningEffortProviderDefault {
-		if mode != llm.ReasoningModeAdaptive {
-			return nil, fmt.Errorf("reasoning effort %q requires adaptive Anthropic thinking", reasoning.Effort)
+	// The only display controls are "summarized" (the provider default) and
+	// "omitted"; a summary detail level cannot be expressed.
+	display := ""
+	switch reasoning.Summary {
+	case "", llm.ReasoningSummaryProviderDefault:
+	case llm.ReasoningSummaryNone:
+		display = "omitted"
+	case llm.ReasoningSummaryAuto:
+		display = "summarized"
+	case llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed:
+		if strict {
+			return nil, fmt.Errorf("reasoning summary %q is not supported by Anthropic Messages", reasoning.Summary)
 		}
+		display = "summarized"
+	default:
+		return nil, fmt.Errorf("reasoning summary %q is not supported by Anthropic Messages", reasoning.Summary)
 	}
-	switch mode {
-	case llm.ReasoningModeProviderDefault:
-		if reasoning.TokenBudget == nil && (reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && summary == llm.ReasoningSummaryProviderDefault {
+	if mode == llm.ReasoningModeProviderDefault {
+		if reasoning.TokenBudget == nil {
+			// Thinking is opt-in: with no thinking object the response has no
+			// thinking blocks, so there is nothing to summarize or omit and
+			// dropping the summary preference loses nothing, even in strict
+			// mode. display has no wire form outside that object.
 			return nil, nil
 		}
-		if reasoning.TokenBudget != nil {
-			mode = llm.ReasoningModeEnabled
-		} else {
-			mode = llm.ReasoningModeAdaptive
-		}
+		mode = llm.ReasoningModeEnabled
+	}
+	if reasoning.Effort != "" && reasoning.Effort != llm.ReasoningEffortProviderDefault && mode != llm.ReasoningModeAdaptive {
+		return nil, fmt.Errorf("reasoning effort %q requires adaptive Anthropic thinking", reasoning.Effort)
+	}
+	result := map[string]any{}
+	switch mode {
 	case llm.ReasoningModeDisabled:
 		return map[string]any{"type": "disabled"}, nil
-	case llm.ReasoningModeAdaptive, llm.ReasoningModeEnabled:
-	default:
-		return nil, fmt.Errorf("reasoning mode %q is not supported by Anthropic Messages", reasoning.Mode)
-	}
-	display := "summarized"
-	if summary == llm.ReasoningSummaryNone {
-		display = "omitted"
-	}
-	switch mode {
 	case llm.ReasoningModeAdaptive:
 		result["type"] = "adaptive"
-		if summary != llm.ReasoningSummaryProviderDefault {
-			result["display"] = display
-		}
 	case llm.ReasoningModeEnabled:
 		if reasoning.TokenBudget == nil {
 			return nil, fmt.Errorf("enabled Anthropic thinking requires token_budget")
@@ -483,9 +502,11 @@ func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
 		}
 		result["type"] = "enabled"
 		result["budget_tokens"] = *reasoning.TokenBudget
-		if summary != llm.ReasoningSummaryProviderDefault {
-			result["display"] = display
-		}
+	default:
+		return nil, fmt.Errorf("reasoning mode %q is not supported by Anthropic Messages", reasoning.Mode)
+	}
+	if display != "" {
+		result["display"] = display
 	}
 	return result, nil
 }

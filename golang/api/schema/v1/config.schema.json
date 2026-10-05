@@ -10,7 +10,7 @@
   ],
   "properties": {
     "version": { "const": "llm-temporal-worker/v1" },
-    "environment": { "type": "string", "minLength": 1 },
+    "environment": { "type": "string", "minLength": 1, "description": "Free-form identifier. Only the exact value development is exempt from production hardening; every other value is treated as production." },
     "server": { "$ref": "#/$defs/server" },
     "temporal": { "$ref": "#/$defs/temporal" },
     "authorization": { "$ref": "#/$defs/authorization" },
@@ -50,7 +50,7 @@
     },
     {
       "if": {
-        "properties": { "environment": { "const": "production" } },
+        "properties": { "environment": { "not": { "const": "development" } } },
         "required": ["environment"]
       },
       "then": {
@@ -189,7 +189,7 @@
         "key_prefix": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
         "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" },
         "key_secret": { "$ref": "#/$defs/secret" },
-        "tls": { "$ref": "#/$defs/tls" }, "admission_hash_tag": { "type": "string" },
+        "tls": { "$ref": "#/$defs/tls" }, "admission_hash_tag": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^{} \\t\\r\\n]+$" },
         "admission_mode": { "enum": ["function", "lua"] }, "function_library": { "type": "string" },
         "admission_version": { "type": "string", "minLength": 1 },
         "admission_digest": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
@@ -428,7 +428,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["allowed_tenants", "data_regions", "routes"],
       "properties": {
-        "allowed_tenants": { "type": "array", "items": { "type": "string" } },
+        "allowed_tenants": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Tenants that may use this model. An empty, null, or omitted list places no tenant restriction on the model." },
         "data_regions": { "type": "array", "items": { "type": "string" } },
         "routes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/route" } }
       }
@@ -447,13 +447,13 @@
     },
     "budget_window": {
       "type": "object", "additionalProperties": false, "required": ["duration", "bucket"],
-      "properties": { "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "description": "Optional stable window name. The accounting identity is <policy id>/<id>, at most 128 bytes; when omitted, <id> is derived from duration and bucket, for example 24h-5m." }, "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_usd": { "type": "string", "pattern": "^(0|[0-9]{1,20})(\\.[0-9]{1,18})?$" }, "limit_micro_usd": { "type": "integer", "minimum": 1 } },
+      "properties": { "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "description": "Optional stable window name. The accounting identity is <policy id>/<id>, at most 128 bytes; when omitted, <id> is derived from duration and bucket, for example 24h-5m." }, "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_usd": { "type": "string", "pattern": "^(0|[0-9]{1,7})(\\.[0-9]{1,18})?$", "description": "Exact USD limit from 0.000000001 to 9007199.254740991, the range Redis represents exactly in nano-USD." }, "limit_micro_usd": { "type": "integer", "minimum": 1, "maximum": 9007199254740 } },
       "anyOf": [{"required": ["limit_usd"]}, {"required": ["limit_micro_usd"]}]
     },
     "budget_policy": {
       "type": "object", "additionalProperties": false, "required": ["id", "match", "windows"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1, "maxLength": 126, "description": "Each window identity is <id>/<window id> and must fit 128 bytes, so a longer window id leaves less room." },
         "match": {
           "type": "object", "additionalProperties": false, "minProperties": 1,
           "properties": {

@@ -22,19 +22,30 @@ func providerTier(class llm.ServiceClass) string {
 	}
 }
 
-func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+// lowerRequestMap builds the intended Responses wire body. lowerRequest carries
+// it into the SDK parameter type; the two must stay wire-equivalent.
+func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[string]any, loweredToolPolicy, error) {
 	input := make([]any, 0, len(request.Instructions)+len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		input = append(input, item)
 	}
 	for index, item := range request.Input {
+		// A reference is an output annotation (for example a citation) that
+		// a replayed transcript still carries. It has no wire form, so it is
+		// left out instead of failing every later turn.
+		if _, annotation := item.(llm.Reference); annotation {
+			continue
+		}
 		lowered, err := lowerItem(item)
 		if err != nil {
-			return responses.ResponseNewParams{}, fmt.Errorf("input item %d: %w", index, err)
+			return nil, loweredToolPolicy{}, fmt.Errorf("input item %d: %w", index, err)
+		}
+		if emptyModelMessage(item) {
+			continue
 		}
 		input = append(input, lowered)
 	}
@@ -46,7 +57,7 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	if request.Output != nil {
 		output, err := lowerOutput(*request.Output)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		for key, value := range output {
 			requestMap[key] = value
@@ -54,13 +65,13 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	}
 	if request.Sampling != nil {
 		if err := lowerSampling(requestMap, *request.Sampling); err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 	}
 	if request.Reasoning != nil {
 		reasoning, err := lowerReasoning(*request.Reasoning)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		if reasoning != nil {
 			requestMap["reasoning"] = reasoning
@@ -69,24 +80,32 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	if len(request.Tools) > 0 {
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		requestMap["tools"] = tools
 	}
 	policy, err := lowerToolPolicy(request.ToolPolicy)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return nil, loweredToolPolicy{}, err
 	}
 	requestMap["tool_choice"] = policy.choice
 	requestMap["parallel_tool_calls"] = policy.parallel
 	continuation, err := lowerContinuation(request.Continuation)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return nil, loweredToolPolicy{}, err
 	}
 	if continuation != "" {
 		requestMap["previous_response_id"] = continuation
 	}
 	if err := lowerExtensions(request.Extensions, requestMap); err != nil {
+		return nil, loweredToolPolicy{}, err
+	}
+	return requestMap, policy, nil
+}
+
+func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+	requestMap, policy, err := lowerRequestMap(request, serviceClass)
+	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
 	encoded, err := json.Marshal(requestMap)
@@ -119,6 +138,14 @@ func lowerInstruction(instruction llm.Instruction) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"type": "message", "role": role, "content": content}, nil
+}
+
+// emptyModelMessage reports a replayed model turn with no parts (for example a
+// lifted content_filter or empty stop reply). It has no Responses wire content and carries no
+// history to preserve.
+func emptyModelMessage(item llm.Item) bool {
+	message, ok := item.(llm.Message)
+	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
 }
 
 func lowerItem(item llm.Item) (map[string]any, error) {
@@ -372,7 +399,12 @@ func lowerOutput(output llm.OutputSpec) (map[string]any, error) {
 		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
 			return nil, fmt.Errorf("output schema: %w", err)
 		}
-		format := map[string]any{"type": "json_schema", "name": output.Format.Name, "schema": schema, "strict": output.Format.Strict}
+		// The provider requires a name; v1 leaves it optional.
+		name := output.Format.Name
+		if name == "" {
+			name = llm.DefaultOutputFormatName
+		}
+		format := map[string]any{"type": "json_schema", "name": name, "schema": schema, "strict": output.Format.Strict}
 		if output.Format.Description != "" {
 			format["description"] = output.Format.Description
 		}

@@ -16,6 +16,10 @@ Every public JSON record is parsed with a recursive duplicate-key check before
 semantic decoding. This includes nested objects retained as extension,
 provider-state, tool-argument, or schema JSON; a repeated key is never resolved
 by taking the last value. Canonical request hashing applies the same rule.
+The check walks the whole record once, at the entry point that receives it;
+the item, part, and blob decoders beneath that entry point split the values
+they are handed without scanning them again, so decode cost is linear in the
+record size rather than multiplied by its nesting depth.
 
 > This chapter describes the current pre-release v1 shape. The staged target,
 > unimplemented delta, cache, exact USD, Compact, and Query contracts replace
@@ -141,7 +145,7 @@ Input is an ordered list of tagged unions. A v1 implementation supports:
 | `tool_call` | `id`, `name`, `arguments` | Model request to invoke a caller-owned tool |
 | `tool_result` | `call_id`, `content`, `is_error` | Caller-provided result paired to one tool call |
 | `provider_state` | `provider`, `endpoint_family`, `media_type`, `opaque` | Uninterpreted continuation data retained byte-for-byte |
-| `reference` | `uri`, optional metadata | External content reference accepted only by declared endpoint capability |
+| `reference` | `uri`, optional metadata | External content annotation, such as a citation in provider output; kept in the transcript and never sent to a provider |
 
 Instructions are a separate ordered part list because OpenAI Responses,
 Chat-style developer/system messages, and Anthropic's top-level system content
@@ -208,10 +212,22 @@ The canonical schema dialect is JSON Schema Draft 2020-12. Processing is:
 4. lower to provider-specific strict structured output or tool schema;
 5. locally validate the final model JSON against the canonical schema.
 
+`output.format.name` is optional. When present it must match
+`^[A-Za-z0-9_-]{1,64}$`, the strictest provider rule; the request is rejected
+at decode otherwise. Providers that require a name receive the constant
+`response` when the caller omits it.
+
 Provider restrictions are expressed as diagnostics. For example, a provider
 may require every property to be required and `additionalProperties: false`.
-The compiler may produce an equivalent provider schema only when it can prove
-round-trip equivalence. Otherwise strict mode fails before dispatch.
+The compiler may send a provider schema that differs from the canonical one
+only when every answer the provider can then return is still checked against
+the canonical schema in step 5. The Anthropic and Bedrock Messages adapters
+use this to move keywords Claude structured output rejects (length, numeric
+and item-count constraints among them) into property descriptions and to
+close objects that leave `additionalProperties` unset; see
+[provider adapters](provider-adapters.md#anthropic-messages). A schema that
+cannot be represented this way, such as a recursive schema or, in strict
+mode, an explicitly open object, fails before dispatch.
 
 ## Portability
 

@@ -37,6 +37,7 @@ type Call struct {
 	Model        string
 	ServiceClass llm.ServiceClass
 	SDKParams    any
+	OutputSchema json.RawMessage
 	Metadata     CallMetadata
 }
 
@@ -49,6 +50,9 @@ type Observer interface {
 
 `SDKParams` may contain only the parameter type for the adapter's official SDK.
 It never crosses the adapter package boundary or enters Temporal history.
+`OutputSchema` is the caller's `json_schema` output schema, set when the
+adapter sent the provider a lowered form of it; the lift validates the final
+JSON against it and it stays in the worker process like `SDKParams`.
 `CallMetadata` contains the redacted facts needed to validate the compiled call,
 including schema digests, estimated bytes, capability version, provider tier
 value, and whether opaque state is required in the response.
@@ -106,15 +110,27 @@ break both.
 
 ## Lowering rules
 
+`reference` items are output annotations, such as the citations lifted from an
+Exa response. They stay in the v1 response and in the checkpoint transcript,
+but no endpoint family has a wire form for them, so every adapter leaves them
+out when it lowers a replayed transcript. Omitting one never changes how the
+surrounding messages, tool calls and tool results are grouped. `provider_state`
+items are unaffected: an adapter still replays its own state and rejects any
+other.
+
 ### OpenAI Responses
 
 - Instructions lower to the supported top-level instruction/developer form.
 - Semantic messages, tool calls, and tool results become separate typed input
   items; they are never concatenated.
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content.
 - A continuation may use a stored response/conversation identifier only when it
   is pinned to the same endpoint, account, family, and compatible model.
 - Strict structured output uses the provider's JSON Schema form after local
-  subset validation.
+  subset validation. The provider requires `text.format.name`; when the
+  caller omits `output.format.name` the adapter sends the constant `response`,
+  so the wire body and its digests stay deterministic.
 - The completed response is validated against the requested JSON object or
   JSON Schema format before it enters the normalized response. JSON-object mode
   requires a valid top-level object; a provider acknowledgement alone is not
@@ -137,7 +153,9 @@ break both.
   messages with their call IDs.
 - Multimodal parts use only the endpoint's declared compatible wire forms.
 - Structured output chooses native response format or a strict tool emulation
-  only when the capability profile declares semantic equivalence.
+  only when the capability profile declares semantic equivalence. A
+  `json_schema` format without a caller name is sent with the constant name
+  `response`, as for Responses.
 - Provider-specific routing bodies are typed namespaced extensions; they cannot
   be injected as arbitrary JSON.
 
@@ -150,12 +168,72 @@ usage/cost lifter.
 - Instructions lower to top-level system blocks in order.
 - Human/model messages lower to user/assistant messages; tool use and tool
   result blocks retain their IDs.
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content. The
+  Bedrock Messages and Bedrock Converse adapters do the same.
 - Consecutive-role merging is permitted only as an explicit, proven transform
   and is recorded as a diagnostic.
 - Thinking, redacted-thinking, and signatures are opaque provider-state. They
   round-trip byte-for-byte and stay pinned to the compatible Anthropic route.
 - JSON Schema constraints are lowered through native output/tool facilities
   only when the exact endpoint profile supports the required strictness.
+- Claude structured output (`output_config.format`) returns a 400 for schema
+  keywords outside its subset, so the Anthropic and Bedrock Messages adapters
+  send a lowered schema, following the transform in the official SDK:
+  - keywords the provider rejects (`minLength`, `maxLength`, `minimum`,
+    `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`,
+    `maxItems`, `minItems` above 1, unsupported `format` values, and every
+    other keyword outside the provider subset) are removed and appended to
+    that schema's `description` as `{keyword: value, ...}` with sorted keys,
+    so the model still sees them and equal schemas lower to equal bytes;
+  - `oneOf` becomes `anyOf`, and a `$ref` keeps no sibling keywords;
+  - an object without `additionalProperties` is closed with
+    `additionalProperties: false`;
+  - an object that explicitly sets `additionalProperties` to `true` or to a
+    schema cannot be represented. Strict portability rejects it at compile.
+    Best effort closes it when it declares `properties`, which only narrows
+    the answer, and rejects it otherwise;
+  - recursive schemas, and references other than `#/$defs/<name>`, are
+    rejected at compile in both modes.
+
+  Rejections are `unsupported_capability` compile errors raised before
+  dispatch, so another route can be chosen. Because the provider enforces a
+  looser schema than the caller wrote, the lift validates the completed
+  response against the caller's original schema, exactly as the Responses and
+  Chat lifts do; JSON that violates it is a provider invalid-response error.
+
+### Amazon Bedrock Messages
+
+- Lowering and lifting follow Anthropic Messages, including the structured
+  output schema lowering and final validation above.
+- Image and document parts must carry inline bytes. Claude on Amazon Bedrock
+  does not accept URL sources and the worker does not fetch URLs, so a URL
+  image or document is an `unsupported_capability` compile error in strict
+  and best-effort mode alike. Bedrock Converse accepts text parts only.
+
+Reasoning controls lower the same way on Anthropic Messages and Bedrock
+Messages:
+
+- Effort is sent as `output_config.effort`, which the API accepts
+  independently of `thinking`. `low`, `medium` and `high` map by name,
+  `maximum` maps to `max`, and `minimal` maps to `low` because the provider has
+  no lower value. An effort with no reasoning mode never adds a `thinking`
+  object; an absent or `provider_default` effort sends no override.
+- The reasoning mode alone decides `thinking`: `adaptive`, `enabled` (requires
+  a token budget of at least 1024; a budget with no mode implies `enabled`) and
+  `disabled` map to the matching `thinking.type`. With no mode and no budget
+  the `thinking` object is omitted and the model default applies. The v1
+  contract carries only effort and summary, so a v1 request never sends
+  `thinking`. An effort combined with an `enabled` or `disabled` mode is
+  rejected.
+- The summary maps to `thinking.display`, whose only values are `summarized`
+  (the provider default) and `omitted`: `none` sends `omitted` and `auto`
+  sends `summarized`. `concise` and `detailed` cannot express their detail
+  level; strict portability rejects them and best-effort sends `summarized`.
+  `display` exists only inside an explicit `thinking` object, so with no
+  reasoning mode a summary preference is not sent and never turns thinking on.
+  This is lossless in strict mode too: thinking is opt-in, so a request with
+  no `thinking` object returns no thinking blocks to summarize or omit.
 
 ## Response lifting
 
@@ -185,6 +263,12 @@ the total are rejected as invalid provider responses.
 
 An unrecognized actual provider tier maps to no public class and returns a
 diagnostic. It must not be mislabeled as `standard`.
+
+Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
+a string, and some compatible providers send an empty string for a tool that
+takes no arguments; an empty or whitespace-only string lifts as the empty
+object `{}` rather than failing the paid response. A call cut off by the output
+limit is still dropped and the response keeps its `length` status.
 
 ## Model inventory pagination
 

@@ -11,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
+	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -117,6 +118,12 @@ func (replay *CheckpointReplay) materializeAuthorized(ctx context.Context, calle
 		if errors.Is(err, state.ErrInvalidHandle) || errors.Is(err, state.ErrNotFound) || errors.Is(err, contracts.ErrNotFound) ||
 			errors.Is(err, state.ErrExpired) || errors.Is(err, state.ErrTenantMismatch) || errors.Is(err, state.ErrLimitExceeded) {
 			code = provider.CodeInvalidArgument
+		}
+		// A committed checkpoint whose record or blob is lost or fails
+		// authentication cannot be repaired by retrying. This is checked last:
+		// corruption never reads as a caller error.
+		if errors.Is(err, cloudstate.ErrCorrupt) {
+			code = provider.CodeStateCorrupt
 		}
 		return state.MaterializedState{}, checkpointReplayError(code)
 	}

@@ -60,9 +60,11 @@ digest, byte length, and media type before reading. It then rechecks the byte
 length and SHA-256. No caller-provided locator is accepted.
 
 `state.DurableCheckpointMaterializer` combines the repository, reader, codec,
-and optional `CheckpointHandleVerifier`. It resolves the complete parent chain,
-rejects cycles/depth gaps/cross-scope rows, and delegates replay/frontier/
-snapshot checks to `CheckpointGraph`. `MaterializeHandle` verifies the opaque
+and optional `CheckpointHandleVerifier`. It resolves the parent chain up to the
+newest row with a verified self-contained snapshot (or the root when there is
+none), rejects cycles/depth gaps/cross-scope rows, and delegates
+replay/frontier/snapshot checks to `CheckpointGraph`. `MaterializeHandle`
+verifies the opaque
 scope-bound handle before lookup. The cloud execution runtime uses this replay
 path for Generate and Compact; the materializer itself performs no publication
 or provider calls.

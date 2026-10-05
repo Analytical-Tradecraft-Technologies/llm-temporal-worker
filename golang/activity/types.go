@@ -90,6 +90,9 @@ func (request GenerateRequest) Validate(maxInlineBytes int) (llm.Request, error)
 	if len(encoded) > maxInlineBytes {
 		return llm.Request{}, fmt.Errorf("inline request payload is %d bytes; limit is %d", len(encoded), maxInlineBytes)
 	}
+	if err := llm.ValidateMediaURLs(normalized.Instructions, normalized.Input); err != nil {
+		return llm.Request{}, err
+	}
 	if err := validateRequestBlobRefs(normalized, time.Now()); err != nil {
 		return llm.Request{}, err
 	}

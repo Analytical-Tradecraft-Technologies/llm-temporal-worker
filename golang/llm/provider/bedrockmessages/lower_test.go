@@ -98,12 +98,12 @@ func TestLowerItemMapsToolAndMediaContent(t *testing.T) {
 		t.Fatalf("image = %#v", image)
 	}
 
-	document, err := lowerPart(llm.DocumentPart{URL: "https://example.test/report.pdf", MediaType: "application/pdf", Title: "Report"})
+	document, err := lowerPart(llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf", Title: "Report"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	documentMap := document.(map[string]any)
-	if documentMap["type"] != "document" || documentMap["title"] != "Report" || documentMap["source"].(map[string]any)["type"] != "url" {
+	if documentMap["type"] != "document" || documentMap["title"] != "Report" || documentMap["source"].(map[string]any)["type"] != "base64" {
 		t.Fatalf("document = %#v", document)
 	}
 }
@@ -118,7 +118,6 @@ func TestLowerRejectsUnsupportedProviderControlsAndMedia(t *testing.T) {
 		{name: "seed", request: llm.Request{Model: "claude", Sampling: &llm.SamplingSpec{Seed: &seed}}, want: "sampling field is not supported"},
 		{name: "tool policy without tools", request: llm.Request{Model: "claude", ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceRequired}}, want: "requires at least one tool"},
 		{name: "unsupported output", request: llm.Request{Model: "claude", Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKind("xml")}}}, want: "output format"},
-		{name: "unsupported reasoning summary", request: llm.Request{Model: "claude", Reasoning: &llm.ReasoningSpec{Summary: llm.ReasoningSummaryDetailed}}, want: "reasoning summary"},
 	}
 	for _, test := range invalidRequests {
 		t.Run(test.name, func(t *testing.T) {
@@ -160,7 +159,7 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "adaptive", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive}, wantType: "adaptive"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := lowerReasoning(test.reasoning)
+			got, err := lowerReasoning(test.reasoning, true)
 			if err != nil || got["type"] != test.wantType {
 				t.Fatalf("lowerReasoning() = %#v, %v", got, err)
 			}
@@ -176,7 +175,7 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "unknown mode", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningMode("future")}, want: "not supported"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := lowerReasoning(test.reasoning)
+			_, err := lowerReasoning(test.reasoning, true)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("lowerReasoning() = %v, want substring %q", err, test.want)
 			}
@@ -238,7 +237,7 @@ func TestLoweringSendsNonStrictToolsAndRejectsSchemalessJSONOutput(t *testing.T)
 		t.Fatalf("tool must not be forced strict: %#v", tools[0])
 	}
 	target := map[string]any{}
-	err = lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target)
+	err = lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target, true)
 	if err == nil || !strings.Contains(err.Error(), "without a schema") || target["output_config"] != nil {
 		t.Fatalf("schema-less JSON output = %v, %#v", err, target)
 	}

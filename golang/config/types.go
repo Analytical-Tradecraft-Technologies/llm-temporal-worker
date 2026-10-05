@@ -478,6 +478,19 @@ func validatePositiveDuration(value Duration, path string) error {
 	return nil
 }
 
+// DevelopmentEnvironment is the only environment exempt from production
+// hardening.
+const DevelopmentEnvironment = "development"
+
+// IsProductionEnvironment reports whether production hardening applies.
+// environment is a free-form identifier (budget policies match on it), so the
+// rule fails closed: every value other than the exact development name,
+// including "Production", "prod", "staging" and unknown values, is production.
+// Validation and runtime composition must both use this helper.
+func IsProductionEnvironment(environment string) bool {
+	return environment != DevelopmentEnvironment
+}
+
 func validateIdentifier(value, path string) error {
 	if strings.TrimSpace(value) == "" || strings.ContainsAny(value, " \t\r\n") {
 		return fmt.Errorf("%s must be a non-empty identifier", path)

@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
@@ -12,9 +13,29 @@ var errProcessLifetimeConfigurationChanged = errors.New("process-lifetime config
 
 var errBudgetWindowGeometryChanged = errors.New("budget window geometry cannot change behind an existing identity during reload")
 
-// validateRuntimeReplacement compares only configuration captured by resources
-// constructed once in New. Provider/state clients and request catalogs are
-// rebuilt per snapshot and deliberately do not belong in this projection.
+// processLifetimeChangeError names the first changed process-lifetime field.
+// The field is a fixed schema path from the table below, never a value.
+type processLifetimeChangeError struct{ field string }
+
+func (err *processLifetimeChangeError) Error() string {
+	return fmt.Sprintf("%v: %s", errProcessLifetimeConfigurationChanged, err.field)
+}
+
+func (err *processLifetimeChangeError) Unwrap() error { return errProcessLifetimeConfigurationChanged }
+
+// validateRuntimeReplacement rejects a replacement that changes configuration
+// the process cannot swap safely. That is configuration captured by resources
+// constructed once in New, and the identity of durable state. State clients
+// are rebuilt per snapshot, so a reload could physically point them at another
+// request namespace, table, payload store, key namespace or result bucket, but
+// Temporal workflows in flight hold request IDs, operation keys, budget
+// reservations and result references that exist only under the old identity.
+// After such a swap they would read as absent, and a retried operation key
+// would be dispatched and paid for again.
+//
+// Redis addresses, credentials, TLS and timeouts stay reloadable: they say how
+// to reach the same data. The two key-material references are compared as
+// references only; the material behind an unchanged reference must not change.
 func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 	return (&budgetWindowGeometries{}).validateReplacement(current, replacement)
 }
@@ -33,6 +54,18 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 	}
 	before := current.Config()
 	after := replacement.Config()
+	// Memory state ignores the Redis section entirely, so it names nothing
+	// there. A change of state.kind itself is rejected first.
+	usesRedis := before.State.Kind != config.StateKindMemory
+	// A missing state.requests block compares as empty; its presence is a
+	// separate entry in the table.
+	var beforeRequests, afterRequests config.CloudRequestConfig
+	if before.State.Requests != nil {
+		beforeRequests = *before.State.Requests
+	}
+	if after.State.Requests != nil {
+		afterRequests = *after.State.Requests
+	}
 	for _, field := range []struct {
 		name    string
 		changed bool
@@ -62,11 +95,30 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 		{name: "telemetry.tracing.otlp_endpoint", changed: before.Telemetry.Tracing.OTLPEndpoint != after.Telemetry.Tracing.OTLPEndpoint},
 		{name: "telemetry.tracing.sample_ratio", changed: before.Telemetry.Tracing.SampleRatio != after.Telemetry.Tracing.SampleRatio},
 		{name: "telemetry.content_logging", changed: before.Telemetry.ContentLogging != after.Telemetry.ContentLogging},
+		{name: "state.kind", changed: before.State.Kind != after.State.Kind},
 		{name: "state.redis.key_prefix", changed: before.State.Redis.KeyPrefix != after.State.Redis.KeyPrefix},
+		{name: "state.redis.admission_hash_tag", changed: usesRedis && before.State.Redis.AdmissionHashTag != after.State.Redis.AdmissionHashTag},
+		{name: "state.redis.key_secret", changed: usesRedis && before.State.Redis.KeySecret != after.State.Redis.KeySecret},
+		{name: "state.requests", changed: (before.State.Requests == nil) != (after.State.Requests == nil)},
+		{name: "state.requests.provider.type", changed: beforeRequests.Provider.Type != afterRequests.Provider.Type},
+		{name: "state.requests.provider.aws.region", changed: beforeRequests.Provider.AWS.Region != afterRequests.Provider.AWS.Region},
+		{name: "state.requests.provider.aws.profile", changed: beforeRequests.Provider.AWS.Profile != afterRequests.Provider.AWS.Profile},
+		{name: "state.requests.provider.aws.temp_directory", changed: beforeRequests.Provider.AWS.TempDirectory != afterRequests.Provider.AWS.TempDirectory},
+		{name: "state.requests.provider.key_value_stores", changed: !maps.Equal(beforeRequests.Provider.KeyValueStores, afterRequests.Provider.KeyValueStores)},
+		{name: "state.requests.provider.blob_stores", changed: !maps.Equal(beforeRequests.Provider.BlobStores, afterRequests.Provider.BlobStores)},
+		{name: "state.requests.request_table", changed: beforeRequests.RequestTable != afterRequests.RequestTable},
+		{name: "state.requests.payload_store", changed: beforeRequests.PayloadStore != afterRequests.PayloadStore},
+		{name: "state.requests.namespace", changed: beforeRequests.Namespace != afterRequests.Namespace},
+		{name: "state.requests.secret", changed: beforeRequests.Secret != afterRequests.Secret},
+		{name: "blob_store.kind", changed: before.BlobStore.Kind != after.BlobStore.Kind},
+		{name: "blob_store.file.root", changed: before.BlobStore.File.Root != after.BlobStore.File.Root},
+		{name: "blob_store.s3.bucket", changed: before.BlobStore.S3.Bucket != after.BlobStore.S3.Bucket},
+		{name: "blob_store.s3.region", changed: before.BlobStore.S3.Region != after.BlobStore.S3.Region},
+		{name: "blob_store.s3.prefix", changed: before.BlobStore.S3.Prefix != after.BlobStore.S3.Prefix},
 		{name: "endpoints.*.outbound_hosts", changed: !sameEndpointOutboundHosts(before.Endpoints, after.Endpoints)},
 	} {
 		if field.changed {
-			return fmt.Errorf("%w: %s", errProcessLifetimeConfigurationChanged, field.name)
+			return &processLifetimeChangeError{field: field.name}
 		}
 	}
 	return geometries.validate(before.Budgets, after.Budgets)

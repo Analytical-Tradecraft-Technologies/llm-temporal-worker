@@ -65,8 +65,12 @@ from the original request prevents replay from creating independent summaries.
 
 The planning activity authorizes before materializing a parent. Roots and parents
 with no safe prefix skip compaction. Otherwise it evaluates inherited policy
-token/byte thresholds and the selected route's context-byte limit against the
-projected Generate input. Token counting uses the admission estimator's exact
+token/byte thresholds against the projected Generate input, and checks the
+context-token and context-byte limits of every candidate route. Route selection
+skips a candidate that does not fit and uses the next, so a context limit
+requests compaction only when some candidate is excluded for size and the same
+selection that admission runs (output cap, shared route health, compilation,
+price and budget-policy quote) would end without a route. Token counting uses the admission estimator's exact
 provider tokenizer when configured, or its UTF-8 byte estimate otherwise. This
 fallback is an estimate, not a guarantee that every provider context window fits.
 The parent's compaction policy governs this summary; a new Generate settings
@@ -79,6 +83,20 @@ The public and internal workflow implementations are registered through
 including planning. See the [implementation boundary](mvp-v1-status.md) for the
 complete list and remaining optional capabilities.
 
+## Workflow input validation
+
+All four workflows are registered with a raw Temporal payload argument. Each
+applies the worker's inline payload limit and the strict v1 decode in workflow
+code before doing anything else, so a malformed, unknown-field, missing or
+oversize input fails once as a non-retryable `llm_invalid_argument` with
+bounded `SafeErrorDetails` (code `invalid_argument`, phase `decode`, dispatch
+`not_dispatched`) and a stable message that does not echo caller values. No
+Activity or child workflow is started for such a request. The budget workflow's
+input is a closed record too: JSON `null`, an unknown field, an unknown kind, a
+negative wait count or an invalid reference fails the same way. The wire format is
+unchanged: callers still send the typed v1 JSON record, and decoding depends
+only on the recorded input, so it is deterministic on replay.
+
 ### Failed attempts and retry timing
 
 Known provider failures retain a bounded retry classification and earliest retry
@@ -90,7 +108,14 @@ never creates that replacement. Unknown paid work retains its separate pending
 record and original claim, as described above.
 
 Permanent provider failures and incomplete compaction results also close the
-public request. The saved, sanitized failure replays after restart without
+public request. So does Generate output that cannot extend the request
+transcript: two tool calls sharing an ID in one response, a tool result without
+a matching call, or other content after tool results have started. The provider
+attempt stays succeeded and settled at its actual cost, its cache fill is
+released without an entry, and the request fails with `incomplete_response` in
+the same step that saved the response.
+
+The saved, sanitized failure replays after restart without
 loading an expired parent or contacting a provider. Authorization still runs
 before replay. Terminal writes repair their pending indexes after uncertain
 acknowledgements, and a stale child cannot close a newer active attempt.

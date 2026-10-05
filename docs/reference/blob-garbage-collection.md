@@ -5,6 +5,11 @@ references. Publication writes blobs before conditionally publishing their
 request, checkpoint or cache metadata. Interrupted publication may leave orphan
 objects. Automatic production blob cleanup is not implemented.
 
+The reverse case, a committed reference whose object is gone (manual deletion,
+a bucket lifecycle rule, a partial restore), is never read as an absent or
+expired record. Readers fail it as `state_corrupt`; see the
+[cloud request repository](cloud-request-repository.md#request-state).
+
 The generic provider delete operation is only a storage primitive. Safe worker
 cleanup must prove that an object has no live request, attempt, checkpoint,
 cache-success or cache-fill reference, including references created concurrently

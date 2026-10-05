@@ -53,7 +53,7 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 	value := snapshot.Config()
 	bundle, err := catalog.LoadWithOptions(value, loader.CatalogOptions)
 	if err != nil {
-		return engine.Snapshot{}, fmt.Errorf("load verified catalogs: %w", err)
+		return engine.Snapshot{}, fmt.Errorf("load verified catalogs: %w", &catalogLoadError{cause: err})
 	}
 	now := clock()
 	price, err := mergePricingCatalogs(bundle, snapshot.ConfigVersion())

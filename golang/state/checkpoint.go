@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -48,7 +49,17 @@ type MaterializeLimits struct {
 	MaxRows  int
 	MaxItems int
 	MaxBytes int64
+	// SnapshotInterval is the publication cadence for self-contained
+	// snapshots: a generated checkpoint whose depth is a positive multiple of
+	// it carries one, so durable materialization reads at most that many rows.
+	// Zero selects DefaultSnapshotInterval. Materialization itself ignores it
+	// and always stops at the newest snapshot it meets.
+	SnapshotInterval int32
 }
+
+// DefaultSnapshotInterval bounds a durable lineage walk to eight rows while
+// writing the full-transcript snapshot blob on only one turn in eight.
+const DefaultSnapshotInterval int32 = 8
 
 func (limits MaterializeLimits) withDefaults() MaterializeLimits {
 	if limits.MaxDepth <= 0 {
@@ -95,6 +106,9 @@ type CheckpointGraph struct {
 	// graph makes durable materialization deterministic and lets callers share
 	// the same time boundary across repository validation and graph replay.
 	Now func() time.Time
+	// base names the one checkpoint published through putBase. Its ancestors
+	// are not in the graph; its verified snapshot stands in for them.
+	base Handle
 }
 
 func NewCheckpointGraph(limits MaterializeLimits) *CheckpointGraph {
@@ -118,6 +132,30 @@ func (graph *CheckpointGraph) PutRoot(checkpoint Checkpoint) error {
 		return fmt.Errorf("root checkpoint cannot have a parent")
 	}
 	checkpoint.Depth = 0
+	return graph.put(checkpoint)
+}
+
+// putBase publishes a checkpoint whose ancestors were deliberately not loaded
+// because its self-contained snapshot already holds their materialized
+// transcript, settings, depth and lineage. Unlike PutRoot it keeps the
+// checkpoint's real depth, so children and limits see the true lineage. The
+// durable materializer uses it to stop a walk at the newest snapshot row.
+func (graph *CheckpointGraph) putBase(checkpoint Checkpoint) error {
+	snapshot := checkpoint.Snapshot
+	if graph == nil || snapshot == nil {
+		return fmt.Errorf("base checkpoint requires a snapshot")
+	}
+	if checkpoint.Depth < 0 || snapshot.Depth != checkpoint.Depth || int64(len(snapshot.Lineage)) != int64(checkpoint.Depth)+1 || snapshot.Lineage[len(snapshot.Lineage)-1] != checkpoint.Handle {
+		return fmt.Errorf("checkpoint snapshot lineage mismatch")
+	}
+	checkpoint.Parent = nil
+	graph.mu.Lock()
+	if graph.base != "" && graph.base != checkpoint.Handle {
+		graph.mu.Unlock()
+		return fmt.Errorf("checkpoint graph already has a snapshot base")
+	}
+	graph.base = checkpoint.Handle
+	graph.mu.Unlock()
 	return graph.put(checkpoint)
 }
 
@@ -248,7 +286,7 @@ func checkpointRequestDigest(checkpoint Checkpoint, maxBytes int) ([32]byte, err
 		}
 		canonical, err := llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
 		if err != nil {
-			return [32]byte{}, fmt.Errorf("canonicalize checkpoint %s for digest: %w", part.name, err)
+			return [32]byte{}, fmt.Errorf("canonicalize checkpoint %s for digest: %w", part.name, typedCanonicalLimit(err))
 		}
 		writePart(canonical)
 	}
@@ -304,6 +342,25 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 	if len(path) == 0 || path[len(path)-1].Parent != nil {
 		return MaterializedState{}, fmt.Errorf("checkpoint graph has no root")
 	}
+	// A snapshot base ends the path early. The ancestors it replaces are known
+	// only through its snapshot lineage, which still counts against the row
+	// limit and must not loop back into the rows that were walked.
+	var prefix []Handle
+	graph.mu.RLock()
+	base := graph.base
+	graph.mu.RUnlock()
+	if root := path[len(path)-1]; base != "" && root.Handle == base && root.Snapshot != nil && len(root.Snapshot.Lineage) > 0 {
+		prefix = root.Snapshot.Lineage[:len(root.Snapshot.Lineage)-1]
+		if len(prefix)+len(path) > graph.limits.MaxRows {
+			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit: %w", ErrLimitExceeded)
+		}
+		for _, ancestor := range prefix {
+			if _, duplicate := seen[ancestor]; duplicate {
+				return MaterializedState{}, fmt.Errorf("checkpoint graph contains a cycle")
+			}
+			seen[ancestor] = struct{}{}
+		}
+	}
 
 	result := MaterializedState{Handle: handle, Tenant: tenant, Project: path[0].Project, Settings: RootModelState("")}
 	start := len(path) - 1
@@ -317,7 +374,8 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		if checkpoint.Snapshot.Depth != checkpoint.Depth {
 			return MaterializedState{}, fmt.Errorf("checkpoint snapshot depth does not match checkpoint")
 		}
-		wantLineage := make([]Handle, 0, len(path)-index)
+		wantLineage := make([]Handle, 0, len(prefix)+len(path)-index)
+		wantLineage = append(wantLineage, prefix...)
 		for lineageIndex := len(path) - 1; lineageIndex >= index; lineageIndex-- {
 			wantLineage = append(wantLineage, path[lineageIndex].Handle)
 		}
@@ -382,7 +440,8 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 	}
 	result.Items = cloneItems(result.Items)
 	result.PendingToolCalls = append([]string(nil), pending...)
-	result.Lineage = make([]Handle, 0, len(path))
+	result.Lineage = make([]Handle, 0, len(prefix)+len(path))
+	result.Lineage = append(result.Lineage, prefix...)
 	for index := len(path) - 1; index >= 0; index-- {
 		result.Lineage = append(result.Lineage, path[index].Handle)
 	}
@@ -565,5 +624,17 @@ func canonicalItemsWithLimit(values []llm.Item, maxBytes int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
+	canonical, err := llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
+	return canonical, typedCanonicalLimit(err)
+}
+
+// typedCanonicalLimit marks a canonical JSON byte or depth violation as
+// ErrLimitExceeded. The canonicalizer rejects an oversized value before any
+// caller can compare its length, so without this the violation is untyped and
+// is retried as a transient failure.
+func typedCanonicalLimit(err error) error {
+	if errors.Is(err, llm.ErrCanonicalJSONLimit) && !errors.Is(err, ErrLimitExceeded) {
+		return fmt.Errorf("%w: %w", ErrLimitExceeded, err)
+	}
+	return err
 }

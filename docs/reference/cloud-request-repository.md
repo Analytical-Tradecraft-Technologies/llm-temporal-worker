@@ -293,6 +293,12 @@ not interpret that schema or perform provider calls.
 
 `Read(ctx, scope, id)` checks the authenticated scope before opening the payload;
 a different scope gets the same not-found classification as a missing request.
+A committed request, checkpoint, checkpoint-blob reference, cache entry or
+cache-use receipt whose blob no longer exists is lost payload, not an absent
+record: every reader returns `ErrCorrupt` (never `ErrNotFound`), which the
+runtime reports as non-retryable `state_corrupt`. An operation key whose record
+blob was lost is therefore never treated as new work. A transient blob read
+error is returned unchanged and stays retryable.
 `ReadForRecovery` and `ListPending` are privileged service-internal APIs. Never
 expose them directly as public activities or treat an ID as authorization.
 

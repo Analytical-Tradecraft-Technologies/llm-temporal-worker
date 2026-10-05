@@ -131,6 +131,16 @@ estimated input tokens at a conservative tokenizer ratio
 + fixed per-request charge
 ```
 
+The context-window check (`ValidateContext`, and the same check inside the
+reservation) counts the estimated input plus the output cap only. Reasoning
+tokens are generated inside that cap on every supported family: Anthropic
+`thinking.budget_tokens` must be less than `max_tokens`, and OpenAI
+`max_output_tokens` / `max_completion_tokens` bound visible output and
+reasoning together. A requested reasoning `token_budget` is therefore not
+added to the window a second time. The reservation still prices the reasoning
+component separately at the catalog's reasoning rate, on top of the full
+output cap, so it stays an upper bound.
+
 The Go `budget.Estimator` accepts an optional candidate-aware exact tokenizer
 hook. A configured hook must be deterministic, return a non-negative count,
 and account for the provider's request structure (including tools and schema);
@@ -142,28 +152,39 @@ length.
 
 Providers bill media on its decoded content (pixels or pages), not on the
 bytes the worker serializes, and a URL contributes only its string to the
-UTF-8 estimate. The fallback estimator therefore adds a conservative per-part
-input-token allowance for every image or document part (URL, inline bytes, or
-blob reference) in instructions, messages, and tool results:
+UTF-8 estimate. The fallback estimator therefore leaves inline image and
+document bytes (base64 in the serialized request) out of the UTF-8 estimate
+and adds a conservative per-part input-token allowance for every image or
+document part (URL, inline bytes, or blob reference) in instructions,
+messages, and tool results:
 
 | Part | Allowance | Basis |
 |---|---|---|
 | Image | 6,000 tokens | Above the largest documented per-image counts of supported providers (about 1,600 standard, about 2,500 patch-based, about 4,800 high-resolution). |
-| Document | 5,400,000 tokens | 600 pages (the largest supported PDF page limit, Anthropic on 1M-token-context models) x 9,000 tokens per page (up to 3,000 extracted-text tokens plus the rendered page image, charged at the 6,000-token image allowance). |
+| Inline text document (`text/*` media type) | Decoded byte length | The provider tokenizes the content as text and a token covers at least one byte. A quarter of the bytes is counted in the UTF-8 estimate like any other text; the allowance reserves the rest. |
+| Any other document | 5,400,000 tokens | 600 pages (the largest supported PDF page limit, Anthropic on 1M-token-context models) x 9,000 tokens per page (up to 3,000 extracted-text tokens plus the rendered page image, charged at the 6,000-token image allowance). |
+
+Only inline text is bounded by its size. A URL or blob reference has no
+content to measure at admission, and the byte length of an inline PDF does not
+bound its page count (page objects compress, and every page is billed as an
+image), so those keep the unknown-size assumption.
 
 The allowance is added to the serialized-size estimate, so text-only requests
 are unchanged. When the candidate declares a context window, the allowance is
 capped at the room left after the text estimate and the reserved output and
 reasoning: the provider must reject input beyond its window, so the allowance
-alone never excludes a candidate for context size. The document allowance
-deliberately exceeds every supported context window, so on any candidate that
-declares one, a document reserves the whole remaining input room (the most the
+alone never excludes a candidate for context size. The unknown-size document
+allowance deliberately exceeds every supported context window, so on any
+candidate that declares one, such a document reserves the whole remaining
+input room (the most the
 provider can bill), including on 1M-token-context routes; only a candidate
 without a declared context window reserves the full 5,400,000-token constant.
 Declare `context_tokens` on routes that accept documents to keep that
 reservation bounded by the real window. Context-fit checks and
-compaction planning (`ValidateContext`, `CountInputTokens`) keep using the
-unadjusted estimate. A configured exact tokenizer is responsible for media and
+compaction planning (`ValidateContext`, `CountInputTokens`) use the same UTF-8
+estimate without the allowance, so inline image and PDF bytes do not count
+against the context window and inline text documents count at the ordinary
+text baseline. A configured exact tokenizer is responsible for media and
 replaces the allowance. The catalog still has no media-unit price; media is
 priced as input tokens and settlement records actual usage.
 
