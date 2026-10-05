@@ -177,7 +177,7 @@ func TestLiveRedisBudgetMaterializerDenialDecodesAtLargeActiveTotal(t *testing.T
 	client := openLiveRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	keys := liveKeyOptions("durable-materializer-large-total")
+	keys := liveKeyOptions("durable-large-total")
 	cleanupLivePrefix(t, client, keys.Prefix)
 	now := time.Now().UTC().Truncate(time.Second)
 	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
@@ -222,7 +222,7 @@ func TestLiveRedisBudgetMaterializerHandlesSingleReservationAboveHundredThousand
 	client := openLiveRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	keys := liveKeyOptions("durable-materializer-large-operation")
+	keys := liveKeyOptions("durable-large-operation")
 	cleanupLivePrefix(t, client, keys.Prefix)
 	now := time.Now().UTC().Truncate(time.Second)
 	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
