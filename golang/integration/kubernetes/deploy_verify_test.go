@@ -127,7 +127,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: llmtw-config
+            name: llmtw-config-5f8c2d7b9h
         - name: runtime-secrets
           secret:
             secretName: llmtw-worker-secrets
@@ -178,7 +178,8 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: llmtw-config
+  name: llmtw-config-5f8c2d7b9h
+immutable: true
 data:
   config.yaml: |
     server:

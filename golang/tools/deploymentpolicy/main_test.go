@@ -190,7 +190,7 @@ metadata:
 			duplicate: `apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: llmtw-config
+  name: llmtw-config-5f8c2d7b9h
 `,
 			resource: "configmap",
 		},
@@ -446,7 +446,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: llmtw-config
+            name: llmtw-config-5f8c2d7b9h
         - name: runtime-secrets
           secret:
             secretName: llmtw-worker-secrets
@@ -501,10 +501,36 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: llmtw-config
+  name: llmtw-config-5f8c2d7b9h
+immutable: true
 data:
   config.yaml: |
     server:
       shutdown_timeout: 90s
     service_classes: [economy, standard, priority]
 `
+
+func TestVerifyRenderedRequiresContentHashedImmutableConfigMap(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(string) string
+		want   string
+	}{
+		{name: "fixed name", mutate: func(rendered string) string {
+			return strings.ReplaceAll(rendered, "llmtw-config-5f8c2d7b9h", "llmtw-config")
+		}, want: "content-hashed"},
+		{name: "static suffix", mutate: func(rendered string) string {
+			return strings.ReplaceAll(rendered, "llmtw-config-5f8c2d7b9h", "llmtw-config-static")
+		}, want: "content-hashed"},
+		{name: "mutable", mutate: func(rendered string) string {
+			return strings.Replace(rendered, "immutable: true\n", "", 1)
+		}, want: "must be immutable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := verifyRendered("base", []byte(test.mutate(validRenderedWorkload)))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("verifyRendered() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
