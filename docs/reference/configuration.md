@@ -159,6 +159,8 @@ blob_store:
       kind: aws_default_chain
 
 limits:
+  # Input request size. Stored results are bounded separately: a blob may be
+  # up to the larger of request_bytes and twice provider_response_bytes.
   request_bytes: 1048576
   items: 512
   parts_per_item: 64
