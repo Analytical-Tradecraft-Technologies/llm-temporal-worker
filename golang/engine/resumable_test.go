@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -426,4 +427,74 @@ func operationIDForTest(t *testing.T, request llm.Request) string {
 	}
 	id, _ := operationIdentity(normalized, digest)
 	return id
+}
+
+func TestGenerateKeepsOperationPendingWhenPollIsRateLimited(t *testing.T) {
+	rateLimited := func(delay time.Duration) error {
+		mapped := provider.NewError(provider.CodeProviderRateLimited, provider.PhasePoll, provider.DispatchAccepted, provider.RetryAfter, "provider rate limited the request")
+		mapped.RetryAfter = delay
+		return mapped
+	}
+	// The first poll follows Submit directly; the second is a resumed
+	// provider_pending poll. Both are rate limited and must leave the durable
+	// operation pending with a bounded delay; the third poll then fetches the
+	// recoverable result without resubmitting.
+	adapter := &resumableEngineAdapter{pollErrors: []error{rateLimited(2 * time.Second), rateLimited(time.Hour)}}
+	harness := newHarness(t, adapter)
+	request := baseRequest("resumable-retry")
+	operationID := operationIDForTest(t, request)
+
+	for attempt, wantDelay := range []time.Duration{2 * time.Second, defaultMaxPollInterval} {
+		_, err := harness.engine.Generate(context.Background(), request)
+		var mapped *provider.Error
+		if !errors.As(err, &mapped) {
+			t.Fatalf("attempt %d error = %v, want provider error", attempt+1, err)
+		}
+		if mapped.Retry != provider.RetrySameOperation || mapped.Code != provider.CodeProviderRateLimited {
+			t.Fatalf("attempt %d error = %s/%s, want rate-limited same-operation retry", attempt+1, mapped.Code, mapped.Retry)
+		}
+		if mapped.RetryAfter != wantDelay {
+			t.Fatalf("attempt %d RetryAfter = %v, want %v", attempt+1, mapped.RetryAfter, wantDelay)
+		}
+		operation, err := harness.admission.Get(context.Background(), operationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if operation.State != admission.StateProviderPending {
+			t.Fatalf("operation state after rate-limited poll %d = %q, want provider_pending", attempt+1, operation.State)
+		}
+	}
+	response, err := harness.engine.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatalf("resume after rate-limited polls failed: %v", err)
+	}
+	if response.Status != llm.ResponseStatusCompleted {
+		t.Fatalf("response status = %q, want completed", response.Status)
+	}
+	adapter.mu.Lock()
+	submits, polls := adapter.submits, adapter.polls
+	adapter.mu.Unlock()
+	if submits != 1 {
+		t.Fatalf("Submit calls = %d, want 1", submits)
+	}
+	if polls != 3 {
+		t.Fatalf("Poll calls = %d, want 3", polls)
+	}
+}
+
+func TestGenerateFinalizesDefinitePollFailure(t *testing.T) {
+	failure := provider.NewError(provider.CodeAuthentication, provider.PhasePoll, provider.DispatchAccepted, provider.RetryNever, "provider rejected credentials")
+	adapter := &resumableEngineAdapter{pollErrors: []error{failure}}
+	harness := newHarness(t, adapter)
+	request := baseRequest("resumable-definite-poll-failure")
+	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
+		t.Fatal("definite poll failure unexpectedly completed")
+	}
+	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.State == admission.StateProviderPending {
+		t.Fatal("definite poll failure left the operation provider_pending")
+	}
 }
