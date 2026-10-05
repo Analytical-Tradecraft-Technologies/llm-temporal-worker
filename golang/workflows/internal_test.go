@@ -63,7 +63,7 @@ func workflowTest(t *testing.T, kind string, steps ...workflowStep) *workflowFix
 		workflowJSON(t, "compact-response", f.completed.Compact)
 		f.completed.Compact.OperationID, f.completed.Compact.OperationKey = testRequestID, f.input.Compact.OperationKey
 	}
-	RegisterInternal(f.env)
+	RegisterInternal(f.env, activity.PayloadLimits{})
 	register := func(name string, fn any) {
 		f.env.RegisterActivityWithOptions(fn, sdkactivity.RegisterOptions{Name: name})
 	}

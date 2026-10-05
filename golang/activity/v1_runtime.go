@@ -237,11 +237,8 @@ func decodeV1ActivityInput[T any](ctx context.Context, activities *Activities, i
 	if ctx != nil && ctx.Err() != nil {
 		return value, ctx.Err()
 	}
-	payload := input.Payload()
-	if payload == nil || len(payload.GetData()) > activities.payloadLimits().inlineBytes() {
-		return value, invalidV1ActivityInput()
-	}
-	if err := converter.GetDefaultDataConverter().FromPayload(payload, &value); err != nil {
+	value, ok := DecodeBoundedPayload[T](activities.payloadLimits(), input)
+	if !ok {
 		return value, invalidV1ActivityInput()
 	}
 	return value, nil

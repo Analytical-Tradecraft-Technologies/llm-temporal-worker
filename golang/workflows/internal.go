@@ -9,6 +9,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -24,9 +25,30 @@ const (
 // RegisterInternal registers implementation workflows, not client entry points.
 // The worker registers these together with the public generation/compaction
 // workflows. Runtime startup verifies the required execution capabilities.
-func RegisterInternal(registry worker.WorkflowRegistry) {
-	registry.RegisterWorkflowWithOptions(ExecuteRequest, workflow.RegisterOptions{Name: RequestWorkflowName})
-	registry.RegisterWorkflowWithOptions(WaitForBudget, workflow.RegisterOptions{Name: BudgetWorkflowName})
+//
+// Every workflow is registered with a raw payload argument and decoded inside
+// workflow code (see rawWorkflow); limits is the worker's inline payload limit.
+func RegisterInternal(registry worker.WorkflowRegistry, limits activity.PayloadLimits) {
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, ExecuteRequest), workflow.RegisterOptions{Name: RequestWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, WaitForBudget), workflow.RegisterOptions{Name: BudgetWorkflowName})
+}
+
+// rawWorkflow adapts a typed workflow to the registered raw-payload signature.
+// Letting the SDK decode a typed argument before workflow code runs would fail
+// an invalid or oversize input as an untyped, retryable wrapper error whose
+// message echoes decoder text (and therefore caller values) into history.
+// Decoding here is a pure function of the recorded input, so it is
+// deterministic on replay, and the wire format is unchanged: callers still
+// send the typed v1 JSON record.
+func rawWorkflow[T, R any](limits activity.PayloadLimits, run func(workflow.Context, T) (R, error)) func(workflow.Context, converter.RawValue) (R, error) {
+	return func(ctx workflow.Context, raw converter.RawValue) (R, error) {
+		input, ok := activity.DecodeBoundedPayload[T](limits, raw)
+		if !ok {
+			var zero R
+			return zero, invalidInput()
+		}
+		return run(ctx, input)
+	}
 }
 
 // BudgetRequest includes the expected operation kind so a corrupt/misrouted
@@ -208,6 +230,13 @@ func responseMatches(input llm.PrepareExecutionV1, result llm.ExecutionResultV1)
 		return result.Generate != nil && result.Generate.OperationKey == input.Generate.OperationKey
 	}
 	return result.Compact != nil && result.Compact.OperationKey == input.Compact.OperationKey
+}
+
+// invalidInput is the stable, content-free failure for a workflow input that
+// cannot be decoded, exceeds the inline limit, or is not a valid v1 request.
+func invalidInput() error {
+	return temporal.NewNonRetryableApplicationError("workflow input is invalid or exceeds its limit", activity.ErrorTypeInvalidArgument, nil,
+		activity.SafeErrorDetails{Code: "invalid_argument", Phase: "decode", Dispatch: "not_dispatched"})
 }
 func invalidState() error {
 	return temporal.NewNonRetryableApplicationError("invalid request execution state", activity.ErrorTypeStateCorrupt, nil)
