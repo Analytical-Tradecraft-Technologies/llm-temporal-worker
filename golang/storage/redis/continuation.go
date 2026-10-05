@@ -201,6 +201,10 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 	if request.OperationKey != "" {
 		operationIndexKey = store.space.continuationOperationKey(parent.Tenant, request.Parent.String(), request.OperationKey)
 		if value, err := store.reader.Get(ctx, operationIndexKey); err == nil && value != "" {
+			existing, getErr := store.Get(ctx, state.Handle(value))
+			if getErr == nil && !sameChildFacts(existing, child) {
+				return "", state.ErrConflict
+			}
 			return state.Handle(value), nil
 		} else if err != nil && !errors.Is(err, redis.Nil) {
 			return "", resolveStateError(ctx, err)
@@ -249,7 +253,14 @@ func (store *ContinuationStore) put(ctx context.Context, handle state.Handle, co
 		if len(parts) < 2 || parts[1] == "" {
 			return "", ErrUnavailable
 		}
-		return state.Handle(parts[1]), nil
+		// A concurrent retry can lose the operation-index race after missing
+		// the preliminary read. The winning child is immutable, so comparing
+		// it here closes that window without trusting a stale read.
+		existing := state.Handle(parts[1])
+		if stored, getErr := store.Get(ctx, existing); getErr == nil && !sameChildFacts(stored, continuation) {
+			return "", state.ErrConflict
+		}
+		return existing, nil
 	case "conflict":
 		return "", state.ErrConflict
 	case "invalid":
@@ -299,4 +310,11 @@ func resolveStateError(ctx context.Context, err error) error {
 		return state.ErrNotFound
 	}
 	return fmt.Errorf("Redis state mutation outcome is unresolved: %w", ErrUnavailable)
+}
+
+// sameChildFacts compares the immutable facts of an idempotent child retry.
+// A retry with the same parent and operation key but a different history is
+// a conflict, not a replay of the stored child.
+func sameChildFacts(stored, incoming state.Continuation) bool {
+	return stored.TranscriptDigest == incoming.TranscriptDigest && stored.TranscriptComplete == incoming.TranscriptComplete
 }
