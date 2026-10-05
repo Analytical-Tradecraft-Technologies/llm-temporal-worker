@@ -130,10 +130,12 @@ python3 "$collector" fixture-manifest \
   --output "$artifact_dir/fixture-manifest.json"
 
 if [[ -z "$verified_inputs" ]]; then
+  # Mark the unique project for cleanup before starting it: a partial start
+  # or health timeout must still be torn down on exit.
+  compose_started=1
   if ! docker compose -p "$compose_project" -f "$module_root/compose.yaml" up --wait --wait-timeout 180 -d redis temporal >"$temporary/compose-up.output" 2>&1; then
     fail "Redis and Temporal did not become healthy; inspect the trusted CI step output"
   fi
-  compose_started=1
 
   bash "$root/scripts/release/collect-compose.sh" "$compose_project" "$artifact_dir"
 fi
