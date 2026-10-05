@@ -38,6 +38,17 @@ func (state CapabilityState) Valid() bool {
 	}
 }
 
+// ToolResultErrorTransform names the reviewed emulation used by endpoint
+// families whose wire contract has no tool-result error field (OpenAI
+// Responses function_call_output and Chat Completions tool messages). A tool
+// result with is_error=true is sent as ordinary tool output text that starts
+// with ToolResultErrorPrefix, followed by the unchanged result content. The
+// prefix is a constant so compiled bodies stay deterministic.
+const (
+	ToolResultErrorTransform = "tool_result_error_text_prefix/v1"
+	ToolResultErrorPrefix    = "[is_error=true] The tool call failed; its output follows.\n"
+)
+
 type Capability struct {
 	State     CapabilityState
 	Transform string

@@ -111,6 +111,10 @@ break both.
 - Instructions lower to the supported top-level instruction/developer form.
 - Semantic messages, tool calls, and tool results become separate typed input
   items; they are never concatenated.
+- `function_call_output` has no error field (its `status` is the item
+  lifecycle: `in_progress`, `completed`, `incomplete`). A tool result with
+  `is_error: true` is emulated by the `tool_result_error_text_prefix/v1`
+  transform described under [Tool-result errors](#tool-result-errors).
 - A continuation may use a stored response/conversation identifier only when it
   is pinned to the same endpoint, account, family, and compatible model.
 - Strict structured output uses the provider's JSON Schema form after local
@@ -135,6 +139,9 @@ break both.
   filtered reply) are omitted rather than sent as an empty assistant message.
 - Tool calls remain assistant tool-call objects and tool results remain tool
   messages with their call IDs.
+- A `tool` message carries only `content` and `tool_call_id`. A tool result
+  with `is_error: true` is emulated by the `tool_result_error_text_prefix/v1`
+  transform described under [Tool-result errors](#tool-result-errors).
 - Multimodal parts use only the endpoint's declared compatible wire forms.
 - Structured output chooses native response format or a strict tool emulation
   only when the capability profile declares semantic equivalence.
@@ -156,6 +163,29 @@ usage/cost lifter.
   round-trip byte-for-byte and stay pinned to the compatible Anthropic route.
 - JSON Schema constraints are lowered through native output/tool facilities
   only when the exact endpoint profile supports the required strictness.
+
+### Tool-result errors
+
+Anthropic Messages (`is_error`) and Bedrock Converse (`status: error`) carry a
+failed tool result natively. OpenAI Responses and OpenAI-compatible Chat
+Completions have no such field; those APIs report a tool failure to the model
+as the tool output text. Their adapters therefore apply the named transform
+`tool_result_error_text_prefix/v1`: the output string is the constant prefix
+
+```text
+[is_error=true] The tool call failed; its output follows.
+```
+
+followed by one line feed and then the result content exactly as it would be
+sent for a successful result. The call ID and item position are unchanged, and
+a result with `is_error: false` is sent byte-for-byte as before. The prefix is
+a compile-time constant, so request digests and compiled bodies stay
+deterministic.
+
+The transform keeps the error state visible to the model, so it is applied in
+both `strict` and `best_effort` portability, like other emulated capabilities.
+The only information not preserved is the distinction between a failed tool
+and a successful tool whose own output begins with the same prefix line.
 
 ## Response lifting
 

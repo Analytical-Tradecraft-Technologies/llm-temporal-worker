@@ -1,6 +1,7 @@
 package openairesponses
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -8,7 +9,45 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
+
+// function_call_output has no error field, so is_error is emulated with the
+// documented text prefix in both portability modes.
+func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		for _, isError := range []bool{true, false} {
+			adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
+			call, err := adapter.Compile(context.Background(), provider.CompileInput{
+				Request: llm.Request{OperationKey: "op-tool-error", Model: "gpt-contract", Input: []llm.Item{
+					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look it up"}}},
+					llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+					llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: isError},
+					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "continue"}}},
+				}},
+				Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+				Strict: strict,
+			})
+			if err != nil {
+				t.Fatalf("strict=%t is_error=%t: %v", strict, isError, err)
+			}
+			encoded, err := json.Marshal(call.SDKParams)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `{"output":"upstream timed out","call_id":"call-1","type":"function_call_output"}`
+			if isError {
+				want = `{"output":"[is_error=true] The tool call failed; its output follows.\nupstream timed out","call_id":"call-1","type":"function_call_output"}`
+			}
+			if !strings.Contains(string(encoded), want) {
+				t.Fatalf("strict=%t is_error=%t wire = %s, want item %s", strict, isError, encoded, want)
+			}
+			if !isError && strings.Contains(string(encoded), "is_error") {
+				t.Fatalf("successful tool result gained an error marker: %s", encoded)
+			}
+		}
+	}
+}
 
 func TestLoweringPreservesTypedInputAndControls(t *testing.T) {
 	maxTokens := 128
