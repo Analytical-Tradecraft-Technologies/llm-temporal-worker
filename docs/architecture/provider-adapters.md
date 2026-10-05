@@ -310,6 +310,39 @@ takes no arguments; an empty or whitespace-only string lifts as the empty
 object `{}` rather than failing the paid response. A call cut off by the output
 limit is still dropped and the response keeps its `length` status.
 
+## Tool-result errors
+
+Anthropic Messages (`is_error`) and Bedrock Converse (`status: error`) carry a
+failed tool result natively. OpenAI Responses and OpenAI-compatible Chat
+Completions have no such field: a Responses `function_call_output` has only a
+lifecycle `status` (`in_progress`, `completed`, `incomplete`) and a Chat `tool`
+message carries only `content` and `tool_call_id`. Those APIs report a tool
+failure to the model as the tool output text. Their adapters therefore apply the named transform
+`tool_result_error_text_prefix/v1`: the output string is the constant prefix
+
+```text
+[is_error=true] The tool call failed; its output follows.
+```
+
+followed by one line feed and then the result content exactly as it would be
+sent for a successful result. The call ID and item position are unchanged, and
+a result with `is_error: false` is sent byte-for-byte as before. The prefix is
+a compile-time constant, so request digests and compiled bodies stay
+deterministic.
+
+The transform keeps the error state visible to the model, so it is applied in
+both `strict` and `best_effort` portability, like other emulated capabilities.
+The prefix is reserved on these routes: a successful result (`is_error: false`)
+whose own output already starts with it would be indistinguishable from a
+failed one. `strict` compilation rejects such a result on Responses and Chat
+routes, which keeps the transform injective; `best_effort` sends it unchanged
+and accepts that ambiguity.
+
+The added prefix is not part of the serialized semantic request, so the route
+context-size check, the compaction planning check, and the fallback input
+token estimate add its size for every failed tool result on these two
+families. A configured exact tokenizer is responsible for counting it itself.
+
 ## Model inventory pagination
 
 Model management APIs are optional adapter capabilities. A profile that does

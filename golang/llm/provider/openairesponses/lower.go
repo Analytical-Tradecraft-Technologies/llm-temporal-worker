@@ -9,6 +9,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 func providerTier(class llm.ServiceClass) string {
@@ -191,12 +192,14 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 			"arguments": string(value.Arguments),
 		}, nil
 	case llm.ToolResult:
-		if value.IsError {
-			return nil, fmt.Errorf("tool result %q error state cannot be represented by Responses", value.CallID)
-		}
 		output, err := lowerToolResultContent(value.Content)
 		if err != nil {
 			return nil, err
+		}
+		if value.IsError {
+			// function_call_output has no error field; its status is an item
+			// lifecycle value. Emulate with provider.ToolResultErrorTransform.
+			output = provider.ToolResultErrorPrefix + output
 		}
 		return map[string]any{"type": "function_call_output", "call_id": value.CallID, "output": output}, nil
 	case llm.ProviderState:

@@ -116,6 +116,42 @@ func TestCompileRejectsToolResultWithoutPrecedingCall(t *testing.T) {
 	}
 }
 
+// Chat tool messages carry only content and tool_call_id, so is_error is
+// emulated with the documented text prefix in both portability modes.
+func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		for _, isError := range []bool{true, false} {
+			call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
+				Request: llm.Request{OperationKey: "op-tool-error", Model: "chat-model", Input: []llm.Item{
+					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look it up"}}},
+					llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+					llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: isError},
+					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "continue"}}},
+				}},
+				Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+				Strict: strict,
+			})
+			if err != nil {
+				t.Fatalf("strict=%t is_error=%t: %v", strict, isError, err)
+			}
+			encoded, err := json.Marshal(call.SDKParams)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `{"content":"upstream timed out","tool_call_id":"call-1","role":"tool"}`
+			if isError {
+				want = `{"content":"[is_error=true] The tool call failed; its output follows.\nupstream timed out","tool_call_id":"call-1","role":"tool"}`
+			}
+			if !strings.Contains(string(encoded), want) {
+				t.Fatalf("strict=%t is_error=%t wire = %s, want message %s", strict, isError, encoded, want)
+			}
+			if !isError && strings.Contains(string(encoded), "is_error") {
+				t.Fatalf("successful tool result gained an error marker: %s", encoded)
+			}
+		}
+	}
+}
+
 // openaiChatParams is an alias kept in the test so the SDK type does not leak
 // into provider-neutral assertions.
 type openaiChatParams = openai.ChatCompletionNewParams
@@ -212,5 +248,26 @@ func TestAssistantHistoryRejectsNilPartWithoutPanicking(t *testing.T) {
 	}}, testProfile(), "default")
 	if err == nil || !strings.Contains(err.Error(), "<nil>") {
 		t.Fatalf("nil assistant part error = %v", err)
+	}
+}
+
+// A successful result that already starts with the reserved prefix would be
+// indistinguishable from a failed one, so strict mode rejects it.
+func TestCompileStrictRejectsSuccessfulToolResultWithReservedPrefix(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		_, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
+			Request: llm.Request{OperationKey: "op-tool-prefix", Model: "chat-model", Input: []llm.Item{
+				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+				llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "[is_error=true] The tool call "}, llm.TextPart{Text: "failed; its output follows.\nfine"}}},
+			}},
+			Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+			Strict: strict,
+		})
+		if strict && (err == nil || !strings.Contains(err.Error(), "reserved tool-error prefix")) {
+			t.Fatalf("strict error = %v", err)
+		}
+		if !strict && err != nil {
+			t.Fatalf("best-effort error = %v", err)
+		}
 	}
 }

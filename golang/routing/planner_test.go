@@ -127,3 +127,33 @@ func TestPlannerValidatesRoutesAfterRejectionLimit(t *testing.T) {
 		})
 	}
 }
+
+// The OpenAI families add a text prefix to failed tool results at lowering, so
+// the context check must count it for those routes only.
+func TestPlannerContextLimitCountsToolResultErrorPrefix(t *testing.T) {
+	request := llm.Request{OperationKey: "op-tool-error", Model: "logical", Context: llm.RequestContext{Tenant: "tenant"}, Input: []llm.Item{
+		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+		llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "timed out"}}, IsError: true},
+	}}
+	if ToolResultErrorOverheadBytes(request, "openai_chat") != len(llm.ToolResultErrorTextPrefix)+1 || ToolResultErrorOverheadBytes(request, "bedrock_converse") != 0 {
+		t.Fatal("unexpected tool-result error overhead")
+	}
+	encoded, err := llm.CanonicalJSON(mustRequestJSON(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := func(id, family string) Route {
+		return Route{ID: id, EndpointID: id, Provider: id, Family: family, Model: "model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true, ContextBytes: len(encoded) + 30}
+	}
+	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{route("openai", "openai_responses"), route("anthropic", "anthropic_messages")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Candidates) != 1 || plan.Candidates[0].RouteID != "anthropic" || len(plan.Rejections) != 1 || plan.Rejections[0].Code != RejectContext {
+		t.Fatalf("candidates=%#v rejections=%#v", plan.Candidates, plan.Rejections)
+	}
+}

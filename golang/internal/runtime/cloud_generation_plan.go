@@ -102,7 +102,9 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 		if err != nil && !errors.Is(err, budget.ErrContextLimit) {
 			return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 		}
-		if err != nil || (route.ContextBytes > 0 && len(encoded) >= route.ContextBytes) {
+		// The byte check counts the text this candidate's family adds when
+		// lowering failed tool results, as route planning does.
+		if err != nil || (route.ContextBytes > 0 && len(encoded)+routing.ToolResultErrorOverheadBytes(input.Request, string(route.Family)) >= route.ContextBytes) {
 			limited = true
 		}
 	}

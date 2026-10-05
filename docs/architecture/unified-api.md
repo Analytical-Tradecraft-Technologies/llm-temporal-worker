@@ -147,6 +147,14 @@ Input is an ordered list of tagged unions. A v1 implementation supports:
 | `provider_state` | `provider`, `endpoint_family`, `media_type`, `opaque` | Uninterpreted continuation data retained byte-for-byte |
 | `reference` | `uri`, optional metadata | External content annotation, such as a citation in provider output; kept in the transcript and never sent to a provider |
 
+`is_error: true` reports a failed tool. Anthropic Messages and Bedrock Converse
+send it in their native error field. OpenAI Responses and Chat Completions
+routes have no such field, so the adapter sends the result content prefixed
+with the fixed line `[is_error=true] The tool call failed; its output follows.`
+in both portability modes. On those routes `strict` rejects a successful
+result whose output already starts with that line; see
+[Tool-result errors](provider-adapters.md#tool-result-errors).
+
 Instructions are a separate ordered part list because OpenAI Responses,
 Chat-style developer/system messages, and Anthropic's top-level system content
 have different lowering rules.

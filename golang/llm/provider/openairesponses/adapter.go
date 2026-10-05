@@ -152,6 +152,9 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability is %s", capability.State))
 		}
 	}
+	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
+		return provider.Call{}, compileError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
+	}
 	params, err := adapter.lowerRequest(normalized, serviceClass)
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())

@@ -9,6 +9,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 // lowerRequestMap builds the intended Chat Completions wire body. lowerRequest
@@ -247,12 +248,14 @@ func appendInputItem(messages *[]any, item llm.Item, toolCalls map[string]struct
 		if _, ok := toolCalls[value.CallID]; !ok {
 			return fmt.Errorf("tool result %q has no preceding tool call", value.CallID)
 		}
-		if value.IsError {
-			return fmt.Errorf("tool result %q error state cannot be represented by Chat Completions", value.CallID)
-		}
 		content, err := lowerToolResultContent(value.Content)
 		if err != nil {
 			return err
+		}
+		if value.IsError {
+			// Tool messages carry only content and tool_call_id. Emulate the
+			// error state with provider.ToolResultErrorTransform.
+			content = provider.ToolResultErrorPrefix + content
 		}
 		*messages = append(*messages, map[string]any{
 			"role":         "tool",

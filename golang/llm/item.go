@@ -156,6 +156,12 @@ func decodeToolCall(data []byte) (ToolCall, error) {
 	return ToolCall{ID: id, Name: name, Arguments: copyRaw(arguments)}, nil
 }
 
+// ToolResultErrorTextPrefix starts the tool output text that endpoint
+// families without a tool-result error field send for a result with
+// IsError set. It lives here so admission can count it without importing
+// the provider packages.
+const ToolResultErrorTextPrefix = "[is_error=true] The tool call failed; its output follows.\n"
+
 type ToolResult struct {
 	CallID  string
 	Name    string

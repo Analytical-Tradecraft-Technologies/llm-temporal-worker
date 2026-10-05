@@ -134,7 +134,7 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 	}
 	if route.ContextBytes > 0 {
 		requestBytes, _ := llm.CanonicalJSON(mustRequestJSON(request))
-		if len(requestBytes) > route.ContextBytes {
+		if len(requestBytes)+ToolResultErrorOverheadBytes(request, string(route.Family)) > route.ContextBytes {
 			return reject(RejectContext, "request", "request exceeds route context limit")
 		}
 	}
@@ -194,6 +194,30 @@ func extensionDigest(request llm.Request) string {
 	data, _ := llm.CanonicalJSON(mustRequestJSON(request))
 	digest := sha256.Sum256(data)
 	return fmt.Sprintf("%x", digest[:])
+}
+
+// ToolResultErrorOverheadBytes is the size of the text the OpenAI Responses
+// and Chat adapters add when lowering failed tool results. The serialized
+// request does not contain it, so context checks add it for those families.
+func ToolResultErrorOverheadBytes(request llm.Request, family string) int {
+	if family != "openai_responses" && family != "openai_chat" {
+		return 0
+	}
+	failed := 0
+	for _, item := range request.Input {
+		switch typed := item.(type) {
+		case llm.ToolResult:
+			if typed.IsError {
+				failed++
+			}
+		case *llm.ToolResult:
+			if typed != nil && typed.IsError {
+				failed++
+			}
+		}
+	}
+	// The trailing line feed is two bytes once JSON-escaped.
+	return failed * (len(llm.ToolResultErrorTextPrefix) + 1)
 }
 
 func mustRequestJSON(request llm.Request) []byte {

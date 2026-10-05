@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
@@ -36,6 +37,46 @@ func (state CapabilityState) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// ToolResultErrorTransform names the reviewed emulation used by endpoint
+// families whose wire contract has no tool-result error field (OpenAI
+// Responses function_call_output and Chat Completions tool messages). A tool
+// result with is_error=true is sent as ordinary tool output text that starts
+// with ToolResultErrorPrefix, followed by the unchanged result content. The
+// prefix is a constant so compiled bodies stay deterministic.
+const (
+	ToolResultErrorTransform = "tool_result_error_text_prefix/v1"
+	ToolResultErrorPrefix    = llm.ToolResultErrorTextPrefix
+)
+
+// ReservedToolResultPrefix returns the call ID of the first successful tool
+// result whose text output already starts with ToolResultErrorPrefix. Such a
+// result would be indistinguishable on the wire from a failed one, so strict
+// compilation rejects it to keep the transform injective.
+func ReservedToolResultPrefix(items []llm.Item) (string, bool) {
+	for _, item := range items {
+		result, ok := item.(llm.ToolResult)
+		if !ok || result.IsError {
+			continue
+		}
+		var output strings.Builder
+		for _, part := range result.Content {
+			switch value := part.(type) {
+			case llm.TextPart:
+				output.WriteString(value.Text)
+			case llm.JSONPart:
+				output.Write(value.Value)
+			}
+			if output.Len() >= len(ToolResultErrorPrefix) {
+				break
+			}
+		}
+		if strings.HasPrefix(output.String(), ToolResultErrorPrefix) {
+			return result.CallID, true
+		}
+	}
+	return "", false
 }
 
 type Capability struct {

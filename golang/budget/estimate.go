@@ -221,7 +221,8 @@ func (estimator Estimator) estimateInput(request llm.Request, candidate routing.
 	}
 	// UTF-8 bytes / 4 is a conservative provider-independent baseline for
 	// ordinary text. Structural overhead is bounded by the serialized request.
-	input := saturatingAdd(int64((len(data)+3)/4), textBaselineTokens(inlineTextBytes))
+	// Text an adapter adds for failed tool results is counted the same way.
+	input := saturatingAdd(int64((len(data)+routing.ToolResultErrorOverheadBytes(request, candidate.Family)+3)/4), textBaselineTokens(inlineTextBytes))
 	if input < 1 {
 		input = 1
 	}
