@@ -87,7 +87,9 @@ code before doing anything else, so a malformed, unknown-field, missing or
 oversize input fails once as a non-retryable `llm_invalid_argument` with
 bounded `SafeErrorDetails` (code `invalid_argument`, phase `decode`, dispatch
 `not_dispatched`) and a stable message that does not echo caller values. No
-Activity or child workflow is started for such a request. The wire format is
+Activity or child workflow is started for such a request. The budget workflow's
+input is a closed record too: JSON `null`, an unknown field, an unknown kind, a
+negative wait count or an invalid reference fails the same way. The wire format is
 unchanged: callers still send the typed v1 JSON record, and decoding depends
 only on the recorded input, so it is deterministic on replay.
 

@@ -139,6 +139,7 @@ func TestInternalWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
 	limits := activity.PayloadLimits{MaxInlineBytes: 4096}
 	oversize := strings.Repeat("x", 2*limits.MaxInlineBytes)
 	generate := wireFixture(t, "generate-root")
+	reference := `{"request_id":"` + testRequestID + `","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"}}`
 	cases := []struct {
 		workflow, name string
 		input          any
@@ -149,12 +150,25 @@ func TestInternalWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
 			fields["append"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"] = inputMarker + oversize
 		})) + `}`)},
 		{BudgetWorkflowName, "malformed reference", json.RawMessage(`{"reference":{"request_id":"` + inputMarker + `"},"kind":"generate"}`)},
+		{BudgetWorkflowName, "JSON null", json.RawMessage(`null`)},
+		{BudgetWorkflowName, "unknown field", json.RawMessage(`{"reference":` + reference + `,"kind":"generate","transcript":"` + inputMarker + `"}`)},
+		{BudgetWorkflowName, "invalid kind", json.RawMessage(`{"reference":` + reference + `,"kind":"` + inputMarker + `"}`)},
+		{BudgetWorkflowName, "negative waits", json.RawMessage(`{"reference":` + reference + `,"kind":"generate","waits":-1}`)},
+		{BudgetWorkflowName, "missing reference", json.RawMessage(`{"kind":"generate"}`)},
+		{BudgetWorkflowName, "no payload", nil},
+		{RequestWorkflowName, "no payload", nil},
 		{BudgetWorkflowName, "oversize payload", json.RawMessage(`{"reference":{},"kind":"` + inputMarker + oversize + `"}`)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.workflow+"/"+tc.name, func(t *testing.T) {
 			env := invalidInputEnvironment(limits)
-			env.ExecuteWorkflow(tc.workflow, tc.input)
+			// Any dispatch would fail the assertion below with a different error:
+			// no Activity is registered in this environment.
+			if tc.input == nil {
+				env.ExecuteWorkflow(tc.workflow)
+			} else {
+				env.ExecuteWorkflow(tc.workflow, tc.input)
+			}
 			if !env.IsWorkflowCompleted() {
 				t.Fatal("workflow did not complete")
 			}

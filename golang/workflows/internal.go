@@ -3,6 +3,9 @@
 package workflows
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
@@ -61,12 +64,33 @@ type BudgetRequest struct {
 	Waits int `json:"waits,omitempty"`
 }
 
+// UnmarshalJSON makes the budget workflow input a closed record like the v1
+// requests: JSON null, unknown fields, an unknown kind, a
+// negative wait count or an invalid reference are rejected at decode, before
+// the workflow can schedule an acquisition.
+func (request *BudgetRequest) UnmarshalJSON(data []byte) error {
+	type record BudgetRequest
+	var decoded *record
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil || decoded == nil || !BudgetRequest(*decoded).valid() {
+		return errors.New("budget request is invalid")
+	}
+	*request = BudgetRequest(*decoded)
+	return nil
+}
+
+func (request BudgetRequest) valid() bool {
+	_, err := request.Reference.MarshalJSON()
+	return err == nil && (request.Kind == "generate" || request.Kind == "compact") && request.Waits >= 0
+}
+
 // WaitForBudget acquires once per activity, then waits using a Temporal timer.
 // Acquisition may find a cached response or an already dispatched attempt; such
 // results go straight back to the request workflow without a second submission.
 func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResultV1, error) {
-	if _, err := input.Reference.MarshalJSON(); err != nil || (input.Kind != "generate" && input.Kind != "compact") || input.Waits < 0 {
-		return llm.ExecutionResultV1{}, invalidState()
+	if !input.valid() {
+		return llm.ExecutionResultV1{}, invalidInput()
 	}
 	ctx = executionContext(ctx)
 	for steps := 0; ; steps++ {
@@ -105,7 +129,7 @@ func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResu
 // reservation is carried in workflow history.
 func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
 	if _, err := input.MarshalJSON(); err != nil {
-		return llm.ExecutionResultV1{}, invalidState()
+		return llm.ExecutionResultV1{}, invalidInput()
 	}
 	ctx = executionContext(ctx)
 	kind, caller := "compact", llm.RequestContext{}
