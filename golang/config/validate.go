@@ -93,6 +93,9 @@ func (config Config) Validate() error {
 	if err := config.Budgets.validate(); err != nil {
 		return err
 	}
+	if err := config.validateBudgetReferences(); err != nil {
+		return err
+	}
 	if err := config.Continuation.validate(); err != nil {
 		return err
 	}
@@ -296,6 +299,9 @@ func (redis RedisConfig) validate(environment string) error {
 	}
 	if redis.AdmissionHashTag == "" || redis.FunctionLibrary == "" || redis.AdmissionVersion == "" {
 		return fmt.Errorf("state.redis.admission_hash_tag, function_library, and admission_version are required")
+	}
+	if err := validateAdmissionHashTag(redis.AdmissionHashTag); err != nil {
+		return err
 	}
 	switch redis.AdmissionMode {
 	case "function", "lua":
@@ -622,6 +628,9 @@ func (budgets BudgetsConfig) validate() error {
 			return fmt.Errorf("%s duplicate policy ID %q", path, policy.ID)
 		}
 		seen[policy.ID] = struct{}{}
+		if err := validateBudgetPolicyIdentity(policy, path); err != nil {
+			return err
+		}
 		match := policy.Match
 		if !hasBudgetMatchRestriction(match) {
 			return fmt.Errorf("%s.match must contain at least one restriction", path)
@@ -649,6 +658,9 @@ func (budgets BudgetsConfig) validate() error {
 				}
 			} else if window.LimitMicroUSD <= 0 {
 				return fmt.Errorf("%s.limit_usd must be positive", windowPath)
+			}
+			if err := validateBudgetLimit(window, windowPath); err != nil {
+				return err
 			}
 		}
 	}

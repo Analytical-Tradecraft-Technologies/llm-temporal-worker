@@ -148,7 +148,7 @@ func TestConfigSchemaRejectsProductionRedisWithoutTLS(t *testing.T) {
 }
 
 func TestConfigSchemaAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
-	loaded, err := config.Load([]byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", 1)))
+	loaded, err := config.Load([]byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
 		"match:\n        tenant: acme\n        environment: production",
-		"match:\n        project: critical-workload\n        actor_prefix: service-\n        logical_model: reasoning\n        endpoint: openai-prod\n        service_class: priority",
+		"match:\n        project: invoice-processing\n        actor_prefix: service-\n        logical_model: invoice-summarizer\n        endpoint: openai-prod\n        service_class: priority",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))

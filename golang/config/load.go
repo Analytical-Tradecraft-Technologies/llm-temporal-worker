@@ -23,9 +23,15 @@ func Load(data []byte) (Config, error) {
 	if len(data) > maxConfigBytes {
 		return Config{}, fmt.Errorf("configuration exceeds %d bytes", maxConfigBytes)
 	}
+	// Without WithSingleDocument the loader requires end of input after the
+	// first document: a second document, or anything after an explicit "..."
+	// end marker, is an error instead of being silently ignored.
 	var config Config
-	if err := yaml.Load(data, &config, yaml.WithV4Defaults(), yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
+	if err := yaml.Load(data, &config, yaml.WithV4Defaults(), yaml.WithKnownFields(), yaml.WithUniqueKeys()); err != nil {
 		return Config{}, fmt.Errorf("configuration YAML: %w", err)
+	}
+	if err := rejectNulls(data, &config, ""); err != nil {
+		return Config{}, err
 	}
 	if config.BudgetsJSON != "" {
 		if config.Budgets.RequireMatch || config.Budgets.Policies != nil {
@@ -217,8 +223,11 @@ func ParseBudgetsJSON(data []byte) (BudgetsConfig, error) {
 	if len(data) == 0 || len(data) > maxConfigBytes || data[0] != '{' || !json.Valid(data) {
 		return budgets, fmt.Errorf("budgets_json must be a JSON object of at most %d bytes", maxConfigBytes)
 	}
-	if err := yaml.Load(data, &budgets, yaml.WithV4Defaults(), yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
+	if err := yaml.Load(data, &budgets, yaml.WithV4Defaults(), yaml.WithKnownFields(), yaml.WithUniqueKeys()); err != nil {
 		return budgets, fmt.Errorf("budgets_json: %w", err)
+	}
+	if err := rejectNulls(data, &budgets, "budgets"); err != nil {
+		return budgets, err
 	}
 	if err := budgets.validate(); err != nil {
 		return budgets, err

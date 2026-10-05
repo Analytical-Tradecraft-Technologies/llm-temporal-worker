@@ -4,6 +4,16 @@
 
 The worker reads one strict YAML document. Unknown fields, duplicate keys,
 unknown enum values, unresolved references, and integer overflow are errors.
+The file must end after that document: a second `---` document, or any content
+after a `...` end marker, is an error rather than being ignored, so
+concatenated files and multi-document renders do not validate. Catalog files
+follow the same rule.
+
+A null (`~`, `null`, or a key with no value) is rejected wherever a value
+would otherwise be substituted silently: for a scalar or a section, such as
+`require_match: ~`, and for a list element, such as `allowed_tenants: [~]`.
+A null for a whole list or map, or for an optional section, means the same as
+omitting it, which is how the effective configuration renders unset lists.
 The command-line binary selects the document with the `--config` flag; the
 default path is `/etc/llmtw/config.yaml`. It does not use a process-wide
 environment-variable override for the configuration path or command mode. See
@@ -766,6 +776,40 @@ enum. `*` is an exact-field wildcard, not a restriction, so a policy with only
 wildcards is rejected. A missing request or candidate fact cannot satisfy an
 exact or prefix restriction.
 
+A matcher that can never match is a configuration error, because its policy
+would silently never apply, or with `require_match: true` silently remove the
+routes it was meant to budget. Validation rejects an exact `logical_model` that
+is not a key of `models`, an exact `endpoint` that is not a key of `endpoints`
+or that no route uses (no route of the matched `logical_model` when one is
+named, since a request only reaches an endpoint through its model's routes),
+and an exact `environment` other than the configuration's own `environment`.
+When `authorization` is configured, an exact `tenant` or `project` must appear
+in `authorization.allowed_scopes`, and when both are set they must appear
+together in one scope. All comparisons are case-sensitive. Keep policies for
+other environments in those environments' files.
+
+Budget bounds that would otherwise fail at worker start or on every matching
+request are also validation errors:
+
+- a window keeps `duration / bucket + 2` buckets, which must not exceed
+  `limits.max_budget_buckets_per_window`;
+- `limit_usd` must be between `0.000000001` (one nano-USD) and
+  `9007199.254740991`, the range Redis represents exactly; `limit_micro_usd`
+  is bounded the same way, at `9007199254740`;
+- a policy `id` must leave room for its window identities, which are derived as
+  `<id>/<window index>` and limited to 128 bytes: at most 126 bytes for a
+  policy of up to ten windows.
+
+## Model tenant restriction
+
+`models.<name>.allowed_tenants` lists the tenants that may route to the model.
+An empty, null, or omitted list places no tenant restriction on the model:
+every tenant admitted by `authorization.allowed_scopes` can use it. To
+restrict a model, list its tenants explicitly. A null list element is
+rejected, so a template that renders an unset tenant as `[~]` cannot widen
+access by accident; a template that renders the whole list as null or empty
+does remove the restriction, so validate rendered files before deploying them.
+
 ## Price catalog shape
 
 ```yaml
@@ -808,7 +852,11 @@ worker:
 - routes reference declared endpoints and only use the three public service
   classes mapped by those endpoints;
 - budget windows, continuation keys, Redis numeric bounds, and retention
-  inequalities are safe;
+  inequalities are safe, including window bucket counts, limits Redis can
+  represent, policy ID length, and the `state.redis.admission_hash_tag`
+  character set (1 to 64 bytes without braces or whitespace);
+- budget matchers name declared models, endpoints, the configured environment,
+  and allowlisted scopes;
 - telemetry settings obey their environment and content-logging rules.
 
 It does not read catalog files or compare their digests, resolve environment or
@@ -819,6 +867,13 @@ reference and client-construction checks during runtime composition; catalog
 and deployment verification are separate gates.
 
 Reload performs the same checks and publishes only a complete valid snapshot.
+The file watcher reloads a changed file only after two consecutive polls, one
+second apart, see the same file identity, size, modification time and content,
+and the reload publishes only that content. A prefix of a configuration file
+is often valid YAML with its trailing sections missing, so this keeps a file
+caught halfway through an in-place write from being published. Prefer an
+atomic rename or a ConfigMap update, which are never observed half written.
+`SIGHUP` reloads the file as it is at that moment without waiting.
 
 ### Responses provider storage policy
 

@@ -495,3 +495,30 @@ entries:
 		}
 	}
 }
+
+func TestLoadRejectsContentAfterTheFirstDocument(t *testing.T) {
+	const body = `version: llmtw-prices/v1
+id: catalog-2026-07-13
+entries:
+  - provider: openai
+    endpoint_id: openai-production
+    endpoint_family: openai_responses
+    region: global
+    model: gpt-example
+    provider_tier: standard
+    input_per_million: "1.250000"
+    output_per_million: "10.000000"
+    source: operator-verified
+`
+	if _, err := LoadPricing(writeCatalog(t, body)); err != nil {
+		t.Fatal(err)
+	}
+	for name, trailing := range map[string]string{
+		"second document":          "---\nversion: llmtw-prices/v1\nid: other\nentries: []\n",
+		"garbage after end marker": "...\n}} not yaml [\n",
+	} {
+		if _, err := LoadPricing(writeCatalog(t, body+trailing)); err == nil {
+			t.Fatalf("%s after the catalog document was silently ignored", name)
+		}
+	}
+}
