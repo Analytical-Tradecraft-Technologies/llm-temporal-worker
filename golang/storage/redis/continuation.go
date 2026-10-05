@@ -253,7 +253,14 @@ func (store *ContinuationStore) put(ctx context.Context, handle state.Handle, co
 		if len(parts) < 2 || parts[1] == "" {
 			return "", ErrUnavailable
 		}
-		return state.Handle(parts[1]), nil
+		// A concurrent retry can lose the operation-index race after missing
+		// the preliminary read. The winning child is immutable, so comparing
+		// it here closes that window without trusting a stale read.
+		existing := state.Handle(parts[1])
+		if stored, getErr := store.Get(ctx, existing); getErr == nil && !sameChildFacts(stored, continuation) {
+			return "", state.ErrConflict
+		}
+		return existing, nil
 	case "conflict":
 		return "", state.ErrConflict
 	case "invalid":
