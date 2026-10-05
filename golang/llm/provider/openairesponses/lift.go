@@ -22,7 +22,7 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
-	output, hasToolCalls, hasRefusal, err := liftOutput(response.Output)
+	output, hasToolCalls, hasRefusal, err := liftOutput(response.Output, response.Status == responses.ResponseStatusIncomplete)
 	if err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
@@ -223,7 +223,9 @@ func liftStatus(status responses.ResponseStatus, incompleteReason string, hasToo
 	}
 }
 
-func liftOutput(items []responses.ResponseOutputItemUnion) ([]llm.Item, bool, bool, error) {
+// liftOutput lifts provider output items. truncated reports an incomplete
+// response, where the output limit can cut a function call off mid-arguments.
+func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]llm.Item, bool, bool, error) {
 	output := make([]llm.Item, 0, len(items))
 	toolCalls := false
 	refusal := false
@@ -253,6 +255,11 @@ func liftOutput(items []responses.ResponseOutputItemUnion) ([]llm.Item, bool, bo
 				return nil, false, false, fmt.Errorf("function call output item %d is missing call ID or name", index)
 			}
 			if !json.Valid([]byte(call.Arguments)) {
+				// Keep the paid incomplete response as a length truncation and
+				// drop only the cut-off call.
+				if truncated {
+					continue
+				}
 				return nil, false, false, fmt.Errorf("function call %q arguments are invalid JSON", call.CallID)
 			}
 			toolCalls = true
