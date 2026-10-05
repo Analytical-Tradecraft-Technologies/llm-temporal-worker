@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/state"
@@ -109,7 +111,11 @@ func (replay *CheckpointReplay) materializeAuthorized(ctx context.Context, calle
 			return state.MaterializedState{}, ctx.Err()
 		}
 		code := provider.CodeStateUnavailable
-		if errors.Is(err, state.ErrInvalidHandle) || errors.Is(err, state.ErrNotFound) || errors.Is(err, state.ErrExpired) || errors.Is(err, state.ErrTenantMismatch) {
+		// Deterministic failures must not be retried as transient: a correctly
+		// signed handle whose checkpoint row is absent (contracts.ErrNotFound
+		// from the cloud store) and lineage limit violations cannot succeed later.
+		if errors.Is(err, state.ErrInvalidHandle) || errors.Is(err, state.ErrNotFound) || errors.Is(err, contracts.ErrNotFound) ||
+			errors.Is(err, state.ErrExpired) || errors.Is(err, state.ErrTenantMismatch) || errors.Is(err, state.ErrLimitExceeded) {
 			code = provider.CodeInvalidArgument
 		}
 		return state.MaterializedState{}, checkpointReplayError(code)

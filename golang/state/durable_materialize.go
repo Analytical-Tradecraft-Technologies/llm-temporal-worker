@@ -81,7 +81,7 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 			return MaterializedState{}, fmt.Errorf("durable checkpoint %s root depth is not zero", current)
 		}
 		if int32(len(path)) > limits.MaxDepth || len(path)+1 > limits.MaxRows {
-			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit")
+			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit: %w", ErrLimitExceeded)
 		}
 		delta, err := materializer.readItems(ctx, scopeID, row.DeltaBlob, codec, CheckpointDeltaBlob)
 		if err != nil {
