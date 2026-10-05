@@ -170,3 +170,53 @@ func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 		t.Fatalf("elected child=%#v err=%v", got, err)
 	}
 }
+
+func TestContinuationStoreDetachesNestedTranscriptData(t *testing.T) {
+	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, bytes.NewReader(append(bytes.Repeat([]byte{4}, 16), bytes.Repeat([]byte{5}, 16)...)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(100, 0)
+	store, err := NewContinuationStore(ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return now }, MaxDepth: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []llm.Part{llm.TextPart{Text: "hello"}}
+	arguments := []byte(`{"q":"x"}`)
+	items := []llm.Item{
+		llm.Message{Actor: llm.ActorHuman, Content: content},
+		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: arguments},
+	}
+	_, digest, err := state.CanonicalTranscript(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mutate the caller's input after the write.
+	content[0] = llm.TextPart{Text: "mutated input"}
+	arguments[2] = 'Q'
+	got, err := store.Get(context.Background(), handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mutate a returned read.
+	got.Transcript[0].(llm.Message).Content[0] = llm.TextPart{Text: "mutated read"}
+	got.Transcript[1].(llm.ToolCall).Arguments[2] = 'R'
+
+	again, err := store.Get(context.Background(), handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := again.Transcript[0].(llm.Message).Content[0].(llm.TextPart).Text; text != "hello" {
+		t.Fatalf("stored message text = %q", text)
+	}
+	if args := string(again.Transcript[1].(llm.ToolCall).Arguments); args != `{"q":"x"}` {
+		t.Fatalf("stored tool arguments = %s", args)
+	}
+	if err := again.Validate(now); err != nil {
+		t.Fatalf("stored continuation no longer matches its digest: %v", err)
+	}
+}
