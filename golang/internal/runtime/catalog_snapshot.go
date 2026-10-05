@@ -220,6 +220,10 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 // its address and credential reference but no secret. Recovery of dispatched
 // work compares it instead of the whole-configuration digest.
 func endpointConfigDigest(endpointID string, endpoint config.EndpointConfig) ([32]byte, error) {
+	// outbound_hosts is a set (see sameEndpointOutboundHosts); reordering it
+	// is not a change. Maps already marshal with sorted keys.
+	endpoint.OutboundHosts = append([]string(nil), endpoint.OutboundHosts...)
+	sort.Strings(endpoint.OutboundHosts)
 	encoded, err := json.Marshal(endpoint)
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("endpoint %q configuration cannot be identified", endpointID)

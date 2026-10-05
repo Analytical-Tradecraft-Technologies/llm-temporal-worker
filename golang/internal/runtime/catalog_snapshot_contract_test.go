@@ -753,6 +753,8 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 	original, originalConfig := load("\n", "\n")
 	unrelated, unrelatedConfig := load("shutdown_timeout: 45s", "shutdown_timeout: 44s")
 	moved, _ := load("base_url: https://provider-mock:8081/v1", "base_url: https://provider-mock:8081/v2")
+	hosts, _ := load("outbound_hosts: [provider-mock]", "outbound_hosts: [provider-mock, provider-mirror]")
+	reorderedHosts, _ := load("outbound_hosts: [provider-mock]", "outbound_hosts: [provider-mirror, provider-mock]")
 	if original.EndpointDigest == ([32]byte{}) {
 		t.Fatal("route has no endpoint digest")
 	}
@@ -761,5 +763,8 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 	}
 	if moved.EndpointDigest == original.EndpointDigest {
 		t.Fatal("a moved endpoint kept its digest")
+	}
+	if hosts.EndpointDigest == original.EndpointDigest || hosts.EndpointDigest != reorderedHosts.EndpointDigest {
+		t.Fatal("outbound hosts must change the digest as a set, not as a list")
 	}
 }
