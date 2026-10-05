@@ -238,15 +238,24 @@ const (
 	// the largest of these.
 	MediaImageInputTokenFloor int64 = 6_000
 	// MediaDocumentPageAssumption is the page count assumed for a document
-	// whose length is unknown at admission (for example a URL). It matches the
-	// common 100-page PDF limit of supported providers.
-	MediaDocumentPageAssumption int64 = 100
-	// MediaDocumentTokensPerPage bounds one PDF page: providers bill the
-	// extracted text (typically 1,500-3,000 tokens for a dense page) and may
-	// also bill a rendered page image.
-	MediaDocumentTokensPerPage int64 = 3_000
+	// whose length is unknown at admission (for example a URL). It is the
+	// largest per-request PDF page limit of supported providers: Anthropic
+	// accepts up to 600 pages on 1M-token-context models.
+	MediaDocumentPageAssumption int64 = 600
+	// MediaDocumentTextTokensPerPage bounds the extracted text of one PDF
+	// page (typically 1,500-3,000 tokens for a dense page).
+	MediaDocumentTextTokensPerPage int64 = 3_000
+	// MediaDocumentTokensPerPage bounds one PDF page. Providers such as
+	// Anthropic bill the extracted text plus a rendered image of every page,
+	// so the page image is charged at the full per-image floor.
+	MediaDocumentTokensPerPage = MediaDocumentTextTokensPerPage + MediaImageInputTokenFloor
 	// MediaDocumentInputTokenFloor is the per-document allowance
-	// (100 pages x 3,000 tokens = 300,000 tokens).
+	// (600 pages x 9,000 tokens = 5,400,000 tokens). It deliberately exceeds
+	// every supported context window: on a candidate that declares a context
+	// window, addMediaAllowance caps it to the remaining input room, so a
+	// document reserves the whole remaining window (the most the provider
+	// can bill). Only a candidate without a declared window reserves the
+	// full constant.
 	MediaDocumentInputTokenFloor = MediaDocumentPageAssumption * MediaDocumentTokensPerPage
 )
 

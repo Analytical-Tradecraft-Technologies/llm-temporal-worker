@@ -149,13 +149,19 @@ blob reference) in instructions, messages, and tool results:
 | Part | Allowance | Basis |
 |---|---|---|
 | Image | 6,000 tokens | Above the largest documented per-image counts of supported providers (about 1,600 standard, about 2,500 patch-based, about 4,800 high-resolution). |
-| Document | 300,000 tokens | 100 pages (the common PDF page limit) x 3,000 tokens per page (extracted text plus a possible page image). |
+| Document | 5,400,000 tokens | 600 pages (the largest supported PDF page limit, Anthropic on 1M-token-context models) x 9,000 tokens per page (up to 3,000 extracted-text tokens plus the rendered page image, charged at the 6,000-token image allowance). |
 
 The allowance is added to the serialized-size estimate, so text-only requests
 are unchanged. When the candidate declares a context window, the allowance is
 capped at the room left after the text estimate and the reserved output and
 reasoning: the provider must reject input beyond its window, so the allowance
-alone never excludes a candidate for context size. Context-fit checks and
+alone never excludes a candidate for context size. The document allowance
+deliberately exceeds every supported context window, so on any candidate that
+declares one, a document reserves the whole remaining input room (the most the
+provider can bill), including on 1M-token-context routes; only a candidate
+without a declared context window reserves the full 5,400,000-token constant.
+Declare `context_tokens` on routes that accept documents to keep that
+reservation bounded by the real window. Context-fit checks and
 compaction planning (`ValidateContext`, `CountInputTokens`) keep using the
 unadjusted estimate. A configured exact tokenizer is responsible for media and
 replaces the allowance. The catalog still has no media-unit price; media is

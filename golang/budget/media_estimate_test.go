@@ -94,12 +94,39 @@ func TestEstimateMediaFloorCountsInstructionsAndToolResults(t *testing.T) {
 func TestEstimateMediaFloorIsCappedByContextWindow(t *testing.T) {
 	estimator := Estimator{}
 	request := mediaEstimateRequest(llm.DocumentPart{URL: "https://example.com/report.pdf", MediaType: "application/pdf"})
-	candidate := routing.Candidate{ID: "c", ContextTokens: 200_000}
-	got, err := estimator.EstimateCandidate(request, candidate, mediaEstimateEntry())
-	if err != nil {
-		t.Fatalf("media floor must not cause a context-limit rejection: %v", err)
+	// The document allowance exceeds every supported window, so a document
+	// reserves the whole remaining input room on standard and 1M-token routes.
+	for _, contextTokens := range []int64{200_000, 1_000_000} {
+		candidate := routing.Candidate{ID: "c", ContextTokens: contextTokens}
+		got, err := estimator.EstimateCandidate(request, candidate, mediaEstimateEntry())
+		if err != nil {
+			t.Fatalf("context %d: media floor must not cause a context-limit rejection: %v", contextTokens, err)
+		}
+		if want := candidate.ContextTokens - got.OutputTokens - got.ReasoningTokens; got.InputTokens != want {
+			t.Fatalf("context %d: capped input tokens = %d, want remaining context %d", contextTokens, got.InputTokens, want)
+		}
 	}
-	if want := candidate.ContextTokens - got.OutputTokens - got.ReasoningTokens; got.InputTokens != want {
-		t.Fatalf("capped input tokens = %d, want remaining context %d", got.InputTokens, want)
+}
+
+func TestEstimateDocumentFloorCoversLargestSupportedPDF(t *testing.T) {
+	// 600 pages x (3,000 text tokens + a rendered page image) must exceed a
+	// 1M-token window so the context cap, not the constant, binds.
+	if MediaDocumentPageAssumption < 600 {
+		t.Fatalf("page assumption = %d, want at least the 600-page provider limit", MediaDocumentPageAssumption)
+	}
+	if MediaDocumentTokensPerPage < MediaDocumentTextTokensPerPage+MediaImageInputTokenFloor {
+		t.Fatalf("tokens per page = %d must include text and a page image", MediaDocumentTokensPerPage)
+	}
+	if MediaDocumentInputTokenFloor <= 1_000_000 {
+		t.Fatalf("document floor = %d, want above the largest 1M-token context window", MediaDocumentInputTokenFloor)
+	}
+	estimator := Estimator{}
+	request := mediaEstimateRequest(llm.DocumentPart{URL: "https://example.com/report.pdf", MediaType: "application/pdf"})
+	got, err := estimator.EstimateCandidate(request, routing.Candidate{ID: "c"}, mediaEstimateEntry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InputTokens < MediaDocumentInputTokenFloor {
+		t.Fatalf("undeclared-window input tokens = %d, want at least %d", got.InputTokens, MediaDocumentInputTokenFloor)
 	}
 }
