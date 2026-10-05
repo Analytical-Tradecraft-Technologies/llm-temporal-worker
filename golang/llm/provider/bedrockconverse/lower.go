@@ -20,6 +20,15 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 	if request.Output != nil && (request.Output.Format.Kind == llm.OutputKindJSON || request.Output.Format.Kind == llm.OutputKindJSONSchema) {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("structured output is not implemented by the Bedrock Converse adapter")
 	}
+	// The generic Converse lowering sends no additionalModelRequestFields, so
+	// it cannot carry reasoning controls or extension namespaces. Reject them
+	// instead of silently dropping them.
+	if len(request.Extensions) > 0 {
+		return bedrockruntime.ConverseInput{}, fmt.Errorf("extensions are not supported by the Bedrock Converse adapter")
+	}
+	if reasoning := request.Reasoning; strict && reasoning != nil && !reasoningIsProviderDefault(*reasoning) {
+		return bedrockruntime.ConverseInput{}, fmt.Errorf("reasoning controls are not implemented by the Bedrock Converse adapter in strict portability mode")
+	}
 	if sampling := request.Sampling; sampling != nil && (sampling.TopK != nil || sampling.Seed != nil || sampling.PresencePenalty != nil || sampling.FrequencyPenalty != nil) {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("top_k, seed and penalty sampling controls are not implemented by the Bedrock Converse adapter")
 	}
@@ -260,4 +269,12 @@ func decodeDocument(raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// reasoningIsProviderDefault reports whether a reasoning spec asks for nothing
+// beyond the provider's default behaviour.
+func reasoningIsProviderDefault(reasoning llm.ReasoningSpec) bool {
+	return (reasoning.Mode == "" || reasoning.Mode == llm.ReasoningModeProviderDefault) &&
+		(reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && reasoning.TokenBudget == nil &&
+		(reasoning.Summary == "" || reasoning.Summary == llm.ReasoningSummaryProviderDefault)
 }
