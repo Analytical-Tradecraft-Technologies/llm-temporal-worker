@@ -79,12 +79,17 @@ func (adapter *Adapter) Name() string { return adapterName }
 // lowering with the endpoint's request policy applied to the map itself, so
 // the body that is sent is exactly the body that was intended.
 func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[string]any, loweredToolPolicy, error) {
-	requestMap, policy, err := lowerRequestMap(request, serviceClass)
+	requestMap, policy, err := lowerRequestMap(request, serviceClass, adapter.storageDenied)
 	if err != nil {
 		return nil, loweredToolPolicy{}, err
 	}
 	if adapter.omitServiceTier {
 		delete(requestMap, "service_tier")
+	}
+	// A caller's explicit store value is left for enforceStoragePolicy to
+	// accept or reject.
+	if _, explicit := requestMap["store"]; adapter.storageDenied && !explicit {
+		requestMap["store"] = false
 	}
 	return requestMap, policy, nil
 }

@@ -84,10 +84,11 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 }
 
 // intendedWireBody is the request map the profile's adapter built before it
-// was carried into the SDK parameter type.
-func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Request) map[string]any {
+// was carried into the SDK parameter type. options are the endpoint policy the
+// adapter is composed with; with none the map carries no storage policy.
+func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Request, options ...AdapterOption) map[string]any {
 	t.Helper()
-	adapter, err := profile.newAdapter(http.DefaultClient)
+	adapter, err := profile.newAdapter(http.DefaultClient, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +342,28 @@ func TestCapturedWireBodyServiceTierFollowsTheRoute(t *testing.T) {
 	}
 }
 
-// A storage-denied endpoint adds exactly store:false to the lowered body.
+// auditStorageDeniedBody checks a storage-denied request two ways. The body the
+// route's adapter intends without a storage policy, plus exactly the stated
+// additions, must be what is sent; and the storage policy must already be part
+// of the storage-denied adapter's intended body rather than applied after it.
+func auditStorageDeniedBody(t *testing.T, profile wireAuditProfile, request llm.Request, additions map[string]any) {
+	t.Helper()
+	denied := WithProviderStoragePermitted(false)
+	captured := captureWireBody(t, profile, request, denied)
+	unrestricted := intendedWireBody(t, profile, request)
+	for key, value := range additions {
+		unrestricted[key] = value
+	}
+	if differences := wireDifferences("$", unrestricted, captured); len(differences) > 0 {
+		t.Fatalf("storage denial changed more than %s:\n%s", describeWireValue(additions), strings.Join(differences, "\n"))
+	}
+	if differences := wireDifferences("$", intendedWireBody(t, profile, request, denied), captured); len(differences) > 0 {
+		t.Fatalf("captured wire body differs from the storage-denied request map:\n%s", strings.Join(differences, "\n"))
+	}
+}
+
+// A storage-denied endpoint adds exactly store:false to the lowered body of a
+// request that involves no reasoning.
 func TestCapturedWireBodyAddsOnlyStoreFalseWhenStorageIsDenied(t *testing.T) {
 	for _, profile := range wireAuditProfiles() {
 		t.Run(profile.id, func(t *testing.T) {
@@ -352,12 +374,50 @@ func TestCapturedWireBodyAddsOnlyStoreFalseWhenStorageIsDenied(t *testing.T) {
 				Tools:        []llm.Tool{wireAuditTool("lookup")},
 				ToolPolicy:   llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup"},
 			}
-			intended := intendedWireBody(t, profile, request)
-			intended["store"] = false
-			captured := captureWireBody(t, profile, request, WithProviderStoragePermitted(false))
-			if differences := wireDifferences("$", intended, captured); len(differences) > 0 {
-				t.Fatalf("captured wire body differs from the lowered request map:\n%s", strings.Join(differences, "\n"))
-			}
+			auditStorageDeniedBody(t, profile, request, map[string]any{"store": false})
 		})
+	}
+}
+
+// With reasoning in play a storage-denied endpoint also asks for encrypted
+// reasoning content. Nothing else in the lowered body changes.
+func TestCapturedWireBodyAddsStoreFalseAndEncryptedReasoningIncludeWhenStorageIsDenied(t *testing.T) {
+	sealed := llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: reasoningStateMediaType, Opaque: json.RawMessage(`{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"opaque-bytes"}`)}
+	for _, test := range []struct {
+		name    string
+		request llm.Request
+		include []any
+	}{
+		{
+			name:    "reasoning configured",
+			request: llm.Request{Input: wireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}},
+			include: []any{"reasoning.encrypted_content"},
+		},
+		{
+			name: "caller include merged",
+			request: llm.Request{Input: wireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}, Extensions: map[string]json.RawMessage{
+				"openai.responses": json.RawMessage(`{"include":["message.output_text.logprobs","reasoning.encrypted_content"]}`),
+			}},
+			include: []any{"message.output_text.logprobs", "reasoning.encrypted_content"},
+		},
+		{
+			name: "replayed reasoning state",
+			request: llm.Request{Input: []llm.Item{
+				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find sydney"}}},
+				sealed,
+				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
+				llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "ok"}}},
+			}, Tools: []llm.Tool{wireAuditTool("lookup")}},
+			include: []any{"reasoning.encrypted_content"},
+		},
+	} {
+		for _, profile := range wireAuditProfiles() {
+			t.Run(test.name+"/"+profile.id, func(t *testing.T) {
+				request := test.request
+				request.Model = "gpt-audit"
+				request.OperationKey = "wire-storage-denied"
+				auditStorageDeniedBody(t, profile, request, map[string]any{"store": false, "include": test.include})
+			})
+		}
 	}
 }

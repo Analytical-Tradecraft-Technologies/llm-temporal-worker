@@ -23,15 +23,21 @@ func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	var state *llm.ProviderState
+	var produced []llm.Item
 	for _, item := range lifted.Output {
 		if value, ok := item.(llm.ProviderState); ok {
 			state = &value
+			continue
 		}
+		produced = append(produced, item)
 	}
 	if state == nil {
 		t.Fatal("fixture did not lift a reasoning provider state")
 	}
-	input := append([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}}}, lifted.Output...)
+	// The fixture lists its reasoning item last. The provider emits one ahead
+	// of the output it produced, and a dangling one is not replayed.
+	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}}, *state}
+	input = append(input, produced...)
 	input = append(input, llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "follow-up"}}})
 	params, err := lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: input}, llm.ServiceClassStandard)
 	if err != nil {

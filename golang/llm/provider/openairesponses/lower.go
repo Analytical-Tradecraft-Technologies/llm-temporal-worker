@@ -23,8 +23,10 @@ func providerTier(class llm.ServiceClass) string {
 }
 
 // lowerRequestMap builds the intended Responses wire body. lowerRequest carries
-// it into the SDK parameter type; the two must stay wire-equivalent.
-func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[string]any, loweredToolPolicy, error) {
+// it into the SDK parameter type; the two must stay wire-equivalent. A
+// storage-denied endpoint is used statelessly, so a reasoning item is only
+// replayable when it carries its encrypted content.
+func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (map[string]any, loweredToolPolicy, error) {
 	input := make([]any, 0, len(request.Instructions)+len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
@@ -33,6 +35,7 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[st
 		}
 		input = append(input, item)
 	}
+	items := make([]map[string]any, 0, len(request.Input))
 	for index, item := range request.Input {
 		// A reference is an output annotation (for example a citation) that
 		// a replayed transcript still carries. It has no wire form, so it is
@@ -47,7 +50,13 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[st
 		if emptyModelMessage(item) {
 			continue
 		}
-		input = append(input, lowered)
+		items = append(items, lowered)
+	}
+	// Skipped items are already gone, so a reasoning item followed only by
+	// them is judged dangling.
+	items, reasoningState := replayableItems(items, storageDenied)
+	for _, item := range items {
+		input = append(input, item)
 	}
 	requestMap := map[string]any{
 		"model":        request.Model,
@@ -100,11 +109,14 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[st
 	if err := lowerExtensions(request.Extensions, requestMap); err != nil {
 		return nil, loweredToolPolicy{}, err
 	}
+	if storageDenied && (reasoningState || reasoningRequested(request.Reasoning)) {
+		requestMap["include"] = includeEncryptedReasoning(requestMap["include"])
+	}
 	return requestMap, policy, nil
 }
 
 func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	requestMap, policy, err := lowerRequestMap(request, serviceClass)
+	requestMap, policy, err := lowerRequestMap(request, serviceClass, false)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -213,6 +225,71 @@ func lowerReasoningState(state llm.ProviderState) (map[string]any, error) {
 		return nil, fmt.Errorf("reasoning provider state has type %v, want reasoning", item["type"])
 	}
 	return item, nil
+}
+
+// replayableItems removes reasoning items the provider would reject. A
+// reasoning item must be followed by the output item it produced, so one left
+// dangling by a reasoning-only incomplete response is dropped. On a
+// storage-denied endpoint the provider cannot resolve a reasoning ID, so an
+// item without encrypted content is dropped as well. Reasoning items are
+// optional context: the messages and tool calls of the transcript are replayed
+// unchanged. The second result reports whether the transcript held a reasoning
+// item at all, which shows the model reasons even when none is replayable.
+func replayableItems(items []map[string]any, storageDenied bool) ([]map[string]any, bool) {
+	keep := make([]bool, len(items))
+	followed, present, dropped := false, false, false
+	for index := len(items) - 1; index >= 0; index-- {
+		item := items[index]
+		if item["type"] != "reasoning" {
+			keep[index] = true
+			followed = item["type"] == "function_call" || (item["type"] == "message" && item["role"] == "assistant")
+			continue
+		}
+		encrypted, _ := item["encrypted_content"].(string)
+		keep[index] = followed && (!storageDenied || encrypted != "")
+		present = true
+		// followed is left as it is: once an item is omitted, the one before
+		// it meets whatever followed the omitted item.
+		if !keep[index] {
+			dropped = true
+		}
+	}
+	if !dropped {
+		return items, present
+	}
+	result := make([]map[string]any, 0, len(items))
+	for index, item := range items {
+		if keep[index] {
+			result = append(result, item)
+		}
+	}
+	return result, present
+}
+
+// reasoningRequested reports whether the request configures reasoning, which
+// routes it only to a model that reasons.
+func reasoningRequested(reasoning *llm.ReasoningSpec) bool {
+	return reasoning != nil && reasoning.Mode != llm.ReasoningModeDisabled
+}
+
+// includeEncryptedReasoning adds reasoning.encrypted_content to the caller's
+// include list without repeating a value.
+func includeEncryptedReasoning(existing any) []string {
+	values, _ := existing.([]string)
+	var result []string
+	seen := make(map[string]struct{})
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	encrypted := string(responses.ResponseIncludableReasoningEncryptedContent)
+	if _, ok := seen[encrypted]; !ok {
+		result = append(result, encrypted)
+	}
+	return result
 }
 
 func lowerParts(parts []llm.Part) ([]any, error) {
