@@ -35,12 +35,12 @@ statuses.
 
 The multi-stage Docker build:
 
-1. uses a pinned Go 1.26 patch image by digest;
+1. uses the reviewed Go 1.26 patch image tag from `golang/.go-version`;
 2. downloads modules from checked-in `go.mod`/`go.sum`;
 3. runs tests in CI, not as a hidden image-build side effect;
 4. builds a static Linux binary and records version/commit/build-time metadata
    on the OCI image;
-5. copies it into a pinned minimal runtime image;
+5. copies it into the Distroless `static-debian12:nonroot` runtime tag;
 6. runs as a numeric non-root user with a read-only root filesystem;
 7. includes CA certificates and time-zone data;
 8. exposes no shell requirement and writes only to a mounted temp directory.
@@ -49,8 +49,11 @@ The image has OCI source/revision/license labels, an SBOM, provenance attestatio
 and vulnerability scan in release CI. No configuration, credentials, test
 fixtures, or provider payloads are baked into it.
 
-The checked-in `golang/Dockerfile` uses digest-pinned Go and Distroless bases, builds
-with `CGO_ENABLED=0`, and runs as uid `65532` with no shell. Kubernetes mounts
+The checked-in `golang/Dockerfile` references its Go and Distroless bases by
+mutable stable tags, not digests, so rebuilds pick up upstream base security
+fixes; `golang/deploy/verify.sh` rejects a base digest in the Dockerfile. The
+worker image itself is deployed by digest. The Dockerfile
+builds with `CGO_ENABLED=0`, and runs as uid `65532` with no shell. Kubernetes mounts
 `/tmp` as a bounded memory volume because the image is intended for a
 read-only root filesystem. `golang/deploy/verify.sh` renders every Kustomize example
 offline and checks these invariants before a manifest is reviewed.
