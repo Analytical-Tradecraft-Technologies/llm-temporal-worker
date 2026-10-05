@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -258,21 +259,21 @@ func cloneParts(values []llm.Part) []llm.Part {
 			result[i] = value
 		case llm.ImagePart:
 			copyValue := value
-			copyValue.Bytes = append([]byte(nil), value.Bytes...)
+			copyValue.Bytes = bytes.Clone(value.Bytes)
 			copyValue.Blob = cloneBlob(value.Blob)
 			result[i] = copyValue
 		case llm.DocumentPart:
 			copyValue := value
-			copyValue.Bytes = append([]byte(nil), value.Bytes...)
+			copyValue.Bytes = bytes.Clone(value.Bytes)
 			copyValue.Blob = cloneBlob(value.Blob)
 			result[i] = copyValue
 		case llm.JSONPart:
-			result[i] = llm.JSONPart{Value: append(json.RawMessage(nil), value.Value...)}
+			result[i] = llm.JSONPart{Value: bytes.Clone(value.Value)}
 		case llm.RefusalPart:
 			result[i] = value
 		case llm.ProviderStatePart:
 			copyValue := value
-			copyValue.Opaque = append([]byte(nil), value.Opaque...)
+			copyValue.Opaque = bytes.Clone(value.Opaque)
 			result[i] = copyValue
 		default:
 			result[i] = part

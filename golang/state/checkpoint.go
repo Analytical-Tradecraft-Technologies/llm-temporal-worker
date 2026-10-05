@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -499,13 +500,13 @@ func cloneItem(item llm.Item) llm.Item {
 		value.Content = cloneParts(value.Content)
 		return value
 	case llm.ToolCall:
-		value.Arguments = append(json.RawMessage(nil), value.Arguments...)
+		value.Arguments = bytes.Clone(value.Arguments)
 		return value
 	case llm.ToolResult:
 		value.Content = cloneParts(value.Content)
 		return value
 	case llm.ProviderState:
-		value.Opaque = append([]byte(nil), value.Opaque...)
+		value.Opaque = bytes.Clone(value.Opaque)
 		return value
 	case llm.Reference:
 		value.Metadata = cloneRawMap(value.Metadata)
