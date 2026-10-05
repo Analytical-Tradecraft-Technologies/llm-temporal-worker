@@ -19,8 +19,9 @@ import (
 )
 
 // cloudCompilerVersion changes when this projection/lowering contract changes.
-// It is independent of the public activity version.
-const cloudCompilerVersion = "cloud-v1"
+// It is independent of the public activity version. cloud-v2 flattens the
+// summarizer instructions for candidates that cannot keep the levels apart.
+const cloudCompilerVersion = "cloud-v2"
 
 // PlannedProviderCall is an invocation-local compiled call, not a dispatch grant
 // or a persistable recovery record. SDKParams and Adapter stay in this process.
