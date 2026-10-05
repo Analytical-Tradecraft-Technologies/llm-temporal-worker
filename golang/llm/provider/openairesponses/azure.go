@@ -107,6 +107,7 @@ func validateAzureConfig(rawEndpoint, apiVersion string, httpClient *http.Client
 	if err != nil {
 		return "", fmt.Errorf("azure responses: %w", err)
 	}
+	endpoint = azureResourceRoot(endpoint)
 	if strings.TrimSpace(apiVersion) == "" {
 		return "", fmt.Errorf("azure responses: API version is required")
 	}
@@ -114,6 +115,20 @@ func validateAzureConfig(rawEndpoint, apiVersion string, httpClient *http.Client
 		return "", fmt.Errorf("azure responses: HTTP client is required")
 	}
 	return endpoint, nil
+}
+
+// azureResourceRoot accepts the documented Azure v1 base URL
+// (https://<resource>.openai.azure.com/openai/v1) as well as the resource root
+// and /openai forms. The official Azure middleware prepends /openai to every
+// route, so any of those suffixes would otherwise be duplicated.
+func azureResourceRoot(endpoint string) string {
+	trimmed := strings.TrimRight(endpoint, "/")
+	for _, suffix := range []string{"/openai/v1", "/openai"} {
+		if strings.HasSuffix(strings.ToLower(trimmed), suffix) {
+			return trimmed[:len(trimmed)-len(suffix)] + "/"
+		}
+	}
+	return endpoint
 }
 
 // azureResponsesPathMiddleware fills the one route gap in the official Azure
