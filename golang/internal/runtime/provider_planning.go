@@ -9,6 +9,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
+	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -237,6 +238,9 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	// logical alias or the originally requested fallback class.
 	resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
 	resolved.ServiceClassFallbacks = nil
+	if !preservesInstructionHierarchy(provider.Family(candidate.Family)) {
+		resolved = compaction.FlattenSummarizerInstructions(resolved)
+	}
 	digest, err := llm.RequestDigest(resolved)
 	if err != nil {
 		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
@@ -354,4 +358,18 @@ func (planning *ProviderPlanning) normalizeRequest(request llm.Request) (llm.Req
 		return (budget.Estimator{MaxOutput: planning.outputLimit}).PrepareRequest(request)
 	}
 	return llm.NormalizeRequest(request)
+}
+
+// preservesInstructionHierarchy reports whether a provider family can carry
+// policy and application instructions separately. Messages and Converse have a
+// single system prompt and reject mixed levels in strict portability, so
+// worker-built summarizer requests are flattened for them; the decision
+// depends only on the candidate, which keeps exact-route recovery stable.
+func preservesInstructionHierarchy(family provider.Family) bool {
+	switch family {
+	case provider.FamilyAnthropicMessages, provider.FamilyBedrockMessages, provider.FamilyBedrockConverse:
+		return false
+	default:
+		return true
+	}
 }
