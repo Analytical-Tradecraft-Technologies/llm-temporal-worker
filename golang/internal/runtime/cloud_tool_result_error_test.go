@@ -74,3 +74,69 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 		t.Fatalf("provider requests=%d body=%s", requests.Load(), sent)
 	}
 }
+
+// Compaction planning must count the prefix an OpenAI-family route adds to a
+// failed tool result: a transcript whose serialized size fits the route's
+// byte limit but not with the prefix has to be compacted first.
+func TestCloudGenerationPlanCountsToolResultErrorPrefix(t *testing.T) {
+	f := boundedCloud(t, false)
+	source := f.cap.Snapshot.(*planningSource)
+	model := source.value.Routes.Models["alias"]
+	model.Routes[0].Capabilities.Features[routing.FeatureToolCall] = routing.Capability{State: routing.CapabilityNative}
+	source.value.Routes.Models["alias"] = model
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		f.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.Result{}, err
+		}
+		result := executionResponse(call).Result
+		result.Response.Output = []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)}}
+		return result, nil
+	}
+	policy := json.RawMessage(`{"recent_turns":0}`)
+	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	f.restart(t)
+	parent := f.finish(t)
+	handle := parent.Generate.Checkpoint.Handle
+	f.request.Parent = &handle
+	f.request.OperationKey = "tool-error-plan"
+	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.now = f.now.Add(time.Second)
+	f.restart(t)
+	compacts := func(limit int, isError bool) bool {
+		t.Helper()
+		providers := f.runtime.execution.admission.planning.providers
+		model := providers.catalog.Models["alias"]
+		model.Routes[0].ContextBytes = limit
+		providers.catalog.Models["alias"] = model
+		request := f.request
+		request.Append = []llm.Item{llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: isError}}
+		decision, err := f.runtime.PlanGenerationV1(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decision.CompactBeforeGenerate
+	}
+	// Find the smallest byte limit the successful transcript fits in.
+	low, high := 1, 1<<20
+	if !compacts(low, false) || compacts(high, false) {
+		t.Fatal("byte limit does not drive the planning decision")
+	}
+	for high-low > 1 {
+		if middle := (low + high) / 2; compacts(middle, false) {
+			low = middle
+		} else {
+			high = middle
+		}
+	}
+	// 30 spare bytes hold the transcript but not the 60-byte error prefix.
+	if compacts(high+30, false) {
+		t.Fatal("successful tool result was charged the error prefix")
+	}
+	if !compacts(high+30, true) {
+		t.Fatal("failed tool result prefix was not counted against the route byte limit")
+	}
+	if compacts(high+30+len(llm.ToolResultErrorTextPrefix), true) {
+		t.Fatal("failed tool result still compacts with room for the prefix")
+	}
+}
