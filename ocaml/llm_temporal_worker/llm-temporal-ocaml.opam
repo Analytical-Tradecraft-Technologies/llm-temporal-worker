@@ -3,7 +3,7 @@ synopsis: "Typed OCaml workflow client for llm-temporal-worker"
 description: "Typed Temporal workflow clients, request and response codecs, and immutable conversations for llm-temporal-worker."
 maintainer: "mfow"
 authors: "mfow"
-license: "MIT"
+license: "Apache-2.0"
 homepage: "https://github.com/mfow/llm-temporal-worker"
 bug-reports: "https://github.com/mfow/llm-temporal-worker/issues"
 depends: [
