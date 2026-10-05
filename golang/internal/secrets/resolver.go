@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
 )
 
 const DefaultMaxBytes int64 = 64 << 10
@@ -121,7 +122,7 @@ func (resolver ConfigResolver) Resolve(ctx context.Context, value *config.Config
 	}
 	for index, ref := range refs {
 		if _, err := resolver.Resolver.Resolve(ctx, ref); err != nil {
-			return fmt.Errorf("secret reference %d could not be resolved: %w", index, err)
+			return diagnostic.Safe(secretReferenceDiagnostic(index, ref, err), err)
 		}
 	}
 	return nil
@@ -135,4 +136,17 @@ type WorkloadIdentityFunc func(context.Context, string) ([]byte, error)
 
 func (function WorkloadIdentityFunc) Resolve(ctx context.Context, audience string) ([]byte, error) {
 	return function(ctx, audience)
+}
+
+// secretReferenceDiagnostic names the failed reference for an operator. Local
+// environment and file failures carry only the reference name or path, so
+// their cause is included; workload identity causes come from cloud SDKs and
+// are omitted.
+func secretReferenceDiagnostic(index int, ref config.SecretRef, cause error) string {
+	switch ref.Kind {
+	case config.SecretEnv, config.SecretFile:
+		return fmt.Sprintf("secret reference %d could not be resolved: %v", index, cause)
+	default:
+		return fmt.Sprintf("secret reference %d (%s) could not be resolved", index, ref.Kind)
+	}
 }

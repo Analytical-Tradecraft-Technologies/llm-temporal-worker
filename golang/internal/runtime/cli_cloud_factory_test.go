@@ -17,6 +17,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -416,5 +417,18 @@ func TestTrustedTemporalRevocationPrecedesTerminalReplay(t *testing.T) {
 	}
 	if store.accesses != 0 {
 		t.Fatal("revoked caller accessed storage")
+	}
+}
+
+func TestProductionRuntimeReportsUnresolvedSecretAsOperatorDiagnostic(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REDIS_USERNAME", "")
+	_, err = newProductionRuntime(context.Background(), data)
+	message, ok := diagnostic.Message(err)
+	if !ok || !strings.Contains(message, `environment secret "REDIS_USERNAME" is not set`) {
+		t.Fatalf("production runtime error = %v, diagnostic = %q", err, message)
 	}
 }
