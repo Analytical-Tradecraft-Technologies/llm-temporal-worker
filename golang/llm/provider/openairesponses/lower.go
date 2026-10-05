@@ -155,11 +155,32 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 			return nil, err
 		}
 		return map[string]any{"type": "function_call_output", "call_id": value.CallID, "output": output}, nil
-	case llm.ProviderState, llm.Reference:
+	case llm.ProviderState:
+		return lowerReasoningState(value)
+	case llm.Reference:
 		return nil, fmt.Errorf("item kind %q is not accepted as Responses input", item.ItemKind())
 	default:
 		return nil, fmt.Errorf("unsupported input item %T", item)
 	}
+}
+
+const reasoningStateMediaType = "application/vnd.openai.reasoning+json"
+
+// lowerReasoningState replays a reasoning output item lifted by this adapter.
+// Only OpenAI Responses reasoning state is accepted, and its payload must be a
+// reasoning item, so another provider's opaque state can never be injected.
+func lowerReasoningState(state llm.ProviderState) (map[string]any, error) {
+	if state.Provider != "openai" || state.EndpointFamily != "responses" || state.MediaType != reasoningStateMediaType {
+		return nil, fmt.Errorf("provider state %s/%s %q is not accepted as Responses input", state.Provider, state.EndpointFamily, state.MediaType)
+	}
+	var item map[string]any
+	if err := json.Unmarshal(state.Opaque, &item); err != nil || item == nil {
+		return nil, fmt.Errorf("reasoning provider state is not a JSON object")
+	}
+	if item["type"] != "reasoning" {
+		return nil, fmt.Errorf("reasoning provider state has type %v, want reasoning", item["type"])
+	}
+	return item, nil
 }
 
 func lowerParts(parts []llm.Part) ([]any, error) {

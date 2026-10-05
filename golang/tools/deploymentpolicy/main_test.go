@@ -410,7 +410,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: worker
-          image: ghcr.io/mfow/llm-temporal-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
+          image: docker.io/analyticaltradecraft/llm-temporal-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
           ports:
             - name: health
               containerPort: 8080

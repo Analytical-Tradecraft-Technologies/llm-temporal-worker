@@ -141,6 +141,9 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 			return provider.Call{}, unsupportedError(feature, "emulated structured output requires a named profile transform")
 		}
 	}
+	if input.Strict && adapter.profile.applicationInstructionRole() == "system" && mixedInstructionLevels(normalized.Instructions) {
+		return provider.Call{}, compileError("instruction hierarchy cannot be preserved when application instructions also use the system role in strict portability mode")
+	}
 	params, err := lowerRequest(normalized, adapter.profile, providerTier)
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
@@ -355,4 +358,16 @@ func invalidResponseError(call provider.Call, requestID, message string) *provid
 	mapped.Provider.RequestID = requestID
 	mapped.OperationID = call.OperationKey
 	return mapped
+}
+
+func mixedInstructionLevels(instructions []llm.Instruction) bool {
+	application, policy := false, false
+	for _, instruction := range instructions {
+		if instruction.Level == llm.InstructionLevelPolicy {
+			policy = true
+		} else {
+			application = true
+		}
+	}
+	return application && policy
 }

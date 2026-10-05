@@ -445,6 +445,12 @@ heartbeat emitted while a one-shot provider call is in flight. It defaults to
 workflow Activity policy using this worker must use the same cadence and a
 `heartbeat_timeout` of at least three times that cadence.
 
+Validation enforces the bounds of the internal request workflow's Activity
+options: `heartbeat_keepalive_interval` may be at most `10s` (one third of the
+`30s` heartbeat timeout), `limits.provider_timeout` must be shorter than the
+`5m` Activity start-to-close timeout, and `server.inline_payload_bytes` may be
+at most 2 MiB, Temporal's default payload blob limit.
+
 `server.shutdown_timeout` is the process-wide shutdown budget. It must be
 strictly greater than `temporal.worker.graceful_stop_timeout` plus
 `server.finalization_timeout`; equality is rejected so shutdown still has

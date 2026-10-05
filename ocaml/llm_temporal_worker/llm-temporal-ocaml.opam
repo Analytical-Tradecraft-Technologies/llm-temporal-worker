@@ -4,8 +4,8 @@ description: "Typed Temporal workflow clients, request and response codecs, and 
 maintainer: "mfow"
 authors: "mfow"
 license: "Apache-2.0"
-homepage: "https://github.com/mfow/llm-temporal-worker"
-bug-reports: "https://github.com/mfow/llm-temporal-worker/issues"
+homepage: "https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker"
+bug-reports: "https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues"
 depends: [
   "ocaml" {>= "5.2"}
   "dune" {>= "3.18"}

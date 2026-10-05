@@ -152,7 +152,7 @@ reference="llm-temporal-worker@$digest"
 bash scripts/release/record.sh \
   -artifact-dir release-artifacts \
   -output release-artifacts/evidence.json \
-  -repository https://github.com/mfow/llm-temporal-worker \
+  -repository https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker \
   -revision "$(git rev-parse HEAD)" \
   -image-reference "$reference" \
   -image-digest "$digest" \
@@ -310,7 +310,7 @@ Because `actions/checkout` v6 requires a token input even for public
 repositories, the preflight does not use it. Before it passes a manual ref to
 Git, it validates the tag's strict `refs/tags/vMAJOR.MINOR.PATCH` shape in a
 shell environment. It then performs a fixed unauthenticated HTTPS Git fetch
-from `https://github.com/mfow/llm-temporal-worker.git`, with an empty temporary
+from `https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git`, with an empty temporary
 Git home, no system Git configuration, disabled prompting, and no credential
 helper. The checkout fails closed if the workspace is not empty, the exact tag
 cannot be fetched, or fetched `master` is not the protected workflow's

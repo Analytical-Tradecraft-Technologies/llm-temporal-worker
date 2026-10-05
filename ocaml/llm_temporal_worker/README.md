@@ -32,7 +32,7 @@ Pin the nested package at the deployment commit:
 
 ```sh
 opam pin add --yes --kind=git llm-temporal-ocaml \
-  'git+https://github.com/mfow/llm-temporal-worker.git#<commit>' \
+  'git+https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git#<commit>' \
   --subpath=ocaml/llm_temporal_worker
 opam install --yes llm-temporal-ocaml
 ```

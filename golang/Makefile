@@ -16,7 +16,7 @@ REDIS_INTEGRATION_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74
 REDIS_INTEGRATION_CONTAINER_PREFIX ?= llmtw-redis-integration
 IMAGE_VERIFY_TAG ?= llm-temporal-worker:image-verify
 IMAGE_VERIFY_VERSION ?= image-verify
-IMAGE_VERIFY_SOURCE ?= https://github.com/mfow/llm-temporal-worker
+IMAGE_VERIFY_SOURCE ?= https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker
 IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)
 IMAGE_VERIFY_OCI_LAYOUT ?=
 

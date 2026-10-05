@@ -15,7 +15,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	messages := make([]any, 0, len(request.Instructions)+len(request.Input))
 	toolCalls := make(map[string]struct{})
 	for index, instruction := range request.Instructions {
-		message, err := lowerInstruction(instruction)
+		message, err := lowerInstruction(instruction, profile.applicationInstructionRole())
 		if err != nil {
 			return openai.ChatCompletionNewParams{}, fmt.Errorf("instruction %d: %w", index, err)
 		}
@@ -26,6 +26,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 			return openai.ChatCompletionNewParams{}, fmt.Errorf("input item %d: %w", index, err)
 		}
 	}
+	messages = dropEmptyAssistantMessages(messages)
 	requestMap := map[string]any{
 		"model":    request.Model,
 		"messages": messages,
@@ -119,8 +120,27 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	return params, nil
 }
 
-func lowerInstruction(instruction llm.Instruction) (map[string]any, error) {
-	role := "developer"
+// dropEmptyAssistantMessages removes replayed model turns that carry neither
+// content nor tool calls (for example a lifted content_filter or empty stop
+// reply). Chat Completions rejects such an assistant message, and it carries
+// no history to preserve.
+func dropEmptyAssistantMessages(messages []any) []any {
+	result := messages[:0]
+	for _, raw := range messages {
+		if message, ok := raw.(map[string]any); ok && message["role"] == "assistant" {
+			_, hasContent := message["content"]
+			_, hasToolCalls := message["tool_calls"]
+			if !hasContent && !hasToolCalls {
+				continue
+			}
+		}
+		result = append(result, raw)
+	}
+	return result
+}
+
+func lowerInstruction(instruction llm.Instruction, applicationRole string) (map[string]any, error) {
+	role := applicationRole
 	if instruction.Level == llm.InstructionLevelPolicy {
 		role = "system"
 	}

@@ -73,15 +73,18 @@ func NewAzureProfile(config AzureProfileConfig) (Profile, error) {
 		return Profile{}, fmt.Errorf("azure chat profile: deployment is required")
 	}
 	return NewProfile(Profile{
-		ID:                        config.ID,
-		CapabilityVersion:         config.CapabilityVersion,
-		Capabilities:              config.Capabilities,
-		ServiceTiers:              config.ServiceTiers,
-		ActualServiceClasses:      config.ActualServiceClasses,
-		MissingActualServiceClass: config.MissingActualServiceClass,
-		AllowedExtensions:         config.AllowedExtensions,
-		ExpectedBaseURL:           baseURL,
-		ExpectedModel:             config.Deployment,
+		// The developer role is not accepted by every API version or
+		// compatible server; system is.
+		ApplicationInstructionRole: "system",
+		ID:                         config.ID,
+		CapabilityVersion:          config.CapabilityVersion,
+		Capabilities:               config.Capabilities,
+		ServiceTiers:               config.ServiceTiers,
+		ActualServiceClasses:       config.ActualServiceClasses,
+		MissingActualServiceClass:  config.MissingActualServiceClass,
+		AllowedExtensions:          config.AllowedExtensions,
+		ExpectedBaseURL:            baseURL,
+		ExpectedModel:              config.Deployment,
 	})
 }
 

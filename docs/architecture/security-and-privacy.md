@@ -97,7 +97,11 @@ Endpoints are operator-configured and validated:
 
 User-provided image/reference URLs are not fetched by the worker in v1. They are
 passed only to endpoint profiles that accept remote references and only after
-scheme/host policy validation. Blob locators address configured stores, not
+scheme/host policy validation: image and document URLs must use `https` or
+`http`, must not carry user information, and must not name `localhost` (or a
+`.localhost` name) or an IP literal that is loopback, private, link-local,
+unspecified, multicast or a cloud metadata address, because the provider
+fetches them inside its own network. Blob locators address configured stores, not
 arbitrary URLs.
 
 ## Content and history

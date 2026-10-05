@@ -255,6 +255,11 @@ func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 			}
 			hasToolCalls = true
 			items = append(items, llm.ToolCall{ID: *value.Value.ToolUseId, Name: *value.Value.Name, Arguments: arguments})
+		case *types.ContentBlockMemberReasoningContent:
+			// Some Converse models always emit reasoning. The adapter does not
+			// replay provider reasoning, so it is omitted from the normalized
+			// output rather than failing an otherwise valid paid response.
+			continue
 		default:
 			return nil, false, fmt.Errorf("content block %d has unsupported type %T", index, block)
 		}

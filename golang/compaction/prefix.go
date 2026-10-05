@@ -25,9 +25,9 @@ type PrefixSelection struct {
 // logical turns. A turn begins whenever the tool frontier is empty. Tool calls
 // and all of their results form one atomic turn, including an unresolved final
 // frontier. This makes every returned boundary frontier-empty and prevents a
-// compaction request from splitting a tool exchange. Provider-state items are
-// ordinary atomic items and are never split because selection only cuts between
-// items.
+// compaction request from splitting a tool exchange. Provider-state items
+// (such as thinking blocks) are grouped with the item that follows them, so a
+// cut never separates them from their model output or tool call.
 //
 // The transcript is validated using the checkpoint materializer's canonical
 // tool-frontier rules. recentTurns must be non-negative. If an open tool
@@ -79,15 +79,28 @@ type turnRange struct {
 // splitTurns uses the same frontier transitions as state.ValidateTranscript.
 // A ToolCall starts a turn when the frontier is empty; subsequent calls and
 // matching results remain in that turn until the frontier is resolved. Every
-// other item with an empty frontier is a single atomic turn.
+// other item with an empty frontier is a single atomic turn, except that an
+// assistant response containing provider state stays one turn through its
+// following model text and tool calls.
 func splitTurns(items []llm.Item) []turnRange {
 	turns := make([]turnRange, 0, len(items))
 	start := 0
 	pending := make(map[string]struct{})
+	// reasoning is true while the current turn holds provider state (for
+	// example a thinking block) from an assistant response that may still
+	// continue with text and tool calls. That whole response stays one turn,
+	// so a cut can never separate thinking from the tool_use it belongs to.
+	reasoning := false
 	for index, item := range items {
-		if index > start && len(pending) == 0 {
+		if index > start && len(pending) == 0 && !(reasoning && isModelOutput(item)) {
 			turns = append(turns, turnRange{start: start, end: index})
 			start = index
+			reasoning = false
+		}
+		if isProviderState(item) {
+			reasoning = true
+		} else if !isModelOutput(item) {
+			reasoning = false
 		}
 		switch value := item.(type) {
 		case llm.ToolCall:
@@ -102,4 +115,28 @@ func splitTurns(items []llm.Item) []turnRange {
 	}
 	turns = append(turns, turnRange{start: start, end: len(items)})
 	return turns
+}
+
+// isModelOutput reports whether an item can be part of one assistant
+// response: provider state, model text, or a tool call.
+func isModelOutput(item llm.Item) bool {
+	switch value := item.(type) {
+	case llm.ProviderState, *llm.ProviderState, llm.ToolCall, *llm.ToolCall:
+		return true
+	case llm.Message:
+		return value.Actor == llm.ActorModel
+	case *llm.Message:
+		return value != nil && value.Actor == llm.ActorModel
+	default:
+		return false
+	}
+}
+
+func isProviderState(item llm.Item) bool {
+	switch item.(type) {
+	case llm.ProviderState, *llm.ProviderState:
+		return true
+	default:
+		return false
+	}
 }
