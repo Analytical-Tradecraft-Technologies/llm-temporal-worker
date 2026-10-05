@@ -15,7 +15,7 @@
     {"content": [{"content": [{"text": "{\"ok\":true}", "type": "text"}], "is_error": false, "tool_use_id": "call-1", "type": "tool_result"}], "role": "user"}
   ],
   "model": "claude-contract",
-  "output_config": {"format": {"schema": {"properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "type": "json_schema"}},
+  "output_config": {"format": {"schema": {"additionalProperties": false, "properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "type": "json_schema"}},
   "service_tier": "auto",
   "stop_sequences": ["END"],
   "system": [

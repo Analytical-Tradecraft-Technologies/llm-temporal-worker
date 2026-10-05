@@ -15,14 +15,14 @@ import (
 
 // ProviderRouteStatusReader reads one snapshot-bound shared route projection.
 type ProviderRouteStatusReader interface {
-	GetRouteStatus(context.Context, [32]byte, string) (control.RouteStatus, error)
+	GetRouteStatus(ctx context.Context, configDigest [32]byte, routeID, endpointID string) (control.RouteStatus, error)
 }
 
 func (p *ProviderPlanning) routeBlocked(ctx context.Context, candidate routing.Candidate) (bool, error) {
 	if isNilCapability(p.routeStatus) {
 		return false, nil
 	}
-	status, err := p.routeStatus.GetRouteStatus(ctx, p.configDigest, candidate.RouteID)
+	status, err := p.routeStatus.GetRouteStatus(ctx, p.configDigest, candidate.RouteID, candidate.EndpointID)
 	if errors.Is(err, control.ErrProviderStatusNotFound) {
 		return false, nil
 	}
@@ -30,7 +30,9 @@ func (p *ProviderPlanning) routeBlocked(ctx context.Context, candidate routing.C
 		return false, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
 	}
 	if status.ConfigDigest != p.configDigest || status.RouteID != candidate.RouteID || status.EndpointID != candidate.EndpointID || status.EndpointAccountHMAC != candidate.EndpointAccountHMAC || status.Provider != candidate.Provider || status.EndpointFamily != candidate.Family {
-		return false, providerPlanningError(provider.CodeStateCorrupt, provider.PhasePlan, provider.RetryNever)
+		// A record for another route identity is not evidence about this
+		// candidate. Health is advisory, so it must not fail the selection.
+		return false, nil
 	}
 	if status.Credit == control.CreditExhausted || status.Billing == control.BillingIssue {
 		return true, nil

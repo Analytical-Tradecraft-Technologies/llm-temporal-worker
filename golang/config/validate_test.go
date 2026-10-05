@@ -148,7 +148,7 @@ func TestConfigSchemaRejectsProductionRedisWithoutTLS(t *testing.T) {
 }
 
 func TestConfigSchemaAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
-	loaded, err := config.Load([]byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", 1)))
+	loaded, err := config.Load([]byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
 		"match:\n        tenant: acme\n        environment: production",
-		"match:\n        project: critical-workload\n        actor_prefix: service-\n        logical_model: reasoning\n        endpoint: openai-prod\n        service_class: priority",
+		"match:\n        project: invoice-processing\n        actor_prefix: service-\n        logical_model: invoice-summarizer\n        endpoint: openai-prod\n        service_class: priority",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
@@ -470,5 +470,54 @@ func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
 				t.Fatal("schema accepted invalid durable storage")
 			}
 		})
+	}
+}
+
+// environment is a free-form identifier. Production hardening applies to every
+// value except the exact development name, so a near-miss cannot skip it.
+func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T) {
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, environment := range []string{"Production", "prod", "staging", "live", "Development"} {
+		rename := func(data string) string {
+			return strings.ReplaceAll(data, "environment: production", "environment: "+environment)
+		}
+		if _, err := config.Load([]byte(rename(string(exampleYAML(t))))); err != nil {
+			t.Fatalf("environment %q rejected the hardened example: %v", environment, err)
+		}
+		for name, test := range map[string]struct{ data, want string }{
+			"redis tls":       {rename(string(redisTLSDisabledYAML(t))), "state.redis.tls.enabled must be true in production"},
+			"content logging": {strings.Replace(rename(string(exampleYAML(t))), "content_logging: disabled", "content_logging: redacted", 1), "telemetry.content_logging must be disabled in production"},
+		} {
+			if _, err := config.Load([]byte(test.data)); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("environment %q %s error = %v, want %q", environment, name, err, test.want)
+			}
+		}
+		loaded, err := config.Load(exampleYAML(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded.Environment, loaded.State.Redis.TLS.Enabled = environment, false
+		for index := range loaded.Budgets.Policies {
+			if loaded.Budgets.Policies[index].Match.Environment != "" {
+				loaded.Budgets.Policies[index].Match.Environment = environment
+			}
+		}
+		encoded, err := json.Marshal(loaded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := compiled.Validate(encoded); err == nil {
+			t.Fatalf("schema accepted environment %q with Redis TLS disabled", environment)
+		}
+	}
+	if config.IsProductionEnvironment(config.DevelopmentEnvironment) {
+		t.Fatal("development is treated as production")
 	}
 }

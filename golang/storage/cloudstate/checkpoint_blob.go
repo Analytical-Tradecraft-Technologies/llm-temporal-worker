@@ -62,7 +62,7 @@ func (s *checkpointStore) Read(ctx context.Context, scope string, reference stat
 		return nil, contracts.ErrNotFound
 	}
 	key := s.repository.namespace + "/payload/" + tag
-	data, err := s.repository.readBlob(ctx, s.blobStream(scope, reference.MediaType), key)
+	data, err := s.repository.readReferencedBlob(ctx, s.blobStream(scope, reference.MediaType), key)
 	if err != nil {
 		return nil, err
 	}

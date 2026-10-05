@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
@@ -57,7 +58,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 			}
 			requestMap["max_tokens"] = *request.Output.MaxTokens
 		}
-		if err := lowerOutput(*request.Output, requestMap); err != nil {
+		if err := lowerOutput(*request.Output, requestMap, strict); err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
 	}
@@ -402,7 +403,7 @@ func lowerToolPolicy(policy llm.ToolPolicy) (map[string]any, error) {
 	return choice, nil
 }
 
-func lowerOutput(output llm.OutputSpec, target map[string]any) error {
+func lowerOutput(output llm.OutputSpec, target map[string]any, strict bool) error {
 	switch output.Format.Kind {
 	case "", llm.OutputKindText:
 		return nil
@@ -411,12 +412,12 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 		// not valid and would otherwise constrain the answer to {}.
 		return fmt.Errorf("output format %q without a schema is not supported by Anthropic Messages", output.Format.Kind)
 	case llm.OutputKindJSONSchema:
-		var schema map[string]any
-		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
-			return fmt.Errorf("output schema: %w", err)
-		}
-		if schema == nil {
-			return fmt.Errorf("output schema must be an object")
+		// Structured output returns a 400 for keywords outside its subset, so
+		// the wire carries a lowered schema; the lift validates the final
+		// JSON against the caller's original.
+		schema, err := anthropicschema.Lower(output.Format.Schema, strict)
+		if err != nil {
+			return err
 		}
 		target["output_config"] = map[string]any{"format": map[string]any{
 			"type":   "json_schema",

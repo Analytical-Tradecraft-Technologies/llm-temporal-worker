@@ -220,12 +220,12 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 	}
 	nextConfig, err := app.builder.Build(ctx, data)
 	if err != nil {
-		return err
+		return &reloadStageError{stage: ReloadStageBuild, err: err}
 	}
 	if app.validateReplacement != nil {
 		if current := app.current.Load(); current != nil {
 			if err := app.validateReplacement(current.Config, nextConfig); err != nil {
-				return fmt.Errorf("validate replacement configuration: %w", err)
+				return &reloadStageError{stage: ReloadStageReplacement, err: fmt.Errorf("validate replacement configuration: %w", err)}
 			}
 		}
 	}
@@ -233,13 +233,13 @@ func (app *App) Reload(ctx context.Context, data []byte) error {
 	if app.clients != nil {
 		clients, err = app.clients(ctx, nextConfig)
 		if err != nil {
-			return fmt.Errorf("construct reloaded clients: %w", err)
+			return &reloadStageError{stage: ReloadStageClients, err: fmt.Errorf("construct reloaded clients: %w", err)}
 		}
 	}
 	if app.verify != nil {
 		if err := app.verify(ctx, nextConfig, clients); err != nil {
 			closeUnpublishedClients(clients)
-			return fmt.Errorf("verify reloaded dependencies: %w", err)
+			return &reloadStageError{stage: ReloadStageVerify, err: fmt.Errorf("verify reloaded dependencies: %w", err)}
 		}
 	}
 	next, err := NewRuntimeSnapshot(nextConfig, clients)

@@ -394,7 +394,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	var generationPort redisstore.BudgetGenerationPort
 	streamEnabled := value.State.Redis.CoordinationStreamEnabled != nil && *value.State.Redis.CoordinationStreamEnabled
-	needBudgetKeys := streamEnabled || (value.Environment == "production" && value.State.Kind == config.StateKindDurable)
+	needBudgetKeys := streamEnabled || (config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable)
 	var budgetKeys redisstore.BudgetKeySpace
 	if needBudgetKeys {
 		budgetKeys, err = redisstore.NewBudgetKeySpace(keyOptions)
@@ -407,7 +407,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if streamEnabled {
 		streamKey = budgetKeys.EventsKey()
 	}
-	if factory.options.BudgetStatusReaderFactory != nil && value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if factory.options.BudgetStatusReaderFactory != nil && config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
 			closeOwned()
@@ -516,7 +516,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	var repository CloudRequestRepository
 	var initialization *budget.Initialization
-	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		repository, err = factory.buildCloudRequests(ctx, value.State.Requests)
 		if err != nil {
 			closeAll()
@@ -848,7 +848,7 @@ func (factory *ProductionEngineFactory) redisKeySecret(ctx context.Context, valu
 	if err := value.State.Redis.KeySecret.Validate("state.redis.key_secret"); err != nil {
 		return nil, err
 	}
-	secret, err := factory.options.Resolver.Resolve(ctx, value.State.Redis.KeySecret)
+	secret, err := factory.resolveSecret(ctx, value.State.Redis.KeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Redis key secret: %w", err)
 	}
@@ -861,7 +861,7 @@ func (factory *ProductionEngineFactory) redisKeySecret(ctx context.Context, valu
 func (factory *ProductionEngineFactory) continuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, error) {
 	keys := make([]state.Key, 0, len(value.Continuation.HandleKeys))
 	for _, key := range value.Continuation.HandleKeys {
-		secret, err := factory.options.Resolver.Resolve(ctx, key.Secret)
+		secret, err := factory.resolveSecret(ctx, key.Secret)
 		if err != nil {
 			return nil, fmt.Errorf("resolve continuation key %q: %w", key.ID, err)
 		}
@@ -1392,14 +1392,23 @@ func stringSlice(value any) ([]string, error) {
 func (factory *ProductionEngineFactory) providerSecret(ctx context.Context, auth config.AuthConfig, endpointID string) ([]byte, error) {
 	switch auth.Kind {
 	case "bearer_env", "header_env":
-		return factory.options.Resolver.Resolve(ctx, config.SecretRef{Kind: config.SecretEnv, Name: auth.Name})
+		return factory.resolveSecret(ctx, config.SecretRef{Kind: config.SecretEnv, Name: auth.Name})
 	default:
 		return nil, factory.unsupportedAuth(endpointID, auth.Kind)
 	}
 }
 
 func (factory *ProductionEngineFactory) resolveAuthSecret(ctx context.Context, _ config.AuthConfig, ref config.SecretRef) ([]byte, error) {
-	return factory.options.Resolver.Resolve(ctx, ref)
+	return factory.resolveSecret(ctx, ref)
+}
+
+// resolveSecret resolves a reference while clients are built. ConfigResolver
+// does not cover provider auth names or the Redis key secret, so a failure here
+// carries the same marker and a rejected reload reports it as a secret cause
+// rather than a dependency outage. The message is unchanged.
+func (factory *ProductionEngineFactory) resolveSecret(ctx context.Context, ref config.SecretRef) ([]byte, error) {
+	value, err := factory.options.Resolver.Resolve(ctx, ref)
+	return value, secrets.MarkReference(err)
 }
 
 func (factory *ProductionEngineFactory) unsupportedAuth(endpointID, kind string) error {

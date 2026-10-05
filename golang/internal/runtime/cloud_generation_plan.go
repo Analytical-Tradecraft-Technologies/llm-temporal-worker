@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 
+	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -77,14 +78,48 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 	if err != nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 	}
-	if err := r.capabilities.BudgetEstimator.ValidateContext(resolved, candidate); err != nil {
-		if !errors.Is(err, budget.ErrContextLimit) {
+	// Selection skips a candidate that does not fit and uses the next one, so
+	// a context limit is a reason to compact only when selection would end
+	// without a route. Retry reordering in selectCall changes the order, not
+	// this answer.
+	limited := false
+	for _, candidate := range plan.Candidates {
+		var route routing.Route
+		for _, configured := range providers.catalog.Models[input.Request.Model].Routes {
+			if configured.ID == candidate.RouteID {
+				route = configured
+			}
+		}
+		if !route.SupportsOutputLimit(input.Request) {
+			continue
+		}
+		// Compacting cannot make a blocked route selectable. The read is best
+		// effort: selection reports a route status failure itself.
+		if blocked, err := providers.routeBlocked(ctx, candidate); err == nil && blocked {
+			continue
+		}
+		err := r.capabilities.BudgetEstimator.ValidateContext(input.Request, candidate)
+		if err != nil && !errors.Is(err, budget.ErrContextLimit) {
 			return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 		}
-		decision.ShouldCompact = true
+		// The byte check counts the text this candidate's family adds when
+		// lowering failed tool results, as route planning does.
+		if err != nil || (route.ContextBytes > 0 && len(encoded)+routing.ToolResultErrorOverheadBytes(input.Request, string(route.Family)) >= route.ContextBytes) {
+			limited = true
+		}
 	}
-	for _, route := range providers.catalog.Models[input.Request.Model].Routes {
-		if route.ID == candidate.RouteID && route.ContextBytes > 0 && len(encoded)+routing.ToolResultErrorOverheadBytes(input.Request, string(route.Family)) >= route.ContextBytes {
+	if limited {
+		// A route that fits suppresses compaction only if admission would
+		// really select it, so run the same selection (health, compilation,
+		// price and budget-policy quote) with a throwaway attempt. Nothing is
+		// reserved or dispatched; any failure leaves compaction requested.
+		now := r.now()
+		_, err := r.execution.admission.planning.Generate(ctx, input, BudgetAttempt{OperationID: "compaction-plan",
+			GenerationID: r.options.BudgetGeneration, QuotedAt: now, ExpiresAt: now.Add(cache.MaxFillLease)})
+		if ctx.Err() != nil {
+			return llm.GenerationPlanV1{}, ctx.Err()
+		}
+		if err != nil {
 			decision.ShouldCompact = true
 		}
 	}
