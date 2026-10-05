@@ -415,6 +415,12 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 		// initialized and therefore cannot safely record.
 		return nil, nil
 	}
+	return observability.NewMetrics(metricAllowedValues(configuration))
+}
+
+// metricAllowedValues lists the bounded label values a configuration can
+// produce. Reloads extend the live Metrics with the same values.
+func metricAllowedValues(configuration config.Config) observability.AllowedValues {
 	endpoints := make([]string, 0, len(configuration.Endpoints))
 	models := make([]string, 0, len(configuration.Models))
 	policies := make([]string, 0, len(configuration.Budgets.Policies))
@@ -430,7 +436,7 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	for _, policy := range configuration.Budgets.Policies {
 		policies = append(policies, policy.ID)
 	}
-	return observability.NewMetrics(observability.AllowedValues{
+	return observability.AllowedValues{
 		Endpoints: endpoints, Models: models, Policies: policies,
 		Outcomes:              []string{"success", "failure", "accepted", "rejected", "denied"},
 		Phases:                []string{"planning", "admission", "pre_write", "response_received", "lift", "finalization", "continuation_write", "total"},
@@ -439,7 +445,7 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 		Methods:               []string{"provider_reported", "catalog_usage", "reconstructed_usage", "retained_reservation"},
 		OperationStates:       []string{"reserved", "dispatching", "completed", "failed", "ambiguous"},
 		ContinuationDecisions: []string{"created", "reused", "dropped"},
-	})
+	}
 }
 
 // Start starts probe listeners before Temporal polling. Required dependency
