@@ -73,7 +73,7 @@ func (s *responseCache) immutable(ctx context.Context, key kv.KeyValueKey, strea
 		if existing != want {
 			return cachePointer{}, contracts.ErrConflict
 		}
-		stored, err := s.repository.readBlob(ctx, stream, existing.Blob)
+		stored, err := s.repository.readReferencedBlob(ctx, stream, existing.Blob)
 		if err != nil {
 			return cachePointer{}, err
 		}
@@ -99,7 +99,7 @@ func (s *responseCache) immutable(ctx context.Context, key kv.KeyValueKey, strea
 }
 
 func (s *responseCache) loadEntry(ctx context.Context, scope string, pointer cachePointer) (cache.ResponseEntry, error) {
-	data, err := s.repository.readBlob(ctx, pointer.Stream, pointer.Blob)
+	data, err := s.repository.readReferencedBlob(ctx, pointer.Stream, pointer.Blob)
 	if err != nil {
 		return cache.ResponseEntry{}, err
 	}
@@ -245,7 +245,7 @@ func (s *responseCache) ReadUse(ctx context.Context, scope string, operation sta
 	if pointer.Stream != key.PartitionKey {
 		return cache.ResponseUse{}, ErrCorrupt
 	}
-	data, err := s.repository.readBlob(ctx, key.PartitionKey, pointer.Blob)
+	data, err := s.repository.readReferencedBlob(ctx, key.PartitionKey, pointer.Blob)
 	if err != nil {
 		return cache.ResponseUse{}, err
 	}

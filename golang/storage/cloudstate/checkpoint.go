@@ -71,7 +71,7 @@ func (s *checkpointStore) Get(ctx context.Context, scope string, id state.Checkp
 		// reservation, never a partially visible or competing publication.
 		return state.DurableCheckpoint{}, contracts.ErrNotFound
 	}
-	data, err := s.repository.readBlob(ctx, s.stream(scope, id), pointer.Blob)
+	data, err := s.repository.readReferencedBlob(ctx, s.stream(scope, id), pointer.Blob)
 	if err != nil {
 		return state.DurableCheckpoint{}, err
 	}
