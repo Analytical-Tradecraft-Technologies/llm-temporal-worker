@@ -13,7 +13,7 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	if strings.Count(master.raw, "${{ secrets.DOCKER_ACCESS_TOKEN }}") != 2 {
 		t.Fatal("registry token must appear only in the two protected cloud setup steps")
 	}
-	for _, jobName := range []string{"container", "verify"} {
+	for _, jobName := range []string{"container", "verify-image"} {
 		job := workflowJob(t, master, jobName)
 		if job["environment"] != "docker_push" || !strings.Contains(scalarString(t, master.name, job, "if"), "github.ref == 'refs/heads/master'") {
 			t.Fatalf("%s must require master and docker_push", jobName)
@@ -49,8 +49,8 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 			t.Fatalf("%s lacks scoped authentication or unconditional cleanup", jobName)
 		}
 	}
-	assertJobRunPrecedesRunContains(t, master, "verify", "bash scripts/ci/setup-build-cloud.sh", "make compose-live-integration")
-	assertJobRunPrecedesRunContains(t, master, "verify", "bash scripts/ci/setup-build-cloud.sh", "make image-verify")
+	assertJobRunPrecedesRunContains(t, master, "verify-image", "bash scripts/ci/setup-build-cloud.sh", "make compose-live-integration")
+	assertJobRunPrecedesRunContains(t, master, "verify-image", "bash scripts/ci/setup-build-cloud.sh", "make image-verify")
 	assertJobRunContains(t, master, "release-evidence", "skopeo --command-timeout 5m copy --preserve-digests")
 	assertJobRunContains(t, master, "release-evidence", `[[ "$digest" == "$PUBLISHED_DIGEST" ]]`)
 	for _, want := range []string{
@@ -61,10 +61,7 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	} {
 		assertJobRunContains(t, master, "container", want)
 	}
-	needs := stringSequence(t, master.name, workflowJob(t, master, "container"), "needs")
-	if strings.Join(needs, ",") != "verify,ocaml,fuzz-shard" {
-		t.Fatalf("publication gates = %v", needs)
-	}
+	assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard")
 	for _, forbidden := range []string{"setup-buildx.sh", "type=gha", "setup-qemu", "--load"} {
 		if strings.Contains(master.raw, forbidden) {
 			t.Fatalf("master retains local/copying build configuration %q", forbidden)

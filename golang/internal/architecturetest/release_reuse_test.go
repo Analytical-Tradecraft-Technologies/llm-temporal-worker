@@ -78,8 +78,8 @@ func TestReleaseEvidenceFuzzReuseRequiresEverySuccessfulShard(t *testing.T) {
 
 func TestWorkflowReleaseEvidenceReusesSuccessfulRunInputs(t *testing.T) {
 	master := readWorkflow(t, "master.yml")
-	assertJobRunContains(t, master, "verify", "scripts/release/run-gate.sh race_summary")
-	assertJobRunContains(t, master, "verify", "RELEASE_COMPOSE_EVIDENCE_DIR=")
+	assertJobRunContains(t, master, "verify-race", "scripts/release/run-gate.sh race_summary")
+	assertJobRunContains(t, master, "verify-image", "RELEASE_COMPOSE_EVIDENCE_DIR=")
 	assertJobRunContains(t, master, "fuzz-shard", "scripts/release/run-gate.sh fuzz_summary")
 	assertJobRunContains(t, master, "release-evidence", "--verified-inputs verified-inputs")
 	assertJobRunContains(t, master, "release-evidence", "scripts/release/merge-fuzz.py")
