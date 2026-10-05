@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 
+	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -78,9 +79,10 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 	}
 	// Selection skips a candidate that does not fit and uses the next one, so
-	// a context limit is a reason to compact only when no usable candidate
-	// fits. Retry reordering in selectCall changes the order, not this answer.
-	fits, limited := false, false
+	// a context limit is a reason to compact only when selection would end
+	// without a route. Retry reordering in selectCall changes the order, not
+	// this answer.
+	limited := false
 	for _, candidate := range plan.Candidates {
 		var route routing.Route
 		for _, configured := range providers.catalog.Models[input.Request.Model].Routes {
@@ -102,13 +104,22 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 		}
 		if err != nil || (route.ContextBytes > 0 && len(encoded) >= route.ContextBytes) {
 			limited = true
-			continue
 		}
-		fits = true
-		break
 	}
-	if limited && !fits {
-		decision.ShouldCompact = true
+	if limited {
+		// A route that fits suppresses compaction only if admission would
+		// really select it, so run the same selection (health, compilation,
+		// price and budget-policy quote) with a throwaway attempt. Nothing is
+		// reserved or dispatched; any failure leaves compaction requested.
+		now := r.now()
+		_, err := r.execution.admission.planning.Generate(ctx, input, BudgetAttempt{OperationID: "compaction-plan",
+			GenerationID: r.options.BudgetGeneration, QuotedAt: now, ExpiresAt: now.Add(cache.MaxFillLease)})
+		if ctx.Err() != nil {
+			return llm.GenerationPlanV1{}, ctx.Err()
+		}
+		if err != nil {
+			decision.ShouldCompact = true
+		}
 	}
 	return llm.GenerationPlanV1{CompactBeforeGenerate: decision.ShouldCompact}, nil
 }

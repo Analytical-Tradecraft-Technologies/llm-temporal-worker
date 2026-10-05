@@ -189,6 +189,19 @@ func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
 	}
 	shared.status = control.RouteStatus{}
 
+	// A route that fits but that selection would skip at compilation must not
+	// suppress compaction either: generation would end without a route.
+	f.adapter.compile = func(provider.CompileInput) (provider.Call, error) {
+		return provider.Call{}, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNextRoute, "unsupported")
+	}
+	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
+		t.Fatalf("uncompilable larger route still counted as usable: %+v %v", decision, err)
+	}
+	f.adapter.compile = nil
+	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || decision.CompactBeforeGenerate {
+		t.Fatalf("usable larger route no longer suppresses compaction: %+v %v", decision, err)
+	}
+
 	providers := f.runtime.execution.admission.planning.providers
 	model := providers.catalog.Models["alias"]
 	model.Routes[1].ContextTokens = 25

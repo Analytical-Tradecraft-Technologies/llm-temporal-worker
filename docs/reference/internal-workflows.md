@@ -68,8 +68,9 @@ with no safe prefix skip compaction. Otherwise it evaluates inherited policy
 token/byte thresholds against the projected Generate input, and checks the
 context-token and context-byte limits of every candidate route. Route selection
 skips a candidate that does not fit and uses the next, so a context limit
-requests compaction only when no usable candidate (one that supports the output
-cap and is not blocked by shared route health) fits. Token counting uses the admission estimator's exact
+requests compaction only when some candidate is excluded for size and the same
+selection that admission runs (output cap, shared route health, compilation,
+price and budget-policy quote) would end without a route. Token counting uses the admission estimator's exact
 provider tokenizer when configured, or its UTF-8 byte estimate otherwise. This
 fallback is an estimate, not a guarantee that every provider context window fits.
 The parent's compaction policy governs this summary; a new Generate settings
