@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
@@ -52,9 +53,11 @@ func (planned PlannedProviderCall) Route(operation durable.OperationID, generati
 }
 
 // ProviderPlanning captures routing inputs once per runtime snapshot. It holds
-// no operation state and never invokes a provider or touches budget/storage.
+// no operation state and never invokes a provider or changes budget/storage. Shared health is read per selection.
 // The injected planner and registry must themselves be snapshot-owned.
 type ProviderPlanning struct {
+	routeStatus      ProviderRouteStatusReader
+	clock            func() time.Time
 	catalog          routing.Catalog
 	health           routing.HealthView
 	planner          routing.Planner
@@ -94,7 +97,11 @@ func (capabilities V1RuntimeCapabilities) captureProviderPlanning(ctx context.Co
 	if err != nil {
 		return nil, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
-	return &ProviderPlanning{catalog: catalog, health: copyProviderHealth(snapshot.Health),
+	clock := capabilities.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	return &ProviderPlanning{routeStatus: capabilities.ProviderRouteStatus, clock: clock, catalog: catalog, health: copyProviderHealth(snapshot.Health),
 		planner: capabilities.Planner, adapters: capabilities.Adapters,
 		configDigest: snapshot.ConfigDigest, configEpoch: snapshot.ConfigEpoch,
 		outputLimit: capabilities.BudgetEstimator.MaxOutput, contextEstimator: copyBudgetEstimator(capabilities.BudgetEstimator), budgetSnapshot: copyBudgetSnapshot(snapshot)}, nil
@@ -140,6 +147,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	if err != nil || len(plan.Candidates) == 0 {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetryNever)
 	}
+	healthBlocked := false
 	// Preserve normal route priority among equally tried candidates, while
 	// giving alternatives a chance before retrying an earlier failed route.
 	if len(priorCandidates) > 0 {
@@ -164,6 +172,14 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			}
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
 		}
+		blocked, healthErr := planning.routeBlocked(ctx, candidate)
+		if healthErr != nil {
+			return PlannedProviderCall{}, healthErr
+		}
+		if blocked {
+			healthBlocked = true
+			continue
+		}
 		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
 		if err != nil {
 			return PlannedProviderCall{}, err
@@ -185,6 +201,9 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			}
 		}
 		return planned, nil
+	}
+	if healthBlocked {
+		return PlannedProviderCall{}, providerPlanningError(provider.CodeProviderUnavailable, provider.PhasePlan, provider.RetrySameOperation)
 	}
 	return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, lastPhase, provider.RetryNever)
 }

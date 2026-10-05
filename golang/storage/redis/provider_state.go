@@ -96,9 +96,6 @@ func applyProviderEvent(record providerStatusRecord, event control.StatusEvent) 
 	if !record.Status.Apply(event) {
 		return record, false
 	}
-	if record.Status.Availability != control.AvailabilityAvailable || record.Status.Credit != control.CreditOK || record.Status.Billing != control.BillingOK {
-		record.Status.ConsecutiveDefiniteFailures++
-	}
 	record.Schema = providerStateSchema
 	if epochChanged {
 		record.CreditEvidence = nil

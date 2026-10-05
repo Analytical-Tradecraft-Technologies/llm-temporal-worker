@@ -577,6 +577,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			CompositionFactory:        factory.options.DurableCompositionFactory,
 			composition:               precomposed,
 			ProviderStatusRecorder:    providerControl,
+			ProviderRouteStatus:       providerState,
 			ProviderInventory:         providerState,
 			Clock:                     clock,
 			GeneratePortsFactory:      factory.options.GeneratePortsFactory,

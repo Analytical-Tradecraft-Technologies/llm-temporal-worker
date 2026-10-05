@@ -180,6 +180,7 @@ type V1RuntimeCapabilities struct {
 	// callbacks.
 	composition            *durablestore.Composition
 	ProviderStatusRecorder engine.ProviderStatusRecorder
+	ProviderRouteStatus    ProviderRouteStatusReader
 	// ProviderInventory caches model listings using the same snapshot-owned Redis client.
 	ProviderInventory control.InventoryStore
 	Clock             func() time.Time
