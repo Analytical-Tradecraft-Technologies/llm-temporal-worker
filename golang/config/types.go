@@ -481,3 +481,14 @@ func validateIdentifier(value, path string) error {
 	}
 	return nil
 }
+
+// Bounds fixed by the internal request workflow's Activity options and the
+// Temporal server. Configuration that exceeds them cannot be honoured: a
+// provider call is cut at start-to-close, a sparse keepalive trips the
+// heartbeat timeout, and a larger inline payload is rejected by Temporal.
+// An architecture test keeps these aligned with workflows/internal.go.
+const (
+	ActivityStartToClose     = 5 * time.Minute
+	ActivityHeartbeatTimeout = 30 * time.Second
+	TemporalBlobLimitBytes   = 2 << 20
+)
