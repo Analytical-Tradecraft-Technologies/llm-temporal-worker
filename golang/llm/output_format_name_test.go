@@ -22,6 +22,7 @@ func TestGenerateRequestV1ValidatesOutputFormatName(t *testing.T) {
 	}{
 		"fixture":            {replacement: invalid},
 		"omitted":            {replacement: ``, valid: true},
+		"explicitly empty":   {replacement: `"name":"",`},
 		"provider charset":   {replacement: `"name":"Claim_summary-2",`, valid: true},
 		"64 characters":      {replacement: `"name":"` + strings.Repeat("a", 64) + `",`, valid: true},
 		"65 characters":      {replacement: `"name":"` + strings.Repeat("a", 65) + `",`},

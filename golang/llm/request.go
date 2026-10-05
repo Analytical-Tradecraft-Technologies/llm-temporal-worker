@@ -308,9 +308,12 @@ func decodeOutputFormat(data []byte) (OutputFormat, error) {
 	if kind != OutputKindText && kind != OutputKindJSON && kind != OutputKindJSONSchema {
 		return OutputFormat{}, fmt.Errorf("output format kind %q is invalid", kind)
 	}
-	name, _, err := optionalString(fields, "name")
+	name, namePresent, err := optionalString(fields, "name")
 	if err != nil {
 		return OutputFormat{}, err
+	}
+	if namePresent && name == "" {
+		return OutputFormat{}, fmt.Errorf("output format name must not be empty when present")
 	}
 	if err := validateOutputFormatName(name); err != nil {
 		return OutputFormat{}, err

@@ -105,6 +105,21 @@ func TestLowerRejectsSchemasOutsideTheLocalSubset(t *testing.T) {
 	}
 }
 
+// The local v1 subset only allows a boolean schema under additionalProperties,
+// so boolean children never reach the lowering and are refused at parse.
+func TestLowerRejectsBooleanChildSchemasAtParse(t *testing.T) {
+	for _, schema := range []string{
+		`{"type":"object","properties":{"tags":{"type":"array","items":false}}}`,
+		`{"type":"object","properties":{"never":false}}`,
+	} {
+		_, err := Lower(json.RawMessage(schema), false)
+		var unsupported *UnsupportedError
+		if err == nil || errors.As(err, &unsupported) || !strings.Contains(err.Error(), "must be an object") {
+			t.Fatalf("boolean child %s = %v", schema, err)
+		}
+	}
+}
+
 func TestValidateAppliesTheCallerSchema(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","minLength":3}},"required":["name"]}`)
 	output := func(text string) []llm.Item {
