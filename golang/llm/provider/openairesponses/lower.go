@@ -246,14 +246,18 @@ func reasoningRequested(reasoning *llm.ReasoningSpec) bool {
 // include list without repeating a value.
 func includeEncryptedReasoning(existing any) []string {
 	values, _ := existing.([]string)
-	result := make([]string, 0, len(values)+1)
-	seen := make(map[string]struct{}, len(values)+1)
-	for _, value := range append(append([]string(nil), values...), string(responses.ResponseIncludableReasoningEncryptedContent)) {
+	var result []string
+	seen := make(map[string]struct{})
+	for _, value := range values {
 		if _, ok := seen[value]; ok {
 			continue
 		}
 		seen[value] = struct{}{}
 		result = append(result, value)
+	}
+	encrypted := string(responses.ResponseIncludableReasoningEncryptedContent)
+	if _, ok := seen[encrypted]; !ok {
+		result = append(result, encrypted)
 	}
 	return result
 }
