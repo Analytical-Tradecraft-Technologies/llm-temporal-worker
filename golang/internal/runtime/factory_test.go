@@ -376,6 +376,9 @@ func TestDefaultRedisFactoryDisablesClientRetries(t *testing.T) {
 	if got := standalone.Options().MaxRetries; got != 0 {
 		t.Fatalf("MaxRetries = %d, want effective zero retries", got)
 	}
+	if !standalone.Options().ContextTimeoutEnabled {
+		t.Fatal("ContextTimeoutEnabled = false, want context deadlines honoured")
+	}
 }
 
 func TestProductionFactoryProviderSecretFailsClosed(t *testing.T) {
