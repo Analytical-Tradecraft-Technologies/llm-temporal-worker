@@ -75,13 +75,26 @@ func NewAdapter(client *Client, endpointID, capabilityVersion string, options ..
 
 func (adapter *Adapter) Name() string { return adapterName }
 
-// lowerRequest applies the endpoint's request policy to the common lowering.
-func (adapter *Adapter) lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	params, err := lowerRequest(request, serviceClass)
-	if err == nil && adapter.omitServiceTier {
-		params.ServiceTier = ""
+// lowerRequestMap builds the intended wire body for this endpoint: the common
+// lowering with the endpoint's request policy applied to the map itself, so
+// the body that is sent is exactly the body that was intended.
+func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[string]any, loweredToolPolicy, error) {
+	requestMap, policy, err := lowerRequestMap(request, serviceClass)
+	if err != nil {
+		return nil, loweredToolPolicy{}, err
 	}
-	return params, err
+	if adapter.omitServiceTier {
+		delete(requestMap, "service_tier")
+	}
+	return requestMap, policy, nil
+}
+
+func (adapter *Adapter) lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+	requestMap, policy, err := adapter.lowerRequestMap(request, serviceClass)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
+	return requestParams(requestMap, policy)
 }
 
 func (adapter *Adapter) Capabilities(ctx context.Context, query provider.CapabilityQuery) (provider.CapabilitySet, error) {

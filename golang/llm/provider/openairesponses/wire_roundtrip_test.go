@@ -36,7 +36,7 @@ func wireAuditProfiles() []wireAuditProfile {
 			if err != nil {
 				return nil, err
 			}
-			return NewAdapter(client, "wire-audit", "wire-audit/v1", options...)
+			return NewAzureAdapter(client, "wire-audit", "wire-audit/v1", options...)
 		}},
 	}
 }
@@ -83,10 +83,14 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 	return wire
 }
 
-// intendedWireBody is the request map the lowerer built before it was carried
-// into the SDK parameter type.
-func intendedWireBody(t *testing.T, request llm.Request) map[string]any {
+// intendedWireBody is the request map the profile's adapter built before it
+// was carried into the SDK parameter type.
+func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Request) map[string]any {
 	t.Helper()
+	adapter, err := profile.newAdapter(http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
 	normalized, err := llm.NormalizeRequest(request)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +99,7 @@ func intendedWireBody(t *testing.T, request llm.Request) map[string]any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestMap, _, err := lowerRequestMap(normalized, serviceClass)
+	requestMap, _, err := adapter.lowerRequestMap(normalized, serviceClass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +302,7 @@ func TestCapturedWireBodyMatchesLoweredRequestMap(t *testing.T) {
 					request := test.request
 					request.Model = "gpt-audit"
 					request.OperationKey = "wire-audit"
-					intended := intendedWireBody(t, request)
+					intended := intendedWireBody(t, profile, request)
 					captured := captureWireBody(t, profile, request)
 					if differences := wireDifferences("$", intended, captured); len(differences) > 0 {
 						t.Fatalf("captured wire body differs from the lowered request map:\n%s", strings.Join(differences, "\n"))
@@ -306,6 +310,34 @@ func TestCapturedWireBodyMatchesLoweredRequestMap(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// The direct API receives the tier of the requested class. The Azure OpenAI
+// Responses specification defines no service_tier, so that route sends none,
+// and the omission is part of the intended body rather than applied after it.
+func TestCapturedWireBodyServiceTierFollowsTheRoute(t *testing.T) {
+	for _, profile := range wireAuditProfiles() {
+		for class, tier := range map[llm.ServiceClass]string{llm.ServiceClassEconomy: "flex", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"} {
+			t.Run(profile.id+"/"+string(class), func(t *testing.T) {
+				request := llm.Request{OperationKey: "wire-tier", Model: "gpt-audit", Input: wireAuditUserText("hello"), ServiceClass: class}
+				intended := intendedWireBody(t, profile, request)
+				captured := captureWireBody(t, profile, request)
+				if differences := wireDifferences("$", intended, captured); len(differences) > 0 {
+					t.Fatalf("captured wire body differs from the lowered request map:\n%s", strings.Join(differences, "\n"))
+				}
+				sent, present := captured["service_tier"]
+				if profile.id == "azure" {
+					if present {
+						t.Fatalf("azure request sent service_tier %v", sent)
+					}
+					return
+				}
+				if sent != tier {
+					t.Fatalf("service_tier = %v, want %q", sent, tier)
+				}
+			})
+		}
 	}
 }
 
@@ -320,7 +352,7 @@ func TestCapturedWireBodyAddsOnlyStoreFalseWhenStorageIsDenied(t *testing.T) {
 				Tools:        []llm.Tool{wireAuditTool("lookup")},
 				ToolPolicy:   llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup"},
 			}
-			intended := intendedWireBody(t, request)
+			intended := intendedWireBody(t, profile, request)
 			intended["store"] = false
 			captured := captureWireBody(t, profile, request, WithProviderStoragePermitted(false))
 			if differences := wireDifferences("$", intended, captured); len(differences) > 0 {
