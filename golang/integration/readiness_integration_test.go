@@ -43,7 +43,12 @@ func TestReadinessIntegrationRedisRecovery(t *testing.T) {
 		t.Skip("make readiness-integration supplies an isolated Redis address and container")
 	}
 	configuration, value := readinessIntegrationConfig(t, address)
-	redisClient := redisclient.NewClient(&redisclient.Options{Addr: address})
+	// Honour the probe context deadline and do not retry, as the worker's own
+	// client does (MaxRetries -1). With go-redis defaults a paused Redis makes
+	// each probe wait out a 3s read timeout across three retries, so the
+	// consecutive failed rounds required before pausing would not fit in the
+	// readiness wait below.
+	redisClient := redisclient.NewClient(&redisclient.Options{Addr: address, ContextTimeoutEnabled: true, MaxRetries: -1})
 	t.Cleanup(func() { _ = redisClient.Close() })
 	initialContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
