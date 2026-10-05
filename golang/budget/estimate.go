@@ -101,9 +101,11 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		reasoningTokens = estimator.MaxReasoning
 	}
 	if estimator.Tokenizer == nil {
-		inputTokens = addMediaAllowance(inputTokens, mediaInputAllowance(request), candidate.ContextTokens, outputTokens, reasoningTokens)
+		inputTokens = addMediaAllowance(inputTokens, mediaInputAllowance(request), candidate.ContextTokens, outputTokens)
 	}
-	if err := validateContextCounts(candidate.ContextTokens, inputTokens, outputTokens, reasoningTokens); err != nil {
+	// reasoningTokens stays a separately priced reservation component below,
+	// but it is spent inside the output cap and takes no extra context room.
+	if err := validateContextCounts(candidate.ContextTokens, inputTokens, outputTokens); err != nil {
 		return Estimate{}, err
 	}
 	cacheWrite := inputTokens
@@ -297,17 +299,17 @@ func mediaInputAllowance(request llm.Request) int64 {
 
 // addMediaAllowance adds the media allowance to the serialized-size estimate.
 // When the candidate declares a context window, the allowance is capped at the
-// room left after the text estimate and the reserved output and reasoning: the
-// provider must reject input beyond its window, so billable media input cannot
+// room left after the text estimate and the output cap (which contains any
+// reasoning): the provider must reject input beyond its window, so billable media input cannot
 // exceed that room, and the allowance alone never turns an admissible request
 // into a context-limit rejection.
-func addMediaAllowance(input, allowance, contextTokens, output, reasoning int64) int64 {
+func addMediaAllowance(input, allowance, contextTokens, output int64) int64 {
 	if allowance <= 0 {
 		return input
 	}
 	if contextTokens > 0 {
 		room := contextTokens
-		for _, used := range []int64{input, output, reasoning} {
+		for _, used := range []int64{input, output} {
 			if used >= room {
 				return input
 			}

@@ -65,8 +65,11 @@ from the original request prevents replay from creating independent summaries.
 
 The planning activity authorizes before materializing a parent. Roots and parents
 with no safe prefix skip compaction. Otherwise it evaluates inherited policy
-token/byte thresholds and the selected route's context-byte limit against the
-projected Generate input. Token counting uses the admission estimator's exact
+token/byte thresholds against the projected Generate input, and checks the
+context-token and context-byte limits of every candidate route. Route selection
+skips a candidate that does not fit and uses the next, so a context limit
+requests compaction only when no usable candidate (one that supports the output
+cap and is not blocked by shared route health) fits. Token counting uses the admission estimator's exact
 provider tokenizer when configured, or its UTF-8 byte estimate otherwise. This
 fallback is an estimate, not a guarantee that every provider context window fits.
 The parent's compaction policy governs this summary; a new Generate settings

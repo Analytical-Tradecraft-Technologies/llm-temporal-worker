@@ -77,16 +77,38 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 	if err != nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 	}
-	if err := r.capabilities.BudgetEstimator.ValidateContext(resolved, candidate); err != nil {
-		if !errors.Is(err, budget.ErrContextLimit) {
+	// Selection skips a candidate that does not fit and uses the next one, so
+	// a context limit is a reason to compact only when no usable candidate
+	// fits. Retry reordering in selectCall changes the order, not this answer.
+	fits, limited := false, false
+	for _, candidate := range plan.Candidates {
+		var route routing.Route
+		for _, configured := range providers.catalog.Models[input.Request.Model].Routes {
+			if configured.ID == candidate.RouteID {
+				route = configured
+			}
+		}
+		if !route.SupportsOutputLimit(input.Request) {
+			continue
+		}
+		// Compacting cannot make a blocked route selectable. The read is best
+		// effort: selection reports a route status failure itself.
+		if blocked, err := providers.routeBlocked(ctx, candidate); err == nil && blocked {
+			continue
+		}
+		err := r.capabilities.BudgetEstimator.ValidateContext(input.Request, candidate)
+		if err != nil && !errors.Is(err, budget.ErrContextLimit) {
 			return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 		}
-		decision.ShouldCompact = true
-	}
-	for _, route := range providers.catalog.Models[input.Request.Model].Routes {
-		if route.ID == candidate.RouteID && route.ContextBytes > 0 && len(encoded) >= route.ContextBytes {
-			decision.ShouldCompact = true
+		if err != nil || (route.ContextBytes > 0 && len(encoded) >= route.ContextBytes) {
+			limited = true
+			continue
 		}
+		fits = true
+		break
+	}
+	if limited && !fits {
+		decision.ShouldCompact = true
 	}
 	return llm.GenerationPlanV1{CompactBeforeGenerate: decision.ShouldCompact}, nil
 }
