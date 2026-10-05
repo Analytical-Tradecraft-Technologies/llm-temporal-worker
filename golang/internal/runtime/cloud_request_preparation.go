@@ -122,10 +122,16 @@ func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record clou
 	scope := record.Request.Scope
 	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
 	if errors.Is(err, cloudstate.ErrRequestPreparationMissing) {
-		// Reuse the input validated before BeginOperation unless a competing
-		// initializer created the record after it was prepared.
-		if initial != nil && !initial.PreparedAt.Before(record.Request.CreatedAt) {
+		// Reuse the input validated before BeginOperation. BeginOperation has
+		// verified the immutable manifest binding, so a record created by a
+		// competing initializer names the same parent and input. Advance
+		// PreparedAt to that record's creation time (PreparedAt must not precede
+		// CreatedAt) instead of reopening a parent that may since have expired.
+		if initial != nil {
 			preparation = *initial
+			if preparation.PreparedAt.Before(record.Request.CreatedAt) {
+				preparation.PreparedAt = record.Request.CreatedAt.UTC()
+			}
 		} else {
 			preparation, err = p.materialize(ctx, record, caller, parent, checkpointScope, p.clock().UTC())
 			if err != nil {

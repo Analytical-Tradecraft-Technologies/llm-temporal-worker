@@ -23,11 +23,17 @@ type preparationTestStore struct {
 	lookups, begins  int
 	loadErr, saveErr error
 	beforeLoad       func()
+	beforeBegin      func(cloudstate.Operation)
 }
 
 func (s *preparationTestStore) BeginOperation(ctx context.Context, op cloudstate.Operation) (cloudstate.Record, error) {
 	s.accesses++
 	s.begins++
+	if s.beforeBegin != nil {
+		hook := s.beforeBegin
+		s.beforeBegin = nil
+		hook(op)
+	}
 	if s.record.Request.ID == "" {
 		s.record = cloudstate.Record{Status: cloudstate.StatusRunning, Request: cloudstate.CreateRequest{ID: "llmtw_req_00000000-0000-4000-8000-000000000001", Scope: op.Scope, Kind: op.Kind, Manifest: op.Manifest, CreatedAt: op.Now, RequestIndex: op.RequestIndex}}
 	} else if s.record.Request.Scope != op.Scope || s.record.Request.Kind != op.Kind || string(s.record.Request.Manifest) != string(op.Manifest) {
@@ -365,6 +371,33 @@ func TestCloudRequestPreparationExistingOperationSkipsPrevalidation(t *testing.T
 		if _, err := p.Prepare(context.Background(), input); err != nil || m.calls != 1 || store.saves != 1 {
 			t.Fatalf("completed=%v replay reopened parent: %v", completed, err)
 		}
+	}
+}
+
+// Two workers miss the lookup; the faster one creates the record (with a later
+// CreatedAt) and crashes before saving its preparation, then the parent expires.
+// The slower worker must keep its validated snapshot rather than reopen the
+// parent, or the competitor's running record would stay pending forever.
+func TestCloudRequestPreparationConcurrentBeginReusesValidatedSnapshot(t *testing.T) {
+	for _, kind := range []string{"generate", "compact"} {
+		t.Run(kind, func(t *testing.T) {
+			p, store, m, input := cloudPreparationFixture(t, kind)
+			competitorAt := p.clock().Add(time.Second)
+			store.beforeBegin = func(op cloudstate.Operation) {
+				store.record = cloudstate.Record{Status: cloudstate.StatusRunning, Request: cloudstate.CreateRequest{ID: "llmtw_req_00000000-0000-4000-8000-000000000002", Scope: op.Scope, Kind: op.Kind, Manifest: op.Manifest, CreatedAt: competitorAt, RequestIndex: op.RequestIndex}}
+				m.err = state.ErrExpired
+			}
+			prepared, err := p.Prepare(context.Background(), input)
+			if err != nil {
+				t.Fatalf("prepare after concurrent begin: %v", err)
+			}
+			if m.calls != 1 || store.saves != 1 || !prepared.Preparation.PreparedAt.Equal(competitorAt) || prepared.Record.Request.ID != store.record.Request.ID {
+				t.Fatalf("calls=%d saves=%d prepared_at=%v", m.calls, store.saves, prepared.Preparation.PreparedAt)
+			}
+			if _, err := p.Load(context.Background(), referenceFor(prepared)); err != nil {
+				t.Fatalf("saved preparation does not restore: %v", err)
+			}
+		})
 	}
 }
 

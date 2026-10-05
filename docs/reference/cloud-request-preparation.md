@@ -83,7 +83,10 @@ parent and input without writing anything, so rejected input (an invalid,
 expired or foreign parent, invalid settings, an oversize parent) never becomes a
 `running` record that `ListPending` would report forever. Only then does it begin
 the discoverable operation and save the versioned parent snapshot before budget
-planning or provider effects. An operation that already exists skips this
+planning or provider effects. If a concurrent worker created the record first
+and has not saved its preparation, the validated snapshot is still used, with its
+preparation time advanced to the record's creation time, rather than reopening a
+parent that may have expired. An operation that already exists skips this
 pre-check and replays its saved result or preparation without reopening the
 parent. The original typed request remains in the immutable request manifest.
 Root generation saves no parent snapshot.
