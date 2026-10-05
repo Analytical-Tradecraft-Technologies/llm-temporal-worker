@@ -26,6 +26,6 @@
   "temperature": 0.25,
   "thinking": {"budget_tokens": 2048, "display": "omitted", "type": "enabled"},
   "tool_choice": {"disable_parallel_tool_use": false, "name": "lookup", "type": "tool"},
-  "tools": [{"description": "look up a place", "input_schema": {"properties": {"q": {"type": "string"}}, "required": ["q"], "type": "object"}, "name": "lookup", "strict": true}],
+  "tools": [{"description": "look up a place", "input_schema": {"properties": {"q": {"type": "string"}}, "required": ["q"], "type": "object"}, "name": "lookup"}],
   "top_k": 5
 }

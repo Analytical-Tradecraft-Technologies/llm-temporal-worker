@@ -269,7 +269,9 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil || schema == nil {
 			return nil, fmt.Errorf("tool %q input schema must be an object", tool.Name)
 		}
-		result = append(result, map[string]any{"name": tool.Name, "description": tool.Description, "input_schema": schema, "strict": true})
+		// Strict tool use only accepts a closed schema subset the worker does
+		// not enforce, so tools are sent non-strict like Responses.
+		result = append(result, map[string]any{"name": tool.Name, "description": tool.Description, "input_schema": schema})
 	}
 	return result, nil
 }
@@ -306,8 +308,9 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 	case "", llm.OutputKindText:
 		return nil
 	case llm.OutputKindJSON:
-		target["output_config"] = map[string]any{"format": map[string]any{"type": "json_schema", "schema": map[string]any{"type": "object"}}}
-		return nil
+		// Structured output requires a closed schema; a bare object schema is
+		// not valid and would otherwise constrain the answer to {}.
+		return fmt.Errorf("output format %q without a schema is not supported by Bedrock Messages", output.Format.Kind)
 	case llm.OutputKindJSONSchema:
 		var schema map[string]any
 		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil || schema == nil {

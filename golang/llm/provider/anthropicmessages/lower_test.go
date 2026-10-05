@@ -82,8 +82,8 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	if toolResult["type"] != "tool_result" || toolResult["tool_use_id"] != "call-1" {
 		t.Fatalf("tool result = %#v", toolResult)
 	}
-	if wire["tools"].([]any)[0].(map[string]any)["strict"] != true {
-		t.Fatalf("strict tool schema = %#v", wire["tools"])
+	if _, strict := wire["tools"].([]any)[0].(map[string]any)["strict"]; strict {
+		t.Fatalf("tool must not be forced strict = %#v", wire["tools"])
 	}
 	if wire["tool_choice"].(map[string]any)["type"] != "tool" {
 		t.Fatalf("tool choice = %#v", wire["tool_choice"])
@@ -267,5 +267,13 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 				t.Fatalf("thinking budget = %#v", config)
 			}
 		})
+	}
+}
+
+func TestLoweringRejectsSchemalessJSONOutput(t *testing.T) {
+	target := map[string]any{}
+	err := lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target)
+	if err == nil || !strings.Contains(err.Error(), "without a schema") || target["output_config"] != nil {
+		t.Fatalf("schema-less JSON output = %v, %#v", err, target)
 	}
 }

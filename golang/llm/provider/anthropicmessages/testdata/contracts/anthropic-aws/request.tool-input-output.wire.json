@@ -17,5 +17,5 @@
   "model": "claude-contract",
   "service_tier": "standard_only",
   "tool_choice": {"disable_parallel_tool_use": true, "type": "auto"},
-  "tools": [{"description": "look up a city", "input_schema": {"properties": {"q": {"type": "string"}}, "required": ["q"], "type": "object"}, "name": "lookup", "strict": true}]
+  "tools": [{"description": "look up a city", "input_schema": {"properties": {"q": {"type": "string"}}, "required": ["q"], "type": "object"}, "name": "lookup"}]
 }
