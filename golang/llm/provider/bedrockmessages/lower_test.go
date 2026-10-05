@@ -2,6 +2,7 @@ package bedrockmessages
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -225,5 +226,20 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 				t.Fatalf("thinking budget = %#v", config)
 			}
 		})
+	}
+}
+
+func TestLoweringSendsNonStrictToolsAndRejectsSchemalessJSONOutput(t *testing.T) {
+	tools, err := lowerTools([]llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string","minLength":1}}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, strict := tools[0].(map[string]any)["strict"]; strict {
+		t.Fatalf("tool must not be forced strict: %#v", tools[0])
+	}
+	target := map[string]any{}
+	err = lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target)
+	if err == nil || !strings.Contains(err.Error(), "without a schema") || target["output_config"] != nil {
+		t.Fatalf("schema-less JSON output = %v, %#v", err, target)
 	}
 }

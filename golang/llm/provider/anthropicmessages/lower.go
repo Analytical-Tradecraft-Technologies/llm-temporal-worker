@@ -344,11 +344,14 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 		if schema == nil {
 			return nil, fmt.Errorf("tool %q input schema must be an object", tool.Name)
 		}
+		// Strict tool use only accepts a closed schema subset (for example
+		// additionalProperties: false and no minLength), which the worker's
+		// schema validator does not enforce. Forcing it would reject ordinary
+		// tool definitions, so tools are sent non-strict like Responses.
 		result = append(result, map[string]any{
 			"name":         tool.Name,
 			"description":  tool.Description,
 			"input_schema": schema,
-			"strict":       true,
 		})
 	}
 	return result, nil
@@ -387,13 +390,9 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 	case "", llm.OutputKindText:
 		return nil
 	case llm.OutputKindJSON:
-		target["output_config"] = map[string]any{"format": map[string]any{
-			"type": "json_schema",
-			"schema": map[string]any{
-				"type": "object",
-			},
-		}}
-		return nil
+		// Structured output requires a closed schema; a bare object schema is
+		// not valid and would otherwise constrain the answer to {}.
+		return fmt.Errorf("output format %q without a schema is not supported by Anthropic Messages", output.Format.Kind)
 	case llm.OutputKindJSONSchema:
 		var schema map[string]any
 		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
