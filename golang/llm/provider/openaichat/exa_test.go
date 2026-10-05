@@ -93,7 +93,16 @@ func TestExaRejectsNegativeReportedCost(t *testing.T) {
 }
 
 func TestExaLiftsCitationsFromSelectedMessage(t *testing.T) {
-	body := `{"id":"exa-generation-2","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer","citations":[{"url":"https://example.com/message-source","title":"Message source"}]}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`
+	for name, body := range map[string]string{
+		"message":                 `{"id":"exa-generation-2","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer","citations":[{"url":"https://example.com/message-source","title":"Message source"}]}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`,
+		"null message falls back": `{"id":"exa-generation-3","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer","citations":null}}],"citations":[{"url":"https://example.com/message-source","title":"Root source"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`,
+	} {
+		t.Run(name, func(t *testing.T) { assertExaCitationLifted(t, body) })
+	}
+}
+
+func assertExaCitationLifted(t *testing.T, body string) {
+	t.Helper()
 	client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 	})}})

@@ -158,10 +158,10 @@ func augmentExa(call provider.Call, response *openai.ChatCompletion, lifted *llm
 	}
 	for _, key := range []string{"results", "sources", "citations"} {
 		value, ok := message[key]
-		if !ok {
+		if !ok || isJSONNull(value) {
 			value, ok = fields[key]
 		}
-		if !ok || string(value) == "null" {
+		if !ok || isJSONNull(value) {
 			continue
 		}
 		references, err := exaReferences(value, key)
@@ -173,6 +173,10 @@ func augmentExa(call provider.Call, response *openai.ChatCompletion, lifted *llm
 	}
 	_ = call
 	return nil
+}
+
+func isJSONNull(value json.RawMessage) bool {
+	return strings.TrimSpace(string(value)) == "null"
 }
 
 func exaSelectedMessageFields(response *openai.ChatCompletion) (map[string]json.RawMessage, error) {
