@@ -128,6 +128,10 @@ entries:
     provider_tier: standard
     input_per_million: "1.250000"
     output_per_million: "10.000000"
+    cache_read_per_million: "0.125000"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"
     source: operator-verified
 ```
 
@@ -152,6 +156,14 @@ component as `unknown` on the compiled pricing entry (the zero value remains
 reserved for an explicitly quoted free component). `pricing.CostFromUsage` and
 the budget estimator fail closed when a request needs an unknown component, so
 partial catalogs cannot silently undercharge.
+
+Every reservation estimate charges `cache_write_per_million` (the whole input
+may be written to cache) and one `per_request` unit, and reasoning-enabled
+requests also charge `reasoning_per_million`. An entry that omits
+`cache_write_per_million` or `per_request` therefore loads but can never be
+selected: every request on that route is skipped as an unusable quote and fails
+with `no_route` when no other candidate remains. Write an explicit `"0"` for a
+component the provider does not bill.
 
 Final usage reconciliation also computes the bounded Redis `MicroUSD`
 compatibility projection. If any component or the checked aggregate exceeds
