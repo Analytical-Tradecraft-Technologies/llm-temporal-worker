@@ -611,6 +611,35 @@ func encodeResult(kind llm.QueryKind, value QueryResult) (llm.QueryResult, error
 	case *SpendSummaryResult:
 		value = *typed
 	}
+	// An empty result is a successful empty list, never a JSON null that the
+	// strict public decoder rejects.
+	switch typed := value.(type) {
+	case ProviderStatusResult:
+		if typed.Routes == nil {
+			typed.Routes = []ProviderStatusRow{}
+		}
+		value = typed
+	case ModelInventoryResult:
+		if typed.Models == nil {
+			typed.Models = []ModelInventoryRow{}
+		}
+		value = typed
+	case CreditStatusResult:
+		if typed.Endpoints == nil {
+			typed.Endpoints = []CreditStatusRow{}
+		}
+		value = typed
+	case BudgetStatusResult:
+		if typed.Windows == nil {
+			typed.Windows = []BudgetWindow{}
+		}
+		value = typed
+	case SpendSummaryResult:
+		if typed.Buckets == nil {
+			typed.Buckets = []SpendBucket{}
+		}
+		value = typed
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
