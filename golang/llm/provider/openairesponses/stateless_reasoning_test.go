@@ -189,6 +189,22 @@ func TestStorageDeniedDropsReasoningWithoutEncryptedContent(t *testing.T) {
 	}
 }
 
+// Omitting a bare item leaves the reasoning item before it still followed by
+// the output they produced, so that one stays replayable.
+func TestStorageDeniedKeepsSealedReasoningBeforeBareItem(t *testing.T) {
+	for name, tail := range map[string]llm.Item{
+		"message":   modelText("answer"),
+		"tool call": llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+	} {
+		input := []llm.Item{humanText("question"), reasoningState(t, "rs-1", "sealed-rs-1"), reasoningState(t, "rs-2", nil), tail}
+		_, wire := compileWire(t, storagePolicyAdapter(t, false, nil), llm.Request{OperationKey: "replay", Input: input}, true)
+		items := wireReasoningItems(wire)
+		if len(items) != 1 || items[0]["id"] != "rs-1" || items[0]["encrypted_content"] != "sealed-rs-1" {
+			t.Fatalf("%s: replayed reasoning = %v, want only rs-1 with its encrypted content", name, items)
+		}
+	}
+}
+
 func TestDanglingReasoningIsNotReplayed(t *testing.T) {
 	sealed := func(id string) llm.ProviderState { return reasoningState(t, id, "sealed-"+id) }
 	call := llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)}

@@ -219,9 +219,10 @@ func replayableItems(items []map[string]any, storageDenied bool) ([]map[string]a
 		encrypted, _ := item["encrypted_content"].(string)
 		keep[index] = followed && (!storageDenied || encrypted != "")
 		present = true
+		// followed is left as it is: once an item is omitted, the one before
+		// it meets whatever followed the omitted item.
 		if !keep[index] {
 			dropped = true
-			followed = false
 		}
 	}
 	if !dropped {
