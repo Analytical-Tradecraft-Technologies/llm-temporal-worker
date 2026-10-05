@@ -328,7 +328,7 @@ func TestConfigFileWatcherDetectsReplacementBeforeWatcherInitialization(t *testi
 	if err := os.WriteFile(path, replacement, 0600); err != nil {
 		t.Fatal(err)
 	}
-	watcher, err := newConfigFileWatcherWithBaseline(path, time.Hour, initial)
+	watcher, err := newConfigFileWatcherWithBaseline(path, time.Millisecond, initial)
 	if err != nil {
 		t.Fatal(err)
 	}

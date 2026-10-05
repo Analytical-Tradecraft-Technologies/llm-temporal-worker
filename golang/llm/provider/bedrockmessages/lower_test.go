@@ -98,12 +98,12 @@ func TestLowerItemMapsToolAndMediaContent(t *testing.T) {
 		t.Fatalf("image = %#v", image)
 	}
 
-	document, err := lowerPart(llm.DocumentPart{URL: "https://example.test/report.pdf", MediaType: "application/pdf", Title: "Report"})
+	document, err := lowerPart(llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf", Title: "Report"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	documentMap := document.(map[string]any)
-	if documentMap["type"] != "document" || documentMap["title"] != "Report" || documentMap["source"].(map[string]any)["type"] != "url" {
+	if documentMap["type"] != "document" || documentMap["title"] != "Report" || documentMap["source"].(map[string]any)["type"] != "base64" {
 		t.Fatalf("document = %#v", document)
 	}
 }
@@ -237,7 +237,7 @@ func TestLoweringSendsNonStrictToolsAndRejectsSchemalessJSONOutput(t *testing.T)
 		t.Fatalf("tool must not be forced strict: %#v", tools[0])
 	}
 	target := map[string]any{}
-	err = lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target)
+	err = lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target, true)
 	if err == nil || !strings.Contains(err.Error(), "without a schema") || target["output_config"] != nil {
 		t.Fatalf("schema-less JSON output = %v, %#v", err, target)
 	}

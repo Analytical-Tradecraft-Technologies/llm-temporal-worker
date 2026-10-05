@@ -713,6 +713,7 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 		"negative-generate-empty-reasoning-patch.json",
 		"negative-generate-compaction-scalar.json",
 		"negative-generate-extensions-null.json",
+		"negative-generate-output-name.json",
 		"negative-generate-null-output.json",
 		"negative-compact-tools.json",
 		"negative-compact-structured-output.json",
@@ -724,7 +725,7 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 			data := readV1Fixture(t, name)
 			var value any
 			switch {
-			case name == "negative-generate-cache-field.json", name == "negative-generate-null-append.json", name == "negative-generate-enum-patch.json", name == "negative-generate-empty-reasoning-patch.json", name == "negative-generate-compaction-scalar.json", name == "negative-generate-extensions-null.json":
+			case name == "negative-generate-cache-field.json", name == "negative-generate-null-append.json", name == "negative-generate-enum-patch.json", name == "negative-generate-empty-reasoning-patch.json", name == "negative-generate-compaction-scalar.json", name == "negative-generate-extensions-null.json", name == "negative-generate-output-name.json":
 				value = new(llm.GenerateRequestV1)
 			case strings.HasPrefix(name, "negative-generate"),
 				strings.HasPrefix(name, "negative-currency"),

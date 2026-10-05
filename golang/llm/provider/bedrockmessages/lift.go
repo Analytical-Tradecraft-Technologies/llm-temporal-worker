@@ -8,6 +8,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 func (profile Profile) liftResponse(call provider.Call, response *anthropic.Message, requestID string) (llm.Response, error) {
@@ -31,6 +32,11 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 	}
 	status, err := liftStatus(response.StopReason, hasToolCalls, hasRefusal)
 	if err != nil {
+		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped.Provider.ResponseID = response.ID
+		return llm.Response{}, mapped
+	}
+	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
@@ -59,6 +65,18 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		},
 		Continuation: continuationForResponse(call, response, states),
 	}, nil
+}
+
+// validateFinalJSON enforces the caller's json_schema output locally. The
+// provider only saw a lowered schema, so constraints moved into descriptions
+// are checked here before the bytes enter Temporal history.
+func validateFinalJSON(call provider.Call, output []llm.Item, status llm.ResponseStatus, hasToolCalls, hasRefusal bool) error {
+	// Incomplete text is retained for callers and accounting, not validated
+	// as a promised complete JSON document.
+	if status != llm.ResponseStatusCompleted || hasToolCalls || hasRefusal || len(call.OutputSchema) == 0 {
+		return nil
+	}
+	return anthropicschema.Validate(call.OutputSchema, output)
 }
 
 func liftContent(blocks []anthropic.ContentBlockUnion) ([]llm.Item, []llm.ProviderState, bool, bool, error) {

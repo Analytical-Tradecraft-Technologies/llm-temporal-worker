@@ -15,7 +15,7 @@ func TestDefaultBlobFactoryBuildsDevelopmentFileStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value := strings.Replace(string(data), "environment: production", "environment: development", 1)
+	value := strings.Replace(string(data), "environment: production", "environment: development", -1)
 	value = strings.Replace(value, `blob_store:
   kind: s3
   inline_bytes: 262144

@@ -275,7 +275,7 @@ func encodeRecord(record Record) ([]byte, error) {
 }
 
 func (r *Repository) loadRecord(ctx context.Context, pointer recordPointer) (Record, error) {
-	data, err := r.readBlob(ctx, r.stream(pointer.ID), pointer.Blob)
+	data, err := r.readReferencedBlob(ctx, r.stream(pointer.ID), pointer.Blob)
 	if err != nil {
 		return Record{}, err
 	}

@@ -266,7 +266,7 @@ func decodeStrict(data []byte, out any) error {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return fmt.Errorf("document is empty")
 	}
-	if err := yaml.Load(data, out, yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
+	if err := yaml.Load(data, out, yaml.WithKnownFields(), yaml.WithUniqueKeys()); err != nil {
 		return fmt.Errorf("strict YAML: %w", err)
 	}
 	return nil

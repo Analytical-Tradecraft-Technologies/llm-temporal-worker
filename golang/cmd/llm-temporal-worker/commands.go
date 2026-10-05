@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -318,17 +317,13 @@ func writeCommandError(output io.Writer, err error) {
 	_, _ = fmt.Fprintf(output, "%s\n", message)
 }
 
-// quotedInputValue matches the input values that configuration errors echo:
-// backtick-quoted YAML scalars and Go %q-quoted validation values. Field paths
-// are unquoted, so they survive redaction.
-var quotedInputValue = regexp.MustCompile("`[^`]*`|\"(?:[^\"\\\\]|\\\\.)*\"")
-
 // writeConfigError reports configuration compile failures. Errors name the
 // failing field path, which the keyword filter in writeCommandError would hide
 // (field names such as max_output_tokens or state.requests.secret always match
 // it). A value echoed from the input could still be misplaced credential text,
-// so every quoted value is replaced unless the error is a typed operator-safe
-// diagnostic such as an unresolved secret reference.
+// so diagnostic.ConfigMessage replaces every quoted value unless the error is a
+// typed operator-safe diagnostic such as an unresolved secret reference. A
+// rejected reload derives its logged field path from the same message.
 func writeConfigError(output io.Writer, err error) {
 	if output == nil {
 		return
@@ -337,9 +332,8 @@ func writeConfigError(output io.Writer, err error) {
 		writeCommandError(output, err)
 		return
 	}
-	message := strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0])
-	message = quotedInputValue.ReplaceAllString(message, "<value>")
-	if message == "" || len(message) > 512 {
+	message, ok := diagnostic.ConfigMessage(err)
+	if !ok {
 		writeCommandError(output, nil)
 		return
 	}

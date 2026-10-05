@@ -138,7 +138,7 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 	}
 
 	fixture := strings.Replace(withoutCloudRequests(withoutStreamFields), "kind: durable", "kind: redis", 1)
-	fixture = strings.Replace(fixture, "environment: production", "environment: development", 1)
+	fixture = strings.Replace(fixture, "environment: production", "environment: development", -1)
 	loaded, err = config.Load([]byte(fixture))
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 }
 
 func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", 1)
+	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", -1)
 	data = strings.Replace(data, `blob_store:
   kind: s3
   inline_bytes: 262144
@@ -224,7 +224,7 @@ func TestLoadRejectsProductionRedisWithoutTLS(t *testing.T) {
 }
 
 func TestLoadAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
-	data := strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", 1)
+	data := strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)
 	if _, err := config.Load([]byte(data)); err != nil {
 		t.Fatalf("development Redis without TLS error = %v", err)
 	}
@@ -249,7 +249,7 @@ func redisTLSDisabledYAML(t *testing.T) []byte {
 
 func developmentFileBlobYAML(t *testing.T) []byte {
 	t.Helper()
-	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", 1)
+	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", -1)
 	data = strings.Replace(data, `blob_store:
   kind: s3
   inline_bytes: 262144
@@ -270,7 +270,7 @@ func TestLoadBudgetPolicyAcceptsEveryDocumentedMatcher(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
 		"match:\n        tenant: acme\n        environment: production",
-		"match:\n        project: critical-workload\n        actor_prefix: service-\n        logical_model: reasoning\n        endpoint: openai-prod\n        service_class: priority",
+		"match:\n        project: invoice-processing\n        actor_prefix: service-\n        logical_model: invoice-summarizer\n        endpoint: openai-prod\n        service_class: priority",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
@@ -278,7 +278,7 @@ func TestLoadBudgetPolicyAcceptsEveryDocumentedMatcher(t *testing.T) {
 		t.Fatal(err)
 	}
 	match := loaded.Budgets.Policies[0].Match
-	if match.Project != "critical-workload" || match.ActorPrefix != "service-" || match.LogicalModel != "reasoning" || match.EndpointID != "openai-prod" || match.ServiceClass != llm.ServiceClassPriority {
+	if match.Project != "invoice-processing" || match.ActorPrefix != "service-" || match.LogicalModel != "invoice-summarizer" || match.EndpointID != "openai-prod" || match.ServiceClass != llm.ServiceClassPriority {
 		t.Fatalf("budget matcher = %#v", match)
 	}
 	if match.Tenant != "" || match.Environment != "" {

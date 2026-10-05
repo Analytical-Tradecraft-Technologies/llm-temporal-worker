@@ -153,6 +153,13 @@ func replacementTestConfig(t *testing.T, mutate func(*config.Config)) []byte {
 	}
 	value.Environment = "development"
 	mutate(&value)
+	// A budget matcher naming another environment is a configuration error, so
+	// keep the fixture's matchers on the environment under test.
+	for index := range value.Budgets.Policies {
+		if value.Budgets.Policies[index].Match.Environment != "" {
+			value.Budgets.Policies[index].Match.Environment = value.Environment
+		}
+	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)

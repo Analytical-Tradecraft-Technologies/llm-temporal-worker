@@ -2,6 +2,8 @@ package state
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -46,9 +48,19 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 	now := materializer.clock()
 	codec := materializer.Codec.withDefaults()
 
-	// Collect leaf-to-root rows first. The repository's scoped Get is the only
-	// database capability used here; a cycle, a missing parent, or a depth gap
-	// is rejected before any graph node is exposed to callers.
+	// Collect rows from the leaf towards the root, stopping at the newest row
+	// that carries a self-contained snapshot. The repository's scoped Get is the
+	// only database capability used here; a cycle, a missing parent, or a depth
+	// gap is rejected before any graph node is exposed to callers.
+	//
+	// Rows older than the snapshot are not read, so they are not re-checked.
+	// That is safe because every row that is read is scope- and expiry-checked,
+	// publication caps a child's expiry at its parent's (so a live snapshot row
+	// implies its ancestors were live when it was written and can only expire
+	// with or after it), and the snapshot is bound to its row by the blob
+	// digest, the row depth and the row's canonical lineage digest. A snapshot
+	// that is present but unreadable or inconsistent fails the read; it is never
+	// skipped, because a compaction snapshot is not reproducible from deltas.
 	type loaded struct {
 		row      DurableCheckpoint
 		delta    []llm.Item
@@ -80,8 +92,18 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 		if row.ParentID == nil && row.Depth != 0 {
 			return MaterializedState{}, fmt.Errorf("durable checkpoint %s root depth is not zero", current)
 		}
-		if int32(len(path)) > limits.MaxDepth || len(path)+1 > limits.MaxRows {
+		// The leaf's depth is its ancestor count, so the limits that a full walk
+		// would reach row by row are known before any ancestor or blob is read.
+		if int32(len(path)) > limits.MaxDepth || len(path)+1 > limits.MaxRows || (len(path) == 0 && (row.Depth > limits.MaxDepth || int64(row.Depth)+1 > int64(limits.MaxRows))) {
 			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit: %w", ErrLimitExceeded)
+		}
+		if row.MaterializedSnapshotBlob != nil {
+			snapshot, err := materializer.readSnapshot(ctx, scopeID, row, codec)
+			if err != nil {
+				return MaterializedState{}, fmt.Errorf("checkpoint %s snapshot: %w", current, err)
+			}
+			path = append(path, loaded{row: row, snapshot: &snapshot})
+			break
 		}
 		delta, err := materializer.readItems(ctx, scopeID, row.DeltaBlob, codec, CheckpointDeltaBlob)
 		if err != nil {
@@ -95,28 +117,13 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 		if err != nil {
 			return MaterializedState{}, fmt.Errorf("checkpoint %s settings patch: %w", current, err)
 		}
-		var snapshot *CheckpointSnapshot
-		if row.MaterializedSnapshotBlob != nil {
-			value, readErr := materializer.Blobs.Read(ctx, scopeID, *row.MaterializedSnapshotBlob)
-			if readErr != nil {
-				return MaterializedState{}, fmt.Errorf("checkpoint %s snapshot: %w", current, readErr)
-			}
-			if row.MaterializedSnapshotBlob.MediaType != "application/json" {
-				return MaterializedState{}, fmt.Errorf("checkpoint %s snapshot has unsupported media type", current)
-			}
-			decoded, decodeErr := codec.DecodeSnapshot(value)
-			if decodeErr != nil {
-				return MaterializedState{}, fmt.Errorf("checkpoint %s snapshot: %w", current, decodeErr)
-			}
-			snapshot = &decoded
-		}
-		path = append(path, loaded{row: row, delta: delta, response: response, patch: patch, snapshot: snapshot})
+		path = append(path, loaded{row: row, delta: delta, response: response, patch: patch})
 		if row.ParentID == nil {
 			break
 		}
 		current = *row.ParentID
 	}
-	if len(path) == 0 || path[len(path)-1].row.ParentID != nil {
+	if len(path) == 0 || (path[len(path)-1].snapshot == nil && path[len(path)-1].row.ParentID != nil) {
 		return MaterializedState{}, fmt.Errorf("durable checkpoint graph has no root")
 	}
 
@@ -142,7 +149,11 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 			parent := Handle(*value.row.ParentID)
 			checkpoint.Parent = &parent
 		}
-		if checkpoint.Parent == nil {
+		if checkpoint.Snapshot != nil {
+			if err := graph.putBase(checkpoint); err != nil {
+				return MaterializedState{}, fmt.Errorf("publish durable snapshot base %s: %w", value.row.ID, err)
+			}
+		} else if checkpoint.Parent == nil {
 			if err := graph.PutRoot(checkpoint); err != nil {
 				return MaterializedState{}, fmt.Errorf("publish durable root %s: %w", value.row.ID, err)
 			}
@@ -187,6 +198,44 @@ func (materializer *DurableCheckpointMaterializer) readItems(ctx context.Context
 		return codec.DecodeDelta(data)
 	}
 	return codec.DecodeResponse(data)
+}
+
+// readSnapshot loads the self-contained replay base of one row and binds it to
+// that row. The decoded depth and lineage must be the row's own, because the
+// ancestors they describe are not read again.
+func (materializer *DurableCheckpointMaterializer) readSnapshot(ctx context.Context, scopeID string, row DurableCheckpoint, codec CheckpointBlobCodec) (CheckpointSnapshot, error) {
+	reference := *row.MaterializedSnapshotBlob
+	if reference.MediaType != "application/json" {
+		return CheckpointSnapshot{}, fmt.Errorf("unsupported media type %q", reference.MediaType)
+	}
+	data, err := materializer.Blobs.Read(ctx, scopeID, reference)
+	if err != nil {
+		return CheckpointSnapshot{}, err
+	}
+	// Readers verify bytes against the reference; repeat it here so a snapshot
+	// is never trusted as a replay base on the strength of an adapter alone.
+	if int64(len(data)) != reference.ByteLength || sha256.Sum256(data) != reference.Digest {
+		return CheckpointSnapshot{}, errors.New("digest or length mismatch")
+	}
+	snapshot, err := codec.DecodeSnapshot(data)
+	if err != nil {
+		return CheckpointSnapshot{}, err
+	}
+	if snapshot.Depth != row.Depth || int64(len(snapshot.Lineage)) != int64(row.Depth)+1 || snapshot.Lineage[len(snapshot.Lineage)-1] != Handle(row.ID) {
+		return CheckpointSnapshot{}, errors.New("depth or lineage does not match its checkpoint")
+	}
+	// The walk stops here, so the parent link is never followed. It must still
+	// agree with the lineage that replaces it; a full walk would have followed
+	// the link and rejected a snapshot whose lineage named a different parent.
+	if row.ParentID != nil && snapshot.Lineage[len(snapshot.Lineage)-2] != Handle(*row.ParentID) {
+		return CheckpointSnapshot{}, errors.New("lineage does not match its checkpoint parent")
+	}
+	// Publication derives the row digest from this exact handle list.
+	lineage, err := json.Marshal(snapshot.Lineage)
+	if err != nil || sha256.Sum256(lineage) != row.CanonicalLineageDigest {
+		return CheckpointSnapshot{}, errors.New("lineage does not match its checkpoint digest")
+	}
+	return snapshot, nil
 }
 
 func (materializer *DurableCheckpointMaterializer) readPatch(ctx context.Context, scopeID string, reference CheckpointBlobReference, codec CheckpointBlobCodec) (SettingsPatch, error) {

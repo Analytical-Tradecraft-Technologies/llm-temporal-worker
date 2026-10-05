@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -66,6 +67,21 @@ func (r *Repository) writeBlob(ctx context.Context, stream string, data []byte) 
 		return "", ErrCorrupt
 	}
 	return key, nil
+}
+
+// readReferencedBlob reads a blob that a committed pointer or signed reference
+// names. Publication writes the blob before the reference, and nothing deletes
+// a referenced blob, so a definite miss here is lost payload, not an absent
+// record. It is reported as ErrCorrupt and deliberately does not match
+// ErrNotFound: callers treat ErrNotFound as "no such record" and would start
+// the work again. Unavailable, throttled, timed-out and cancelled reads stay
+// retryable storage errors.
+func (r *Repository) readReferencedBlob(ctx context.Context, stream, key string) ([]byte, error) {
+	data, err := r.readBlob(ctx, stream, key)
+	if errors.Is(err, contracts.ErrNotFound) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+		return nil, fmt.Errorf("%w: referenced blob is missing: %v", ErrCorrupt, err)
+	}
+	return data, err
 }
 
 func (r *Repository) readBlob(ctx context.Context, stream, key string) ([]byte, error) {

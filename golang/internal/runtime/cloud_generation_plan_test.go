@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 )
 
@@ -130,5 +132,81 @@ func TestCloudGenerationPlanMaterializesOutputCap(t *testing.T) {
 	}
 	if !seen || f.submits.Load() != before {
 		t.Fatal("preflight skipped planning or performed paid work")
+	}
+}
+
+// Selection falls through to a later route with a larger context window, so
+// the plan must not request compaction while such a route can take the
+// transcript. It must once that route is blocked or too small as well.
+func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
+	// The fixture counts 10 input tokens and reserves 16 output tokens.
+	f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
+		model := b.source.value.Routes.Models["alias"]
+		small := model.Routes[0]
+		small.ID, small.Model, small.ContextTokens = "small-context", "small-model", 25
+		model.Routes[0].ContextTokens = 26
+		model.Routes = append([]routing.Route{small}, model.Routes...)
+		b.source.value.Routes.Models["alias"] = model
+		b.estimator.Tokenizer = func(llm.Request, routing.Candidate) (int64, error) { return 10, nil }
+	})
+	shared := &sharedHealthFixture{}
+	f.cap.ProviderRouteStatus = shared
+	var models []string
+	invoke := f.adapter.invoke
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		models = append(models, call.Model)
+		return invoke(ctx, call, o)
+	}
+	policy := json.RawMessage(`{"recent_turns":0}`)
+	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	f.restart(t)
+	parent := f.finish(t)
+	handle := parent.Generate.Checkpoint.Handle
+	f.request.Parent = &handle
+	f.request.OperationKey = "next-turn"
+	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.now = f.now.Add(time.Second)
+	f.restart(t)
+	decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request)
+	if err != nil || decision.CompactBeforeGenerate {
+		t.Fatalf("compaction requested although the second route fits: %+v %v", decision, err)
+	}
+	f.finish(t)
+	if len(models) != 2 || models[0] != "provider-model" || models[1] != "provider-model" {
+		t.Fatalf("generation did not use the larger route: %v", models)
+	}
+
+	// A blocked route cannot take the transcript, so only the small one is left.
+	snapshot, err := f.cap.Snapshot.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := snapshot.Routes.Models["alias"].Routes[1]
+	f.request.OperationKey = "blocked-turn"
+	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: large.ID, EndpointID: large.EndpointID, EndpointAccountHMAC: large.EndpointAccountHMAC, Provider: large.Provider, EndpointFamily: large.Family, Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
+	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
+		t.Fatalf("blocked larger route still counted as fitting: %+v %v", decision, err)
+	}
+	shared.status = control.RouteStatus{}
+
+	// A route that fits but that selection would skip at compilation must not
+	// suppress compaction either: generation would end without a route.
+	f.adapter.compile = func(provider.CompileInput) (provider.Call, error) {
+		return provider.Call{}, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNextRoute, "unsupported")
+	}
+	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
+		t.Fatalf("uncompilable larger route still counted as usable: %+v %v", decision, err)
+	}
+	f.adapter.compile = nil
+	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || decision.CompactBeforeGenerate {
+		t.Fatalf("usable larger route no longer suppresses compaction: %+v %v", decision, err)
+	}
+
+	providers := f.runtime.execution.admission.planning.providers
+	model := providers.catalog.Models["alias"]
+	model.Routes[1].ContextTokens = 25
+	providers.catalog.Models["alias"] = model
+	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
+		t.Fatalf("no route fits but compaction was not requested: %+v %v", decision, err)
 	}
 }

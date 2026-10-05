@@ -219,7 +219,7 @@ func loadManifest(path string) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("manifest cannot be read")
 	}
 	var manifest Manifest
-	if err := yaml.Load(data, &manifest, yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
+	if err := yaml.Load(data, &manifest, yaml.WithKnownFields(), yaml.WithUniqueKeys()); err != nil {
 		return Manifest{}, fmt.Errorf("manifest is not valid YAML")
 	}
 	return manifest, nil
@@ -231,7 +231,7 @@ func loadMetadata(path string) (Metadata, error) {
 		return Metadata{}, err
 	}
 	var metadata Metadata
-	if err := yaml.Load(data, &metadata, yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
+	if err := yaml.Load(data, &metadata, yaml.WithKnownFields(), yaml.WithUniqueKeys()); err != nil {
 		return Metadata{}, err
 	}
 	return metadata, nil

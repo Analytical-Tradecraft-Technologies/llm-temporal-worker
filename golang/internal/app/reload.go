@@ -32,9 +32,20 @@ func IsPublishedReloadError(err error) bool {
 	return errors.As(err, &published)
 }
 
+// ErrReloadDeferred reports that ReloadFileIf read the file but its caller
+// declined the bytes, so nothing was compiled or published.
+var ErrReloadDeferred = errors.New("configuration reload deferred")
+
 // ReloadFile reads a complete replacement before compiling it. A read or
 // validation error leaves the currently published snapshot untouched.
 func (app *App) ReloadFile(ctx context.Context, path string) error {
+	return app.ReloadFileIf(ctx, path, nil)
+}
+
+// ReloadFileIf is ReloadFile with an optional gate over the bytes read. The
+// file watcher uses it to refuse a file that changed again after it was last
+// seen stable; accept sees exactly the bytes that would be compiled.
+func (app *App) ReloadFileIf(ctx context.Context, path string, accept func([]byte) bool) error {
 	if path == "" {
 		return fmt.Errorf("configuration path is required")
 	}
@@ -49,6 +60,9 @@ func (app *App) ReloadFile(ctx context.Context, path string) error {
 	}
 	if len(data) > maxReloadFileBytes {
 		return fmt.Errorf("configuration file exceeds safe size")
+	}
+	if accept != nil && !accept(data) {
+		return ErrReloadDeferred
 	}
 	return app.Reload(ctx, data)
 }

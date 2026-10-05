@@ -37,6 +37,7 @@ type Call struct {
 	Model        string
 	ServiceClass llm.ServiceClass
 	SDKParams    any
+	OutputSchema json.RawMessage
 	Metadata     CallMetadata
 }
 
@@ -49,6 +50,9 @@ type Observer interface {
 
 `SDKParams` may contain only the parameter type for the adapter's official SDK.
 It never crosses the adapter package boundary or enters Temporal history.
+`OutputSchema` is the caller's `json_schema` output schema, set when the
+adapter sent the provider a lowered form of it; the lift validates the final
+JSON against it and it stays in the worker process like `SDKParams`.
 `CallMetadata` contains the redacted facts needed to validate the compiled call,
 including schema digests, estimated bytes, capability version, provider tier
 value, and whether opaque state is required in the response.
@@ -124,7 +128,9 @@ other.
 - A continuation may use a stored response/conversation identifier only when it
   is pinned to the same endpoint, account, family, and compatible model.
 - Strict structured output uses the provider's JSON Schema form after local
-  subset validation.
+  subset validation. The provider requires `text.format.name`; when the
+  caller omits `output.format.name` the adapter sends the constant `response`,
+  so the wire body and its digests stay deterministic.
 - The completed response is validated against the requested JSON object or
   JSON Schema format before it enters the normalized response. JSON-object mode
   requires a valid top-level object; a provider acknowledgement alone is not
@@ -147,7 +153,9 @@ other.
   messages with their call IDs.
 - Multimodal parts use only the endpoint's declared compatible wire forms.
 - Structured output chooses native response format or a strict tool emulation
-  only when the capability profile declares semantic equivalence.
+  only when the capability profile declares semantic equivalence. A
+  `json_schema` format without a caller name is sent with the constant name
+  `response`, as for Responses.
 - Provider-specific routing bodies are typed namespaced extensions; they cannot
   be injected as arbitrary JSON.
 
@@ -169,6 +177,39 @@ usage/cost lifter.
   round-trip byte-for-byte and stay pinned to the compatible Anthropic route.
 - JSON Schema constraints are lowered through native output/tool facilities
   only when the exact endpoint profile supports the required strictness.
+- Claude structured output (`output_config.format`) returns a 400 for schema
+  keywords outside its subset, so the Anthropic and Bedrock Messages adapters
+  send a lowered schema, following the transform in the official SDK:
+  - keywords the provider rejects (`minLength`, `maxLength`, `minimum`,
+    `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`,
+    `maxItems`, `minItems` above 1, unsupported `format` values, and every
+    other keyword outside the provider subset) are removed and appended to
+    that schema's `description` as `{keyword: value, ...}` with sorted keys,
+    so the model still sees them and equal schemas lower to equal bytes;
+  - `oneOf` becomes `anyOf`, and a `$ref` keeps no sibling keywords;
+  - an object without `additionalProperties` is closed with
+    `additionalProperties: false`;
+  - an object that explicitly sets `additionalProperties` to `true` or to a
+    schema cannot be represented. Strict portability rejects it at compile.
+    Best effort closes it when it declares `properties`, which only narrows
+    the answer, and rejects it otherwise;
+  - recursive schemas, and references other than `#/$defs/<name>`, are
+    rejected at compile in both modes.
+
+  Rejections are `unsupported_capability` compile errors raised before
+  dispatch, so another route can be chosen. Because the provider enforces a
+  looser schema than the caller wrote, the lift validates the completed
+  response against the caller's original schema, exactly as the Responses and
+  Chat lifts do; JSON that violates it is a provider invalid-response error.
+
+### Amazon Bedrock Messages
+
+- Lowering and lifting follow Anthropic Messages, including the structured
+  output schema lowering and final validation above.
+- Image and document parts must carry inline bytes. Claude on Amazon Bedrock
+  does not accept URL sources and the worker does not fetch URLs, so a URL
+  image or document is an `unsupported_capability` compile error in strict
+  and best-effort mode alike. Bedrock Converse accepts text parts only.
 
 Reasoning controls lower the same way on Anthropic Messages and Bedrock
 Messages:
