@@ -138,9 +138,28 @@ the candidate argument allows provider-family/model-specific tokenization. A
 hook error or negative result fails closed. When no hook is configured, the
 fallback estimator uses UTF-8 byte length plus structural overhead and a
 configurable safety factor. It must never use the model's average completion
-length. The current catalog has no media-unit price, so media content does not
-create a separate estimate component until that pricing contract is added
-explicitly.
+length.
+
+Providers bill media on its decoded content (pixels or pages), not on the
+bytes the worker serializes, and a URL contributes only its string to the
+UTF-8 estimate. The fallback estimator therefore adds a conservative per-part
+input-token allowance for every image or document part (URL, inline bytes, or
+blob reference) in instructions, messages, and tool results:
+
+| Part | Allowance | Basis |
+|---|---|---|
+| Image | 6,000 tokens | Above the largest documented per-image counts of supported providers (about 1,600 standard, about 2,500 patch-based, about 4,800 high-resolution). |
+| Document | 300,000 tokens | 100 pages (the common PDF page limit) x 3,000 tokens per page (extracted text plus a possible page image). |
+
+The allowance is added to the serialized-size estimate, so text-only requests
+are unchanged. When the candidate declares a context window, the allowance is
+capped at the room left after the text estimate and the reserved output and
+reasoning: the provider must reject input beyond its window, so the allowance
+alone never excludes a candidate for context size. Context-fit checks and
+compaction planning (`ValidateContext`, `CountInputTokens`) keep using the
+unadjusted estimate. A configured exact tokenizer is responsible for media and
+replaces the allowance. The catalog still has no media-unit price; media is
+priced as input tokens and settlement records actual usage.
 
 The request reservation is the maximum single-attempt estimate across every
 candidate the router is authorized to attempt, including all explicit
