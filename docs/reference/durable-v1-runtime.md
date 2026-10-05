@@ -42,10 +42,17 @@ also denies polling and terminal replay; drain paid work before revoking access.
 This policy does not cancel workflows or release their already-paid reservations.
 
 Checkpoint TTL comes from `state.continuation_retention`; maximum depth comes
-from `limits.continuation_depth` (at most 2,147,483,647). Other materialization
-limits retain the bounded defaults: 512 rows, 4,096 items and 16 MiB. The separate
-development fixture without this policy remains limited to configuration and
-readiness checks. Deployment authentication, IAM and live provider behavior still
+from `limits.continuation_depth` (at most 2,147,483,647), and the row bound is
+derived from it (`continuation_depth + 1`), so a depth above the materializer's
+512-row default stays effective. Other materialization limits retain the
+bounded defaults: 4,096 items and 16 MiB. A checkpoint at the maximum depth is
+readable but terminal: Prepare rejects a Generate or Compact on it, a lineage
+whose rows are exhausted, or a Generate whose parent plus append leaves no room
+for one output item, with non-retryable `llm_invalid_argument` before budget
+acquisition or dispatch, so a request that publication would refuse never
+pays. Publication repeats the same comparison against the actual output. The
+separate development fixture without this policy remains limited to
+configuration and readiness checks. Deployment authentication, IAM and live provider behavior still
 require release verification.
 
 ## Storage and execution boundaries

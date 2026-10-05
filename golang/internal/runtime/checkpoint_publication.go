@@ -41,18 +41,7 @@ func (capabilities V1RuntimeCapabilities) NewCheckpointPublication(keyring *stat
 	if limits.SnapshotInterval == 0 {
 		limits.SnapshotInterval = state.DefaultSnapshotInterval
 	}
-	if limits.MaxDepth == 0 {
-		limits.MaxDepth = 256
-	}
-	if limits.MaxRows == 0 {
-		limits.MaxRows = 512
-	}
-	if limits.MaxItems == 0 {
-		limits.MaxItems = 4096
-	}
-	if limits.MaxBytes == 0 {
-		limits.MaxBytes = 16 << 20
-	}
+	limits = lineageLimits(limits)
 	// A configured blob bound must also fit the codec's integer bound.
 	if limits.MaxBytes > 16<<20 {
 		return nil, checkpointPublicationError(provider.CodeConfiguration)
