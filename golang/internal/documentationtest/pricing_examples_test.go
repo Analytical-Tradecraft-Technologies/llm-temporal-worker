@@ -37,7 +37,7 @@ func TestDocumentedPriceCatalogExamplesAreUsable(t *testing.T) {
 				t.Fatalf("%s price example %d does not load: %v", relative, index, err)
 			}
 			for _, entry := range loaded.Catalog.Entries {
-				for _, component := range []pricing.PriceComponent{pricing.PriceComponentCacheWrite, pricing.PriceComponentPerRequest, pricing.PriceComponentReasoning} {
+				for _, component := range []pricing.PriceComponent{pricing.PriceComponentInput, pricing.PriceComponentOutput, pricing.PriceComponentCacheWrite, pricing.PriceComponentPerRequest, pricing.PriceComponentReasoning} {
 					if entry.ComponentUnknown(component) {
 						t.Errorf("%s price example %d leaves %s unknown, so its route can never be selected", relative, index, component)
 					}
