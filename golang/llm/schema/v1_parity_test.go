@@ -413,6 +413,32 @@ func TestV1SchemasShareDefinitions(t *testing.T) {
 	}
 }
 
+// TestV1ObjectFieldsRejectNullAndDuplicateKeys pins the negative side the
+// OCaml codec mirrors: a present provider_raw or details must be an object,
+// and open JSON may not repeat a key at any depth.
+func TestV1ObjectFieldsRejectNullAndDuplicateKeys(t *testing.T) {
+	compiled := readV1Schema(t, "generate-response.schema.json")
+	fixture := string(readV1Fixture(t, "generate-response-all-kinds.json"))
+	for name, replace := range map[string][2]string{
+		"provider_raw null":      {`"provider_raw": {"total_tokens": 645, "service_tier": "default", "details": {"audio_tokens": 0}}`, `"provider_raw": null`},
+		"provider_raw duplicate": {`"details": {"audio_tokens": 0}`, `"details": {"audio_tokens": 0, "audio_tokens": 1}`},
+		"details null":           {`"details": {"route_id": "route-primary"}`, `"details": null`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mutated := strings.Replace(fixture, replace[0], replace[1], 1)
+			if mutated == fixture {
+				t.Fatalf("fixture does not contain %q", replace[0])
+			}
+			if err := compiled.Validate([]byte(mutated)); err == nil {
+				t.Fatal("schema validation accepted the record")
+			}
+			if err := json.Unmarshal([]byte(mutated), new(llm.GenerateResponseV1)); err == nil {
+				t.Fatal("Go codec accepted the record")
+			}
+		})
+	}
+}
+
 // compileV1ExecutionSchema compiles a schema that references the request and
 // response schemas by $id, which schema.Parse deliberately does not resolve.
 func compileV1ExecutionSchema(t *testing.T, name string) func([]byte) error {

@@ -168,4 +168,18 @@ let () =
   in
   let plain = ok (V1_codec.encode_generate_response { generate with usage = Some { usage with provider_raw = None } }) in
   error (V1_codec.decode_generate_response (with_usage_field "provider_raw" (`String "raw") plain));
-  error (V1_codec.decode_generate_response (with_usage_field "unknown_tokens" (`Int 1) plain))
+  error (V1_codec.decode_generate_response (with_usage_field "unknown_tokens" (`Int 1) plain));
+  (* The Go codec and the schemas reject a present null and nested duplicate keys. *)
+  error (V1_codec.decode_generate_response (with_usage_field "provider_raw" `Null plain));
+  error (V1_codec.decode_generate_response (with_usage_field "provider_raw" (`Assoc ["details", `Assoc ["tokens", `Int 1; "tokens", `Int 2]]) plain));
+  ignore (ok (V1_codec.decode_generate_response (with_usage_field "provider_raw" (`Assoc ["details", `Assoc ["tokens", `Int 1]]) plain)));
+  let with_diagnostic_details value bytes =
+    let fields = Yojson.Safe.Util.to_assoc (Yojson.Safe.from_string (Bytes.to_string bytes)) in
+    let diagnostic = `Assoc ["code", `String "c"; "severity", `String "info"; "message", `String "m"; "details", value] in
+    Bytes.of_string (Yojson.Safe.to_string (`Assoc (("diagnostics", `List [diagnostic]) :: List.remove_assoc "diagnostics" fields)))
+  in
+  ignore (ok (V1_codec.decode_generate_response (with_diagnostic_details (`Assoc ["k", `String "v"]) plain)));
+  error (V1_codec.decode_generate_response (with_diagnostic_details `Null plain));
+  let compact_plain = ok (V1_codec.encode_compaction_response { compact with usage = Some { usage with provider_raw = None } }) in
+  error (V1_codec.decode_compaction_response (with_usage_field "provider_raw" `Null compact_plain));
+  error (V1_codec.decode_compaction_response (with_diagnostic_details `Null compact_plain))

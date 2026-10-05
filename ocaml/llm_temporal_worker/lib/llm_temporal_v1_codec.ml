@@ -284,7 +284,8 @@ let usage_of_json context value =
   let* fields = closed context ["input_tokens"; "output_tokens"; "reasoning_tokens"; "cache_read_tokens"; "cache_write_tokens"; "provider_raw"] value in
   let get name = required context name fields >>= int64 (context ^ "." ^ name) >>= fun value -> let* () = nonnegative (context ^ "." ^ name) value in Ok value in
   let* input_tokens = get "input_tokens" in let* output_tokens = get "output_tokens" in let* reasoning_tokens = get "reasoning_tokens" in let* cache_read_tokens = get "cache_read_tokens" in let* cache_write_tokens = get "cache_write_tokens" in
-  let* provider_raw = match optional "provider_raw" fields with None | Some `Null -> Ok None | Some value -> let* value = Llm_temporal_codec.unique_object (context ^ ".provider_raw") value in Ok (Some value) in
+  (* Like the Go codec, a present provider_raw must be an object (never null) without duplicate keys at any depth. *)
+  let* provider_raw = match optional "provider_raw" fields with None -> Ok None | Some value -> let* fields = Llm_temporal_codec.unique_object (context ^ ".provider_raw") value in let* () = Llm_temporal_codec.validate_unique_json (context ^ ".provider_raw") value in Ok (Some fields) in
   Ok { input_tokens; output_tokens; reasoning_tokens; cache_read_tokens; cache_write_tokens; provider_raw }
 
 let diagnostic_to_json (value : diagnostic) =
@@ -297,7 +298,7 @@ let diagnostic_of_json context value =
   let* severity = required context "severity" fields >>= string (context ^ ".severity") >>= fun value -> match value with "info" -> Ok Info | "warning" -> Ok Warning | "error" -> Ok Diagnostic_error | _ -> Error (errorf "%s.severity is invalid" context) in
   let* message = required context "message" fields >>= string (context ^ ".message") >>= fun value -> nonempty (context ^ ".message") value in
   let* path = match optional "path" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".path") value in Ok (Some value) in
-  let* details = match optional "details" fields with None | Some `Null -> Ok None | Some value -> let* values = Llm_temporal_codec.unique_object (context ^ ".details") value in let* values = map_result (fun (name, value) -> let* value = string (context ^ ".details." ^ name) value in Ok (name, value)) values in Ok (Some values) in
+  let* details = match optional "details" fields with None -> Ok None | Some value -> let* values = Llm_temporal_codec.unique_object (context ^ ".details") value in let* values = map_result (fun (name, value) -> let* value = string (context ^ ".details." ^ name) value in Ok (name, value)) values in Ok (Some values) in
   Ok { code = Diagnostic_code.of_string code; severity; message; path; details }
 
 let route_to_v1_json (value : route) =
