@@ -34,7 +34,10 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	response.Service.Requested = candidate.candidate.RequestedClass
 	response.Service.Attempted = candidate.candidate.AttemptedClass
 	response.Service.FallbackIndex = candidate.candidate.FallbackIndex
-	if response.Service.ProviderValue == "" {
+	// The request tier stands in for a missing label only when the adapter
+	// classified the response. With no actual class the provider reported no
+	// mappable tier, and the request tier must not be recorded as its label.
+	if response.Service.ProviderValue == "" && response.Service.Actual != nil {
 		response.Service.ProviderValue = call.Metadata.ProviderTier
 	}
 	actual := pricing.Cost{}
