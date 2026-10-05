@@ -165,7 +165,10 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err := observer.BeforePossibleWrite(callContext); err != nil {
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
-	response, err := adapter.client.converse.Converse(callContext, &params)
+	response, panicked, err := converseRecovered(callContext, adapter.client.converse, &params)
+	if panicked != nil {
+		return provider.Result{}, invalidResponseError(call, "", fmt.Sprintf("provider SDK panicked while handling the response: %v", panicked))
+	}
 	if err != nil {
 		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
 			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
@@ -191,6 +194,22 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	}
 	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(lifted.Output)})
 	return provider.Result{Response: lifted}, nil
+}
+
+// converseRecovered runs the one Converse operation and reports an SDK panic
+// instead of letting it unwind the Activity. The SDK builds the request from
+// typed values this package constructed, so a panic there comes from decoding
+// what the provider returned (for example a content block member the vendored
+// SDK does not know). By then the provider has accepted and billed the
+// request, so the caller maps it to an accepted invalid response.
+func converseRecovered(ctx context.Context, service converseService, params *bedrockruntime.ConverseInput) (response *bedrockruntime.ConverseOutput, panicked any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			response, panicked, err = nil, recovered, nil
+		}
+	}()
+	response, err = service.Converse(ctx, params)
+	return response, nil, err
 }
 
 func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntime.ConverseOutput, requestID string) (llm.Response, error) {
@@ -277,12 +296,25 @@ func liftStatus(reason types.StopReason, hasToolCalls bool) (llm.ResponseStatus,
 			return llm.ResponseStatusToolCalls, nil
 		}
 		return llm.ResponseStatusCompleted, nil
-	case types.StopReasonToolUse, types.StopReasonMalformedToolUse:
+	case types.StopReasonToolUse:
 		if !hasToolCalls {
 			return "", fmt.Errorf("provider stop reason %q did not contain a tool call", reason)
 		}
 		return llm.ResponseStatusToolCalls, nil
+	case types.StopReasonMalformedToolUse:
+		// The model attempted a tool call the service could not parse, so
+		// the block is usually absent. Without one this is an unfinished
+		// generation, not a provider protocol failure.
+		if hasToolCalls {
+			return llm.ResponseStatusToolCalls, nil
+		}
+		return llm.ResponseStatusLength, nil
 	case types.StopReasonMaxTokens, types.StopReasonModelContextWindowExceeded:
+		return llm.ResponseStatusLength, nil
+	case types.StopReasonMalformedModelOutput:
+		// The model stopped without a usable answer. As with an incomplete
+		// Responses result, the paid response is kept as an unfinished one and
+		// the raw stop reason stays in the provider facts.
 		return llm.ResponseStatusLength, nil
 	case types.StopReasonGuardrailIntervened, types.StopReasonContentFiltered:
 		return llm.ResponseStatusRefused, nil

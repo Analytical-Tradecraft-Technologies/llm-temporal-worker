@@ -16,6 +16,9 @@ An SDK response that is nil without an accompanying error is treated as an
 accepted malformed response and becomes a safe provider-invalid-response
 error. Adapters must never dereference a provider response before this guard;
 an Activity panic would bypass the operation ledger's terminal classification.
+The Bedrock Converse adapter applies the same rule to a panic raised inside the
+SDK while it decodes a response: the panic is recovered and classified as an
+accepted provider-invalid-response error.
 
 Every SDK client is constructed with automatic retries disabled. This prevents
 an SDK retry from escaping the operation ledger, spending twice, or using a

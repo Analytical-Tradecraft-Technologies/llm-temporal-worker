@@ -222,7 +222,9 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 
 func liftStatus(finishReason string, hasToolCalls, hasRefusal bool) (llm.ResponseStatus, error) {
 	switch finishReason {
-	case "stop":
+	// OpenRouter documents finish_reason as nullable. A response that names no
+	// reason is classified by its content, exactly like a normal stop.
+	case "stop", "":
 		if hasRefusal {
 			return llm.ResponseStatusRefused, nil
 		}
