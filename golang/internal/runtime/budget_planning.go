@@ -189,9 +189,7 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 	quote.Entry.UnknownComponents = append([]pricing.PriceComponent(nil), entry.UnknownComponents...)
 	result.Route.PriceVersion = entry.Version
 	// Estimate the provider model, attempted tier and exact compiled input.
-	resolved, _ := llm.NormalizeRequest(semantic)
-	resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
-	resolved.ServiceClassFallbacks = nil
+	resolved := resolveCandidateRequest(semantic, candidate, call.Adapter)
 	digest, err := llm.RequestDigest(resolved)
 	if err != nil || digest != call.Call.Metadata.SchemaDigest {
 		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
