@@ -11,19 +11,21 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
 
-func lowerRequest(request llm.Request, profile Profile, serviceTier string) (openai.ChatCompletionNewParams, error) {
+// lowerRequestMap builds the intended Chat Completions wire body. lowerRequest
+// carries it into the SDK parameter type; the two must stay wire-equivalent.
+func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (map[string]any, error) {
 	messages := make([]any, 0, len(request.Instructions)+len(request.Input))
 	toolCalls := make(map[string]struct{})
 	for index, instruction := range request.Instructions {
 		message, err := lowerInstruction(instruction, profile.applicationInstructionRole())
 		if err != nil {
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("instruction %d: %w", index, err)
+			return nil, fmt.Errorf("instruction %d: %w", index, err)
 		}
 		messages = append(messages, message)
 	}
 	for index, item := range request.Input {
 		if err := appendInputItem(&messages, item, toolCalls); err != nil {
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("input item %d: %w", index, err)
+			return nil, fmt.Errorf("input item %d: %w", index, err)
 		}
 	}
 	messages = dropEmptyAssistantMessages(messages)
@@ -34,7 +36,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	for wire, raw := range profile.WireDefaults {
 		var value any
 		if err := json.Unmarshal(raw, &value); err != nil {
-			return openai.ChatCompletionNewParams{}, fmt.Errorf("wire default %q: %w", wire, err)
+			return nil, fmt.Errorf("wire default %q: %w", wire, err)
 		}
 		requestMap[wire] = value
 	}
@@ -43,29 +45,29 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	}
 	if request.Output != nil {
 		if err := lowerOutput(*request.Output, requestMap); err != nil {
-			return openai.ChatCompletionNewParams{}, err
+			return nil, err
 		}
 	}
 	if request.Sampling != nil {
 		if err := lowerSampling(*request.Sampling, requestMap); err != nil {
-			return openai.ChatCompletionNewParams{}, err
+			return nil, err
 		}
 	}
 	if request.Reasoning != nil {
 		if err := lowerReasoning(*request.Reasoning, requestMap); err != nil {
-			return openai.ChatCompletionNewParams{}, err
+			return nil, err
 		}
 	}
 	if len(request.Tools) > 0 {
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
-			return openai.ChatCompletionNewParams{}, err
+			return nil, err
 		}
 		requestMap["tools"] = tools
 	}
 	policy, err := lowerToolPolicy(request.ToolPolicy, len(request.Tools) > 0)
 	if err != nil {
-		return openai.ChatCompletionNewParams{}, err
+		return nil, err
 	}
 	if len(request.Tools) > 0 && policy != nil {
 		requestMap["tool_choice"] = policy
@@ -74,9 +76,17 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
 	}
 	if request.Continuation != nil {
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("continuation is not representable by Chat Completions")
+		return nil, fmt.Errorf("continuation is not representable by Chat Completions")
 	}
 	if err := lowerExtensions(profile, request.Extensions, requestMap); err != nil {
+		return nil, err
+	}
+	return requestMap, nil
+}
+
+func lowerRequest(request llm.Request, profile Profile, serviceTier string) (openai.ChatCompletionNewParams, error) {
+	requestMap, err := lowerRequestMap(request, profile, serviceTier)
+	if err != nil {
 		return openai.ChatCompletionNewParams{}, err
 	}
 	encoded, err := json.Marshal(requestMap)
@@ -86,6 +96,15 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	var params openai.ChatCompletionNewParams
 	if err := json.Unmarshal(encoded, &params); err != nil {
 		return openai.ChatCompletionNewParams{}, fmt.Errorf("openai chat parameter union: %w", err)
+	}
+	if name := namedToolChoice(requestMap["tool_choice"]); name != "" {
+		// The SDK union decodes a named function choice as its allowed-tools
+		// variant and drops the function name, so select the variant explicitly.
+		params.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfFunctionToolChoice: &openai.ChatCompletionNamedToolChoiceParam{
+				Function: openai.ChatCompletionNamedToolChoiceFunctionParam{Name: name},
+			},
+		}
 	}
 	// The official parameter union intentionally ignores unknown compatible
 	// fields. Preserve profile-owned fields (such as OpenRouter's provider
@@ -408,6 +427,18 @@ func lowerToolPolicy(policy llm.ToolPolicy, hasTools bool) (any, error) {
 	default:
 		return nil, fmt.Errorf("tool policy mode %q is invalid", mode)
 	}
+}
+
+// namedToolChoice returns the function name of a lowered named tool choice,
+// or "" when choice is any other tool-choice shape.
+func namedToolChoice(choice any) string {
+	named, ok := choice.(map[string]any)
+	if !ok || named["type"] != "function" {
+		return ""
+	}
+	function, _ := named["function"].(map[string]any)
+	name, _ := function["name"].(string)
+	return name
 }
 
 func lowerOutput(output llm.OutputSpec, target map[string]any) error {

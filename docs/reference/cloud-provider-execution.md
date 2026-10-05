@@ -38,6 +38,16 @@ provided by this helper.
 
 Completed, truncated, refused and tool-call responses retain their actual
 provider response status. Cache eligibility remains the cache layer's decision.
+
+Tool-call IDs stay unique for a checkpoint lineage. Some providers number calls
+from zero in every response, so a Generate response can repeat the ID of an
+earlier, already resolved call. Before the response is saved, each such ID is
+replaced by `call_` followed by 32 hexadecimal characters derived from the
+attempt's operation ID and the provider's ID; a result for that call in the same
+output follows it. The saved, cached and published output all carry the
+replacement, and the caller answers with it. IDs that do not collide with the
+request transcript are never changed. Two calls sharing an ID within one
+response are not separated.
 Known exact costs settle every reserved window together. Missing cost evidence
 keeps the conservative charge. Only an explicitly classified rejection or
 pre-dispatch failure has known zero cost. Provider errors persist safe enums,

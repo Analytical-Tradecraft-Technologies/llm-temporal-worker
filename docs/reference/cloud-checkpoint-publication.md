@@ -13,7 +13,9 @@ work. The signed continuation handle is scoped to the caller, and a child cannot
 outlive its parent. Configured depth, row, item and byte limits bound publication.
 
 Generation records the current append, settings patch and model output, keeping
-exact decimal settings intact. Parent replay verifies the materializer's opaque
+exact decimal settings intact. The runtime applies the same transcript
+validation to provider output when the paid response is saved, so an unusable
+response fails the request there instead of reaching publication. Parent replay verifies the materializer's opaque
 storage scope before attaching the authorized tenant and project. Materialized
 storage scope is not itself a caller identity.
 

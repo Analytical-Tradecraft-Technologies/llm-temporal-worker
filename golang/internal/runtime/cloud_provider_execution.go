@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -168,7 +169,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		copy.Retry = provider.RetryNever
 		err = &copy
 	}
-	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, outcome, err, false)
+	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, call.transcript, outcome, err, false)
 	if err != nil && observer.saveErr != nil {
 		return ProviderExecutionResult{}, cloudRuntimeError(observer.saveErr, true)
 	}
@@ -196,7 +197,7 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 	if (stage == cloudstate.ExecutionClaiming || stage == cloudstate.ExecutionSubmitting) && executor.clock().Before(saved.Execution.RecoverAfter) {
 		return executor.result(saved), nil
 	}
-	planned, err := executor.reconstruct(ctx, scope, id, saved.Plan, generate, compact)
+	planned, transcript, err := executor.reconstruct(ctx, scope, id, saved.Plan, generate, compact)
 	if err != nil {
 		return ProviderExecutionResult{}, err
 	}
@@ -227,60 +228,62 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		return executor.save(ctx, scope, id, saved, next)
 	}
-	return executor.completeCall(ctx, scope, id, saved, planned.Call, outcome, nil, true)
+	return executor.completeCall(ctx, scope, id, saved, planned.Call, transcript, outcome, nil, true)
 }
 
-func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, plan cloudstate.BudgetPlan, generate durable.GenerateReplay, compact durable.CompactReplay) (PlannedProviderCall, error) {
+func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, plan cloudstate.BudgetPlan, generate durable.GenerateReplay, compact durable.CompactReplay) (PlannedProviderCall, []llm.Item, error) {
 	record, err := executor.store.Read(ctx, scope, id)
 	if err != nil {
-		return PlannedProviderCall{}, cloudRuntimeError(err, false)
+		return PlannedProviderCall{}, nil, cloudRuntimeError(err, false)
 	}
 	if record.Request.Scope != scope || record.Request.ID != id || record.Request.Kind != plan.Kind {
-		return PlannedProviderCall{}, executionError(provider.CodeStateCorrupt)
+		return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 	}
 	linked, err := cloudRequestAttempt(record)
 	if err != nil {
-		return PlannedProviderCall{}, err
+		return PlannedProviderCall{}, nil, err
 	}
 	if linked != nil && plan.Route.OperationID != durable.OperationID(linked.ID) {
-		return PlannedProviderCall{}, executionError(provider.CodeStateCorrupt)
+		return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 	}
 	binding := ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RequestDigest: plan.RequestDigest, CandidateID: plan.Estimate.CandidateID,
 		Route: plan.Route, Family: plan.Family, CapabilityVersion: plan.CapabilityVersion, ProviderTier: plan.ProviderTier, RequestedClass: plan.RequestedClass, AttemptedClass: plan.AttemptedClass}
 	if plan.Kind == "generate" {
 		var request llm.GenerateRequestV1
 		if json.Unmarshal(record.Request.Manifest, &request) != nil || request.Context.Tenant != scope.Tenant || request.Context.Project != scope.Project {
-			return PlannedProviderCall{}, executionError(provider.CodeStateCorrupt)
+			return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 		}
 		prepared, err := PrepareGenerateInput(ctx, request, generate)
 		if err != nil {
-			return PlannedProviderCall{}, err
+			return PlannedProviderCall{}, nil, err
 		}
 		key, err := cloudProviderOperationKey(record, request.OperationKey)
 		if err != nil {
-			return PlannedProviderCall{}, err
+			return PlannedProviderCall{}, nil, err
 		}
 		prepared.Request.OperationKey = key
 		binding.OperationKeyDigest = ProviderRecoveryOperationKeyDigest(key)
-		return executor.admission.recovery.Generate(ctx, prepared, binding)
+		planned, err := executor.admission.recovery.Generate(ctx, prepared, binding)
+		return planned, prepared.Request.Input, err
 	}
 	var request llm.CompactRequestV1
 	if json.Unmarshal(record.Request.Manifest, &request) != nil || request.Context.Tenant != scope.Tenant || request.Context.Project != scope.Project {
-		return PlannedProviderCall{}, executionError(provider.CodeStateCorrupt)
+		return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 	}
 	prepared, err := PrepareCompactInput(ctx, request, compact)
 	if err != nil {
-		return PlannedProviderCall{}, err
+		return PlannedProviderCall{}, nil, err
 	}
 	key, err := cloudProviderOperationKey(record, request.OperationKey)
 	if err != nil {
-		return PlannedProviderCall{}, err
+		return PlannedProviderCall{}, nil, err
 	}
 	if prepared.Request != nil {
 		prepared.Request.OperationKey = key
 	}
 	binding.OperationKeyDigest = ProviderRecoveryOperationKeyDigest(key)
-	return executor.admission.recovery.Compact(ctx, prepared, binding)
+	planned, err := executor.admission.recovery.Compact(ctx, prepared, binding)
+	return planned, nil, err
 }
 
 type executionObserver struct {
@@ -313,7 +316,7 @@ func (*executionObserver) AfterResponseHeaders(context.Context, provider.Respons
 }
 func (*executionObserver) OnProgress(context.Context, provider.Progress) {}
 
-func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, call provider.Call, outcome provider.ResumableResult, callErr error, polling bool) (ProviderExecutionResult, error) {
+func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, call provider.Call, transcript []llm.Item, outcome provider.ResumableResult, callErr error, polling bool) (ProviderExecutionResult, error) {
 	next := saved.Execution
 	next.PollAfter, next.Failure = time.Time{}, nil
 	if callErr == nil {
@@ -353,6 +356,9 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			next.PollAfter = executor.clock().Add(delay).UTC()
 		case provider.ResumableCompleted:
 			next.Stage, next.Response = cloudstate.ExecutionSucceeded, &outcome.Result.Response
+			if saved.Plan.Kind == "generate" {
+				next.Response.Output = uniqueToolCallIDs(saved.Plan.Route.OperationID, transcript, next.Response.Output)
+			}
 			priceExecutionResponse(saved.Plan, next.Response)
 		case provider.ResumableFailed:
 			next.Stage = cloudstate.ExecutionFailed
@@ -526,6 +532,90 @@ func minExecutionObservationTime(now, recoverAfter time.Time) time.Time {
 		return next
 	}
 	return recoverAfter
+}
+
+// uniqueToolCallIDs keeps tool-call IDs unique for a lineage. Providers that
+// number calls from zero in every response reuse the ID of an earlier,
+// already resolved call; the saved response replaces such an ID, and any
+// result for it in the same output, before settlement so the paid output can
+// be published and continued. The replacement depends only on the attempt and
+// the provider's ID, so a repeated poll saves the same response. Two calls
+// sharing an ID within one response are ambiguous: they still share one ID
+// afterwards and the output stays invalid.
+func uniqueToolCallIDs(operation durable.OperationID, transcript, output []llm.Item) []llm.Item {
+	lineage := make(map[string]struct{})
+	for _, item := range transcript {
+		if call, ok := toolCallValue(item); ok {
+			lineage[call.ID] = struct{}{}
+		}
+	}
+	used := make(map[string]struct{}, len(lineage))
+	for id := range lineage {
+		used[id] = struct{}{}
+	}
+	var reused []string
+	for _, item := range output {
+		call, ok := toolCallValue(item)
+		if !ok {
+			continue
+		}
+		if _, exists := lineage[call.ID]; exists && call.ID != "" {
+			reused = append(reused, call.ID)
+		}
+		used[call.ID] = struct{}{}
+	}
+	if len(reused) == 0 {
+		return output
+	}
+	renamed := make(map[string]string, len(reused))
+	for _, id := range reused {
+		if _, done := renamed[id]; done {
+			continue
+		}
+		for salt := 0; ; salt++ {
+			digest := sha256.Sum256([]byte(fmt.Sprintf("tool-call-id-v1/%s/%d/%s", operation, salt, id)))
+			// 37 characters of [a-z0-9_] fit every provider's tool-call ID rules.
+			candidate := "call_" + hex.EncodeToString(digest[:16])
+			if _, taken := used[candidate]; !taken {
+				renamed[id], used[candidate] = candidate, struct{}{}
+				break
+			}
+		}
+	}
+	result := make([]llm.Item, len(output))
+	for index, item := range output {
+		if call, ok := toolCallValue(item); ok {
+			if id, found := renamed[call.ID]; found {
+				call.ID = id
+			}
+			item = call
+		} else if value, ok := item.(llm.ToolResult); ok {
+			if id, found := renamed[value.CallID]; found {
+				value.CallID = id
+			}
+			item = value
+		} else if value, ok := item.(*llm.ToolResult); ok && value != nil {
+			detached := *value
+			if id, found := renamed[detached.CallID]; found {
+				detached.CallID = id
+			}
+			item = detached
+		}
+		result[index] = item
+	}
+	return result
+}
+
+func toolCallValue(item llm.Item) (llm.ToolCall, bool) {
+	switch value := item.(type) {
+	case llm.ToolCall:
+		return value, true
+	case *llm.ToolCall:
+		if value != nil {
+			return *value, true
+		}
+	}
+	return llm.ToolCall{}, false
 }
 
 func executionError(code provider.Code) error {
