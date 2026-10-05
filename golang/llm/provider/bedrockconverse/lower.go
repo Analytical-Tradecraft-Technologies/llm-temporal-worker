@@ -37,6 +37,12 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		return bedrockruntime.ConverseInput{}, err
 	}
 	for index, item := range request.Input {
+		// A reference is an output annotation (for example a citation) that
+		// a replayed transcript still carries. It has no wire form, so it is
+		// left out instead of failing every later turn.
+		if _, annotation := item.(llm.Reference); annotation {
+			continue
+		}
 		message, err := lowerItem(item)
 		if err != nil {
 			return bedrockruntime.ConverseInput{}, fmt.Errorf("input item %d: %w", index, err)

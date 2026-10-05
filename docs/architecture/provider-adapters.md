@@ -106,6 +106,14 @@ break both.
 
 ## Lowering rules
 
+`reference` items are output annotations, such as the citations lifted from an
+Exa response. They stay in the v1 response and in the checkpoint transcript,
+but no endpoint family has a wire form for them, so every adapter leaves them
+out when it lowers a replayed transcript. Omitting one never changes how the
+surrounding messages, tool calls and tool results are grouped. `provider_state`
+items are unaffected: an adapter still replays its own state and rejects any
+other.
+
 ### OpenAI Responses
 
 - Instructions lower to the supported top-level instruction/developer form.

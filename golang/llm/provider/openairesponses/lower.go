@@ -34,6 +34,12 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[st
 		input = append(input, item)
 	}
 	for index, item := range request.Input {
+		// A reference is an output annotation (for example a citation) that
+		// a replayed transcript still carries. It has no wire form, so it is
+		// left out instead of failing every later turn.
+		if _, annotation := item.(llm.Reference); annotation {
+			continue
+		}
 		lowered, err := lowerItem(item)
 		if err != nil {
 			return nil, loweredToolPolicy{}, fmt.Errorf("input item %d: %w", index, err)
