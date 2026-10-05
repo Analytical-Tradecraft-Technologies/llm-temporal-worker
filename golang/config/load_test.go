@@ -549,3 +549,29 @@ func withoutCloudRequests(value string) string {
 	end := strings.Index(value[start:], "\nblob_store:") + start
 	return value[:start] + value[end:]
 }
+
+func TestExampleAzureAPIVersionIsAString(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Endpoints["azure-openai-au"].Extensions["azure"]["api_version"]; got != "2024-10-21" {
+		t.Fatalf("example Azure api_version = %#v, want string 2024-10-21", got)
+	}
+}
+
+func TestLoadRejectsUnquotedAzureExtensionScalars(t *testing.T) {
+	for _, test := range []struct{ from, to, field string }{
+		{from: `api_version: "2024-10-21"`, to: `api_version: 2024-10-21`, field: "api_version"},
+		{from: `api_version: "2024-10-21"`, to: "api_version: \"2024-10-21\"\n        deployment: 7", field: "deployment"},
+	} {
+		data := strings.Replace(string(exampleYAML(t)), test.from, test.to, 1)
+		if data == string(exampleYAML(t)) {
+			t.Fatalf("example does not contain %q", test.from)
+		}
+		_, err := config.Load([]byte(data))
+		if err == nil || !strings.Contains(err.Error(), "extensions.azure."+test.field+" must be a quoted string") {
+			t.Fatalf("Load(%s) error = %v", test.field, err)
+		}
+	}
+}
