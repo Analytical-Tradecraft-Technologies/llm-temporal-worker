@@ -370,8 +370,10 @@ func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, e
 	}
 	if mode == llm.ReasoningModeProviderDefault {
 		if reasoning.TokenBudget == nil {
-			// display exists only inside an explicit thinking object, so
-			// without a mode the summary preference has no wire form.
+			// Thinking is opt-in: with no thinking object the response has no
+			// thinking blocks, so there is nothing to summarize or omit and
+			// dropping the summary preference loses nothing, even in strict
+			// mode. display has no wire form outside that object.
 			return nil, nil
 		}
 		mode = llm.ReasoningModeEnabled

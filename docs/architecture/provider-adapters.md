@@ -178,6 +178,8 @@ Messages:
   level; strict portability rejects them and best-effort sends `summarized`.
   `display` exists only inside an explicit `thinking` object, so with no
   reasoning mode a summary preference is not sent and never turns thinking on.
+  This is lossless in strict mode too: thinking is opt-in, so a request with
+  no `thinking` object returns no thinking blocks to summarize or omit.
 
 ## Response lifting
 
