@@ -35,7 +35,9 @@ Temporal payload and perform this size check and strict decode inside the
 Activity, so a malformed, unknown-field or oversize input fails once as a
 non-retryable `llm_invalid_argument` with bounded `SafeErrorDetails` (phase
 `decode`) and a stable message that does not echo caller values. The wire
-format for valid inputs is the same typed v1 JSON record.
+format for valid inputs is the same typed v1 JSON record. The registered
+workflows apply the same boundary to their own input; see
+[workflow input validation](internal-workflows.md#workflow-input-validation).
 Responses are validated against the same limit before Temporal serialization;
 errors are converted to bounded `SafeErrorDetails` and never include prompts,
 outputs, provider bodies, or identifiers from a runtime error message.

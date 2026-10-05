@@ -164,7 +164,7 @@ func (h *liveCloudWorkflow) startWorker(t *testing.T) func() {
 		t.Fatal(err)
 	}
 	w := worker.New(h.client, h.queue, worker.Options{WorkerStopTimeout: time.Second, MaxConcurrentWorkflowTaskExecutionSize: 4})
-	workflows.Register(w)
+	workflows.Register(w, activity.PayloadLimits{})
 	a := &activity.Activities{V1Runtime: &observedCloudRuntime{cloudV1Runtime: &cloudV1Runtime{CloudExecutionRuntime: runtime}, harness: h}}
 	if err := a.RegisterForTaskQueue(w, h.queue); err != nil {
 		t.Fatal(err)
