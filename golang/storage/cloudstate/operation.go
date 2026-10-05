@@ -95,6 +95,20 @@ func (r *Repository) BeginOperation(ctx context.Context, operation Operation) (R
 	return Record{}, contracts.ErrConflict
 }
 
+// LookupOperation reads the record an operation key already names without
+// writing anything. A key that has no committed record returns ErrNotFound, so
+// callers can reject invalid input before BeginOperation makes it discoverable.
+// It does not compare the manifest; BeginOperation still enforces that binding.
+func (r *Repository) LookupOperation(ctx context.Context, operation Operation) (Record, error) {
+	if err := validContext(ctx); err != nil {
+		return Record{}, err
+	}
+	if operation.Key == "" || len(operation.Key) > 4096 || !utf8.ValidString(operation.Key) {
+		return Record{}, ErrInvalid
+	}
+	return r.Read(ctx, operation.Scope, r.operationID(operation.Scope, operation.Kind, operation.Key))
+}
+
 func (r *Repository) operationID(scope Scope, kind, key string) RequestID {
 	identity, _ := json.Marshal(struct {
 		Namespace string

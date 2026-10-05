@@ -77,11 +77,19 @@ checkpoint, settle paid attempts, or implement that compaction workflow.
 ## Durable preparation and recovery
 
 `V1RuntimeCapabilities.NewCloudRequestPreparation` creates the cloud preparation
-boundary with an explicit authorization callback. `Prepare` authorizes first,
-begins the discoverable operation, materializes and validates its parent, and
-saves the versioned parent snapshot before budget planning or provider effects.
-The original typed request remains in the immutable request manifest. Root
-generation saves no parent snapshot.
+boundary with an explicit authorization callback. `Prepare` authorizes first.
+For an operation key with no record yet, it then materializes and validates the
+parent and input without writing anything, so rejected input (an invalid,
+expired or foreign parent, invalid settings, an oversize parent) never becomes a
+`running` record that `ListPending` would report forever. Only then does it begin
+the discoverable operation and save the versioned parent snapshot before budget
+planning or provider effects. If a concurrent worker created the record first
+and has not saved its preparation, the validated snapshot is still used, with its
+preparation time advanced to the record's creation time, rather than reopening a
+parent that may have expired. An operation that already exists skips this
+pre-check and replays its saved result or preparation without reopening the
+parent. The original typed request remains in the immutable request manifest.
+Root generation saves no parent snapshot.
 
 The encrypted preparation has one immutable CAS winner. A retry after a lost
 write acknowledgement reads that winner and repairs its discovery entry before

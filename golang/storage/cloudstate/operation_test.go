@@ -199,3 +199,45 @@ func TestOperationValidationAndReadiness(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupOperationIsReadOnlyAndScoped(t *testing.T) {
+	r, table, blobs, op := operationFixture(t)
+	ctx := context.Background()
+	table.hook = func(string, kv.KeyValueItem) (error, error) {
+		t.Error("lookup attempted a table write")
+		return nil, nil
+	}
+	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("lookup attempted a blob write"); return nil, nil }
+	if _, err := r.LookupOperation(ctx, op); !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("missing operation: %v", err)
+	}
+	for shard := range PendingShards {
+		page, err := r.ListPending(ctx, shard, 100, "")
+		if err != nil || len(page.Requests) != 0 {
+			t.Fatalf("lookup made an operation discoverable: %+v %v", page.Requests, err)
+		}
+	}
+	table.hook, blobs.hook = nil, nil
+	begun, err := r.BeginOperation(ctx, op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := r.LookupOperation(ctx, op)
+	if err != nil || found.Request.ID != begun.Request.ID || found.Revision != begun.Revision {
+		t.Fatalf("lookup: %v", err)
+	}
+	other := op
+	other.Scope.Project = "other"
+	if _, err := r.LookupOperation(ctx, other); !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("lookup crossed scope: %v", err)
+	}
+	other = op
+	other.Key = "different-key"
+	if _, err := r.LookupOperation(ctx, other); !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("lookup matched another key: %v", err)
+	}
+	other.Key = ""
+	if _, err := r.LookupOperation(ctx, other); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty key: %v", err)
+	}
+}
