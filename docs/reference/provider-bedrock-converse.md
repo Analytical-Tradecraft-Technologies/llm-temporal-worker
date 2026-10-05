@@ -72,6 +72,18 @@ chain remain inside the SDK client; credentials never enter the normalized
 request or persisted call metadata. SDK retries are disabled at this boundary,
 leaving retry ownership with the Temporal/routing layer.
 
+A paid response is kept wherever it can be described. The `malformed_model_output`
+stop reason, and `malformed_tool_use` without a parsed `toolUse` block, are
+lifted as the unfinished `length` status with the raw stop reason retained in
+the provider facts. The vendored SDK cannot decode a content block member it
+does not know and panics instead of returning an error; the adapter recovers
+that panic and, because its innermost deserialize middleware saw the HTTP
+response arrive, reports an accepted `provider_invalid_response`, so the
+operation ledger still records a terminal, non-retried outcome. A recovered
+panic without that evidence is never reported as paid: before the request
+reached the transport it is not dispatched and may move to the next route;
+inside the transport it is of ambiguous outcome and is not retried.
+
 The deterministic unit and contract tests exercise tier mapping, strict
 instruction hierarchy rejection, tool JSON documents, and response lifting.
 The enforced contract matrix includes Flex, Default, and Priority response-tier

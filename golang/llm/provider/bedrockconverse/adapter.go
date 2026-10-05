@@ -9,6 +9,7 @@ import (
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go/middleware"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -165,7 +166,11 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err := observer.BeforePossibleWrite(callContext); err != nil {
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
-	response, err := adapter.client.converse.Converse(callContext, &params)
+	stage := &dispatchStage{}
+	response, panicked, err := converseRecovered(callContext, adapter.client.converse, &params, stage)
+	if panicked != nil {
+		return provider.Result{}, provider.WithEndpointID(stage.panicError(call, panicked), adapter.endpointID)
+	}
 	if err != nil {
 		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
 			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
@@ -191,6 +196,68 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	}
 	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(lifted.Output)})
 	return provider.Result{Response: lifted}, nil
+}
+
+// dispatchStage records, from inside the SDK middleware stack, how far one
+// Converse call got: whether the request reached the transport and whether an
+// HTTP response came back. It is registered as the innermost deserialize
+// middleware, so it runs immediately around the transport and before the
+// SDK's own response decoding.
+type dispatchStage struct {
+	sent     bool
+	received bool
+}
+
+func (*dispatchStage) ID() string { return "llmtwDispatchStage" }
+
+func (stage *dispatchStage) HandleDeserialize(ctx context.Context, in middleware.DeserializeInput, next middleware.DeserializeHandler) (middleware.DeserializeOutput, middleware.Metadata, error) {
+	stage.sent = true
+	out, metadata, err := next.HandleDeserialize(ctx, in)
+	if out.RawResponse != nil {
+		stage.received = true
+	}
+	return out, metadata, err
+}
+
+func (stage *dispatchStage) register(options *bedrockruntime.Options) {
+	options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
+		return stack.Deserialize.Add(stage, middleware.After)
+	})
+}
+
+// panicError classifies a recovered SDK panic by the evidence the stage
+// gathered. Only a panic raised after a response arrived (for example while
+// decoding a content block member the vendored SDK does not know) is a paid,
+// accepted invalid response. A panic before the request reached the transport
+// was never dispatched and may move to another route; one raised after the
+// request was sent but before any response is of unknown outcome.
+func (stage *dispatchStage) panicError(call provider.Call, panicked any) *provider.Error {
+	switch {
+	case stage.received:
+		return invalidResponseError(call, "", fmt.Sprintf("provider SDK panicked while decoding the response: %v", panicked))
+	case stage.sent:
+		mapped := provider.NewError(provider.CodeInternal, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, fmt.Sprintf("provider SDK panicked after the request was sent: %v", panicked))
+		mapped.OperationID = call.OperationKey
+		return mapped
+	default:
+		mapped := provider.NewError(provider.CodeInternal, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNextRoute, fmt.Sprintf("provider SDK panicked before the request was sent: %v", panicked))
+		mapped.OperationID = call.OperationKey
+		return mapped
+	}
+}
+
+// converseRecovered runs the one Converse operation and reports an SDK panic
+// instead of letting it unwind the Activity, which would bypass the operation
+// ledger's terminal classification. The stage tells the caller how far the
+// call got before the panic.
+func converseRecovered(ctx context.Context, service converseService, params *bedrockruntime.ConverseInput, stage *dispatchStage) (response *bedrockruntime.ConverseOutput, panicked any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			response, panicked, err = nil, recovered, nil
+		}
+	}()
+	response, err = service.Converse(ctx, params, stage.register)
+	return response, nil, err
 }
 
 func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntime.ConverseOutput, requestID string) (llm.Response, error) {
@@ -277,12 +344,25 @@ func liftStatus(reason types.StopReason, hasToolCalls bool) (llm.ResponseStatus,
 			return llm.ResponseStatusToolCalls, nil
 		}
 		return llm.ResponseStatusCompleted, nil
-	case types.StopReasonToolUse, types.StopReasonMalformedToolUse:
+	case types.StopReasonToolUse:
 		if !hasToolCalls {
 			return "", fmt.Errorf("provider stop reason %q did not contain a tool call", reason)
 		}
 		return llm.ResponseStatusToolCalls, nil
+	case types.StopReasonMalformedToolUse:
+		// The model attempted a tool call the service could not parse, so
+		// the block is usually absent. Without one this is an unfinished
+		// generation, not a provider protocol failure.
+		if hasToolCalls {
+			return llm.ResponseStatusToolCalls, nil
+		}
+		return llm.ResponseStatusLength, nil
 	case types.StopReasonMaxTokens, types.StopReasonModelContextWindowExceeded:
+		return llm.ResponseStatusLength, nil
+	case types.StopReasonMalformedModelOutput:
+		// The model stopped without a usable answer. As with an incomplete
+		// Responses result, the paid response is kept as an unfinished one and
+		// the raw stop reason stays in the provider facts.
 		return llm.ResponseStatusLength, nil
 	case types.StopReasonGuardrailIntervened, types.StopReasonContentFiltered:
 		return llm.ResponseStatusRefused, nil
