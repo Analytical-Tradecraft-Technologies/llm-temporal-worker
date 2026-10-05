@@ -224,6 +224,12 @@ func (materializer *DurableCheckpointMaterializer) readSnapshot(ctx context.Cont
 	if snapshot.Depth != row.Depth || int64(len(snapshot.Lineage)) != int64(row.Depth)+1 || snapshot.Lineage[len(snapshot.Lineage)-1] != Handle(row.ID) {
 		return CheckpointSnapshot{}, errors.New("depth or lineage does not match its checkpoint")
 	}
+	// The walk stops here, so the parent link is never followed. It must still
+	// agree with the lineage that replaces it; a full walk would have followed
+	// the link and rejected a snapshot whose lineage named a different parent.
+	if row.ParentID != nil && snapshot.Lineage[len(snapshot.Lineage)-2] != Handle(*row.ParentID) {
+		return CheckpointSnapshot{}, errors.New("lineage does not match its checkpoint parent")
+	}
 	// Publication derives the row digest from this exact handle list.
 	lineage, err := json.Marshal(snapshot.Lineage)
 	if err != nil || sha256.Sum256(lineage) != row.CanonicalLineageDigest {

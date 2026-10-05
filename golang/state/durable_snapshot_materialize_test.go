@@ -310,6 +310,12 @@ func TestDurableCheckpointMaterializerRejectsUnusableSnapshotRows(t *testing.T) 
 		"missing blob": {mutate: func(fixture *snapshotLineageFixture, row *DurableCheckpoint) {
 			delete(fixture.blobs.values, row.MaterializedSnapshotBlob.ID)
 		}},
+		// The snapshot stays internally consistent; only the row's parent link
+		// contradicts the lineage the snapshot stands in for.
+		"row parent": {mutate: func(_ *snapshotLineageFixture, row *DurableCheckpoint) {
+			parent := CheckpointID("main-03")
+			row.ParentID = &parent
+		}},
 		"row depth": {mutate: func(_ *snapshotLineageFixture, row *DurableCheckpoint) { row.Depth = 7 }},
 		"snapshot depth": {mutate: replaceSnapshot(func(snapshot *CheckpointSnapshot) {
 			snapshot.Depth--
