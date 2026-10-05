@@ -82,6 +82,13 @@ func decodeJSON(data []byte, dst any) error {
 	if err := rejectDuplicateJSONKeys(data); err != nil {
 		return err
 	}
+	// The v1 schemas never allow null for a present field. encoding/json
+	// would decode it as the zero value, silently turning "unset" into an
+	// empty string, zero, false, or an empty list that replaces inherited
+	// settings.
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("null is not permitted")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	if err := decoder.Decode(dst); err != nil {
