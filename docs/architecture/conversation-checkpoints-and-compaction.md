@@ -206,6 +206,19 @@ through binary floating point. There is no downstream currency field or
 currency enum: names such as **actual_cost_usd** make the denomination part of
 the type contract.
 
+**output** can hold any item and part kind listed in
+[Unified API](unified-api.md#semantic-items): reasoning continuation is
+returned as **provider_state** items or parts, citations as **reference**
+items, and a refusal part may carry a **provider_code**. The optional
+**usage** object has the five normalized token counts and may add
+**provider_raw**, an open object of provider-defined usage facts with no
+normalized field. An exact **cost** may name the **catalog_version** it was
+priced with, and each diagnostic may add a **path** and a string-valued
+**details** map. Compact responses use the same usage, cost, and diagnostic
+shapes. The published JSON schemas, the Go codec, and the OCaml codec accept
+exactly these shapes; a codec-versus-schema parity test and fixtures shared by
+both codecs keep them from drifting.
+
 If the real charge cannot be established, the top-level Generate
 **status** remains **completed** while **cost.status=unknown**,
 **cost.actual_cost_usd=null**, and a safe cost reason is present with no method.

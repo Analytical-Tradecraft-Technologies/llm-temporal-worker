@@ -278,25 +278,27 @@ let checkpoint_of_json context value =
   Ok { handle; parent; kind; depth }
 
 let usage_to_json (value : usage) =
-  `Assoc ["input_tokens", `Intlit (Int64.to_string value.input_tokens); "output_tokens", `Intlit (Int64.to_string value.output_tokens); "reasoning_tokens", `Intlit (Int64.to_string value.reasoning_tokens); "cache_read_tokens", `Intlit (Int64.to_string value.cache_read_tokens); "cache_write_tokens", `Intlit (Int64.to_string value.cache_write_tokens)]
+  `Assoc (["input_tokens", `Intlit (Int64.to_string value.input_tokens); "output_tokens", `Intlit (Int64.to_string value.output_tokens); "reasoning_tokens", `Intlit (Int64.to_string value.reasoning_tokens); "cache_read_tokens", `Intlit (Int64.to_string value.cache_read_tokens); "cache_write_tokens", `Intlit (Int64.to_string value.cache_write_tokens)] @ option_field "provider_raw" (fun value -> `Assoc value) value.provider_raw)
 
 let usage_of_json context value =
-  let* fields = closed context ["input_tokens"; "output_tokens"; "reasoning_tokens"; "cache_read_tokens"; "cache_write_tokens"] value in
+  let* fields = closed context ["input_tokens"; "output_tokens"; "reasoning_tokens"; "cache_read_tokens"; "cache_write_tokens"; "provider_raw"] value in
   let get name = required context name fields >>= int64 (context ^ "." ^ name) >>= fun value -> let* () = nonnegative (context ^ "." ^ name) value in Ok value in
   let* input_tokens = get "input_tokens" in let* output_tokens = get "output_tokens" in let* reasoning_tokens = get "reasoning_tokens" in let* cache_read_tokens = get "cache_read_tokens" in let* cache_write_tokens = get "cache_write_tokens" in
-  Ok { input_tokens; output_tokens; reasoning_tokens; cache_read_tokens; cache_write_tokens; provider_raw = None }
+  let* provider_raw = match optional "provider_raw" fields with None | Some `Null -> Ok None | Some value -> let* value = Llm_temporal_codec.unique_object (context ^ ".provider_raw") value in Ok (Some value) in
+  Ok { input_tokens; output_tokens; reasoning_tokens; cache_read_tokens; cache_write_tokens; provider_raw }
 
 let diagnostic_to_json (value : diagnostic) =
   let severity = match value.severity with Info -> "info" | Warning -> "warning" | Diagnostic_error -> "error" in
-  `Assoc (["code", `String (Diagnostic_code.to_string value.code); "severity", `String severity; "message", `String value.message] @ option_field "path" (fun value -> `String value) value.path)
+  `Assoc (["code", `String (Diagnostic_code.to_string value.code); "severity", `String severity; "message", `String value.message] @ option_field "path" (fun value -> `String value) value.path @ option_field "details" (fun value -> `Assoc (List.map (fun (key, text) -> (key, `String text)) value)) value.details)
 
 let diagnostic_of_json context value =
-  let* fields = closed context ["code"; "severity"; "message"; "path"] value in
+  let* fields = closed context ["code"; "severity"; "message"; "path"; "details"] value in
   let* code = required context "code" fields >>= string (context ^ ".code") >>= fun value -> nonempty (context ^ ".code") value in
   let* severity = required context "severity" fields >>= string (context ^ ".severity") >>= fun value -> match value with "info" -> Ok Info | "warning" -> Ok Warning | "error" -> Ok Diagnostic_error | _ -> Error (errorf "%s.severity is invalid" context) in
   let* message = required context "message" fields >>= string (context ^ ".message") >>= fun value -> nonempty (context ^ ".message") value in
   let* path = match optional "path" fields with None | Some `Null -> Ok None | Some value -> let* value = string (context ^ ".path") value in Ok (Some value) in
-  Ok { code = Diagnostic_code.of_string code; severity; message; path; details = None }
+  let* details = match optional "details" fields with None | Some `Null -> Ok None | Some value -> let* values = Llm_temporal_codec.unique_object (context ^ ".details") value in let* values = map_result (fun (name, value) -> let* value = string (context ^ ".details." ^ name) value in Ok (name, value)) values in Ok (Some values) in
+  Ok { code = Diagnostic_code.of_string code; severity; message; path; details }
 
 let route_to_v1_json (value : route) =
   `Assoc (option_field "route_id" (fun value -> `String (Route_id.to_string value)) value.route_id @ option_field "endpoint_id" (fun value -> `String (Endpoint_id.to_string value)) value.endpoint_id @ option_field "api_family" (fun value -> `String (Api_family.to_string value)) value.api_family @ option_field "requested_model" (fun value -> `String (Model_selector.to_string value)) value.requested_model @ option_field "resolved_model" (fun value -> `String (Resolved_model_id.to_string value)) value.resolved_model)

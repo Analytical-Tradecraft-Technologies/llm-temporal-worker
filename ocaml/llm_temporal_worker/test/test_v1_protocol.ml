@@ -5,22 +5,32 @@ let ok = function Ok value -> value | Error error -> failf "codec error: %s" (Te
 let error = function Ok _ -> failwith "expected codec error" | Error _ -> ()
 let checkpoint value = match Checkpoint.of_string value with Ok value -> value | Error message -> failwith message
 let time value = match Ptime.of_rfc3339 value with Ok (value, _, _) -> value | Error _ -> failwith "invalid test time"
-let fixture name =
+let fixture_in directory name =
   let candidates =
-    [ Filename.concat (Sys.getcwd ()) ("fixtures/task17/" ^ name);
+    [ Filename.concat (Sys.getcwd ()) ("fixtures/" ^ directory ^ "/" ^ name);
       (match Sys.getenv_opt "DUNE_SOURCEROOT" with
        | None -> ""
-       | Some root -> Filename.concat root ("ocaml/llm_temporal_worker/test/fixtures/task17/" ^ name)) ]
+       | Some root -> Filename.concat root ("ocaml/llm_temporal_worker/test/fixtures/" ^ directory ^ "/" ^ name)) ]
   in
   match List.find_opt Sys.file_exists candidates with
   | Some path -> In_channel.with_open_bin path In_channel.input_all
   | None -> failf "fixture not found: %s" name
+let fixture = fixture_in "task17"
 let canonical json = Yojson.Safe.to_string (Yojson.Safe.from_string json)
 let assert_fixture name decode encode =
   let input = fixture name in
   let value = ok (decode (Bytes.of_string input)) in
   let output = ok (encode value) |> Bytes.to_string in
   if canonical input <> canonical output then failf "fixture %s changed on canonical round trip" name
+(* fixtures/v1 holds byte-for-byte copies of golang/llm/testdata/v1 fixtures
+   (pinned by the Go schema parity test).  They are not written in this
+   codec's field order, so the round trip is compared with sorted fields. *)
+let sorted json = Yojson.Safe.to_string (Yojson.Safe.sort (Yojson.Safe.from_string json))
+let assert_shared_fixture name decode encode =
+  let input = fixture_in "v1" name in
+  let value = ok (decode (Bytes.of_string input)) in
+  let output = ok (encode value) |> Bytes.to_string in
+  if sorted input <> sorted output then failf "shared fixture %s changed on round trip" name
 let assert_rejected name decode =
   if Result.is_ok (decode (Bytes.of_string (fixture name))) then failf "fixture %s was accepted" name
 let omit field bytes =
@@ -133,3 +143,29 @@ let () =
   assert_fixture "compact-cache-any-age.json" V1_codec.decode_compact_request V1_codec.encode_compact_request;
   let cache = match Conversation.Cache_policy.any_age () with Ok value -> value | Error message -> failwith message in
   if Conversation.Cache_policy.max_age_seconds cache <> None then failwith "unrestricted cache acquired an age limit"
+
+(* Shapes the Go worker publishes: provider_state and reference items, coded
+   refusals, usage.provider_raw, priced costs and diagnostics with details. *)
+let () =
+  assert_shared_fixture "generate-request-all-kinds.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
+  assert_shared_fixture "generate-response-all-kinds.json" V1_codec.decode_generate_response V1_codec.encode_generate_response;
+  assert_shared_fixture "compact-response-priced.json" V1_codec.decode_compaction_response V1_codec.encode_compaction_response;
+  let usage : usage = { input_tokens = 6L; output_tokens = 7L; reasoning_tokens = 2L; cache_read_tokens = 3L; cache_write_tokens = 1L; provider_raw = Some ["total_tokens", `Int 17; "details", `Assoc ["audio_tokens", `Int 0]] } in
+  let diagnostic : diagnostic = { code = Diagnostic_code.of_string "route_unavailable"; message = "Route unavailable"; severity = Warning; path = Some "/append/0"; details = Some ["route_id", "route-primary"] } in
+  let generate = ok (V1_codec.decode_generate_response (Bytes.of_string (fixture_in "v1" "generate-response-all-kinds.json"))) in
+  let generate = ok (V1_codec.decode_generate_response (ok (V1_codec.encode_generate_response { generate with usage = Some usage; diagnostics = [diagnostic] }))) in
+  if generate.usage <> Some usage then failwith "generate usage provider_raw lost";
+  if generate.diagnostics <> [diagnostic] then failwith "generate diagnostic details lost";
+  if not (List.exists (function Provider_state _ -> true | _ -> false) generate.output) then failwith "generate provider_state output lost";
+  let compact = ok (V1_codec.decode_compaction_response (Bytes.of_string (fixture_in "v1" "compact-response-priced.json"))) in
+  let compact = ok (V1_codec.decode_compaction_response (ok (V1_codec.encode_compaction_response { compact with usage = Some usage; diagnostics = [diagnostic] }))) in
+  if compact.usage <> Some usage then failwith "compact usage provider_raw lost";
+  if compact.diagnostics <> [diagnostic] then failwith "compact diagnostic details lost";
+  let with_usage_field name value bytes =
+    let fields = Yojson.Safe.Util.to_assoc (Yojson.Safe.from_string (Bytes.to_string bytes)) in
+    let usage = Yojson.Safe.Util.to_assoc (List.assoc "usage" fields) in
+    Bytes.of_string (Yojson.Safe.to_string (`Assoc (("usage", `Assoc ((name, value) :: usage)) :: List.remove_assoc "usage" fields)))
+  in
+  let plain = ok (V1_codec.encode_generate_response { generate with usage = Some { usage with provider_raw = None } }) in
+  error (V1_codec.decode_generate_response (with_usage_field "provider_raw" (`String "raw") plain));
+  error (V1_codec.decode_generate_response (with_usage_field "unknown_tokens" (`Int 1) plain))
