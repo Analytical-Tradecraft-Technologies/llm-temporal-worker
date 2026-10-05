@@ -17,6 +17,7 @@ const (
 	RequestWorkflowName = "llm.request.execute.v1"
 	BudgetWorkflowName  = "llm.budget.wait.v1"
 	maxStepsPerRun      = 128
+	maxBudgetBackoff    = 5 * time.Minute
 )
 
 // RegisterInternal registers implementation workflows, not client entry points.
@@ -32,6 +33,9 @@ func RegisterInternal(registry worker.WorkflowRegistry) {
 type BudgetRequest struct {
 	Reference llm.ExecutionReferenceV1 `json:"reference"`
 	Kind      string                   `json:"kind"`
+	// Waits counts budget denials already waited out, carried across
+	// continue-as-new so the backoff does not reset to one second.
+	Waits int `json:"waits,omitempty"`
 }
 
 // WaitForBudget acquires once per activity, then waits using a Temporal timer.
@@ -54,7 +58,12 @@ func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResu
 		case llm.ExecutionBudgetRequired:
 			// A valid acquire result must either acquire, wait, or recover saved work.
 			return llm.ExecutionResultV1{}, invalidState()
-		case llm.ExecutionBudgetWait, llm.ExecutionCacheWait:
+		case llm.ExecutionBudgetWait:
+			if err := workflow.Sleep(ctx, budgetBackoff(result, input.Waits)); err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
+			input.Waits++
+		case llm.ExecutionCacheWait:
 			if err := wait(ctx, result); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
@@ -161,6 +170,18 @@ func executionContext(ctx workflow.Context) workflow.Context {
 		RetryPolicy:      &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumInterval: time.Minute},
 	})
 }
+
+// budgetBackoff waits at least the acquisition hint, doubling from one second
+// per consecutive denial up to maxBudgetBackoff. A saturated long window would
+// otherwise poll the acquire Activity once per second per waiting request.
+func budgetBackoff(result llm.ExecutionResultV1, waits int) time.Duration {
+	backoff := maxBudgetBackoff
+	if waits < 16 {
+		backoff = min(time.Second<<waits, maxBudgetBackoff)
+	}
+	return max(time.Duration(result.RetryAfterSeconds)*time.Second, backoff)
+}
+
 func wait(ctx workflow.Context, result llm.ExecutionResultV1) error {
 	return workflow.Sleep(ctx, time.Duration(result.RetryAfterSeconds)*time.Second)
 }
