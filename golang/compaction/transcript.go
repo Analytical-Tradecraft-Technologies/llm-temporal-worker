@@ -3,7 +3,6 @@ package compaction
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -39,7 +38,9 @@ func summarizerInput(prefix []llm.Item, policy Policy) []llm.Item {
 			continue
 		}
 		index++
-		fmt.Fprintf(&body, "[%d] %s\n%s\n\n", index, heading, content)
+		// Every content line is indented so a caller-controlled text cannot
+		// forge an entry heading: headings alone start at column zero.
+		fmt.Fprintf(&body, "[%d] %s\n  %s\n\n", index, heading, strings.ReplaceAll(content, "\n", "\n  "))
 	}
 	transcript := strings.TrimRight(body.String(), "\n")
 	// The marker is derived from the quoted text, so it stays stable across
@@ -63,9 +64,30 @@ func summarizerInput(prefix []llm.Item, policy Policy) []llm.Item {
 
 // renderItem returns the heading and text of one transcript entry. Provider
 // state is opaque to every model but the one that produced it and is left
-// out.
+// out. Items implement llm.Item with value receivers, so a transcript may
+// carry pointer forms; those render exactly as their values.
 func renderItem(item llm.Item) (heading, content string, ok bool) {
 	switch value := item.(type) {
+	case *llm.Message:
+		if value == nil {
+			return "", "", false
+		}
+		return renderItem(*value)
+	case *llm.ToolCall:
+		if value == nil {
+			return "", "", false
+		}
+		return renderItem(*value)
+	case *llm.ToolResult:
+		if value == nil {
+			return "", "", false
+		}
+		return renderItem(*value)
+	case *llm.Reference:
+		if value == nil {
+			return "", "", false
+		}
+		return renderItem(*value)
 	case llm.Message:
 		return string(value.Actor) + " message", renderParts(value.Content), true
 	case llm.ToolCall:
@@ -77,11 +99,9 @@ func renderItem(item llm.Item) (heading, content string, ok bool) {
 	case llm.Reference:
 		return "reference", value.URI, true
 	default:
-		encoded, err := json.Marshal(item)
-		if err != nil {
-			return "", "", false
-		}
-		return string(item.ItemKind()), string(encoded), true
+		// An item kind this renderer does not know must not reach the
+		// summarizer as raw JSON: it could carry bytes or opaque state.
+		return string(item.ItemKind()), "(omitted)", true
 	}
 }
 

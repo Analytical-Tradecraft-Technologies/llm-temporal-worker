@@ -23,10 +23,12 @@ the transcript between `-----BEGIN TRANSCRIPT <id>-----` and
 `-----END TRANSCRIPT <id>-----` marker lines, and a closing instruction to
 write the summary that states the `output_reserve_tokens` length budget. Each
 entry is numbered and labelled (`human message`, `model message`,
-`model tool call id=... name=...`, `tool result call_id=... is_error=...`); tool
-arguments and results are serialized as text, images and documents are named
-by reference (media type plus URL, blob digest or byte count) without their
-bytes, and opaque provider state is left out. The marker identifier is derived
+`model tool call id=... name=...`, `tool result call_id=... is_error=...`) on a
+line of its own, with every content line indented, so transcript text cannot
+forge an entry boundary; tool arguments and results are serialized as text,
+images and documents are named by reference (media type plus URL, blob digest
+or byte count) without their bytes, and opaque provider state is left out.
+Pointer-form items render as their values. The marker identifier is derived
 from the quoted text, so it is stable across retries and transcript content
 cannot contain its own closing marker. The summarizer therefore never receives
 a trailing assistant turn, tool blocks without tool definitions, or media, on
