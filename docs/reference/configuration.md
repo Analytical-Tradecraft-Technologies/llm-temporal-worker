@@ -4,6 +4,16 @@
 
 The worker reads one strict YAML document. Unknown fields, duplicate keys,
 unknown enum values, unresolved references, and integer overflow are errors.
+The file must end after that document: a second `---` document, or any content
+after a `...` end marker, is an error rather than being ignored, so
+concatenated files and multi-document renders do not validate. Catalog files
+follow the same rule.
+
+A null (`~`, `null`, or a key with no value) is rejected wherever a value
+would otherwise be substituted silently: for a scalar or a section, such as
+`require_match: ~`, and for a list element, such as `allowed_tenants: [~]`.
+A null for a whole list or map, or for an optional section, means the same as
+omitting it, which is how the effective configuration renders unset lists.
 The command-line binary selects the document with the `--config` flag; the
 default path is `/etc/llmtw/config.yaml`. It does not use a process-wide
 environment-variable override for the configuration path or command mode. See
@@ -36,6 +46,24 @@ its names by provisioning the **raw 32-byte SHA-256 digest** of the UTF-8 prefix
 secret, before changing the password. Do not use the digest's hexadecimal text.
 Keep that file stable afterward. New installations should use an independent
 random secret. The worker no longer derives namespace identity from a password.
+
+## Environment
+
+`environment` is a free-form identifier; budget policies can match it with
+`match.environment`. Only the exact, case-sensitive value `development` selects
+the development composition. Every other value is treated as production,
+including `production`, `staging`, `prod`, `Production` and names the worker
+has never seen. For those values:
+
+- `state.redis.tls.enabled` must be `true`;
+- `telemetry.content_logging` must be `disabled`;
+- `state.kind` must be `durable` and `blob_store.kind` must be `s3`;
+- startup requires the durable v1 runtime, the cloud budget initialization
+  receipt and the Redis budget authority probe.
+
+Where this document says "production", it means any environment other than
+`development`. Validation and runtime composition share one rule
+(`config.IsProductionEnvironment`), so a misspelt name cannot skip hardening.
 
 ## Caller authorization
 
@@ -260,7 +288,8 @@ endpoints:
     timeout: 115s
     service_classes:
       standard:
-        provider_value: standard
+        # Sent as service_tier; use a value OpenRouter's request schema accepts.
+        provider_value: default
     capability_profile: openrouter-chat-pinned-v2
     price_catalog: catalog-2026-07-13
     extensions:
@@ -280,6 +309,8 @@ endpoints:
     timeout: 115s
     service_classes:
       standard:
+        # Exa defines no service_tier: this value is never sent and only names
+        # the price-catalog tier.
         provider_value: standard
     capability_profile: exa-chat-v1
     price_catalog: catalog-2026-07-13
@@ -542,6 +573,18 @@ The effective prefix is immutable for the lifetime of a worker process: a
 configuration reload that changes it is rejected before new clients are built.
 Deploy a new worker process when moving to a different Redis namespace.
 
+The same holds for everything else that identifies where durable state lives:
+`state.kind`, `state.redis.admission_hash_tag`, the `state.redis.key_secret`
+reference, the `state.requests` provider block, `request_table`,
+`payload_store`, `namespace` and `secret` reference, and the result store's
+`blob_store.kind`, `blob_store.file.root` and `blob_store.s3` bucket, region
+and prefix. In-flight requests, budget reservations and results exist only
+under the identity they were written with, so a reload that changes one is
+rejected and its log record names the field. `state.redis.addresses`, Redis
+credentials, TLS and timeouts are reloadable because they reach the same data.
+See [configuration reload](cli.md#configuration-reload) for the full list and
+the reload failure causes.
+
 The former `state.postgres` section is rejected by the strict loader. The
 `LLMTW_POSTGRES_DATABASE`, `LLMTW_POSTGRES_SCHEMA` and
 `LLMTW_POSTGRES_TABLE_PREFIX` overrides are removed. Configure existing cloud
@@ -709,9 +752,31 @@ Configuration may omit unsupported entries for an endpoint; it cannot define a
 fourth public class. A mapping's `provider_value` is adapter-profile validated
 and cannot be supplied by a request.
 
+`provider_value` is sent as the request tier only where the provider API
+defines one. Azure OpenAI (Chat and Responses) and Exa define no `service_tier`,
+so nothing is sent for those endpoints; the value still names the price-catalog
+tier and the response label that maps back to the class. For OpenRouter the
+value is sent as `service_tier` and must be one OpenRouter accepts (`default`,
+`flex`, `priority`, ...), not an upstream label such as `standard`.
+
+A response that reports no tier, or a tier no mapping recognizes, is still
+accepted: `service.actual` is omitted, `service.provider_value` keeps the raw
+label, and the call is priced at the attempted class. Anthropic Messages
+endpoints are the exception and require the response tier.
+
 A request without `service_class` becomes `standard`. There is no configurable
 provider default. `service_class_fallbacks` is request data, not a worker-wide
 default, because only the caller can authorize a cost/latency class change.
+
+## Route identifiers
+
+A route `id` must be unique within its model. Two models may use the same
+route ID, for example a `primary` route in each. Shared route health (status,
+credit, billing and circuit state) is stored per route ID and endpoint under
+the configuration digest, so same-named routes on different endpoints never
+share a record. Same-named routes of different models that use the same
+endpoint do share one record: they observe the same upstream endpoint and
+account.
 
 ## Capability catalog shape
 
@@ -766,6 +831,40 @@ enum. `*` is an exact-field wildcard, not a restriction, so a policy with only
 wildcards is rejected. A missing request or candidate fact cannot satisfy an
 exact or prefix restriction.
 
+A matcher that can never match is a configuration error, because its policy
+would silently never apply, or with `require_match: true` silently remove the
+routes it was meant to budget. Validation rejects an exact `logical_model` that
+is not a key of `models`, an exact `endpoint` that is not a key of `endpoints`
+or that no route uses (no route of the matched `logical_model` when one is
+named, since a request only reaches an endpoint through its model's routes),
+and an exact `environment` other than the configuration's own `environment`.
+When `authorization` is configured, an exact `tenant` or `project` must appear
+in `authorization.allowed_scopes`, and when both are set they must appear
+together in one scope. All comparisons are case-sensitive. Keep policies for
+other environments in those environments' files.
+
+Budget bounds that would otherwise fail at worker start or on every matching
+request are also validation errors:
+
+- a window keeps `duration / bucket + 2` buckets, which must not exceed
+  `limits.max_budget_buckets_per_window`;
+- `limit_usd` must be between `0.000000001` (one nano-USD) and
+  `9007199.254740991`, the range Redis represents exactly; `limit_micro_usd`
+  is bounded the same way, at `9007199254740`;
+- a policy `id` must leave room for its window identities, which are derived as
+  `<id>/<window index>` and limited to 128 bytes: at most 126 bytes for a
+  policy of up to ten windows.
+
+## Model tenant restriction
+
+`models.<name>.allowed_tenants` lists the tenants that may route to the model.
+An empty, null, or omitted list places no tenant restriction on the model:
+every tenant admitted by `authorization.allowed_scopes` can use it. To
+restrict a model, list its tenants explicitly. A null list element is
+rejected, so a template that renders an unset tenant as `[~]` cannot widen
+access by accident; a template that renders the whole list as null or empty
+does remove the restriction, so validate rendered files before deploying them.
+
 ## Price catalog shape
 
 ```yaml
@@ -808,7 +907,11 @@ worker:
 - routes reference declared endpoints and only use the three public service
   classes mapped by those endpoints;
 - budget windows, continuation keys, Redis numeric bounds, and retention
-  inequalities are safe;
+  inequalities are safe, including window bucket counts, limits Redis can
+  represent, policy ID length, and the `state.redis.admission_hash_tag`
+  character set (1 to 64 bytes without braces or whitespace);
+- budget matchers name declared models, endpoints, the configured environment,
+  and allowlisted scopes;
 - telemetry settings obey their environment and content-logging rules.
 
 It does not read catalog files or compare their digests, resolve environment or
@@ -819,6 +922,13 @@ reference and client-construction checks during runtime composition; catalog
 and deployment verification are separate gates.
 
 Reload performs the same checks and publishes only a complete valid snapshot.
+The file watcher reloads a changed file only after two consecutive polls, one
+second apart, see the same file identity, size, modification time and content,
+and the reload publishes only that content. A prefix of a configuration file
+is often valid YAML with its trailing sections missing, so this keeps a file
+caught halfway through an in-place write from being published. Prefer an
+atomic rename or a ConfigMap update, which are never observed half written.
+`SIGHUP` reloads the file as it is at that moment without waiting.
 
 ### Responses provider storage policy
 

@@ -8,18 +8,25 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 func (profile Profile) liftResponse(call provider.Call, response *anthropic.Message, requestID string) (llm.Response, error) {
+	return profile.liftResponseWithTier(call, response, requestID, "")
+}
+
+// liftResponseWithTier lifts a response whose service tier may have been
+// reported outside the Anthropic body. InvokeModel carries it in a response
+// header; a tier in usage still wins when the body has one.
+func (profile Profile) liftResponseWithTier(call provider.Call, response *anthropic.Message, requestID, headerTier string) (llm.Response, error) {
 	if response == nil {
 		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
 	}
-	actual, err := profile.actualClass(string(response.Usage.ServiceTier))
-	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+	providerTier := string(response.Usage.ServiceTier)
+	if providerTier == "" {
+		providerTier = headerTier
 	}
+	actual := profile.actualClass(providerTier)
 	output, states, hasToolCalls, hasRefusal, err := liftContent(response.Content)
 	if err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
@@ -35,6 +42,11 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
+	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
+		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped.Provider.ResponseID = response.ID
+		return llm.Response{}, mapped
+	}
 	return llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
@@ -46,7 +58,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		},
 		Service: llm.ServiceFacts{
 			Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual,
-			ProviderValue: string(response.Usage.ServiceTier), FallbackIndex: 0,
+			ProviderValue: providerTier, FallbackIndex: 0,
 		},
 		Usage: llm.Usage{
 			InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
@@ -59,6 +71,18 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		},
 		Continuation: continuationForResponse(call, response, states),
 	}, nil
+}
+
+// validateFinalJSON enforces the caller's json_schema output locally. The
+// provider only saw a lowered schema, so constraints moved into descriptions
+// are checked here before the bytes enter Temporal history.
+func validateFinalJSON(call provider.Call, output []llm.Item, status llm.ResponseStatus, hasToolCalls, hasRefusal bool) error {
+	// Incomplete text is retained for callers and accounting, not validated
+	// as a promised complete JSON document.
+	if status != llm.ResponseStatusCompleted || hasToolCalls || hasRefusal || len(call.OutputSchema) == 0 {
+		return nil
+	}
+	return anthropicschema.Validate(call.OutputSchema, output)
 }
 
 func liftContent(blocks []anthropic.ContentBlockUnion) ([]llm.Item, []llm.ProviderState, bool, bool, error) {

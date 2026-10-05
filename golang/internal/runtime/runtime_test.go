@@ -255,7 +255,7 @@ func TestDevelopmentRuntimeAllowsFailClosedV1Runtime(t *testing.T) {
 	var closed atomic.Bool
 	options := testRuntimeOptions(t, controller, &closed)
 	options.V1Runtime = nil
-	data := []byte(strings.Replace(string(runtimeConfig(t)), "environment: production", "environment: development", 1))
+	data := []byte(strings.Replace(string(runtimeConfig(t)), "environment: production", "environment: development", -1))
 	runtime, err := New(context.Background(), data, options)
 	if err != nil {
 		t.Fatal(err)
@@ -723,7 +723,7 @@ func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
 		}
 		return testEngine{}, clients, nil
 	})
-	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", 1))
+	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", -1))
 	runtime, err := New(context.Background(), configuration, options)
 	if err != nil {
 		t.Fatal(err)

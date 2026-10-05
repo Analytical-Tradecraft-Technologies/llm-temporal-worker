@@ -3,12 +3,14 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
@@ -18,8 +20,9 @@ const defaultConfigWatchInterval = time.Second
 
 // maxConfigWatchBaselineBytes matches the application reload limit. The
 // watcher reads this bounded amount once at startup to close the race between
-// validating startup bytes and beginning metadata polling; subsequent polls
-// remain metadata-only.
+// validating startup bytes and beginning metadata polling. Later polls stay
+// metadata-only while the file is unchanged and read the same bounded amount
+// only while a change is settling.
 const maxConfigWatchBaselineBytes = 4 << 20
 
 // ReloadFile compiles and verifies a complete file replacement before the app
@@ -27,13 +30,24 @@ const maxConfigWatchBaselineBytes = 4 << 20
 // boundary error: configuration contents, paths, and resolved references never
 // become log fields or command output.
 func (runtime *Runtime) ReloadFile(ctx context.Context, path string) error {
+	return runtime.reloadFile(ctx, path, nil)
+}
+
+// reloadFile is ReloadFile with an optional gate over the bytes just read. A
+// declined read is not a failure: the file is still being written, nothing is
+// compiled or published, and the watcher notifies again once it settles.
+func (runtime *Runtime) reloadFile(ctx context.Context, path string, accept func([]byte) bool) error {
 	if runtime == nil || runtime.App == nil {
 		return errors.New("runtime is not initialized")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	err := runtime.App.ReloadFile(ctx, path)
+	err := runtime.App.ReloadFileIf(ctx, path, accept)
+	if errors.Is(err, app.ErrReloadDeferred) {
+		runtime.Logger.Info(ctx, "configuration reload deferred until the file is stable", slog.String("outcome", "deferred"))
+		return nil
+	}
 	if err != nil && !app.IsPublishedReloadError(err) {
 		runtime.recordReloadFailure(ctx, err)
 		return safeReloadError(err)
@@ -57,7 +71,14 @@ func (runtime *Runtime) recordReloadFailure(ctx context.Context, err error) {
 		return
 	}
 	runtime.Metrics.RecordConfigReload("failure")
-	runtime.Logger.Error(ctx, "configuration reload failed", err, slog.String("outcome", "failure"))
+	// Every rejection used to log the same line. Name a bounded cause and,
+	// where one is known, the schema path of the offending field.
+	cause, field := classifyReloadFailure(err)
+	attrs := []slog.Attr{slog.String("outcome", "failure"), slog.String("cause", cause)}
+	if field != "" {
+		attrs = append(attrs, slog.String("config_field", field))
+	}
+	runtime.Logger.Error(ctx, "configuration reload failed", err, attrs...)
 }
 
 func safeReloadError(err error) error {
@@ -73,23 +94,41 @@ func safeReloadError(err error) error {
 
 // configFileWatcher intentionally uses metadata polling rather than a native
 // watcher dependency. It observes atomic rename replacements as well as
-// in-place updates, gives reload a complete file to compile, and keeps the
-// portable process image small. It only emits a bounded notification; reload
-// owns reading and validation.
+// in-place updates and keeps the portable process image small. It only emits
+// a bounded notification; reload owns reading and validation.
+//
+// A change is notified only once it is stable: two consecutive polls must see
+// the same file identity, size, mode, modification time and content digest.
+// A prefix of a YAML file is usually valid YAML and every budget setting is
+// optional, so a file caught halfway through an in-place write could
+// otherwise validate and reload with its budgets missing. An atomic rename or
+// ConfigMap symlink swap is stable at once and is notified one poll later
+// than it is first seen.
 type configFileWatcher struct {
 	path     string
 	interval time.Duration
 
-	mu      sync.Mutex
-	state   configFileState
-	changes chan struct{}
-	done    chan struct{}
-	stopped chan struct{}
-	once    sync.Once
+	mu sync.Mutex
+	// state is the last stable observation: the startup file or the one most
+	// recently notified. unsettled forces the next polls to re-observe the
+	// file even when its metadata still equals state.
+	state     configFileState
+	unsettled bool
+	// candidate is a changed observation waiting for a second, equal poll. It
+	// is only touched by the polling goroutine.
+	candidate *configFileState
+	changes   chan struct{}
+	done      chan struct{}
+	stopped   chan struct{}
+	once      sync.Once
 }
 
 type configFileState struct {
 	info os.FileInfo
+	// digest is the SHA-256 of the content when hashed is true. The startup
+	// state of a watcher without a baseline is metadata-only.
+	digest [sha256.Size]byte
+	hashed bool
 }
 
 func newConfigFileWatcher(path string, interval time.Duration) (*configFileWatcher, error) {
@@ -97,10 +136,11 @@ func newConfigFileWatcher(path string, interval time.Duration) (*configFileWatch
 }
 
 // newConfigFileWatcherWithBaseline compares the current file once with the
-// bytes already validated by the command boundary. A mismatch emits an
-// immediate notification, covering an atomic replacement that occurred after
-// startup validation but before watcher initialization. A nil baseline keeps
-// the metadata-only behavior for callers without validated startup bytes.
+// bytes already validated by the command boundary. A mismatch leaves the
+// watcher unsettled, so the replacement is notified as soon as two polls agree
+// on it; this covers a replacement that occurred after startup validation but
+// before watcher initialization. A nil baseline keeps the metadata-only
+// startup state for callers without validated startup bytes.
 func newConfigFileWatcherWithBaseline(path string, interval time.Duration, baseline []byte) (*configFileWatcher, error) {
 	if path == "" {
 		return nil, errors.New("configuration path is required")
@@ -119,10 +159,12 @@ func newConfigFileWatcherWithBaseline(path string, interval time.Duration, basel
 	if baseline != nil {
 		current, readErr := readConfigFileBytes(path)
 		if readErr != nil || !bytes.Equal(current, baseline) {
-			// Comparison failure is conservative: the runtime attempts a bounded
-			// reload and retains the last valid snapshot if the replacement is
-			// incomplete or unreadable.
-			watcher.changes <- struct{}{}
+			// Comparison failure is conservative: once the file settles the
+			// runtime attempts a bounded reload and retains the last valid
+			// snapshot if the replacement is invalid or unreadable.
+			watcher.unsettled = true
+		} else {
+			watcher.state.digest, watcher.state.hashed = sha256.Sum256(baseline), true
 		}
 	}
 	go watcher.watch()
@@ -173,21 +215,59 @@ func (watcher *configFileWatcher) watch() {
 		case <-watcher.done:
 			return
 		case <-ticker.C:
-			next := readConfigFileState(watcher.path)
-			watcher.mu.Lock()
-			changed := !watcher.state.equal(next)
-			if changed {
-				watcher.state = next
-			}
-			watcher.mu.Unlock()
-			if changed {
-				select {
-				case watcher.changes <- struct{}{}:
-				default:
-				}
-			}
+			watcher.poll()
 		}
 	}
+}
+
+// poll performs one observation. It notifies only when this observation
+// differs from the last stable state and equals the previous poll's.
+func (watcher *configFileWatcher) poll() {
+	next := readConfigFileState(watcher.path)
+	watcher.mu.Lock()
+	unchanged := !watcher.unsettled && watcher.state.sameMetadata(next)
+	watcher.mu.Unlock()
+	if unchanged {
+		watcher.candidate = nil
+		return
+	}
+	if next.info != nil {
+		if data, err := readConfigFileBytes(watcher.path); err == nil {
+			next.digest, next.hashed = sha256.Sum256(data), true
+		}
+	}
+	if watcher.candidate == nil || !watcher.candidate.equal(next) {
+		watcher.candidate = &next
+		return
+	}
+	watcher.candidate = nil
+	watcher.mu.Lock()
+	watcher.state, watcher.unsettled = next, false
+	watcher.mu.Unlock()
+	select {
+	case watcher.changes <- struct{}{}:
+	default:
+	}
+}
+
+// settled reports whether data, as just read by a reload, is the content the
+// watcher last observed as stable. A mismatch means the file changed again
+// after the notification; the reload must not publish it, and the watcher is
+// marked unsettled so the new content is notified once it is stable.
+func (watcher *configFileWatcher) settled(data []byte) bool {
+	if watcher == nil {
+		return true
+	}
+	watcher.mu.Lock()
+	defer watcher.mu.Unlock()
+	if watcher.unsettled {
+		return false
+	}
+	if watcher.state.hashed && watcher.state.digest != sha256.Sum256(data) {
+		watcher.unsettled = true
+		return false
+	}
+	return true
 }
 
 func readConfigFileState(path string) configFileState {
@@ -198,17 +278,50 @@ func readConfigFileState(path string) configFileState {
 	return configFileState{info: info}
 }
 
-func (left configFileState) equal(right configFileState) bool {
+func (left configFileState) sameMetadata(right configFileState) bool {
 	if left.info == nil || right.info == nil {
 		return left.info == nil && right.info == nil
 	}
 	return os.SameFile(left.info, right.info) && left.info.Size() == right.info.Size() && left.info.Mode() == right.info.Mode() && left.info.ModTime().Equal(right.info.ModTime())
 }
 
+func (left configFileState) equal(right configFileState) bool {
+	return left.sameMetadata(right) && left.hashed == right.hashed && left.digest == right.digest
+}
+
+// watchedReloadGate decides, per triggered reload, whether the bytes it reads
+// must be the content the watcher saw stable. Triggers are coalesced into one
+// channel, so the source of a reload is recorded here instead.
+type watchedReloadGate struct {
+	watcher  *configFileWatcher
+	explicit atomic.Bool
+}
+
+// signal records a SIGHUP before its trigger is forwarded.
+func (gate *watchedReloadGate) signal() { gate.explicit.Store(true) }
+
+// begin is called before a reload reads the file. A pending SIGHUP is
+// consumed here, never after the read: a signal that arrives while a
+// watcher-triggered reload is already in flight must not exempt the bytes
+// that reload read earlier, and keeps its bypass for the reload it queued.
+func (gate *watchedReloadGate) begin() func([]byte) bool {
+	if gate.explicit.Swap(false) {
+		return nil
+	}
+	return gate.watcher.settled
+}
+
 // combineReloadTriggers turns signal and watcher notifications into one
 // nonblocking input for Runtime.RunWithReload. The caller owns cancellation;
 // closing it never writes to an already closed channel.
 func combineReloadTriggers(ctx context.Context, changes <-chan struct{}, signals <-chan os.Signal) <-chan struct{} {
+	return combineReloadTriggersNotify(ctx, changes, signals, nil)
+}
+
+// combineReloadTriggersNotify additionally calls onSignal, when set, before a
+// signal is forwarded, so the reload it causes can be told apart from a
+// watcher notification.
+func combineReloadTriggersNotify(ctx context.Context, changes <-chan struct{}, signals <-chan os.Signal, onSignal func()) <-chan struct{} {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -229,6 +342,9 @@ func combineReloadTriggers(ctx context.Context, changes <-chan struct{}, signals
 				if !ok {
 					signals = nil
 					continue
+				}
+				if onSignal != nil {
+					onSignal()
 				}
 				notifyReload(triggers)
 			}

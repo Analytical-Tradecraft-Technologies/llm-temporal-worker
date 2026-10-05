@@ -342,9 +342,9 @@ func assertBedrockClassFacts(t *testing.T, adapter *Adapter) {
 		if params["service_tier"] != fact.RequestedTier {
 			t.Fatalf("%s wire tier = %#v, want %q", fact.Class, params["service_tier"], fact.RequestedTier)
 		}
-		actual, err := adapter.profile.actualClass(fact.ActualTier)
-		if err != nil || actual == nil || *actual != actualByClass[fact.Class] {
-			t.Fatalf("%s actual class = %#v, %v; want %q", fact.Class, actual, err, actualByClass[fact.Class])
+		actual := adapter.profile.actualClass(fact.ActualTier)
+		if actual == nil || *actual != actualByClass[fact.Class] {
+			t.Fatalf("%s actual class = %#v; want %q", fact.Class, actual, actualByClass[fact.Class])
 		}
 	}
 }

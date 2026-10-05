@@ -38,8 +38,10 @@ const (
 )
 
 // ProviderStatusListOptions describes the storage portion of a
-// provider-status query.  AfterRouteID is an unsigned keyset position.  The
-// control layer must authenticate it before passing it here.
+// provider-status query.  AfterRouteID is an unsigned keyset position: a route
+// ID, or a short fixed-length store marker (it contains a tab, which no route
+// ID does) inside a group of same-named routes.  The control layer must
+// authenticate it before passing it here.
 type ProviderStatusListOptions struct {
 	ConfigDigest   [32]byte
 	Provider       string
@@ -55,8 +57,8 @@ type ProviderStatusListOptions struct {
 }
 
 // ProviderStatusPage is a bounded projection page.  NextRouteID is empty
-// when the page is complete; otherwise it is the last route key needed for a
-// subsequent keyset read.  It is not a signed public cursor.
+// when the page is complete; otherwise it is the opaque position needed for a
+// subsequent keyset read (see AfterRouteID).  It is not a signed public cursor.
 type ProviderStatusPage struct {
 	Routes      []RouteStatus
 	NextRouteID string

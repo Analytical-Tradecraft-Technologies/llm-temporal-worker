@@ -206,6 +206,19 @@ through binary floating point. There is no downstream currency field or
 currency enum: names such as **actual_cost_usd** make the denomination part of
 the type contract.
 
+**output** can hold any item and part kind listed in
+[Unified API](unified-api.md#semantic-items): reasoning continuation is
+returned as **provider_state** items or parts, citations as **reference**
+items, and a refusal part may carry a **provider_code**. The optional
+**usage** object has the five normalized token counts and may add
+**provider_raw**, an open object of provider-defined usage facts with no
+normalized field. An exact **cost** may name the **catalog_version** it was
+priced with, and each diagnostic may add a **path** and a string-valued
+**details** map. Compact responses use the same usage, cost, and diagnostic
+shapes. The published JSON schemas, the Go codec, and the OCaml codec accept
+exactly these shapes; a codec-versus-schema parity test and fixtures shared by
+both codecs keep them from drifting.
+
 If the real charge cannot be established, the top-level Generate
 **status** remains **completed** while **cost.status=unknown**,
 **cost.actual_cost_usd=null**, and a safe cost reason is present with no method.
@@ -239,7 +252,10 @@ metadata, digests and immutable references. Cache response templates also use
 encrypted blobs; the KV metadata does not contain plaintext model output.
 
 Materialization walks parent links only until the newest compaction base or
-materialized snapshot. It then:
+materialized snapshot; rows and blobs older than that row are not read. The
+snapshot is bound to its row by blob digest, depth and canonical lineage
+digest, and a snapshot that fails verification fails the read rather than
+falling back to older deltas. It then:
 
 1. verifies scope, handle MAC, row schema version, digests, and blob lengths;
 2. reconstructs the inherited settings from versioned snapshots and patches;
@@ -253,7 +269,13 @@ materialized snapshot. It then:
 Materialization has hard limits for depth, rows, bytes, item count, and blob
 reads. A periodic snapshot is a performance optimization and contains the same
 digest as replaying the lineage. Snapshot creation never changes a public
-handle or the logical graph.
+handle or the logical graph. Compaction always writes a snapshot, and Generate
+writes one whenever the new checkpoint's depth is a positive multiple of the
+snapshot interval (default 8), so a turn reads at most that many rows however
+long the conversation is. Because a child's expiry is capped at its parent's,
+a live snapshot row implies that the ancestors it replaces had not expired.
+See [Checkpoint graph materializer](checkpoint-materializer.md) for the exact
+rules.
 
 Parent and child writes use foreign keys and immutable-column guards. There is
 no mutable **latest checkpoint** pointer in the correctness path. Applications

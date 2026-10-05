@@ -4,6 +4,7 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
@@ -97,6 +98,26 @@ func (resolver *DefaultResolver) Resolve(ctx context.Context, ref config.SecretR
 	return append([]byte(nil), value...), nil
 }
 
+// ErrReference marks a configuration secret reference that could not be
+// resolved, so callers can classify the failure without reading its message.
+var ErrReference = errors.New("secret reference could not be resolved")
+
+// referenceError carries ErrReference without changing the cause's message.
+type referenceError struct{ cause error }
+
+func (err *referenceError) Error() string { return err.cause.Error() }
+
+func (err *referenceError) Unwrap() []error { return []error{ErrReference, err.cause} }
+
+// MarkReference marks err as a secret reference that could not be resolved. A
+// nil error stays nil.
+func MarkReference(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &referenceError{cause: err}
+}
+
 // ConfigResolver validates every SecretRef that is represented as a SecretRef
 // in the external configuration. It intentionally discards returned bytes.
 // Provider auth names are resolved by the provider client factory, where their
@@ -122,7 +143,7 @@ func (resolver ConfigResolver) Resolve(ctx context.Context, value *config.Config
 	}
 	for index, ref := range refs {
 		if _, err := resolver.Resolver.Resolve(ctx, ref); err != nil {
-			return diagnostic.Safe(secretReferenceDiagnostic(index, ref, err), err)
+			return diagnostic.Safe(secretReferenceDiagnostic(index, ref, err), MarkReference(err))
 		}
 	}
 	return nil

@@ -131,6 +131,16 @@ estimated input tokens at a conservative tokenizer ratio
 + fixed per-request charge
 ```
 
+The context-window check (`ValidateContext`, and the same check inside the
+reservation) counts the estimated input plus the output cap only. Reasoning
+tokens are generated inside that cap on every supported family: Anthropic
+`thinking.budget_tokens` must be less than `max_tokens`, and OpenAI
+`max_output_tokens` / `max_completion_tokens` bound visible output and
+reasoning together. A requested reasoning `token_budget` is therefore not
+added to the window a second time. The reservation still prices the reasoning
+component separately at the catalog's reasoning rate, on top of the full
+output cap, so it stays an upper bound.
+
 The Go `budget.Estimator` accepts an optional candidate-aware exact tokenizer
 hook. A configured hook must be deterministic, return a non-negative count,
 and account for the provider's request structure (including tools and schema);

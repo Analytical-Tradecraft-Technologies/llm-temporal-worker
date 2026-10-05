@@ -116,15 +116,15 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 }
 
 func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	return lowerRequestForEndpoint(request, serviceClass, false)
-}
-
-// lowerRequestForEndpoint lowers a request under the endpoint's storage policy.
-func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (responses.ResponseNewParams, error) {
-	requestMap, policy, err := lowerRequestMap(request, serviceClass, storageDenied)
+	requestMap, policy, err := lowerRequestMap(request, serviceClass, false)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
+	return requestParams(requestMap, policy)
+}
+
+// requestParams carries an intended wire body into the SDK parameter type.
+func requestParams(requestMap map[string]any, policy loweredToolPolicy) (responses.ResponseNewParams, error) {
 	encoded, err := json.Marshal(requestMap)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
@@ -481,7 +481,12 @@ func lowerOutput(output llm.OutputSpec) (map[string]any, error) {
 		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
 			return nil, fmt.Errorf("output schema: %w", err)
 		}
-		format := map[string]any{"type": "json_schema", "name": output.Format.Name, "schema": schema, "strict": output.Format.Strict}
+		// The provider requires a name; v1 leaves it optional.
+		name := output.Format.Name
+		if name == "" {
+			name = llm.DefaultOutputFormatName
+		}
+		format := map[string]any{"type": "json_schema", "name": name, "schema": schema, "strict": output.Format.Strict}
 		if output.Format.Description != "" {
 			format["description"] = output.Format.Description
 		}

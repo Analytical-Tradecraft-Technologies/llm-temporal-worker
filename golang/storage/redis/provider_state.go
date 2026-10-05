@@ -73,6 +73,14 @@ func (store *ProviderStateStore) key(kind string, digest [32]byte) string {
 	return store.space.admissionKey("provider-"+kind, hex.EncodeToString(digest[:]))
 }
 
+// routeField is the only derivation of a route projection's hash field. Route
+// IDs are unique per model, not per configuration, so the endpoint is part of
+// the key: same-named routes of two models on different endpoints must not
+// share one record.
+func (store *ProviderStateStore) routeField(route, endpoint string) string {
+	return store.space.digest("provider-route", route, endpoint)
+}
+
 // RecordProviderStatus implements the engine recorder using shared Redis state.
 func (store *ProviderStateStore) RecordProviderStatus(ctx context.Context, observation control.StatusObservation) error {
 	event, err := control.NewStatusEvent(observation)
@@ -123,7 +131,7 @@ func (store *ProviderStateStore) PersistStatusEvent(ctx context.Context, event c
 		return false, errors.New("status event digest mismatch")
 	}
 	key := store.key("status", event.ConfigDigest)
-	field := store.space.digest("provider-route", event.RouteID)
+	field := store.routeField(event.RouteID, event.EndpointID)
 	return store.update(ctx, key, field, func(previous string) (string, bool, error) {
 		var record providerStatusRecord
 		if previous != "" {
@@ -174,15 +182,15 @@ func decodeProviderStatus(raw string, digest [32]byte, record *providerStatusRec
 	return nil
 }
 
-func (store *ProviderStateStore) GetRouteStatus(ctx context.Context, digest [32]byte, route string) (control.RouteStatus, error) {
-	options := control.ProviderStatusListOptions{ConfigDigest: digest, AfterRouteID: route}
-	if route == "" {
-		return control.RouteStatus{}, errors.New("route is required")
+func (store *ProviderStateStore) GetRouteStatus(ctx context.Context, digest [32]byte, route, endpoint string) (control.RouteStatus, error) {
+	options := control.ProviderStatusListOptions{ConfigDigest: digest, AfterRouteID: route, EndpointID: endpoint}
+	if route == "" || endpoint == "" {
+		return control.RouteStatus{}, errors.New("route and endpoint are required")
 	}
 	if err := options.Normalize(); err != nil {
 		return control.RouteStatus{}, err
 	}
-	raw, err := store.client.HGet(ctx, store.key("status", digest), store.space.digest("provider-route", route)).Result()
+	raw, err := store.client.HGet(ctx, store.key("status", digest), store.routeField(route, endpoint)).Result()
 	if errors.Is(err, redisclient.Nil) {
 		return control.RouteStatus{}, control.ErrProviderStatusNotFound
 	}
@@ -193,7 +201,7 @@ func (store *ProviderStateStore) GetRouteStatus(ctx context.Context, digest [32]
 	if err := decodeProviderStatus(raw, digest, &record); err != nil {
 		return control.RouteStatus{}, err
 	}
-	if record.Status.RouteID != route {
+	if record.Status.RouteID != route || record.Status.EndpointID != endpoint {
 		return control.RouteStatus{}, ErrUnavailable
 	}
 	return record.Status, nil
@@ -438,14 +446,24 @@ func (store *ProviderStateStore) statusView(ctx context.Context, digest [32]byte
 		if err := decodeProviderStatus(raw, digest, &record); err != nil {
 			return nil, err
 		}
-		if field != store.space.digest("provider-route", record.Status.RouteID) {
+		if field != store.routeField(record.Status.RouteID, record.Status.EndpointID) {
+			// Records written before the endpoint became part of the field are
+			// unreachable by route reads; skip them instead of failing the view.
+			if field == store.space.digest("provider-route", record.Status.RouteID) {
+				continue
+			}
 			return nil, ErrUnavailable
 		}
 		if !record.Status.ObservedAt.After(view.Horizon) {
 			result = append(result, record)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Status.RouteID < result[j].Status.RouteID })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Status.RouteID != result[j].Status.RouteID {
+			return result[i].Status.RouteID < result[j].Status.RouteID
+		}
+		return result[i].Status.EndpointID < result[j].Status.EndpointID
+	})
 	return result, nil
 }
 
@@ -461,19 +479,50 @@ func (store *ProviderStateStore) ListRouteStatuses(ctx context.Context, options 
 	if err != nil {
 		return page, err
 	}
+	return store.pageRouteStatuses(records, options)
+}
+
+// routePosition marks one record inside a group of same-named routes. It is a
+// fixed-length digest, so the position stays within the cursor and
+// normalization bounds whatever the route and endpoint lengths. The tab keeps
+// it distinct from every route ID.
+func (store *ProviderStateStore) routePosition(status control.RouteStatus) string {
+	return "@\t" + store.space.digest("provider-route-position", status.RouteID, status.EndpointID)
+}
+
+// pageRouteStatuses pages records already sorted by route ID and endpoint. A
+// position is a route ID, or a routePosition marker when a page ended between
+// same-named routes of different models.
+func (store *ProviderStateStore) pageRouteStatuses(records []providerStatusRecord, options control.ProviderStatusListOptions) (control.ProviderStatusPage, error) {
+	var page control.ProviderStatusPage
+	// A marker resumes after the record it names. The pinned view still holds
+	// that record; if it does not, the caller must restart pagination.
+	marker := strings.Contains(options.AfterRouteID, "\t")
+	resuming := marker
 	for _, record := range records {
 		status := record.Status
-		if status.RouteID <= options.AfterRouteID || (options.Provider != "" && options.Provider != status.Provider) || (options.EndpointID != "" && options.EndpointID != status.EndpointID) || (options.Availability != "" && options.Availability != status.Availability) {
+		if resuming {
+			resuming = store.routePosition(status) != options.AfterRouteID
+			continue
+		}
+		if (!marker && status.RouteID <= options.AfterRouteID) || (options.Provider != "" && options.Provider != status.Provider) || (options.EndpointID != "" && options.EndpointID != status.EndpointID) || (options.Availability != "" && options.Availability != status.Availability) {
 			continue
 		}
 		if !options.IncludeHealthy && status.Availability == control.AvailabilityAvailable && status.Credit == control.CreditOK && status.Billing == control.BillingOK && status.Circuit == control.CircuitClosed {
 			continue
 		}
 		if len(page.Routes) == options.Limit {
-			page.NextRouteID = page.Routes[len(page.Routes)-1].RouteID
+			last := page.Routes[len(page.Routes)-1]
+			page.NextRouteID = last.RouteID
+			if status.RouteID == last.RouteID {
+				page.NextRouteID = store.routePosition(last)
+			}
 			break
 		}
 		page.Routes = append(page.Routes, status)
+	}
+	if resuming {
+		return control.ProviderStatusPage{}, control.ErrProviderViewExpired
 	}
 	return page, nil
 }

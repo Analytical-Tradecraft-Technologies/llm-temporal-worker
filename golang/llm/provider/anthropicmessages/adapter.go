@@ -3,6 +3,7 @@ package anthropicmessages
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 // Adapter owns one official Anthropic Messages SDK client and one immutable
@@ -131,6 +133,10 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)
 	if err != nil {
+		var unsupported *anthropicschema.UnsupportedError
+		if errors.As(err, &unsupported) {
+			return provider.Call{}, unsupportedError(provider.FeatureStructuredOutput, err.Error())
+		}
 		return provider.Call{}, compileError(err.Error())
 	}
 	digest := input.Metadata.SchemaDigest
@@ -159,6 +165,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		OperationKey: normalized.OperationKey,
 		ServiceClass: serviceClass,
 		SDKParams:    params,
+		OutputSchema: outputSchema(normalized),
 		Metadata:     metadata,
 	}, nil
 }
@@ -231,6 +238,15 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, err
 	}
 	return provider.Result{Response: lifted}, nil
+}
+
+// outputSchema returns the caller's schema for the lift; the wire carries a
+// lowered form the provider enforces more loosely.
+func outputSchema(request llm.Request) json.RawMessage {
+	if request.Output == nil || request.Output.Format.Kind != llm.OutputKindJSONSchema {
+		return nil
+	}
+	return append(json.RawMessage(nil), request.Output.Format.Schema...)
 }
 
 func responseRequestID(response *anthropic.Message) string {

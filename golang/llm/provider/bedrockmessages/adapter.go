@@ -3,6 +3,7 @@ package bedrockmessages
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 // Adapter owns one official Anthropic SDK client configured with Bedrock's
@@ -127,6 +129,14 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)
 	if err != nil {
+		var unsupportedSchema *anthropicschema.UnsupportedError
+		if errors.As(err, &unsupportedSchema) {
+			return provider.Call{}, unsupportedError(provider.FeatureStructuredOutput, err.Error())
+		}
+		var unsupportedMedia *unsupportedMediaError
+		if errors.As(err, &unsupportedMedia) {
+			return provider.Call{}, unsupportedError(unsupportedMedia.feature, err.Error())
+		}
 		return provider.Call{}, compileError(err.Error())
 	}
 	digest := input.Metadata.SchemaDigest
@@ -148,7 +158,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		}
 		metadata.EstimatedBytes = len(canonical)
 	}
-	return provider.Call{EndpointID: adapter.endpointID, Family: provider.FamilyBedrockMessages, Model: normalized.Model, OperationKey: normalized.OperationKey, ServiceClass: serviceClass, SDKParams: params, Metadata: metadata}, nil
+	return provider.Call{EndpointID: adapter.endpointID, Family: provider.FamilyBedrockMessages, Model: normalized.Model, OperationKey: normalized.OperationKey, ServiceClass: serviceClass, SDKParams: params, OutputSchema: outputSchema(normalized), Metadata: metadata}, nil
 }
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
@@ -196,8 +206,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
 	}
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.Usage.ServiceTier)}
+	headerTier := ""
 	if rawResponse != nil {
 		metadata.Status = rawResponse.StatusCode
+		headerTier = rawResponse.Header.Get(serviceTierHeader)
+		if metadata.ProviderTier == "" {
+			metadata.ProviderTier = headerTier
+		}
 		for _, header := range []string{"x-amzn-requestid", "x-amzn-request-id", "request-id", "x-request-id"} {
 			metadata.RequestID = rawResponse.Header.Get(header)
 			if metadata.RequestID != "" {
@@ -215,11 +230,20 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, mapped
 	}
 	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Content)})
-	lifted, err := adapter.profile.liftResponse(call, response, metadata.RequestID)
+	lifted, err := adapter.profile.liftResponseWithTier(call, response, metadata.RequestID, headerTier)
 	if err != nil {
 		return provider.Result{}, err
 	}
 	return provider.Result{Response: lifted}, nil
+}
+
+// outputSchema returns the caller's schema for the lift; the wire carries a
+// lowered form the provider enforces more loosely.
+func outputSchema(request llm.Request) json.RawMessage {
+	if request.Output == nil || request.Output.Format.Kind != llm.OutputKindJSONSchema {
+		return nil
+	}
+	return append(json.RawMessage(nil), request.Output.Format.Schema...)
 }
 
 func responseRequestID(response *anthropic.Message) string {

@@ -35,8 +35,11 @@ type CheckpointPublication struct {
 }
 
 func (capabilities V1RuntimeCapabilities) NewCheckpointPublication(keyring *state.Keyring, limits state.MaterializeLimits) (*CheckpointPublication, error) {
-	if keyring == nil || capabilities.Checkpoints.RequireMaterializer() != nil || isNilCapability(capabilities.Checkpoints.BlobWriter) || limits.MaxDepth < 0 || limits.MaxRows < 0 || limits.MaxItems < 0 || limits.MaxBytes < 0 {
+	if keyring == nil || capabilities.Checkpoints.RequireMaterializer() != nil || isNilCapability(capabilities.Checkpoints.BlobWriter) || limits.MaxDepth < 0 || limits.MaxRows < 0 || limits.MaxItems < 0 || limits.MaxBytes < 0 || limits.SnapshotInterval < 0 {
 		return nil, checkpointPublicationError(provider.CodeConfiguration)
+	}
+	if limits.SnapshotInterval == 0 {
+		limits.SnapshotInterval = state.DefaultSnapshotInterval
 	}
 	if limits.MaxDepth == 0 {
 		limits.MaxDepth = 256
@@ -100,7 +103,11 @@ func (p *CheckpointPublication) Generate(ctx context.Context, identity Checkpoin
 		return zero, llm.GenerateResponseV1{}, checkpointPublicationError(provider.CodeStateCorrupt)
 	}
 	items := append(append([]llm.Item(nil), prepared.Request.Input...), result.Output...)
-	cp, err = p.blobs(ctx, cp, replay.State, prepared.Settings, request.Append, result.Output, patch, items, false)
+	// A snapshot on every SnapshotInterval-th depth keeps the next turns'
+	// lineage walks short without a full-transcript blob write on each turn.
+	// Depth is immutable, so a retry and every fork make the same choice.
+	snapshot := cp.Depth > 0 && cp.Depth%p.limits.SnapshotInterval == 0
+	cp, err = p.blobs(ctx, cp, replay.State, prepared.Settings, request.Append, result.Output, patch, items, snapshot)
 	return cp, response, err
 }
 
@@ -246,10 +253,17 @@ func (p *CheckpointPublication) blobs(ctx context.Context, cp state.DurableCheck
 	payloads := [][]byte{deltaBytes, outputBytes, patch}
 	if snapshot {
 		data, err := p.codec.EncodeSnapshot(*state.NewCheckpointSnapshot(state.MaterializedState{Items: items, Settings: settings, Depth: cp.Depth, Lineage: lineage}))
-		if err != nil {
+		switch {
+		case err == nil:
+			payloads = append(payloads, data)
+		case cp.Kind == state.CheckpointCompaction:
 			return state.DurableCheckpoint{}, checkpointPublicationError(provider.CodeStateCorrupt)
+		default:
+			// A cadence snapshot is only a read optimization. Settings and
+			// lineage can push it past the blob bound when the transcript alone
+			// still fits; the paid result must then publish without one.
+			snapshot = false
 		}
-		payloads = append(payloads, data)
 	}
 	refs := make([]state.CheckpointBlobReference, len(payloads))
 	for i, data := range payloads {

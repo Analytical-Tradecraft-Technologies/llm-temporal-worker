@@ -169,19 +169,20 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 	return tier, nil
 }
 
-func (profile Profile) actualClass(tier string) (*llm.ServiceClass, error) {
-	if tier == "" {
-		if profile.MissingActualServiceClass == "" {
-			return nil, fmt.Errorf("provider response omitted service tier")
-		}
-		class := profile.MissingActualServiceClass
-		return &class, nil
-	}
+// actualClass maps the tier a response reported to a public class. Converse
+// makes serviceTier optional, and a missing or unrecognized tier (for example
+// reserved capacity) is not evidence of any class, so it yields nil rather
+// than a guess or a failure: the response is already paid for, and the raw
+// label is kept in the service facts for audit.
+func (profile Profile) actualClass(tier string) *llm.ServiceClass {
 	class, ok := profile.ActualServiceClasses[tier]
-	if !ok {
-		return nil, fmt.Errorf("provider returned unsupported service tier %q", tier)
+	if tier == "" {
+		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
 	}
-	return &class, nil
+	if !ok {
+		return nil
+	}
+	return &class
 }
 
 func publicServiceClasses() []llm.ServiceClass {

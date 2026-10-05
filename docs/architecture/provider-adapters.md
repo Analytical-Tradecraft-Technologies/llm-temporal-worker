@@ -37,6 +37,7 @@ type Call struct {
 	Model        string
 	ServiceClass llm.ServiceClass
 	SDKParams    any
+	OutputSchema json.RawMessage
 	Metadata     CallMetadata
 }
 
@@ -49,6 +50,9 @@ type Observer interface {
 
 `SDKParams` may contain only the parameter type for the adapter's official SDK.
 It never crosses the adapter package boundary or enters Temporal history.
+`OutputSchema` is the caller's `json_schema` output schema, set when the
+adapter sent the provider a lowered form of it; the lift validates the final
+JSON against it and it stays in the worker process like `SDKParams`.
 `CallMetadata` contains the redacted facts needed to validate the compiled call,
 including schema digests, estimated bytes, capability version, provider tier
 value, and whether opaque state is required in the response.
@@ -85,12 +89,12 @@ verified profile.
 | Profile | Official client | Initial API family | Service-class lowering | Important policy |
 | --- | --- | --- | --- | --- |
 | OpenAI | `openai-go` | Responses | economy -> `flex`, standard -> `default`, priority -> `priority` when the model supports them | Capture response `service_tier`; a downgrade is observable |
-| Azure OpenAI | `openai-go` with Azure base URL/auth options | Responses or Chat, declared per deployment | deployment capability maps supported public classes to Azure tier values | Never infer capability from the base URL alone |
+| Azure OpenAI | `openai-go` with Azure base URL/auth options | Responses or Chat, declared per deployment | the configured tier selects eligibility and pricing only; `service_tier` is not sent because the Azure specification does not define it | Never infer capability from the base URL alone |
 | OpenRouter | `openai-go` with compatible base URL | Chat Completions | configured only when a verified provider/model path offers the requested behavior | Disable hidden provider fallback and require declared parameters |
-| Exa | `openai-go` with compatible base URL | Chat Completions | profile-declared; normally standard until another tier is verified | Preserve Exa request ID and authoritative `costDollars` when present |
+| Exa | `openai-go` with compatible base URL | Chat Completions | profile-declared; normally standard until another tier is verified; `service_tier` is not sent because Exa does not define it | Preserve Exa request ID and authoritative `costDollars` when present |
 | Anthropic | `anthropic-sdk-go` | Messages | standard -> `standard_only`; priority -> `auto` only for accounts/models where priority capacity is explicitly enabled; economy unsupported synchronously | Lift the actual service tier from usage |
 | Claude Platform on AWS | Anthropic SDK AWS gateway support | Messages | capability-declared from the selected AWS offering | AWS auth belongs to client construction, not semantic input |
-| Amazon Bedrock | Anthropic SDK Bedrock/Mantle client | Messages | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | `reserved` is deployment capacity, never a public service class |
+| Amazon Bedrock | Anthropic SDK Bedrock/Mantle client | Messages | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | `reserved` is deployment capacity, never a public service class; the response tier is read from `usage.service_tier` or, when the body has none, the `X-Amzn-Bedrock-Service-Tier` header |
 | Amazon Bedrock Converse | AWS SDK for Go v2 `bedrockruntime` | Converse | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | One-shot `Converse` only; live token streaming is outside the Temporal v1 boundary |
 
 This table is a starting profile, not a promise that every model supports every
@@ -124,7 +128,9 @@ other.
 - A continuation may use a stored response/conversation identifier only when it
   is pinned to the same endpoint, account, family, and compatible model.
 - Strict structured output uses the provider's JSON Schema form after local
-  subset validation.
+  subset validation. The provider requires `text.format.name`; when the
+  caller omits `output.format.name` the adapter sends the constant `response`,
+  so the wire body and its digests stay deterministic.
 - The completed response is validated against the requested JSON object or
   JSON Schema format before it enters the normalized response. JSON-object mode
   requires a valid top-level object; a provider acknowledgement alone is not
@@ -146,7 +152,8 @@ other.
   reasoning item without encrypted content on a storage-denied endpoint, where
   its ID cannot be resolved.
 - `service_tier` is set from the resolved public class and the response tier is
-  lifted independently.
+  lifted independently. Azure OpenAI Responses is the exception on the request
+  side: its specification does not define the field, so it is not sent.
 
 ### OpenAI-compatible Chat Completions
 
@@ -161,9 +168,17 @@ other.
   messages with their call IDs.
 - Multimodal parts use only the endpoint's declared compatible wire forms.
 - Structured output chooses native response format or a strict tool emulation
-  only when the capability profile declares semantic equivalence.
+  only when the capability profile declares semantic equivalence. A
+  `json_schema` format without a caller name is sent with the constant name
+  `response`, as for Responses.
 - Provider-specific routing bodies are typed namespaced extensions; they cannot
   be injected as arbitrary JSON.
+- `service_tier` is sent only where the provider API defines it. The Azure and
+  Exa profiles omit it; the configured tier still selects the supported
+  classes and the price-catalog tier.
+- Exa's `text` option is a profile-owned root field (`"text": true`) that a
+  caller extension cannot override. `extra_body` is the OpenAI Python SDK's
+  merge mechanism and never appears on the wire.
 
 Compatible does not mean identical. Azure, OpenRouter, Exa, and optional
 endpoints each receive their own profile, fixtures, limits, error decoder, and
@@ -183,6 +198,39 @@ usage/cost lifter.
   round-trip byte-for-byte and stay pinned to the compatible Anthropic route.
 - JSON Schema constraints are lowered through native output/tool facilities
   only when the exact endpoint profile supports the required strictness.
+- Claude structured output (`output_config.format`) returns a 400 for schema
+  keywords outside its subset, so the Anthropic and Bedrock Messages adapters
+  send a lowered schema, following the transform in the official SDK:
+  - keywords the provider rejects (`minLength`, `maxLength`, `minimum`,
+    `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`,
+    `maxItems`, `minItems` above 1, unsupported `format` values, and every
+    other keyword outside the provider subset) are removed and appended to
+    that schema's `description` as `{keyword: value, ...}` with sorted keys,
+    so the model still sees them and equal schemas lower to equal bytes;
+  - `oneOf` becomes `anyOf`, and a `$ref` keeps no sibling keywords;
+  - an object without `additionalProperties` is closed with
+    `additionalProperties: false`;
+  - an object that explicitly sets `additionalProperties` to `true` or to a
+    schema cannot be represented. Strict portability rejects it at compile.
+    Best effort closes it when it declares `properties`, which only narrows
+    the answer, and rejects it otherwise;
+  - recursive schemas, and references other than `#/$defs/<name>`, are
+    rejected at compile in both modes.
+
+  Rejections are `unsupported_capability` compile errors raised before
+  dispatch, so another route can be chosen. Because the provider enforces a
+  looser schema than the caller wrote, the lift validates the completed
+  response against the caller's original schema, exactly as the Responses and
+  Chat lifts do; JSON that violates it is a provider invalid-response error.
+
+### Amazon Bedrock Messages
+
+- Lowering and lifting follow Anthropic Messages, including the structured
+  output schema lowering and final validation above.
+- Image and document parts must carry inline bytes. Claude on Amazon Bedrock
+  does not accept URL sources and the worker does not fetch URLs, so a URL
+  image or document is an `unsupported_capability` compile error in strict
+  and best-effort mode alike. Bedrock Converse accepts text parts only.
 
 Reasoning controls lower the same way on Anthropic Messages and Bedrock
 Messages:
@@ -234,8 +282,27 @@ inclusive provider count remains in `usage.provider_raw` as `prompt_tokens`
 (Chat) or `input_tokens` (Responses). Negative counts or cache subsets exceeding
 the total are rejected as invalid provider responses.
 
-An unrecognized actual provider tier maps to no public class and returns a
-diagnostic. It must not be mislabeled as `standard`.
+A successful response is never rejected over its tier label, because the
+provider has already done billable work. The OpenAI Chat, OpenAI Responses,
+Bedrock Messages and Bedrock Converse adapters treat the response tier as
+optional evidence:
+
+- A response with no tier is accepted and reports no actual class
+  (`service.actual` is omitted). `service_tier` is optional in the OpenAI
+  response schemas and in Converse, and is absent from the Azure OpenAI and Exa
+  response shapes and from the Bedrock InvokeModel body.
+- An unrecognized provider tier (for example an upstream label relayed by
+  OpenRouter, or Bedrock `reserved`) also maps to no public class. The raw
+  label is kept in `service.provider_value`. It must not be mislabeled as
+  `standard` or as the attempted class.
+- A profile may set `MissingActualServiceClass` to name the class a tier-less
+  response reports; the production factory does not.
+
+Pricing and cost metrics use the attempted class whenever no actual class is
+reported, and the actual-class metric records `unknown`.
+
+The Anthropic Messages profiles (direct and AWS gateway) still require
+`usage.service_tier`, which that API documents as always present.
 
 Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
 a string, and some compatible providers send an empty string for a tool that

@@ -420,8 +420,10 @@ func TestCapturedWireBodyKeepsNamedToolChoiceFunctionName(t *testing.T) {
 func TestCapturedWireBodyKeepsProfileWireDefaults(t *testing.T) {
 	want := map[string]map[string]any{
 		"openrouter": {"provider": map[string]any{"order": []any{"ProviderA", "ProviderB"}, "allow_fallbacks": false, "require_parameters": true}},
-		"exa":        {"extra_body": map[string]any{"text": true}},
+		// Exa reads text as a root field; extra_body never appears on the wire.
+		"exa": {"text": true},
 	}
+	absent := map[string][]string{"exa": {"extra_body"}}
 	for _, profile := range wireAuditProfiles(t) {
 		defaults, ok := want[profile.id]
 		if !ok {
@@ -440,6 +442,46 @@ func TestCapturedWireBodyKeepsProfileWireDefaults(t *testing.T) {
 					t.Fatalf("%s = %s, want %s", field, describeWireValue(wire[field]), describeWireValue(value))
 				}
 			}
+			for _, field := range absent[profile.id] {
+				if value, present := wire[field]; present {
+					t.Fatalf("%s = %s, want the field absent", field, describeWireValue(value))
+				}
+			}
 		})
+	}
+}
+
+// service_tier is sent only where the provider API defines it: the configured
+// tier for the direct API and OpenRouter, nothing for Azure and Exa. The
+// omission is part of the intended body, so the audit above covers it too.
+func TestCapturedWireBodyServiceTierFollowsTheProfile(t *testing.T) {
+	omits := map[string]bool{"openai": false, "azure": true, "openrouter": false, "exa": true}
+	for _, profile := range wireAuditProfiles(t) {
+		omit, known := omits[profile.id]
+		if !known {
+			t.Fatalf("profile %q has no declared service_tier expectation", profile.id)
+		}
+		if profile.profile.OmitServiceTier != omit {
+			t.Fatalf("profile %q OmitServiceTier = %t, want %t", profile.id, profile.profile.OmitServiceTier, omit)
+		}
+		for class, tier := range profile.profile.ServiceTiers {
+			if tier == "" {
+				continue
+			}
+			t.Run(profile.id+"/"+string(class), func(t *testing.T) {
+				request := llm.Request{OperationKey: "wire-tier", Model: profile.model, Input: wireAuditUserText("hello"), ServiceClass: class}
+				intended := intendedWireBody(t, profile, request)
+				captured := captureWireBody(t, profile, request)
+				for name, body := range map[string]map[string]any{"intended": intended, "captured": captured} {
+					sent, present := body["service_tier"]
+					if omit && present {
+						t.Fatalf("%s body sent service_tier %v to an API that does not define it", name, sent)
+					}
+					if !omit && sent != tier {
+						t.Fatalf("%s body service_tier = %v, want %q", name, sent, tier)
+					}
+				}
+			})
+		}
 	}
 }

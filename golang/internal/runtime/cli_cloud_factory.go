@@ -34,7 +34,7 @@ func newCLIReferenceResolver(resolver secrets.Resolver) config.ReferenceResolver
 }
 
 func isCLIReadinessFixture(value config.Config) bool {
-	return value.Environment == "development" && value.State.Kind != config.StateKindDurable && value.Authorization == nil
+	return !config.IsProductionEnvironment(value.Environment) && value.State.Kind != config.StateKindDurable && value.Authorization == nil
 }
 
 // newCLIEngineFactory binds policy and clients to the same immutable snapshot.

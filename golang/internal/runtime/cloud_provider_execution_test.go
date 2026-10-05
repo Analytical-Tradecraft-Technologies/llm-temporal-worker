@@ -268,13 +268,29 @@ func TestCloudProviderExecutionLostAcknowledgementsNeverResubmit(t *testing.T) {
 				}
 				return nil
 			}
-			_, err := f.submit(context.Background())
+			refused, err := f.submit(context.Background())
+			if stage == cloudstate.ExecutionSubmitting {
+				// The refused marker stopped the adapter before any write, so this
+				// caller settles its own claim at zero cost instead of guessing later.
+				execution := refused.Saved.Execution
+				if err != nil || execution.Stage != cloudstate.ExecutionFailed || execution.Failure.Dispatch != provider.DispatchNotDispatched || !execution.Failure.Retryable || !execution.Settled || f.settlements.Load() != 1 {
+					t.Fatal("refused marker not settled as undispatched", refused, err)
+				}
+				f.store.after = nil
+				before := f.submits.Load()
+				f.now = f.now.Add(16 * time.Minute)
+				result, err := f.resume(context.Background())
+				if err != nil || result.Saved.Execution.Stage != cloudstate.ExecutionFailed || f.submits.Load() != before || f.polls.Load() != 0 || f.settlements.Load() != 1 {
+					t.Fatal("settled refusal resubmitted or settled twice", result, err)
+				}
+				return
+			}
 			if err == nil || strings.Contains(err.Error(), "sensitive") {
 				t.Fatal("uncertain write not safely reported", err)
 			}
 			f.store.after = nil
 			before := f.submits.Load()
-			if stage == cloudstate.ExecutionClaiming || stage == cloudstate.ExecutionSubmitting {
+			if stage == cloudstate.ExecutionClaiming {
 				result, err := f.resume(context.Background())
 				if err != nil || result.Saved.Execution.Stage != stage || result.RetryAfter != 5*time.Second || f.submits.Load() != before || f.polls.Load() != 0 || f.settlements.Load() != 0 {
 					t.Fatal("observation delayed until recovery or performed provider work", result, err)
@@ -293,7 +309,7 @@ func TestCloudProviderExecutionLostAcknowledgementsNeverResubmit(t *testing.T) {
 			if f.submits.Load() != before {
 				t.Fatal("recovery submitted again")
 			}
-			if stage == cloudstate.ExecutionClaiming || stage == cloudstate.ExecutionSubmitting {
+			if stage == cloudstate.ExecutionClaiming {
 				if result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || f.settlements.Load() != 0 {
 					t.Fatal("uncertain submission refunded or guessed")
 				}
@@ -587,8 +603,14 @@ func TestCloudProviderExecutionRefusesHTTPWhenSubmissionStateCannotBeSaved(t *te
 		writes++
 		return provider.ResumableResult{}, nil
 	}
-	if _, err := f.submit(context.Background()); err == nil || writes != 0 {
+	result, err := f.submit(context.Background())
+	if writes != 0 {
 		t.Fatal("HTTP crossed failed durable boundary", err)
+	}
+	// Nothing was sent, so the consumed claim is released for a prompt retry.
+	execution := result.Saved.Execution
+	if err != nil || execution.Stage != cloudstate.ExecutionFailed || execution.Failure.Dispatch != provider.DispatchNotDispatched || !execution.Failure.Retryable || !execution.Settled || f.settlements.Load() != 1 {
+		t.Fatal("refused dispatch left the claim unsettled", result, err)
 	}
 }
 

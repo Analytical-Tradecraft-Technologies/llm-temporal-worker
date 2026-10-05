@@ -394,7 +394,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	var generationPort redisstore.BudgetGenerationPort
 	streamEnabled := value.State.Redis.CoordinationStreamEnabled != nil && *value.State.Redis.CoordinationStreamEnabled
-	needBudgetKeys := streamEnabled || (value.Environment == "production" && value.State.Kind == config.StateKindDurable)
+	needBudgetKeys := streamEnabled || (config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable)
 	var budgetKeys redisstore.BudgetKeySpace
 	if needBudgetKeys {
 		budgetKeys, err = redisstore.NewBudgetKeySpace(keyOptions)
@@ -407,7 +407,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if streamEnabled {
 		streamKey = budgetKeys.EventsKey()
 	}
-	if factory.options.BudgetStatusReaderFactory != nil && value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if factory.options.BudgetStatusReaderFactory != nil && config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
 			closeOwned()
@@ -516,7 +516,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	var repository CloudRequestRepository
 	var initialization *budget.Initialization
-	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		repository, err = factory.buildCloudRequests(ctx, value.State.Requests)
 		if err != nil {
 			closeAll()
@@ -848,7 +848,7 @@ func (factory *ProductionEngineFactory) redisKeySecret(ctx context.Context, valu
 	if err := value.State.Redis.KeySecret.Validate("state.redis.key_secret"); err != nil {
 		return nil, err
 	}
-	secret, err := factory.options.Resolver.Resolve(ctx, value.State.Redis.KeySecret)
+	secret, err := factory.resolveSecret(ctx, value.State.Redis.KeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Redis key secret: %w", err)
 	}
@@ -861,7 +861,7 @@ func (factory *ProductionEngineFactory) redisKeySecret(ctx context.Context, valu
 func (factory *ProductionEngineFactory) continuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, error) {
 	keys := make([]state.Key, 0, len(value.Continuation.HandleKeys))
 	for _, key := range value.Continuation.HandleKeys {
-		secret, err := factory.options.Resolver.Resolve(ctx, key.Secret)
+		secret, err := factory.resolveSecret(ctx, key.Secret)
 		if err != nil {
 			return nil, fmt.Errorf("resolve continuation key %q: %w", key.ID, err)
 		}
@@ -952,7 +952,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
 		case "bearer_env", "header_env":
 			key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 			if err != nil {
@@ -962,7 +962,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
 		default:
 			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
 		}
@@ -997,11 +997,17 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, err
 		}
+		// The client must match the dialect the profile was built for, which a
+		// configured endpoint declares through its extension marker.
+		dialect, err := chatDialect(endpointID, endpoint, profile)
+		if err != nil {
+			return nil, err
+		}
 		key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 		if err != nil {
 			return nil, err
 		}
-		switch profile.ChatDialect {
+		switch dialect {
 		case ChatDialectOpenRouter:
 			openrouterClient, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
 			if err != nil {
@@ -1214,22 +1220,9 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 	tiers, actual := endpointTiers(endpoint)
 	allowed := extensionSpecs(endpoint)
 	base := strings.TrimRight(endpoint.BaseURL, "/")
-	dialect := supplied.ChatDialect
-	if dialect == "" {
-		_, openRouterExtension := endpoint.Extensions["openrouter"]
-		_, exaExtension := endpoint.Extensions["exa"]
-		switch {
-		case openRouterExtension && exaExtension:
-			return nil, fmt.Errorf("endpoint %q: chat dialect markers are ambiguous", endpointID)
-		case openRouterExtension:
-			dialect = ChatDialectOpenRouter
-		case exaExtension:
-			dialect = ChatDialectExa
-		case base == "https://openrouter.ai/api/v1" || base == "https://api.exa.ai":
-			return nil, fmt.Errorf("endpoint %q: specialized chat dialect must be explicit", endpointID)
-		default:
-			dialect = ChatDialectGeneric
-		}
+	dialect, err := chatDialect(endpointID, endpoint, supplied)
+	if err != nil {
+		return nil, err
 	}
 	switch dialect {
 	case ChatDialectOpenRouter:
@@ -1262,6 +1255,32 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 		return &value, nil
 	default:
 		return nil, fmt.Errorf("endpoint %q: unsupported chat dialect %q", endpointID, dialect)
+	}
+}
+
+// chatDialect resolves the Chat dialect of an endpoint: the supplied one, or
+// the one its extension marker declares. It is never inferred from the host.
+func chatDialect(endpointID string, endpoint config.EndpointConfig, supplied EndpointProfile) (ChatDialect, error) {
+	if supplied.ChatDialect != "" {
+		return supplied.ChatDialect, nil
+	}
+	if supplied.Chat != nil {
+		return ChatDialectGeneric, nil
+	}
+	_, openRouterExtension := endpoint.Extensions["openrouter"]
+	_, exaExtension := endpoint.Extensions["exa"]
+	base := strings.TrimRight(endpoint.BaseURL, "/")
+	switch {
+	case openRouterExtension && exaExtension:
+		return "", fmt.Errorf("endpoint %q: chat dialect markers are ambiguous", endpointID)
+	case openRouterExtension:
+		return ChatDialectOpenRouter, nil
+	case exaExtension:
+		return ChatDialectExa, nil
+	case base == "https://openrouter.ai/api/v1" || base == "https://api.exa.ai":
+		return "", fmt.Errorf("endpoint %q: specialized chat dialect must be explicit", endpointID)
+	default:
+		return ChatDialectGeneric, nil
 	}
 }
 
@@ -1392,14 +1411,23 @@ func stringSlice(value any) ([]string, error) {
 func (factory *ProductionEngineFactory) providerSecret(ctx context.Context, auth config.AuthConfig, endpointID string) ([]byte, error) {
 	switch auth.Kind {
 	case "bearer_env", "header_env":
-		return factory.options.Resolver.Resolve(ctx, config.SecretRef{Kind: config.SecretEnv, Name: auth.Name})
+		return factory.resolveSecret(ctx, config.SecretRef{Kind: config.SecretEnv, Name: auth.Name})
 	default:
 		return nil, factory.unsupportedAuth(endpointID, auth.Kind)
 	}
 }
 
 func (factory *ProductionEngineFactory) resolveAuthSecret(ctx context.Context, _ config.AuthConfig, ref config.SecretRef) ([]byte, error) {
-	return factory.options.Resolver.Resolve(ctx, ref)
+	return factory.resolveSecret(ctx, ref)
+}
+
+// resolveSecret resolves a reference while clients are built. ConfigResolver
+// does not cover provider auth names or the Redis key secret, so a failure here
+// carries the same marker and a rejected reload reports it as a secret cause
+// rather than a dependency outage. The message is unchanged.
+func (factory *ProductionEngineFactory) resolveSecret(ctx context.Context, ref config.SecretRef) ([]byte, error) {
+	value, err := factory.options.Resolver.Resolve(ctx, ref)
+	return value, secrets.MarkReference(err)
 }
 
 func (factory *ProductionEngineFactory) unsupportedAuth(endpointID, kind string) error {

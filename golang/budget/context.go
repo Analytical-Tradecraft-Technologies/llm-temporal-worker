@@ -9,7 +9,7 @@ import (
 )
 
 // ErrContextLimit excludes a candidate whose model cannot fit the estimated
-// input and reserved output/reasoning. Other estimator failures are hard errors.
+// input and the output cap. Other estimator failures are hard errors.
 var ErrContextLimit = errors.New("request exceeds model context token limit")
 
 // ValidateContext performs no pricing, admission, or provider I/O. It uses the
@@ -35,15 +35,19 @@ func (estimator Estimator) ValidateContext(request llm.Request, candidate routin
 	if err != nil {
 		return err
 	}
-	reasoning := estimator.MaxReasoning
-	if resolved.Reasoning != nil && resolved.Reasoning.TokenBudget != nil && int64(*resolved.Reasoning.TokenBudget) > reasoning {
-		reasoning = int64(*resolved.Reasoning.TokenBudget)
-	}
-	return validateContextCounts(candidate.ContextTokens, input, output, reasoning)
+	// The reasoning budget is not added. Every supported family counts
+	// thinking inside the output cap: Anthropic thinking.budget_tokens "must be
+	// ≥1024 and less than max_tokens", and OpenAI max_output_tokens and
+	// max_completion_tokens bound "visible output tokens and reasoning tokens".
+	// Bedrock Converse forwards no reasoning controls.
+	return validateContextCounts(candidate.ContextTokens, input, output)
 }
 
-func validateContextCounts(limit, input, output, reasoning int64) error {
-	if limit < 0 || input < 0 || output < 0 || reasoning < 0 {
+// validateContextCounts checks the window against the input and the output
+// cap. Reasoning tokens are generated inside the output cap, so they occupy no
+// additional room.
+func validateContextCounts(limit, input, output int64) error {
+	if limit < 0 || input < 0 || output < 0 {
 		return fmt.Errorf("context limit and token counts must not be negative")
 	}
 	if limit == 0 {
@@ -51,7 +55,7 @@ func validateContextCounts(limit, input, output, reasoning int64) error {
 	}
 	// Subtraction avoids overflow even for adversarial int64 token counts.
 	remaining := limit
-	for _, count := range []int64{input, output, reasoning} {
+	for _, count := range []int64{input, output} {
 		if count > remaining {
 			return ErrContextLimit
 		}

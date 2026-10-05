@@ -78,7 +78,7 @@ func TestLiftRejectsNilResponseWithoutPanicking(t *testing.T) {
 	}
 }
 
-func TestLiftMapsActualTiersAndRejectsUnknown(t *testing.T) {
+func TestLiftMapsActualTiersAndKeepsUnreportedTierUnclassified(t *testing.T) {
 	for _, test := range []struct {
 		tier responses.ResponseServiceTier
 		want llm.ServiceClass
@@ -97,11 +97,17 @@ func TestLiftMapsActualTiersAndRejectsUnknown(t *testing.T) {
 			t.Errorf("tier %s -> %#v, want %s", test.tier, got.Service.Actual, test.want)
 		}
 	}
-	unknown := minimalResponse(responses.ResponseServiceTierScale, responses.ResponseStatusCompleted)
-	_, err := liftResponse(provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &unknown, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("unknown tier error = %#v", err)
+	// A paid response is never discarded over its tier label: a missing or
+	// unrecognized tier reports no actual class and keeps the raw value.
+	for _, tier := range []responses.ResponseServiceTier{"", responses.ResponseServiceTierScale} {
+		response := minimalResponse(tier, responses.ResponseStatusCompleted)
+		got, err := liftResponse(provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "op", ServiceClass: llm.ServiceClassPriority}, &response, "req")
+		if err != nil {
+			t.Fatalf("tier %q: %v", tier, err)
+		}
+		if got.Service.Actual != nil || got.Service.Attempted != llm.ServiceClassPriority || got.Service.ProviderValue != string(tier) {
+			t.Fatalf("tier %q service facts = %+v", tier, got.Service)
+		}
 	}
 }
 
