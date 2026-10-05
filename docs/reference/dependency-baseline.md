@@ -106,13 +106,20 @@ The baseline currently records one approved exception:
 
 | Finding | Owner | Expiry | Remediation | Accepted trace scope |
 | --- | --- | --- | --- | --- |
-| `GO-2026-5932` | `platform-security` | `2026-08-14T00:00:00Z` | [Go vulnerability entry](https://pkg.go.dev/vuln/GO-2026-5932) | `module_only` |
+| `GO-2026-5932` | `platform-security` | `2027-01-15T00:00:00Z` | [Go vulnerability entry](https://pkg.go.dev/vuln/GO-2026-5932) | `module_only` |
 
 This `module_only` exception accepts only the finding's single module/version
 trace frame. It does not accept a reachable package or function trace, and it
 does not suppress unrelated findings. The verifier requires the finding to be
 present and rejects the exception after its expiry; remove or update this
 entry when remediation is complete.
+
+`GO-2026-5932` reports that `golang.org/x/crypto/openpgp` is unmaintained. It
+affects every `golang.org/x/crypto` version, so no upgrade remediates it, and
+the worker does not import any `openpgp` package. It was re-reviewed on
+2026-10-05 and extended for one quarter. Re-review it before the expiry above
+and remove it if the module drops the package or a fixed version is published.
+The documentation test keeps this table in step with `baseline.json`.
 
 ## Repository module
 
