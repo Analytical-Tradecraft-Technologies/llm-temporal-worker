@@ -7,9 +7,13 @@ The previous SQL adapters have been removed. No existing SQL data is migrated.
 
 ## Runtime composition
 
-Production snapshots bind inference outcomes to the same Redis client and key
-namespace used by the worker. The recorder constructs a validated
-`control.StatusEvent`, then atomically updates the route projection. It stores
+The recorder constructs a validated `control.StatusEvent` and atomically
+updates the route projection in the worker's Redis key namespace. Production
+snapshots construct this recorder (`V1RuntimeCapabilities.ProviderStatusRecorder`),
+but the cloud Generate/Compact execution path does not yet call it; only the
+legacy engine records inference outcomes. Until it is wired, the Redis status
+projection stays empty on the cloud path and sticky credit/billing incident
+detection does not run there. It stores
 safe codes and digests, never prompts, outputs, credentials, or raw provider
 bodies. Recorder failures remain control-plane telemetry and do not replace a
 provider result. Memory-mode snapshots do not create external stores.

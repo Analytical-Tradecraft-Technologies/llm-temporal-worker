@@ -113,7 +113,9 @@ provider state are sensitive by default. The worker:
   at-rest encryption;
 - records retention/expiry metadata; automatic production cleanup is deferred;
 - records provider storage/retention choices in endpoint profiles;
-- provides content-free audit events for access and deletion.
+- is intended to provide content-free audit events for access and deletion;
+  these are not yet emitted for Generate/Compact access or scope denials (only
+  query audit and configuration reloads are logged today).
 
 The cloud Generate contract stores bounded content-free metadata and references
 for recovery and cache verification. Prompt, tool, output and provider-state
