@@ -35,6 +35,9 @@ func (converter *boundedDataConverter) ToPayload(value interface{}) (*commonpb.P
 }
 
 func (converter *boundedDataConverter) FromPayload(payload *commonpb.Payload, valuePtr interface{}) error {
+	if deferredDecode(valuePtr) {
+		return converter.delegate.FromPayload(payload, valuePtr)
+	}
 	if err := converter.check(payload); err != nil {
 		return err
 	}
@@ -53,10 +56,27 @@ func (converter *boundedDataConverter) ToPayloads(values ...interface{}) (*commo
 }
 
 func (converter *boundedDataConverter) FromPayloads(payloads *commonpb.Payloads, valuePtrs ...interface{}) error {
-	if err := converter.checkAll(payloads); err != nil {
-		return err
+	if payloads != nil {
+		for index, payload := range payloads.Payloads {
+			if index < len(valuePtrs) && deferredDecode(valuePtrs[index]) {
+				continue
+			}
+			if err := converter.check(payload); err != nil {
+				return err
+			}
+		}
 	}
 	return converter.delegate.FromPayloads(payloads, valuePtrs...)
+}
+
+// deferredDecode reports a raw-payload target. The v1 Activity handlers take
+// converter.RawValue so they can apply the same inline limit and strict decode
+// inside the Activity, where the failure becomes a typed, non-retryable
+// llm_invalid_argument. Rejecting here instead would surface an untyped,
+// retryable SDK wrapper error before the handler could classify it.
+func deferredDecode(valuePtr interface{}) bool {
+	_, ok := valuePtr.(*converter.RawValue)
+	return ok
 }
 
 func (converter *boundedDataConverter) ToString(payload *commonpb.Payload) string {

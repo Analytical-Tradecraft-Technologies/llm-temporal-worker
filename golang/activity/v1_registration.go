@@ -13,8 +13,8 @@ import (
 // from accidentally describing an Activity on a different queue.
 //
 // InputType and OutputType are documentation/inspection labels, not a second
-// serializer. The registered function signatures remain the source of truth
-// for Temporal's payload codec.
+// serializer. The registered handlers accept a raw payload and decode it
+// strictly into these types inside the Activity (see decodeV1ActivityInput).
 type V1ActivityDescriptor struct {
 	TaskQueue  string
 	Name       string
