@@ -32,7 +32,14 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		if err != nil {
 			return bedrockruntime.ConverseInput{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		input.Messages = append(input.Messages, message)
+		// A model turn can be split into text and tool-call items internally.
+		// Converse requires those blocks (and parallel tool results) together.
+		last := len(input.Messages) - 1
+		if last >= 0 && input.Messages[last].Role == message.Role {
+			input.Messages[last].Content = append(input.Messages[last].Content, message.Content...)
+		} else {
+			input.Messages = append(input.Messages, message)
+		}
 	}
 	if len(input.Messages) == 0 {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("at least one input message is required")
