@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strings"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -190,7 +191,8 @@ func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, 
 
 // CountInputTokens shares the admission estimate with compaction planning. It
 // uses the configured exact tokenizer or the existing UTF-8 estimate, without
-// looking up prices or acquiring budget.
+// looking up prices or acquiring budget. The UTF-8 estimate excludes inline
+// image and PDF bytes and the capped media allowance that reservation adds.
 func (estimator Estimator) CountInputTokens(request llm.Request, candidate routing.Candidate) (int64, error) {
 	return estimator.estimateInput(request, candidate)
 }
@@ -206,14 +208,19 @@ func (estimator Estimator) estimateInput(request llm.Request, candidate routing.
 		}
 		return inputTokens, nil
 	}
-	data, err := llm.CanonicalJSONWithLimits(mustRequestJSON(request), 16<<20, 128)
+	// Inline media bytes are serialized as base64, which says nothing about
+	// what the provider bills: images and PDFs are covered by the per-part
+	// media allowance, and inline text documents are counted below on their
+	// decoded bytes like any other text.
+	textRequest, inlineTextBytes := withoutInlineMediaBytes(request)
+	data, err := llm.CanonicalJSONWithLimits(mustRequestJSON(textRequest), 16<<20, 128)
 	if err != nil {
 		return 0, err
 	}
 	// UTF-8 bytes / 4 is a conservative provider-independent baseline for
 	// ordinary text. Structural overhead is bounded by the serialized request.
 	// Text an adapter adds for failed tool results is counted the same way.
-	input := int64((len(data) + routing.ToolResultErrorOverheadBytes(request, candidate.Family) + 3) / 4)
+	input := saturatingAdd(int64((len(data)+routing.ToolResultErrorOverheadBytes(request, candidate.Family)+3)/4), textBaselineTokens(inlineTextBytes))
 	if input < 1 {
 		input = 1
 	}
@@ -228,9 +235,11 @@ func (estimator Estimator) estimateInput(request llm.Request, candidate routing.
 // (pixels or pages), not on the bytes this worker serializes. A URL
 // contributes only its string to the UTF-8 fallback, so without an explicit
 // allowance an arbitrarily large remote document would be reserved at a few
-// dozen tokens and bypass the admission cap. The fallback estimator therefore
-// adds a fixed conservative allowance per media part. These constants are
-// reservation bounds, not billing rates; settlement still records actual usage.
+// dozen tokens and bypass the admission cap. Inline bytes are excluded from
+// the serialized-size estimate for the same reason: their base64 length is
+// unrelated to the billed tokens. The fallback estimator therefore adds a
+// conservative allowance per media part. These constants are reservation
+// bounds, not billing rates; settlement still records actual usage.
 const (
 	// MediaImageInputTokenFloor bounds one image. Supported providers resize
 	// images before tokenization: Anthropic's standard limit is about 1,600
@@ -250,7 +259,9 @@ const (
 	// Anthropic bill the extracted text plus a rendered image of every page,
 	// so the page image is charged at the full per-image floor.
 	MediaDocumentTokensPerPage = MediaDocumentTextTokensPerPage + MediaImageInputTokenFloor
-	// MediaDocumentInputTokenFloor is the per-document allowance
+	// MediaDocumentInputTokenFloor is the allowance for a document whose
+	// content cannot be bounded at admission: a URL, a blob reference, or
+	// inline bytes that are not plain text (see documentInputAllowance)
 	// (600 pages x 9,000 tokens = 5,400,000 tokens). It deliberately exceeds
 	// every supported context window: on a candidate that declares a context
 	// window, addMediaAllowance caps it to the remaining input room, so a
@@ -266,11 +277,15 @@ func mediaInputAllowance(request llm.Request) int64 {
 	total := int64(0)
 	add := func(parts []llm.Part) {
 		for _, part := range parts {
-			switch part.(type) {
+			switch typed := part.(type) {
 			case llm.ImagePart, *llm.ImagePart:
 				total = saturatingAdd(total, MediaImageInputTokenFloor)
-			case llm.DocumentPart, *llm.DocumentPart:
-				total = saturatingAdd(total, MediaDocumentInputTokenFloor)
+			case llm.DocumentPart:
+				total = saturatingAdd(total, documentInputAllowance(typed))
+			case *llm.DocumentPart:
+				if typed != nil {
+					total = saturatingAdd(total, documentInputAllowance(*typed))
+				}
 			}
 		}
 	}
@@ -294,6 +309,119 @@ func mediaInputAllowance(request llm.Request) int64 {
 		}
 	}
 	return total
+}
+
+// documentInputAllowance bounds one document part beyond what estimateInput
+// already counts for it. An inline text document is tokenized as text and a
+// token covers at least one byte, so its decoded byte length bounds its
+// tokens; estimateInput counts those bytes at the text baseline and the
+// allowance reserves the remainder. Every other document keeps the
+// unknown-size assumption. That includes inline PDFs: providers bill a
+// rendered image for every page, and compressed page objects mean a small
+// file can still declare the maximum page count, so the byte length does not
+// bound the page count.
+func documentInputAllowance(part llm.DocumentPart) int64 {
+	if !inlineTextDocument(part) {
+		return MediaDocumentInputTokenFloor
+	}
+	length := int64(len(part.Bytes))
+	return length - textBaselineTokens(length)
+}
+
+// inlineTextDocument reports whether the part carries its own bytes and
+// declares a text media type, ignoring case and parameters such as charset.
+func inlineTextDocument(part llm.DocumentPart) bool {
+	if part.Bytes == nil || part.URL != "" || part.Blob != nil {
+		return false
+	}
+	mediaType, _, _ := strings.Cut(part.MediaType, ";")
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mediaType)), "text/")
+}
+
+// textBaselineTokens is the bytes / 4 text baseline, rounded up.
+func textBaselineTokens(length int64) int64 {
+	return length/4 + (length%4+3)/4
+}
+
+// withoutInlineMediaBytes returns a copy of the request whose inline image
+// and document parts carry no bytes, plus the total decoded length of the
+// inline text documents. The request itself is not modified.
+func withoutInlineMediaBytes(request llm.Request) (llm.Request, int64) {
+	textBytes := int64(0)
+	strip := func(parts []llm.Part) []llm.Part {
+		var stripped []llm.Part
+		replace := func(index int, part llm.Part) {
+			if stripped == nil {
+				stripped = append([]llm.Part(nil), parts...)
+			}
+			stripped[index] = part
+		}
+		for index, part := range parts {
+			switch typed := part.(type) {
+			case llm.ImagePart:
+				if len(typed.Bytes) > 0 {
+					typed.Bytes = []byte{}
+					replace(index, typed)
+				}
+			case *llm.ImagePart:
+				if typed != nil && len(typed.Bytes) > 0 {
+					value := *typed
+					value.Bytes = []byte{}
+					replace(index, value)
+				}
+			case llm.DocumentPart:
+				if len(typed.Bytes) > 0 {
+					if inlineTextDocument(typed) {
+						textBytes = saturatingAdd(textBytes, int64(len(typed.Bytes)))
+					}
+					typed.Bytes = []byte{}
+					replace(index, typed)
+				}
+			case *llm.DocumentPart:
+				if typed != nil && len(typed.Bytes) > 0 {
+					value := *typed
+					if inlineTextDocument(value) {
+						textBytes = saturatingAdd(textBytes, int64(len(value.Bytes)))
+					}
+					value.Bytes = []byte{}
+					replace(index, value)
+				}
+			}
+		}
+		if stripped == nil {
+			return parts
+		}
+		return stripped
+	}
+	instructions := append([]llm.Instruction(nil), request.Instructions...)
+	for index := range instructions {
+		instructions[index].Content = strip(instructions[index].Content)
+	}
+	input := append([]llm.Item(nil), request.Input...)
+	for index, item := range input {
+		switch typed := item.(type) {
+		case llm.Message:
+			typed.Content = strip(typed.Content)
+			input[index] = typed
+		case *llm.Message:
+			if typed != nil {
+				value := *typed
+				value.Content = strip(value.Content)
+				input[index] = &value
+			}
+		case llm.ToolResult:
+			typed.Content = strip(typed.Content)
+			input[index] = typed
+		case *llm.ToolResult:
+			if typed != nil {
+				value := *typed
+				value.Content = strip(value.Content)
+				input[index] = &value
+			}
+		}
+	}
+	request.Instructions, request.Input = instructions, input
+	return request, textBytes
 }
 
 // addMediaAllowance adds the media allowance to the serialized-size estimate.

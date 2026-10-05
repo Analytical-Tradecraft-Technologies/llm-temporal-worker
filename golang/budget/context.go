@@ -14,6 +14,8 @@ var ErrContextLimit = errors.New("request exceeds model context token limit")
 
 // ValidateContext performs no pricing, admission, or provider I/O. It uses the
 // configured tokenizer, or the same approximate input estimate as reservation.
+// The media allowance is left out: reservation caps it at the room this check
+// leaves, so it can never change the outcome.
 // A zero catalog limit means unspecified, not an unlimited provider window.
 func (estimator Estimator) ValidateContext(request llm.Request, candidate routing.Candidate) error {
 	if candidate.ContextTokens == 0 {
