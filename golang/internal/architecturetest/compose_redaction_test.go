@@ -28,12 +28,12 @@ func TestComposeLogRedactionTerminatesWhenSecretMatchesMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(output)
-	for _, secret := range []string{"mock-key", "hmac-value", "password=REDACTED "} {
+	for _, secret := range []string{"REDACTED", "ACT", "mock-key", "hmac-value"} {
 		if strings.Contains(got, secret) {
-			t.Fatalf("redacted output still contains %q: %q", secret, got)
+			t.Fatalf("redacted output still contains secret %q: %q", secret, got)
 		}
 	}
-	if !strings.Contains(got, "password=[RED") {
-		t.Fatalf("password was not redacted: %q", got)
+	if !strings.Contains(got, "password=<secret removed> key=<secret removed> hmac=<secret removed>") {
+		t.Fatalf("unexpected redaction: %q", got)
 	}
 }
