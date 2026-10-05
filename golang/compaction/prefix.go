@@ -94,6 +94,10 @@ func splitTurns(items []llm.Item) []turnRange {
 			pending[value.ID] = struct{}{}
 		case llm.ToolResult:
 			delete(pending, value.CallID)
+		case *llm.ToolCall:
+			pending[value.ID] = struct{}{}
+		case *llm.ToolResult:
+			delete(pending, value.CallID)
 		}
 	}
 	turns = append(turns, turnRange{start: start, end: len(items)})

@@ -21,6 +21,7 @@ func validateItems(items []llm.Item) ([]string, error) {
 	seenCalls := make(map[string]struct{})
 	resultsStarted := false
 	for index, item := range items {
+		item = itemValue(item)
 		if item == nil {
 			return nil, fmt.Errorf("transcript item %d is nil", index)
 		}
@@ -83,12 +84,43 @@ func validateItems(items []llm.Item) ([]string, error) {
 
 func validateItemEncoding(items []llm.Item) error {
 	for index, item := range items {
+		item = itemValue(item)
 		if item == nil {
 			return fmt.Errorf("transcript item %d is nil", index)
 		}
 		if _, err := json.Marshal(item); err != nil {
 			return fmt.Errorf("transcript item %d: %w", index, err)
 		}
+	}
+	return nil
+}
+
+// itemValue normalizes the closed Item union without a JSON round trip.
+// It is a shallow view; cloneItem detaches mutable fields before storage.
+func itemValue(item llm.Item) llm.Item {
+	switch value := item.(type) {
+	case *llm.Message:
+		if value != nil {
+			return *value
+		}
+	case *llm.ToolCall:
+		if value != nil {
+			return *value
+		}
+	case *llm.ToolResult:
+		if value != nil {
+			return *value
+		}
+	case *llm.ProviderState:
+		if value != nil {
+			return *value
+		}
+	case *llm.Reference:
+		if value != nil {
+			return *value
+		}
+	default:
+		return item
 	}
 	return nil
 }
