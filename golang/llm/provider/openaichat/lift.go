@@ -3,6 +3,7 @@ package openaichat
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	openai "github.com/openai/openai-go/v3"
 
@@ -200,7 +201,15 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 		if call.ID == "" || call.Function.Name == "" {
 			return nil, false, false, fmt.Errorf("choice tool call %d is missing ID or name", index)
 		}
-		if !json.Valid([]byte(call.Function.Arguments)) {
+		arguments := call.Function.Arguments
+		// Some providers send an empty string for a zero-argument tool. That
+		// is the empty object, not a malformed call. A length finish keeps the
+		// cut-off handling below, since the call may have ended before any
+		// argument was written.
+		if strings.TrimSpace(arguments) == "" && choice.FinishReason != "length" {
+			arguments = "{}"
+		}
+		if !json.Valid([]byte(arguments)) {
 			// The output limit can cut a call off mid-arguments. Keep the paid
 			// response as a length truncation and drop only the incomplete call.
 			if choice.FinishReason == "length" {
@@ -209,7 +218,7 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 			return nil, false, false, fmt.Errorf("tool call %q arguments are invalid JSON", call.ID)
 		}
 		hasToolCalls = true
-		output = append(output, llm.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: []byte(call.Function.Arguments)})
+		output = append(output, llm.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: []byte(arguments)})
 	}
 	return output, hasToolCalls, hasRefusal, nil
 }

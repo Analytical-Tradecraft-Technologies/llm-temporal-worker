@@ -37,12 +37,23 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 	}
 	items := make([]map[string]any, 0, len(request.Input))
 	for index, item := range request.Input {
+		// A reference is an output annotation (for example a citation) that
+		// a replayed transcript still carries. It has no wire form, so it is
+		// left out instead of failing every later turn.
+		if _, annotation := item.(llm.Reference); annotation {
+			continue
+		}
 		lowered, err := lowerItem(item)
 		if err != nil {
 			return nil, loweredToolPolicy{}, fmt.Errorf("input item %d: %w", index, err)
 		}
+		if emptyModelMessage(item) {
+			continue
+		}
 		items = append(items, lowered)
 	}
+	// Skipped items are already gone, so a reasoning item followed only by
+	// them is judged dangling.
 	items, reasoningState := replayableItems(items, storageDenied)
 	for _, item := range items {
 		input = append(input, item)
@@ -144,6 +155,14 @@ func lowerInstruction(instruction llm.Instruction) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"type": "message", "role": role, "content": content}, nil
+}
+
+// emptyModelMessage reports a replayed model turn with no parts (for example a
+// lifted content_filter or empty stop reply). It has no Responses wire content and carries no
+// history to preserve.
+func emptyModelMessage(item llm.Item) bool {
+	message, ok := item.(llm.Message)
+	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
 }
 
 func lowerItem(item llm.Item) (map[string]any, error) {

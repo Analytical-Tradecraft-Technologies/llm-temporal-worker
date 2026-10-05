@@ -12,6 +12,13 @@ local function integer(value)
     return result
 end
 
+-- Lua 5.1 tostring() formats numbers with %.14g and switches to scientific
+-- notation at 1e14, which INCRBY/DECRBY/EXPIRE reject. Values here are integers
+-- of at most MAX_SAFE, which %.0f prints exactly.
+local function decimal(value)
+    return string.format('%.0f', value)
+end
+
 local function reservation()
     local value = redis.call('GET', KEYS[1])
     if not value then return nil, nil end
@@ -50,13 +57,13 @@ if ACTION == 'acquire' then
     end
     for index, limit in ipairs(incoming.limits) do
         local amount = integer(limit.amount)
-        local next_value = redis.call('INCRBY', KEYS[index + 1], tostring(amount))
+        local next_value = redis.call('INCRBY', KEYS[index + 1], decimal(amount))
         if integer(next_value) == nil then return {'state_unavailable', ''} end
         local current_ttl = redis.call('TTL', KEYS[index + 1])
-        if current_ttl == -2 or current_ttl < ttl then redis.call('EXPIRE', KEYS[index + 1], tostring(ttl)) end
+        if current_ttl == -2 or current_ttl < ttl then redis.call('EXPIRE', KEYS[index + 1], decimal(ttl)) end
     end
     local encoded_incoming = cjson.encode(incoming)
-    redis.call('SET', KEYS[1], encoded_incoming, 'EX', tostring(ttl), 'NX')
+    redis.call('SET', KEYS[1], encoded_incoming, 'EX', decimal(ttl), 'NX')
     return {'created', encoded_incoming}
 end
 
@@ -78,7 +85,7 @@ if ACTION == 'release' then
     end
     for index, limit in ipairs(existing.limits) do
         local amount = integer(ARGV[index + 2])
-        redis.call('DECRBY', KEYS[index + 1], tostring(amount))
+        redis.call('DECRBY', KEYS[index + 1], decimal(amount))
     end
     redis.call('DEL', KEYS[1])
     return {'released', ''}

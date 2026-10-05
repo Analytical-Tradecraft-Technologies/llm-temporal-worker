@@ -176,7 +176,7 @@ func TestProviderPlanningRealCompilerResolvesAliasesAndFallbackForBothPhases(t *
 			if err != nil || route.CacheIdentity != planned.CacheIdentity || route.Model != planned.Call.Model || route.PriceVersion != "price/v1" {
 				t.Fatalf("route = %+v, %v", route, err)
 			}
-			if planned.CacheIdentity.Account != "0800000000000000000000000000000000000000000000000000000000000000" || planned.CacheIdentity.Region != "region" || planned.CacheIdentity.Revision != "provider-revision" || planned.CacheIdentity.Compiler != "openai_responses/cloud-v1" || planned.ConfigDigest != capabilities.ConfigDigest || planned.ConfigEpoch != "epoch/v1" {
+			if planned.CacheIdentity.Account != "0800000000000000000000000000000000000000000000000000000000000000" || planned.CacheIdentity.Region != "region" || planned.CacheIdentity.Revision != "provider-revision" || planned.CacheIdentity.Compiler != "openai_responses/cloud-v2" || planned.ConfigDigest != capabilities.ConfigDigest || planned.ConfigEpoch != "epoch/v1" {
 				t.Fatalf("incomplete cache binding: %+v", planned)
 			}
 		})

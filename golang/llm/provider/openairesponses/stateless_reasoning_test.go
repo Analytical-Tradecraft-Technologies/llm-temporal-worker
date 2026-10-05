@@ -220,6 +220,11 @@ func TestDanglingReasoningIsNotReplayed(t *testing.T) {
 		{name: "followed by its tool call", input: []llm.Item{humanText("question"), sealed("rs-1"), call}, want: []string{"rs-1"}},
 		{name: "consecutive reasoning before a message", input: []llm.Item{humanText("question"), sealed("rs-1"), sealed("rs-2"), modelText("answer")}, want: []string{"rs-1", "rs-2"}},
 		{name: "earlier turn kept, dangling tail dropped", input: []llm.Item{humanText("question"), sealed("rs-1"), modelText("answer"), humanText("again"), sealed("rs-2"), humanText("follow-up")}, want: []string{"rs-1"}},
+		// References and empty model messages have no wire form, so they
+		// cannot be the output a reasoning item is followed by.
+		{name: "followed only by a skipped reference", input: []llm.Item{humanText("question"), sealed("rs-1"), llm.Reference{URI: "https://example.com/source"}, humanText("follow-up")}},
+		{name: "followed only by a skipped empty model message", input: []llm.Item{humanText("question"), sealed("rs-1"), llm.Message{Actor: llm.ActorModel}, humanText("follow-up")}},
+		{name: "skipped items before its message", input: []llm.Item{humanText("question"), sealed("rs-1"), llm.Reference{URI: "https://example.com/source"}, llm.Message{Actor: llm.ActorModel}, modelText("answer")}, want: []string{"rs-1"}},
 	} {
 		for _, permitted := range []bool{false, true} {
 			_, wire := compileWire(t, storagePolicyAdapter(t, permitted, nil), llm.Request{OperationKey: "replay", Input: test.input}, true)

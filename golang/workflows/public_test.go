@@ -86,15 +86,17 @@ func TestPublicWorkflowsUseActualInternalStateMachine(t *testing.T) {
 			submit = activity.CompactActivityName
 		}
 		f := workflowTest(t, kind, step(activity.PrepareActivityName, llm.ExecutionBudgetRequired), step(activity.AcquireBudgetActivityName, llm.ExecutionAcquired), step(submit, llm.ExecutionPending), step(activity.PollActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted))
-		f.env.RegisterWorkflowWithOptions(Generate, workflow.RegisterOptions{Name: GenerateWorkflowName})
-		f.env.RegisterWorkflowWithOptions(Compact, workflow.RegisterOptions{Name: CompactWorkflowName})
+		// Registered as the worker registers them: all four workflows receive the
+		// raw payload, and the caller sends the unchanged v1 wire record.
+		f.env.RegisterWorkflowWithOptions(rawWorkflow(activity.PayloadLimits{}, Generate), workflow.RegisterOptions{Name: GenerateWorkflowName})
+		f.env.RegisterWorkflowWithOptions(rawWorkflow(activity.PayloadLimits{}, Compact), workflow.RegisterOptions{Name: CompactWorkflowName})
 		f.env.RegisterActivityWithOptions(func(context.Context, llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
 			return llm.GenerationPlanV1{}, nil
 		}, sdkactivity.RegisterOptions{Name: activity.PlanGenerationActivityName})
 		f.env.RegisterDelayedCallback(func() { f.env.CancelWorkflow() }, time.Second)
-		name, input := GenerateWorkflowName, any(f.input.Generate)
+		name, input := GenerateWorkflowName, wireFixture(t, "generate-root")
 		if kind == "compact" {
-			name, input = CompactWorkflowName, f.input.Compact
+			name, input = CompactWorkflowName, wireFixture(t, "compact-request")
 		}
 		f.env.ExecuteWorkflow(name, input)
 		if err := f.env.GetWorkflowError(); err != nil {

@@ -129,7 +129,7 @@ state:
     admission_mode: function
     function_library: llmtw_admission_v1
     admission_version: admission_v1
-    admission_digest: c030680a921b24872bcc935f4d3110c9ea83ae89609e3595ce4d1f03ee623950
+    admission_digest: e7bcf1ce68509895586301dd6db9b4906ca505b2d933ece78163b68581c09717
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96

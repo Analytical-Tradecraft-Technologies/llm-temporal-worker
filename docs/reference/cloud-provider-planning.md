@@ -45,7 +45,7 @@ If no candidate compiles, the result is `no_route` before admission.
 `PlannedProviderCall` carries the candidate, process-local adapter/SDK call,
 config digest/epoch, capability version and complete cache route identity. The
 account dimension uses the existing endpoint account HMAC. The identity also
-includes provider, endpoint, region, model revision and `<family>/cloud-v1`
+includes provider, endpoint, region, model revision and `<family>/cloud-v2`
 compiler version. Bump that compiler version when the projection/lowering
 contract changes; public activity names stay v1. `Route` supplies the same
 identity to the durable runner. Cache fingerprint construction must additionally

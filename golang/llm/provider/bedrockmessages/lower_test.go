@@ -118,7 +118,6 @@ func TestLowerRejectsUnsupportedProviderControlsAndMedia(t *testing.T) {
 		{name: "seed", request: llm.Request{Model: "claude", Sampling: &llm.SamplingSpec{Seed: &seed}}, want: "sampling field is not supported"},
 		{name: "tool policy without tools", request: llm.Request{Model: "claude", ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceRequired}}, want: "requires at least one tool"},
 		{name: "unsupported output", request: llm.Request{Model: "claude", Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKind("xml")}}}, want: "output format"},
-		{name: "unsupported reasoning summary", request: llm.Request{Model: "claude", Reasoning: &llm.ReasoningSpec{Summary: llm.ReasoningSummaryDetailed}}, want: "reasoning summary"},
 	}
 	for _, test := range invalidRequests {
 		t.Run(test.name, func(t *testing.T) {
@@ -160,7 +159,7 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "adaptive", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive}, wantType: "adaptive"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := lowerReasoning(test.reasoning)
+			got, err := lowerReasoning(test.reasoning, true)
 			if err != nil || got["type"] != test.wantType {
 				t.Fatalf("lowerReasoning() = %#v, %v", got, err)
 			}
@@ -176,7 +175,7 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "unknown mode", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningMode("future")}, want: "not supported"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := lowerReasoning(test.reasoning)
+			_, err := lowerReasoning(test.reasoning, true)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("lowerReasoning() = %v, want substring %q", err, test.want)
 			}

@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -15,6 +16,16 @@ const (
 	DefaultCanonicalMaxBytes = 8 << 20
 	DefaultCanonicalMaxDepth = 128
 )
+
+// ErrCanonicalJSONLimit marks input or output that exceeds the byte or
+// nesting limit passed to the canonicalizer. It is deterministic for a given
+// value and limit, unlike a malformed-JSON error.
+var ErrCanonicalJSONLimit = errors.New("canonical JSON limit exceeded")
+
+type canonicalLimitError struct{ message string }
+
+func (err canonicalLimitError) Error() string { return err.message }
+func (canonicalLimitError) Unwrap() error     { return ErrCanonicalJSONLimit }
 
 type canonicalObject struct {
 	values map[string]any
@@ -42,7 +53,7 @@ func CanonicalJSONWithLimits(data []byte, maxBytes, maxDepth int) ([]byte, error
 		return nil, fmt.Errorf("canonical JSON is empty")
 	}
 	if len(data) > maxBytes {
-		return nil, fmt.Errorf("canonical JSON exceeds %d bytes", maxBytes)
+		return nil, canonicalLimitError{fmt.Sprintf("canonical JSON exceeds %d bytes", maxBytes)}
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -63,7 +74,7 @@ func CanonicalJSONWithLimits(data []byte, maxBytes, maxDepth int) ([]byte, error
 		return nil, err
 	}
 	if output.Len() > maxBytes {
-		return nil, fmt.Errorf("canonical JSON output exceeds %d bytes", maxBytes)
+		return nil, canonicalLimitError{fmt.Sprintf("canonical JSON output exceeds %d bytes", maxBytes)}
 	}
 	return output.Bytes(), nil
 }
@@ -78,7 +89,7 @@ func parseCanonicalValue(decoder *json.Decoder, depth, maxDepth int) (any, error
 	}
 	if delimiter, ok := token.(json.Delim); ok {
 		if depth >= maxDepth {
-			return nil, fmt.Errorf("canonical JSON exceeds depth %d", maxDepth)
+			return nil, canonicalLimitError{fmt.Sprintf("canonical JSON exceeds depth %d", maxDepth)}
 		}
 		switch delimiter {
 		case '{':
