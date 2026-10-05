@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
@@ -47,6 +48,14 @@ func PrepareGenerateInput(ctx context.Context, request llm.GenerateRequestV1, re
 	settings, err := state.ApplySettingsPatchV1(base, request.SettingsPatch)
 	if err != nil {
 		return PreparedGenerateInput{}, preparationError(provider.CodeInvalidArgument)
+	}
+	// Reject a policy that later compaction planning could not decode before
+	// any provider work, so one bad request cannot publish a checkpoint that
+	// makes every descendant fail as state_corrupt.
+	if request.SettingsPatch.CompactionPolicy.Set != nil {
+		if _, err := decodeCompactionPolicy(settings.CompactionPolicy); err != nil {
+			return PreparedGenerateInput{}, preparationError(provider.CodeInvalidArgument)
+		}
 	}
 	items := append([]llm.Item(nil), replay.State.Items...)
 	items = append(items, request.Append...)
@@ -93,26 +102,9 @@ func PrepareCompactInput(ctx context.Context, request llm.CompactRequestV1, repl
 	if err := validatePreparationReplay(request.Context, string(request.Parent), replay.State); err != nil {
 		return PreparedCompactInput{}, err
 	}
-	policy := compaction.DefaultPolicy()
-	if len(replay.State.Settings.CompactionPolicy) != 0 {
-		raw := bytes.TrimSpace(replay.State.Settings.CompactionPolicy)
-		if !json.Valid(raw) || len(raw) == 0 || raw[0] != '{' {
-			return PreparedCompactInput{}, preparationError(provider.CodeStateCorrupt)
-		}
-		// Decode over explicit defaults and reject unknown stored fields. The
-		// Policy decoder intentionally accepts partial policies, but does not
-		// itself reject unknown fields.
-		type policyFields compaction.Policy
-		inherited := policyFields(policy)
-		decoder := json.NewDecoder(bytes.NewReader(replay.State.Settings.CompactionPolicy))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&inherited); err != nil {
-			return PreparedCompactInput{}, preparationError(provider.CodeStateCorrupt)
-		}
-		policy = compaction.Policy(inherited)
-		if err := policy.Validate(); err != nil {
-			return PreparedCompactInput{}, preparationError(provider.CodeStateCorrupt)
-		}
+	policy, err := decodeCompactionPolicy(replay.State.Settings.CompactionPolicy)
+	if err != nil {
+		return PreparedCompactInput{}, preparationError(provider.CodeStateCorrupt)
 	}
 	if len(request.Policy) != 0 {
 		var override struct {
@@ -215,4 +207,32 @@ func prepareSemanticRequest(caller llm.RequestContext, operationKey string, sett
 
 func preparationError(code provider.Code) error {
 	return provider.NewError(code, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "request preparation failed")
+}
+
+// decodeCompactionPolicy decodes a stored or requested policy over explicit
+// defaults, rejecting unknown fields and invalid values. An empty value is the
+// default policy.
+func decodeCompactionPolicy(raw json.RawMessage) (compaction.Policy, error) {
+	policy := compaction.DefaultPolicy()
+	if len(raw) == 0 {
+		return policy, nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if !json.Valid(trimmed) || len(trimmed) == 0 || trimmed[0] != '{' {
+		return compaction.Policy{}, errors.New("compaction policy must be a JSON object")
+	}
+	// The Policy decoder intentionally accepts partial policies, but does not
+	// itself reject unknown fields.
+	type policyFields compaction.Policy
+	decoded := policyFields(policy)
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return compaction.Policy{}, err
+	}
+	policy = compaction.Policy(decoded)
+	if err := policy.Validate(); err != nil {
+		return compaction.Policy{}, err
+	}
+	return policy, nil
 }

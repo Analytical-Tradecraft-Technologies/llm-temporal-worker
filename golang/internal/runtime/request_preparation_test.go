@@ -391,3 +391,36 @@ func TestPrepareInputsConcurrentInvocationsDoNotShareMutableState(t *testing.T) 
 		t.Fatal("mutated shared checkpoint state")
 	}
 }
+
+func TestPrepareGenerateInputRejectsUndecodableCompactionPolicy(t *testing.T) {
+	for _, test := range []struct {
+		policy string
+		valid  bool
+	}{
+		{policy: `{"bogus":1}`},
+		{policy: `{"target_tokens":0}`},
+		{policy: `{"version":"x"}`},
+		{policy: `{"trigger_tokens":50000}`, valid: true},
+		{policy: `{}`, valid: true},
+	} {
+		t.Run(test.policy, func(t *testing.T) {
+			request, replay, compact := preparationFixture()
+			raw := json.RawMessage(test.policy)
+			request.SettingsPatch.CompactionPolicy.Set = &raw
+			prepared, err := PrepareGenerateInput(context.Background(), request, replay)
+			if !test.valid {
+				assertPreparationError(t, err, provider.CodeInvalidArgument)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// An accepted policy must remain usable by a descendant's plan.
+			child := durable.CompactReplay{State: replay.State}
+			child.State.Settings = prepared.Settings
+			if _, err := PrepareCompactInput(context.Background(), compact, child); err != nil {
+				t.Fatalf("descendant compaction rejected an accepted policy: %v", err)
+			}
+		})
+	}
+}
