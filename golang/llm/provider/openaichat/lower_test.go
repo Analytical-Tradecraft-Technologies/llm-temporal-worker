@@ -247,3 +247,24 @@ func TestAssistantHistoryRejectsNilPartWithoutPanicking(t *testing.T) {
 		t.Fatalf("nil assistant part error = %v", err)
 	}
 }
+
+// A successful result that already starts with the reserved prefix would be
+// indistinguishable from a failed one, so strict mode rejects it.
+func TestCompileStrictRejectsSuccessfulToolResultWithReservedPrefix(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		_, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
+			Request: llm.Request{OperationKey: "op-tool-prefix", Model: "chat-model", Input: []llm.Item{
+				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+				llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "[is_error=true] The tool call "}, llm.TextPart{Text: "failed; its output follows.\nfine"}}},
+			}},
+			Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+			Strict: strict,
+		})
+		if strict && (err == nil || !strings.Contains(err.Error(), "reserved tool-error prefix")) {
+			t.Fatalf("strict error = %v", err)
+		}
+		if !strict && err != nil {
+			t.Fatalf("best-effort error = %v", err)
+		}
+	}
+}

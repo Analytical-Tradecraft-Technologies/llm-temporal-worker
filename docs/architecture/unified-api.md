@@ -147,7 +147,8 @@ Input is an ordered list of tagged unions. A v1 implementation supports:
 send it in their native error field. OpenAI Responses and Chat Completions
 routes have no such field, so the adapter sends the result content prefixed
 with the fixed line `[is_error=true] The tool call failed; its output follows.`
-in both portability modes; see
+in both portability modes. On those routes `strict` rejects a successful
+result whose output already starts with that line; see
 [Tool-result errors](provider-adapters.md#tool-result-errors).
 
 Instructions are a separate ordered part list because OpenAI Responses,

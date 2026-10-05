@@ -130,3 +130,30 @@ func TestEstimateDocumentFloorCoversLargestSupportedPDF(t *testing.T) {
 		t.Fatalf("undeclared-window input tokens = %d, want at least %d", got.InputTokens, MediaDocumentInputTokenFloor)
 	}
 }
+
+// The fallback estimate counts the text prefix the OpenAI families add to a
+// failed tool result, and nothing for families with a native error field.
+func TestFallbackEstimateCountsToolResultErrorPrefix(t *testing.T) {
+	for _, isError := range []bool{true, false} {
+		request := mediaEstimateRequest()
+		request.Input = append(request.Input, llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "timed out"}}, IsError: isError})
+		native, err := Estimator{}.CountInputTokens(request, routing.Candidate{ID: "c", Family: "anthropic_messages"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range []string{"openai_responses", "openai_chat"} {
+			emulated, err := Estimator{}.CountInputTokens(request, routing.Candidate{ID: "c", Family: family})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := int64(0)
+			if isError {
+				want = int64(len(llm.ToolResultErrorTextPrefix)) / 4
+			}
+			if emulated-native < want || (!isError && emulated != native) {
+				t.Fatalf("%s is_error=%t estimate %d, native %d, want at least %d more", family, isError, emulated, native, want)
+			}
+		}
+	}
+}

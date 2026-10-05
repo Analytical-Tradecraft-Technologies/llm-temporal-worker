@@ -84,7 +84,7 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 		decision.ShouldCompact = true
 	}
 	for _, route := range providers.catalog.Models[input.Request.Model].Routes {
-		if route.ID == candidate.RouteID && route.ContextBytes > 0 && len(encoded) >= route.ContextBytes {
+		if route.ID == candidate.RouteID && route.ContextBytes > 0 && len(encoded)+routing.ToolResultErrorOverheadBytes(input.Request, string(route.Family)) >= route.ContextBytes {
 			decision.ShouldCompact = true
 		}
 	}

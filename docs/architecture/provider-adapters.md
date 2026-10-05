@@ -184,8 +184,16 @@ deterministic.
 
 The transform keeps the error state visible to the model, so it is applied in
 both `strict` and `best_effort` portability, like other emulated capabilities.
-The only information not preserved is the distinction between a failed tool
-and a successful tool whose own output begins with the same prefix line.
+The prefix is reserved on these routes: a successful result (`is_error: false`)
+whose own output already starts with it would be indistinguishable from a
+failed one. `strict` compilation rejects such a result on Responses and Chat
+routes, which keeps the transform injective; `best_effort` sends it unchanged
+and accepts that ambiguity.
+
+The added prefix is not part of the serialized semantic request, so the route
+context-size check, the compaction planning check, and the fallback input
+token estimate add its size for every failed tool result on these two
+families. A configured exact tokenizer is responsible for counting it itself.
 
 ## Response lifting
 
