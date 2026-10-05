@@ -25,9 +25,18 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		return anthropic.MessageNewParams{}, err
 	}
 	for index, item := range request.Input {
+		// A reference is an output annotation (for example a citation) that
+		// a replayed transcript still carries. It has no wire form, so it is
+		// left out instead of failing every later turn.
+		if _, annotation := item.(llm.Reference); annotation {
+			continue
+		}
 		message, err := lowerItem(item)
 		if err != nil {
 			return anthropic.MessageNewParams{}, fmt.Errorf("input item %d: %w", index, err)
+		}
+		if emptyModelMessage(item) {
+			continue
 		}
 		messages = append(messages, message)
 	}
@@ -160,6 +169,14 @@ func lowerInstructionParts(parts []llm.Part) ([]any, error) {
 		}
 	}
 	return blocks, nil
+}
+
+// emptyModelMessage reports a replayed model turn with no parts (for example a
+// lifted content_filter or empty stop reply). Anthropic Messages rejects an assistant message
+// without content, and it carries no history to preserve.
+func emptyModelMessage(item llm.Item) bool {
+	message, ok := item.(llm.Message)
+	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
 }
 
 func lowerItem(item llm.Item) (map[string]any, error) {

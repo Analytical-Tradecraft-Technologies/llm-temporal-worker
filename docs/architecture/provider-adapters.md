@@ -106,15 +106,21 @@ break both.
 
 ## Lowering rules
 
+`reference` items are output annotations, such as the citations lifted from an
+Exa response. They stay in the v1 response and in the checkpoint transcript,
+but no endpoint family has a wire form for them, so every adapter leaves them
+out when it lowers a replayed transcript. Omitting one never changes how the
+surrounding messages, tool calls and tool results are grouped. `provider_state`
+items are unaffected: an adapter still replays its own state and rejects any
+other.
+
 ### OpenAI Responses
 
 - Instructions lower to the supported top-level instruction/developer form.
 - Semantic messages, tool calls, and tool results become separate typed input
   items; they are never concatenated.
-- `function_call_output` has no error field (its `status` is the item
-  lifecycle: `in_progress`, `completed`, `incomplete`). A tool result with
-  `is_error: true` is emulated by the `tool_result_error_text_prefix/v1`
-  transform described under [Tool-result errors](#tool-result-errors).
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content.
 - A continuation may use a stored response/conversation identifier only when it
   is pinned to the same endpoint, account, family, and compatible model.
 - Strict structured output uses the provider's JSON Schema form after local
@@ -139,9 +145,6 @@ break both.
   filtered reply) are omitted rather than sent as an empty assistant message.
 - Tool calls remain assistant tool-call objects and tool results remain tool
   messages with their call IDs.
-- A `tool` message carries only `content` and `tool_call_id`. A tool result
-  with `is_error: true` is emulated by the `tool_result_error_text_prefix/v1`
-  transform described under [Tool-result errors](#tool-result-errors).
 - Multimodal parts use only the endpoint's declared compatible wire forms.
 - Structured output chooses native response format or a strict tool emulation
   only when the capability profile declares semantic equivalence.
@@ -157,6 +160,9 @@ usage/cost lifter.
 - Instructions lower to top-level system blocks in order.
 - Human/model messages lower to user/assistant messages; tool use and tool
   result blocks retain their IDs.
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content. The
+  Bedrock Messages and Bedrock Converse adapters do the same.
 - Consecutive-role merging is permitted only as an explicit, proven transform
   and is recorded as a diagnostic.
 - Thinking, redacted-thinking, and signatures are opaque provider-state. They
@@ -188,37 +194,6 @@ Messages:
   This is lossless in strict mode too: thinking is opt-in, so a request with
   no `thinking` object returns no thinking blocks to summarize or omit.
 
-### Tool-result errors
-
-Anthropic Messages (`is_error`) and Bedrock Converse (`status: error`) carry a
-failed tool result natively. OpenAI Responses and OpenAI-compatible Chat
-Completions have no such field; those APIs report a tool failure to the model
-as the tool output text. Their adapters therefore apply the named transform
-`tool_result_error_text_prefix/v1`: the output string is the constant prefix
-
-```text
-[is_error=true] The tool call failed; its output follows.
-```
-
-followed by one line feed and then the result content exactly as it would be
-sent for a successful result. The call ID and item position are unchanged, and
-a result with `is_error: false` is sent byte-for-byte as before. The prefix is
-a compile-time constant, so request digests and compiled bodies stay
-deterministic.
-
-The transform keeps the error state visible to the model, so it is applied in
-both `strict` and `best_effort` portability, like other emulated capabilities.
-The prefix is reserved on these routes: a successful result (`is_error: false`)
-whose own output already starts with it would be indistinguishable from a
-failed one. `strict` compilation rejects such a result on Responses and Chat
-routes, which keeps the transform injective; `best_effort` sends it unchanged
-and accepts that ambiguity.
-
-The added prefix is not part of the serialized semantic request, so the route
-context-size check, the compaction planning check, and the fallback input
-token estimate add its size for every failed tool result on these two
-families. A configured exact tokenizer is responsible for counting it itself.
-
 ## Response lifting
 
 The lifter produces a common ordered output sequence and never discards unknown
@@ -247,6 +222,45 @@ the total are rejected as invalid provider responses.
 
 An unrecognized actual provider tier maps to no public class and returns a
 diagnostic. It must not be mislabeled as `standard`.
+
+Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
+a string, and some compatible providers send an empty string for a tool that
+takes no arguments; an empty or whitespace-only string lifts as the empty
+object `{}` rather than failing the paid response. A call cut off by the output
+limit is still dropped and the response keeps its `length` status.
+
+## Tool-result errors
+
+Anthropic Messages (`is_error`) and Bedrock Converse (`status: error`) carry a
+failed tool result natively. OpenAI Responses and OpenAI-compatible Chat
+Completions have no such field: a Responses `function_call_output` has only a
+lifecycle `status` (`in_progress`, `completed`, `incomplete`) and a Chat `tool`
+message carries only `content` and `tool_call_id`. Those APIs report a tool
+failure to the model as the tool output text. Their adapters therefore apply the named transform
+`tool_result_error_text_prefix/v1`: the output string is the constant prefix
+
+```text
+[is_error=true] The tool call failed; its output follows.
+```
+
+followed by one line feed and then the result content exactly as it would be
+sent for a successful result. The call ID and item position are unchanged, and
+a result with `is_error: false` is sent byte-for-byte as before. The prefix is
+a compile-time constant, so request digests and compiled bodies stay
+deterministic.
+
+The transform keeps the error state visible to the model, so it is applied in
+both `strict` and `best_effort` portability, like other emulated capabilities.
+The prefix is reserved on these routes: a successful result (`is_error: false`)
+whose own output already starts with it would be indistinguishable from a
+failed one. `strict` compilation rejects such a result on Responses and Chat
+routes, which keeps the transform injective; `best_effort` sends it unchanged
+and accepts that ambiguity.
+
+The added prefix is not part of the serialized semantic request, so the route
+context-size check, the compaction planning check, and the fallback input
+token estimate add its size for every failed tool result on these two
+families. A configured exact tokenizer is responsible for counting it itself.
 
 ## Model inventory pagination
 

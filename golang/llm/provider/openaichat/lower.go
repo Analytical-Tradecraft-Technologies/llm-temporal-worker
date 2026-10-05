@@ -263,8 +263,13 @@ func appendInputItem(messages *[]any, item llm.Item, toolCalls map[string]struct
 			"content":      content,
 		})
 		return nil
-	case llm.ProviderState, llm.Reference:
+	case llm.ProviderState:
 		return fmt.Errorf("item kind %q is not accepted as Chat Completions input", item.ItemKind())
+	case llm.Reference:
+		// A reference is an output annotation (for example an Exa citation)
+		// that a replayed transcript still carries. It has no wire form, so it
+		// is left out instead of failing every later turn.
+		return nil
 	default:
 		return fmt.Errorf("unsupported input item %T", item)
 	}
