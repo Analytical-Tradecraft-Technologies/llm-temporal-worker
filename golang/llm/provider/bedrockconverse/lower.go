@@ -197,7 +197,11 @@ func lowerTools(tools []llm.Tool) ([]types.Tool, error) {
 		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
 			return nil, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
 		}
-		result = append(result, &types.ToolMemberToolSpec{Value: types.ToolSpecification{Name: stringPtr(tool.Name), Description: stringPtr(tool.Description), InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)}}})
+		var description *string
+		if tool.Description != "" {
+			description = stringPtr(tool.Description)
+		}
+		result = append(result, &types.ToolMemberToolSpec{Value: types.ToolSpecification{Name: stringPtr(tool.Name), Description: description, InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)}}})
 	}
 	return result, nil
 }
