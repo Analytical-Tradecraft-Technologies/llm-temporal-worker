@@ -105,6 +105,31 @@ func (allowed AllowedValues) lists() labelAllowList {
 	}
 }
 
+// ExtendAllowed adds configuration identifiers (endpoints, models, budget
+// policies and windows) introduced by a reloaded snapshot. Existing values are
+// kept so a retired snapshot that is still finishing work stays labelled; the
+// lists remain bounded by the configurations this process has loaded.
+func (metrics *Metrics) ExtendAllowed(allowed AllowedValues) {
+	if metrics == nil {
+		return
+	}
+	metrics.mu.Lock()
+	defer metrics.mu.Unlock()
+	for target, values := range map[*map[string]struct{}][]string{
+		&metrics.allowed.endpoints: allowed.Endpoints,
+		&metrics.allowed.models:    allowed.Models,
+		&metrics.allowed.policies:  allowed.Policies,
+		&metrics.allowed.windows:   allowed.Windows,
+	} {
+		if *target == nil {
+			*target = make(map[string]struct{}, len(values))
+		}
+		for _, value := range values {
+			(*target)[value] = struct{}{}
+		}
+	}
+}
+
 func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m := &Metrics{registry: prometheus.NewRegistry(), allowed: allowed.lists()}
 	m.activityTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_activity_total", Help: "Completed and failed Temporal activity calls."}, []string{"status", "error_class"})

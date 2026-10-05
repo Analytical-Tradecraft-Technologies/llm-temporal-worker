@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -194,11 +195,18 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	builder := app.SnapshotBuilder{References: references}
 	var engineFactory = options.EngineFactory
 	configuredProbes := append([]DependencyProbe(nil), options.DependencyProbes...)
+	// liveMetrics is set once telemetry exists. Each later snapshot build
+	// extends the metric allow-lists before the snapshot is published, so
+	// identifiers introduced by a reload are labelled from its first request.
+	var liveMetrics atomic.Pointer[observability.Metrics]
 	application, err := app.New(ctx, app.Options{
 		InitialConfig:        data,
 		Builder:              builder,
 		ReplacementValidator: validateRuntimeReplacement,
 		Clients: func(buildContext context.Context, snapshot *config.Snapshot) (app.ClientSet, error) {
+			if metrics := liveMetrics.Load(); metrics != nil {
+				metrics.ExtendAllowed(metricAllowedValues(snapshot.Config()))
+			}
 			engine, clients, err := engineFactory.Build(buildContext, snapshot)
 			if err != nil {
 				return nil, &engineFactoryError{cause: err}
@@ -264,6 +272,9 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		temporalClient.Close()
 		_ = application.Close(context.Background())
 		return nil, err
+	}
+	if metrics != nil {
+		liveMetrics.Store(metrics)
 	}
 	dynamic := &snapshotEngine{application: application}
 	identity := options.Identity
@@ -418,6 +429,12 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 		// initialized and therefore cannot safely record.
 		return nil, nil
 	}
+	return observability.NewMetrics(metricAllowedValues(configuration))
+}
+
+// metricAllowedValues lists the bounded label values a configuration can
+// produce. Reloads extend the live Metrics with the same values.
+func metricAllowedValues(configuration config.Config) observability.AllowedValues {
 	endpoints := make([]string, 0, len(configuration.Endpoints))
 	models := make([]string, 0, len(configuration.Models))
 	policies := make([]string, 0, len(configuration.Budgets.Policies))
@@ -433,7 +450,7 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 	for _, policy := range configuration.Budgets.Policies {
 		policies = append(policies, policy.ID)
 	}
-	return observability.NewMetrics(observability.AllowedValues{
+	return observability.AllowedValues{
 		Endpoints: endpoints, Models: models, Policies: policies,
 		Outcomes:              []string{"success", "failure", "accepted", "rejected", "denied"},
 		Phases:                []string{"planning", "admission", "pre_write", "response_received", "lift", "finalization", "continuation_write", "total"},
@@ -442,7 +459,7 @@ func newMetrics(configuration config.Config) (*observability.Metrics, error) {
 		Methods:               []string{"provider_reported", "catalog_usage", "reconstructed_usage", "retained_reservation"},
 		OperationStates:       []string{"reserved", "dispatching", "completed", "failed", "ambiguous"},
 		ContinuationDecisions: []string{"created", "reused", "dropped"},
-	})
+	}
 }
 
 // Start starts probe listeners before Temporal polling. Required dependency

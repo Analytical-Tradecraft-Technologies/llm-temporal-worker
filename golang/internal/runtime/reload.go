@@ -39,11 +39,11 @@ func (runtime *Runtime) ReloadFile(ctx context.Context, path string) error {
 		return safeReloadError(err)
 	}
 	cleanupIncomplete := err != nil
-	runtime.Metrics.RecordConfigReload("success")
 	version := ""
 	if current := runtime.App.Current(); current != nil && current.Config != nil {
 		version = current.Config.ConfigVersion()
 	}
+	runtime.Metrics.RecordConfigReload("success")
 	message := "configuration reloaded"
 	if cleanupIncomplete {
 		message = "configuration reloaded; previous snapshot cleanup did not finish before reload returned"

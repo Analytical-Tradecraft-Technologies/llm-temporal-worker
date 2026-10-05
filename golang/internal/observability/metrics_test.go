@@ -281,3 +281,25 @@ func metricValue(families []*dto.MetricFamily, name string, labels map[string]st
 	}
 	return 0
 }
+
+func TestExtendAllowedLabelsIdentifiersIntroducedByReload(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint-a"}, Models: []string{"model-a"}, Policies: []string{"policy-a"}, Outcomes: []string{"success", "accepted"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics.RecordBudgetAdmission("policy-b", "accepted")
+	metrics.ExtendAllowed(observability.AllowedValues{Endpoints: []string{"endpoint-b"}, Models: []string{"model-b"}, Policies: []string{"policy-b"}})
+	metrics.RecordBudgetAdmission("policy-b", "accepted")
+	metrics.RecordBudgetAdmission("policy-a", "accepted")
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for policy, want := range map[string]float64{"other": 1, "policy-b": 1, "policy-a": 1} {
+		if got := metricValue(families, "llmtw_budget_admission_total", map[string]string{"policy": policy, "outcome": "accepted"}); got != want {
+			t.Errorf("policy %q admissions = %v, want %v", policy, got, want)
+		}
+	}
+	var disabled *observability.Metrics
+	disabled.ExtendAllowed(observability.AllowedValues{Policies: []string{"policy-c"}})
+}

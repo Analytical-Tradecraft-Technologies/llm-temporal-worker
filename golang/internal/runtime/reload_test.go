@@ -383,3 +383,58 @@ func reloadOutcome(t *testing.T, metrics *observability.Metrics, outcome string)
 	}
 	return 0
 }
+
+func TestRuntimeReloadFileLabelsIdentifiersIntroducedByTheReload(t *testing.T) {
+	controller := &testWorker{}
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, controller, &closed)
+	data := runtimeConfig(t)
+	runtime, err := New(context.Background(), data, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	replacement := strings.Replace(string(data), "model: gpt-example-2026-07-01", "model: gpt-replacement-2026-09-20", 1)
+	if replacement == string(data) {
+		t.Fatal("example route model not found")
+	}
+	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Hold the old snapshot so the reload publishes and then blocks draining:
+	// requests can already run on the replacement during that interval.
+	old := runtime.App.Current()
+	lease, err := runtime.App.Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- runtime.ReloadFile(context.Background(), path) }()
+	waitForRuntime(t, func() bool { return runtime.App.Current() != old })
+	runtime.Metrics.RecordProviderAttempt("openai-prod", "gpt-replacement-2026-09-20", "standard", "success", time.Millisecond)
+	lease.Release()
+	if err := <-reloaded; err != nil {
+		t.Fatal(err)
+	}
+	families, err := runtime.Metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, family := range families {
+		if family.GetName() != "llmtw_provider_attempt_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			for _, label := range metric.Label {
+				if label.GetName() == "model" && label.GetValue() == "gpt-replacement-2026-09-20" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("model introduced by reload was not labelled after the reload")
+	}
+}
