@@ -57,7 +57,14 @@ func (runtime *Runtime) recordReloadFailure(ctx context.Context, err error) {
 		return
 	}
 	runtime.Metrics.RecordConfigReload("failure")
-	runtime.Logger.Error(ctx, "configuration reload failed", err, slog.String("outcome", "failure"))
+	// Every rejection used to log the same line. Name a bounded cause and,
+	// where one is known, the schema path of the offending field.
+	cause, field := classifyReloadFailure(err)
+	attrs := []slog.Attr{slog.String("outcome", "failure"), slog.String("cause", cause)}
+	if field != "" {
+		attrs = append(attrs, slog.String("config_field", field))
+	}
+	runtime.Logger.Error(ctx, "configuration reload failed", err, attrs...)
 }
 
 func safeReloadError(err error) error {

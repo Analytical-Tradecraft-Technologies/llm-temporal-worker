@@ -151,13 +151,59 @@ and emits only a safe error classification; configuration text, paths, resolved
 secrets, and provider payloads are not logged. A successful reload records
 `outcome="success"`.
 
+The `configuration reload failed` log record carries a bounded `cause` so a
+rejection can be diagnosed without restarting a pod:
+
+| `cause` | Meaning |
+| --- | --- |
+| `read` | the file could not be opened or read |
+| `yaml` | the file is not decodable: malformed YAML, an unknown or duplicate key, or a value of the wrong type |
+| `validation` | the decoded configuration failed validation |
+| `secret` | a secret reference could not be resolved |
+| `process_lifetime` | the replacement changes a setting that requires a restart (listed below) |
+| `catalog` | a capability or pricing catalog could not be read, did not match its configured SHA-256, or could not be decoded |
+| `dependency` | replacement clients could not be built, or a Redis, cloud request or blob dependency check failed |
+| `canceled` | the reload was canceled or timed out before a dependency check |
+| `internal` | anything else |
+
+For `validation` and `process_lifetime` the record also carries `config_field`,
+the schema path of the offending field, such as `state.redis.key_prefix` or
+`models.*.routes[0].model`. Operator-chosen map keys are written as `*` and no
+configured value, file path or reference name is logged. `validate-config` on
+the same file prints the full validation message; it cannot report a
+`process_lifetime`, `catalog` or `dependency` rejection, which depend on the
+running worker. The cause is a log attribute only;
+`llmtw_config_reload_total` keeps its single `outcome` label.
+
 Reload changes the dynamic request snapshot (routes, catalogs, budgets, and
-provider/state clients). The environment, listener addresses, shutdown and
-dependency-monitor settings, inline Activity payload limit, Temporal
-connection/task-queue and worker settings, telemetry process wiring, Redis key
-prefix, cloud request provider, namespace and table/blob aliases, and endpoint outbound-host
-allowlists are established at startup and require a restart. A replacement
-that changes one is rejected before replacement clients are built.
+provider/state clients). The following are established at startup and require
+a restart. A replacement that changes one is rejected before replacement
+clients are built, with the field in `config_field`:
+
+- `environment`, the `server` listener addresses, shutdown and
+  dependency-monitor settings and inline Activity payload limit;
+- the `temporal` connection, task queue and worker settings, and `telemetry`
+  process wiring;
+- `endpoints.*.outbound_hosts` and the set of endpoints;
+- the identity of durable state: `state.kind`, `state.redis.key_prefix`,
+  `state.redis.admission_hash_tag`, the `state.redis.key_secret` reference,
+  and in `state.requests` the `provider` block (type, AWS region, profile and
+  temp directory, and the table and blob alias maps), `request_table`,
+  `payload_store`, `namespace` and the `secret` reference;
+- where results are stored: `blob_store.kind`, `blob_store.file.root`, and
+  `blob_store.s3.bucket`, `region` and `prefix`.
+
+State and result clients are rebuilt for every snapshot, so these could be
+swapped mechanically, but requests, budget reservations and results already in
+flight exist only under the old identity; after a swap they would read as
+absent and a retried operation could be dispatched and charged again.
+
+`state.redis.addresses`, the Redis username and password references, TLS,
+connection limits and timeouts, and `blob_store.s3.auth` remain reloadable:
+they change how the same data is reached. The replacement must still pass the
+dependency checks before it is published. The two key-material references are
+compared as references only. The secret behind an unchanged reference is read
+again on reload and must not change.
 Environment variables are not re-read during reload.
 
 ## Exit status and diagnostics
