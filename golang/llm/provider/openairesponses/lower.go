@@ -22,19 +22,21 @@ func providerTier(class llm.ServiceClass) string {
 	}
 }
 
-func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+// lowerRequestMap builds the intended Responses wire body. lowerRequest carries
+// it into the SDK parameter type; the two must stay wire-equivalent.
+func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[string]any, loweredToolPolicy, error) {
 	input := make([]any, 0, len(request.Instructions)+len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		input = append(input, item)
 	}
 	for index, item := range request.Input {
 		lowered, err := lowerItem(item)
 		if err != nil {
-			return responses.ResponseNewParams{}, fmt.Errorf("input item %d: %w", index, err)
+			return nil, loweredToolPolicy{}, fmt.Errorf("input item %d: %w", index, err)
 		}
 		input = append(input, lowered)
 	}
@@ -46,7 +48,7 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	if request.Output != nil {
 		output, err := lowerOutput(*request.Output)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		for key, value := range output {
 			requestMap[key] = value
@@ -54,13 +56,13 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	}
 	if request.Sampling != nil {
 		if err := lowerSampling(requestMap, *request.Sampling); err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 	}
 	if request.Reasoning != nil {
 		reasoning, err := lowerReasoning(*request.Reasoning)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		if reasoning != nil {
 			requestMap["reasoning"] = reasoning
@@ -69,24 +71,32 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	if len(request.Tools) > 0 {
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		requestMap["tools"] = tools
 	}
 	policy, err := lowerToolPolicy(request.ToolPolicy)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return nil, loweredToolPolicy{}, err
 	}
 	requestMap["tool_choice"] = policy.choice
 	requestMap["parallel_tool_calls"] = policy.parallel
 	continuation, err := lowerContinuation(request.Continuation)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return nil, loweredToolPolicy{}, err
 	}
 	if continuation != "" {
 		requestMap["previous_response_id"] = continuation
 	}
 	if err := lowerExtensions(request.Extensions, requestMap); err != nil {
+		return nil, loweredToolPolicy{}, err
+	}
+	return requestMap, policy, nil
+}
+
+func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+	requestMap, policy, err := lowerRequestMap(request, serviceClass)
+	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
 	encoded, err := json.Marshal(requestMap)
