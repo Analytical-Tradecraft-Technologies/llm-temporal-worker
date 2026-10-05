@@ -46,6 +46,13 @@ func TestProviderEgressPolicyRejectsBlockedAddresses(t *testing.T) {
 		"ipv6 multicast":       "ff02::1",
 		"ipv6 unspecified":     "::",
 		"ipv4 mapped loopback": "::ffff:127.0.0.1",
+		"ietf protocol":        "192.0.0.8",
+		"nat64 metadata":       "64:ff9b::a9fe:a9fe",
+		"nat64 private":        "64:ff9b::a00:1",
+		"nat64 local use":      "64:ff9b:1::a00:1",
+		"6to4 private":         "2002:a00:1::1",
+		"teredo":               "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+		"ipv4 compatible":      "::7f00:1",
 	}
 	for name, address := range cases {
 		t.Run(name, func(t *testing.T) {
