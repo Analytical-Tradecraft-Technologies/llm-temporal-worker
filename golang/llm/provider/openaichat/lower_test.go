@@ -161,3 +161,44 @@ func TestCompileOmitsToolControlsWithoutTools(t *testing.T) {
 		}
 	}
 }
+
+func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
+	refused := openai.ChatCompletion{
+		ID: "refused", Model: "chat-model", ServiceTier: openai.ChatCompletionServiceTierDefault,
+		Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Refusal: "I can't help with that."}}},
+	}
+	lifted, err := testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, &refused, "req")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := append([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}}}, lifted.Output...)
+	input = append(input, llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "a benign follow-up"}}})
+	params, err := lowerRequest(llm.Request{Model: "chat-model", Input: input}, testProfile(), "default")
+	if err != nil {
+		t.Fatalf("replaying a lifted refusal: %v", err)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Messages []struct {
+			Role    string           `json:"role"`
+			Content []map[string]any `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("wire = %s: %v", encoded, err)
+	}
+	if len(wire.Messages) != 3 || wire.Messages[1].Role != "assistant" || len(wire.Messages[1].Content) != 1 ||
+		wire.Messages[1].Content[0]["type"] != "refusal" || wire.Messages[1].Content[0]["refusal"] != "I can't help with that." {
+		t.Fatalf("assistant refusal wire = %s", encoded)
+	}
+
+	_, err = lowerRequest(llm.Request{Model: "chat-model", Input: []llm.Item{
+		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ImagePart{URL: "https://example.test/a.png", MediaType: "image/png"}}},
+	}}, testProfile(), "default")
+	if err == nil || !strings.Contains(err.Error(), "assistant history") {
+		t.Fatalf("assistant image error = %v", err)
+	}
+}
