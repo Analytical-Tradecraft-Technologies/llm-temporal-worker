@@ -1,7 +1,12 @@
+# Template catalog: replace the profile model and limits with the provider
+# model configured in config.yaml, then update the sha256 pin there.
 version: production-openai-responses
 profiles:
   production-openai-responses:
     family: openai_responses
+    model: replace-with-model
     input: [text, image, reference]
     output: [text, tool_call]
     service_classes: [economy, standard, priority]
+    max_context_tokens: 128000
+    max_output_tokens: 32768

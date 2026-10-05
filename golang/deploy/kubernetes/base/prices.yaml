@@ -1,2 +1,45 @@
+# Template catalog: these zero prices belong to the placeholder model only.
+# Replace every entry with the provider's published prices for the model
+# configured in config.yaml, then update the sha256 pin there. A route whose
+# model has no matching price entry is not usable.
 version: production-v1
-entries: []
+entries:
+  - provider: openai
+    endpoint: openai-production
+    family: openai_responses
+    region: global
+    model: replace-with-model
+    service_class: economy
+    provider_tier: flex
+    input_per_million: "0"
+    output_per_million: "0"
+    cache_read_per_million: "0"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"
+  - provider: openai
+    endpoint: openai-production
+    family: openai_responses
+    region: global
+    model: replace-with-model
+    service_class: standard
+    provider_tier: default
+    input_per_million: "0"
+    output_per_million: "0"
+    cache_read_per_million: "0"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"
+  - provider: openai
+    endpoint: openai-production
+    family: openai_responses
+    region: global
+    model: replace-with-model
+    service_class: priority
+    provider_tier: priority
+    input_per_million: "0"
+    output_per_million: "0"
+    cache_read_per_million: "0"
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"
