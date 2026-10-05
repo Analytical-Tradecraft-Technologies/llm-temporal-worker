@@ -17,6 +17,8 @@ configMapGenerator:
       - config.yaml
       - capabilities.yaml
       - prices.yaml
+    # Kustomize appends a content hash and rewrites the Deployment reference,
+    # so a configuration or catalog change creates a new immutable ConfigMap
+    # and rolls the worker.
     options:
-      disableNameSuffixHash: true
       immutable: true
