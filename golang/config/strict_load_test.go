@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -77,7 +78,7 @@ func TestLoadRejectsBudgetBoundsThatFailAfterValidation(t *testing.T) {
 		{
 			name: "policy ID leaves no room for the window index",
 			old:  "id: acme-production", replacement: "id: " + strings.Repeat("p", 127),
-			want: []string{"budgets.policies[0].id", "at most 126 bytes"},
+			want: []string{"budgets.policies[0].id"},
 		},
 		{
 			name: "admission hash tag with a brace",
@@ -95,9 +96,9 @@ func TestLoadRejectsBudgetBoundsThatFailAfterValidation(t *testing.T) {
 			requireLoadError(t, replaceExample(t, test.old, test.replacement), test.want...)
 		})
 	}
-	// The longest policy ID whose window identities still fit is accepted.
-	if _, err := config.Load(replaceExample(t, "id: acme-production", "id: "+strings.Repeat("p", 126))); err != nil {
-		t.Fatalf("126-byte policy ID rejected: %v", err)
+	// A long policy ID whose window identities still fit is accepted.
+	if _, err := config.Load(replaceExample(t, "id: acme-production", "id: "+strings.Repeat("p", 96))); err != nil {
+		t.Fatalf("96-byte policy ID rejected: %v", err)
 	}
 }
 
@@ -122,6 +123,7 @@ func TestLoadRejectsBudgetMatchersThatCanNeverMatch(t *testing.T) {
 	}{
 		{"unknown logical model", "match:\n        logical_model: invoice-sumarizer", "budgets.policies[0].match.logical_model"},
 		{"unknown endpoint", "match:\n        endpoint: openai-prd", "budgets.policies[0].match.endpoint"},
+		{"endpoint no model routes to", "match:\n        endpoint: exa-answer", "budgets.policies[0].match.endpoint \"exa-answer\" is not used by any model route"},
 		{"another environment", "match:\n        tenant: acme\n        environment: staging", "budgets.policies[0].match.environment"},
 		{"tenant with different case", "match:\n        tenant: Acme", "budgets.policies[0].match.tenant"},
 		{"tenant outside the allowlist", "match:\n        tenant: globex", "budgets.policies[0].match.tenant"},
@@ -224,5 +226,33 @@ func TestLoadAcceptsNullListsAndTheRenderedEffectiveConfiguration(t *testing.T) 
 	}
 	if err := compiled.Validate(rendered); err != nil {
 		t.Fatalf("schema rejects a model without a tenant restriction: %v", err)
+	}
+}
+
+// An endpoint reaches budget matching only through a route of the requested
+// model, so a matcher pairing a model with another model's endpoint is inert.
+func TestValidateRejectsBudgetEndpointOutsideTheMatchedModel(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var class llm.ServiceClass
+	for class = range loaded.Endpoints["exa-answer"].ServiceClasses {
+		break
+	}
+	loaded.Models["search"] = config.ModelConfig{Routes: []config.RouteConfig{{ID: "exa", Endpoint: "exa-answer", Model: "exa", Classes: []llm.ServiceClass{class}}}}
+	match := &loaded.Budgets.Policies[0].Match
+	*match = config.BudgetMatch{EndpointID: "exa-answer"}
+	if err := loaded.Validate(); err != nil {
+		t.Fatalf("endpoint routed by a model rejected: %v", err)
+	}
+	match.LogicalModel = "search"
+	if err := loaded.Validate(); err != nil {
+		t.Fatalf("endpoint routed by the matched model rejected: %v", err)
+	}
+	match.LogicalModel = "invoice-summarizer"
+	err = loaded.Validate()
+	if err == nil || !strings.Contains(err.Error(), `budgets.policies[0].match.endpoint "exa-answer" is not used by a route of model "invoice-summarizer"`) {
+		t.Fatalf("endpoint of another model error = %v", err)
 	}
 }

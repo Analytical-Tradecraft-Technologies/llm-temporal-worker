@@ -779,7 +779,9 @@ exact or prefix restriction.
 A matcher that can never match is a configuration error, because its policy
 would silently never apply, or with `require_match: true` silently remove the
 routes it was meant to budget. Validation rejects an exact `logical_model` that
-is not a key of `models`, an exact `endpoint` that is not a key of `endpoints`,
+is not a key of `models`, an exact `endpoint` that is not a key of `endpoints`
+or that no route uses (no route of the matched `logical_model` when one is
+named, since a request only reaches an endpoint through its model's routes),
 and an exact `environment` other than the configuration's own `environment`.
 When `authorization` is configured, an exact `tenant` or `project` must appear
 in `authorization.allowed_scopes`, and when both are set they must appear

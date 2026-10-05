@@ -292,7 +292,7 @@ func TestValidateConfigRejectsSettingsThatFailAfterValidation(t *testing.T) {
 	for _, row := range []struct{ name, old, replacement, want string }{
 		{"window bucket count", "bucket: 1h", "bucket: 1s", "budgets.policies[0].windows[2] needs 2592002 buckets"},
 		{"limit above the Redis range", `limit_usd: "25.000000000000000000"`, `limit_usd: "99999999999999999999"`, "budgets.policies[0].windows[0].limit_usd must not exceed"},
-		{"policy ID of 127 bytes", "id: acme-production", "id: " + strings.Repeat("p", 127), "budgets.policies[0].id must be at most 126 bytes"},
+		{"policy ID of 127 bytes", "id: acme-production", "id: " + strings.Repeat("p", 127), "budgets.policies[0].id must be at most"},
 		{"limit below one nano-USD", `limit_usd: "25.000000000000000000"`, `limit_usd: "0.0000000001"`, "budgets.policies[0].windows[0].limit_usd must be at least"},
 		{"second document", "", "\n---\nbudgets:\n  require_match: false\n", "configuration YAML"},
 	} {

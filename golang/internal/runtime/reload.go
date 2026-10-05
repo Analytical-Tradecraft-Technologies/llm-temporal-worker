@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
@@ -279,6 +280,28 @@ func (left configFileState) sameMetadata(right configFileState) bool {
 
 func (left configFileState) equal(right configFileState) bool {
 	return left.sameMetadata(right) && left.hashed == right.hashed && left.digest == right.digest
+}
+
+// watchedReloadGate decides, per triggered reload, whether the bytes it reads
+// must be the content the watcher saw stable. Triggers are coalesced into one
+// channel, so the source of a reload is recorded here instead.
+type watchedReloadGate struct {
+	watcher  *configFileWatcher
+	explicit atomic.Bool
+}
+
+// signal records a SIGHUP before its trigger is forwarded.
+func (gate *watchedReloadGate) signal() { gate.explicit.Store(true) }
+
+// begin is called before a reload reads the file. A pending SIGHUP is
+// consumed here, never after the read: a signal that arrives while a
+// watcher-triggered reload is already in flight must not exempt the bytes
+// that reload read earlier, and keeps its bypass for the reload it queued.
+func (gate *watchedReloadGate) begin() func([]byte) bool {
+	if gate.explicit.Swap(false) {
+		return nil
+	}
+	return gate.watcher.settled
 }
 
 // combineReloadTriggers turns signal and watcher notifications into one

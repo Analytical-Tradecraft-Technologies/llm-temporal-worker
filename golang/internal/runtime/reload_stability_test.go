@@ -268,3 +268,24 @@ func TestConfigValidationAgreesWithBudgetCompilationBounds(t *testing.T) {
 		})
 	}
 }
+
+// A SIGHUP that arrives while a watcher-triggered reload is already in flight
+// must not exempt the bytes that reload read before the signal; the bypass
+// belongs to the reload the signal queues.
+func TestWatchedReloadGateBindsSIGHUPToTheReloadItQueues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, "stable")
+	gate := &watchedReloadGate{watcher: manualConfigFileWatcher(t, path, []byte("stable"))}
+
+	watcherReload := gate.begin()
+	gate.signal()
+	if watcherReload == nil || watcherReload([]byte("stab")) {
+		t.Fatal("a later SIGHUP exempted bytes a watcher-triggered reload had already read")
+	}
+	if gate.begin() != nil {
+		t.Fatal("the SIGHUP reload lost its bypass to the reload already in flight")
+	}
+	if gate.begin() == nil {
+		t.Fatal("one SIGHUP exempted more than one reload")
+	}
+}

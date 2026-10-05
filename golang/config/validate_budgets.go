@@ -94,6 +94,15 @@ func (config Config) validateBudgetReferences() error {
 			if _, exists := config.Endpoints[match.EndpointID]; !exists {
 				return fmt.Errorf("%s.match.endpoint %q is not configured in endpoints", path, match.EndpointID)
 			}
+			// A request only carries an endpoint through a route of its
+			// logical model, so a declared endpoint no such route uses can
+			// never match either.
+			if !config.modelRoutesTo(match.LogicalModel, match.EndpointID) {
+				if budgetMatchIsExact(match.LogicalModel) {
+					return fmt.Errorf("%s.match.endpoint %q is not used by a route of model %q", path, match.EndpointID, match.LogicalModel)
+				}
+				return fmt.Errorf("%s.match.endpoint %q is not used by any model route", path, match.EndpointID)
+			}
 		}
 		if budgetMatchIsExact(match.Environment) && match.Environment != config.Environment {
 			return fmt.Errorf("%s.match.environment %q can never match environment %q", path, match.Environment, config.Environment)
@@ -105,6 +114,22 @@ func (config Config) validateBudgetReferences() error {
 		}
 	}
 	return nil
+}
+
+// modelRoutesTo reports whether a route of the named model, or of any model
+// when the name is a wildcard, uses the endpoint.
+func (config Config) modelRoutesTo(model, endpoint string) bool {
+	for name, value := range config.Models {
+		if budgetMatchIsExact(model) && name != model {
+			continue
+		}
+		for _, route := range value.Routes {
+			if route.Endpoint == endpoint {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateBudgetMatchScope compares exact tenant and project restrictions
