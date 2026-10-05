@@ -230,10 +230,11 @@ func appendInputItem(messages *[]any, item llm.Item, toolCalls map[string]struct
 
 func lowerMessage(message llm.Message) (map[string]any, error) {
 	role := "user"
+	lower := lowerParts
 	if message.Actor == llm.ActorModel {
-		role = "assistant"
+		role, lower = "assistant", lowerAssistantParts
 	}
-	content, err := lowerParts(message.Content)
+	content, err := lower(message.Content)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +254,31 @@ func lowerParts(parts []llm.Part) ([]any, error) {
 			return nil, fmt.Errorf("part %d: %w", index, err)
 		}
 		content = append(content, lowered)
+	}
+	return content, nil
+}
+
+// lowerAssistantParts lowers replayed model content. Chat Completions accepts
+// only text and refusal parts on assistant messages, so a lifted refusal is
+// replayed as a refusal part rather than rejected.
+func lowerAssistantParts(parts []llm.Part) ([]any, error) {
+	content := make([]any, 0, len(parts))
+	for index, part := range parts {
+		switch value := part.(type) {
+		case llm.RefusalPart:
+			content = append(content, map[string]any{"type": "refusal", "refusal": value.Text})
+		case llm.TextPart, llm.JSONPart:
+			lowered, err := lowerPart(part)
+			if err != nil {
+				return nil, fmt.Errorf("part %d: %w", index, err)
+			}
+			content = append(content, lowered)
+		default:
+			if part == nil {
+				return nil, fmt.Errorf("part %d: unsupported part <nil>", index)
+			}
+			return nil, fmt.Errorf("part %d: part kind %q is not accepted in Chat Completions assistant history", index, part.PartKind())
+		}
 	}
 	return content, nil
 }
