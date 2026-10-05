@@ -76,6 +76,7 @@ func TestCloudExecutionReportsUnsupportedCapabilityForRejectedRoutes(t *testing.
 }
 
 func TestProviderPlanningClassifiesExhaustedSelection(t *testing.T) {
+	var customPlanner routing.Planner
 	unsupported := func(provider.CompileInput) (provider.Call, error) {
 		return provider.Call{}, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "structured_output: sensitive compiler error")
 	}
@@ -113,12 +114,26 @@ func TestProviderPlanningClassifiesExhaustedSelection(t *testing.T) {
 		{name: "model has no route", configure: func(_ *planningSource, _ *planningAdapter, request *llm.GenerateRequestV1) {
 			request.SettingsPatch.Model.Set = preparationPointer("unknown")
 		}, code: provider.CodeNoRoute, phase: provider.PhasePlan},
+		{name: "custom planner rejects with request text", configure: func(_ *planningSource, _ *planningAdapter, _ *llm.GenerateRequestV1) {
+			customPlanner = planningPlannerFunc(func(context.Context, routing.Input) (routing.Plan, error) {
+				return routing.Plan{Rejections: []routing.Rejection{
+					{Code: "sensitive prompt", RouteID: "route", Path: "capabilities.text"},
+					{Code: routing.RejectCapability, RouteID: "sensitive route", Path: "capabilities.text"},
+					{Code: routing.RejectCapability, RouteID: "route", Path: "capabilities.sensitive"},
+				}}, errors.New("no eligible route candidates")
+			})
+		}, code: provider.CodeUnsupportedCapability, phase: provider.PhasePlan,
+			details: map[string]string{"rejected_routes": "3", "route_1": "route", "reason_1": routing.RejectCapability, "route_2": "", "reason_2": routing.RejectInvalid, "route_3": "", "reason_3": routing.RejectInvalid}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			capabilities, source, adapter, request, _, _ := planningFixture()
 			request.SettingsPatch.ServiceClass.Set = preparationPointer(llm.ServiceClassStandard)
 			request.SettingsPatch.ServiceClassFallbacks.Set = preparationPointer([]llm.ServiceClass{})
+			customPlanner = nil
 			test.configure(source, adapter, &request)
+			if customPlanner != nil {
+				capabilities.Planner = customPlanner
+			}
 			planning, err := capabilities.NewProviderPlanning(context.Background())
 			if err != nil {
 				t.Fatal(err)

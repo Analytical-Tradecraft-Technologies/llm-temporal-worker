@@ -150,7 +150,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	if ctx.Err() != nil {
 		return PlannedProviderCall{}, ctx.Err()
 	}
-	rejections := plannerRejections(plan.Rejections)
+	rejections := planning.plannerRejections(semantic.Model, plan.Rejections)
 	if err != nil || len(plan.Candidates) == 0 {
 		return PlannedProviderCall{}, selectionError(ctx, rejections, false, provider.PhasePlan)
 	}
@@ -353,16 +353,41 @@ func (rejection planningRejection) capability() bool {
 	return false
 }
 
-func plannerRejections(source []routing.Rejection) []planningRejection {
+// plannerRejections keeps a planner's rejections within the closed vocabulary.
+// A custom planner is not bound by DeterministicPlanner, so a code outside the
+// routing constants or a route outside the captured catalog is recorded as an
+// invalid rejection of no route rather than copied into details or logs.
+func (planning *ProviderPlanning) plannerRejections(model string, source []routing.Rejection) []planningRejection {
 	result := make([]planningRejection, 0, len(source))
 	for _, rejection := range source {
-		feature := ""
-		if rejection.Code == routing.RejectCapability {
-			feature = knownFeature(strings.TrimPrefix(rejection.Path, "capabilities."))
+		mapped := planningRejection{Reason: routing.RejectInvalid}
+		if knownRejection(rejection.Code) && planning.containsRoute(model, rejection.RouteID) {
+			mapped.RouteID, mapped.Reason = rejection.RouteID, rejection.Code
+			if rejection.Code == routing.RejectCapability {
+				mapped.Feature = knownFeature(strings.TrimPrefix(rejection.Path, "capabilities."))
+			}
 		}
-		result = append(result, planningRejection{RouteID: rejection.RouteID, Reason: rejection.Code, Feature: feature})
+		result = append(result, mapped)
 	}
 	return result
+}
+
+func knownRejection(code string) bool {
+	switch code {
+	case routing.RejectTenant, routing.RejectRegion, routing.RejectModel, routing.RejectHealth, routing.RejectCapability, routing.RejectPrice,
+		routing.RejectExtension, routing.RejectContext, routing.RejectContinuation, routing.RejectClass, routing.RejectInvalid:
+		return true
+	}
+	return false
+}
+
+func (planning *ProviderPlanning) containsRoute(model, routeID string) bool {
+	for _, route := range planning.catalog.Models[model].Routes {
+		if route.ID == routeID {
+			return routeID != ""
+		}
+	}
+	return false
 }
 
 // rejectedCandidate classifies a local adapter failure. Only a request the
