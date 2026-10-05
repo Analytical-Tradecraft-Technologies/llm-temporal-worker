@@ -132,6 +132,9 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 	if request.OperationKey != "" {
 		operationKey := continuationOperationKey{tenant: parent.Tenant, parent: request.Parent, operation: request.OperationKey}
 		if handle, exists := store.byOp[operationKey]; exists {
+			if record, ok := store.records[handle]; ok && !sameChildFacts(record.value, child) {
+				return "", state.ErrConflict
+			}
 			return handle, nil
 		}
 	}
@@ -185,4 +188,11 @@ func (store *ContinuationStore) Sweep(now time.Time) int {
 		}
 	}
 	return removed
+}
+
+// sameChildFacts compares the immutable facts of an idempotent child retry.
+// A retry with the same parent and operation key but a different history is
+// a conflict, not a replay of the stored child.
+func sameChildFacts(stored, incoming state.Continuation) bool {
+	return stored.TranscriptDigest == incoming.TranscriptDigest && stored.TranscriptComplete == incoming.TranscriptComplete
 }
