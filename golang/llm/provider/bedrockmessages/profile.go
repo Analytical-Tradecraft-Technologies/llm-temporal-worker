@@ -95,14 +95,24 @@ func (profile Profile) validate() error {
 	if profile.Capabilities.Version != "" && profile.Capabilities.Version != version {
 		return fmt.Errorf("bedrock messages profile %q capability versions conflict", profile.ID)
 	}
+	supported := 0
 	for _, class := range publicServiceClasses() {
 		value, ok := profile.ServiceTiers[class]
 		if !ok {
 			return fmt.Errorf("bedrock messages profile %q must declare service class %q", profile.ID, class)
 		}
+		// An empty tier marks a class the endpoint does not offer, as in the
+		// Chat and Anthropic profiles; providerTier then reports it unsupported.
+		if value == "" {
+			continue
+		}
 		if !validProviderTier(value) {
 			return fmt.Errorf("bedrock messages profile %q service class %q has invalid provider tier %q", profile.ID, class, value)
 		}
+		supported++
+	}
+	if supported == 0 {
+		return fmt.Errorf("bedrock messages profile %q must support at least one service class", profile.ID)
 	}
 	for feature, capability := range profile.Capabilities.Features {
 		if feature == "" {
