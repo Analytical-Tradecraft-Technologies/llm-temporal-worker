@@ -659,12 +659,15 @@ var providerBlockedIPv6Prefixes = []netip.Prefix{
 	// IPv6 forms that embed an IPv4 destination. A NAT64, 6to4 or Teredo
 	// gateway translates them to that IPv4 address, which would bypass the
 	// IPv4 private, loopback and metadata checks above.
+	// The NAT64 well-known prefix is decoded and checked separately below so
+	// DNS64 deployments can still reach public IPv4-only providers.
 	netip.MustParsePrefix("::/96"),          // IPv4-compatible (deprecated).
-	netip.MustParsePrefix("64:ff9b::/96"),   // NAT64 well-known prefix (RFC 6052).
 	netip.MustParsePrefix("64:ff9b:1::/48"), // NAT64 local-use prefix (RFC 8215).
 	netip.MustParsePrefix("2002::/16"),      // 6to4 (RFC 3056).
 	netip.MustParsePrefix("2001::/32"),      // Teredo (RFC 4380).
 }
+
+var nat64WellKnownPrefix = netip.MustParsePrefix("64:ff9b::/96")
 
 func blockedProviderAddress(address netip.Addr) bool {
 	if !address.IsValid() || address.IsUnspecified() || address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsMulticast() {
@@ -679,6 +682,12 @@ func blockedProviderAddress(address netip.Addr) bool {
 				return true
 			}
 		}
+	}
+	if address.Is6() && nat64WellKnownPrefix.Contains(address) {
+		// RFC 6052 /96: the low 32 bits are the IPv4 destination the gateway
+		// translates to, so apply the IPv4 policy to it.
+		raw := address.As16()
+		return blockedProviderAddress(netip.AddrFrom4([4]byte(raw[12:])))
 	}
 	if address.Is6() {
 		for _, prefix := range providerBlockedIPv6Prefixes {

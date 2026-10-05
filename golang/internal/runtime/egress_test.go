@@ -1077,3 +1077,17 @@ func localProviderMockEndpoint(t *testing.T) config.EndpointConfig {
 	}
 	return endpoint
 }
+
+func TestBlockedProviderAddressDecodesNAT64WellKnownPrefix(t *testing.T) {
+	for address, blocked := range map[string]bool{
+		"64:ff9b::808:808":   false, // DNS64 synthesis of public 8.8.8.8.
+		"64:ff9b::a9fe:a9fe": true,  // 169.254.169.254 metadata.
+		"64:ff9b::a00:1":     true,  // 10.0.0.1 private.
+		"64:ff9b::7f00:1":    true,  // 127.0.0.1 loopback.
+		"64:ff9b:1::a00:1":   true,  // Local-use NAT64 is not decoded.
+	} {
+		if got := blockedProviderAddress(netip.MustParseAddr(address)); got != blocked {
+			t.Errorf("blockedProviderAddress(%s) = %t, want %t", address, got, blocked)
+		}
+	}
+}
