@@ -206,8 +206,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
 	}
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.Usage.ServiceTier)}
+	headerTier := ""
 	if rawResponse != nil {
 		metadata.Status = rawResponse.StatusCode
+		headerTier = rawResponse.Header.Get(serviceTierHeader)
+		if metadata.ProviderTier == "" {
+			metadata.ProviderTier = headerTier
+		}
 		for _, header := range []string{"x-amzn-requestid", "x-amzn-request-id", "request-id", "x-request-id"} {
 			metadata.RequestID = rawResponse.Header.Get(header)
 			if metadata.RequestID != "" {
@@ -225,7 +230,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, mapped
 	}
 	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Content)})
-	lifted, err := adapter.profile.liftResponse(call, response, metadata.RequestID)
+	lifted, err := adapter.profile.liftResponseWithTier(call, response, metadata.RequestID, headerTier)
 	if err != nil {
 		return provider.Result{}, err
 	}

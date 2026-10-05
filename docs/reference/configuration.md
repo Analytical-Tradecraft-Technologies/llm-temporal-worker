@@ -288,7 +288,8 @@ endpoints:
     timeout: 115s
     service_classes:
       standard:
-        provider_value: standard
+        # Sent as service_tier; use a value OpenRouter's request schema accepts.
+        provider_value: default
     capability_profile: openrouter-chat-pinned-v2
     price_catalog: catalog-2026-07-13
     extensions:
@@ -308,6 +309,8 @@ endpoints:
     timeout: 115s
     service_classes:
       standard:
+        # Exa defines no service_tier: this value is never sent and only names
+        # the price-catalog tier.
         provider_value: standard
     capability_profile: exa-chat-v1
     price_catalog: catalog-2026-07-13
@@ -748,6 +751,18 @@ The request enum remains exactly `economy`, `standard`, and `priority`.
 Configuration may omit unsupported entries for an endpoint; it cannot define a
 fourth public class. A mapping's `provider_value` is adapter-profile validated
 and cannot be supplied by a request.
+
+`provider_value` is sent as the request tier only where the provider API
+defines one. Azure OpenAI (Chat and Responses) and Exa define no `service_tier`,
+so nothing is sent for those endpoints; the value still names the price-catalog
+tier and the response label that maps back to the class. For OpenRouter the
+value is sent as `service_tier` and must be one OpenRouter accepts (`default`,
+`flex`, `priority`, ...), not an upstream label such as `standard`.
+
+A response that reports no tier, or a tier no mapping recognizes, is still
+accepted: `service.actual` is omitted, `service.provider_value` keeps the raw
+label, and the call is priced at the attempted class. Anthropic Messages
+endpoints are the exception and require the response tier.
 
 A request without `service_class` becomes `standard`. There is no configurable
 provider default. `service_class_fallbacks` is request data, not a worker-wide

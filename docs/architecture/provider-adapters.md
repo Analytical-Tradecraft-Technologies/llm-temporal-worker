@@ -89,12 +89,12 @@ verified profile.
 | Profile | Official client | Initial API family | Service-class lowering | Important policy |
 | --- | --- | --- | --- | --- |
 | OpenAI | `openai-go` | Responses | economy -> `flex`, standard -> `default`, priority -> `priority` when the model supports them | Capture response `service_tier`; a downgrade is observable |
-| Azure OpenAI | `openai-go` with Azure base URL/auth options | Responses or Chat, declared per deployment | deployment capability maps supported public classes to Azure tier values | Never infer capability from the base URL alone |
+| Azure OpenAI | `openai-go` with Azure base URL/auth options | Responses or Chat, declared per deployment | the configured tier selects eligibility and pricing only; `service_tier` is not sent because the Azure specification does not define it | Never infer capability from the base URL alone |
 | OpenRouter | `openai-go` with compatible base URL | Chat Completions | configured only when a verified provider/model path offers the requested behavior | Disable hidden provider fallback and require declared parameters |
-| Exa | `openai-go` with compatible base URL | Chat Completions | profile-declared; normally standard until another tier is verified | Preserve Exa request ID and authoritative `costDollars` when present |
+| Exa | `openai-go` with compatible base URL | Chat Completions | profile-declared; normally standard until another tier is verified; `service_tier` is not sent because Exa does not define it | Preserve Exa request ID and authoritative `costDollars` when present |
 | Anthropic | `anthropic-sdk-go` | Messages | standard -> `standard_only`; priority -> `auto` only for accounts/models where priority capacity is explicitly enabled; economy unsupported synchronously | Lift the actual service tier from usage |
 | Claude Platform on AWS | Anthropic SDK AWS gateway support | Messages | capability-declared from the selected AWS offering | AWS auth belongs to client construction, not semantic input |
-| Amazon Bedrock | Anthropic SDK Bedrock/Mantle client | Messages | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | `reserved` is deployment capacity, never a public service class |
+| Amazon Bedrock | Anthropic SDK Bedrock/Mantle client | Messages | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | `reserved` is deployment capacity, never a public service class; the response tier is read from `usage.service_tier` or, when the body has none, the `X-Amzn-Bedrock-Service-Tier` header |
 | Amazon Bedrock Converse | AWS SDK for Go v2 `bedrockruntime` | Converse | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | One-shot `Converse` only; live token streaming is outside the Temporal v1 boundary |
 
 This table is a starting profile, not a promise that every model supports every
@@ -138,7 +138,8 @@ other.
 - Reasoning encrypted content is retained as provider-state only when requested
   by capability/configuration.
 - `service_tier` is set from the resolved public class and the response tier is
-  lifted independently.
+  lifted independently. Azure OpenAI Responses is the exception on the request
+  side: its specification does not define the field, so it is not sent.
 
 ### OpenAI-compatible Chat Completions
 
@@ -158,6 +159,12 @@ other.
   `response`, as for Responses.
 - Provider-specific routing bodies are typed namespaced extensions; they cannot
   be injected as arbitrary JSON.
+- `service_tier` is sent only where the provider API defines it. The Azure and
+  Exa profiles omit it; the configured tier still selects the supported
+  classes and the price-catalog tier.
+- Exa's `text` option is a profile-owned root field (`"text": true`) that a
+  caller extension cannot override. `extra_body` is the OpenAI Python SDK's
+  merge mechanism and never appears on the wire.
 
 Compatible does not mean identical. Azure, OpenRouter, Exa, and optional
 endpoints each receive their own profile, fixtures, limits, error decoder, and
@@ -261,8 +268,27 @@ inclusive provider count remains in `usage.provider_raw` as `prompt_tokens`
 (Chat) or `input_tokens` (Responses). Negative counts or cache subsets exceeding
 the total are rejected as invalid provider responses.
 
-An unrecognized actual provider tier maps to no public class and returns a
-diagnostic. It must not be mislabeled as `standard`.
+A successful response is never rejected over its tier label, because the
+provider has already done billable work. The OpenAI Chat, OpenAI Responses,
+Bedrock Messages and Bedrock Converse adapters treat the response tier as
+optional evidence:
+
+- A response with no tier is accepted and reports no actual class
+  (`service.actual` is omitted). `service_tier` is optional in the OpenAI
+  response schemas and in Converse, and is absent from the Azure OpenAI and Exa
+  response shapes and from the Bedrock InvokeModel body.
+- An unrecognized provider tier (for example an upstream label relayed by
+  OpenRouter, or Bedrock `reserved`) also maps to no public class. The raw
+  label is kept in `service.provider_value`. It must not be mislabeled as
+  `standard` or as the attempted class.
+- A profile may set `MissingActualServiceClass` to name the class a tier-less
+  response reports; the production factory does not.
+
+Pricing and cost metrics use the attempted class whenever no actual class is
+reported, and the actual-class metric records `unknown`.
+
+The Anthropic Messages profiles (direct and AWS gateway) still require
+`usage.service_tier`, which that API documents as always present.
 
 Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
 a string, and some compatible providers send an empty string for a tool that

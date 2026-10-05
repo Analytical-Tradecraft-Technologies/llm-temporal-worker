@@ -3,6 +3,5 @@
   "model": "azure-responses/fixture",
   "parallel_tool_calls": false,
   "previous_response_id": "azure-resp-prior",
-  "service_tier": "default",
   "tool_choice": "auto"
 }

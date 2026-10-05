@@ -153,8 +153,11 @@ func azureResponsesPathMiddleware(request *http.Request, next option.MiddlewareN
 // NewAzureAdapter constructs an adapter for one Azure Responses endpoint.
 // Endpoint and capability identity remain provider-neutral at the adapter
 // boundary; only the client construction uses Azure-specific middleware.
-func NewAzureAdapter(client *Client, endpointID, capabilityVersion string) (*Adapter, error) {
-	return New(client, endpointID, capabilityVersion)
+//
+// The Azure OpenAI Responses specification defines no service_tier, so the
+// field is never sent and a response is not expected to echo one.
+func NewAzureAdapter(client *Client, endpointID, capabilityVersion string, options ...AdapterOption) (*Adapter, error) {
+	return New(client, endpointID, capabilityVersion, append([]AdapterOption{WithoutRequestServiceTier()}, options...)...)
 }
 
 // Explicit aliases keep the provider name visible at call sites that compose
@@ -167,6 +170,6 @@ func NewAzureOpenAITokenClient(config AzureTokenClientConfig) (*Client, error) {
 	return NewAzureTokenClient(config)
 }
 
-func NewAzureOpenAIAdapter(client *Client, endpointID, capabilityVersion string) (*Adapter, error) {
-	return NewAzureAdapter(client, endpointID, capabilityVersion)
+func NewAzureOpenAIAdapter(client *Client, endpointID, capabilityVersion string, options ...AdapterOption) (*Adapter, error) {
+	return NewAzureAdapter(client, endpointID, capabilityVersion, options...)
 }
