@@ -570,6 +570,18 @@ The effective prefix is immutable for the lifetime of a worker process: a
 configuration reload that changes it is rejected before new clients are built.
 Deploy a new worker process when moving to a different Redis namespace.
 
+The same holds for everything else that identifies where durable state lives:
+`state.kind`, `state.redis.admission_hash_tag`, the `state.redis.key_secret`
+reference, the `state.requests` provider block, `request_table`,
+`payload_store`, `namespace` and `secret` reference, and the result store's
+`blob_store.kind`, `blob_store.file.root` and `blob_store.s3` bucket, region
+and prefix. In-flight requests, budget reservations and results exist only
+under the identity they were written with, so a reload that changes one is
+rejected and its log record names the field. `state.redis.addresses`, Redis
+credentials, TLS and timeouts are reloadable because they reach the same data.
+See [configuration reload](cli.md#configuration-reload) for the full list and
+the reload failure causes.
+
 The former `state.postgres` section is rejected by the strict loader. The
 `LLMTW_POSTGRES_DATABASE`, `LLMTW_POSTGRES_SCHEMA` and
 `LLMTW_POSTGRES_TABLE_PREFIX` overrides are removed. Configure existing cloud

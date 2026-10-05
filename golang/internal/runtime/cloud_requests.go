@@ -10,6 +10,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 )
@@ -127,7 +128,7 @@ func (factory *ProductionEngineFactory) buildCloudRequests(ctx context.Context, 
 	}
 	encoded, err := factory.options.Resolver.Resolve(ctx, c.Secret)
 	if err != nil {
-		return nil, errors.New("resolve cloud request storage secret")
+		return nil, secrets.MarkReference(errors.New("resolve cloud request storage secret"))
 	}
 	defer clear(encoded)
 	key, err := base64.StdEncoding.Strict().DecodeString(string(encoded))
