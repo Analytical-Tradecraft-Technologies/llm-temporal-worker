@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
@@ -165,8 +166,10 @@ func executionContext(ctx workflow.Context) workflow.Context {
 	// abandon a paid provider request or a cache fill another caller is awaiting.
 	detached, _ := workflow.NewDisconnectedContext(ctx)
 	return workflow.WithActivityOptions(detached, workflow.ActivityOptions{
-		StartToCloseTimeout: 5 * time.Minute, ScheduleToCloseTimeout: 24 * time.Hour,
-		HeartbeatTimeout: 30 * time.Second,
+		// Configuration validation rejects provider timeouts and keepalive
+		// intervals these bounds cannot honour.
+		StartToCloseTimeout: config.ActivityStartToClose, ScheduleToCloseTimeout: 24 * time.Hour,
+		HeartbeatTimeout: config.ActivityHeartbeatTimeout,
 		RetryPolicy:      &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumInterval: time.Minute},
 	})
 }

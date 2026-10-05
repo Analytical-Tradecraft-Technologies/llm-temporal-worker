@@ -153,8 +153,8 @@ func (server ServerConfig) validate() error {
 	if server.ReadinessProbeTimeout > server.ReadinessProbeInterval {
 		return fmt.Errorf("server.readiness_probe_timeout must not exceed readiness_probe_interval")
 	}
-	if server.InlinePayloadBytes <= 0 || server.InlinePayloadBytes > 16<<20 {
-		return fmt.Errorf("server.inline_payload_bytes must be between 1 and 16777216")
+	if server.InlinePayloadBytes <= 0 || server.InlinePayloadBytes > TemporalBlobLimitBytes {
+		return fmt.Errorf("server.inline_payload_bytes must be between 1 and %d (the Temporal payload blob limit)", TemporalBlobLimitBytes)
 	}
 	return nil
 }
@@ -184,7 +184,13 @@ func (temporal TemporalConfig) validate() error {
 	if err := validatePositiveDuration(temporal.Worker.GracefulStopTimeout, "temporal.worker.graceful_stop_timeout"); err != nil {
 		return err
 	}
-	return validatePositiveDuration(temporal.Worker.HeartbeatKeepaliveInterval, "temporal.worker.heartbeat_keepalive_interval")
+	if err := validatePositiveDuration(temporal.Worker.HeartbeatKeepaliveInterval, "temporal.worker.heartbeat_keepalive_interval"); err != nil {
+		return err
+	}
+	if time.Duration(temporal.Worker.HeartbeatKeepaliveInterval) > ActivityHeartbeatTimeout/3 {
+		return fmt.Errorf("temporal.worker.heartbeat_keepalive_interval must be at most %s (one third of the %s Activity heartbeat timeout)", ActivityHeartbeatTimeout/3, ActivityHeartbeatTimeout)
+	}
+	return nil
 }
 
 func (state StateConfig) validate(environment string) error {
@@ -387,6 +393,9 @@ func (limits LimitsConfig) validate() error {
 	}
 	if err := validatePositiveDuration(limits.ProviderTimeout, "limits.provider_timeout"); err != nil {
 		return err
+	}
+	if time.Duration(limits.ProviderTimeout) >= ActivityStartToClose {
+		return fmt.Errorf("limits.provider_timeout must be shorter than the %s Activity start-to-close timeout", ActivityStartToClose)
 	}
 	if limits.ProviderResponseBytes <= 0 || limits.ProviderResponseBytes > MaxProviderResponseBytes {
 		return fmt.Errorf("limits.provider_response_bytes must be between 1 and %d", MaxProviderResponseBytes)
