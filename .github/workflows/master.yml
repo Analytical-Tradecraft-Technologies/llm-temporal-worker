@@ -12,9 +12,13 @@ on:
 permissions:
   contents: read
 
+# Every master push needs its own completed run: the release guard requires a
+# successful push run whose head_sha is the tagged commit. Push runs therefore
+# get a per-commit group and are never cancelled (a shared group would still
+# replace a pending run). Scheduled and manual runs keep superseding each other.
 concurrency:
-  group: master-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: master-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   container:
