@@ -275,6 +275,6 @@ func decodeDocument(raw json.RawMessage) (any, error) {
 // beyond the provider's default behaviour.
 func reasoningIsProviderDefault(reasoning llm.ReasoningSpec) bool {
 	return (reasoning.Mode == "" || reasoning.Mode == llm.ReasoningModeProviderDefault) &&
-		reasoning.Effort == "" && reasoning.TokenBudget == nil &&
+		(reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && reasoning.TokenBudget == nil &&
 		(reasoning.Summary == "" || reasoning.Summary == llm.ReasoningSummaryProviderDefault)
 }

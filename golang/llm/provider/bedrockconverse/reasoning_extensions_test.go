@@ -47,6 +47,9 @@ func TestLoweringRejectsReasoningAndExtensionsItCannotSend(t *testing.T) {
 		{name: "provider default strict", strict: true, mutate: func(r *llm.Request) {
 			r.Reasoning = &llm.ReasoningSpec{Mode: llm.ReasoningModeProviderDefault}
 		}},
+		{name: "explicit provider defaults strict", strict: true, mutate: func(r *llm.Request) {
+			r.Reasoning = &llm.ReasoningSpec{Mode: llm.ReasoningModeProviderDefault, Effort: llm.ReasoningEffortProviderDefault, Summary: llm.ReasoningSummaryProviderDefault}
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := base
