@@ -29,6 +29,8 @@ type boundedCloudFixture struct {
 	cap            V1RuntimeCapabilities
 	options        CloudExecutionOptions
 	repository     *cloudstate.Repository
+	table          *executionMemoryTable
+	blobs          *executionMemoryBlobs
 	now            time.Time
 	request        llm.GenerateRequestV1
 	adapter        *executionAsyncAdapter

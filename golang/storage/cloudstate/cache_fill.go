@@ -37,14 +37,24 @@ func (s *cacheFills) read(ctx context.Context, key cache.ResponseKey) (cache.Fil
 	}
 	data, err := s.responses.repository.readBlob(ctx, pointer.Stream, pointer.Blob)
 	if err != nil {
-		// A dangling reference must never look like an absent fill to Acquire.
-		return cache.FillRecord{}, "", errors.Join(ErrCorrupt, err)
+		return cache.FillRecord{}, "", fillBlobError(err)
 	}
 	var envelope fillEnvelope
 	if json.Unmarshal(data, &envelope) != nil || envelope.Version != 1 || envelope.Record.Lease.Key != key || !validFillRecord(envelope.Record) {
 		return cache.FillRecord{}, "", ErrCorrupt
 	}
 	return envelope.Record, version, nil
+}
+
+// fillBlobError classifies a failed read of a blob that a fill pointer
+// references. A dangling reference must never look like an absent fill to
+// Acquire, so only a definite miss becomes corruption. Unavailable, throttled,
+// timed-out and cancelled reads stay retryable storage errors.
+func fillBlobError(err error) error {
+	if errors.Is(err, contracts.ErrNotFound) {
+		return errors.Join(ErrCorrupt, err)
+	}
+	return err
 }
 
 func (s *cacheFills) write(ctx context.Context, record cache.FillRecord, version kv.KeyValueVersion) error {
