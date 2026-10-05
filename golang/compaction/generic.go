@@ -29,7 +29,8 @@ func Prompt(version string) (string, error) {
 // caller's routing and sampling settings, but never mutates the caller and
 // always strips application tools, tool policy, continuation, reasoning, and
 // structured output. It injects the versioned repository prompt and selected
-// summary style as policy instructions. The returned request can therefore
+// summary style as policy instructions, or at the caller's instruction level
+// when the caller uses a single level. The returned request can therefore
 // only ask for bounded plain text.
 func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, policy Policy) (llm.Request, error) {
 	if operationKey == "" {
@@ -49,10 +50,11 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 	result := source
 	result.OperationKey = operationKey
 	result.Input = append([]llm.Item(nil), input...)
+	level := summarizerInstructionLevel(source.Instructions)
 	result.Instructions = make([]llm.Instruction, 0, len(source.Instructions)+2)
 	result.Instructions = append(result.Instructions,
-		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: prompt},
-		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "Summary style: " + string(policy.SummaryStyle)},
+		llm.Instruction{Kind: llm.InstructionKindText, Level: level, Text: prompt},
+		llm.Instruction{Kind: llm.InstructionKindText, Level: level, Text: "Summary style: " + string(policy.SummaryStyle)},
 	)
 	result.Instructions = append(result.Instructions, source.Instructions...)
 	result.Tools = nil
@@ -72,6 +74,23 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 		result.Sampling = &value
 	}
 	return result, nil
+}
+
+// summarizerInstructionLevel places the injected summarizer instructions at
+// the caller's instruction level when the caller uses a single level. Messages
+// and Converse cannot preserve mixed instruction levels in strict portability
+// mode, so injecting policy instructions beside application instructions would
+// make the summarizer request uncompilable on those routes.
+func summarizerInstructionLevel(instructions []llm.Instruction) llm.InstructionLevel {
+	if len(instructions) == 0 {
+		return llm.InstructionLevelPolicy
+	}
+	for _, instruction := range instructions {
+		if instruction.Level == llm.InstructionLevelPolicy {
+			return llm.InstructionLevelPolicy
+		}
+	}
+	return llm.InstructionLevelApplication
 }
 
 // PlainTextSummary extracts only a completed model message containing text

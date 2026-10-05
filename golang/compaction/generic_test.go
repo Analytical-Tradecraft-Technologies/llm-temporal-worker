@@ -164,3 +164,42 @@ func TestPromptVersionIsPinned(t *testing.T) {
 		t.Fatal("unknown prompt version accepted")
 	}
 }
+
+func TestPrepareRequestMatchesSingleCallerInstructionLevel(t *testing.T) {
+	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	for _, test := range []struct {
+		name   string
+		levels []llm.InstructionLevel
+		want   llm.InstructionLevel
+	}{
+		{name: "none", want: llm.InstructionLevelPolicy},
+		{name: "application", levels: []llm.InstructionLevel{llm.InstructionLevelApplication}, want: llm.InstructionLevelApplication},
+		{name: "unset", levels: []llm.InstructionLevel{""}, want: llm.InstructionLevelApplication},
+		{name: "policy", levels: []llm.InstructionLevel{llm.InstructionLevelPolicy}, want: llm.InstructionLevelPolicy},
+		{name: "mixed", levels: []llm.InstructionLevel{llm.InstructionLevelPolicy, llm.InstructionLevelApplication}, want: llm.InstructionLevelPolicy},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := llm.Request{OperationKey: "generate-1", Model: "model-1", Input: input}
+			for _, level := range test.levels {
+				request.Instructions = append(request.Instructions, llm.Instruction{Kind: llm.InstructionKindText, Level: level, Text: "be helpful"})
+			}
+			compact, err := PrepareRequest(request, "generate-1/compact", input, DefaultPolicy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(compact.Instructions) != len(test.levels)+2 {
+				t.Fatalf("instructions = %#v", compact.Instructions)
+			}
+			for index := 0; index < 2; index++ {
+				if got := compact.Instructions[index].Level; got != test.want {
+					t.Fatalf("summarizer instruction %d level = %q, want %q", index, got, test.want)
+				}
+			}
+			for index, level := range test.levels {
+				if got := compact.Instructions[index+2].Level; got != level {
+					t.Fatalf("caller instruction %d level = %q, want %q", index, got, level)
+				}
+			}
+		})
+	}
+}
