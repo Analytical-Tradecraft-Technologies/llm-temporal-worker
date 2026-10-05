@@ -43,7 +43,7 @@ func trustedTemporalSnapshot(t *testing.T, value config.Config) *config.Snapshot
 func trustedTemporalTestConfig(t *testing.T) config.Config {
 	t.Helper()
 	value := cloudSnapshot(t, "runtime-test").Config()
-	value.Authorization = &config.AuthorizationConfig{Mode: config.AuthorizationTrustedTemporal, AllowedScopes: []config.AuthorizedScope{{Tenant: "tenant", Project: "project"}}}
+	value.Authorization = &config.AuthorizationConfig{Mode: config.AuthorizationTrustedTemporal, AllowedScopes: []config.AuthorizedScope{{Tenant: "tenant", Project: "project"}, {Tenant: "acme", Project: "invoice-processing"}}}
 	return value
 }
 

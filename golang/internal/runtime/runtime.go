@@ -140,6 +140,9 @@ type Runtime struct {
 
 	shutdown *app.ShutdownCoordinator
 	timeout  time.Duration
+	// reloadAccept, when set, gates the bytes read by a triggered reload. It
+	// is assigned before the run loop starts and only read by that loop.
+	reloadAccept func([]byte) bool
 
 	readinessProbeInterval time.Duration
 	readinessProbeTimeout  time.Duration
@@ -633,7 +636,7 @@ func (runtime *Runtime) reloadFromTrigger(parent context.Context, path string) {
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	_ = runtime.ReloadFile(ctx, path)
+	_ = runtime.reloadFile(ctx, path, runtime.reloadAccept)
 }
 
 func (runtime *Runtime) gracefulShutdown() error {
@@ -699,9 +702,21 @@ func RunWorkerFile(ctx context.Context, path string, data []byte, _ io.Writer) e
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGHUP)
 	defer signal.Stop(signals)
+	return runtime.runWatchedFile(ctx, path, watcher, signals)
+}
+
+// runWatchedFile runs with reloads from the watcher and from SIGHUP. A
+// watcher-triggered reload publishes only the content the watcher saw stable.
+// SIGHUP is explicit operator intent and reloads whatever the file holds at
+// that moment, without waiting for it to settle.
+func (runtime *Runtime) runWatchedFile(ctx context.Context, path string, watcher *configFileWatcher, signals <-chan os.Signal) error {
+	var explicit atomic.Bool
+	runtime.reloadAccept = func(data []byte) bool {
+		return explicit.Swap(false) || watcher.settled(data)
+	}
 	reloadContext, cancelReloads := context.WithCancel(ctx)
 	defer cancelReloads()
-	reloads := combineReloadTriggers(reloadContext, watcher.Changes(), signals)
+	reloads := combineReloadTriggersNotify(reloadContext, watcher.Changes(), signals, func() { explicit.Store(true) })
 	return runtime.RunWithReload(ctx, path, reloads)
 }
 

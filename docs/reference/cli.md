@@ -145,6 +145,14 @@ Activities. At startup the watcher also compares the path with the bytes that
 were already validated, covering a replacement that lands before the watcher
 is initialized. Repeated notifications are coalesced.
 
+The watcher polls the path every second and reloads a change only once two
+consecutive polls see the same file identity, size, modification time and
+content; the reload then publishes only that content. A file that is still
+being written in place is therefore not reloaded until the write has finished,
+and an atomic rename or ConfigMap symlink swap is reloaded about two seconds
+after it lands. `SIGHUP` is an explicit request and reloads the file as it is
+at that moment, without waiting for it to settle.
+
 An unreadable or invalid replacement leaves the active snapshot and readiness
 state unchanged. The worker records `llmtw_config_reload_total{outcome="failure"}`
 and emits only a safe error classification; configuration text, paths, resolved
