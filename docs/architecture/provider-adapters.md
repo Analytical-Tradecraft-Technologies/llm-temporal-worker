@@ -126,8 +126,13 @@ break both.
 
 ### OpenAI-compatible Chat Completions
 
-- Instructions lower to the declared system/developer role supported by the
-  endpoint.
+- Instructions lower to the role the endpoint profile declares: policy
+  instructions use `system`; application instructions use `developer` for the
+  direct OpenAI API and `system` for Azure, OpenRouter, Exa and generic
+  compatible servers. When both levels would share `system`, strict
+  portability rejects the request because the hierarchy cannot be preserved.
+- Replayed model turns with neither content nor tool calls (for example a
+  filtered reply) are omitted rather than sent as an empty assistant message.
 - Tool calls remain assistant tool-call objects and tool results remain tool
   messages with their call IDs.
 - Multimodal parts use only the endpoint's declared compatible wire forms.

@@ -1249,7 +1249,13 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 		}
 		return &value, nil
 	case ChatDialectGeneric:
-		value, err := openaichat.NewOpenAIProfile(openaichat.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: allowed, ExpectedBaseURL: endpoint.BaseURL})
+		// Only the direct OpenAI API is known to accept the developer role;
+		// generic compatible servers receive application instructions as system.
+		role := "system"
+		if base == "https://api.openai.com/v1" {
+			role = "developer"
+		}
+		value, err := openaichat.NewOpenAIProfile(openaichat.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: allowed, ExpectedBaseURL: endpoint.BaseURL, ApplicationInstructionRole: role})
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}

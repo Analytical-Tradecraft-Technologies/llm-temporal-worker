@@ -42,7 +42,12 @@ type Profile struct {
 	ServiceTiers              map[llm.ServiceClass]string
 	ActualServiceClasses      map[string]llm.ServiceClass
 	MissingActualServiceClass llm.ServiceClass
-	AllowedExtensions         map[string]ExtensionSpec
+	// ApplicationInstructionRole is the Chat role used for application-level
+	// instructions: "developer" (the default, direct OpenAI) or "system" for
+	// endpoints that do not accept the developer role. Policy instructions
+	// always use "system".
+	ApplicationInstructionRole string
+	AllowedExtensions          map[string]ExtensionSpec
 	// ExpectedBaseURL pins a profile to one exact normalized client endpoint.
 	// Compatible behavior is never inferred from the URL; this is an identity
 	// check that prevents accidentally attaching a profile to another service.
@@ -100,7 +105,17 @@ func NewProfile(profile Profile) (Profile, error) {
 	return copy, nil
 }
 
+func (profile Profile) applicationInstructionRole() string {
+	if profile.ApplicationInstructionRole == "" {
+		return "developer"
+	}
+	return profile.ApplicationInstructionRole
+}
+
 func (profile Profile) validate() error {
+	if role := profile.ApplicationInstructionRole; role != "" && role != "developer" && role != "system" {
+		return fmt.Errorf("openai chat profile %q application instruction role %q is invalid", profile.ID, role)
+	}
 	if profile.ID == "" {
 		return fmt.Errorf("openai chat profile ID is required")
 	}
