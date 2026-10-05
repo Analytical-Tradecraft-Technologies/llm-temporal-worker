@@ -1,8 +1,12 @@
 # Deployment assets
 
 The worker image is built by the repository [Dockerfile](../Dockerfile) as a
-static, non-root binary on a digest-pinned Go builder and a digest-pinned
-Distroless runtime. It has no shell, writes no files by default, and expects an
+static, non-root binary on the reviewed Go patch image tag (`golang/.go-version`)
+and the Distroless `static-debian12:nonroot` runtime tag. Base images are
+deliberately referenced by mutable stable tags so they pick up upstream security
+rebuilds; `deploy/verify.sh` rejects base digests in the Dockerfile. Supply-chain
+pinning happens at deployment: the Kubernetes manifests reference the released
+worker image by its own digest. It has no shell, writes no files by default, and expects an
 orchestrator-provided `/tmp` volume when the root filesystem is read-only. The
 Kubernetes base deliberately contains a `REPLACE_WITH_RELEASE_DIGEST` marker;
 release automation must substitute the signed digest before applying it.
