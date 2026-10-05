@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -206,30 +207,54 @@ func scopedOperationKey(tenant, project, operation string) string {
 // idempotent retry and conflict detection. Any failure is returned rather than
 // collapsed into a sentinel digest: a shared zero digest would make distinct
 // oversized checkpoints compare equal and silently accept a conflicting write.
-// The request envelope is bounded by the graph's materialization byte limit so
-// the write path and replay path enforce one explicit size budget.
+//
+// The digest is built from length-prefixed parts instead of one combined JSON
+// envelope so each part keeps its own byte budget. Delta, Output, and the
+// settings patch are persisted and validated as separate blobs, so each is
+// canonicalized against maxBytes on its own; scalar identity fields are hashed
+// verbatim. A checkpoint whose parts each fit is therefore never rejected just
+// because their sum exceeds maxBytes.
 func checkpointRequestDigest(checkpoint Checkpoint, maxBytes int) ([32]byte, error) {
-	data, err := json.Marshal(struct {
-		Schema        string
-		Tenant        string
-		Project       string
-		Parent        *Handle
-		OperationKey  string
-		Delta         []llm.Item
-		Output        []llm.Item
-		SettingsPatch SettingsPatch
-	}{checkpointSchemaVersion, checkpoint.Tenant, checkpoint.Project, checkpoint.Parent, checkpoint.OperationKey, checkpoint.Delta, checkpoint.Output, checkpoint.SettingsPatch})
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("encode checkpoint request digest: %w", err)
+	hash := sha256.New()
+	writePart := func(data []byte) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(data)))
+		hash.Write(length[:])
+		hash.Write(data)
 	}
-	if len(data) > maxBytes {
-		return [32]byte{}, fmt.Errorf("checkpoint request exceeds byte limit: %w", ErrLimitExceeded)
+	writePart([]byte(checkpointSchemaVersion))
+	writePart([]byte(checkpoint.Tenant))
+	writePart([]byte(checkpoint.Project))
+	if checkpoint.Parent == nil {
+		writePart([]byte{0})
+	} else {
+		writePart(append([]byte{1}, *checkpoint.Parent...))
 	}
-	canonical, err := llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("canonicalize checkpoint request digest: %w", err)
+	writePart([]byte(checkpoint.OperationKey))
+	for _, part := range []struct {
+		name  string
+		value any
+	}{
+		{"delta", checkpoint.Delta},
+		{"output", checkpoint.Output},
+		{"settings patch", checkpoint.SettingsPatch},
+	} {
+		data, err := json.Marshal(part.value)
+		if err != nil {
+			return [32]byte{}, fmt.Errorf("encode checkpoint %s for digest: %w", part.name, err)
+		}
+		if len(data) > maxBytes {
+			return [32]byte{}, fmt.Errorf("checkpoint %s exceeds byte limit: %w", part.name, ErrLimitExceeded)
+		}
+		canonical, err := llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
+		if err != nil {
+			return [32]byte{}, fmt.Errorf("canonicalize checkpoint %s for digest: %w", part.name, err)
+		}
+		writePart(canonical)
 	}
-	return sha256.Sum256(canonical), nil
+	var digest [32]byte
+	copy(digest[:], hash.Sum(nil))
+	return digest, nil
 }
 
 func (graph *CheckpointGraph) Get(handle Handle) (Checkpoint, error) {

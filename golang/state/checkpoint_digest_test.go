@@ -49,8 +49,44 @@ func TestCheckpointGraphLargeCheckpointConflictIsDetected(t *testing.T) {
 	}
 }
 
-// Requests whose digest envelope cannot be computed within the graph's byte
-// limit are rejected explicitly rather than sharing a sentinel digest.
+// A checkpoint whose transcript and settings patch each fit the byte limit
+// must be accepted even when their combined digest envelope does not: durable
+// publication bounds those blobs separately and replays them through PutRoot.
+// Conflicts must still be detected for such checkpoints.
+func TestCheckpointGraphAcceptsSeparatelyBoundedPartsBeyondCombinedLimit(t *testing.T) {
+	const limit = 4 << 10
+	withParts := func(text, instructions string) Checkpoint {
+		checkpoint := rootCheckpoint("root", "tenant-a", "operation-root")
+		checkpoint.Delta = []llm.Item{message(text)}
+		checkpoint.SettingsPatch.Instructions = SetPatch([]llm.Instruction{{
+			Kind: llm.InstructionKindParts, Level: llm.InstructionLevelApplication,
+			Content: []llm.Part{llm.TextPart{Text: instructions}},
+		}})
+		return checkpoint
+	}
+	graph := NewCheckpointGraph(MaterializeLimits{MaxBytes: limit})
+	first := withParts(strings.Repeat("a", 3<<10), strings.Repeat("i", 3<<10))
+	if err := graph.PutRoot(first); err != nil {
+		t.Fatalf("separately bounded checkpoint rejected: %v", err)
+	}
+	if _, err := graph.Materialize("tenant-a", "root"); err != nil {
+		t.Fatalf("materialize separately bounded checkpoint: %v", err)
+	}
+	if err := graph.PutRoot(first); err != nil {
+		t.Fatalf("identical retry: %v", err)
+	}
+	for name, conflicting := range map[string]Checkpoint{
+		"delta":    withParts(strings.Repeat("b", 3<<10), strings.Repeat("i", 3<<10)),
+		"settings": withParts(strings.Repeat("a", 3<<10), strings.Repeat("j", 3<<10)),
+	} {
+		if err := graph.PutRoot(conflicting); !errors.Is(err, ErrConflict) {
+			t.Fatalf("conflicting %s returned %v, want %v", name, err, ErrConflict)
+		}
+	}
+}
+
+// A request part that cannot be digested within the graph's byte limit is
+// rejected explicitly rather than sharing a sentinel digest.
 func TestCheckpointGraphRejectsRequestBeyondByteLimit(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{MaxBytes: 1 << 10})
 	checkpoint := rootCheckpoint("root", "tenant-a", "operation-root")
