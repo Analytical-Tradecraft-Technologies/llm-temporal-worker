@@ -265,3 +265,30 @@ func TestSelectPrefixKeepsThinkingWithToolCallPastInterveningText(t *testing.T) 
 		t.Fatalf("human turn after a thinking response = %#v", selection.Retained)
 	}
 }
+
+func TestSelectPrefixKeepsReferenceWithPrecedingResponse(t *testing.T) {
+	// A citation annotates the response before it. It is not a turn, so the
+	// recent window keeps the cited answer instead of only its citations.
+	items := []llm.Item{
+		textMessage(llm.ActorHuman, "first question"),
+		textMessage(llm.ActorModel, "first answer"),
+		llm.Reference{URI: "https://example.com/first"},
+		textMessage(llm.ActorHuman, "second question"),
+		textMessage(llm.ActorModel, "second answer"),
+		llm.Reference{URI: "https://example.com/second-a"},
+		&llm.Reference{URI: "https://example.com/second-b"},
+	}
+	selection, err := SelectPrefix(items, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := selection.Prefix, items[:3]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prefix = %#v, want %#v", got, want)
+	}
+	if got, want := selection.Retained, items[3:]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("retained = %#v, want %#v", got, want)
+	}
+	if selection.RetainedTurns != 2 {
+		t.Fatalf("retained turns = %d, want 2", selection.RetainedTurns)
+	}
+}

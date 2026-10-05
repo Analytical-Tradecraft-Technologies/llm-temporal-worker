@@ -141,7 +141,7 @@ Input is an ordered list of tagged unions. A v1 implementation supports:
 | `tool_call` | `id`, `name`, `arguments` | Model request to invoke a caller-owned tool |
 | `tool_result` | `call_id`, `content`, `is_error` | Caller-provided result paired to one tool call |
 | `provider_state` | `provider`, `endpoint_family`, `media_type`, `opaque` | Uninterpreted continuation data retained byte-for-byte |
-| `reference` | `uri`, optional metadata | External content reference accepted only by declared endpoint capability |
+| `reference` | `uri`, optional metadata | External content annotation, such as a citation in provider output; kept in the transcript and never sent to a provider |
 
 Instructions are a separate ordered part list because OpenAI Responses,
 Chat-style developer/system messages, and Anthropic's top-level system content

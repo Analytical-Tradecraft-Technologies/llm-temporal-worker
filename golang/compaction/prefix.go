@@ -27,7 +27,9 @@ type PrefixSelection struct {
 // frontier. This makes every returned boundary frontier-empty and prevents a
 // compaction request from splitting a tool exchange. Provider-state items
 // (such as thinking blocks) are grouped with the item that follows them, so a
-// cut never separates them from their model output or tool call.
+// cut never separates them from their model output or tool call. Reference
+// items (output annotations such as citations) are grouped with the item that
+// precedes them, so they are never counted as turns of their own.
 //
 // The transcript is validated using the checkpoint materializer's canonical
 // tool-frontier rules. recentTurns must be non-negative. If an open tool
@@ -81,7 +83,8 @@ type turnRange struct {
 // matching results remain in that turn until the frontier is resolved. Every
 // other item with an empty frontier is a single atomic turn, except that an
 // assistant response containing provider state stays one turn through its
-// following model text and tool calls.
+// following model text and tool calls, and a reference annotation stays with
+// the item it follows.
 func splitTurns(items []llm.Item) []turnRange {
 	turns := make([]turnRange, 0, len(items))
 	start := 0
@@ -92,14 +95,14 @@ func splitTurns(items []llm.Item) []turnRange {
 	// so a cut can never separate thinking from the tool_use it belongs to.
 	reasoning := false
 	for index, item := range items {
-		if index > start && len(pending) == 0 && !(reasoning && isModelOutput(item)) {
+		if index > start && len(pending) == 0 && !(reasoning && isModelOutput(item)) && !isReference(item) {
 			turns = append(turns, turnRange{start: start, end: index})
 			start = index
 			reasoning = false
 		}
 		if isProviderState(item) {
 			reasoning = true
-		} else if !isModelOutput(item) {
+		} else if !isModelOutput(item) && !isReference(item) {
 			reasoning = false
 		}
 		switch value := item.(type) {
@@ -135,6 +138,15 @@ func isModelOutput(item llm.Item) bool {
 func isProviderState(item llm.Item) bool {
 	switch item.(type) {
 	case llm.ProviderState, *llm.ProviderState:
+		return true
+	default:
+		return false
+	}
+}
+
+func isReference(item llm.Item) bool {
+	switch item.(type) {
+	case llm.Reference, *llm.Reference:
 		return true
 	default:
 		return false
