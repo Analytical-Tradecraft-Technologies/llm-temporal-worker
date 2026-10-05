@@ -20,6 +20,14 @@ type Adapter struct {
 	endpointID        string
 	capabilityVersion string
 	storageDenied     bool
+	omitServiceTier   bool
+}
+
+// WithoutRequestServiceTier keeps service_tier out of the request for APIs
+// that do not define the field, such as Azure OpenAI Responses. The public
+// service class still selects routing and pricing.
+func WithoutRequestServiceTier() AdapterOption {
+	return func(adapter *Adapter) { adapter.omitServiceTier = true }
 }
 
 // ModelListerAdapter is the direct OpenAI Responses adapter with its optional
@@ -66,6 +74,15 @@ func NewAdapter(client *Client, endpointID, capabilityVersion string, options ..
 }
 
 func (adapter *Adapter) Name() string { return adapterName }
+
+// lowerRequest applies the endpoint's request policy to the common lowering.
+func (adapter *Adapter) lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+	params, err := lowerRequest(request, serviceClass)
+	if err == nil && adapter.omitServiceTier {
+		params.ServiceTier = ""
+	}
+	return params, err
+}
 
 func (adapter *Adapter) Capabilities(ctx context.Context, query provider.CapabilityQuery) (provider.CapabilitySet, error) {
 	if adapter == nil {
@@ -117,7 +134,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability is %s", capability.State))
 		}
 	}
-	params, err := lowerRequest(normalized, serviceClass)
+	params, err := adapter.lowerRequest(normalized, serviceClass)
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}

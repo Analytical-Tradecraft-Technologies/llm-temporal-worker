@@ -952,7 +952,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
 		case "bearer_env", "header_env":
 			key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 			if err != nil {
@@ -962,7 +962,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
 		default:
 			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
 		}
@@ -997,11 +997,17 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, err
 		}
+		// The client must match the dialect the profile was built for, which a
+		// configured endpoint declares through its extension marker.
+		dialect, err := chatDialect(endpointID, endpoint, profile)
+		if err != nil {
+			return nil, err
+		}
 		key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 		if err != nil {
 			return nil, err
 		}
-		switch profile.ChatDialect {
+		switch dialect {
 		case ChatDialectOpenRouter:
 			openrouterClient, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
 			if err != nil {
@@ -1214,22 +1220,9 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 	tiers, actual := endpointTiers(endpoint)
 	allowed := extensionSpecs(endpoint)
 	base := strings.TrimRight(endpoint.BaseURL, "/")
-	dialect := supplied.ChatDialect
-	if dialect == "" {
-		_, openRouterExtension := endpoint.Extensions["openrouter"]
-		_, exaExtension := endpoint.Extensions["exa"]
-		switch {
-		case openRouterExtension && exaExtension:
-			return nil, fmt.Errorf("endpoint %q: chat dialect markers are ambiguous", endpointID)
-		case openRouterExtension:
-			dialect = ChatDialectOpenRouter
-		case exaExtension:
-			dialect = ChatDialectExa
-		case base == "https://openrouter.ai/api/v1" || base == "https://api.exa.ai":
-			return nil, fmt.Errorf("endpoint %q: specialized chat dialect must be explicit", endpointID)
-		default:
-			dialect = ChatDialectGeneric
-		}
+	dialect, err := chatDialect(endpointID, endpoint, supplied)
+	if err != nil {
+		return nil, err
 	}
 	switch dialect {
 	case ChatDialectOpenRouter:
@@ -1262,6 +1255,32 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 		return &value, nil
 	default:
 		return nil, fmt.Errorf("endpoint %q: unsupported chat dialect %q", endpointID, dialect)
+	}
+}
+
+// chatDialect resolves the Chat dialect of an endpoint: the supplied one, or
+// the one its extension marker declares. It is never inferred from the host.
+func chatDialect(endpointID string, endpoint config.EndpointConfig, supplied EndpointProfile) (ChatDialect, error) {
+	if supplied.ChatDialect != "" {
+		return supplied.ChatDialect, nil
+	}
+	if supplied.Chat != nil {
+		return ChatDialectGeneric, nil
+	}
+	_, openRouterExtension := endpoint.Extensions["openrouter"]
+	_, exaExtension := endpoint.Extensions["exa"]
+	base := strings.TrimRight(endpoint.BaseURL, "/")
+	switch {
+	case openRouterExtension && exaExtension:
+		return "", fmt.Errorf("endpoint %q: chat dialect markers are ambiguous", endpointID)
+	case openRouterExtension:
+		return ChatDialectOpenRouter, nil
+	case exaExtension:
+		return ChatDialectExa, nil
+	case base == "https://openrouter.ai/api/v1" || base == "https://api.exa.ai":
+		return "", fmt.Errorf("endpoint %q: specialized chat dialect must be explicit", endpointID)
+	default:
+		return ChatDialectGeneric, nil
 	}
 }
 

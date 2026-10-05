@@ -38,7 +38,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 		}
 		requestMap[wire] = value
 	}
-	if serviceTier != "" {
+	if serviceTier != "" && !profile.OmitServiceTier {
 		requestMap["service_tier"] = serviceTier
 	}
 	if request.Output != nil {
@@ -89,7 +89,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	}
 	// The official parameter union intentionally ignores unknown compatible
 	// fields. Preserve profile-owned fields (such as OpenRouter's provider
-	// routing object or Exa's extra_body) through its audited extension escape
+	// routing object or Exa's text flag) through its audited extension escape
 	// hatch instead of silently dropping them.
 	knownBytes, err := json.Marshal(params)
 	if err != nil {

@@ -13,6 +13,9 @@ const (
 	adapterName              = "bedrock.messages"
 	defaultCapabilityVersion = "bedrock-anthropic/v1"
 	defaultMaxTokens         = int64(1024)
+	// serviceTierHeader is where InvokeModel reports the tier that served a
+	// request; the Anthropic response body is not documented to carry it.
+	serviceTierHeader = "X-Amzn-Bedrock-Service-Tier"
 )
 
 // Profile is an immutable Bedrock Anthropic Messages contract. Bedrock tier
@@ -181,19 +184,19 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 	return value, nil
 }
 
-func (profile Profile) actualClass(providerTier string) (*llm.ServiceClass, error) {
-	if providerTier == "" {
-		if profile.MissingActualServiceClass != "" {
-			class := profile.MissingActualServiceClass
-			return &class, nil
-		}
-		return nil, fmt.Errorf("provider response omitted service tier")
-	}
+// actualClass maps the tier a response reported to a public class. A missing
+// or unrecognized tier (for example reserved capacity) is not evidence of any
+// class, so it yields nil rather than a guess or a failure: the response is
+// already paid for, and the raw label is kept in the service facts for audit.
+func (profile Profile) actualClass(providerTier string) *llm.ServiceClass {
 	class, ok := profile.ActualServiceClasses[providerTier]
-	if !ok {
-		return nil, fmt.Errorf("provider returned unsupported service tier %q", providerTier)
+	if providerTier == "" {
+		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
 	}
-	return &class, nil
+	if !ok {
+		return nil
+	}
+	return &class
 }
 
 func publicServiceClasses() []llm.ServiceClass {

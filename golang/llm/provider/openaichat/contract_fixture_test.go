@@ -500,10 +500,7 @@ func assertChatFixtureClassFacts(t *testing.T, profile chatFixtureProfile) {
 		if tier != fact.RequestedTier {
 			t.Fatalf("%s %s requested tier = %q, want %q", profile.id, fact.Class, tier, fact.RequestedTier)
 		}
-		actual, err := profile.profile.actualClass(fact.ActualTier)
-		if err != nil {
-			t.Fatalf("%s %s actual tier %q: %v", profile.id, fact.Class, fact.ActualTier, err)
-		}
+		actual := profile.profile.actualClass(fact.ActualTier)
 		if actual == nil || *actual != actualByClass[fact.Class] {
 			t.Fatalf("%s %s actual class = %#v, want %q", profile.id, fact.Class, actual, actualByClass[fact.Class])
 		}

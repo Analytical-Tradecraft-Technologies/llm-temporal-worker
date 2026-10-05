@@ -16,12 +16,7 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 	if response == nil {
 		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
 	}
-	actual, err := serviceClassForTier(response.ServiceTier)
-	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
-	}
+	actual := serviceClassForTier(response.ServiceTier)
 	output, hasToolCalls, hasRefusal, err := liftOutput(response.Output, response.Status == responses.ResponseStatusIncomplete)
 	if err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
@@ -184,7 +179,12 @@ func firstModelText(output []llm.Item) (string, bool) {
 	return "", false
 }
 
-func serviceClassForTier(tier responses.ResponseServiceTier) (*llm.ServiceClass, error) {
+// serviceClassForTier maps the tier a response reported to a public class.
+// service_tier is optional in the Responses API and absent from the Azure
+// specification, and a missing or unrecognized tier is not evidence of any
+// class, so it yields nil rather than a guess or a failure: the response is
+// already paid for, and the raw label is kept in the service facts for audit.
+func serviceClassForTier(tier responses.ResponseServiceTier) *llm.ServiceClass {
 	var class llm.ServiceClass
 	switch tier {
 	case responses.ResponseServiceTierFlex:
@@ -193,12 +193,10 @@ func serviceClassForTier(tier responses.ResponseServiceTier) (*llm.ServiceClass,
 		class = llm.ServiceClassStandard
 	case responses.ResponseServiceTierPriority:
 		class = llm.ServiceClassPriority
-	case "":
-		return nil, fmt.Errorf("provider response omitted service tier")
 	default:
-		return nil, fmt.Errorf("provider returned unsupported service tier %q", tier)
+		return nil
 	}
-	return &class, nil
+	return &class
 }
 
 func liftStatus(status responses.ResponseStatus, incompleteReason string, hasToolCalls, hasRefusal bool) (llm.ResponseStatus, error) {

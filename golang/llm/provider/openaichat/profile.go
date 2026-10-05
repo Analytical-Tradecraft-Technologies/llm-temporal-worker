@@ -36,12 +36,20 @@ type ExtensionSpec struct {
 // invalid profile, which prevents a provider default from becoming a public
 // service class by accident.
 type Profile struct {
-	ID                        string
-	CapabilityVersion         string
-	Capabilities              provider.CapabilitySet
-	ServiceTiers              map[llm.ServiceClass]string
-	ActualServiceClasses      map[string]llm.ServiceClass
+	ID                   string
+	CapabilityVersion    string
+	Capabilities         provider.CapabilitySet
+	ServiceTiers         map[llm.ServiceClass]string
+	ActualServiceClasses map[string]llm.ServiceClass
+	// MissingActualServiceClass optionally names the class to report when a
+	// response carries no service tier. Left empty, such a response is still
+	// accepted and reports no actual class: service_tier is optional in the
+	// Chat Completions response and absent from several compatible APIs.
 	MissingActualServiceClass llm.ServiceClass
+	// OmitServiceTier keeps service_tier out of the request for APIs that do
+	// not define the field. ServiceTiers still selects the supported classes
+	// and the catalog tier used for pricing.
+	OmitServiceTier bool
 	// ApplicationInstructionRole is the Chat role used for application-level
 	// instructions: "developer" (the default, direct OpenAI) or "system" for
 	// endpoints that do not accept the developer role. Policy instructions
@@ -249,19 +257,19 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 	return value, nil
 }
 
-func (profile Profile) actualClass(providerTier string) (*llm.ServiceClass, error) {
-	if providerTier == "" {
-		if profile.MissingActualServiceClass != "" {
-			class := profile.MissingActualServiceClass
-			return &class, nil
-		}
-		return nil, fmt.Errorf("provider response omitted service tier")
-	}
+// actualClass maps the tier a response reported to a public class. A missing
+// or unrecognized tier is not evidence of any class, so it yields nil rather
+// than a guess or a failure: the response is already paid for, and the raw
+// label is kept in the service facts for audit.
+func (profile Profile) actualClass(providerTier string) *llm.ServiceClass {
 	class, ok := profile.ActualServiceClasses[providerTier]
-	if !ok {
-		return nil, fmt.Errorf("provider returned unsupported service tier %q", providerTier)
+	if providerTier == "" {
+		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
 	}
-	return &class, nil
+	if !ok {
+		return nil
+	}
+	return &class
 }
 
 func publicServiceClasses() []llm.ServiceClass {

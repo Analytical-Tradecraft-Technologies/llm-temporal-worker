@@ -73,16 +73,12 @@ func NewExaProfile(config ExaProfileConfig) (Profile, error) {
 	if model == "" {
 		model = "exa"
 	}
-	textBody, err := json.Marshal(map[string]any{"text": true})
-	if err != nil {
-		return Profile{}, fmt.Errorf("exa chat profile: extra body: %w", err)
-	}
 	allowed := cloneExtensions(config.AllowedExtensions)
 	if allowed == nil {
 		allowed = map[string]ExtensionSpec{}
 	}
 	if _, exists := allowed["exa"]; !exists {
-		allowed["exa"] = ExtensionSpec{Fields: map[string]string{"text": "extra_body"}}
+		allowed["exa"] = ExtensionSpec{Fields: map[string]string{"text": "text"}}
 	}
 	return NewProfile(Profile{
 		// The developer role is not accepted by every API version or
@@ -94,13 +90,17 @@ func NewExaProfile(config ExaProfileConfig) (Profile, error) {
 		ServiceTiers:               config.ServiceTiers,
 		ActualServiceClasses:       config.ActualServiceClasses,
 		MissingActualServiceClass:  config.MissingActualServiceClass,
-		AllowedExtensions:          allowed,
-		ExpectedBaseURL:            baseURL,
-		ExpectedModel:              model,
+		// Exa's chat completions API defines no service_tier.
+		OmitServiceTier:   true,
+		AllowedExtensions: allowed,
+		ExpectedBaseURL:   baseURL,
+		ExpectedModel:     model,
+		// Exa reads text as a root field. extra_body is the OpenAI Python
+		// SDK's merge mechanism and never appears on the wire.
 		WireDefaults: map[string]json.RawMessage{
-			"extra_body": textBody,
+			"text": json.RawMessage("true"),
 		},
-		ReservedWireFields: map[string]struct{}{"extra_body": {}},
+		ReservedWireFields: map[string]struct{}{"text": {}},
 		ResponseAugment:    augmentExa,
 	})
 }

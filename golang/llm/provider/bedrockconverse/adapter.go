@@ -198,10 +198,7 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 	if response.ServiceTier != nil {
 		actualTier = string(response.ServiceTier.Type)
 	}
-	actual, err := adapter.profile.actualClass(actualTier)
-	if err != nil {
-		return llm.Response{}, invalidResponseError(call, requestID, err.Error())
-	}
+	actual := adapter.profile.actualClass(actualTier)
 	output, hasToolCalls, err := liftOutput(response.Output)
 	if err != nil {
 		return llm.Response{}, invalidResponseError(call, requestID, err.Error())

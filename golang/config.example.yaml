@@ -162,7 +162,8 @@ endpoints:
     timeout: 115s
     service_classes:
       standard:
-        provider_value: standard
+        # Sent as service_tier; use a value OpenRouter's request schema accepts.
+        provider_value: default
     capability_profile: openrouter-chat-pinned-v2
     price_catalog: catalog-2026-07-13
     extensions:
@@ -182,6 +183,8 @@ endpoints:
     timeout: 115s
     service_classes:
       standard:
+        # Exa defines no service_tier: this value is never sent and only names
+        # the price-catalog tier.
         provider_value: standard
     capability_profile: exa-chat-v1
     price_catalog: catalog-2026-07-13

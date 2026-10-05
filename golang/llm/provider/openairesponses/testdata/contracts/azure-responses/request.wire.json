@@ -11,7 +11,6 @@
   "model": "azure-responses/fixture",
   "parallel_tool_calls": true,
   "reasoning": {"effort": "high", "mode": "standard", "summary": "detailed"},
-  "service_tier": "priority",
   "store": false,
   "temperature": 0.3,
   "text": {"format": {"description": "azure fixture answer", "name": "azure_answer", "schema": {"properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "strict": true, "type": "json_schema"}},

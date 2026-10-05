@@ -82,9 +82,12 @@ func NewAzureProfile(config AzureProfileConfig) (Profile, error) {
 		ServiceTiers:               config.ServiceTiers,
 		ActualServiceClasses:       config.ActualServiceClasses,
 		MissingActualServiceClass:  config.MissingActualServiceClass,
-		AllowedExtensions:          config.AllowedExtensions,
-		ExpectedBaseURL:            baseURL,
-		ExpectedModel:              config.Deployment,
+		// The Azure OpenAI Chat Completions specification defines no
+		// service_tier, on the request or the response.
+		OmitServiceTier:   true,
+		AllowedExtensions: config.AllowedExtensions,
+		ExpectedBaseURL:   baseURL,
+		ExpectedModel:     config.Deployment,
 	})
 }
 
