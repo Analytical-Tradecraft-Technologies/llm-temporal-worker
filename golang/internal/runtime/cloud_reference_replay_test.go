@@ -88,7 +88,22 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 	v, err = f.runtime.CompactStepV1(ctx, compact)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	if boundedState(t, v, err, llm.ExecutionCompleted).Compact == nil || f.submits.Load() != 3 {
+	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	if v.Compact == nil || f.submits.Load() != 3 {
 		t.Fatal("compaction did not summarise the cited transcript")
+	}
+
+	// A plain-text summary cannot hold a citation, so the compacted
+	// transcript carries both citations verbatim after it.
+	f.now = f.now.Add(time.Minute)
+	f.request = llm.GenerateRequestV1{OperationKey: "after-compaction", Context: f.request.Context, Parent: &v.Compact.Checkpoint.Handle, Append: []llm.Item{preparationMessage("after compaction")}}
+	if after := f.finish(t); after.Generate == nil || f.submits.Load() != 4 {
+		t.Fatalf("turn after compaction did not continue: %+v", after.Generate)
+	}
+	f.adapter.mu.Lock()
+	replayed = f.adapter.inputs[len(f.adapter.inputs)-1].Request.Input
+	f.adapter.mu.Unlock()
+	if len(replayed) != 4 || replayed[0].ItemKind() != llm.ItemKindMessage || replayed[1].ItemKind() != llm.ItemKindReference || replayed[2].ItemKind() != llm.ItemKindReference {
+		t.Fatalf("compacted transcript lost its citations: %#v", replayed)
 	}
 }

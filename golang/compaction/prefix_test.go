@@ -282,13 +282,41 @@ func TestSelectPrefixKeepsReferenceWithPrecedingResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := selection.Prefix, items[:3]; !reflect.DeepEqual(got, want) {
+	// The summarized turn's citation cannot survive a plain-text summary, so
+	// it leaves the lossy prefix and stays verbatim ahead of the recent turns.
+	if got, want := selection.Prefix, items[:2]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("prefix = %#v, want %#v", got, want)
 	}
-	if got, want := selection.Retained, items[3:]; !reflect.DeepEqual(got, want) {
+	if got, want := selection.Retained, items[2:]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("retained = %#v, want %#v", got, want)
 	}
 	if selection.RetainedTurns != 2 {
 		t.Fatalf("retained turns = %d, want 2", selection.RetainedTurns)
+	}
+}
+
+func TestSelectPrefixCarriesEveryReferencePastTheSummary(t *testing.T) {
+	first, second := llm.Reference{URI: "https://example.com/first"}, &llm.Reference{URI: "https://example.com/second"}
+	items := []llm.Item{
+		textMessage(llm.ActorHuman, "first question"),
+		textMessage(llm.ActorModel, "first answer"),
+		first,
+		textMessage(llm.ActorHuman, "second question"),
+		textMessage(llm.ActorModel, "second answer"),
+		second,
+		textMessage(llm.ActorHuman, "third question"),
+	}
+	selection, err := SelectPrefix(items, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := selection.Prefix, []llm.Item{items[0], items[1], items[3], items[4]}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prefix = %#v, want %#v", got, want)
+	}
+	if got, want := selection.Retained, []llm.Item{first, second, items[6]}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("retained = %#v, want %#v", got, want)
+	}
+	if selection.RetainedTurns != 1 {
+		t.Fatalf("retained turns = %d, want 1", selection.RetainedTurns)
 	}
 }

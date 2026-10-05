@@ -12,6 +12,10 @@ import (
 // recent suffix that remains verbatim. The two slices are copies of the input
 // slice; the items themselves are immutable semantic values by contract.
 //
+// Reference items (output annotations such as citations) are never lossy
+// input: those that fall before the boundary are left out of Prefix and lead
+// Retained in their original order, so a compacted transcript keeps them.
+//
 // A selection may have an empty Prefix when the transcript does not contain a
 // safe compaction boundary. Callers should treat that as "nothing to compact"
 // rather than sending an empty request to PrepareRequest.
@@ -65,11 +69,18 @@ func SelectPrefix(items []llm.Item, recentTurns int) (PrefixSelection, error) {
 	if cut > 0 {
 		boundary = turns[cut-1].end
 	}
-	selection := PrefixSelection{
-		Prefix:        append([]llm.Item(nil), items[:boundary]...),
-		Retained:      append([]llm.Item(nil), items[boundary:]...),
-		RetainedTurns: len(turns) - cut,
+	selection := PrefixSelection{RetainedTurns: len(turns) - cut}
+	// A summary is plain text and cannot carry a citation's URI or metadata,
+	// so references before the boundary stay verbatim instead of being
+	// summarized away.
+	for _, item := range items[:boundary] {
+		if isReference(item) {
+			selection.Retained = append(selection.Retained, item)
+		} else {
+			selection.Prefix = append(selection.Prefix, item)
+		}
 	}
+	selection.Retained = append(selection.Retained, items[boundary:]...)
 	return selection, nil
 }
 
