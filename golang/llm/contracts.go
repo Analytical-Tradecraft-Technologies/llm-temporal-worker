@@ -387,6 +387,12 @@ func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 			return zero, fmt.Errorf("%s.set: %w", name, err)
 		}
 		return any(value).(T), nil
+	case ToolPolicy:
+		value, err := decodeToolPolicy(raw)
+		if err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(value).(T), nil
 	case OutputSpec:
 		value, err := decodeOutput(raw)
 		if err != nil {
