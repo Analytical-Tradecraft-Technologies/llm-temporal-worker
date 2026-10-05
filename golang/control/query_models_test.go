@@ -279,3 +279,36 @@ func containsJSONNumber(data []byte, key string, want int64) bool {
 	}
 	return got == want
 }
+
+func TestTypedQueryResponseEncodesEmptyResultListsAsArrays(t *testing.T) {
+	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
+	for _, test := range []struct {
+		name   string
+		kind   llm.QueryKind
+		result QueryResult
+	}{
+		{name: "spend", kind: llm.QuerySpendSummary, result: SpendSummaryResult{StartTime: now.Add(-time.Hour), EndTime: now}},
+		{name: "spend pointer", kind: llm.QuerySpendSummary, result: &SpendSummaryResult{StartTime: now.Add(-time.Hour), EndTime: now}},
+		{name: "budget", kind: llm.QueryBudgetStatus, result: BudgetStatusResult{ActiveAt: now, GenerationID: "generation", ManifestDigest: ManifestDigest(strings.Repeat("0", 64)), StreamHighWaterMark: "1-0"}},
+		{name: "provider status", kind: llm.QueryProviderStatus, result: ProviderStatusResult{}},
+		{name: "model inventory", kind: llm.QueryModelInventory, result: ModelInventoryResult{}},
+		{name: "credit status", kind: llm.QueryCreditStatus, result: CreditStatusResult{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wire, err := EncodeQueryResponse(QueryResponse{OperationKey: "op", ExecutionID: "execution", Kind: test.kind, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: test.result, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}})
+			if err != nil {
+				t.Fatalf("EncodeQueryResponse() error = %v", err)
+			}
+			encoded, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), "null") {
+				t.Fatalf("empty result encoded with null: %s", encoded)
+			}
+			if _, err := DecodeQueryResponse(wire); err != nil {
+				t.Fatalf("DecodeQueryResponse() error = %v", err)
+			}
+		})
+	}
+}
