@@ -191,10 +191,15 @@ usage raw-facts maps; it is not copied into `llm.Cost` without an exact catalog
 quote.
 
 If measured cost exceeds the conservative reservation, completion still records
-the full cost because it was already incurred. It atomically adds the excess,
-marks a `reservation_underestimated` policy violation, and alerts. A budget may
-then be over its limit; subsequent admissions fail. Silently clipping cost is
-forbidden.
+the full cost because it was already incurred and atomically adds the excess. A
+budget may then be over its limit; subsequent admissions fail. Silently clipping
+cost is forbidden. No dedicated `reservation_underestimated` violation record or
+alert is emitted yet; an overrun is visible as accounted spend above the window
+limit in budget status.
+
+A completed response whose usage is entirely absent (all token counts zero) and
+that carries no provider-reported cost is settled as cost unknown, retaining its
+reservation, rather than as an exact near-zero catalog cost.
 
 ## Budget policies
 
