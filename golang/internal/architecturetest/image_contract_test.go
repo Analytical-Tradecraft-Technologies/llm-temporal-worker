@@ -24,7 +24,7 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 		"ARG VERSION=dev",
 		"ARG REVISION=unknown",
 		"ARG BUILD_TIME=unknown",
-		"ARG SOURCE=https://github.com/mfow/llm-temporal-worker",
+		"ARG SOURCE=https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker",
 		"ARG GO_VERSION=unknown",
 		"org.opencontainers.image.version=\"${VERSION}\"",
 		"org.opencontainers.image.revision=\"${REVISION}\"",

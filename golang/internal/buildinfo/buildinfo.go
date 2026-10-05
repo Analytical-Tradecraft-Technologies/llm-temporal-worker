@@ -5,7 +5,7 @@ package buildinfo
 
 import "runtime"
 
-const defaultSource = "https://github.com/mfow/llm-temporal-worker"
+const defaultSource = "https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker"
 
 var (
 	Version   = "dev"

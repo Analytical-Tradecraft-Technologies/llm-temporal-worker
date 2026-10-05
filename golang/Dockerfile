@@ -7,7 +7,7 @@ ARG GO_IMAGE=docker.io/library/golang:1.26.7
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
-ARG SOURCE=https://github.com/mfow/llm-temporal-worker
+ARG SOURCE=https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker
 ARG GO_VERSION=unknown
 
 FROM ${GO_IMAGE} AS build

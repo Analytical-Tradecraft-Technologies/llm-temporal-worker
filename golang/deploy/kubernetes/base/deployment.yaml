@@ -37,7 +37,7 @@ spec:
         - name: worker
           # Release automation replaces this marker with the signed image
           # digest. A mutable tag is intentionally not accepted here.
-          image: ghcr.io/mfow/llm-temporal-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
+          image: docker.io/analyticaltradecraft/llm-temporal-worker@sha256:REPLACE_WITH_RELEASE_DIGEST
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/llm-temporal-worker"]
           args: ["worker", "--config", "/etc/llmtw/config.yaml"]
