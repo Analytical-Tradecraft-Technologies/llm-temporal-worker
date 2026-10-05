@@ -402,10 +402,21 @@ func TestRuntimeReloadFileLabelsIdentifiersIntroducedByTheReload(t *testing.T) {
 	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.ReloadFile(context.Background(), path); err != nil {
+	// Hold the old snapshot so the reload publishes and then blocks draining:
+	// requests can already run on the replacement during that interval.
+	old := runtime.App.Current()
+	lease, err := runtime.App.Acquire()
+	if err != nil {
 		t.Fatal(err)
 	}
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- runtime.ReloadFile(context.Background(), path) }()
+	waitForRuntime(t, func() bool { return runtime.App.Current() != old })
 	runtime.Metrics.RecordProviderAttempt("openai-prod", "gpt-replacement-2026-09-20", "standard", "success", time.Millisecond)
+	lease.Release()
+	if err := <-reloaded; err != nil {
+		t.Fatal(err)
+	}
 	families, err := runtime.Metrics.Gather()
 	if err != nil {
 		t.Fatal(err)

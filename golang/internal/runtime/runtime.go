@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -191,11 +192,18 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	builder := app.SnapshotBuilder{References: references}
 	var engineFactory = options.EngineFactory
 	configuredProbes := append([]DependencyProbe(nil), options.DependencyProbes...)
+	// liveMetrics is set once telemetry exists. Each later snapshot build
+	// extends the metric allow-lists before the snapshot is published, so
+	// identifiers introduced by a reload are labelled from its first request.
+	var liveMetrics atomic.Pointer[observability.Metrics]
 	application, err := app.New(ctx, app.Options{
 		InitialConfig:        data,
 		Builder:              builder,
 		ReplacementValidator: validateRuntimeReplacement,
 		Clients: func(buildContext context.Context, snapshot *config.Snapshot) (app.ClientSet, error) {
+			if metrics := liveMetrics.Load(); metrics != nil {
+				metrics.ExtendAllowed(metricAllowedValues(snapshot.Config()))
+			}
 			engine, clients, err := engineFactory.Build(buildContext, snapshot)
 			if err != nil {
 				return nil, &engineFactoryError{cause: err}
@@ -261,6 +269,9 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		temporalClient.Close()
 		_ = application.Close(context.Background())
 		return nil, err
+	}
+	if metrics != nil {
+		liveMetrics.Store(metrics)
 	}
 	dynamic := &snapshotEngine{application: application}
 	identity := options.Identity
