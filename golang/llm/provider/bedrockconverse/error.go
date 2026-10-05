@@ -7,15 +7,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 // mapError keeps AWS SDK errors out of the provider-neutral response while
-// preserving retry and dispatch certainty. Smithy response errors expose HTTP
-// status and response details without requiring a dependency on generated
-// service error types.
+// preserving retry and dispatch certainty. Recognize model-processing exceptions
+// even without a Smithy HTTP wrapper; otherwise classify the response status.
 func mapError(err error, profileName string) *provider.Error {
 	if err == nil {
 		return nil
@@ -39,6 +39,14 @@ func mapError(err error, profileName string) *provider.Error {
 		mapped := provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request deadline exceeded")
 		mapped.Cause = err
 		return mapped
+	}
+	var modelTimeout *types.ModelTimeoutException
+	if errors.As(err, &modelTimeout) {
+		return mapHTTPError(http.StatusRequestTimeout, err, profileName)
+	}
+	var modelError *types.ModelErrorException
+	if errors.As(err, &modelError) {
+		return mapHTTPError(http.StatusFailedDependency, err, profileName)
 	}
 	var statusErr interface{ HTTPStatusCode() int }
 	if errors.As(err, &statusErr) {
@@ -69,6 +77,10 @@ func mapHTTPError(status int, cause error, profileName string) *provider.Error {
 	switch {
 	case status >= http.StatusMultipleChoices && status < http.StatusBadRequest:
 		dispatch, retry, safe = provider.DispatchAmbiguous, provider.RetryNever, "provider redirect response is ambiguous"
+	case status == http.StatusRequestTimeout || status == http.StatusFailedDependency:
+		// Bedrock reports model processing failures with these 4xx statuses.
+		// They do not prove rejection or zero usage: a new attempt needs budget.
+		dispatch, safe = provider.DispatchAmbiguous, "provider model processing failed"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
 	case status == http.StatusForbidden:
