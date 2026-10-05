@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"context"
 	"errors"
 	"github.com/mfow/llm-temporal-worker/golang/workflows"
 	"reflect"
@@ -789,5 +790,144 @@ func TestWorkerRegistersV1WorkflowsAndActivitiesAgainAfterDrain(t *testing.T) {
 		if !reflect.DeepEqual(registry.activities, expectedActivities) {
 			t.Fatalf("missing/duplicate activities: %v", registry.activities)
 		}
+	}
+}
+
+// sdkLikeWorker models the Temporal SDK worker's Stop: it waits for the one
+// in-flight Activity up to WorkerStopTimeout and otherwise gives up on it, the
+// point at which the SDK cancels every Activity context. The Activity itself
+// runs under BackgroundActivityContext and returns when that context is
+// cancelled or when the test completes it.
+type sdkLikeWorker struct {
+	options      worker.Options
+	activityDone chan struct{}
+	stopEntered  chan struct{}
+	stopCalls    atomic.Int32
+	// abandoned records that Stop gave up on the in-flight Activity.
+	abandoned atomic.Bool
+	// completedLive records that the Activity completed while its context
+	// was still live.
+	completedLive atomic.Bool
+}
+
+func newSDKLikeWorker(options worker.Options) *sdkLikeWorker {
+	return &sdkLikeWorker{options: options, activityDone: make(chan struct{}), stopEntered: make(chan struct{}, 1)}
+}
+
+func (worker *sdkLikeWorker) Start() error { return nil }
+
+func (worker *sdkLikeWorker) Stop() {
+	worker.stopCalls.Add(1)
+	signalWorkerEvent(worker.stopEntered)
+	ctx := worker.options.BackgroundActivityContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(worker.options.WorkerStopTimeout)
+	defer timer.Stop()
+	select {
+	case <-worker.activityDone:
+		worker.completedLive.Store(ctx.Err() == nil)
+	case <-ctx.Done():
+	case <-timer.C:
+		worker.abandoned.Store(true)
+	}
+}
+
+func (worker *sdkLikeWorker) activityContextCause() error {
+	if worker.options.BackgroundActivityContext == nil {
+		return nil
+	}
+	return context.Cause(worker.options.BackgroundActivityContext)
+}
+
+func newSDKLikeTemporalWorker(t *testing.T, graceful, pauseDrain time.Duration) (*app.TemporalWorker, func() *sdkLikeWorker) {
+	t.Helper()
+	var mu sync.Mutex
+	var controllers []*sdkLikeWorker
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: graceful, PauseDrainTimeout: pauseDrain,
+		Activities: &domainactivity.Activities{}, Health: httpserver.NewHealthState(),
+		Factory: func(_ client.Client, _ string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+			controller := newSDKLikeWorker(options)
+			mu.Lock()
+			controllers = append(controllers, controller)
+			mu.Unlock()
+			return controller, &fakeRegistry{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := func() *sdkLikeWorker {
+		mu.Lock()
+		defer mu.Unlock()
+		return controllers[len(controllers)-1]
+	}
+	return temporalWorker, latest
+}
+
+func TestWorkerPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(t *testing.T) {
+	const graceful = 20 * time.Millisecond
+	temporalWorker, latest := newSDKLikeTemporalWorker(t, graceful, time.Second)
+	t.Cleanup(temporalWorker.Stop)
+	if err := temporalWorker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	first := latest()
+	temporalWorker.Pause()
+	waitForWorkerEvent(t, first.stopEntered, "paused controller drain")
+
+	// The Activity needs several graceful stop windows to finish.
+	time.Sleep(5 * graceful)
+	if first.abandoned.Load() || first.activityContextCause() != nil {
+		t.Fatalf("pause drain gave up on the in-flight Activity after the graceful stop timeout: abandoned=%v cause=%v", first.abandoned.Load(), first.activityContextCause())
+	}
+	close(first.activityDone)
+	resumeWorkerAfterDrain(t, temporalWorker, "pause drain to finish after the Activity completed")
+	if !first.completedLive.Load() {
+		t.Fatal("in-flight Activity did not complete under a live context")
+	}
+}
+
+func TestWorkerStopCancelsInFlightActivitiesAfterGracefulStopTimeout(t *testing.T) {
+	const graceful = 20 * time.Millisecond
+	temporalWorker, latest := newSDKLikeTemporalWorker(t, graceful, time.Minute)
+	if err := temporalWorker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	controller := latest()
+	started := time.Now()
+	temporalWorker.Stop()
+	if elapsed := time.Since(started); elapsed < graceful || elapsed > 20*graceful {
+		t.Fatalf("permanent Stop returned after %s, want the graceful stop timeout %s", elapsed, graceful)
+	}
+	if controller.abandoned.Load() || !errors.Is(controller.activityContextCause(), worker.ErrWorkerShutdown) {
+		t.Fatalf("permanent Stop did not cancel the in-flight Activity: abandoned=%v cause=%v", controller.abandoned.Load(), controller.activityContextCause())
+	}
+}
+
+func TestWorkerStopDuringPauseDrainCancelsInFlightActivitiesAfterGracefulStopTimeout(t *testing.T) {
+	const graceful = 20 * time.Millisecond
+	temporalWorker, latest := newSDKLikeTemporalWorker(t, graceful, time.Minute)
+	if err := temporalWorker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	controller := latest()
+	temporalWorker.Pause()
+	waitForWorkerEvent(t, controller.stopEntered, "paused controller drain")
+	time.Sleep(5 * graceful)
+	if controller.activityContextCause() != nil {
+		t.Fatalf("pause drain cancelled the in-flight Activity: %v", controller.activityContextCause())
+	}
+
+	started := time.Now()
+	temporalWorker.Stop()
+	if elapsed := time.Since(started); elapsed < graceful || elapsed > 20*graceful {
+		t.Fatalf("permanent Stop returned after %s, want the graceful stop timeout %s", elapsed, graceful)
+	}
+	if controller.stopCalls.Load() != 1 || controller.abandoned.Load() || !errors.Is(controller.activityContextCause(), worker.ErrWorkerShutdown) {
+		t.Fatalf("permanent Stop during the pause drain: stop-calls=%d abandoned=%v cause=%v", controller.stopCalls.Load(), controller.abandoned.Load(), controller.activityContextCause())
 	}
 }
