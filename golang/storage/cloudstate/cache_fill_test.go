@@ -24,7 +24,7 @@ func fillLease(entry cache.ResponseEntry) cache.FillLease {
 
 func mustAcquireFill(t *testing.T, store cache.FillRepository, lease cache.FillLease, want cache.FillDisposition) cache.FillRecord {
 	t.Helper()
-	decision, err := store.Acquire(context.Background(), lease)
+	decision, err := store.Acquire(context.Background(), lease, lease.AcquiredAt)
 	if err != nil || decision.Disposition != want {
 		t.Fatalf("acquire = %v, %v; want %s", decision, err, want)
 	}
@@ -95,7 +95,7 @@ func TestCloudFillsHundredRetriesOfSameOwnerStartOnce(t *testing.T) {
 	for range 100 {
 		store := reopen(t, table, blobs).ResponseFills()
 		wg.Go(func() {
-			_, err := store.Acquire(context.Background(), lease)
+			_, err := store.Acquire(context.Background(), lease, lease.AcquiredAt)
 			if err != nil {
 				errs <- err
 				return
@@ -148,6 +148,32 @@ func TestCloudFillsExpiryFencesPreviousOwner(t *testing.T) {
 	}
 }
 
+func TestCloudFillsWaiterTakesOverExpiredOwnerAtAcquisitionTime(t *testing.T) {
+	r, _, _, entry, _ := responseCacheFixture(t)
+	ctx, lease := context.Background(), fillLease(entry)
+	store := r.ResponseFills()
+	mustAcquireFill(t, store, lease, cache.FillOwned)
+	// The waiter's stable lease predates the owner's expiry, so it waits
+	// while the owner is live and takes over once the owner has expired.
+	waiter := lease
+	waiter.Attempt, waiter.AcquiredAt, waiter.ExpiresAt = "waiter", lease.AcquiredAt.Add(time.Minute), lease.AcquiredAt.Add(time.Minute+cache.MaxFillLease)
+	for _, now := range []time.Time{waiter.AcquiredAt, lease.ExpiresAt.Add(-time.Nanosecond)} {
+		if decision, err := store.Acquire(ctx, waiter, now); err != nil || decision.Disposition != cache.FillWait {
+			t.Fatalf("acquire at %s = %v, %v", now, decision, err)
+		}
+	}
+	if _, err := store.Acquire(ctx, waiter, waiter.AcquiredAt.Add(-time.Nanosecond)); !errors.Is(err, ErrInvalid) {
+		t.Fatal("acquisition before the lease", err)
+	}
+	if decision, err := store.Acquire(ctx, waiter, lease.ExpiresAt); err != nil || decision.Disposition != cache.FillOwned || decision.Record.Lease != waiter {
+		t.Fatalf("acquire at expiry = %v, %v", decision, err)
+	}
+	if ok, err := store.Start(ctx, lease, lease.ExpiresAt); ok || !errors.Is(err, contracts.ErrConflict) {
+		t.Fatalf("fenced start = %v %v", ok, err)
+	}
+	mustStartFill(t, store, waiter, lease.ExpiresAt)
+}
+
 func TestCloudFillsTakeoverRacesStart(t *testing.T) {
 	// A paused owner with a stale clock can race an expiry-based takeover.
 	// The shared CAS permits only one: either started work remains pinned or
@@ -166,7 +192,9 @@ func TestCloudFillsTakeoverRacesStart(t *testing.T) {
 		wg.Go(func() {
 			oldStarted, oldErr = reopen(t, table, blobs).ResponseFills().Start(context.Background(), lease, lease.AcquiredAt)
 		})
-		wg.Go(func() { acquired, newErr = reopen(t, table, blobs).ResponseFills().Acquire(context.Background(), next) })
+		wg.Go(func() {
+			acquired, newErr = reopen(t, table, blobs).ResponseFills().Acquire(context.Background(), next, next.AcquiredAt)
+		})
 		wg.Wait()
 		if newErr != nil {
 			t.Fatal(newErr)
@@ -294,7 +322,7 @@ func TestCloudFillsLostAcknowledgements(t *testing.T) {
 					invoke := func(store cache.FillRepository) (bool, error) {
 						switch operation {
 						case "acquire":
-							_, err := store.Acquire(ctx, lease)
+							_, err := store.Acquire(ctx, lease, lease.AcquiredAt)
 							return false, err
 						case "start":
 							return store.Start(ctx, lease, lease.AcquiredAt)
@@ -382,7 +410,7 @@ func TestCloudFillsCorruptionAndIsolation(t *testing.T) {
 	}
 	data := blobs.values[blob.BlobKey(pointer.Blob)]
 	delete(blobs.values, blob.BlobKey(pointer.Blob))
-	if _, err := r.ResponseFills().Acquire(ctx, lease); !errors.Is(err, ErrCorrupt) {
+	if _, err := r.ResponseFills().Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, ErrCorrupt) {
 		t.Fatal("dangling fill treated as miss", err)
 	}
 	blobs.values[blob.BlobKey(pointer.Blob)] = append([]byte(nil), data...)
@@ -404,16 +432,16 @@ func TestCloudFillsInvalidInputCannotMutate(t *testing.T) {
 	} {
 		bad := lease
 		edit(&bad)
-		if _, err := r.ResponseFills().Acquire(ctx, bad); !errors.Is(err, ErrInvalid) {
+		if _, err := r.ResponseFills().Acquire(ctx, bad, bad.AcquiredAt); !errors.Is(err, ErrInvalid) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := r.ResponseFills().Acquire(nil, lease); err == nil {
+	if _, err := r.ResponseFills().Acquire(nil, lease, lease.AcquiredAt); err == nil {
 		t.Fatal("nil context")
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := r.ResponseFills().Acquire(cancelled, lease); !errors.Is(err, context.Canceled) {
+	if _, err := r.ResponseFills().Acquire(cancelled, lease, lease.AcquiredAt); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if ok, err := r.ResponseFills().Start(ctx, lease, lease.AcquiredAt.Add(-time.Second)); ok || !errors.Is(err, ErrInvalid) {

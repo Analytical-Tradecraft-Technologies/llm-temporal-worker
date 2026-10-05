@@ -47,7 +47,7 @@ func TestCloudFillLostCompletionSurvivesTakeover(t *testing.T) {
 				}
 				return nil, nil
 			}
-			if _, err := r.ResponseFills().Acquire(ctx, next); !errors.Is(err, contracts.ErrUnavailable) {
+			if _, err := r.ResponseFills().Acquire(ctx, next, next.AcquiredAt); !errors.Is(err, contracts.ErrUnavailable) {
 				t.Fatal("takeover discarded receipt", err)
 			}
 			table.hook = nil
@@ -60,7 +60,7 @@ func TestCloudFillLostCompletionSurvivesTakeover(t *testing.T) {
 			mustAcquireFill(t, r.ResponseFills(), lease, cache.FillAttemptFinished)
 			changed := lease
 			changed.OperationID = "different-operation"
-			if _, err := r.ResponseFills().Acquire(ctx, changed); !errors.Is(err, contracts.ErrConflict) {
+			if _, err := r.ResponseFills().Acquire(ctx, changed, changed.AcquiredAt); !errors.Is(err, contracts.ErrConflict) {
 				t.Fatal("reused completed attempt identity", err)
 			}
 		})
@@ -158,7 +158,7 @@ func TestCloudFillMalformedStateAndBoundedContention(t *testing.T) {
 		}
 		return nil, nil
 	}
-	if _, err := r.ResponseFills().Acquire(ctx, lease); !errors.Is(err, contracts.ErrConflict) || calls != 16 {
+	if _, err := r.ResponseFills().Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, contracts.ErrConflict) || calls != 16 {
 		t.Fatalf("unbounded contention: %d %v", calls, err)
 	}
 	table.hook = nil
@@ -167,7 +167,7 @@ func TestCloudFillMalformedStateAndBoundedContention(t *testing.T) {
 	if err := store.write(ctx, bad, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Acquire(ctx, lease); !errors.Is(err, ErrCorrupt) {
+	if _, err := store.Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, ErrCorrupt) {
 		t.Fatal("unknown stored state", err)
 	}
 }

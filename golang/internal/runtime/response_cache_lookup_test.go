@@ -33,7 +33,7 @@ type lookupFills struct {
 	release func(context.Context, cache.FillLease, time.Time) error
 }
 
-func (s *lookupFills) Acquire(ctx context.Context, input cache.FillLease) (cache.FillDecision, error) {
+func (s *lookupFills) Acquire(ctx context.Context, input cache.FillLease, _ time.Time) (cache.FillDecision, error) {
 	return s.acquire(ctx, input)
 }
 func (s *lookupFills) Start(ctx context.Context, input cache.FillLease, now time.Time) (bool, error) {

@@ -153,7 +153,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			if fills == nil {
 				t.Fatal("response fills not attached")
 			}
-			if _, err := fills.Acquire(context.Background(), cache.FillLease{}); err != nil {
+			if _, err := fills.Acquire(context.Background(), cache.FillLease{}, time.Time{}); err != nil {
 				t.Fatal(err)
 			}
 			if repositories[len(repositories)-1].fillStore.(*cloudFillTestStore).calls != 1 {

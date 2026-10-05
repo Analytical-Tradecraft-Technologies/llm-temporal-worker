@@ -127,7 +127,7 @@ func (r *CloudExecutionRuntime) finishUnknownFill(ctx context.Context, p Prepare
 	// Acquire is only an observation of this existing, expired attempt. It
 	// cannot create a new lease or start work. Held fills can be taken over by
 	// the next child after expiry; started fills require this stable receipt.
-	decision, err := r.capabilities.ResponseFills.Acquire(ctx, *lease)
+	decision, err := r.capabilities.ResponseFills.Acquire(ctx, *lease, r.now())
 	if err != nil {
 		// The expired lease is fenced once another attempt took the fill over
 		// and ended it. That fill is no longer this attempt's to finish.

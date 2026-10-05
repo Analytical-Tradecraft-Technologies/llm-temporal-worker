@@ -25,7 +25,7 @@ type prepareFills struct {
 	release func(FillLease, time.Time) error
 }
 
-func (s prepareFills) Acquire(_ context.Context, l FillLease) (FillDecision, error) {
+func (s prepareFills) Acquire(_ context.Context, l FillLease, _ time.Time) (FillDecision, error) {
 	return s.acquire(l)
 }
 func (s prepareFills) Release(_ context.Context, l FillLease, at time.Time) error {

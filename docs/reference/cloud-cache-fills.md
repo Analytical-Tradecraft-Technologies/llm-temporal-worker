@@ -31,7 +31,9 @@ acquisition time and expiry. The key isolates authenticated scope,
 Generate/Compact, resolved provider route, semantic fingerprint and request
 index. Persist the proposed lease and retain identical values across uncertain
 acquisition retries. New attempts require fresh attempt IDs and acquisition
-times. Times come from a trusted worker clock. IDs are not authorization.
+times. Each `Acquire` also receives the current time, which decides whether a
+held lease has expired. Times come from a trusted worker clock. IDs are not
+authorization.
 
 | Current state | Acquisition result or allowed transition |
 | --- | --- |
@@ -49,6 +51,11 @@ acquisition, not after its attempt is renewed. A lease that had already
 expired by then conflicts, and the conflict returns the current record. That
 fences an owner whose held lease was taken over, because its successor can
 only have acquired, and so ended, after the old lease expired.
+
+Expiry is judged at the time of the acquisition call, not at the proposed
+lease's acquisition time. A waiter keeps its stable lease and waits while the
+owner's lease is live; on its next acquisition after that lease expires it
+takes the fill over, rather than waiting until its own attempt is renewed.
 
 The pre-dispatch lease is bounded at 15 minutes. It is distinct from the Redis
 budget reservation and does not extend that reservation's deadline. There is
