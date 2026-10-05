@@ -237,6 +237,42 @@ func TestCloudFillsCompletionAndTombstone(t *testing.T) {
 	}
 }
 
+func TestCloudFillsWaiterOwnsAfterUnpublishedEnd(t *testing.T) {
+	for _, outcome := range []cache.FillOutcome{"", cache.FillNotCacheable, cache.FillFailed, cache.FillUnknown} {
+		t.Run("end="+string(outcome), func(t *testing.T) {
+			r, _, _, entry, _ := responseCacheFixture(t)
+			lease, ctx := fillLease(entry), context.Background()
+			store := r.ResponseFills()
+			mustAcquireFill(t, store, lease, cache.FillOwned)
+			// The waiter's attempt predates the owner's end.
+			waiter := lease
+			waiter.Attempt, waiter.AcquiredAt, waiter.ExpiresAt = "waiter", lease.AcquiredAt.Add(time.Second), lease.AcquiredAt.Add(time.Second+cache.MaxFillLease)
+			mustAcquireFill(t, store, waiter, cache.FillWait)
+			ended := entry.CompletedAt
+			if outcome == "" {
+				if err := store.Release(ctx, lease, ended); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				mustStartFill(t, store, lease, lease.AcquiredAt)
+				if err := store.Complete(ctx, lease, cache.FillCompletion{Outcome: outcome, CompletedAt: ended}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A lease that had expired by the end stays fenced and sees the record.
+			expired := waiter
+			expired.Attempt, expired.AcquiredAt, expired.ExpiresAt = "expired", ended.Add(-time.Minute), ended
+			if decision, err := store.Acquire(ctx, expired); !errors.Is(err, contracts.ErrConflict) || decision.Record.Lease != lease {
+				t.Fatalf("expired acquisition = %v, %v", decision, err)
+			}
+			mustAcquireFill(t, store, waiter, cache.FillOwned)
+			mustAcquireFill(t, store, waiter, cache.FillOwned)
+			mustAcquireFill(t, store, lease, cache.FillAttemptFinished)
+			mustStartFill(t, store, waiter, ended.Add(time.Second))
+		})
+	}
+}
+
 func TestCloudFillsLostAcknowledgements(t *testing.T) {
 	for _, operation := range []string{"acquire", "start", "release", "complete"} {
 		for _, boundary := range []string{"blob", "row", "receipt"} {

@@ -141,9 +141,17 @@ func decideFill(current cache.FillRecord, lease cache.FillLease) (cache.FillDeci
 		decision.Disposition = cache.FillWait
 		return decision, false, nil
 	}
-	// Tombstones and strictly increasing acquisition times fence delayed old
-	// acquisitions. Never delete/TTL this row independently of its operations.
-	if !lease.AcquiredAt.After(current.UpdatedAt) {
+	// Tombstones fence delayed old acquisitions. Never delete/TTL this row
+	// independently of its operations. An expired held lease yields only to a
+	// later acquisition. A released or finished one also yields to a waiter
+	// created before that end whose own lease was still unexpired then: an
+	// owner that was taken over had expired before its successor acquired, so
+	// its lease can never outlive the successor's terminal time.
+	if current.State == cache.FillHeld {
+		if !lease.AcquiredAt.After(current.UpdatedAt) {
+			return decision, false, contracts.ErrConflict
+		}
+	} else if !lease.ExpiresAt.After(current.UpdatedAt) {
 		return decision, false, contracts.ErrConflict
 	}
 	return decision, true, nil
