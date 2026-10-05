@@ -16,13 +16,22 @@ BEGIN {
 	secrets[4] = ENVIRON["LLMTW_LOG_REDACT_CONTINUATION_HMAC"]
 }
 {
+	line = $0
 	for (i = 1; i <= 4; i++) {
 		secret = secrets[i]
-		while (length(secret) && index($0, secret)) {
-			position = index($0, secret)
-			$0 = substr($0, 1, position - 1) "[REDACTED]" substr($0, position + length(secret))
+		if (!length(secret)) {
+			continue
 		}
+		# Scan only the unscanned remainder so an inserted marker is never
+		# revisited, even when the secret itself occurs inside "[REDACTED]".
+		redacted = ""
+		rest = line
+		while ((position = index(rest, secret)) > 0) {
+			redacted = redacted substr(rest, 1, position - 1) "[REDACTED]"
+			rest = substr(rest, position + length(secret))
+		}
+		line = redacted rest
 	}
-	print
+	print line
 }
 '
