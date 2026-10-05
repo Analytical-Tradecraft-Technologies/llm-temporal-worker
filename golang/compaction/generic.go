@@ -29,8 +29,7 @@ func Prompt(version string) (string, error) {
 // caller's routing and sampling settings, but never mutates the caller and
 // always strips application tools, tool policy, continuation, reasoning, and
 // structured output. It injects the versioned repository prompt and selected
-// summary style as policy instructions, or at the caller's instruction level
-// when the caller uses a single level. The returned request can therefore
+// summary style as policy instructions. The returned request can therefore
 // only ask for bounded plain text.
 func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, policy Policy) (llm.Request, error) {
 	if operationKey == "" {
@@ -50,11 +49,10 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 	result := source
 	result.OperationKey = operationKey
 	result.Input = append([]llm.Item(nil), input...)
-	level := summarizerInstructionLevel(source.Instructions)
 	result.Instructions = make([]llm.Instruction, 0, len(source.Instructions)+2)
 	result.Instructions = append(result.Instructions,
-		llm.Instruction{Kind: llm.InstructionKindText, Level: level, Text: prompt},
-		llm.Instruction{Kind: llm.InstructionKindText, Level: level, Text: "Summary style: " + string(policy.SummaryStyle)},
+		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: prompt},
+		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "Summary style: " + string(policy.SummaryStyle)},
 	)
 	result.Instructions = append(result.Instructions, source.Instructions...)
 	result.Tools = nil
@@ -74,23 +72,6 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 		result.Sampling = &value
 	}
 	return result, nil
-}
-
-// summarizerInstructionLevel places the injected summarizer instructions at
-// the caller's instruction level when the caller uses a single level. Messages
-// and Converse cannot preserve mixed instruction levels in strict portability
-// mode, so injecting policy instructions beside application instructions would
-// make the summarizer request uncompilable on those routes.
-func summarizerInstructionLevel(instructions []llm.Instruction) llm.InstructionLevel {
-	if len(instructions) == 0 {
-		return llm.InstructionLevelPolicy
-	}
-	for _, instruction := range instructions {
-		if instruction.Level == llm.InstructionLevelPolicy {
-			return llm.InstructionLevelPolicy
-		}
-	}
-	return llm.InstructionLevelApplication
 }
 
 // PlainTextSummary extracts only a completed model message containing text
@@ -127,4 +108,42 @@ func PlainTextSummary(response llm.Response, maxBytes int) (string, error) {
 		return "", fmt.Errorf("compaction output is %d bytes; limit is %d", builder.Len(), maxBytes)
 	}
 	return builder.String(), nil
+}
+
+// FlattenSummarizerInstructions adapts a PrepareRequest result for a provider
+// family that has a single system prompt and therefore cannot represent the
+// policy/application instruction hierarchy. When every caller instruction is
+// application level, the two injected summarizer instructions are moved to
+// application level so strict portability can compile the request. Requests
+// that were not built by PrepareRequest, or whose caller instructions include
+// policy level, are returned unchanged. Families that preserve the hierarchy
+// must not use this: there the summarizer prompt keeps policy priority over
+// caller instructions.
+func FlattenSummarizerInstructions(request llm.Request) llm.Request {
+	if !isSummarizerRequest(request) || len(request.Instructions) == 2 {
+		return request
+	}
+	for _, instruction := range request.Instructions[2:] {
+		if instruction.Level == llm.InstructionLevelPolicy {
+			return request
+		}
+	}
+	instructions := append([]llm.Instruction(nil), request.Instructions...)
+	instructions[0].Level = llm.InstructionLevelApplication
+	instructions[1].Level = llm.InstructionLevelApplication
+	request.Instructions = instructions
+	return request
+}
+
+func isSummarizerRequest(request llm.Request) bool {
+	if len(request.Instructions) < 2 {
+		return false
+	}
+	prompt, err := Prompt(PromptVersion)
+	if err != nil {
+		return false
+	}
+	first, second := request.Instructions[0], request.Instructions[1]
+	return first.Kind == llm.InstructionKindText && first.Level == llm.InstructionLevelPolicy && first.Text == prompt &&
+		second.Kind == llm.InstructionKindText && second.Level == llm.InstructionLevelPolicy && strings.HasPrefix(second.Text, "Summary style: ")
 }

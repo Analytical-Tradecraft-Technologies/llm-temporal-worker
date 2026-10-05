@@ -604,3 +604,45 @@ func TestProviderPlanningContextLimitFallbackBeforeCompile(t *testing.T) {
 		t.Fatal("custom planner bypassed context limit")
 	}
 }
+
+func TestProviderPlanningFlattensSummarizerInstructionsOnlyForSingleSystemFamilies(t *testing.T) {
+	for _, test := range []struct {
+		family provider.Family
+		want   llm.InstructionLevel
+	}{
+		{family: provider.FamilyOpenAIResponses, want: llm.InstructionLevelPolicy},
+		{family: provider.FamilyOpenAIChat, want: llm.InstructionLevelPolicy},
+		{family: provider.FamilyAnthropicMessages, want: llm.InstructionLevelApplication},
+		{family: provider.FamilyBedrockMessages, want: llm.InstructionLevelApplication},
+		{family: provider.FamilyBedrockConverse, want: llm.InstructionLevelApplication},
+	} {
+		t.Run(string(test.family), func(t *testing.T) {
+			capabilities, source, adapter, _, replay, compact := planningFixture()
+			model := source.value.Routes.Models["alias"]
+			model.Routes[0].Family = string(test.family)
+			source.value.Routes.Models["alias"] = model
+			replay.State.Settings.Instructions = []llm.Instruction{{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "You are a helpful assistant"}}
+			planning, err := capabilities.NewProviderPlanning(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			summary, err := PrepareCompactInput(context.Background(), compact, replay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := planning.Compact(context.Background(), summary); err != nil {
+				t.Fatal(err)
+			}
+			if len(adapter.inputs) != 1 {
+				t.Fatalf("compile inputs = %d", len(adapter.inputs))
+			}
+			instructions := adapter.inputs[0].Request.Instructions
+			if len(instructions) != 3 || instructions[0].Level != test.want || instructions[1].Level != test.want || instructions[2].Level != llm.InstructionLevelApplication {
+				t.Fatalf("compiled instructions = %#v, want summarizer level %q", instructions, test.want)
+			}
+			if summary.Request.Instructions[0].Level != llm.InstructionLevelPolicy {
+				t.Fatal("planning changed the semantic summarizer request")
+			}
+		})
+	}
+}

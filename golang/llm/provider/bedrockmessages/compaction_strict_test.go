@@ -16,6 +16,7 @@ func TestCompactionRequestCompilesInStrictModeWithApplicationInstructions(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	request = compaction.FlattenSummarizerInstructions(request)
 	if _, err := lowerRequestWithStrict(request, DefaultProfile("bedrock"), "", true); err != nil {
 		t.Fatalf("strict compaction request lowering error = %v", err)
 	}

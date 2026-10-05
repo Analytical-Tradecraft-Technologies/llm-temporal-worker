@@ -18,6 +18,7 @@ func TestCompactionRequestCompilesInStrictModeWithApplicationInstructions(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	request = compaction.FlattenSummarizerInstructions(request)
 	if _, err := lowerRequest(request, DefaultProfile("nova"), string(types.ServiceTierTypeDefault), true); err != nil {
 		t.Fatalf("strict compaction request lowering error = %v", err)
 	}

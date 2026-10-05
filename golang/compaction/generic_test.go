@@ -165,18 +165,18 @@ func TestPromptVersionIsPinned(t *testing.T) {
 	}
 }
 
-func TestPrepareRequestMatchesSingleCallerInstructionLevel(t *testing.T) {
+func TestFlattenSummarizerInstructionsOnlyForApplicationCallers(t *testing.T) {
 	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
 	for _, test := range []struct {
-		name   string
-		levels []llm.InstructionLevel
-		want   llm.InstructionLevel
+		name    string
+		levels  []llm.InstructionLevel
+		flatten bool
 	}{
-		{name: "none", want: llm.InstructionLevelPolicy},
-		{name: "application", levels: []llm.InstructionLevel{llm.InstructionLevelApplication}, want: llm.InstructionLevelApplication},
-		{name: "unset", levels: []llm.InstructionLevel{""}, want: llm.InstructionLevelApplication},
-		{name: "policy", levels: []llm.InstructionLevel{llm.InstructionLevelPolicy}, want: llm.InstructionLevelPolicy},
-		{name: "mixed", levels: []llm.InstructionLevel{llm.InstructionLevelPolicy, llm.InstructionLevelApplication}, want: llm.InstructionLevelPolicy},
+		{name: "none"},
+		{name: "application", levels: []llm.InstructionLevel{llm.InstructionLevelApplication}, flatten: true},
+		{name: "unset", levels: []llm.InstructionLevel{""}, flatten: true},
+		{name: "policy", levels: []llm.InstructionLevel{llm.InstructionLevelPolicy}},
+		{name: "mixed", levels: []llm.InstructionLevel{llm.InstructionLevelPolicy, llm.InstructionLevelApplication}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := llm.Request{OperationKey: "generate-1", Model: "model-1", Input: input}
@@ -187,19 +187,35 @@ func TestPrepareRequestMatchesSingleCallerInstructionLevel(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(compact.Instructions) != len(test.levels)+2 {
-				t.Fatalf("instructions = %#v", compact.Instructions)
+			for index := 0; index < 2; index++ {
+				if got := compact.Instructions[index].Level; got != llm.InstructionLevelPolicy {
+					t.Fatalf("PrepareRequest summarizer instruction %d level = %q, want policy", index, got)
+				}
+			}
+			flattened := FlattenSummarizerInstructions(compact)
+			want := llm.InstructionLevelPolicy
+			if test.flatten {
+				want = llm.InstructionLevelApplication
 			}
 			for index := 0; index < 2; index++ {
-				if got := compact.Instructions[index].Level; got != test.want {
-					t.Fatalf("summarizer instruction %d level = %q, want %q", index, got, test.want)
+				if got := flattened.Instructions[index].Level; got != want {
+					t.Fatalf("flattened summarizer instruction %d level = %q, want %q", index, got, want)
+				}
+				if compact.Instructions[index].Level != llm.InstructionLevelPolicy {
+					t.Fatal("FlattenSummarizerInstructions mutated its input")
 				}
 			}
-			for index, level := range test.levels {
-				if got := compact.Instructions[index+2].Level; got != level {
-					t.Fatalf("caller instruction %d level = %q, want %q", index, got, level)
-				}
+			if !reflect.DeepEqual(flattened.Instructions[2:], compact.Instructions[2:]) {
+				t.Fatalf("caller instructions changed: %#v", flattened.Instructions[2:])
 			}
 		})
+	}
+	ordinary := llm.Request{Instructions: []llm.Instruction{
+		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "policy"},
+		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "Summary style: x"},
+		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "app"},
+	}}
+	if got := FlattenSummarizerInstructions(ordinary); !reflect.DeepEqual(got, ordinary) {
+		t.Fatalf("non-summarizer request changed: %#v", got)
 	}
 }
