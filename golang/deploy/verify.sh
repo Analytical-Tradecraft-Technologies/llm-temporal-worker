@@ -17,6 +17,9 @@ if grep -Fq '@sha256:' "$root/Dockerfile"; then
   fail 'Dockerfile builder/runtime images must use mutable stable tags'
 fi
 grep -Fq '@sha256:' "$root/deploy/kubernetes/base/deployment.yaml" || fail 'Kubernetes worker image must be digest pinned'
+if grep -rq 'disableNameSuffixHash' "$root/deploy/kubernetes"; then
+  fail 'Kubernetes ConfigMaps must keep the Kustomize content hash so changes roll the worker'
+fi
 grep -Fq 'CGO_ENABLED=0' "$root/Dockerfile" || fail 'worker image must be statically built'
 grep -Fq 'USER 65532:65532' "$root/Dockerfile" || fail 'worker image must use uid 65532'
 grep -Fq 'read_only: true' "$root/compose.yaml" || fail 'Compose worker must use a read-only root filesystem'

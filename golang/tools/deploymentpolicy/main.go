@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -54,9 +55,16 @@ func verifyRendered(overlay string, rendered []byte) error {
 	if err != nil {
 		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
 	}
-	configMap, err := findResource(documents, "ConfigMap", "llmtw-config")
+	configMapName, err := configVolumeConfigMapName(deployment)
 	if err != nil {
 		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
+	configMap, err := findResource(documents, "ConfigMap", configMapName)
+	if err != nil {
+		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
+	}
+	if boolAt(configMap, "immutable") != true {
+		return fmt.Errorf("deployment policy verification %s: ConfigMap %q must be immutable", overlay, configMapName)
 	}
 	networkPolicy, err := findResource(documents, "NetworkPolicy", "llmtw-worker")
 	if err != nil {
@@ -349,6 +357,36 @@ func decodeDocuments(rendered []byte) ([]map[string]any, error) {
 		return nil, errors.New("rendered manifest is empty")
 	}
 	return documents, nil
+}
+
+// kustomizeContentHash matches the ten-character suffix Kustomize derives
+// from ConfigMap content: hex digits with 0, 1, 3, a and e replaced by
+// g, h, k, m and t.
+var kustomizeContentHash = regexp.MustCompile(`^[2456789bcdfghkmt]{10}$`)
+
+// configVolumeConfigMapName returns the ConfigMap mounted by the worker's
+// config volume. It must carry Kustomize's content hash suffix: an immutable
+// ConfigMap with a fixed name cannot be updated, so a configuration change
+// would neither apply nor roll the Deployment.
+func configVolumeConfigMapName(deployment map[string]any) (string, error) {
+	podSpec, err := deploymentPodSpec(deployment)
+	if err != nil {
+		return "", err
+	}
+	volume, err := namedListItem(podSpec, "volumes", "config")
+	if err != nil {
+		return "", err
+	}
+	source, ok := mapAt(volume, "configMap")
+	if !ok {
+		return "", errors.New("config volume must mount a ConfigMap")
+	}
+	name := stringAt(source, "name")
+	suffix, hashed := strings.CutPrefix(name, "llmtw-config-")
+	if !hashed || !kustomizeContentHash.MatchString(suffix) {
+		return "", fmt.Errorf("config volume ConfigMap %q must use a content-hashed llmtw-config-<hash> name", name)
+	}
+	return name, nil
 }
 
 func findResource(documents []map[string]any, kind, name string) (map[string]any, error) {

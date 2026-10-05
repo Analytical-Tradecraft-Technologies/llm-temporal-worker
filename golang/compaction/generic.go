@@ -109,3 +109,41 @@ func PlainTextSummary(response llm.Response, maxBytes int) (string, error) {
 	}
 	return builder.String(), nil
 }
+
+// FlattenSummarizerInstructions adapts a PrepareRequest result for a provider
+// family that has a single system prompt and therefore cannot represent the
+// policy/application instruction hierarchy. When every caller instruction is
+// application level, the two injected summarizer instructions are moved to
+// application level so strict portability can compile the request. Requests
+// that were not built by PrepareRequest, or whose caller instructions include
+// policy level, are returned unchanged. Families that preserve the hierarchy
+// must not use this: there the summarizer prompt keeps policy priority over
+// caller instructions.
+func FlattenSummarizerInstructions(request llm.Request) llm.Request {
+	if !isSummarizerRequest(request) || len(request.Instructions) == 2 {
+		return request
+	}
+	for _, instruction := range request.Instructions[2:] {
+		if instruction.Level == llm.InstructionLevelPolicy {
+			return request
+		}
+	}
+	instructions := append([]llm.Instruction(nil), request.Instructions...)
+	instructions[0].Level = llm.InstructionLevelApplication
+	instructions[1].Level = llm.InstructionLevelApplication
+	request.Instructions = instructions
+	return request
+}
+
+func isSummarizerRequest(request llm.Request) bool {
+	if len(request.Instructions) < 2 {
+		return false
+	}
+	prompt, err := Prompt(PromptVersion)
+	if err != nil {
+		return false
+	}
+	first, second := request.Instructions[0], request.Instructions[1]
+	return first.Kind == llm.InstructionKindText && first.Level == llm.InstructionLevelPolicy && first.Text == prompt &&
+		second.Kind == llm.InstructionKindText && second.Level == llm.InstructionLevelPolicy && strings.HasPrefix(second.Text, "Summary style: ")
+}
