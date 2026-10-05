@@ -38,15 +38,18 @@ func NewAzureClient(config AzureClientConfig) (*Client, error) {
 	if config.HTTPClient == nil {
 		return nil, fmt.Errorf("azure chat: HTTP client is required")
 	}
-	return &Client{
-		sdk: openai.NewClient(
-			azure.WithEndpoint(endpoint, config.APIVersion),
-			azure.WithAPIKey(config.APIKey),
-			option.WithHTTPClient(config.HTTPClient),
-			option.WithMaxRetries(0),
-		),
-		baseURL: endpoint,
-	}, nil
+	options := []option.RequestOption{
+		azure.WithEndpoint(endpoint, config.APIVersion),
+		azure.WithAPIKey(config.APIKey),
+		option.WithHTTPClient(config.HTTPClient),
+		option.WithMaxRetries(0),
+	}
+	if clientconfig.LoopbackHTTP(endpoint) {
+		// Azure enforces its own HTTPS-only credential policy; loopback HTTP
+		// needs the Azure opt-in and is served by the SDK's direct transport.
+		options = append(options, azure.WithUnsafeAllowHTTP())
+	}
+	return &Client{sdk: openai.NewClient(options...), baseURL: endpoint}, nil
 }
 
 type AzureProfileConfig struct {
