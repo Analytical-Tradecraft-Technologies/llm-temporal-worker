@@ -479,12 +479,33 @@ func (store *ProviderStateStore) ListRouteStatuses(ctx context.Context, options 
 	if err != nil {
 		return page, err
 	}
-	// A position is a route ID, or "route\tendpoint" when a page ended between
-	// same-named routes of different models. Configured IDs contain no tab.
-	afterRoute, afterEndpoint, withinRoute := strings.Cut(options.AfterRouteID, "\t")
+	return store.pageRouteStatuses(records, options)
+}
+
+// routePosition marks one record inside a group of same-named routes. It is a
+// fixed-length digest, so the position stays within the cursor and
+// normalization bounds whatever the route and endpoint lengths. The tab keeps
+// it distinct from every route ID.
+func (store *ProviderStateStore) routePosition(status control.RouteStatus) string {
+	return "@\t" + store.space.digest("provider-route-position", status.RouteID, status.EndpointID)
+}
+
+// pageRouteStatuses pages records already sorted by route ID and endpoint. A
+// position is a route ID, or a routePosition marker when a page ended between
+// same-named routes of different models.
+func (store *ProviderStateStore) pageRouteStatuses(records []providerStatusRecord, options control.ProviderStatusListOptions) (control.ProviderStatusPage, error) {
+	var page control.ProviderStatusPage
+	// A marker resumes after the record it names. The pinned view still holds
+	// that record; if it does not, the caller must restart pagination.
+	marker := strings.Contains(options.AfterRouteID, "\t")
+	resuming := marker
 	for _, record := range records {
 		status := record.Status
-		if status.RouteID < afterRoute || (status.RouteID == afterRoute && (!withinRoute || status.EndpointID <= afterEndpoint)) || (options.Provider != "" && options.Provider != status.Provider) || (options.EndpointID != "" && options.EndpointID != status.EndpointID) || (options.Availability != "" && options.Availability != status.Availability) {
+		if resuming {
+			resuming = store.routePosition(status) != options.AfterRouteID
+			continue
+		}
+		if (!marker && status.RouteID <= options.AfterRouteID) || (options.Provider != "" && options.Provider != status.Provider) || (options.EndpointID != "" && options.EndpointID != status.EndpointID) || (options.Availability != "" && options.Availability != status.Availability) {
 			continue
 		}
 		if !options.IncludeHealthy && status.Availability == control.AvailabilityAvailable && status.Credit == control.CreditOK && status.Billing == control.BillingOK && status.Circuit == control.CircuitClosed {
@@ -494,11 +515,14 @@ func (store *ProviderStateStore) ListRouteStatuses(ctx context.Context, options 
 			last := page.Routes[len(page.Routes)-1]
 			page.NextRouteID = last.RouteID
 			if status.RouteID == last.RouteID {
-				page.NextRouteID += "\t" + last.EndpointID
+				page.NextRouteID = store.routePosition(last)
 			}
 			break
 		}
 		page.Routes = append(page.Routes, status)
+	}
+	if resuming {
+		return control.ProviderStatusPage{}, control.ErrProviderViewExpired
 	}
 	return page, nil
 }

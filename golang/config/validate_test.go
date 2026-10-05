@@ -486,7 +486,7 @@ func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T
 	}
 	for _, environment := range []string{"Production", "prod", "staging", "live", "Development"} {
 		rename := func(data string) string {
-			return strings.Replace(data, "environment: production", "environment: "+environment, 1)
+			return strings.ReplaceAll(data, "environment: production", "environment: "+environment)
 		}
 		if _, err := config.Load([]byte(rename(string(exampleYAML(t))))); err != nil {
 			t.Fatalf("environment %q rejected the hardened example: %v", environment, err)
@@ -504,6 +504,11 @@ func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T
 			t.Fatal(err)
 		}
 		loaded.Environment, loaded.State.Redis.TLS.Enabled = environment, false
+		for index := range loaded.Budgets.Policies {
+			if loaded.Budgets.Policies[index].Match.Environment != "" {
+				loaded.Budgets.Policies[index].Match.Environment = environment
+			}
+		}
 		encoded, err := json.Marshal(loaded)
 		if err != nil {
 			t.Fatal(err)

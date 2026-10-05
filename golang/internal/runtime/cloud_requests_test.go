@@ -486,7 +486,8 @@ func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *test
 	}
 	for _, environment := range []string{"Production", "prod", "staging"} {
 		t.Run(environment, func(t *testing.T) {
-			renamed := strings.Replace(string(data), "environment: production", "environment: "+environment, 1)
+			// Budget matchers follow the renamed environment.
+			renamed := strings.ReplaceAll(string(data), "environment: production", "environment: "+environment)
 			snapshot, err := config.Compile(context.Background(), []byte(renamed), config.ReferenceResolverFunc(func(_ context.Context, c *config.Config) error {
 				c.State.Requests = testCloudConfig()
 				c.Endpoints = map[string]config.EndpointConfig{"openai-prod": c.Endpoints["openai-prod"]}

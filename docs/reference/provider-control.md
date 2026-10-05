@@ -147,9 +147,10 @@ the neutral `control` page contracts with the existing filters and limits
 (default 100, maximum 1,000). Credit queries select the newest route projection
 per provider/endpoint with route ID as the tie breaker, then apply the healthy
 filter. Provider-status pages are ordered by route ID and then endpoint. The
-keyset position is the last route ID, or `route<TAB>endpoint` when a page ends
-between two routes that share an ID. Inventory remains informational and cannot
-change routing.
+keyset position is the last route ID. When a page ends between two routes that
+share an ID it is instead a fixed-length keyed digest of the last route and
+endpoint, so the position does not grow with identifier length. Inventory
+remains informational and cannot change routing.
 
 The first read captures the bounded configuration hash with one atomic
 `HGETALL`. A temporary view pins that data for subsequent pages, including

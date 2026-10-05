@@ -39,8 +39,9 @@ const (
 
 // ProviderStatusListOptions describes the storage portion of a
 // provider-status query.  AfterRouteID is an unsigned keyset position: a route
-// ID, or "route\tendpoint" inside a group of same-named routes.  The control
-// layer must authenticate it before passing it here.
+// ID, or a short fixed-length store marker (it contains a tab, which no route
+// ID does) inside a group of same-named routes.  The control layer must
+// authenticate it before passing it here.
 type ProviderStatusListOptions struct {
 	ConfigDigest   [32]byte
 	Provider       string

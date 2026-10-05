@@ -438,7 +438,7 @@ func TestLiveRedisProviderStatusSeparatesSameRouteIDAcrossEndpoints(t *testing.T
 	}
 	options := control.ProviderStatusListOptions{ConfigDigest: first.ConfigDigest, IncludeHealthy: true, SnapshotHorizon: now, Limit: 1}
 	page, err := store.ListRouteStatuses(ctx, options)
-	if err != nil || len(page.Routes) != 1 || page.Routes[0].EndpointID != "endpoint-a" || page.NextRouteID != "primary\tendpoint-a" {
+	if err != nil || len(page.Routes) != 1 || page.Routes[0].EndpointID != "endpoint-a" || page.NextRouteID != store.routePosition(page.Routes[0]) {
 		t.Fatalf("first page: %#v %v", page, err)
 	}
 	options.AfterRouteID, options.SnapshotHorizon = page.NextRouteID, time.Unix(now.Unix(), 0)
