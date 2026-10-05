@@ -88,3 +88,16 @@ func newEngineTestMetrics(t *testing.T) *observability.Metrics {
 	}
 	return metrics
 }
+
+func TestGenerateRecordsUnreportedActualServiceClassAsUnknown(t *testing.T) {
+	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+	adapter.response.Service.Actual = nil
+	harness := newHarness(t, adapter)
+	metrics := newEngineTestMetrics(t)
+
+	if _, err := harness.engine.Generate(observability.WithMetrics(context.Background(), metrics), baseRequest("metrics-unknown-actual")); err != nil {
+		t.Fatal(err)
+	}
+	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "unknown", "endpoint": "endpoint-1"}, 1)
+	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 0)
+}

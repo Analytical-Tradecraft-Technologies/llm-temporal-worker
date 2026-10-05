@@ -45,11 +45,17 @@ func recordCompletion(ctx context.Context, response llm.Response) {
 		return
 	}
 	recordOperationState(ctx, admission.StateCompleted)
+	// Cost metrics are labelled with the tier the cost was priced at, which is
+	// the attempted tier unless the provider reported an actual one.
 	actual := response.Service.Attempted
+	// The actual-tier metric must not guess: an unreported actual tier is
+	// recorded as unknown rather than as the attempted tier.
+	actualLabel := "unknown"
 	if response.Service.Actual != nil {
 		actual = *response.Service.Actual
+		actualLabel = string(actual)
 	}
-	metrics.RecordServiceClass(string(response.Service.Requested), string(actual), response.Route.EndpointID)
+	metrics.RecordServiceClass(string(response.Service.Requested), actualLabel, response.Route.EndpointID)
 	if response.Cost.Status == llm.CostStatusKnown {
 		if response.Cost.ActualCostUSD != nil {
 			metrics.RecordCostStatus(response.Route.EndpointID, response.Route.ResolvedModel, string(actual), "exact", response.Cost.Method)
