@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -131,6 +134,12 @@ func TestCheckpointReplayFailuresStopBeforeRoutingAndBudgets(t *testing.T) {
 		{"forged handle", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) { m.err = state.ErrInvalidHandle }, provider.CodeInvalidArgument},
 		{"expired", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) { m.err = state.ErrExpired }, provider.CodeInvalidArgument},
 		{"missing", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) { m.err = state.ErrNotFound }, provider.CodeInvalidArgument},
+		{"missing cloud row", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) {
+			m.err = fmt.Errorf("load checkpoint: %w", contracts.ErrNotFound)
+		}, provider.CodeInvalidArgument},
+		{"lineage limit", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) {
+			m.err = fmt.Errorf("checkpoint materialization exceeds item limit: %w", state.ErrLimitExceeded)
+		}, provider.CodeInvalidArgument},
 		{"tenant", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) { m.result.Tenant = "other" }, provider.CodeStateCorrupt},
 		{"project", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) { m.result.Project = "other" }, provider.CodeStateCorrupt},
 		{"handle", func(_ *CheckpointReplay, m *checkpointReplayMaterializer) { m.result.Handle = "other" }, provider.CodeStateCorrupt},

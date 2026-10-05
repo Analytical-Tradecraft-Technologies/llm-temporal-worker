@@ -148,7 +148,7 @@ func (graph *CheckpointGraph) put(checkpoint Checkpoint) error {
 		return fmt.Errorf("checkpoint handle, tenant, and operation key are required")
 	}
 	if checkpoint.Depth < 0 || checkpoint.Depth > graph.limits.MaxDepth {
-		return fmt.Errorf("checkpoint depth exceeds configured limit")
+		return fmt.Errorf("checkpoint depth exceeds configured limit: %w", ErrLimitExceeded)
 	}
 	if err := checkpoint.SettingsPatch.Validate(); err != nil {
 		return err
@@ -256,7 +256,7 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		}
 		path = append(path, checkpoint)
 		if int32(len(path)-1) > graph.limits.MaxDepth || len(path) > graph.limits.MaxRows {
-			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit")
+			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds depth/row limit: %w", ErrLimitExceeded)
 		}
 		if checkpoint.Parent == nil {
 			break
@@ -290,7 +290,7 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		result.Settings = checkpoint.Snapshot.Settings.Clone()
 		result.Depth = checkpoint.Snapshot.Depth
 		if result.Depth < 0 || result.Depth > graph.limits.MaxDepth {
-			return MaterializedState{}, fmt.Errorf("checkpoint snapshot exceeds depth limit")
+			return MaterializedState{}, fmt.Errorf("checkpoint snapshot exceeds depth limit: %w", ErrLimitExceeded)
 		}
 		if err := graph.validateMaterializedLimits(result.Items); err != nil {
 			return MaterializedState{}, err
@@ -312,7 +312,7 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		checkpoint := path[index]
 		itemCount := len(checkpoint.Delta) + len(checkpoint.Output)
 		if itemCount > graph.limits.MaxItems-itemCapacity {
-			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds item limit")
+			return MaterializedState{}, fmt.Errorf("checkpoint materialization exceeds item limit: %w", ErrLimitExceeded)
 		}
 		itemCapacity += itemCount
 	}
@@ -354,14 +354,14 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 
 func (graph *CheckpointGraph) validateMaterializedLimits(items []llm.Item) error {
 	if len(items) > graph.limits.MaxItems {
-		return fmt.Errorf("checkpoint materialization exceeds item limit")
+		return fmt.Errorf("checkpoint materialization exceeds item limit: %w", ErrLimitExceeded)
 	}
 	bytes, err := canonicalItemsWithLimit(items, int(graph.limits.MaxBytes))
 	if err != nil {
 		return err
 	}
 	if int64(len(bytes)) > graph.limits.MaxBytes {
-		return fmt.Errorf("checkpoint materialization exceeds byte limit")
+		return fmt.Errorf("checkpoint materialization exceeds byte limit: %w", ErrLimitExceeded)
 	}
 	return nil
 }

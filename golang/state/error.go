@@ -12,4 +12,7 @@ var (
 	ErrTenantMismatch = errors.New("state tenant mismatch")
 	ErrExpired        = errors.New("state record expired")
 	ErrConflict       = errors.New("state record conflict")
+	// ErrLimitExceeded marks a deterministic lineage, depth, item or byte
+	// limit violation. Retrying the same request cannot succeed.
+	ErrLimitExceeded = errors.New("state limit exceeded")
 )
