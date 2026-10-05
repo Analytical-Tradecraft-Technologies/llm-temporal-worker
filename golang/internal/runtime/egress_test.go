@@ -46,6 +46,13 @@ func TestProviderEgressPolicyRejectsBlockedAddresses(t *testing.T) {
 		"ipv6 multicast":       "ff02::1",
 		"ipv6 unspecified":     "::",
 		"ipv4 mapped loopback": "::ffff:127.0.0.1",
+		"ietf protocol":        "192.0.0.8",
+		"nat64 metadata":       "64:ff9b::a9fe:a9fe",
+		"nat64 private":        "64:ff9b::a00:1",
+		"nat64 local use":      "64:ff9b:1::a00:1",
+		"6to4 private":         "2002:a00:1::1",
+		"teredo":               "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+		"ipv4 compatible":      "::7f00:1",
 	}
 	for name, address := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1069,4 +1076,18 @@ func localProviderMockEndpoint(t *testing.T) config.EndpointConfig {
 		t.Fatal("local config is missing provider-mock endpoint")
 	}
 	return endpoint
+}
+
+func TestBlockedProviderAddressDecodesNAT64WellKnownPrefix(t *testing.T) {
+	for address, blocked := range map[string]bool{
+		"64:ff9b::808:808":   false, // DNS64 synthesis of public 8.8.8.8.
+		"64:ff9b::a9fe:a9fe": true,  // 169.254.169.254 metadata.
+		"64:ff9b::a00:1":     true,  // 10.0.0.1 private.
+		"64:ff9b::7f00:1":    true,  // 127.0.0.1 loopback.
+		"64:ff9b:1::a00:1":   true,  // Local-use NAT64 is not decoded.
+	} {
+		if got := blockedProviderAddress(netip.MustParseAddr(address)); got != blocked {
+			t.Errorf("blockedProviderAddress(%s) = %t, want %t", address, got, blocked)
+		}
+	}
 }
