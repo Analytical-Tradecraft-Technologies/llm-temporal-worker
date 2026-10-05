@@ -3,6 +3,8 @@ package redis
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,4 +121,49 @@ func FuzzProviderStatusDecode(f *testing.F) {
 		var record providerStatusRecord
 		_ = decodeProviderStatus(raw, sha256.Sum256([]byte("config")), &record)
 	})
+}
+
+// Two models may share a route ID, and identifiers may be 256 bytes long. The
+// position issued when a page ends between such routes must stay within the
+// cursor codec's default 128-byte bound and the list options' own bound.
+func TestProviderStatusPagePositionIsBoundedForLongIdentifiers(t *testing.T) {
+	space, err := newKeySpace(testKeyOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &ProviderStateStore{space: space}
+	now := time.Date(2026, 7, 14, 1, 0, 0, 0, time.UTC)
+	route := strings.Repeat("r", 100)
+	var records []providerStatusRecord
+	for _, endpoint := range []string{strings.Repeat("a", 256), strings.Repeat("b", 256), strings.Repeat("c", 256)} {
+		record, applied := applyProviderEvent(providerStatusRecord{}, providerTestEvent(t, now, route, func(o *control.StatusObservation) { o.EndpointID = endpoint }))
+		if !applied {
+			t.Fatal("event not applied")
+		}
+		records = append(records, record)
+	}
+	options := control.ProviderStatusListOptions{ConfigDigest: records[0].Status.ConfigDigest, IncludeHealthy: true, SnapshotHorizon: now, Limit: 1}
+	for index, record := range records {
+		if err := options.Normalize(); err != nil {
+			t.Fatalf("page %d position rejected: %v", index, err)
+		}
+		page, err := store.pageRouteStatuses(records, options)
+		if err != nil || len(page.Routes) != 1 || page.Routes[0].EndpointID != record.Status.EndpointID {
+			t.Fatalf("page %d: %#v %v", index, page, err)
+		}
+		if last := index == len(records)-1; last != (page.NextRouteID == "") || len(page.NextRouteID) > 128 {
+			t.Fatalf("page %d position has %d bytes", index, len(page.NextRouteID))
+		}
+		options.AfterRouteID = page.NextRouteID
+	}
+	// A marker for a record the pinned view no longer holds restarts pagination.
+	options.AfterRouteID = store.routePosition(control.RouteStatus{RouteID: route, EndpointID: "removed"})
+	if _, err := store.pageRouteStatuses(records, options); !errors.Is(err, control.ErrProviderViewExpired) {
+		t.Fatalf("unknown marker error = %v", err)
+	}
+	// A plain route position still skips every record of that route.
+	options.AfterRouteID = route
+	if page, err := store.pageRouteStatuses(records, options); err != nil || len(page.Routes) != 0 {
+		t.Fatalf("plain position: %#v %v", page, err)
+	}
 }

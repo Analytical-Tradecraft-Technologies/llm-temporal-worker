@@ -47,6 +47,24 @@ secret, before changing the password. Do not use the digest's hexadecimal text.
 Keep that file stable afterward. New installations should use an independent
 random secret. The worker no longer derives namespace identity from a password.
 
+## Environment
+
+`environment` is a free-form identifier; budget policies can match it with
+`match.environment`. Only the exact, case-sensitive value `development` selects
+the development composition. Every other value is treated as production,
+including `production`, `staging`, `prod`, `Production` and names the worker
+has never seen. For those values:
+
+- `state.redis.tls.enabled` must be `true`;
+- `telemetry.content_logging` must be `disabled`;
+- `state.kind` must be `durable` and `blob_store.kind` must be `s3`;
+- startup requires the durable v1 runtime, the cloud budget initialization
+  receipt and the Redis budget authority probe.
+
+Where this document says "production", it means any environment other than
+`development`. Validation and runtime composition share one rule
+(`config.IsProductionEnvironment`), so a misspelt name cannot skip hardening.
+
 ## Caller authorization
 
 The production CLI requires `authorization.mode: trusted_temporal` and a
@@ -722,6 +740,16 @@ and cannot be supplied by a request.
 A request without `service_class` becomes `standard`. There is no configurable
 provider default. `service_class_fallbacks` is request data, not a worker-wide
 default, because only the caller can authorize a cost/latency class change.
+
+## Route identifiers
+
+A route `id` must be unique within its model. Two models may use the same
+route ID, for example a `primary` route in each. Shared route health (status,
+credit, billing and circuit state) is stored per route ID and endpoint under
+the configuration digest, so same-named routes on different endpoints never
+share a record. Same-named routes of different models that use the same
+endpoint do share one record: they observe the same upstream endpoint and
+account.
 
 ## Capability catalog shape
 

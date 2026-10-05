@@ -371,7 +371,7 @@ func v1RuntimeRequired(configuration config.Config) bool {
 	// Only the checked-in development composition is allowed to start without
 	// the durable v1 seam. Every other environment, including production and
 	// unknown values, must fail closed before advertising readiness.
-	return configuration.Environment != "development"
+	return config.IsProductionEnvironment(configuration.Environment)
 }
 
 func composeRuntimeActivities(configuration config.Config, engine llm.Engine, metrics *observability.Metrics, tracer *observability.Tracer, v1Runtime activity.V1Runtime, queryService activity.QueryService) *activity.Activities {

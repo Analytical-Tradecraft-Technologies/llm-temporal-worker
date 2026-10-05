@@ -414,7 +414,7 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, err := providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID)
+	status, err := providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID, incident.EndpointID)
 	if err != nil || status.Credit != control.CreditExhausted {
 		t.Fatalf("provider incident after restart: %#v %v", status, err)
 	}
@@ -428,7 +428,7 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	if _, err := providers.PersistStatusEvent(context.Background(), updated); err != nil {
 		t.Fatal(err)
 	}
-	status, err = providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID)
+	status, err = providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID, incident.EndpointID)
 	if err != nil || status.Credit != control.CreditExhausted {
 		t.Fatalf("sticky incident after restart/update: %#v %v", status, err)
 	}

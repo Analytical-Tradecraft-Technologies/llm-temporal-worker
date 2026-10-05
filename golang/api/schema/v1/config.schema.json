@@ -10,7 +10,7 @@
   ],
   "properties": {
     "version": { "const": "llm-temporal-worker/v1" },
-    "environment": { "type": "string", "minLength": 1 },
+    "environment": { "type": "string", "minLength": 1, "description": "Free-form identifier. Only the exact value development is exempt from production hardening; every other value is treated as production." },
     "server": { "$ref": "#/$defs/server" },
     "temporal": { "$ref": "#/$defs/temporal" },
     "authorization": { "$ref": "#/$defs/authorization" },
@@ -50,7 +50,7 @@
     },
     {
       "if": {
-        "properties": { "environment": { "const": "production" } },
+        "properties": { "environment": { "not": { "const": "development" } } },
         "required": ["environment"]
       },
       "then": {

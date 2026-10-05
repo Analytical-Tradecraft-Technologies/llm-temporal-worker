@@ -18,7 +18,7 @@ func requireDurableV1RuntimeBuilder(value config.Config, builder V1RuntimeBuilde
 	if value.State.Requests != nil && builder == nil {
 		return fmt.Errorf("%w: cloud requests require V1RuntimeBuilder", ErrDurableV1Composition)
 	}
-	if value.State.Kind != config.StateKindDurable || value.Environment == "development" {
+	if value.State.Kind != config.StateKindDurable || !config.IsProductionEnvironment(value.Environment) {
 		return nil
 	}
 	if builder == nil {
