@@ -34,6 +34,24 @@ func TestEmptyFunctionCallArgumentsLiftAsEmptyObject(t *testing.T) {
 				t.Fatalf("tool call = %#v", lifted.Output[0])
 			}
 
+			// A completed response whose call is explicitly unfinished is
+			// contradictory; blank arguments are not completed for it. A
+			// call without a status keeps the normalization.
+			for status, wantErr := range map[string]bool{"incomplete": true, "in_progress": true, "": false} {
+				item := `"status":"` + status + `"}]`
+				if status == "" {
+					item = `"type":"function_call"}]`
+				}
+				var contradictory responses.Response
+				if err := json.Unmarshal([]byte(strings.Replace(body, `"status":"completed"}]`, item, 1)), &contradictory); err != nil {
+					t.Fatal(err)
+				}
+				lifted, err := liftResponse(call, &contradictory, "req")
+				if wantErr != (err != nil) {
+					t.Fatalf("call status %q: lifted = %#v, error = %v", status, lifted.Output, err)
+				}
+			}
+
 			// A call cut off by the output limit before any argument was
 			// written is still dropped.
 			cutOff := strings.Replace(body, `"status":"completed","service_tier"`, `"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"service_tier"`, 1)

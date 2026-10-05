@@ -257,9 +257,12 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 			}
 			// Some providers send an empty string for a zero-argument tool.
 			// That is the empty object, not a malformed call. A call cut off
-			// by the output limit keeps the truncation handling below.
+			// by the output limit keeps the truncation handling below, and a
+			// call the provider itself marks unfinished is never completed
+			// here: its blank arguments stay invalid.
 			cutOff := truncated && call.Status != responses.ResponseFunctionToolCallStatusCompleted
-			if strings.TrimSpace(call.Arguments) == "" && !cutOff {
+			unfinished := call.Status != "" && call.Status != responses.ResponseFunctionToolCallStatusCompleted
+			if strings.TrimSpace(call.Arguments) == "" && !cutOff && !unfinished {
 				call.Arguments = "{}"
 			}
 			if !json.Valid([]byte(call.Arguments)) {
