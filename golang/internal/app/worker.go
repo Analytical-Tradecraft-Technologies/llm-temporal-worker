@@ -109,7 +109,7 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 		if err := options.Activities.RegisterForTaskQueue(registry, options.TaskQueue); err != nil {
 			return nil, fmt.Errorf("register Temporal Activities: %w", err)
 		}
-		workflows.Register(registry)
+		workflows.Register(registry, options.Activities.PayloadLimits)
 		return controller, nil
 	}
 	controller, err := build()

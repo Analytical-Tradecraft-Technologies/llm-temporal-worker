@@ -836,8 +836,11 @@ func (metadata *CheckpointMetadata) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if depth < 0 || depth > math.MaxInt32 {
+		return fmt.Errorf("checkpoint metadata is invalid")
+	}
 	result := CheckpointMetadata{Handle: CheckpointHandle(handle), Kind: kind, Depth: int32(depth)}
-	if !result.Handle.valid() || depth < 0 || depth > math.MaxInt32 {
+	if !result.Handle.valid() {
 		return fmt.Errorf("checkpoint metadata is invalid")
 	}
 	if raw, ok := fields["parent"]; ok && string(raw) != "null" {

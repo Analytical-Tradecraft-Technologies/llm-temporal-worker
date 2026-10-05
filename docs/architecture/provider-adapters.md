@@ -164,6 +164,30 @@ usage/cost lifter.
 - JSON Schema constraints are lowered through native output/tool facilities
   only when the exact endpoint profile supports the required strictness.
 
+Reasoning controls lower the same way on Anthropic Messages and Bedrock
+Messages:
+
+- Effort is sent as `output_config.effort`, which the API accepts
+  independently of `thinking`. `low`, `medium` and `high` map by name,
+  `maximum` maps to `max`, and `minimal` maps to `low` because the provider has
+  no lower value. An effort with no reasoning mode never adds a `thinking`
+  object; an absent or `provider_default` effort sends no override.
+- The reasoning mode alone decides `thinking`: `adaptive`, `enabled` (requires
+  a token budget of at least 1024; a budget with no mode implies `enabled`) and
+  `disabled` map to the matching `thinking.type`. With no mode and no budget
+  the `thinking` object is omitted and the model default applies. The v1
+  contract carries only effort and summary, so a v1 request never sends
+  `thinking`. An effort combined with an `enabled` or `disabled` mode is
+  rejected.
+- The summary maps to `thinking.display`, whose only values are `summarized`
+  (the provider default) and `omitted`: `none` sends `omitted` and `auto`
+  sends `summarized`. `concise` and `detailed` cannot express their detail
+  level; strict portability rejects them and best-effort sends `summarized`.
+  `display` exists only inside an explicit `thinking` object, so with no
+  reasoning mode a summary preference is not sent and never turns thinking on.
+  This is lossless in strict mode too: thinking is opt-in, so a request with
+  no `thinking` object returns no thinking blocks to summarize or omit.
+
 ### Tool-result errors
 
 Anthropic Messages (`is_error`) and Bedrock Converse (`status: error`) carry a

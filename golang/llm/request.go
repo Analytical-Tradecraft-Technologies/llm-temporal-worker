@@ -892,21 +892,9 @@ func copyRawMap(source map[string]json.RawMessage) map[string]json.RawMessage {
 	return result
 }
 
-func decodeInt(data []byte) (int, error) {
-	var value int
-	if err := decodeJSON(data, &value); err != nil {
-		return 0, err
-	}
-	return value, nil
-}
+func decodeInt(data []byte) (int, error) { return decodeIntJSON[int](data) }
 
-func decodeInt64(data []byte) (int64, error) {
-	var value int64
-	if err := decodeJSON(data, &value); err != nil {
-		return 0, err
-	}
-	return value, nil
-}
+func decodeInt64(data []byte) (int64, error) { return decodeIntJSON[int64](data) }
 
 func decodeFloat64(data []byte) (float64, error) {
 	var value float64

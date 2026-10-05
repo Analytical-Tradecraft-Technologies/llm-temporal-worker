@@ -16,6 +16,10 @@ Every public JSON record is parsed with a recursive duplicate-key check before
 semantic decoding. This includes nested objects retained as extension,
 provider-state, tool-argument, or schema JSON; a repeated key is never resolved
 by taking the last value. Canonical request hashing applies the same rule.
+The check walks the whole record once, at the entry point that receives it;
+the item, part, and blob decoders beneath that entry point split the values
+they are handed without scanning them again, so decode cost is linear in the
+record size rather than multiplied by its nesting depth.
 
 > This chapter describes the current pre-release v1 shape. The staged target,
 > unimplemented delta, cache, exact USD, Compact, and Query contracts replace
