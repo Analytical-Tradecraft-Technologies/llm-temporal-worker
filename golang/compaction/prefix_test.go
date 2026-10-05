@@ -87,7 +87,7 @@ func TestSelectPrefixRejectsInvalidTranscript(t *testing.T) {
 	}
 }
 
-func TestSelectPrefixPreservesProviderStateAsAnAtomicItem(t *testing.T) {
+func TestSelectPrefixKeepsProviderStateWithFollowingOutput(t *testing.T) {
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "question"),
 		llm.ProviderState{Provider: "provider", EndpointFamily: "family", MediaType: "opaque", Opaque: []byte{1, 2, 3}},
@@ -97,8 +97,34 @@ func TestSelectPrefixPreservesProviderStateAsAnAtomicItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(selection.Prefix) != 2 || len(selection.Retained) != 1 {
-		t.Fatalf("selection split provider state: %#v", selection)
+	if len(selection.Prefix) != 1 || len(selection.Retained) != 2 {
+		t.Fatalf("selection separated provider state from its output: %#v", selection)
+	}
+	if _, ok := selection.Retained[0].(llm.ProviderState); !ok {
+		t.Fatalf("retained suffix does not start with the provider state: %#v", selection.Retained)
+	}
+}
+
+func TestSelectPrefixKeepsThinkingWithPendingToolCall(t *testing.T) {
+	thinking := llm.ProviderState{Provider: "anthropic", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.content-block+json", Opaque: []byte(`{"type":"thinking"}`)}
+	items := []llm.Item{
+		textMessage(llm.ActorHuman, "first"),
+		textMessage(llm.ActorModel, "reply"),
+		textMessage(llm.ActorHuman, "second"),
+		thinking,
+		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+	}
+	for _, recent := range []int{0, 1} {
+		selection, err := SelectPrefix(items, recent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if last := selection.Prefix[len(selection.Prefix)-1]; isProviderState(last) {
+			t.Fatalf("recent=%d prefix ends with provider state: %#v", recent, selection.Prefix)
+		}
+		if _, ok := selection.Retained[0].(llm.ProviderState); !ok {
+			t.Fatalf("recent=%d retained suffix starts without its thinking block: %#v", recent, selection.Retained)
+		}
 	}
 }
 
@@ -201,5 +227,41 @@ func TestSelectPrefixKeepsMixedToolResponseAtomic(t *testing.T) {
 				t.Fatalf("selection split the mixed tool exchange: %#v", selection)
 			}
 		})
+	}
+}
+
+func TestSelectPrefixKeepsThinkingWithToolCallPastInterveningText(t *testing.T) {
+	thinking := llm.ProviderState{Provider: "anthropic", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.content-block+json", Opaque: []byte(`{"type":"thinking"}`)}
+	items := []llm.Item{
+		textMessage(llm.ActorHuman, "first"),
+		textMessage(llm.ActorModel, "reply"),
+		textMessage(llm.ActorHuman, "second"),
+		thinking,
+		thinking,
+		textMessage(llm.ActorModel, "I will look that up."),
+		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+	}
+	for _, recent := range []int{0, 1} {
+		selection, err := SelectPrefix(items, recent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(selection.Retained) != 4 {
+			t.Fatalf("recent=%d retained = %#v, want the whole thinking response with its tool call", recent, selection.Retained)
+		}
+		for _, item := range selection.Prefix {
+			if isProviderState(item) {
+				t.Fatalf("recent=%d summarised a thinking block of the retained tool call: %#v", recent, selection.Prefix)
+			}
+		}
+	}
+	// A following human turn still starts a new turn.
+	closed := append(append([]llm.Item(nil), items[:6]...), textMessage(llm.ActorHuman, "third"))
+	selection, err := SelectPrefix(closed, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selection.Retained) != 1 {
+		t.Fatalf("human turn after a thinking response = %#v", selection.Retained)
 	}
 }
