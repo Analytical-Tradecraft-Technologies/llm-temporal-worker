@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -122,10 +123,16 @@ func validateAzureConfig(rawEndpoint, apiVersion string, httpClient *http.Client
 // and /openai forms. The official Azure middleware prepends /openai to every
 // route, so any of those suffixes would otherwise be duplicated.
 func azureResourceRoot(endpoint string) string {
-	trimmed := strings.TrimRight(endpoint, "/")
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	path := strings.TrimRight(parsed.Path, "/")
 	for _, suffix := range []string{"/openai/v1", "/openai"} {
-		if strings.HasSuffix(strings.ToLower(trimmed), suffix) {
-			return trimmed[:len(trimmed)-len(suffix)] + "/"
+		if strings.HasSuffix(strings.ToLower(path), suffix) {
+			parsed.Path = path[:len(path)-len(suffix)] + "/"
+			parsed.RawPath = ""
+			return parsed.String()
 		}
 	}
 	return endpoint

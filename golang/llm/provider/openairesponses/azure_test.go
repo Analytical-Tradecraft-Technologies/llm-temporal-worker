@@ -362,3 +362,16 @@ func TestAzureResponsesAcceptsDocumentedEndpointForms(t *testing.T) {
 		}
 	}
 }
+
+func TestAzureResourceRootOnlyStripsPathSuffixes(t *testing.T) {
+	for endpoint, want := range map[string]string{
+		"https://openai/":   "https://openai/",
+		"https://openai/v1": "https://openai/v1",
+		"https://example.openai.azure.com/openai/v1/": "https://example.openai.azure.com/",
+		"https://proxy.test/tenant/openai":            "https://proxy.test/tenant/",
+	} {
+		if got := azureResourceRoot(endpoint); got != want {
+			t.Errorf("azureResourceRoot(%q) = %q, want %q", endpoint, got, want)
+		}
+	}
+}
