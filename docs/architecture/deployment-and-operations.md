@@ -256,7 +256,8 @@ Metric labels use bounded configured IDs, never tenant-provided free text:
 - `llmtw_activity_duration_seconds{phase}`;
 - `llmtw_provider_attempt_total{endpoint,model,class,outcome}`;
 - `llmtw_provider_duration_seconds{endpoint,model,class}`;
-- `llmtw_service_class_actual_total{requested,actual,endpoint}`;
+- `llmtw_service_class_actual_total{requested,actual,endpoint}`, where `actual` is
+  `unknown` when the provider did not report the tier that served the request;
 - `llmtw_budget_admission_total{policy,outcome}`;
 - `llmtw_cost_usd_total{endpoint,model,class,method}` as a bounded count of
   exact-cost events (the amount remains in the durable ledger);

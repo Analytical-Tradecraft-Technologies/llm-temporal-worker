@@ -221,7 +221,8 @@ func (metrics *Metrics) RecordServiceClass(requested, actual, endpoint string) {
 	metrics.mu.RLock()
 	defer metrics.mu.RUnlock()
 	classes := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
-	metrics.serviceClassActual.WithLabelValues(metrics.builtIn(requested, classes), metrics.builtIn(actual, classes), metrics.allow(endpoint, metrics.allowed.endpoints)).Inc()
+	actualClasses := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}, "unknown": {}}
+	metrics.serviceClassActual.WithLabelValues(metrics.builtIn(requested, classes), metrics.builtIn(actual, actualClasses), metrics.allow(endpoint, metrics.allowed.endpoints)).Inc()
 }
 
 func (metrics *Metrics) RecordBudgetAdmission(policy, outcome string) {
