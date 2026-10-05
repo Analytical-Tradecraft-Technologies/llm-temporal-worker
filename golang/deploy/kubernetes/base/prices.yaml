@@ -4,7 +4,8 @@
 # model has no matching price entry is not usable.
 version: production-v1
 entries:
-  - endpoint: openai-production
+  - provider: openai
+    endpoint: openai-production
     family: openai_responses
     region: global
     model: replace-with-model
@@ -16,7 +17,8 @@ entries:
     cache_write_per_million: "0"
     reasoning_per_million: "0"
     per_request: "0"
-  - endpoint: openai-production
+  - provider: openai
+    endpoint: openai-production
     family: openai_responses
     region: global
     model: replace-with-model
@@ -28,7 +30,8 @@ entries:
     cache_write_per_million: "0"
     reasoning_per_million: "0"
     per_request: "0"
-  - endpoint: openai-production
+  - provider: openai
+    endpoint: openai-production
     family: openai_responses
     region: global
     model: replace-with-model

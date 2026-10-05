@@ -441,7 +441,7 @@ func TestKubernetesBaseCatalogsLoadThroughSnapshotLoader(t *testing.T) {
 		t.Fatalf("Kubernetes base catalogs do not load: %v", err)
 	}
 	model, ok := loaded.Routes.Models["default"]
-	if !ok || len(model.Routes) != 1 || model.Routes[0].Model != "replace-with-model" || !model.Routes[0].PriceAvailable {
+	if !ok || len(model.Routes) != 1 || model.Routes[0].Model != "replace-with-model" || model.Routes[0].Provider != "openai" || !model.Routes[0].PriceAvailable {
 		t.Fatalf("Kubernetes base routes = %#v", loaded.Routes)
 	}
 }
