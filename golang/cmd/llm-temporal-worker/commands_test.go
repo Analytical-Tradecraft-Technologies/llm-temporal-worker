@@ -203,8 +203,12 @@ func TestConfigCommandsReportValidationAndReferenceFailures(t *testing.T) {
 		{name: "output limit", from: "max_output_tokens: 32768", to: "max_output_tokens: -1", want: "limits.max_output_tokens"},
 		{name: "token ratio", from: `token_estimate_safety_ratio: "1.35"`, to: `token_estimate_safety_ratio: "0"`, want: "token_estimate_safety_ratio"},
 		{name: "secret reference", resolver: config.ReferenceResolverFunc(func(context.Context, *config.Config) error {
-			return errors.New(`environment secret "REDIS_USERNAME" is not set`)
+			return diagnostic.Safe(`secret reference 0 could not be resolved: environment secret "REDIS_USERNAME" is not set`, errors.New("raw"))
 		}), want: `environment secret "REDIS_USERNAME" is not set`},
+		{name: "unclassified reference", resolver: config.ReferenceResolverFunc(func(context.Context, *config.Config) error {
+			return errors.New(`reference "sk-live-secret-value" rejected`)
+		}), want: "reference <value> rejected", hidden: "sk-live-secret-value"},
+		{name: "enum value", from: "level: info", to: "level: sk-live-secret-value", want: "telemetry.logs.level", hidden: "sk-live-secret-value"},
 		{name: "yaml value", from: "max_output_tokens: 32768", to: "max_output_tokens: sk-live-secret-value", want: "configuration YAML", hidden: "sk-live-secret-value"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -244,5 +248,13 @@ func TestWorkerCommandShowsOperatorSafeRuntimeDiagnostics(t *testing.T) {
 	})
 	if code != 1 || strings.TrimSpace(errorsOut.String()) != `secret reference 0 could not be resolved: environment secret "REDIS_USERNAME" is not set` {
 		t.Fatalf("worker code=%d error=%q", code, errorsOut.String())
+	}
+}
+
+func TestWriteConfigErrorRedactsQuotedInputValues(t *testing.T) {
+	var output bytes.Buffer
+	writeConfigError(&output, fmt.Errorf(`state.kind %q is unsupported`, `sk-live "quoted" secret`))
+	if got := strings.TrimSpace(output.String()); got != "state.kind <value> is unsupported" {
+		t.Fatalf("writeConfigError() = %q", got)
 	}
 }

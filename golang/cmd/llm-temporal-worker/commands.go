@@ -309,26 +309,27 @@ func writeCommandError(output io.Writer, err error) {
 	_, _ = fmt.Fprintf(output, "%s\n", message)
 }
 
-// yamlEchoedValue matches the backtick-quoted scalars that YAML decode errors
-// echo from the input document.
-var yamlEchoedValue = regexp.MustCompile("`[^`]*`")
+// quotedInputValue matches the input values that configuration errors echo:
+// backtick-quoted YAML scalars and Go %q-quoted validation values. Field paths
+// are unquoted, so they survive redaction.
+var quotedInputValue = regexp.MustCompile("`[^`]*`|\"(?:[^\"\\\\]|\\\\.)*\"")
 
-// writeConfigError reports configuration compile failures. Validation and
-// secret-reference errors name field paths and reference names, never resolved
-// secret values, so they are shown instead of being hidden by the keyword
-// filter in writeCommandError (field names such as max_output_tokens or
-// state.requests.secret would otherwise always match it). YAML decode errors
-// can echo document scalars, so those are replaced before printing.
+// writeConfigError reports configuration compile failures. Errors name the
+// failing field path, which the keyword filter in writeCommandError would hide
+// (field names such as max_output_tokens or state.requests.secret always match
+// it). A value echoed from the input could still be misplaced credential text,
+// so every quoted value is replaced unless the error is a typed operator-safe
+// diagnostic such as an unresolved secret reference.
 func writeConfigError(output io.Writer, err error) {
 	if output == nil {
 		return
 	}
-	if err == nil {
+	if _, safe := diagnostic.Message(err); err == nil || safe {
 		writeCommandError(output, err)
 		return
 	}
 	message := strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0])
-	message = yamlEchoedValue.ReplaceAllString(message, "<value>")
+	message = quotedInputValue.ReplaceAllString(message, "<value>")
 	if message == "" || len(message) > 512 {
 		writeCommandError(output, nil)
 		return
