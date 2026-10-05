@@ -119,15 +119,18 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 		}}
 	}
 	return NewProfile(Profile{
-		ID:                        config.ID,
-		CapabilityVersion:         config.CapabilityVersion,
-		Capabilities:              config.Capabilities,
-		ServiceTiers:              config.ServiceTiers,
-		ActualServiceClasses:      config.ActualServiceClasses,
-		MissingActualServiceClass: config.MissingActualServiceClass,
-		AllowedExtensions:         allowed,
-		ExpectedBaseURL:           baseURL,
-		ExpectedModel:             config.Model,
+		// The developer role is not accepted by every API version or
+		// compatible server; system is.
+		ApplicationInstructionRole: "system",
+		ID:                         config.ID,
+		CapabilityVersion:          config.CapabilityVersion,
+		Capabilities:               config.Capabilities,
+		ServiceTiers:               config.ServiceTiers,
+		ActualServiceClasses:       config.ActualServiceClasses,
+		MissingActualServiceClass:  config.MissingActualServiceClass,
+		AllowedExtensions:          allowed,
+		ExpectedBaseURL:            baseURL,
+		ExpectedModel:              config.Model,
 		WireDefaults: map[string]json.RawMessage{
 			"provider": providerRaw,
 		},

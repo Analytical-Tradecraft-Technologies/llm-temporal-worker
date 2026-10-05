@@ -85,15 +85,18 @@ func NewExaProfile(config ExaProfileConfig) (Profile, error) {
 		allowed["exa"] = ExtensionSpec{Fields: map[string]string{"text": "extra_body"}}
 	}
 	return NewProfile(Profile{
-		ID:                        config.ID,
-		CapabilityVersion:         config.CapabilityVersion,
-		Capabilities:              config.Capabilities,
-		ServiceTiers:              config.ServiceTiers,
-		ActualServiceClasses:      config.ActualServiceClasses,
-		MissingActualServiceClass: config.MissingActualServiceClass,
-		AllowedExtensions:         allowed,
-		ExpectedBaseURL:           baseURL,
-		ExpectedModel:             model,
+		// The developer role is not accepted by every API version or
+		// compatible server; system is.
+		ApplicationInstructionRole: "system",
+		ID:                         config.ID,
+		CapabilityVersion:          config.CapabilityVersion,
+		Capabilities:               config.Capabilities,
+		ServiceTiers:               config.ServiceTiers,
+		ActualServiceClasses:       config.ActualServiceClasses,
+		MissingActualServiceClass:  config.MissingActualServiceClass,
+		AllowedExtensions:          allowed,
+		ExpectedBaseURL:            baseURL,
+		ExpectedModel:              model,
 		WireDefaults: map[string]json.RawMessage{
 			"extra_body": textBody,
 		},
