@@ -258,3 +258,26 @@ func TestWriteConfigErrorRedactsQuotedInputValues(t *testing.T) {
 		t.Fatalf("writeConfigError() = %q", got)
 	}
 }
+
+func TestConfigCommandsRejectWorkloadIdentityTheBinaryCannotResolve(t *testing.T) {
+	example, err := os.ReadFile(exampleConfigPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := strings.Replace(string(example), "    password:\n      kind: file\n      path: /var/run/secrets/redis-password", "    password:\n      kind: workload_identity\n      audience: redis", 1)
+	if data == string(example) {
+		t.Fatal("example Redis password reference not found")
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range []string{"validate-config", "worker"} {
+		var output, errorsOut bytes.Buffer
+		code := Execute(context.Background(), []string{command, "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut,
+			RunWorker: func(context.Context, []byte, io.Writer) error { return nil }})
+		if code != 1 || !strings.Contains(errorsOut.String(), "state.redis.password uses workload_identity") {
+			t.Fatalf("%s code=%d error=%q", command, code, errorsOut.String())
+		}
+	}
+}

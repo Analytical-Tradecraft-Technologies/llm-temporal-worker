@@ -13,6 +13,10 @@ Secret values are referenced with typed `env`, `file`, or workload-identity
 configuration. Those references are resolved by the production worker during
 runtime construction, while `validate-config` and
 `print-effective-config` only parse and canonicalize the non-secret document.
+`workload_identity` secret references and endpoint auth are available to
+embeddings that supply a workload identity provider; the worker binary does
+not, so its `validate-config`, `print-effective-config` and `worker` commands
+reject them.
 The effective non-secret configuration is canonicalized and hashed as
 `config_version`.
 

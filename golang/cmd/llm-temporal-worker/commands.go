@@ -192,6 +192,10 @@ func executeConfigCommand(ctx context.Context, args []string, options CommandOpt
 		writeConfigError(options.ErrOut, err)
 		return 1
 	}
+	if err := unsupportedByWorkerBinary(snapshot); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
 	if printEffective {
 		_, _ = options.Out.Write(snapshot.Canonical())
 		_, _ = io.WriteString(options.Out, "\n")
@@ -213,8 +217,13 @@ func executeWorkerCommand(ctx context.Context, args []string, options CommandOpt
 		writeCommandError(options.ErrOut, err)
 		return 1
 	}
-	if _, err := config.Compile(ctx, data, options.Resolver); err != nil {
+	snapshot, err := config.Compile(ctx, data, options.Resolver)
+	if err != nil {
 		writeConfigError(options.ErrOut, err)
+		return 1
+	}
+	if err := unsupportedByWorkerBinary(snapshot); err != nil {
+		writeCommandError(options.ErrOut, err)
 		return 1
 	}
 	if options.RunWorkerFile == nil && options.RunWorker == nil {
@@ -335,6 +344,16 @@ func writeConfigError(output io.Writer, err error) {
 		return
 	}
 	_, _ = fmt.Fprintf(output, "%s\n", message)
+}
+
+// unsupportedByWorkerBinary rejects configuration that the generic loader
+// accepts for embeddings but this worker binary cannot run, so validate-config
+// fails where the worker would fail at startup.
+func unsupportedByWorkerBinary(snapshot *config.Snapshot) error {
+	if paths := snapshot.Config().WorkloadIdentityPaths(); len(paths) > 0 {
+		return diagnostic.Safe(fmt.Sprintf("%s uses workload_identity, which this worker binary does not support", paths[0]), nil)
+	}
+	return nil
 }
 
 func writeUsage(output io.Writer) {
