@@ -152,6 +152,7 @@ for source in \
   "$module_root/deploy/kubernetes/base" \
   "$module_root/deploy/kubernetes/examples/aws-workload-identity" \
   "$module_root/deploy/kubernetes/examples/azure-workload-identity" \
+  "$module_root/deploy/kubernetes/examples/private-state-egress" \
   "$module_root/deploy/kubernetes/examples/redis-tls"; do
   rendered="$temporary/$(basename "$source").yaml"
   kubectl kustomize "$source" >"$rendered"
