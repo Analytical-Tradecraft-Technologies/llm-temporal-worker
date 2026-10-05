@@ -132,10 +132,20 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 	if request.OperationKey != "" {
 		operationKey := continuationOperationKey{tenant: parent.Tenant, parent: request.Parent, operation: request.OperationKey}
 		if handle, exists := store.byOp[operationKey]; exists {
-			if record, ok := store.records[handle]; ok && !sameChildFacts(record.value, child) {
-				return "", state.ErrConflict
+			record, ok := store.records[handle]
+			if ok && store.clock().Before(record.value.ExpiresAt) {
+				if !sameChildFacts(record.value, child) {
+					return "", state.ErrConflict
+				}
+				return handle, nil
 			}
-			return handle, nil
+			// The indexed child was swept or has expired. Returning its handle
+			// would hand the caller a continuation that Get cannot resolve, so
+			// drop the stale index (and any expired record) and mint a new child.
+			if ok {
+				delete(store.records, handle)
+			}
+			delete(store.byOp, operationKey)
 		}
 	}
 	handle, err := store.keyring.Issue(child.Tenant)
@@ -166,7 +176,13 @@ func (store *ContinuationStore) put(handle state.Handle, continuation state.Cont
 	return store.putLocked(handle, continuation)
 }
 
+// putLocked publishes one record. Every write also performs opportunistic
+// expiry cleanup, mirroring BlobStore, so a development process without an
+// external lifecycle owner does not retain expired continuations forever.
+// Validate has already rejected an expired incoming record, so the sweep can
+// never remove the record being written.
 func (store *ContinuationStore) putLocked(handle state.Handle, continuation state.Continuation) (state.Handle, error) {
+	store.sweepLocked(store.clock())
 	if existing, ok := store.records[handle]; ok {
 		if existing.value.TranscriptDigest == continuation.TranscriptDigest && existing.value.LastOperationID == continuation.LastOperationID {
 			return handle, nil
@@ -177,14 +193,27 @@ func (store *ContinuationStore) putLocked(handle state.Handle, continuation stat
 	return handle, nil
 }
 
+// Sweep removes expired continuations and any operation-index entries that
+// point at removed handles, returning the number of continuations removed.
+// Writes also sweep opportunistically; a lifecycle owner may call Sweep
+// periodically when no traffic is present.
 func (store *ContinuationStore) Sweep(now time.Time) int {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	return store.sweepLocked(now)
+}
+
+func (store *ContinuationStore) sweepLocked(now time.Time) int {
 	removed := 0
 	for handle, record := range store.records {
 		if !now.Before(record.value.ExpiresAt) {
 			delete(store.records, handle)
 			removed++
+		}
+	}
+	for key, handle := range store.byOp {
+		if _, ok := store.records[handle]; !ok {
+			delete(store.byOp, key)
 		}
 	}
 	return removed

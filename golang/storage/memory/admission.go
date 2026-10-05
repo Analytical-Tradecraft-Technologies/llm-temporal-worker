@@ -26,6 +26,17 @@ type AdmissionStore struct {
 	pollAfter   map[string]time.Time
 	byScope     map[string]string
 	buckets     map[budgetKey]map[int64]pricing.MicroUSD
+	// geometry records the widest window seen for each budget key so Sweep
+	// can tell which buckets can no longer contribute to an admission check.
+	geometry map[budgetKey]bucketGeometry
+}
+
+type bucketGeometry struct {
+	bucketNanos   int64
+	durationNanos int64
+	// mixed marks a key seen with more than one bucket width; bucket indexes
+	// are then not comparable, so Sweep leaves that key's buckets alone.
+	mixed bool
 }
 
 type AdmissionOptions struct{ Clock func() time.Time }
@@ -34,7 +45,7 @@ func NewAdmissionStore(options AdmissionOptions) *AdmissionStore {
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
-	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), providerIDs: make(map[string]string), pollAfter: make(map[string]time.Time), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD)}
+	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), providerIDs: make(map[string]string), pollAfter: make(map[string]time.Time), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD), geometry: make(map[budgetKey]bucketGeometry)}
 }
 
 // MarkProviderPending mirrors the durable repository transition used by
@@ -118,6 +129,9 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	// Opportunistic retention cleanup keeps the development store bounded
+	// without a separate lifecycle owner, mirroring the memory blob store.
+	store.sweepLocked(store.clock())
 	if operationID, ok := store.byScope[request.ScopeKey]; ok {
 		operation := store.operations[operationID]
 		if operation.RequestDigest != request.RequestDigest {
@@ -328,6 +342,70 @@ func (store *AdmissionStore) Get(ctx context.Context, id string) (admission.Oper
 	return operation.Clone(), nil
 }
 
+// Sweep reclaims retained admission state and returns the number of
+// operations removed. Only terminal operations whose retention (ExpiresAt) has
+// elapsed are removed, together with their scope, provider-envelope and
+// poll-after entries. Reserved, dispatching and provider-pending operations
+// are never removed, whatever their ExpiresAt, because they still own budget
+// reservations that must be reconciled. Budget buckets are removed only when
+// they have left every admission window recorded for their key and no
+// retained operation still references them.
+func (store *AdmissionStore) Sweep(now time.Time) int {
+	if store == nil {
+		return 0
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.sweepLocked(now)
+}
+
+func (store *AdmissionStore) sweepLocked(now time.Time) int {
+	removed := 0
+	for id, operation := range store.operations {
+		if !operation.State.Terminal() || operation.ExpiresAt.IsZero() || now.Before(operation.ExpiresAt) {
+			continue
+		}
+		delete(store.operations, id)
+		delete(store.providerIDs, id)
+		delete(store.pollAfter, id)
+		if store.byScope[operation.ScopeKey] == id {
+			delete(store.byScope, operation.ScopeKey)
+		}
+		removed++
+	}
+	referenced := make(map[budgetKey]map[int64]struct{})
+	for _, operation := range store.operations {
+		for _, reservation := range operation.Reservations {
+			key := budgetKey{policy: reservation.PolicyID, window: reservation.WindowID}
+			if referenced[key] == nil {
+				referenced[key] = make(map[int64]struct{})
+			}
+			referenced[key][reservation.Bucket] = struct{}{}
+		}
+	}
+	for key, buckets := range store.buckets {
+		geometry, ok := store.geometry[key]
+		if !ok || geometry.mixed {
+			continue
+		}
+		first := floorDiv(now.UnixNano()-geometry.durationNanos, geometry.bucketNanos)
+		for index := range buckets {
+			if index >= first {
+				continue
+			}
+			if _, inUse := referenced[key][index]; inUse {
+				continue
+			}
+			delete(buckets, index)
+		}
+		if len(buckets) == 0 {
+			delete(store.buckets, key)
+			delete(store.geometry, key)
+		}
+	}
+	return removed
+}
+
 func (store *AdmissionStore) loadToken(id, token string) (admission.Operation, error) {
 	operation, ok := store.operations[id]
 	if !ok {
@@ -370,6 +448,18 @@ func (store *AdmissionStore) addReservation(reservation admission.WindowReservat
 		return fmt.Errorf("invalid reservation amount")
 	}
 	key := budgetKey{policy: reservation.PolicyID, window: reservation.WindowID}
+	if reservation.BucketNanos > 0 && reservation.DurationNanos > 0 {
+		geometry := store.geometry[key]
+		if geometry.bucketNanos == 0 {
+			geometry.bucketNanos = reservation.BucketNanos
+		} else if geometry.bucketNanos != reservation.BucketNanos {
+			geometry.mixed = true
+		}
+		if reservation.DurationNanos > geometry.durationNanos {
+			geometry.durationNanos = reservation.DurationNanos
+		}
+		store.geometry[key] = geometry
+	}
 	if store.buckets[key] == nil {
 		store.buckets[key] = make(map[int64]pricing.MicroUSD)
 	}
