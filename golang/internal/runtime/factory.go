@@ -1420,12 +1420,25 @@ func defaultRedisFactory(_ context.Context, value config.RedisConfig, username, 
 	return redis.NewUniversalClient(&redis.UniversalOptions{Addrs: append([]string(nil), value.Addresses...), Username: username, Password: password, DialTimeout: time.Duration(value.DialTimeout), ReadTimeout: time.Duration(value.OperationTimeout), WriteTimeout: time.Duration(value.OperationTimeout), PoolSize: value.MaxConnections, MaxRetries: -1, TLSConfig: tlsConfig}), nil
 }
 
+// blobMaxBytes bounds one blob in the shared request/result store. Results
+// are complete serialized responses, so the input request limit alone would
+// reject a valid response larger than the request that produced it. Allow the
+// larger of the request limit and twice the provider response limit, which
+// covers JSON re-encoding (escaping) of a maximal provider body.
+func blobMaxBytes(limits config.LimitsConfig) int64 {
+	response := limits.ProviderResponseBytes
+	if response <= 0 {
+		response = config.DefaultProviderResponseBytes
+	}
+	return max(int64(limits.RequestBytes), 2*response)
+}
+
 func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, io.Closer, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	if value.BlobStore.Kind == "file" {
-		store, err := fileblob.New(fileblob.Options{Root: value.BlobStore.File.Root, MaxBytes: int64(value.Limits.RequestBytes)})
+		store, err := fileblob.New(fileblob.Options{Root: value.BlobStore.File.Root, MaxBytes: blobMaxBytes(value.Limits)})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1439,7 +1452,7 @@ func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, i
 		return nil, nil, err
 	}
 	client := s3.NewFromConfig(awsValue)
-	store, err := s3blob.New(s3blob.Options{Client: client, Bucket: value.BlobStore.S3.Bucket, Prefix: value.BlobStore.S3.Prefix, MaxBytes: int64(value.Limits.RequestBytes)})
+	store, err := s3blob.New(s3blob.Options{Client: client, Bucket: value.BlobStore.S3.Bucket, Prefix: value.BlobStore.S3.Prefix, MaxBytes: blobMaxBytes(value.Limits)})
 	if err != nil {
 		return nil, nil, err
 	}
