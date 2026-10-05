@@ -485,6 +485,14 @@ func executionSettlement(execution cloudstate.ProviderExecution) *durable.Reconc
 // errors remain outcome_unknown; they never become a free or immediate retry.
 func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, failure *provider.Error, now time.Time) *cloudstate.ExecutionFailure {
 	result := &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch}
+	if preDispatchContextEnded(failure) {
+		// The worker's own context ended (shutdown or Activity deadline) before
+		// any provider write. Nothing was sent, so this is a zero-cost retryable
+		// failure. RetryNever on the provider error only forbids route fallback
+		// within this attempt; it must not make the request durably terminal.
+		result.Retryable, result.RetryNotBefore = true, now.UTC().Add(time.Second)
+		return result
+	}
 	if failure != nil && failure.Retry.Valid() && failure.Retry != provider.RetryNever {
 		delay := failure.RetryAfter
 		if delay < time.Second {
@@ -496,4 +504,10 @@ func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, f
 		result.Retryable, result.RetryNotBefore = true, now.UTC().Add(delay)
 	}
 	return result
+}
+
+func preDispatchContextEnded(failure *provider.Error) bool {
+	return failure != nil && failure.Dispatch == provider.DispatchNotDispatched &&
+		(failure.Code == provider.CodeCanceled || failure.Code == provider.CodeDeadlineExceeded) &&
+		errors.Is(failure, provider.ErrProviderPreDispatch)
 }

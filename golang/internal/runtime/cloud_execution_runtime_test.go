@@ -685,3 +685,44 @@ func TestCloudExecutionRuntimeIndependentSamples(t *testing.T) {
 		})
 	}
 }
+
+func TestCloudExecutionRuntimePreDispatchContextEndIsRetryable(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			f := boundedCloud(t, false)
+			original := f.adapter.invoke
+			f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+				f.submits.Add(1)
+				return provider.Result{}, provider.NewPreDispatchContextError(cause)
+			}
+			v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
+			boundedState(t, v, err, llm.ExecutionFailed)
+			if !v.Retryable {
+				t.Fatalf("pre-dispatch %v became a permanent failure: %#v", cause, v)
+			}
+			f.adapter.invoke = original
+			ctx := context.Background()
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			f.now = f.now.Add(2 * time.Second)
+			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			boundedState(t, v, err, llm.ExecutionAcquired)
+			v, err = f.runtime.GenerateStepV1(ctx, f.request)
+			boundedState(t, v, err, llm.ExecutionProviderCompleted)
+			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+			boundedState(t, v, err, llm.ExecutionCompleted)
+		})
+	}
+}
+
+func TestCloudExecutionRuntimeRejectedDispatchStaysPermanent(t *testing.T) {
+	f := boundedCloud(t, false)
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		f.submits.Add(1)
+		return provider.Result{}, provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "canceled without pre-dispatch evidence")
+	}
+	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	if v.Retryable {
+		t.Fatal("cancellation without pre-dispatch evidence became retryable")
+	}
+}
