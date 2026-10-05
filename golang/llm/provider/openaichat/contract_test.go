@@ -146,7 +146,7 @@ func TestInvokeSubmitsExactlyOnceAndLiftsResponse(t *testing.T) {
 	responseBody := `{"id":"chatcmpl-1","object":"chat.completion","created":1700000000,"model":"chat-model","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"done","refusal":""}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`
 	calls := 0
 	client, err := NewClient(ClientConfig{
-		BaseURL: "http://127.0.0.1/contract",
+		BaseURL: "https://127.0.0.1/contract",
 		APIKey:  "test-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++

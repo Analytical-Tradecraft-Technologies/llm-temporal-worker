@@ -14,3 +14,18 @@ func TestBaseURLRejectsUnsafeForms(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopbackHTTPOnlyMatchesPlainHTTPLoopback(t *testing.T) {
+	for value, want := range map[string]bool{
+		"http://127.0.0.1:8080/v1/": true,
+		"http://localhost/v1/":      true,
+		"http://[::1]:8080/":        true,
+		"https://127.0.0.1/v1/":     false,
+		"https://api.openai.com/":   false,
+		"http://example.com/":       false,
+	} {
+		if got := LoopbackHTTP(value); got != want {
+			t.Errorf("LoopbackHTTP(%q) = %v, want %v", value, got, want)
+		}
+	}
+}

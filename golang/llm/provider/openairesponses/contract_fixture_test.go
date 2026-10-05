@@ -332,7 +332,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 	var got *http.Request
 	var calls int
 	client, err := NewClient(ClientConfig{
-		BaseURL: "http://127.0.0.1/v1",
+		BaseURL: "https://127.0.0.1/v1",
 		APIKey:  "fixture-openai-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++

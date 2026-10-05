@@ -20,7 +20,7 @@ type RetryServer struct {
 func NewRetryServer(t testing.TB) *RetryServer {
 	t.Helper()
 	server := &RetryServer{}
-	server.URL = "http://127.0.0.1/contract"
+	server.URL = "https://127.0.0.1/contract"
 	server.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		server.Calls.Add(1)
 		return &http.Response{
