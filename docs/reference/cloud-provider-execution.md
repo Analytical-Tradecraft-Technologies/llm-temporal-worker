@@ -53,6 +53,17 @@ keeps the conservative charge. Only an explicitly classified rejection or
 pre-dispatch failure has known zero cost. Provider errors persist safe enums,
 not diagnostic causes or arbitrary provider error text.
 
+A response that arrived in full but could not be lifted is an accepted
+`provider_invalid_response`. Tool-call arguments with a duplicate JSON key are
+one example; every adapter rejects them while lifting. The attempt is a terminal
+failure settled at the conservative charge. It is not `outcome_unknown`, so it
+does not wait for the recovery time or lead to another submission.
+
+A saved terminal result is immutable; only its settlement acknowledgement may
+follow. Results are compared in canonical JSON form, so the key order a provider
+used in tool-call arguments is not a different result. Callers receive the
+canonical, key-sorted arguments held in the saved response.
+
 Provider calls have a five-minute bound. Saving an execution revision and
 settlement each have a separate bound even if the activity context has ended.
 One save attempt has ten seconds. A transient storage failure is retried in

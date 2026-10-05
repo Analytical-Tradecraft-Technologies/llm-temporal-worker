@@ -204,7 +204,9 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 		if strings.TrimSpace(arguments) == "" && choice.FinishReason != "length" {
 			arguments = "{}"
 		}
-		if !json.Valid([]byte(arguments)) {
+		// encoding/json accepts duplicate keys but a normalized tool call does
+		// not, so arguments must also be canonicalizable.
+		if _, err := llm.CanonicalJSON([]byte(arguments)); err != nil {
 			// The output limit can cut a call off mid-arguments. Keep the paid
 			// response as a length truncation and drop only the incomplete call.
 			if choice.FinishReason == "length" {

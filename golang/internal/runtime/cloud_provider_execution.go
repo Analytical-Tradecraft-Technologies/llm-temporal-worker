@@ -322,7 +322,9 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 	if callErr == nil {
 		callErr = outcome.ValidateForCall(call)
 		if callErr == nil && outcome.State == provider.ResumableCompleted {
-			_, callErr = outcome.Result.Response.MarshalJSON()
+			if _, err := outcome.Result.Response.MarshalJSON(); err != nil {
+				callErr = provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider response cannot be saved")
+			}
 		}
 		if saved.Execution.ProviderOperationID != "" && outcome.State != provider.ResumableNotFound && outcome.ProviderOperationID != saved.Execution.ProviderOperationID {
 			callErr = executionError(provider.CodeProviderInvalidResponse)
@@ -335,7 +337,10 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		next.Stage = cloudstate.ExecutionUnknown
 		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		var classified *provider.Error
-		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched) {
+		// A one-shot Invoke always reports a completed outcome. A resumable
+		// submission that failed may still have a running job to recover.
+		received := outcome.State == provider.ResumableCompleted
+		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched || (received && acceptedInvalidResponse(classified))) {
 			next.Stage = cloudstate.ExecutionFailed
 			next.Failure = executionFailure(classified.Code, classified.Dispatch, classified, executor.clock())
 		}
@@ -688,6 +693,15 @@ func executionSettlement(execution cloudstate.ProviderExecution) *durable.Reconc
 		result.Events = append(result.Events, event)
 	}
 	return result
+}
+
+// A response that was received in full and then rejected while lifting has a
+// certain outcome: the provider did the work and its output is unusable. It is
+// a terminal failure accounted at the reservation, never an unknown outcome
+// that stalls and then buys a second provider call.
+func acceptedInvalidResponse(failure *provider.Error) bool {
+	return failure.Code == provider.CodeProviderInvalidResponse && failure.Phase == provider.PhaseLift &&
+		failure.Dispatch == provider.DispatchAccepted && failure.Retry == provider.RetryNever
 }
 
 // Only a valid provider retry classification can authorize a new attempt. Raw
