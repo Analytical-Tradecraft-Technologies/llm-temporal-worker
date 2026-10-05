@@ -42,7 +42,7 @@ type BudgetRequest struct {
 // Acquisition may find a cached response or an already dispatched attempt; such
 // results go straight back to the request workflow without a second submission.
 func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResultV1, error) {
-	if _, err := input.Reference.MarshalJSON(); err != nil || (input.Kind != "generate" && input.Kind != "compact") {
+	if _, err := input.Reference.MarshalJSON(); err != nil || (input.Kind != "generate" && input.Kind != "compact") || input.Waits < 0 {
 		return llm.ExecutionResultV1{}, invalidState()
 	}
 	ctx = executionContext(ctx)
@@ -176,7 +176,7 @@ func executionContext(ctx workflow.Context) workflow.Context {
 // otherwise poll the acquire Activity once per second per waiting request.
 func budgetBackoff(result llm.ExecutionResultV1, waits int) time.Duration {
 	backoff := maxBudgetBackoff
-	if waits < 16 {
+	if waits >= 0 && waits < 16 {
 		backoff = min(time.Second<<waits, maxBudgetBackoff)
 	}
 	return max(time.Duration(result.RetryAfterSeconds)*time.Second, backoff)

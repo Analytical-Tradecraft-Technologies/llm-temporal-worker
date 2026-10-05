@@ -327,3 +327,14 @@ func TestBudgetBackoffHonoursLongerHintAndCarriedWaits(t *testing.T) {
 		t.Fatalf("capped backoff = %v", got)
 	}
 }
+
+func TestBudgetWorkflowRejectsNegativeWaits(t *testing.T) {
+	f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait))
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate", Waits: -1})
+	if f.env.GetWorkflowError() == nil {
+		t.Fatal("negative denial count accepted")
+	}
+	if got := budgetBackoff(llm.ExecutionResultV1{}, -1); got != maxBudgetBackoff {
+		t.Fatalf("negative waits backoff = %v", got)
+	}
+}
