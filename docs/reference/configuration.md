@@ -760,13 +760,22 @@ exact or prefix restriction.
 version: llmtw-prices/v1
 id: catalog-2026-07-13
 entries:
-  - endpoint_family: openai_responses
+  - provider: openai
+    endpoint_id: openai-prod
+    endpoint_family: openai_responses
+    region: global
     model: gpt-example-2026-07-01
     provider_tier: default
     effective_from: 2026-07-13T00:00:00Z
     input_per_million: "1.250000"
     output_per_million: "10.000000"
     cache_read_per_million: "0.125000"
+    # Every estimate charges cache writes and one request unit. Write an
+    # explicit "0" for a component the provider does not bill; an omitted
+    # component is unknown, and the route can then never be selected.
+    cache_write_per_million: "0"
+    reasoning_per_million: "0"
+    per_request: "0"
     source: operator-verified
 ```
 
