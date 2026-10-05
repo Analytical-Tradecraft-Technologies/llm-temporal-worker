@@ -1233,3 +1233,91 @@ func TestRuntimeToleratesTransientDependencyProbeFailuresBeforePausing(t *testin
 	// Pause drains the worker controller asynchronously.
 	waitForRuntime(t, func() bool { return controller.stops.Load() >= 1 && !runtime.Health.Ready() })
 }
+
+// sdkLikeMonitoringWorker models the Temporal SDK worker's Stop as composed by
+// the runtime: it waits for its one in-flight Activity up to the
+// WorkerStopTimeout it was built with and otherwise gives up, which is when the
+// SDK cancels every Activity context.
+type sdkLikeMonitoringWorker struct {
+	options      worker.Options
+	activityDone chan struct{}
+	stopEntered  chan struct{}
+	starts       atomic.Int32
+	abandoned    atomic.Bool
+	completed    atomic.Bool
+}
+
+func (w *sdkLikeMonitoringWorker) Start() error {
+	w.starts.Add(1)
+	return nil
+}
+
+func (w *sdkLikeMonitoringWorker) Stop() {
+	select {
+	case w.stopEntered <- struct{}{}:
+	default:
+	}
+	ctx := w.options.BackgroundActivityContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(w.options.WorkerStopTimeout)
+	defer timer.Stop()
+	select {
+	case <-w.activityDone:
+		w.completed.Store(ctx.Err() == nil)
+	case <-ctx.Done():
+	case <-timer.C:
+		w.abandoned.Store(true)
+	}
+}
+
+func TestRuntimeDependencyPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(t *testing.T) {
+	const graceful = 50 * time.Millisecond
+	probe := &mutableRuntimeProbe{}
+	probe.healthy.Store(true)
+	first := &sdkLikeMonitoringWorker{activityDone: make(chan struct{}), stopEntered: make(chan struct{}, 1)}
+	replacement := &monitoringWorker{}
+	var built atomic.Int32
+	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
+	options.WorkerFactory = func(_ client.Client, _ string, workerOptions worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+		if built.Add(1) == 1 {
+			first.options = workerOptions
+			return first, &testRegistry{}, nil
+		}
+		return replacement, &testRegistry{}, nil
+	}
+	options.DependencyProbes = []DependencyProbe{probe}
+	configuration := strings.Replace(string(runtimeMonitorConfig(t)), "graceful_stop_timeout: 30s", "graceful_stop_timeout: "+graceful.String(), 1)
+	runtime, err := New(context.Background(), []byte(configuration), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+
+	probe.healthy.Store(false)
+	waitForRuntimeEvent(t, first.stopEntered, "dependency pause drain")
+	probe.healthy.Store(true)
+	// The in-flight provider call needs several graceful stop windows.
+	time.Sleep(5 * graceful)
+	if first.abandoned.Load() {
+		t.Fatal("dependency pause gave up on the in-flight Activity after the graceful stop timeout")
+	}
+	if first.options.BackgroundActivityContext != nil && first.options.BackgroundActivityContext.Err() != nil {
+		t.Fatalf("dependency pause cancelled the in-flight Activity: %v", context.Cause(first.options.BackgroundActivityContext))
+	}
+	if replacement.starts.Load() != 0 {
+		t.Fatal("replacement poller started while the in-flight Activity was still running")
+	}
+	close(first.activityDone)
+	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() == 1 })
+	if !first.completed.Load() {
+		t.Fatal("in-flight Activity did not complete under a live context")
+	}
+}
