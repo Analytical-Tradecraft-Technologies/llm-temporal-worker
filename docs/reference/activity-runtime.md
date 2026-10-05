@@ -95,7 +95,10 @@ request kind, and one closed state:
 
 Only the three waiting states include `retry_after_seconds`, bounded to 1–86400.
 A failed result has `provider_error`, `provider_rejected`, or `incomplete_response`
-as its failure code. Retrying failed or unknown paid work requires a separate
+as its failure code. `incomplete_response` means the provider was paid but its
+response cannot be published: an invalid compaction summary, or Generate output
+that cannot extend the transcript.
+Retrying failed or unknown paid work requires a separate
 attempt and fresh budget; `retryable` never authorizes reusing its reservation.
 Completion includes exactly one response matching the request kind. All other
 states exclude response bodies. Provider job IDs, raw errors, and Redis lease
