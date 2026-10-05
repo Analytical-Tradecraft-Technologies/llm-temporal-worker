@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"time"
 
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -127,6 +129,11 @@ func (r *CloudExecutionRuntime) finishUnknownFill(ctx context.Context, p Prepare
 	// the next child after expiry; started fills require this stable receipt.
 	decision, err := r.capabilities.ResponseFills.Acquire(ctx, *lease)
 	if err != nil {
+		// The expired lease is fenced once another attempt took the fill over
+		// and ended it. That fill is no longer this attempt's to finish.
+		if other := decision.Record.Lease.Attempt; errors.Is(err, contracts.ErrConflict) && other != "" && other != lease.Attempt {
+			return nil
+		}
 		return cloudRuntimeError(err, false)
 	}
 	if decision.Record.Lease.Attempt != lease.Attempt {

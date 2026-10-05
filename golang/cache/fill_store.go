@@ -78,7 +78,8 @@ type FillDecision struct {
 type FillRepository interface {
 	// Acquire may take over an expired HELD lease, since Start then fences the
 	// previous owner. STARTED work never expires: it requires explicit recovery.
-	// Retry unknown writes with the identical proposed lease.
+	// Retry unknown writes with the identical proposed lease. A lease fenced
+	// by another attempt's record conflicts and returns that record.
 	Acquire(context.Context, FillLease) (FillDecision, error)
 	// Start returns true ONLY to the call that commits held -> started with a
 	// definite acknowledgement. Only that invocation may dispatch (after Redis

@@ -39,8 +39,16 @@ times. Times come from a trusted worker clock. IDs are not authorization.
 | Held, unexpired | Same attempt retains ownership; another attempt waits. |
 | Held, expired | A newer attempt may replace it conditionally, fencing the old owner. |
 | Started | Recovery required; expiry never permits takeover. |
-| Released | Only an unstarted owner may release; a newer attempt can acquire. |
-| Finished | The resolved attempt is immutable; a newer attempt can acquire. |
+| Released | Only an unstarted owner may release; another unexpired attempt can acquire. |
+| Finished | The resolved attempt is immutable; another unexpired attempt can acquire. |
+
+An attempt can replace a released or finished record when its own lease had
+not expired at that record's terminal time. This includes a waiter created
+before the owner ended without publishing: it owns the next fill on its next
+acquisition, not after its attempt is renewed. A lease that had already
+expired by then conflicts, and the conflict returns the current record. That
+fences an owner whose held lease was taken over, because its successor can
+only have acquired, and so ended, after the old lease expired.
 
 The pre-dispatch lease is bounded at 15 minutes. It is distinct from the Redis
 budget reservation and does not extend that reservation's deadline. There is

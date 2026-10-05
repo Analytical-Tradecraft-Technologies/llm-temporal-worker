@@ -249,8 +249,11 @@ Before any budget claim or provider submission, the winning durable execution
 fence starts the cache fill. Losing the start acknowledgement cannot authorize
 another submission. After the 15-minute recovery interval an explicit acquire
 step can replace an unknown attempt with a separately charged child; the old
-child remains discoverable. An unused attempt can also expire before its quote
-was written, and is safely replaced without contacting a provider.
+child remains discoverable. If another request took over and ended the unknown
+attempt's unstarted fill, that fill needs no completion and the replacement
+proceeds, consuming a published response. An unused attempt can also expire
+before its quote was written, and is safely replaced without contacting a
+provider.
 
 Cache fingerprints cover the complete normalized semantic request, route,
 configuration, capability/compiler versions and request index. Compaction also
