@@ -12,6 +12,7 @@
 *.crt
 secrets/
 tmp/
+.local/
 
 # Build/test output.
 bin/

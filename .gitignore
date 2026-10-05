@@ -45,3 +45,6 @@ release-artifacts/
 
 # OCaml/Dune build artifacts
 _build/
+
+# Local runtime secrets such as the compose continuation HMAC key.
+golang/.local/
