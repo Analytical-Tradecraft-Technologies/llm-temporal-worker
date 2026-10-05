@@ -33,6 +33,8 @@ type boundedCloudFixture struct {
 	request        llm.GenerateRequestV1
 	adapter        *executionAsyncAdapter
 	submits, polls atomic.Int32
+	table          *executionMemoryTable
+	blobs          *executionMemoryBlobs
 }
 
 func boundedCloud(t *testing.T, async bool, configure ...func(*budgetPlanningFixture)) *boundedCloudFixture {
@@ -48,6 +50,7 @@ func boundedCloud(t *testing.T, async bool, configure ...func(*budgetPlanningFix
 	f.request = b.gen
 	table := &executionMemoryTable{rows: map[kv.KeyValueKey]kv.KeyValueRecord{}}
 	blobs := &executionMemoryBlobs{values: map[blob.BlobKey][]byte{}}
+	f.table, f.blobs = table, blobs
 	var err error
 	f.repository, err = cloudstate.NewRepository(cloudstate.Options{Table: table, Blobs: blobs, Namespace: "runtime-test", Secret: bytes.Repeat([]byte{7}, 32)})
 	if err != nil {

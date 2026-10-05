@@ -43,8 +43,28 @@ keeps the conservative charge. Only an explicitly classified rejection or
 pre-dispatch failure has known zero cost. Provider errors persist safe enums,
 not diagnostic causes or arbitrary provider error text.
 
-Provider calls have a five-minute bound; saving paid outcomes and settlement
-each have a separate ten-second bound even if the activity context has ended.
+Provider calls have a five-minute bound. Saving an execution revision and
+settlement each have a separate bound even if the activity context has ended.
+One save attempt has ten seconds. A transient storage failure is retried in
+process, with the identical revision, after 200 ms, 1 s and 3 s while a
+30-second total remains, because a provider result exists only in memory until
+it is saved. A retry is a compare-and-set of the same content and never calls
+the provider. If a retry finds a conflict, the attempt is reloaded; when the
+stored revision is this same result, an earlier write was applied without an
+acknowledgement and the save has succeeded. Any other conflict, and a failure
+that outlasts the retries, is returned to the Activity as before: the saved
+state stays `submitting`, and recovery follows the interrupted-submission rules
+above without another submission.
+
+If the pre-HTTP save of the submitting state still fails after those retries,
+the adapter is refused before it can write, so nothing was sent. The attempt is
+then saved as a retryable `not_dispatched` failure and its consumed claim is
+settled at zero cost, instead of waiting for the recovery time. This applies
+only when the saved state is the untouched claiming record or this caller's own
+unacknowledged marker; otherwise the error is returned unchanged. A lost reply
+to the Redis claim or to the initial attempt record remains ambiguous and still
+waits for the recovery time.
+
 No cancellation API or background cleanup process is introduced here.
 
 ## Calls without reservations

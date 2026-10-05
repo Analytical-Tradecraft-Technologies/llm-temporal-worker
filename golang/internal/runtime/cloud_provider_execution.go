@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -33,7 +34,17 @@ type CloudProviderExecution struct {
 	store          CloudProviderExecutionStore
 	admission      *CloudBudgetAdmission
 	clock          func() time.Time
+	saveBackoff    []time.Duration
 }
+
+// One execution save may take executionSaveAttemptTimeout. A failed save is
+// retried after each executionSaveBackoff delay while executionSaveBudget lasts.
+const (
+	executionSaveAttemptTimeout = 10 * time.Second
+	executionSaveBudget         = 30 * time.Second
+)
+
+var executionSaveBackoff = []time.Duration{200 * time.Millisecond, time.Second, 3 * time.Second}
 
 // ProviderExecutionResult is internal runtime state, not a Temporal payload.
 // Workflow-facing payloads use only the internal request ID and safe status.
@@ -55,7 +66,7 @@ func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.
 	if clock == nil {
 		clock = time.Now
 	}
-	return &CloudProviderExecution{statusRecorder: capabilities.ProviderStatusRecorder, store: store, admission: admission, clock: clock}, nil
+	return &CloudProviderExecution{statusRecorder: capabilities.ProviderStatusRecorder, store: store, admission: admission, clock: clock, saveBackoff: executionSaveBackoff}, nil
 }
 
 // Submit accepts only a prepared local call and its accepted reservation. The
@@ -124,10 +135,20 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		result, err = call.provider.Adapter.Invoke(callCtx, call.provider.Call, observer)
 		outcome = provider.ResumableResult{State: provider.ResumableCompleted, Dispatch: provider.DispatchAccepted, Result: result}
 	}
-	if observer.saveErr != nil {
-		return ProviderExecutionResult{}, cloudRuntimeError(observer.saveErr, true)
-	}
 	saved = observer.saved
+	if observer.saveErr != nil {
+		// The observer refused the possible-write boundary and never marked it,
+		// so the adapter was not allowed to send anything. Settle the consumed
+		// claim as a zero-cost retryable failure instead of leaving the attempt
+		// in claiming/submitting until RecoverAfter. The refused save may still
+		// have been applied, so continue from whichever revision is durable.
+		current, ok := executor.refusedDispatch(ctx, call.scope, call.id, saved)
+		if !ok {
+			return ProviderExecutionResult{}, cloudRuntimeError(observer.saveErr, true)
+		}
+		saved = current
+		err = provider.NewError(provider.CodeStateUnavailable, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetrySameOperation, "provider execution not dispatched")
+	}
 	// A preflight failure may precede the observer. Retain the fresh claim so
 	// an explicitly proven pre-dispatch failure can be settled without another
 	// HTTP call. A successful adapter must have crossed the durable boundary.
@@ -147,7 +168,11 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		copy.Retry = provider.RetryNever
 		err = &copy
 	}
-	return executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, outcome, err, false)
+	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, outcome, err, false)
+	if err != nil && observer.saveErr != nil {
+		return ProviderExecutionResult{}, cloudRuntimeError(observer.saveErr, true)
+	}
+	return result, err
 }
 
 // Resume reconstructs the same saved provider call using original input. It
@@ -357,14 +382,50 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 	return executor.settle(ctx, scope, id, result.Saved)
 }
 
+// refusedDispatch loads the durable state left by a failed pre-HTTP marker
+// save: either the untouched claiming record or this caller's own applied
+// marker. Anything else was advanced elsewhere and is left to Resume.
+func (executor *CloudProviderExecution) refusedDispatch(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (cloudstate.SavedProviderExecution, bool) {
+	loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), executionSaveAttemptTimeout)
+	defer cancel()
+	current, err := executor.store.LoadProviderExecution(loadCtx, scope, id)
+	if err != nil || current.Execution.StartToken != saved.Execution.StartToken {
+		return cloudstate.SavedProviderExecution{}, false
+	}
+	untouched := current.Execution.Revision == saved.Execution.Revision && current.Execution.Stage == cloudstate.ExecutionClaiming
+	marker := current.Execution.Revision == saved.Execution.Revision+1 && current.Execution.Stage == cloudstate.ExecutionSubmitting
+	return current, untouched || marker
+}
+
+// save writes one revision. A provider outcome exists only in memory, so a
+// transient storage failure is retried with the identical revision under a
+// bounded context detached from the Activity. A retry is a compare-and-set of
+// the same content: it cannot dispatch, and it treats an earlier attempt whose
+// acknowledgement was lost as success.
 func (executor *CloudProviderExecution) save(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution) (ProviderExecutionResult, error) {
 	next.Revision = saved.Execution.Revision + 1
 	if now := executor.clock().UTC(); now.After(next.UpdatedAt) {
 		next.UpdatedAt = now
 	}
-	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), executionSaveBudget)
 	defer cancel()
-	if err := executor.store.SaveProviderExecution(finalCtx, scope, id, saved.Execution.Revision, next); err != nil {
+	err := executor.saveOnce(finalCtx, scope, id, saved.Execution.Revision, next, false)
+	for _, delay := range executor.saveBackoff {
+		if err == nil || !retryableExecutionSave(err) {
+			break
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-finalCtx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if finalCtx.Err() != nil {
+			break
+		}
+		err = executor.saveOnce(finalCtx, scope, id, saved.Execution.Revision, next, true)
+	}
+	if err != nil {
 		// Concurrent polls or settlement acknowledgements may advance this same
 		// execution. Retry observation through the durable fence; this is not a
 		// conflicting public request. The pre-HTTP write must still fail closed.
@@ -375,6 +436,55 @@ func (executor *CloudProviderExecution) save(ctx context.Context, scope cloudsta
 	}
 	saved.Execution = next
 	return executor.result(saved), nil
+}
+
+func (executor *CloudProviderExecution) saveOnce(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, previous uint64, next cloudstate.ProviderExecution, retried bool) error {
+	attemptCtx, cancel := context.WithTimeout(ctx, executionSaveAttemptTimeout)
+	defer cancel()
+	err := executor.store.SaveProviderExecution(attemptCtx, scope, id, previous, next)
+	if !retried || !errors.Is(err, contracts.ErrConflict) {
+		return err
+	}
+	// An earlier attempt may have been applied without an acknowledgement.
+	// Stored progress is re-encoded, so compare canonical forms after a reload
+	// rather than relying on the repository's byte comparison.
+	current, loadErr := executor.store.LoadProviderExecution(attemptCtx, scope, id)
+	if loadErr != nil {
+		return loadErr
+	}
+	if sameExecution(current.Execution, next) {
+		return nil
+	}
+	return err
+}
+
+func retryableExecutionSave(err error) bool {
+	for _, permanent := range []error{contracts.ErrConflict, contracts.ErrNotFound, cloudstate.ErrInvalid, cloudstate.ErrCorrupt, cloudstate.ErrProviderExecutionMissing, cloudstate.ErrBudgetPlanMissing} {
+		if errors.Is(err, permanent) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameExecution(left, right cloudstate.ProviderExecution) bool {
+	canonical := func(execution cloudstate.ProviderExecution) []byte {
+		data, err := json.Marshal(execution)
+		if err != nil {
+			return nil
+		}
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		var tree any
+		if decoder.Decode(&tree) != nil {
+			return nil
+		}
+		// Encoding a decoded tree sorts every object's keys.
+		data, _ = json.Marshal(tree)
+		return data
+	}
+	l, r := canonical(left), canonical(right)
+	return l != nil && bytes.Equal(l, r)
 }
 
 func (executor *CloudProviderExecution) settle(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {
