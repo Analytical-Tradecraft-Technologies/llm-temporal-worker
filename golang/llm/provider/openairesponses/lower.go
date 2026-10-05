@@ -124,15 +124,18 @@ func lowerInstruction(instruction llm.Instruction) (map[string]any, error) {
 func lowerItem(item llm.Item) (map[string]any, error) {
 	switch value := item.(type) {
 	case llm.Message:
-		role := "user"
 		if value.Actor == llm.ActorModel {
-			role = "assistant"
+			content, err := lowerModelParts(value.Content)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"type": "message", "role": "assistant", "content": content}, nil
 		}
 		content, err := lowerParts(value.Content)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"type": "message", "role": role, "content": content}, nil
+		return map[string]any{"type": "message", "role": "user", "content": content}, nil
 	case llm.ToolCall:
 		if !json.Valid(value.Arguments) {
 			return nil, fmt.Errorf("tool call %q arguments are invalid JSON", value.ID)
@@ -167,6 +170,28 @@ func lowerParts(parts []llm.Part) ([]any, error) {
 			return nil, fmt.Errorf("part %d: %w", index, err)
 		}
 		content = append(content, lowered)
+	}
+	return content, nil
+}
+
+// lowerModelParts lowers replayed assistant content. Responses accepts only
+// output_text and refusal content on assistant messages.
+func lowerModelParts(parts []llm.Part) ([]any, error) {
+	content := make([]any, 0, len(parts))
+	for index, part := range parts {
+		switch value := part.(type) {
+		case llm.TextPart:
+			content = append(content, map[string]any{"type": "output_text", "text": value.Text, "annotations": []any{}})
+		case llm.JSONPart:
+			if !json.Valid(value.Value) {
+				return nil, fmt.Errorf("part %d: JSON part is invalid", index)
+			}
+			content = append(content, map[string]any{"type": "output_text", "text": string(value.Value), "annotations": []any{}})
+		case llm.RefusalPart:
+			content = append(content, map[string]any{"type": "refusal", "refusal": value.Text})
+		default:
+			return nil, fmt.Errorf("part %d: part kind %q is not accepted in Responses assistant history", index, part.PartKind())
+		}
 	}
 	return content, nil
 }
