@@ -90,7 +90,14 @@ never creates that replacement. Unknown paid work retains its separate pending
 record and original claim, as described above.
 
 Permanent provider failures and incomplete compaction results also close the
-public request. The saved, sanitized failure replays after restart without
+public request. So does Generate output that cannot extend the request
+transcript: two tool calls sharing an ID in one response, a tool result without
+a matching call, or other content after tool results have started. The provider
+attempt stays succeeded and settled at its actual cost, its cache fill is
+released without an entry, and the request fails with `incomplete_response` in
+the same step that saved the response.
+
+The saved, sanitized failure replays after restart without
 loading an expired parent or contacting a provider. Authorization still runs
 before replay. Terminal writes repair their pending indexes after uncertain
 acknowledgements, and a stale child cannot close a newer active attempt.
