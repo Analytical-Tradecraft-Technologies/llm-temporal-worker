@@ -1,6 +1,10 @@
 package provider
 
-import "github.com/mfow/llm-temporal-worker/golang/llm"
+import (
+	"encoding/json"
+
+	"github.com/mfow/llm-temporal-worker/golang/llm"
+)
 
 type CompileInput struct {
 	Request    llm.Request
@@ -17,6 +21,10 @@ type Call struct {
 	OperationKey string
 	ServiceClass llm.ServiceClass
 	SDKParams    any
+	// OutputSchema is the caller's json_schema output schema when the adapter
+	// sent the provider a lowered form of it. The lift validates the final
+	// JSON against this original, not against the wire schema.
+	OutputSchema json.RawMessage
 	Metadata     CallMetadata
 }
 

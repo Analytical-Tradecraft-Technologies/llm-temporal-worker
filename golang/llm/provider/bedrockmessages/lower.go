@@ -10,6 +10,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
@@ -52,7 +54,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 			}
 			target["max_tokens"] = *request.Output.MaxTokens
 		}
-		if err := lowerOutput(*request.Output, target); err != nil {
+		if err := lowerOutput(*request.Output, target, strict); err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
 	}
@@ -228,9 +230,23 @@ func lowerPart(part llm.Part) (any, error) {
 	}
 }
 
+// unsupportedMediaError marks media this route cannot carry, so Compile
+// reports an unsupported capability rather than an invalid request.
+type unsupportedMediaError struct {
+	feature provider.Feature
+	message string
+}
+
+func (err *unsupportedMediaError) Error() string { return err.message }
+
 func lowerImage(value llm.ImagePart) (map[string]any, error) {
-	if value.Blob != nil || (value.URL == "" && len(value.Bytes) == 0) {
-		return nil, fmt.Errorf("image requires URL or bytes and cannot use blob-backed media")
+	// Claude on Amazon Bedrock does not support URL sources, and the worker
+	// does not fetch URLs on a caller's behalf.
+	if value.URL != "" {
+		return nil, &unsupportedMediaError{feature: provider.FeatureImage, message: "image URL sources are not supported by Bedrock Messages"}
+	}
+	if value.Blob != nil || len(value.Bytes) == 0 {
+		return nil, fmt.Errorf("image requires bytes and cannot use blob-backed media")
 	}
 	if value.Detail != "" {
 		return nil, fmt.Errorf("image detail %q is not supported by Bedrock Messages", value.Detail)
@@ -240,35 +256,26 @@ func lowerImage(value llm.ImagePart) (map[string]any, error) {
 	default:
 		return nil, fmt.Errorf("image media type %q is not supported by Bedrock Messages", value.MediaType)
 	}
-	source := map[string]any{}
-	if value.URL != "" {
-		source["type"], source["url"] = "url", value.URL
-	} else {
-		source["type"], source["media_type"], source["data"] = "base64", value.MediaType, base64.StdEncoding.EncodeToString(value.Bytes)
-	}
+	source := map[string]any{"type": "base64", "media_type": value.MediaType, "data": base64.StdEncoding.EncodeToString(value.Bytes)}
 	return map[string]any{"type": "image", "source": source}, nil
 }
 
 func lowerDocument(value llm.DocumentPart) (map[string]any, error) {
-	if value.Blob != nil || (value.URL == "" && len(value.Bytes) == 0) {
-		return nil, fmt.Errorf("document requires URL or bytes and cannot use blob-backed media")
+	if value.URL != "" {
+		return nil, &unsupportedMediaError{feature: provider.FeatureDocument, message: "document URL sources are not supported by Bedrock Messages"}
+	}
+	if value.Blob != nil || len(value.Bytes) == 0 {
+		return nil, fmt.Errorf("document requires bytes and cannot use blob-backed media")
 	}
 	mediaType := strings.ToLower(value.MediaType)
 	result := map[string]any{"type": "document"}
-	if value.URL != "" {
-		if mediaType != "application/pdf" {
-			return nil, fmt.Errorf("document URL media type %q is not supported by Bedrock Messages", value.MediaType)
-		}
-		result["source"] = map[string]any{"type": "url", "url": value.URL}
-	} else {
-		switch mediaType {
-		case "application/pdf":
-			result["source"] = map[string]any{"type": "base64", "media_type": mediaType, "data": base64.StdEncoding.EncodeToString(value.Bytes)}
-		case "text/plain":
-			result["source"] = map[string]any{"type": "text", "media_type": value.MediaType, "data": string(value.Bytes)}
-		default:
-			return nil, fmt.Errorf("document media type %q is not supported by Bedrock Messages", value.MediaType)
-		}
+	switch mediaType {
+	case "application/pdf":
+		result["source"] = map[string]any{"type": "base64", "media_type": mediaType, "data": base64.StdEncoding.EncodeToString(value.Bytes)}
+	case "text/plain":
+		result["source"] = map[string]any{"type": "text", "media_type": value.MediaType, "data": string(value.Bytes)}
+	default:
+		return nil, fmt.Errorf("document media type %q is not supported by Bedrock Messages", value.MediaType)
 	}
 	if value.Title != "" {
 		result["title"] = value.Title
@@ -320,7 +327,7 @@ func lowerToolPolicy(policy llm.ToolPolicy) (map[string]any, error) {
 	return choice, nil
 }
 
-func lowerOutput(output llm.OutputSpec, target map[string]any) error {
+func lowerOutput(output llm.OutputSpec, target map[string]any, strict bool) error {
 	switch output.Format.Kind {
 	case "", llm.OutputKindText:
 		return nil
@@ -329,9 +336,12 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 		// not valid and would otherwise constrain the answer to {}.
 		return fmt.Errorf("output format %q without a schema is not supported by Bedrock Messages", output.Format.Kind)
 	case llm.OutputKindJSONSchema:
-		var schema map[string]any
-		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil || schema == nil {
-			return fmt.Errorf("output schema must be an object")
+		// Structured output returns a 400 for keywords outside its subset, so
+		// the wire carries a lowered schema; the lift validates the final
+		// JSON against the caller's original.
+		schema, err := anthropicschema.Lower(output.Format.Schema, strict)
+		if err != nil {
+			return err
 		}
 		target["output_config"] = map[string]any{"format": map[string]any{"type": "json_schema", "schema": schema}}
 		return nil

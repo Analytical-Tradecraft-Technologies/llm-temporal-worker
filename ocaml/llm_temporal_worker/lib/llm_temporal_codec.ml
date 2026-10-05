@@ -1084,7 +1084,7 @@ let validate_request_semantics (request : request) =
     | None -> Ok ()
     | Some { max_tokens; format } ->
         let* () = match max_tokens with None -> Ok () | Some value when value >= 0 -> Ok () | Some _ -> Error (codec_error "request output max_tokens must not be negative") in
-        (match format with Json_schema_format { name; schema; _ } -> let* _ = nonempty "request output schema name" name in validate_unique_json "request output schema" schema | _ -> Ok ())
+        (match format with Json_schema_format { name; schema; _ } -> let* _ = valid_tool_name "request output schema name" name in validate_unique_json "request output schema" schema | _ -> Ok ())
   in
   let* () = match request.reasoning with None -> Ok () | Some { token_budget; _ } -> match token_budget with None -> Ok () | Some value when value >= 0 -> Ok () | Some _ -> Error (codec_error "request reasoning token_budget must not be negative") in
   let* () = match request.sampling with

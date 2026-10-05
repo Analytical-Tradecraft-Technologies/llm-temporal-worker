@@ -272,7 +272,7 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 
 func TestLoweringRejectsSchemalessJSONOutput(t *testing.T) {
 	target := map[string]any{}
-	err := lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target)
+	err := lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target, true)
 	if err == nil || !strings.Contains(err.Error(), "without a schema") || target["output_config"] != nil {
 		t.Fatalf("schema-less JSON output = %v, %#v", err, target)
 	}

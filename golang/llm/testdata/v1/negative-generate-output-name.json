@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"output-name","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"append":[],"settings_patch":{"output":{"set":{"format":{"kind":"json_schema","name":"claim summary","schema":{"type":"object"},"strict":true}}}}}
