@@ -14,15 +14,43 @@ BEGIN {
 	secrets[2] = ENVIRON["LLMTW_LOG_REDACT_POSTGRES_PASSWORD"]
 	secrets[3] = ENVIRON["LLMTW_LOG_REDACT_MOCK_API_KEY"]
 	secrets[4] = ENVIRON["LLMTW_LOG_REDACT_CONTINUATION_HMAC"]
-}
-{
-	for (i = 1; i <= 4; i++) {
-		secret = secrets[i]
-		while (length(secret) && index($0, secret)) {
-			position = index($0, secret)
-			$0 = substr($0, 1, position - 1) "[REDACTED]" substr($0, position + length(secret))
+	# The marker must not itself contain any configured secret, or the
+	# redacted output would still expose it. Fall back to deleting the
+	# secret when every candidate marker contains one.
+	candidates[1] = "[REDACTED]"
+	candidates[2] = "<secret removed>"
+	candidates[3] = "***"
+	candidates[4] = "###"
+	marker = ""
+	for (c = 1; c <= 4 && marker == ""; c++) {
+		safe = 1
+		for (i = 1; i <= 4; i++) {
+			if (length(secrets[i]) && index(candidates[c], secrets[i])) {
+				safe = 0
+			}
+		}
+		if (safe) {
+			marker = candidates[c]
 		}
 	}
-	print
+}
+{
+	line = $0
+	for (i = 1; i <= 4; i++) {
+		secret = secrets[i]
+		if (!length(secret)) {
+			continue
+		}
+		# Scan only the unscanned remainder so an inserted marker is never
+		# revisited.
+		redacted = ""
+		rest = line
+		while ((position = index(rest, secret)) > 0) {
+			redacted = redacted substr(rest, 1, position - 1) marker
+			rest = substr(rest, position + length(secret))
+		}
+		line = redacted rest
+	}
+	print line
 }
 '
