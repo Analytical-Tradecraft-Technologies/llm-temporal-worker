@@ -205,7 +205,7 @@ func assertLiveProviderWorkflowSourceAndActionBoundary(t *testing.T, workflow wo
 			"GIT_TERMINAL_PROMPT=0",
 			"GIT_ASKPASS=/bin/false",
 			"git init --quiet \"$GITHUB_WORKSPACE\"",
-			"https://github.com/mfow/llm-temporal-worker.git",
+			"https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git",
 			"-c credential.helper= -c http.extraHeader= fetch --no-tags --force origin",
 			"refs/remotes/origin/master",
 		} {

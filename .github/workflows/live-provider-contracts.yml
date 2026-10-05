@@ -87,7 +87,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -192,7 +192,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -304,7 +304,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -408,7 +408,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -512,7 +512,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -616,7 +616,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -721,7 +721,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -833,7 +833,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"
@@ -944,7 +944,7 @@ jobs:
           export GIT_ASKPASS=/bin/false
           mkdir -p "$HOME"
           git init --quiet "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/mfow/llm-temporal-worker.git
+          git -C "$GITHUB_WORKSPACE" remote add origin https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git
           git -C "$GITHUB_WORKSPACE" -c credential.helper= -c http.extraHeader= fetch --no-tags --force origin \
             +refs/heads/master:refs/remotes/origin/master
           fetched_master="$(git -C "$GITHUB_WORKSPACE" rev-parse --verify refs/remotes/origin/master)"

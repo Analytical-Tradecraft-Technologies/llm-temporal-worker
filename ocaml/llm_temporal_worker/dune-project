@@ -3,4 +3,4 @@
 (generate_opam_files false)
 
 (source
- (github mfow/llm-temporal-worker))
+ (github Analytical-Tradecraft-Technologies/llm-temporal-worker))
