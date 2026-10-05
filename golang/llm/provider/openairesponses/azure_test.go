@@ -321,3 +321,57 @@ func gotURL(request *http.Request) any {
 	}
 	return request.URL
 }
+
+func TestAzureResponsesAcceptsDocumentedEndpointForms(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://127.0.0.1",
+		"https://127.0.0.1/",
+		"https://127.0.0.1/openai",
+		"https://127.0.0.1/openai/v1",
+		"https://127.0.0.1/openai/v1/",
+	} {
+		for _, auth := range []string{"api-key", "token"} {
+			t.Run(auth+" "+endpoint, func(t *testing.T) {
+				var got *http.Request
+				httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					got = request
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(bytes.NewReader(readContractFixture(t, "azure-responses", "response.completed.json"))),
+						Request:    request,
+					}, nil
+				})}
+				var client *Client
+				var err error
+				if auth == "api-key" {
+					client, err = NewAzureClient(AzureClientConfig{Endpoint: endpoint, APIVersion: "2024-10-21", APIKey: "test-azure-key", HTTPClient: httpClient})
+				} else {
+					client, err = NewAzureTokenClient(AzureTokenClientConfig{Endpoint: endpoint, APIVersion: "2024-10-21", TokenCredential: &fakeAzureTokenCredential{}, HTTPClient: httpClient})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{Model: shared.ResponsesModel("gpt-contract")}); err != nil {
+					t.Fatal(err)
+				}
+				if got == nil || got.URL.Path != "/openai/v1/responses" || got.URL.Query().Get("api-version") != "2024-10-21" {
+					t.Fatalf("Azure Responses request URL = %v", gotURL(got))
+				}
+			})
+		}
+	}
+}
+
+func TestAzureResourceRootOnlyStripsPathSuffixes(t *testing.T) {
+	for endpoint, want := range map[string]string{
+		"https://openai/":   "https://openai/",
+		"https://openai/v1": "https://openai/v1",
+		"https://example.openai.azure.com/openai/v1/": "https://example.openai.azure.com/",
+		"https://proxy.test/tenant/openai":            "https://proxy.test/tenant/",
+	} {
+		if got := azureResourceRoot(endpoint); got != want {
+			t.Errorf("azureResourceRoot(%q) = %q, want %q", endpoint, got, want)
+		}
+	}
+}
