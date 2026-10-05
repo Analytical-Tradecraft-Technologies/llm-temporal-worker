@@ -202,3 +202,53 @@ func TestReplayToolCallDoesNotInventProviderItemID(t *testing.T) {
 		t.Fatalf("lost tool correlation: %#v", input)
 	}
 }
+
+func TestReplayAssistantHistoryUsesOutputContentTypes(t *testing.T) {
+	params, err := lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: []llm.Item{
+		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}},
+		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{
+			llm.TextPart{Text: "answer"},
+			llm.JSONPart{Value: json.RawMessage(`{"a":1}`)},
+			llm.RefusalPart{Text: "declined", ProviderCode: "openai.refusal"},
+		}},
+		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "follow-up"}}},
+	}}, llm.ServiceClassStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := marshalParams(t, params)["input"].([]any)
+	if len(input) != 3 {
+		t.Fatalf("input = %#v", input)
+	}
+	user := input[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if user["type"] != "input_text" {
+		t.Fatalf("user content = %#v", user)
+	}
+	assistant := input[1].(map[string]any)
+	if assistant["role"] != "assistant" {
+		t.Fatalf("assistant message = %#v", assistant)
+	}
+	content := assistant["content"].([]any)
+	if len(content) != 3 {
+		t.Fatalf("assistant content = %#v", content)
+	}
+	for index, want := range []map[string]any{
+		{"type": "output_text", "text": "answer"},
+		{"type": "output_text", "text": `{"a":1}`},
+		{"type": "refusal", "refusal": "declined"},
+	} {
+		part := content[index].(map[string]any)
+		for field, value := range want {
+			if part[field] != value {
+				t.Fatalf("assistant part %d = %#v, want %s=%#v", index, part, field, value)
+			}
+		}
+	}
+
+	_, err = lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: []llm.Item{
+		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ImagePart{URL: "https://example.test/a.png", MediaType: "image/png"}}},
+	}}, llm.ServiceClassStandard)
+	if err == nil || !strings.Contains(err.Error(), "assistant history") {
+		t.Fatalf("assistant image error = %v", err)
+	}
+}
