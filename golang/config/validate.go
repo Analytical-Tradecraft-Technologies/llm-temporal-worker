@@ -3,10 +3,12 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -137,6 +139,16 @@ func (server ServerConfig) validate() error {
 	}
 	if err := validateAddress(server.MetricsAddress, "server.metrics_address"); err != nil {
 		return err
+	}
+	// The listener is shared only when the two strings are identical; any
+	// other spelling of the same port (":8080" and "0.0.0.0:8080") would make
+	// the second bind fail at startup.
+	if server.HealthAddress != server.MetricsAddress {
+		_, healthPort, _ := net.SplitHostPort(server.HealthAddress)
+		_, metricsPort, _ := net.SplitHostPort(server.MetricsAddress)
+		if healthPort == metricsPort && healthPort != "0" {
+			return fmt.Errorf("server.health_address and server.metrics_address must be identical to share a listener, or use different ports")
+		}
 	}
 	if err := validatePositiveDuration(server.ShutdownTimeout, "server.shutdown_timeout"); err != nil {
 		return err
@@ -381,6 +393,10 @@ func (limits LimitsConfig) validate() error {
 		if value <= 0 {
 			return fmt.Errorf("%s must be positive", name)
 		}
+	}
+	// Request output limits are carried in a signed 32-bit field.
+	if limits.MaxOutputTokens > math.MaxInt32 {
+		return fmt.Errorf("limits.max_output_tokens must not exceed %d", math.MaxInt32)
 	}
 	if limits.RequestBytes > 64<<20 || limits.SchemaBytes > limits.RequestBytes {
 		return fmt.Errorf("limits request/schema byte bounds are unsafe")
@@ -689,9 +705,12 @@ func (telemetry TelemetryConfig) validate(environment string) error {
 		if telemetry.Tracing.OTLPEndpoint == "" {
 			return fmt.Errorf("telemetry.tracing.otlp_endpoint is required when tracing is enabled")
 		}
-		ratio, ok := new(big.Rat).SetString(telemetry.Tracing.SampleRatio)
-		if !ok || ratio.Sign() < 0 || ratio.Cmp(big.NewRat(1, 1)) > 0 {
-			return fmt.Errorf("telemetry.tracing.sample_ratio must be between 0 and 1")
+		// Parse exactly as the tracer does (strconv.ParseFloat), so a value such
+		// as "1/20" that big.Rat accepts cannot pass validation and then fail
+		// tracer construction at startup.
+		ratio, err := strconv.ParseFloat(telemetry.Tracing.SampleRatio, 64)
+		if err != nil || math.IsNaN(ratio) || ratio < 0 || ratio > 1 {
+			return fmt.Errorf("telemetry.tracing.sample_ratio must be a decimal between 0 and 1")
 		}
 	}
 	return nil
@@ -701,8 +720,12 @@ func validateAddress(value, path string) error {
 	if value == "" {
 		return fmt.Errorf("%s must be non-empty host:port", path)
 	}
-	if _, _, err := net.SplitHostPort(value); err != nil {
+	_, port, err := net.SplitHostPort(value)
+	if err != nil {
 		return fmt.Errorf("%s must be host:port: %w", path, err)
+	}
+	if number, err := strconv.Atoi(port); err != nil || number < 0 || number > 65535 {
+		return fmt.Errorf("%s port must be between 0 and 65535", path)
 	}
 	return nil
 }

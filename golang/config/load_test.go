@@ -575,3 +575,41 @@ func TestLoadRejectsUnquotedAzureExtensionScalars(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateMatchesRuntimeParsersForStartupSettings(t *testing.T) {
+	for _, test := range []struct{ from, to, want string }{
+		{from: `sample_ratio: "0.05"`, to: `sample_ratio: "1/20"`, want: "sample_ratio must be a decimal between 0 and 1"},
+		{from: "metrics_address: 0.0.0.0:9090", to: "metrics_address: :8080", want: "must be identical to share a listener"},
+		{from: "metrics_address: 0.0.0.0:9090", to: "metrics_address: 0.0.0.0:99999", want: "port must be between 0 and 65535"},
+		{from: "max_output_tokens: 32768", to: "max_output_tokens: 3000000000", want: "limits.max_output_tokens must not exceed 2147483647"},
+	} {
+		data := strings.Replace(string(exampleYAML(t)), test.from, test.to, 1)
+		if data == string(exampleYAML(t)) {
+			t.Fatalf("example does not contain %q", test.from)
+		}
+		if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("Load(%s) error = %v, want %q", test.to, err, test.want)
+		}
+	}
+	shared := strings.Replace(string(exampleYAML(t)), "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:8080", 1)
+	if _, err := config.Load([]byte(shared)); err != nil {
+		t.Fatalf("identical shared listener rejected: %v", err)
+	}
+}
+
+func TestWorkloadIdentityPathsListsEveryReference(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths := loaded.WorkloadIdentityPaths(); len(paths) != 0 {
+		t.Fatalf("example workload identity paths = %v", paths)
+	}
+	loaded.State.Redis.Password = config.SecretRef{Kind: config.SecretWorkloadIdentity, Audience: "redis"}
+	endpoint := loaded.Endpoints["openai-prod"]
+	endpoint.Auth = config.AuthConfig{Kind: "workload_identity", Audience: "provider"}
+	loaded.Endpoints["openai-prod"] = endpoint
+	if got := loaded.WorkloadIdentityPaths(); len(got) != 2 || got[0] != "endpoints.openai-prod.auth" || got[1] != "state.redis.password" {
+		t.Fatalf("workload identity paths = %v", got)
+	}
+}
