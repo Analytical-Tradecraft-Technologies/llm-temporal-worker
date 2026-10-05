@@ -504,9 +504,7 @@ func assertTrustedMasterEvidenceArtifactSource(t *testing.T, master workflowDocu
 	if scalarString(t, master.name, job, "if") != "github.event_name == 'push' && github.ref == 'refs/heads/master'" {
 		t.Fatalf("master release-evidence job must run only for a master push, got %#v", job["if"])
 	}
-	if fmt.Sprint(job["needs"]) != "[verify fuzz-shard container]" {
-		t.Fatalf("master release-evidence job must require verified master CI, got %#v", job["needs"])
-	}
+	assertMasterJobNeedsEveryVerificationGate(t, master, "release-evidence", "fuzz-shard", "container")
 	assertJobUsesAction(t, master, "release-evidence", uploadArtifactAction)
 	assertJobActionInput(t, master, "release-evidence", uploadArtifactAction, "name", "release-evidence")
 

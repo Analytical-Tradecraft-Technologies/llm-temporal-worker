@@ -443,9 +443,7 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	if scalarString(t, master.name, job, "if") != "github.event_name == 'push' && github.ref == 'refs/heads/master'" {
 		t.Fatalf("release-evidence job must run only on a master push, got %#v", job["if"])
 	}
-	if fmt.Sprint(job["needs"]) != "[verify fuzz-shard container]" {
-		t.Fatalf("release-evidence job must follow verify, got %#v", job["needs"])
-	}
+	assertMasterJobNeedsEveryVerificationGate(t, master, "release-evidence", "fuzz-shard", "container")
 	if _, ok := workflowMapping(t, pullRequest, "jobs")["release-evidence"]; ok {
 		t.Fatal("pull-request workflow must not run release evidence collection")
 	}
@@ -676,12 +674,18 @@ func TestWorkflowsRunHardenedImageVerification(t *testing.T) {
 }
 
 func TestWorkflowsRunPinnedKubernetesDeploymentPolicyVerification(t *testing.T) {
-	for _, name := range []string{"master.yml", "pull-request.yml"} {
-		workflow := readWorkflow(t, name)
-		job := workflowJob(t, workflow, "verify")
-		assertJobRunPrecedesRunContains(t, workflow, "verify", "bash scripts/ci/setup-kubectl.sh", "make deployment-policy-verify")
+	for _, test := range []struct {
+		name string
+		job  string
+	}{
+		{name: "master.yml", job: "verify-static"},
+		{name: "pull-request.yml", job: "verify"},
+	} {
+		workflow := readWorkflow(t, test.name)
+		job := workflowJob(t, workflow, test.job)
+		assertJobRunPrecedesRunContains(t, workflow, test.job, "bash scripts/ci/setup-kubectl.sh", "make deployment-policy-verify")
 		if !jobHasRunCommand(job, "make deployment-policy-verify") {
-			t.Fatalf("%s verify job does not run make deployment-policy-verify", workflow.name)
+			t.Fatalf("%s %s job does not run make deployment-policy-verify", workflow.name, test.job)
 		}
 	}
 }

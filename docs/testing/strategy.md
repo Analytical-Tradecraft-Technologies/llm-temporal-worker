@@ -578,10 +578,13 @@ The release job retains:
 
 ## Reusing trusted master evidence
 
-The master Verify job records one full race-enabled test run as both the test
-and race summaries. Fuzz jobs retain summaries for all three bounded shards.
-Compose health and redacted service-log summaries are captured after the existing
-lifecycle tests pass and before their services are removed. Raw command output
+Master verification runs as concurrent jobs (`verify-static`, `verify-race`,
+`verify-race-repeat`, `verify-cloud-workflow`, `verify-redis`, `verify-image`)
+gated by an aggregating `verify` job. The `verify-race` job records one full
+race-enabled test run as both the test and race summaries. Fuzz jobs retain
+summaries for all three bounded shards. The `verify-image` job captures Compose
+health and redacted service-log summaries after the existing lifecycle tests
+pass and before their services are removed. Raw command output
 is never uploaded. Gate wrappers report their stage and elapsed time.
 
 Release evidence downloads these successful inputs from the same workflow run;

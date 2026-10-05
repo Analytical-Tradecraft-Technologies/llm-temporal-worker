@@ -8,7 +8,8 @@ separate task.
 
 ## Trusted boundary
 
-The `release-evidence` job runs only after `verify` on a `push` to `master`.
+The `release-evidence` job runs only after `verify` and every split
+verification job it aggregates succeed on a `push` to `master`.
 Pull-request, scheduled, and manual workflow executions do not collect or
 retain this bundle. The job has only `contents: read` permission.
 
