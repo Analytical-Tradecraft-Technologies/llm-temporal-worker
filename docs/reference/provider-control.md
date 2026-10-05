@@ -9,7 +9,13 @@ The previous SQL adapters have been removed. No existing SQL data is migrated.
 
 Production snapshots bind inference outcomes to the same Redis client and key
 namespace used by the worker. The recorder constructs a validated
-`control.StatusEvent`, then atomically updates the route projection. It stores
+`control.StatusEvent`, then atomically updates the route projection. On the
+cloud Generate/Compact path, settlement records each definite success or
+supported failure as an availability observation, which drives the shared
+route circuit. Those observations always report credit and billing as `ok`:
+provider-specific credit/billing evidence (for example `insufficient_quota`)
+is not yet derived on the cloud path, so sticky credit/billing incident
+detection only runs for the legacy engine. It stores
 safe codes and digests, never prompts, outputs, credentials, or raw provider
 bodies. Recorder failures remain control-plane telemetry and do not replace a
 provider result. Memory-mode snapshots do not create external stores.
