@@ -519,6 +519,9 @@ func TestVerifyRenderedRequiresContentHashedImmutableConfigMap(t *testing.T) {
 		{name: "fixed name", mutate: func(rendered string) string {
 			return strings.ReplaceAll(rendered, "llmtw-config-5f8c2d7b9h", "llmtw-config")
 		}, want: "content-hashed"},
+		{name: "static suffix", mutate: func(rendered string) string {
+			return strings.ReplaceAll(rendered, "llmtw-config-5f8c2d7b9h", "llmtw-config-static")
+		}, want: "content-hashed"},
 		{name: "mutable", mutate: func(rendered string) string {
 			return strings.Replace(rendered, "immutable: true\n", "", 1)
 		}, want: "must be immutable"},

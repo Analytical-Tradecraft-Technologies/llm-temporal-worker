@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -358,6 +359,11 @@ func decodeDocuments(rendered []byte) ([]map[string]any, error) {
 	return documents, nil
 }
 
+// kustomizeContentHash matches the ten-character suffix Kustomize derives
+// from ConfigMap content: hex digits with 0, 1, 3, a and e replaced by
+// g, h, k, m and t.
+var kustomizeContentHash = regexp.MustCompile(`^[2456789bcdfghkmt]{10}$`)
+
 // configVolumeConfigMapName returns the ConfigMap mounted by the worker's
 // config volume. It must carry Kustomize's content hash suffix: an immutable
 // ConfigMap with a fixed name cannot be updated, so a configuration change
@@ -377,7 +383,7 @@ func configVolumeConfigMapName(deployment map[string]any) (string, error) {
 	}
 	name := stringAt(source, "name")
 	suffix, hashed := strings.CutPrefix(name, "llmtw-config-")
-	if !hashed || suffix == "" {
+	if !hashed || !kustomizeContentHash.MatchString(suffix) {
 		return "", fmt.Errorf("config volume ConfigMap %q must use a content-hashed llmtw-config-<hash> name", name)
 	}
 	return name, nil
