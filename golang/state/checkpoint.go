@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -248,7 +249,7 @@ func checkpointRequestDigest(checkpoint Checkpoint, maxBytes int) ([32]byte, err
 		}
 		canonical, err := llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
 		if err != nil {
-			return [32]byte{}, fmt.Errorf("canonicalize checkpoint %s for digest: %w", part.name, err)
+			return [32]byte{}, fmt.Errorf("canonicalize checkpoint %s for digest: %w", part.name, typedCanonicalLimit(err))
 		}
 		writePart(canonical)
 	}
@@ -565,5 +566,17 @@ func canonicalItemsWithLimit(values []llm.Item, maxBytes int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
+	canonical, err := llm.CanonicalJSONWithLimits(data, maxBytes, llm.DefaultCanonicalMaxDepth)
+	return canonical, typedCanonicalLimit(err)
+}
+
+// typedCanonicalLimit marks a canonical JSON byte or depth violation as
+// ErrLimitExceeded. The canonicalizer rejects an oversized value before any
+// caller can compare its length, so without this the violation is untyped and
+// is retried as a transient failure.
+func typedCanonicalLimit(err error) error {
+	if errors.Is(err, llm.ErrCanonicalJSONLimit) && !errors.Is(err, ErrLimitExceeded) {
+		return fmt.Errorf("%w: %w", ErrLimitExceeded, err)
+	}
+	return err
 }

@@ -72,6 +72,12 @@ type streamSetup struct {
 func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (streamSetup, error) {
 	normalizeCtx, normalizeSpan := engine.startTrace(ctx, "llmtw.normalize", requestTraceAttrs(request)...)
 	normalized, err := engine.dependencies.Estimator.PrepareRequest(request)
+	if err == nil {
+		// The request is caller input here, so the remote-media URL policy
+		// applies. The item codec does not enforce it because it also decodes
+		// stored transcripts.
+		err = llm.ValidateMediaURLs(normalized.Instructions, normalized.Input)
+	}
 	if err != nil {
 		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
 		normalizeSpan.End()

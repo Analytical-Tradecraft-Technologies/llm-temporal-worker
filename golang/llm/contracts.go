@@ -652,6 +652,9 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 	if err := validateGenerateRequestV1Bounds(request); err != nil {
 		return nil, err
 	}
+	if err := validateGenerateRequestV1MediaURLs(request); err != nil {
+		return nil, err
+	}
 	if request.Parent != nil && !request.Parent.valid() {
 		return nil, fmt.Errorf("parent checkpoint is invalid")
 	}
@@ -746,6 +749,9 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 		result.Cache = &policy
 	}
 	if err := validateGenerateRequestV1Bounds(result); err != nil {
+		return err
+	}
+	if err := validateGenerateRequestV1MediaURLs(result); err != nil {
 		return err
 	}
 	*request = result
