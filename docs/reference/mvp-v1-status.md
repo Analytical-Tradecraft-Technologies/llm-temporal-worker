@@ -41,8 +41,9 @@ See [workflow behavior](internal-workflows.md) and [activity contracts](activity
 Cloud KV/blob interfaces hold requests, attempts, pending discovery, encrypted
 checkpoints and cache artifacts. The initial provider uses DynamoDB and S3.
 Redis owns budgets, throttles, provider status and inventory. Budget policy comes
-from worker settings. The cloud execution path does not yet record provider
-status observations into Redis (see [provider control](provider-control.md)).
+from worker settings. The cloud execution path records provider availability
+into Redis but not yet credit/billing evidence (see
+[provider control](provider-control.md)).
 Content-free access audit events are not yet emitted for Generate/Compact
 access or scope denials; only query audit and configuration reload messages
 reach structured logs. Temporal's own storage
