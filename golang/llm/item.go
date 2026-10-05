@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 )
@@ -862,7 +863,7 @@ func validateMediaSource(rawURL string, data []byte, blob *BlobRef, mediaType, k
 	sources := 0
 	if rawURL != "" {
 		sources++
-		if err := validateURI(rawURL); err != nil {
+		if err := validateMediaURL(rawURL); err != nil {
 			return fmt.Errorf("%s url: %w", kind, err)
 		}
 	}
@@ -882,6 +883,44 @@ func validateMediaSource(rawURL string, data []byte, blob *BlobRef, mediaType, k
 		return fmt.Errorf("%s media_type must match blob media_type", kind)
 	}
 	return nil
+}
+
+// validateMediaURL applies the remote-media policy to caller-supplied image
+// and document URLs. The worker never fetches them, but providers do, inside
+// their own network, so URLs that address local, private or metadata
+// destinations, or that carry credentials, are rejected.
+func validateMediaURL(raw string) error {
+	if err := validateURI(raw); err != nil {
+		return err
+	}
+	parsed, _ := url.Parse(raw)
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return fmt.Errorf("media URL scheme %q is not allowed; use https or http", parsed.Scheme)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("media URL must not contain user information")
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if host == "" {
+		return fmt.Errorf("media URL must include a host")
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return fmt.Errorf("media URL host is not allowed")
+	}
+	if address, err := netip.ParseAddr(host); err == nil {
+		address = address.Unmap()
+		if !address.IsGlobalUnicast() || address.IsPrivate() || mediaMetadataAddresses[address] {
+			return fmt.Errorf("media URL host is not allowed")
+		}
+	}
+	return nil
+}
+
+var mediaMetadataAddresses = map[netip.Addr]bool{
+	netip.MustParseAddr("100.100.100.200"): true, // Alibaba metadata service.
+	netip.MustParseAddr("168.63.129.16"):   true, // Azure platform metadata service.
+	netip.MustParseAddr("169.254.169.254"): true, // AWS, GCP and compatible metadata.
+	netip.MustParseAddr("fd00:ec2::254"):   true, // AWS IMDS IPv6 endpoint.
 }
 
 func validateURI(raw string) error {
