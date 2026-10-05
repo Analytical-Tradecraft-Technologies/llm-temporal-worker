@@ -39,6 +39,9 @@ func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 	}
 	before := current.Config()
 	after := replacement.Config()
+	// Memory state ignores the Redis section entirely, so it names nothing
+	// there. A change of state.kind itself is rejected first.
+	usesRedis := before.State.Kind != config.StateKindMemory
 	// A missing state.requests block compares as empty; its presence is a
 	// separate entry in the table.
 	var beforeRequests, afterRequests config.CloudRequestConfig
@@ -79,8 +82,8 @@ func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 		{name: "telemetry.content_logging", changed: before.Telemetry.ContentLogging != after.Telemetry.ContentLogging},
 		{name: "state.kind", changed: before.State.Kind != after.State.Kind},
 		{name: "state.redis.key_prefix", changed: before.State.Redis.KeyPrefix != after.State.Redis.KeyPrefix},
-		{name: "state.redis.admission_hash_tag", changed: before.State.Redis.AdmissionHashTag != after.State.Redis.AdmissionHashTag},
-		{name: "state.redis.key_secret", changed: before.State.Redis.KeySecret != after.State.Redis.KeySecret},
+		{name: "state.redis.admission_hash_tag", changed: usesRedis && before.State.Redis.AdmissionHashTag != after.State.Redis.AdmissionHashTag},
+		{name: "state.redis.key_secret", changed: usesRedis && before.State.Redis.KeySecret != after.State.Redis.KeySecret},
 		{name: "state.requests", changed: (before.State.Requests == nil) != (after.State.Requests == nil)},
 		{name: "state.requests.provider.type", changed: beforeRequests.Provider.Type != afterRequests.Provider.Type},
 		{name: "state.requests.provider.aws.region", changed: beforeRequests.Provider.AWS.Region != afterRequests.Provider.AWS.Region},

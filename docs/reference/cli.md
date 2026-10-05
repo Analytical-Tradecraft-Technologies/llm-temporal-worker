@@ -159,7 +159,7 @@ rejection can be diagnosed without restarting a pod:
 | `read` | the file could not be opened or read |
 | `yaml` | the file is not decodable: malformed YAML, an unknown or duplicate key, or a value of the wrong type |
 | `validation` | the decoded configuration failed validation |
-| `secret` | a secret reference could not be resolved |
+| `secret` | a secret reference could not be resolved, including a provider API-key variable or key secret read while clients are built |
 | `process_lifetime` | the replacement changes a setting that requires a restart (listed below) |
 | `catalog` | a capability or pricing catalog could not be read, did not match its configured SHA-256, or could not be decoded |
 | `dependency` | replacement clients could not be built, or a Redis, cloud request or blob dependency check failed |
@@ -203,7 +203,10 @@ connection limits and timeouts, and `blob_store.s3.auth` remain reloadable:
 they change how the same data is reached. The replacement must still pass the
 dependency checks before it is published. The two key-material references are
 compared as references only. The secret behind an unchanged reference is read
-again on reload and must not change.
+again on reload and must not change. With `state.kind: memory` the Redis
+section is ignored, so `state.redis.admission_hash_tag` and
+`state.redis.key_secret` can change there.
+
 Environment variables are not re-read during reload.
 
 ## Exit status and diagnostics

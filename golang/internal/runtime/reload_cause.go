@@ -50,14 +50,16 @@ func classifyReloadFailure(err error) (cause, field string) {
 		return reloadCauseProcessLifetime, change.field
 	case stage == app.ReloadStageReplacement:
 		return reloadCauseProcessLifetime, ""
+	case stage == app.ReloadStageVerify:
+		return reloadCauseDependency, ""
+	// Cancellation is checked before the secret and catalog markers: a
+	// resolver or loader interrupted by a canceled reload is not their fault.
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return reloadCauseCanceled, ""
 	case errors.Is(err, secrets.ErrReference):
 		return reloadCauseSecret, ""
 	case errors.As(err, &catalog):
 		return reloadCauseCatalog, ""
-	case stage == app.ReloadStageVerify:
-		return reloadCauseDependency, ""
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return reloadCauseCanceled, ""
 	case stage == app.ReloadStageBuild && config.IsYAMLError(err):
 		return reloadCauseYAML, ""
 	case stage == app.ReloadStageBuild:
