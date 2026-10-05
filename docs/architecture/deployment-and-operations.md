@@ -159,8 +159,11 @@ can begin. This is an in-memory composition check only; the normal bounded
 network probes still have to pass at startup and during monitoring.
 Runtime role grants remain deployment-owned and are exercised by normal
 least-privilege operations. S3 readiness uses `HeadBucket`
-against the configured bucket only, never a tenant key. A failed state check
-keeps liveness `200`, sets readiness `503`, and pauses Temporal polling;
+against the configured bucket only, never a tenant key. Pausing is a full
+Temporal worker stop that cancels in-flight Activities after the graceful stop
+timeout, so a single slow or failed probe round is tolerated: only after three
+consecutive failed rounds (a success resets the count) does the monitor keep
+liveness `200`, set readiness `503`, and pause Temporal polling;
 periodic checks resume polling only after every dependency has recovered. The
 monitor keeps checking while a paused poller drains, but does not start its
 replacement until that prior poller has stopped.
