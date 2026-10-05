@@ -41,6 +41,9 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		if err != nil {
 			return bedrockruntime.ConverseInput{}, fmt.Errorf("input item %d: %w", index, err)
 		}
+		if emptyModelMessage(item) {
+			continue
+		}
 		// A model turn can be split into text and tool-call items internally.
 		// Converse requires those blocks (and parallel tool results) together.
 		last := len(input.Messages) - 1
@@ -120,6 +123,14 @@ func lowerInstructions(instructions []llm.Instruction, input *bedrockruntime.Con
 		}
 	}
 	return nil
+}
+
+// emptyModelMessage reports a replayed model turn with no parts (for example a
+// lifted content_filter or empty stop reply). Bedrock Converse rejects an assistant message
+// without content, and it carries no history to preserve.
+func emptyModelMessage(item llm.Item) bool {
+	message, ok := item.(llm.Message)
+	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
 }
 
 func lowerItem(item llm.Item) (types.Message, error) {
