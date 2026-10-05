@@ -1452,3 +1452,18 @@ func actionName(value any) string {
 	name, _, _ := strings.Cut(reference, "@")
 	return name
 }
+
+func TestWorkflowRaceRunsSetExplicitPackageTimeouts(t *testing.T) {
+	for _, test := range []struct {
+		workflow string
+		command  string
+	}{
+		{workflow: "pull-request.yml", command: "go test -race ./... -timeout 20m"},
+		{workflow: "master.yml", command: "go test -race ./... -timeout 20m"},
+		{workflow: "master.yml", command: "go test -race -count=5 -timeout 30m "},
+	} {
+		if !strings.Contains(readWorkflow(t, test.workflow).raw, test.command) {
+			t.Errorf("%s race run %q must set an explicit package timeout", test.workflow, test.command)
+		}
+	}
+}
