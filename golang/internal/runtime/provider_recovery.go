@@ -120,11 +120,10 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 			(candidate.PriceVersion != "" && candidate.PriceVersion != binding.Route.PriceVersion) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
-		resolved, _ := llm.NormalizeRequest(semantic)
-		resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
-		resolved.ServiceClassFallbacks = nil
-		digest, err := llm.RequestDigest(resolved)
-		if err != nil || digest != binding.RequestDigest {
+		// Changed input is rejected before any adapter lookup. Which form of a
+		// summarizer request was bound is an endpoint fact, so this accepts
+		// either and the compiled call settles it below.
+		if !plausibleCandidateDigest(semantic, candidate, binding.RequestDigest) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 		}
 		if health, present := planning.health.Routes[candidate.RouteID]; present && (!health.Enabled || health.Open || health.AuthOpen) {
@@ -136,6 +135,11 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 		}
 		if !usable {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.RetrySameOperation)
+		}
+		// compileCandidate derived its digest through resolveCandidateRequest
+		// with the endpoint's adapter; only that exact request was bound.
+		if planned.Call.Metadata.SchemaDigest != binding.RequestDigest {
+			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 		}
 		return planned, nil
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -213,7 +214,7 @@ func TestAdmissionFunctionPreservesRecordRetentionOnUpdates(t *testing.T) {
 		"local current_ttl = redis.call('TTL', key)",
 		"current_ttl == -2",
 		"current_ttl >= 0 and current_ttl < ttl_value",
-		"redis.call('EXPIRE', key, tostring(restore_ttl))",
+		"redis.call('EXPIRE', key, decimal(restore_ttl))",
 	} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("admission function does not preserve record TTL: missing %q", fragment)
@@ -230,5 +231,39 @@ func TestContinuationFunctionUsesCreateIfAbsentAndTTL(t *testing.T) {
 	}
 	if !strings.Contains(continuationFunctionSource, "DEL', KEYS[1], KEYS[2]") {
 		t.Fatal("continuation function does not clean up provisional conflicts")
+	}
+}
+
+// Redis embeds Lua 5.1, whose tostring() formats numbers with %.14g: an
+// integer of 1e14 or more (USD 100,000 in nano-USD) becomes scientific
+// notation that Redis integer commands and the Go decoders reject. The
+// accounting Functions must format every number through their decimal()
+// helper instead.
+func TestAccountingFunctionsFormatNumbersAsPlainDecimalIntegers(t *testing.T) {
+	for name, source := range map[string]string{"admission.lua": AdmissionLuaSource(), "throttle.lua": ThrottleLuaSource()} {
+		if !strings.Contains(source, "local function decimal(value)\n    return string.format('%.0f', value)\nend\n") {
+			t.Errorf("%s does not define the integer-safe decimal() formatter", name)
+		}
+		for index, line := range strings.Split(source, "\n") {
+			code, _, _ := strings.Cut(line, "--")
+			if strings.Contains(code, "tostring(") {
+				t.Errorf("%s:%d formats a number with tostring(): %s", name, index+1, strings.TrimSpace(line))
+			}
+		}
+	}
+	// Hash fields and expiry-index members written by the previous Function
+	// must still match: below 1e14 both formats render the same text.
+	for _, value := range []float64{0, 1, -1, 10_000_000, 40_000_010_000_000, -40_000_010_000_000, 99_999_999_999_999, -99_999_999_999_999} {
+		if got, want := fmt.Sprintf("%.0f", value), fmt.Sprintf("%.14g", value); got != want {
+			t.Errorf("%%.0f of %v = %q, but tostring() rendered %q", value, got, want)
+		}
+	}
+	for value, want := range map[float64]string{100_000_000_000_000: "100000000000000", 120_000_030_000_000: "120000030000000", -120_000_010_000_000: "-120000010000000", 9_007_199_254_740_991: "9007199254740991"} {
+		if got := fmt.Sprintf("%.0f", value); got != want {
+			t.Errorf("%%.0f of %v = %q, want %q", value, got, want)
+		}
+		if legacy := fmt.Sprintf("%.14g", value); !strings.Contains(legacy, "e+") {
+			t.Errorf("%%.14g of %v = %q, expected the scientific notation this test guards against", value, legacy)
+		}
 	}
 }

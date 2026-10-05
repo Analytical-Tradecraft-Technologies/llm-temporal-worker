@@ -98,11 +98,46 @@ Endpoints are operator-configured and validated:
 User-provided image/reference URLs are not fetched by the worker in v1. They are
 passed only to endpoint profiles that accept remote references and only after
 scheme/host policy validation: image and document URLs must use `https` or
-`http`, must not carry user information, and must not name `localhost` (or a
-`.localhost` name) or an IP literal that is loopback, private, link-local,
-unspecified, multicast or a cloud metadata address, because the provider
-fetches them inside its own network. Blob locators address configured stores, not
-arbitrary URLs.
+`http`, must not carry user information, and must not name a local, private or
+metadata destination, because the provider fetches them inside its own network.
+The host policy rejects:
+
+- an IP literal that the provider egress policy above would refuse to dial
+  (the two share one address table): loopback, private, link-local,
+  unspecified, multicast, carrier-grade NAT, reserved and benchmarking ranges,
+  cloud metadata addresses, IPv6 site-local, and IPv4-mapped, IPv4-compatible,
+  NAT64, 6to4 and Teredo forms that embed such an IPv4 address; a zoned IPv6
+  literal is always rejected;
+- a host that is not a canonical IP literal but that resolvers and URL parsers
+  read as IPv4 because its last label is a decimal, octal or hexadecimal number
+  (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`); names that merely contain
+  digits, such as `cdn1.example.com` or `1password.com`, are unaffected;
+- a host containing anything other than ASCII letters, digits, `-`, `_` and
+  `.`, which a fetcher could normalise into one of the forms above;
+  internationalised names must be given in punycode;
+- `localhost` and `.localhost` names, the private-use `.internal` zone (which
+  holds `metadata.google.internal` and the EC2 internal names), and the
+  metadata aliases `metadata`, `metadata.goog` and `instance-data`.
+
+The policy inspects the URL only. A public DNS name that resolves to a private
+address cannot be detected by the worker, which never resolves or fetches these
+URLs; providers remain responsible for their own fetch-time controls.
+
+The policy is enforced where a request enters: the v1 Generate request codec
+(`append` items and `settings_patch.instructions`), the legacy Activity payload
+boundary and the engine entry points. It is deliberately not part of the stored
+transcript codec, so a checkpoint written under an earlier policy still decodes
+and materializes; only the structural check (a scheme other than `javascript`
+or `data`) applies when stored content is decoded. Compact requests carry no
+content of their own.
+
+Stored content is checked again before it can reach a provider. Request
+preparation applies the policy to the whole provider-facing request, replayed
+parent transcript and inherited instructions included, for both Generate and
+Compact. Continuing from a checkpoint that holds a now-blocked URL therefore
+fails as non-retryable `invalid_argument` before the operation is recorded,
+rather than replaying the URL or being retried as a transient storage failure.
+Blob locators address configured stores, not arbitrary URLs.
 
 ## Content and history
 

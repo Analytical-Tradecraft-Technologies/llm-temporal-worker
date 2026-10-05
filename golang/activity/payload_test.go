@@ -119,6 +119,37 @@ func TestRequestPayloadValidatesDocumentBlobSource(t *testing.T) {
 	}
 }
 
+// The item codec no longer applies the remote-media URL policy (it also
+// decodes stored transcripts), so the Activity payload boundary must.
+func TestRequestPayloadAppliesMediaURLPolicy(t *testing.T) {
+	payloadFor := func(raw string) GenerateRequest {
+		return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "media-url", Model: "model-1",
+			Instructions: []llm.Instruction{{Kind: llm.InstructionKindParts, Content: []llm.Part{llm.TextPart{Text: "read"}}}},
+			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{URL: raw, MediaType: "image/png"}}}}}}
+	}
+	encoded, err := MarshalRequest(payloadFor("https://cdn1.example.com/a.png"), PayloadLimits{})
+	if err != nil {
+		t.Fatalf("public media URL rejected: %v", err)
+	}
+	if _, err := UnmarshalRequest(encoded, PayloadLimits{}); err != nil {
+		t.Fatalf("public media URL rejected on decode: %v", err)
+	}
+	for _, raw := range []string{"http://localhost/a.png", "http://127.1/a.png", "http://2130706433/a.png", "http://[64:ff9b::a9fe:a9fe]/a.png", "http://100.64.0.1/a.png", "http://metadata.google.internal/a.png"} {
+		if _, err := payloadFor(raw).Validate(16 * 1024); err == nil {
+			t.Errorf("media URL %q accepted by Validate", raw)
+		}
+		wire := bytes.Replace(encoded, []byte("https://cdn1.example.com/a.png"), []byte(raw), 1)
+		if _, err := UnmarshalRequest(wire, PayloadLimits{}); err == nil {
+			t.Errorf("media URL %q accepted by UnmarshalRequest", raw)
+		}
+		document := payloadFor("https://cdn1.example.com/a.png")
+		document.Request.Instructions[0].Content = []llm.Part{llm.DocumentPart{URL: raw, MediaType: "application/pdf"}}
+		if _, err := document.Validate(16 * 1024); err == nil {
+			t.Errorf("instruction media URL %q accepted by Validate", raw)
+		}
+	}
+}
+
 func TestPayloadUnmarshalRejectsOversizeBeforeJSONDecode(t *testing.T) {
 	// This is intentionally malformed as JSON. The size gate must run first so
 	// malformed or adversarial payloads cannot force an unbounded decode before

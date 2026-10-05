@@ -69,14 +69,31 @@ func (converter *boundedDataConverter) FromPayloads(payloads *commonpb.Payloads,
 	return converter.delegate.FromPayloads(payloads, valuePtrs...)
 }
 
-// deferredDecode reports a raw-payload target. The v1 Activity handlers take
-// converter.RawValue so they can apply the same inline limit and strict decode
-// inside the Activity, where the failure becomes a typed, non-retryable
-// llm_invalid_argument. Rejecting here instead would surface an untyped,
+// deferredDecode reports a raw-payload target. The v1 Activity handlers and
+// the registered workflows take converter.RawValue so they can apply the same
+// inline limit and strict decode in their own code, where the failure becomes
+// a typed, non-retryable llm_invalid_argument. Rejecting here instead would surface an untyped,
 // retryable SDK wrapper error before the handler could classify it.
 func deferredDecode(valuePtr interface{}) bool {
 	_, ok := valuePtr.(*converter.RawValue)
 	return ok
+}
+
+// DecodeBoundedPayload applies the inline limit and the strict contract decode
+// to a raw payload received by a handler registered with converter.RawValue.
+// It reports only success: decoder text can echo caller values, so callers map
+// a false result to their own stable, typed failure.
+func DecodeBoundedPayload[T any](limits PayloadLimits, input converter.RawValue) (T, bool) {
+	var value T
+	payload := input.Payload()
+	if payload == nil || len(payload.GetData()) > limits.inlineBytes() {
+		return value, false
+	}
+	if err := converter.GetDefaultDataConverter().FromPayload(payload, &value); err != nil {
+		var zero T
+		return zero, false
+	}
+	return value, true
 }
 
 func (converter *boundedDataConverter) ToString(payload *commonpb.Payload) string {

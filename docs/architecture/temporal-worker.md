@@ -48,7 +48,9 @@ embeddings; production generation and compaction use `ExecutionRuntime` and
 ## Payload contract
 
 Public workflow inputs are `llm.GenerateRequestV1` and `llm.CompactRequestV1`;
-outputs are their corresponding typed response records. Internal activities
+outputs are their corresponding typed response records. The workflows decode
+their input themselves, so an invalid or oversize request fails as a
+non-retryable `llm_invalid_argument` that does not echo caller values. Internal activities
 exchange bounded execution-state records and scoped internal request references.
 Provider identifiers and budget receipts remain in durable runtime storage.
 `llm.query.v1` uses its separate tagged request/response union.
