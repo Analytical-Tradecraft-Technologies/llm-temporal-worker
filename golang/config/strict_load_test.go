@@ -76,9 +76,9 @@ func TestLoadRejectsBudgetBoundsThatFailAfterValidation(t *testing.T) {
 			want: []string{"budgets.policies[0].windows[1].limit_usd", "rounds down to zero"},
 		},
 		{
-			name: "policy ID leaves no room for the window index",
+			name: "policy ID leaves no room for the window id",
 			old:  "id: acme-production", replacement: "id: " + strings.Repeat("p", 127),
-			want: []string{"budgets.policies[0].id"},
+			want: []string{"budgets.policies[0].windows[0] identity", "must be at most 128 bytes"},
 		},
 		{
 			name: "admission hash tag with a brace",
@@ -97,8 +97,8 @@ func TestLoadRejectsBudgetBoundsThatFailAfterValidation(t *testing.T) {
 		})
 	}
 	// A long policy ID whose window identities still fit is accepted.
-	if _, err := config.Load(replaceExample(t, "id: acme-production", "id: "+strings.Repeat("p", 96))); err != nil {
-		t.Fatalf("96-byte policy ID rejected: %v", err)
+	if _, err := config.Load(replaceExample(t, "id: acme-production", "id: "+strings.Repeat("p", 120))); err != nil {
+		t.Fatalf("120-byte policy ID rejected: %v", err)
 	}
 }
 

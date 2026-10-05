@@ -447,13 +447,13 @@
     },
     "budget_window": {
       "type": "object", "additionalProperties": false, "required": ["duration", "bucket"],
-      "properties": { "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_usd": { "type": "string", "pattern": "^(0|[0-9]{1,7})(\\.[0-9]{1,18})?$", "description": "Exact USD limit from 0.000000001 to 9007199.254740991, the range Redis represents exactly in nano-USD." }, "limit_micro_usd": { "type": "integer", "minimum": 1, "maximum": 9007199254740 } },
+      "properties": { "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "description": "Optional stable window name. The accounting identity is <policy id>/<id>, at most 128 bytes; when omitted, <id> is derived from duration and bucket, for example 24h-5m." }, "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_usd": { "type": "string", "pattern": "^(0|[0-9]{1,7})(\\.[0-9]{1,18})?$", "description": "Exact USD limit from 0.000000001 to 9007199.254740991, the range Redis represents exactly in nano-USD." }, "limit_micro_usd": { "type": "integer", "minimum": 1, "maximum": 9007199254740 } },
       "anyOf": [{"required": ["limit_usd"]}, {"required": ["limit_micro_usd"]}]
     },
     "budget_policy": {
       "type": "object", "additionalProperties": false, "required": ["id", "match", "windows"],
       "properties": {
-        "id": { "type": "string", "minLength": 1, "maxLength": 126, "description": "Window identities are derived as <id>/<window index> and must fit 128 bytes." },
+        "id": { "type": "string", "minLength": 1, "maxLength": 126, "description": "Each window identity is <id>/<window id> and must fit 128 bytes, so a longer window id leaves less room." },
         "match": {
           "type": "object", "additionalProperties": false, "minProperties": 1,
           "properties": {

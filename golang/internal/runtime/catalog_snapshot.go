@@ -307,7 +307,7 @@ func compileBudgetPolicies(value config.Config) ([]budget.Policy, error) {
 			if err != nil {
 				return nil, fmt.Errorf("budget policy %q window %d: %w", policyValue.ID, index, err)
 			}
-			policy.Windows = append(policy.Windows, budget.Window{ID: fmt.Sprintf("%s/%d", policyValue.ID, index), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), LimitUSD: windowValue.LimitUSD, Limit: legacyLimit})
+			policy.Windows = append(policy.Windows, budget.Window{ID: policyValue.WindowIdentity(windowValue), Duration: time.Duration(windowValue.Duration), Bucket: time.Duration(windowValue.Bucket), LimitUSD: windowValue.LimitUSD, Limit: legacyLimit})
 		}
 		if err := policy.Validate(value.Limits.MaxBudgetBucketsPerWindow); err != nil {
 			return nil, fmt.Errorf("budget policy %q: %w", policy.ID, err)

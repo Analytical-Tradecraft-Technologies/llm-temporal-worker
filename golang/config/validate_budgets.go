@@ -2,17 +2,10 @@ package config
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
 )
-
-// maxBudgetIdentityBytes is the longest policy or window identity the budget
-// stores accept in a reservation. A window is identified as
-// "<policy id>/<window index>", so the policy ID must leave room for that
-// suffix; otherwise every matching request fails at reservation time.
-const maxBudgetIdentityBytes = 128
 
 // maxAdmissionHashTagBytes and the forbidden characters mirror the Redis key
 // space, which wraps the tag in braces to pin admission keys to one slot.
@@ -33,16 +26,6 @@ func budgetWindowBuckets(duration, bucket Duration) int64 {
 		return 0
 	}
 	return int64(duration/bucket) + 2
-}
-
-// validateBudgetPolicyIdentity keeps the derived window identities of a
-// policy within maxBudgetIdentityBytes.
-func validateBudgetPolicyIdentity(policy BudgetPolicy, path string) error {
-	suffix := 1 + len(strconv.Itoa(max(len(policy.Windows)-1, 0)))
-	if len(policy.ID)+suffix > maxBudgetIdentityBytes {
-		return fmt.Errorf("%s.id must be at most %d bytes so its window identities fit the %d-byte budget identity limit", path, maxBudgetIdentityBytes-suffix, maxBudgetIdentityBytes)
-	}
-	return nil
 }
 
 // validateBudgetLimit requires a window limit that Redis can hold exactly.

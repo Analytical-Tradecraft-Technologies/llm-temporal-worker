@@ -4,11 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sync"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 )
 
 var errProcessLifetimeConfigurationChanged = errors.New("process-lifetime configuration cannot change during reload")
+
+var errBudgetWindowGeometryChanged = errors.New("budget window geometry cannot change behind an existing identity during reload")
 
 // processLifetimeChangeError names the first changed process-lifetime field.
 // The field is a fixed schema path from the table below, never a value.
@@ -34,6 +37,18 @@ func (err *processLifetimeChangeError) Unwrap() error { return errProcessLifetim
 // to reach the same data. The two key-material references are compared as
 // references only; the material behind an unchanged reference must not change.
 func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
+	return (&budgetWindowGeometries{}).validateReplacement(current, replacement)
+}
+
+// newRuntimeReplacementValidator returns the validator for one worker
+// process. It remembers the geometry of every budget window identity an
+// active snapshot has used, so an identity removed by one reload cannot come
+// back with another geometry in a later one while its accounting may remain.
+func newRuntimeReplacementValidator() func(current, replacement *config.Snapshot) error {
+	return (&budgetWindowGeometries{}).validateReplacement
+}
+
+func (geometries *budgetWindowGeometries) validateReplacement(current, replacement *config.Snapshot) error {
 	if current == nil || replacement == nil {
 		return errProcessLifetimeConfigurationChanged
 	}
@@ -104,6 +119,43 @@ func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 	} {
 		if field.changed {
 			return &processLifetimeChangeError{field: field.name}
+		}
+	}
+	return geometries.validate(before.Budgets, after.Budgets)
+}
+
+type budgetWindowGeometry struct{ duration, bucket config.Duration }
+
+// budgetWindowGeometries records the duration and bucket each budget window
+// identity has been active with.
+type budgetWindowGeometries struct {
+	mu   sync.Mutex
+	seen map[string]budgetWindowGeometry
+}
+
+// validate rejects a replacement that uses a known budget window identity
+// with another duration or bucket. The identity selects the accounting hash,
+// whose bucket layout and expiries were written for the old geometry. Only an
+// explicit window id can do this: a derived identity changes with the
+// geometry and starts separate accounting. The active policies are recorded
+// on every call, so identities are remembered after they leave the snapshot.
+func (geometries *budgetWindowGeometries) validate(before, after config.BudgetsConfig) error {
+	geometries.mu.Lock()
+	defer geometries.mu.Unlock()
+	if geometries.seen == nil {
+		geometries.seen = make(map[string]budgetWindowGeometry)
+	}
+	for _, policy := range before.Policies {
+		for _, window := range policy.Windows {
+			geometries.seen[policy.WindowIdentity(window)] = budgetWindowGeometry{window.Duration, window.Bucket}
+		}
+	}
+	for policyIndex, policy := range after.Policies {
+		for windowIndex, window := range policy.Windows {
+			previous, exists := geometries.seen[policy.WindowIdentity(window)]
+			if exists && previous != (budgetWindowGeometry{window.Duration, window.Bucket}) {
+				return fmt.Errorf("%w: budgets.policies[%d].windows[%d] uses an id this worker has accounted with another duration or bucket; give the window a new id", errBudgetWindowGeometryChanged, policyIndex, windowIndex)
+			}
 		}
 	}
 	return nil

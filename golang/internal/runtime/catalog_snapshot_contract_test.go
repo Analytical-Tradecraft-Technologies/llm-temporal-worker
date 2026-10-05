@@ -510,7 +510,7 @@ func TestCompileBudgetPoliciesMapsAndValidatesWindows(t *testing.T) {
 	if err != nil || len(policies) != 1 {
 		t.Fatalf("compileBudgetPolicies() = %#v, %v", policies, err)
 	}
-	if policies[0].ID != "tenant-policy" || policies[0].Match.Tenant != "tenant-a" || policies[0].Match.Project != "project-a" || policies[0].Match.ActorPrefix != "svc-" || policies[0].Match.Environment != "production" || policies[0].Match.LogicalModel != "logical-model" || policies[0].Match.EndpointID != "endpoint-a" || policies[0].Match.ServiceClass != llm.ServiceClassPriority || policies[0].Windows[0].ID != "tenant-policy/0" || policies[0].Windows[0].Limit != 12345 {
+	if policies[0].ID != "tenant-policy" || policies[0].Match.Tenant != "tenant-a" || policies[0].Match.Project != "project-a" || policies[0].Match.ActorPrefix != "svc-" || policies[0].Match.Environment != "production" || policies[0].Match.LogicalModel != "logical-model" || policies[0].Match.EndpointID != "endpoint-a" || policies[0].Match.ServiceClass != llm.ServiceClassPriority || policies[0].Windows[0].ID != "tenant-policy/1h-1m" || policies[0].Windows[0].Limit != 12345 {
 		t.Fatalf("compiled budget policy = %#v", policies[0])
 	}
 

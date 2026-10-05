@@ -628,9 +628,6 @@ func (budgets BudgetsConfig) validate() error {
 			return fmt.Errorf("%s duplicate policy ID %q", path, policy.ID)
 		}
 		seen[policy.ID] = struct{}{}
-		if err := validateBudgetPolicyIdentity(policy, path); err != nil {
-			return err
-		}
 		match := policy.Match
 		if !hasBudgetMatchRestriction(match) {
 			return fmt.Errorf("%s.match must contain at least one restriction", path)
@@ -640,6 +637,9 @@ func (budgets BudgetsConfig) validate() error {
 		}
 		if len(policy.Windows) == 0 {
 			return fmt.Errorf("%s.windows must not be empty", path)
+		}
+		if err := validateBudgetWindowIdentities(policy, path); err != nil {
+			return err
 		}
 		for windowIndex, window := range policy.Windows {
 			windowPath := fmt.Sprintf("%s.windows[%d]", path, windowIndex)

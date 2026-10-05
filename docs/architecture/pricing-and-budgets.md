@@ -296,6 +296,15 @@ resolution and produce no more than the configured maximum buckets per window.
 Policy IDs and window definitions are immutable across a catalog version;
 changes create a new version with explicit carry-forward behavior.
 
+Each window is accounted under `<policy id>/<window id>`. The window id is the
+optional `id` field, or `<duration>-<bucket>` when it is omitted (`24h-5m`). It
+is never the window's list position, so removing, inserting or reordering
+windows cannot point one window at another window's spend. Two windows of one
+policy with the same geometry need explicit ids. A limit change keeps the
+identity and its spend; a reload that changes duration or bucket behind an
+unchanged identity is rejected. See
+[budget window identity](../reference/configuration.md#budget-window-identity).
+
 ## Conservative sliding windows
 
 For time `t`, duration `W`, and bucket size `D`:

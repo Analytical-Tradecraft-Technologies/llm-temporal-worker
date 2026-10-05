@@ -206,7 +206,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	application, err := app.New(ctx, app.Options{
 		InitialConfig:        data,
 		Builder:              builder,
-		ReplacementValidator: validateRuntimeReplacement,
+		ReplacementValidator: newRuntimeReplacementValidator(),
 		Clients: func(buildContext context.Context, snapshot *config.Snapshot) (app.ClientSet, error) {
 			if metrics := liveMetrics.Load(); metrics != nil {
 				metrics.ExtendAllowed(metricAllowedValues(snapshot.Config()))

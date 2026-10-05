@@ -615,6 +615,74 @@ configuration digest, so equivalent JSON and YAML produce the same snapshot.
 No SQL budget configuration is read. See [Redis budget leases](redis-budget-leases.md)
 for the 15-minute start deadline and persistent paid-work accounting.
 
+### Budget window identity
+
+Each window's spend is accounted under the identity `<policy id>/<window id>`.
+The identity never depends on the window's position in `windows`, so
+removing, inserting or reordering windows leaves every other window on its own
+accounting.
+
+`id` is optional on each window. It must match
+`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. When it is omitted, the window id is derived
+from the geometry as `<duration>-<bucket>`, each written as a Go duration
+without trailing zero units: `duration: 24h` with `bucket: 5m` is `24h-5m`,
+`30d` with `1h` is `720h-1h`, and `90m` is `1h30m`. Validation rejects:
+
+- two windows in one policy that resolve to the same window id, including two
+  windows with the same `duration` and `bucket` and no `id` — give each an
+  explicit `id`;
+- an identity longer than 128 bytes, the limit the budget stores accept.
+
+```yaml
+windows:
+  - id: daily          # identity acme-production/daily
+    duration: 24h
+    bucket: 5m
+    limit_usd: "250.000000000000000000"
+  - duration: 1h       # identity acme-production/1h-1m
+    bucket: 1m
+    limit_usd: "25.000000000000000000"
+```
+
+Changing `limit_usd` keeps the identity and the recorded spend. Changing the
+identity selects different accounting: the window starts from zero and the old
+spend is no longer counted against it. This happens when an `id` is added,
+changed or removed, and when `duration` or `bucket` changes on a window
+without an `id`. A reload that keeps an identity but changes its `duration` or
+`bucket` is rejected and the active snapshot stays in place, because the
+recorded buckets and their expiries were written for the old geometry; give
+the window a new `id` instead. The worker remembers every identity it has run
+with since it started, so removing a window in one reload and bringing its `id`
+back with another geometry in a later reload is rejected too. This comparison
+needs the running worker, so it does not apply to `validate-config` or to a
+worker restart: do not reuse an explicit `id` with another geometry across a
+restart either.
+
+Earlier releases identified a window by its list position,
+`<policy id>/<index>`. That is why removing or reordering a window moved the
+remaining windows onto each other's accounting. Positional identities are no
+longer derived. On upgrade, a window without an `id` moves to its
+geometry-derived identity and starts from zero: spend recorded in the current
+window before the upgrade is not counted, for at most one window duration.
+To carry the recorded spend across the upgrade, pin each existing window to
+its former position before upgrading, and keep those ids when the list is
+edited later:
+
+```yaml
+windows:
+  - id: "0"            # was the first window
+    duration: 1h
+    bucket: 1m
+    limit_usd: "25.000000000000000000"
+  - id: "1"            # was the second window
+    duration: 24h
+    bucket: 5m
+    limit_usd: "250.000000000000000000"
+```
+
+Requests admitted before an identity change settle against the identity they
+reserved under.
+
 `pricing.require_price_when_budgeted` controls the explicit unpriced policy.
 When it is `true`, a route without a current catalog quote is eligible only if
 it matches no monetary budget policy. A matching policy always requires a
@@ -851,9 +919,9 @@ request are also validation errors:
 - `limit_usd` must be between `0.000000001` (one nano-USD) and
   `9007199.254740991`, the range Redis represents exactly; `limit_micro_usd`
   is bounded the same way, at `9007199254740`;
-- a policy `id` must leave room for its window identities, which are derived as
-  `<id>/<window index>` and limited to 128 bytes: at most 126 bytes for a
-  policy of up to ten windows.
+- every window identity `<policy id>/<window id>` must fit 128 bytes, so a
+  policy `id` must leave room for its longest window id; see
+  [budget window identity](#budget-window-identity).
 
 ## Model tenant restriction
 
