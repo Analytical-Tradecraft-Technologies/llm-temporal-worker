@@ -30,12 +30,12 @@ func TestLowerRequestMapsSystemToolsOutputSamplingAndReasoning(t *testing.T) {
 		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopP: &topP, TopK: &topK, StopSequences: []string{"END"}},
 		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortMedium, Summary: llm.ReasoningSummaryNone, TokenBudget: &reasoningBudget},
 	}
-	params, err := lowerRequest(request, mustBedrockProfile(t, ""), "priority")
+	params, err := lowerRequest(request, mustBedrockProfile(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	wire := marshalBedrockWire(t, params)
-	if wire["model"] != "claude-contract" || wire["max_tokens"] != float64(maxTokens) || wire["service_tier"] != "priority" {
+	if wire["model"] != "claude-contract" || wire["max_tokens"] != float64(maxTokens) {
 		t.Fatalf("request identity = %#v", wire)
 	}
 	messages, ok := wire["messages"].([]any)
@@ -121,7 +121,7 @@ func TestLowerRejectsUnsupportedProviderControlsAndMedia(t *testing.T) {
 	}
 	for _, test := range invalidRequests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := lowerRequest(test.request, mustBedrockProfile(t, ""), "")
+			_, err := lowerRequest(test.request, mustBedrockProfile(t, ""))
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("lowerRequest() = %v, want substring %q", err, test.want)
 			}
@@ -200,7 +200,7 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning}
-			params, err := lowerRequest(request, mustBedrockProfile(t, ""), "")
+			params, err := lowerRequest(request, mustBedrockProfile(t, ""))
 			if err != nil {
 				t.Fatal(err)
 			}

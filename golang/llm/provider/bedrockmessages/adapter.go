@@ -127,7 +127,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
 		}
 	}
-	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)
+	params, err := lowerRequestWithStrict(normalized, adapter.profile, input.Strict)
 	if err != nil {
 		var unsupportedSchema *anthropicschema.UnsupportedError
 		if errors.As(err, &unsupportedSchema) {
@@ -192,7 +192,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if messages == nil {
 		messages = &adapter.client.sdk.Messages
 	}
-	response, err := messages.New(callContext, params, option.WithResponseInto(&rawResponse))
+	// InvokeModel takes the requested tier as a header, not as an Anthropic
+	// body field. It is set before the Bedrock middleware signs the request.
+	options := []option.RequestOption{option.WithResponseInto(&rawResponse)}
+	if call.Metadata.ProviderTier != "" {
+		options = append(options, option.WithHeader(serviceTierHeader, call.Metadata.ProviderTier))
+	}
+	response, err := messages.New(callContext, params, options...)
 	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
 		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
 	}

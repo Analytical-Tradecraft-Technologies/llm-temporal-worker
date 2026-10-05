@@ -13,8 +13,9 @@ const (
 	adapterName              = "bedrock.messages"
 	defaultCapabilityVersion = "bedrock-anthropic/v1"
 	defaultMaxTokens         = int64(1024)
-	// serviceTierHeader is where InvokeModel reports the tier that served a
-	// request; the Anthropic response body is not documented to carry it.
+	// serviceTierHeader carries the Bedrock service tier on InvokeModel: the
+	// requested tier on the request and the tier that served it on the
+	// response. The Anthropic body is not documented to carry either.
 	serviceTierHeader = "X-Amzn-Bedrock-Service-Tier"
 )
 

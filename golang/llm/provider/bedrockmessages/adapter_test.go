@@ -77,9 +77,10 @@ func TestCompileMapsOnlyTheThreePublicBedrockServiceClasses(t *testing.T) {
 		if call.Metadata.ProviderTier != test.tier {
 			t.Fatalf("class %q provider tier = %q, want %q", test.class, call.Metadata.ProviderTier, test.tier)
 		}
+		// The tier travels as an InvokeModel header, never in the Anthropic body.
 		wire := marshalBedrockWire(t, call.SDKParams)
-		if wire["service_tier"] != test.tier {
-			t.Fatalf("class %q wire tier = %#v, want %q", test.class, wire["service_tier"], test.tier)
+		if tier, present := wire["service_tier"]; present {
+			t.Fatalf("class %q wire body carried service_tier %#v", test.class, tier)
 		}
 	}
 }
@@ -141,11 +142,13 @@ func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
 	responseBody := string(mustReadBedrockFixture(t, "invoke.response.json"))
 	calls := 0
 	var requestBody []byte
+	var requestHeaders http.Header
 	client, err := NewClient(context.Background(), ClientConfig{
 		BaseURL: "http://127.0.0.1",
 		HTTPClient: &http.Client{Transport: bedrockRoundTrip(func(request *http.Request) (*http.Response, error) {
 			calls++
 			requestBody, _ = io.ReadAll(request.Body)
+			requestHeaders = request.Header.Clone()
 			if !strings.HasSuffix(request.URL.Path, "/model/claude-contract/invoke") {
 				t.Errorf("Bedrock request path = %q", request.URL.Path)
 			}
@@ -179,8 +182,16 @@ func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
 	if calls != 1 || result.Response.Provider.RequestID != "bedrock-req-1" || result.Response.Service.Actual == nil || *result.Response.Service.Actual != llm.ServiceClassStandard {
 		t.Fatalf("calls/response = %d %#v", calls, result.Response)
 	}
-	if !strings.Contains(string(requestBody), `"service_tier":"default"`) {
-		t.Fatalf("Bedrock request body omitted default tier: %s", requestBody)
+	// InvokeModel takes the requested tier as a header; the header is set
+	// before the Bedrock middleware runs, so SigV4 covers it.
+	if strings.Contains(string(requestBody), "service_tier") {
+		t.Fatalf("Bedrock request body carried a service tier: %s", requestBody)
+	}
+	if got := requestHeaders.Get(serviceTierHeader); got != "default" {
+		t.Fatalf("Bedrock request tier header = %q, want %q", got, "default")
+	}
+	if authorization := requestHeaders.Get("Authorization"); !strings.Contains(strings.ToLower(authorization), strings.ToLower(serviceTierHeader)) {
+		t.Fatalf("SigV4 signed headers omit %s: %s", serviceTierHeader, authorization)
 	}
 	if strings.Contains(string(requestBody), "contract-secret") {
 		t.Fatal("AWS secret appeared in Bedrock request body")

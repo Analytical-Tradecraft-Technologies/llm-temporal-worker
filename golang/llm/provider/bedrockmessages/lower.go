@@ -14,11 +14,15 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
-func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
-	return lowerRequestWithStrict(request, profile, serviceTier, false)
+// lowerRequest builds the Anthropic body InvokeModel forwards to the model.
+// The Bedrock service tier is not part of that body: InvokeModel takes it as
+// the X-Amzn-Bedrock-Service-Tier request header, which Invoke sets from the
+// call metadata.
+func lowerRequest(request llm.Request, profile Profile) (anthropic.MessageNewParams, error) {
+	return lowerRequestWithStrict(request, profile, false)
 }
 
-func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier string, strict bool) (anthropic.MessageNewParams, error) {
+func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (anthropic.MessageNewParams, error) {
 	if strict && hasMixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, fmt.Errorf("instruction hierarchy cannot be preserved by Bedrock Messages in strict portability mode")
 	}
@@ -80,9 +84,6 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 			}
 		}
 		target["system"] = system
-	}
-	if serviceTier != "" {
-		target["service_tier"] = serviceTier
 	}
 	if request.Sampling != nil {
 		if err := lowerSampling(*request.Sampling, target); err != nil {
