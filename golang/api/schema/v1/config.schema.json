@@ -447,7 +447,7 @@
     },
     "budget_window": {
       "type": "object", "additionalProperties": false, "required": ["duration", "bucket"],
-      "properties": { "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_usd": { "type": "string", "pattern": "^(0|[0-9]{1,20})(\\.[0-9]{1,18})?$" }, "limit_micro_usd": { "type": "integer", "minimum": 1 } },
+      "properties": { "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", "description": "Optional stable window name. The accounting identity is <policy id>/<id>, at most 128 bytes; when omitted, <id> is derived from duration and bucket, for example 24h-5m." }, "duration": { "$ref": "#/$defs/duration" }, "bucket": { "$ref": "#/$defs/duration" }, "limit_usd": { "type": "string", "pattern": "^(0|[0-9]{1,20})(\\.[0-9]{1,18})?$" }, "limit_micro_usd": { "type": "integer", "minimum": 1 } },
       "anyOf": [{"required": ["limit_usd"]}, {"required": ["limit_micro_usd"]}]
     },
     "budget_policy": {

@@ -9,6 +9,8 @@ import (
 
 var errProcessLifetimeConfigurationChanged = errors.New("process-lifetime configuration cannot change during reload")
 
+var errBudgetWindowGeometryChanged = errors.New("budget window geometry cannot change behind an existing identity during reload")
+
 // validateRuntimeReplacement compares only configuration captured by resources
 // constructed once in New. Provider/state clients and request catalogs are
 // rebuilt per snapshot and deliberately do not belong in this projection.
@@ -52,6 +54,30 @@ func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 	} {
 		if field.changed {
 			return fmt.Errorf("%w: %s", errProcessLifetimeConfigurationChanged, field.name)
+		}
+	}
+	return validateBudgetWindowGeometry(before.Budgets, after.Budgets)
+}
+
+// validateBudgetWindowGeometry rejects a replacement that keeps a budget
+// window identity but changes its duration or bucket. The identity selects the
+// accounting hash, whose bucket layout and expiries were written for the old
+// geometry. Only an explicit window id can do this: a derived identity changes
+// with the geometry and starts separate accounting.
+func validateBudgetWindowGeometry(before, after config.BudgetsConfig) error {
+	type geometry struct{ duration, bucket config.Duration }
+	current := make(map[string]geometry)
+	for _, policy := range before.Policies {
+		for _, window := range policy.Windows {
+			current[policy.WindowIdentity(window)] = geometry{window.Duration, window.Bucket}
+		}
+	}
+	for policyIndex, policy := range after.Policies {
+		for windowIndex, window := range policy.Windows {
+			previous, exists := current[policy.WindowIdentity(window)]
+			if exists && previous != (geometry{window.Duration, window.Bucket}) {
+				return fmt.Errorf("%w: budgets.policies[%d].windows[%d] keeps its id but changes duration or bucket; give the window a new id", errBudgetWindowGeometryChanged, policyIndex, windowIndex)
+			}
 		}
 	}
 	return nil

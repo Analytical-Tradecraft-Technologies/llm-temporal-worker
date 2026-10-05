@@ -294,6 +294,9 @@ type BudgetMatch struct {
 }
 
 type BudgetWindow struct {
+	// ID optionally names the window within its policy. When empty the
+	// identity is derived from duration and bucket; see BudgetWindow.Key.
+	ID            string      `yaml:"id,omitempty" json:"id,omitempty"`
 	Duration      Duration    `yaml:"duration" json:"duration"`
 	Bucket        Duration    `yaml:"bucket" json:"bucket"`
 	LimitUSD      pricing.USD `yaml:"limit_usd" json:"limit_usd"`

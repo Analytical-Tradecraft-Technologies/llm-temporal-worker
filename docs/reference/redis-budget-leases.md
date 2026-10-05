@@ -121,8 +121,15 @@ Budget policies come from worker settings, using `budgets_json` or the existing
 Changing limits under stable policy/window identities preserves existing usage.
 The runtime uses stable Redis budget identities across configuration reloads.
 Changing the Redis namespace or policy/window identities is not a limit update:
-it selects different accounting keys. Window geometry changes need a separate
-migration policy.
+it selects different accounting keys. A window identity is
+`<policy id>/<window id>`, where the window id is the configured `id` or, when
+omitted, `<duration>-<bucket>`; it does not depend on the window's position in
+the list, so editing other windows does not move a window's accounting. A
+reload that keeps an identity but changes its duration or bucket is rejected,
+because the stored bucket layout would no longer match; a geometry change
+takes a new identity and starts from zero. See
+[budget window identity](configuration.md#budget-window-identity), including
+how to keep accounting recorded under the former positional identities.
 
 Workers using the same namespace see the same atomic budget state. When
 `state.redis.coordination_stream_enabled` is true, the runtime publishes budget

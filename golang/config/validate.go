@@ -632,6 +632,9 @@ func (budgets BudgetsConfig) validate() error {
 		if len(policy.Windows) == 0 {
 			return fmt.Errorf("%s.windows must not be empty", path)
 		}
+		if err := validateBudgetWindowIdentities(policy, path); err != nil {
+			return err
+		}
 		for windowIndex, window := range policy.Windows {
 			windowPath := fmt.Sprintf("%s.windows[%d]", path, windowIndex)
 			if err := validatePositiveDuration(window.Duration, windowPath+".duration"); err != nil {

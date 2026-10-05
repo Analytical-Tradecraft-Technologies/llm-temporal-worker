@@ -48,6 +48,11 @@ compatible compilation from that identity or stop; this helper does not permit
 substituting a current route or SDK request. Admission expiry is not refreshed
 on replay; Redis decides whether an unused lease is still eligible.
 
+Saved reservations name each window by its
+[budget window identity](configuration.md#budget-window-identity). A
+reservation made before a window's identity changed stays under, and is settled
+against, the identity it was made with, not the window's current one.
+
 Provider-pending, outcome-unknown, terminal and finalizing requests cannot resume
 initial admission through these functions. Outcome-unknown retry orchestration
 must record a separate paid attempt, obtain fresh budget, and retain the old
