@@ -158,6 +158,7 @@ type memoryBlobs struct {
 	mu     sync.Mutex
 	values map[blob.BlobKey][]byte
 	hook   func(blob.BlobKey) (before, after error)
+	open   func(blob.BlobKey) error
 	trace  func(string)
 }
 
@@ -196,6 +197,11 @@ func (s *memoryBlobs) Open(ctx context.Context, key blob.BlobKey) (blob.BlobRead
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return blob.BlobReadResult{}, err
+	}
+	if s.open != nil {
+		if err := s.open(key); err != nil {
+			return blob.BlobReadResult{}, err
+		}
 	}
 	data, ok := s.values[key]
 	if !ok {

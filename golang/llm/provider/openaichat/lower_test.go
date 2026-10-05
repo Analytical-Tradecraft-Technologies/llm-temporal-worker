@@ -65,6 +65,9 @@ func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
 	if !ok || choice["type"] != "function" {
 		t.Fatalf("declared tools lost named choice: %#v", wire["tool_choice"])
 	}
+	if function, ok := choice["function"].(map[string]any); !ok || function["name"] != "lookup" {
+		t.Fatalf("named choice lost its function name: %#v", wire["tool_choice"])
+	}
 	messages := wire["messages"].([]any)
 	if messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "developer" {
 		t.Fatalf("instruction roles = %#v", messages[:2])

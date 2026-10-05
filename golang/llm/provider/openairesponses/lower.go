@@ -22,19 +22,16 @@ func providerTier(class llm.ServiceClass) string {
 	}
 }
 
-func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	return lowerRequestForEndpoint(request, serviceClass, false)
-}
-
-// lowerRequestForEndpoint lowers a request under the endpoint's storage policy.
-// A storage-denied endpoint is used statelessly, so a reasoning item is only
+// lowerRequestMap builds the intended Responses wire body. lowerRequest carries
+// it into the SDK parameter type; the two must stay wire-equivalent. A
+// storage-denied endpoint is used statelessly, so a reasoning item is only
 // replayable when it carries its encrypted content.
-func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (responses.ResponseNewParams, error) {
+func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (map[string]any, loweredToolPolicy, error) {
 	input := make([]any, 0, len(request.Instructions)+len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		input = append(input, item)
 	}
@@ -42,7 +39,7 @@ func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass,
 	for index, item := range request.Input {
 		lowered, err := lowerItem(item)
 		if err != nil {
-			return responses.ResponseNewParams{}, fmt.Errorf("input item %d: %w", index, err)
+			return nil, loweredToolPolicy{}, fmt.Errorf("input item %d: %w", index, err)
 		}
 		items = append(items, lowered)
 	}
@@ -58,7 +55,7 @@ func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass,
 	if request.Output != nil {
 		output, err := lowerOutput(*request.Output)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		for key, value := range output {
 			requestMap[key] = value
@@ -66,13 +63,13 @@ func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass,
 	}
 	if request.Sampling != nil {
 		if err := lowerSampling(requestMap, *request.Sampling); err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 	}
 	if request.Reasoning != nil {
 		reasoning, err := lowerReasoning(*request.Reasoning)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		if reasoning != nil {
 			requestMap["reasoning"] = reasoning
@@ -81,28 +78,41 @@ func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass,
 	if len(request.Tools) > 0 {
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
-			return responses.ResponseNewParams{}, err
+			return nil, loweredToolPolicy{}, err
 		}
 		requestMap["tools"] = tools
 	}
 	policy, err := lowerToolPolicy(request.ToolPolicy)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return nil, loweredToolPolicy{}, err
 	}
 	requestMap["tool_choice"] = policy.choice
 	requestMap["parallel_tool_calls"] = policy.parallel
 	continuation, err := lowerContinuation(request.Continuation)
 	if err != nil {
-		return responses.ResponseNewParams{}, err
+		return nil, loweredToolPolicy{}, err
 	}
 	if continuation != "" {
 		requestMap["previous_response_id"] = continuation
 	}
 	if err := lowerExtensions(request.Extensions, requestMap); err != nil {
-		return responses.ResponseNewParams{}, err
+		return nil, loweredToolPolicy{}, err
 	}
 	if storageDenied && (reasoningState || reasoningRequested(request.Reasoning)) {
 		requestMap["include"] = includeEncryptedReasoning(requestMap["include"])
+	}
+	return requestMap, policy, nil
+}
+
+func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+	return lowerRequestForEndpoint(request, serviceClass, false)
+}
+
+// lowerRequestForEndpoint lowers a request under the endpoint's storage policy.
+func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (responses.ResponseNewParams, error) {
+	requestMap, policy, err := lowerRequestMap(request, serviceClass, storageDenied)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
 	}
 	encoded, err := json.Marshal(requestMap)
 	if err != nil {
