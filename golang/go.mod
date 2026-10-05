@@ -2,6 +2,8 @@ module github.com/mfow/llm-temporal-worker/golang
 
 go 1.26.0
 
+toolchain go1.26.7
+
 tool golang.org/x/vuln/cmd/govulncheck
 
 require (
