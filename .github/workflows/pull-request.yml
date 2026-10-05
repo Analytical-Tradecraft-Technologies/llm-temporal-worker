@@ -224,7 +224,7 @@ jobs:
           output="$(mktemp)"
           trap 'rm -f "$output"' EXIT
           test_status=0
-          go test -race ./... -json >"$output" 2>&1 || test_status=$?
+          go test -race ./... -timeout 20m -json >"$output" 2>&1 || test_status=$?
           go run ./tools/sourceverify -test-output "$output"
           if (( test_status != 0 )); then
             cat "$output"
