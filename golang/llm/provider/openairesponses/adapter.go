@@ -20,6 +20,14 @@ type Adapter struct {
 	endpointID        string
 	capabilityVersion string
 	storageDenied     bool
+	omitServiceTier   bool
+}
+
+// WithoutRequestServiceTier keeps service_tier out of the request for APIs
+// that do not define the field, such as Azure OpenAI Responses. The public
+// service class still selects routing and pricing.
+func WithoutRequestServiceTier() AdapterOption {
+	return func(adapter *Adapter) { adapter.omitServiceTier = true }
 }
 
 // ModelListerAdapter is the direct OpenAI Responses adapter with its optional
@@ -66,6 +74,28 @@ func NewAdapter(client *Client, endpointID, capabilityVersion string, options ..
 }
 
 func (adapter *Adapter) Name() string { return adapterName }
+
+// lowerRequestMap builds the intended wire body for this endpoint: the common
+// lowering with the endpoint's request policy applied to the map itself, so
+// the body that is sent is exactly the body that was intended.
+func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[string]any, loweredToolPolicy, error) {
+	requestMap, policy, err := lowerRequestMap(request, serviceClass)
+	if err != nil {
+		return nil, loweredToolPolicy{}, err
+	}
+	if adapter.omitServiceTier {
+		delete(requestMap, "service_tier")
+	}
+	return requestMap, policy, nil
+}
+
+func (adapter *Adapter) lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+	requestMap, policy, err := adapter.lowerRequestMap(request, serviceClass)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
+	return requestParams(requestMap, policy)
+}
 
 func (adapter *Adapter) Capabilities(ctx context.Context, query provider.CapabilityQuery) (provider.CapabilitySet, error) {
 	if adapter == nil {
@@ -120,7 +150,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
 		return provider.Call{}, compileError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
 	}
-	params, err := lowerRequest(normalized, serviceClass)
+	params, err := adapter.lowerRequest(normalized, serviceClass)
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}

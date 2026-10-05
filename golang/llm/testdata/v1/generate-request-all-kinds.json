@@ -1,0 +1,28 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "all-kinds-1",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "parent": "ckp_v1.parent",
+  "append": [
+    {"kind": "message", "actor": "human", "content": [
+      {"kind": "text", "text": "Compare the photo with the report."},
+      {"kind": "image", "media_type": "image/png", "url": "https://example.com/claim/photo.png", "detail": "high"},
+      {"kind": "image", "media_type": "image/png", "bytes": "aGVsbG8="},
+      {"kind": "image", "media_type": "image/jpeg", "blob": {"digest": "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "byte_length": 5, "media_type": "image/jpeg", "locator": "blob://media/photo-2"}},
+      {"kind": "document", "media_type": "application/pdf", "url": "https://example.com/claim/report.pdf", "title": "Assessor report"},
+      {"kind": "document", "media_type": "text/plain", "bytes": "aGVsbG8="},
+      {"kind": "document", "media_type": "application/pdf", "blob": {"digest": "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "byte_length": 5, "media_type": "application/pdf", "locator": "blob://media/report-2"}},
+      {"kind": "json", "value": {"claim": 4831, "flags": ["urgent", null, true]}}
+    ]},
+    {"kind": "message", "actor": "model", "content": [
+      {"kind": "provider_state", "provider": "anthropic", "endpoint_family": "anthropic_messages", "media_type": "application/json", "opaque": "eyJ0eXBlIjoidGhpbmtpbmcifQ=="},
+      {"kind": "refusal", "text": "I cannot assess that image.", "provider_code": "openai.refusal"},
+      {"kind": "refusal", "text": "Declined."}
+    ]},
+    {"kind": "tool_call", "id": "call-1", "name": "lookup_claim", "arguments": {"claim": 4831}},
+    {"kind": "tool_result", "call_id": "call-1", "name": "lookup_claim", "content": [{"kind": "json", "value": {"approved": true}}], "is_error": false},
+    {"kind": "provider_state", "provider": "openai", "endpoint_family": "openai_responses", "media_type": "application/json", "opaque": "eyJ0eXBlIjoicmVhc29uaW5nIn0="},
+    {"kind": "reference", "uri": "https://example.com/policy", "metadata": {"title": "Claims policy", "rank": 1}},
+    {"kind": "reference", "uri": "urn:claims:4831"}
+  ]
+}

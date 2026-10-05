@@ -109,6 +109,11 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
+	return requestParams(requestMap, policy)
+}
+
+// requestParams carries an intended wire body into the SDK parameter type.
+func requestParams(requestMap map[string]any, policy loweredToolPolicy) (responses.ResponseNewParams, error) {
 	encoded, err := json.Marshal(requestMap)
 	if err != nil {
 		return responses.ResponseNewParams{}, err

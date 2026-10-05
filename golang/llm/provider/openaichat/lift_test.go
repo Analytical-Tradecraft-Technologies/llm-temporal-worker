@@ -63,7 +63,7 @@ func TestLiftCompletedToolResponsePreservesUsageAndIDs(t *testing.T) {
 	}
 }
 
-func TestLiftMapsFinishReasonsAndRejectsUnknownTier(t *testing.T) {
+func TestLiftMapsFinishReasonsAndKeepsUnreportedTierUnclassified(t *testing.T) {
 	for _, test := range []struct {
 		reason string
 		want   llm.ResponseStatus
@@ -78,11 +78,24 @@ func TestLiftMapsFinishReasonsAndRejectsUnknownTier(t *testing.T) {
 			t.Fatalf("reason %q = %#v, %v", test.reason, got, err)
 		}
 	}
-	unknown := openai.ChatCompletion{ID: "id", Model: "model", ServiceTier: "scale", Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Role: "assistant"}}}}
-	_, err := testProfile().liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &unknown, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("unknown tier error = %#v", err)
+	// A paid response is never discarded over its tier label: a missing or
+	// unrecognized tier reports no actual class and keeps the raw value.
+	for _, tier := range []openai.ChatCompletionServiceTier{"", "scale"} {
+		response := openai.ChatCompletion{ID: "id", Model: "model", ServiceTier: tier, Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Role: "assistant"}}}}
+		got, err := testProfile().liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassPriority}, &response, "req")
+		if err != nil {
+			t.Fatalf("tier %q: %v", tier, err)
+		}
+		if got.Service.Actual != nil || got.Service.Attempted != llm.ServiceClassPriority || got.Service.ProviderValue != string(tier) {
+			t.Fatalf("tier %q service facts = %+v", tier, got.Service)
+		}
+	}
+	explicit := testProfile()
+	explicit.MissingActualServiceClass = llm.ServiceClassStandard
+	response := openai.ChatCompletion{ID: "id", Model: "model", Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Role: "assistant"}}}}
+	got, err := explicit.liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassPriority}, &response, "req")
+	if err != nil || got.Service.Actual == nil || *got.Service.Actual != llm.ServiceClassStandard {
+		t.Fatalf("explicit missing-tier class = %+v, %v", got.Service, err)
 	}
 }
 

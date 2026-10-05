@@ -149,13 +149,45 @@ func TestLiftMapsTerminalReasonsAndRejectsInvalidProviderFacts(t *testing.T) {
 	}{
 		{name: "tool stop without tool", response: anthropic.Message{ID: "missing-tool", Model: "claude-contract", StopReason: anthropic.StopReasonToolUse, Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTier("default")}}},
 		{name: "unknown stop reason", response: anthropic.Message{ID: "unknown-stop", Model: "claude-contract", StopReason: anthropic.StopReason("future_reason"), Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTier("default")}}},
-		{name: "unknown service tier", response: anthropic.Message{ID: "unknown-tier", Model: "claude-contract", StopReason: anthropic.StopReasonEndTurn, Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTier("scale")}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := profile.liftResponse(call, &test.response, "req")
 			var providerErr *provider.Error
 			if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
 				t.Fatalf("invalid response error = %#v", err)
+			}
+		})
+	}
+}
+
+// A paid response is never discarded over its tier label. InvokeModel reports
+// the tier in a response header, so the body tier is optional; a missing or
+// unrecognized tier reports no actual class and keeps the raw value.
+func TestLiftKeepsUnreportedTierUnclassifiedAndReadsHeaderTier(t *testing.T) {
+	profile := mustBedrockProfile(t, "")
+	call := provider.Call{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract", OperationKey: "bedrock-tier", ServiceClass: llm.ServiceClassPriority}
+	standard, priority := llm.ServiceClassStandard, llm.ServiceClassPriority
+	for _, test := range []struct {
+		name, body, header, wantValue string
+		want                          *llm.ServiceClass
+	}{
+		{name: "no tier anywhere"},
+		{name: "header only", header: "priority", wantValue: "priority", want: &priority},
+		{name: "body wins over header", body: "default", header: "priority", wantValue: "default", want: &standard},
+		{name: "reserved capacity", header: "reserved", wantValue: "reserved"},
+		{name: "unknown body tier", body: "scale", wantValue: "scale"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := anthropic.Message{ID: "tier", Model: "claude-contract", StopReason: anthropic.StopReasonEndTurn, Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTier(test.body)}}
+			got, err := profile.liftResponseWithTier(call, &response, "req", test.header)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Service.Attempted != llm.ServiceClassPriority || got.Service.ProviderValue != test.wantValue {
+				t.Fatalf("service facts = %+v", got.Service)
+			}
+			if (got.Service.Actual == nil) != (test.want == nil) || (test.want != nil && *got.Service.Actual != *test.want) {
+				t.Fatalf("actual class = %v, want %v", got.Service.Actual, test.want)
 			}
 		})
 	}

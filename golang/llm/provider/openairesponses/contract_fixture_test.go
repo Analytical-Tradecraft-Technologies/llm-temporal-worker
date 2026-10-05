@@ -45,7 +45,7 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			params, err := lowerRequest(normalized, serviceClass)
+			params, err := fixtureAdapterForProfile(t, profile).lowerRequest(normalized, serviceClass)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -496,10 +496,7 @@ func assertProfileClassFacts(t *testing.T, profile responsesFixtureProfile) {
 		if got := marshalParams(t, params)["service_tier"]; got != fact.RequestedTier {
 			t.Fatalf("%s %s requested tier = %#v, want %q", profile.id, fact.Class, got, fact.RequestedTier)
 		}
-		actual, err := serviceClassForTier(responses.ResponseServiceTier(fact.ActualTier))
-		if err != nil {
-			t.Fatalf("%s %s actual tier %q: %v", profile.id, fact.Class, fact.ActualTier, err)
-		}
+		actual := serviceClassForTier(responses.ResponseServiceTier(fact.ActualTier))
 		if actual == nil || *actual != actualByClass[fact.Class] {
 			t.Fatalf("%s %s actual class = %#v, want %q", profile.id, fact.Class, actual, actualByClass[fact.Class])
 		}

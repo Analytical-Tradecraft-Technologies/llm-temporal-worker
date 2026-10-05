@@ -249,8 +249,15 @@ func (state ProviderState) MarshalJSON() ([]byte, error) {
 		"provider":        state.Provider,
 		"endpoint_family": state.EndpointFamily,
 		"media_type":      state.MediaType,
-		"opaque":          copyBytes(state.Opaque),
+		"opaque":          opaqueBytes(state.Opaque),
 	})
+}
+
+// opaqueBytes copies a provider-state payload for marshalling. An empty
+// payload stays an empty base64 string: a nil slice would marshal as null,
+// which decodeProviderState and the published schema reject.
+func opaqueBytes(value []byte) []byte {
+	return append([]byte{}, value...)
 }
 
 func decodeProviderState(data []byte) (ProviderState, error) {
@@ -773,7 +780,7 @@ func (part ProviderStatePart) MarshalJSON() ([]byte, error) {
 		"provider":        part.Provider,
 		"endpoint_family": part.EndpointFamily,
 		"media_type":      part.MediaType,
-		"opaque":          copyBytes(part.Opaque),
+		"opaque":          opaqueBytes(part.Opaque),
 	})
 }
 

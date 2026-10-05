@@ -101,3 +101,27 @@ func TestGenerateRecordsUnreportedActualServiceClassAsUnknown(t *testing.T) {
 	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "unknown", "endpoint": "endpoint-1"}, 1)
 	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 0)
 }
+
+// A response that reports no actual class did not report a mappable tier, so
+// the request tier must not be recorded as the provider's own label.
+func TestGenerateKeepsProviderValueEmptyWhenNoTierWasReported(t *testing.T) {
+	unreported := &fakeAdapter{name: "fake", response: successfulResponse()}
+	response, err := newHarness(t, unreported).engine.Generate(context.Background(), baseRequest("provider-value-unreported"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Service.Actual != nil || response.Service.ProviderValue != "" {
+		t.Fatalf("service facts = %+v, want no actual class and no provider value", response.Service)
+	}
+
+	standard := llm.ServiceClassStandard
+	classified := &fakeAdapter{name: "fake", response: successfulResponse()}
+	classified.response.Service.Actual = &standard
+	response, err = newHarness(t, classified).engine.Generate(context.Background(), baseRequest("provider-value-classified"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Service.Actual == nil || response.Service.ProviderValue == "" {
+		t.Fatalf("service facts = %+v, want the request tier as the classified response's label", response.Service)
+	}
+}

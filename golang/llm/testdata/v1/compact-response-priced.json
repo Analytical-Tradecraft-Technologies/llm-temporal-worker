@@ -1,0 +1,14 @@
+{
+  "api_version": "llm.temporal/compact/v1",
+  "operation_key": "compact-priced-1",
+  "operation_id": "op-compact-priced-1",
+  "status": "completed",
+  "checkpoint": {"handle": "ckp_v1.compact", "parent": "ckp_v1.child", "kind": "compaction", "depth": 3},
+  "cache": {"disposition": "miss_populated", "variant": 2},
+  "provenance": {"source": "provider", "policy_version": "policy-v1", "prompt_version": "prompt-v1"},
+  "usage": {"input_tokens": 900, "output_tokens": 120, "reasoning_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "provider_raw": {"total_tokens": 1020}},
+  "cost": {"status": "exact", "actual_cost_usd": "0.0021", "method": "catalog_usage", "catalog_version": "prices-2026-07-13"},
+  "diagnostics": [
+    {"code": "summary_truncated", "severity": "warning", "message": "Summary was shortened", "path": "/policy/target_tokens", "details": {"target_tokens": "100"}}
+  ]
+}

@@ -64,9 +64,13 @@ func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
 	if err := json.Unmarshal(body, &wire); err != nil {
 		t.Fatal(err)
 	}
-	extra, ok := wire["extra_body"].(map[string]any)
-	if !ok || extra["text"] != true {
-		t.Fatalf("exa extra body = %#v", wire["extra_body"])
+	if wire["text"] != true {
+		t.Fatalf("exa text = %#v", wire["text"])
+	}
+	for _, field := range []string{"extra_body", "service_tier"} {
+		if _, present := wire[field]; present {
+			t.Fatalf("exa request sent %q: %s", field, body)
+		}
 	}
 	if result.Response.Cost.ActualCostUSD == nil || result.Response.Cost.ActualCostUSD.String() != "0.000001230000000000" || result.Response.Provider.RequestID != "exa-req-1" || result.Response.Provider.GenerationID != "exa-generation-1" {
 		t.Fatalf("exa response metadata = %#v", result.Response)
