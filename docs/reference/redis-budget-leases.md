@@ -125,8 +125,9 @@ it selects different accounting keys. A window identity is
 `<policy id>/<window id>`, where the window id is the configured `id` or, when
 omitted, `<duration>-<bucket>`; it does not depend on the window's position in
 the list, so editing other windows does not move a window's accounting. A
-reload that keeps an identity but changes its duration or bucket is rejected,
-because the stored bucket layout would no longer match; a geometry change
+reload that uses an identity the running worker has already accounted with
+another duration or bucket is rejected, even if the identity was removed in
+between, because the stored bucket layout would no longer match; a geometry change
 takes a new identity and starts from zero. See
 [budget window identity](configuration.md#budget-window-identity), including
 how to keep accounting recorded under the former positional identities.

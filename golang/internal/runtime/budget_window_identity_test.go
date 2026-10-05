@@ -165,7 +165,7 @@ func TestReloadRejectsGeometryChangeBehindBudgetWindowIdentity(t *testing.T) {
 		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
 			return app.ClientSetFunc(func(context.Context) error { return nil }), nil
 		},
-		ReplacementValidator: validateRuntimeReplacement,
+		ReplacementValidator: newRuntimeReplacementValidator(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -190,5 +190,18 @@ func TestReloadRejectsGeometryChangeBehindBudgetWindowIdentity(t *testing.T) {
 	allowed := budgetWindowYAML("", "1h", "5m", "10") + budgetWindowYAML("daily", "24h", "5m", "250")
 	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, allowed)); err != nil {
 		t.Fatalf("Reload() with stable identities = %v", err)
+	}
+
+	// Removing the window does not free its id for another geometry: the
+	// accounting written under it may still be in Redis.
+	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("", "1h", "5m", "10"))); err != nil {
+		t.Fatalf("Reload() removing the daily window = %v", err)
+	}
+	err = application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "12h", "1h", "100")))
+	if !errors.Is(err, errBudgetWindowGeometryChanged) {
+		t.Fatalf("Reload() reintroducing a removed id with another geometry = %v, want geometry rejection", err)
+	}
+	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "24h", "5m", "100"))); err != nil {
+		t.Fatalf("Reload() reintroducing a removed id with its geometry = %v", err)
 	}
 }

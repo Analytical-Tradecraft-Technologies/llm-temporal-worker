@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 )
@@ -15,6 +16,18 @@ var errBudgetWindowGeometryChanged = errors.New("budget window geometry cannot c
 // constructed once in New. Provider/state clients and request catalogs are
 // rebuilt per snapshot and deliberately do not belong in this projection.
 func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
+	return (&budgetWindowGeometries{}).validateReplacement(current, replacement)
+}
+
+// newRuntimeReplacementValidator returns the validator for one worker
+// process. It remembers the geometry of every budget window identity an
+// active snapshot has used, so an identity removed by one reload cannot come
+// back with another geometry in a later one while its accounting may remain.
+func newRuntimeReplacementValidator() func(current, replacement *config.Snapshot) error {
+	return (&budgetWindowGeometries{}).validateReplacement
+}
+
+func (geometries *budgetWindowGeometries) validateReplacement(current, replacement *config.Snapshot) error {
 	if current == nil || replacement == nil {
 		return errProcessLifetimeConfigurationChanged
 	}
@@ -56,27 +69,40 @@ func validateRuntimeReplacement(current, replacement *config.Snapshot) error {
 			return fmt.Errorf("%w: %s", errProcessLifetimeConfigurationChanged, field.name)
 		}
 	}
-	return validateBudgetWindowGeometry(before.Budgets, after.Budgets)
+	return geometries.validate(before.Budgets, after.Budgets)
 }
 
-// validateBudgetWindowGeometry rejects a replacement that keeps a budget
-// window identity but changes its duration or bucket. The identity selects the
-// accounting hash, whose bucket layout and expiries were written for the old
-// geometry. Only an explicit window id can do this: a derived identity changes
-// with the geometry and starts separate accounting.
-func validateBudgetWindowGeometry(before, after config.BudgetsConfig) error {
-	type geometry struct{ duration, bucket config.Duration }
-	current := make(map[string]geometry)
+type budgetWindowGeometry struct{ duration, bucket config.Duration }
+
+// budgetWindowGeometries records the duration and bucket each budget window
+// identity has been active with.
+type budgetWindowGeometries struct {
+	mu   sync.Mutex
+	seen map[string]budgetWindowGeometry
+}
+
+// validate rejects a replacement that uses a known budget window identity
+// with another duration or bucket. The identity selects the accounting hash,
+// whose bucket layout and expiries were written for the old geometry. Only an
+// explicit window id can do this: a derived identity changes with the
+// geometry and starts separate accounting. The active policies are recorded
+// on every call, so identities are remembered after they leave the snapshot.
+func (geometries *budgetWindowGeometries) validate(before, after config.BudgetsConfig) error {
+	geometries.mu.Lock()
+	defer geometries.mu.Unlock()
+	if geometries.seen == nil {
+		geometries.seen = make(map[string]budgetWindowGeometry)
+	}
 	for _, policy := range before.Policies {
 		for _, window := range policy.Windows {
-			current[policy.WindowIdentity(window)] = geometry{window.Duration, window.Bucket}
+			geometries.seen[policy.WindowIdentity(window)] = budgetWindowGeometry{window.Duration, window.Bucket}
 		}
 	}
 	for policyIndex, policy := range after.Policies {
 		for windowIndex, window := range policy.Windows {
-			previous, exists := current[policy.WindowIdentity(window)]
-			if exists && previous != (geometry{window.Duration, window.Bucket}) {
-				return fmt.Errorf("%w: budgets.policies[%d].windows[%d] keeps its id but changes duration or bucket; give the window a new id", errBudgetWindowGeometryChanged, policyIndex, windowIndex)
+			previous, exists := geometries.seen[policy.WindowIdentity(window)]
+			if exists && previous != (budgetWindowGeometry{window.Duration, window.Bucket}) {
+				return fmt.Errorf("%w: budgets.policies[%d].windows[%d] uses an id this worker has accounted with another duration or bucket; give the window a new id", errBudgetWindowGeometryChanged, policyIndex, windowIndex)
 			}
 		}
 	}

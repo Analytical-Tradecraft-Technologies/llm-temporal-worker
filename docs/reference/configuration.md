@@ -608,9 +608,12 @@ changed or removed, and when `duration` or `bucket` changes on a window
 without an `id`. A reload that keeps an identity but changes its `duration` or
 `bucket` is rejected and the active snapshot stays in place, because the
 recorded buckets and their expiries were written for the old geometry; give
-the window a new `id` instead. This comparison needs the running snapshot, so
-it does not apply to `validate-config` or to a worker restart: do not change the
-geometry behind an explicit `id` across a restart either.
+the window a new `id` instead. The worker remembers every identity it has run
+with since it started, so removing a window in one reload and bringing its `id`
+back with another geometry in a later reload is rejected too. This comparison
+needs the running worker, so it does not apply to `validate-config` or to a
+worker restart: do not reuse an explicit `id` with another geometry across a
+restart either.
 
 Earlier releases identified a window by its list position,
 `<policy id>/<index>`. That is why removing or reordering a window moved the
