@@ -23,6 +23,7 @@ trap cleanup EXIT HUP INT TERM
 targets=(
   "./budget FuzzSlidingWindowBoundaries"
   "./llm FuzzCanonicalJSONIdempotent"
+  "./llm FuzzFastJSONDecodingMatchesReference"
   "./llm FuzzRequestCanonicalizesClosedServiceClasses"
   "./llm/provider FuzzAssemblerEventSequences"
   "./llm/provider/anthropicmessages FuzzDecodeStream"
