@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/buildinfo"
+	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
 )
 
 func TestVersionCommandEmitsBuildMetadata(t *testing.T) {
@@ -182,5 +185,76 @@ func TestHealthcheckCommandFailsWhenAProbeIsUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(errorsOut.String(), "healthcheck failed") {
 		t.Fatalf("healthcheck failure=%q", errorsOut.String())
+	}
+}
+
+func TestConfigCommandsReportValidationAndReferenceFailures(t *testing.T) {
+	example, err := os.ReadFile(exampleConfigPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		from, to string
+		resolver config.ReferenceResolver
+		want     string
+		hidden   string
+	}{
+		{name: "output limit", from: "max_output_tokens: 32768", to: "max_output_tokens: -1", want: "limits.max_output_tokens"},
+		{name: "token ratio", from: `token_estimate_safety_ratio: "1.35"`, to: `token_estimate_safety_ratio: "0"`, want: "token_estimate_safety_ratio"},
+		{name: "secret reference", resolver: config.ReferenceResolverFunc(func(context.Context, *config.Config) error {
+			return diagnostic.Safe(`secret reference 0 could not be resolved: environment secret "REDIS_USERNAME" is not set`, errors.New("raw"))
+		}), want: `environment secret "REDIS_USERNAME" is not set`},
+		{name: "unclassified reference", resolver: config.ReferenceResolverFunc(func(context.Context, *config.Config) error {
+			return errors.New(`reference "sk-live-secret-value" rejected`)
+		}), want: "reference <value> rejected", hidden: "sk-live-secret-value"},
+		{name: "enum value", from: "level: info", to: "level: sk-live-secret-value", want: "telemetry.logs.level", hidden: "sk-live-secret-value"},
+		{name: "yaml value", from: "max_output_tokens: 32768", to: "max_output_tokens: sk-live-secret-value", want: "configuration YAML", hidden: "sk-live-secret-value"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := string(example)
+			if test.from != "" {
+				data = strings.Replace(data, test.from, test.to, 1)
+				if data == string(example) {
+					t.Fatalf("example does not contain %q", test.from)
+				}
+			}
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, command := range []string{"validate-config", "worker"} {
+				var output, errorsOut bytes.Buffer
+				code := Execute(context.Background(), []string{command, "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut, Resolver: test.resolver,
+					RunWorker: func(context.Context, []byte, io.Writer) error { return nil }})
+				if code != 1 || !strings.Contains(errorsOut.String(), test.want) {
+					t.Fatalf("%s code=%d error=%q, want %q", command, code, errorsOut.String(), test.want)
+				}
+				if test.hidden != "" && strings.Contains(errorsOut.String(), test.hidden) {
+					t.Fatalf("%s echoed a YAML value: %q", command, errorsOut.String())
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerCommandShowsOperatorSafeRuntimeDiagnostics(t *testing.T) {
+	var output, errorsOut bytes.Buffer
+	code := Execute(context.Background(), []string{"worker", "--config", exampleConfigPath(t)}, CommandOptions{
+		Out: &output, ErrOut: &errorsOut,
+		RunWorker: func(context.Context, []byte, io.Writer) error {
+			return fmt.Errorf("build configuration snapshot: %w", diagnostic.Safe(`secret reference 0 could not be resolved: environment secret "REDIS_USERNAME" is not set`, errors.New("raw cause")))
+		},
+	})
+	if code != 1 || strings.TrimSpace(errorsOut.String()) != `secret reference 0 could not be resolved: environment secret "REDIS_USERNAME" is not set` {
+		t.Fatalf("worker code=%d error=%q", code, errorsOut.String())
+	}
+}
+
+func TestWriteConfigErrorRedactsQuotedInputValues(t *testing.T) {
+	var output bytes.Buffer
+	writeConfigError(&output, fmt.Errorf(`state.kind %q is unsupported`, `sk-live "quoted" secret`))
+	if got := strings.TrimSpace(output.String()); got != "state.kind <value> is unsupported" {
+		t.Fatalf("writeConfigError() = %q", got)
 	}
 }

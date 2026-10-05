@@ -9,11 +9,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/buildinfo"
+	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
 	"github.com/mfow/llm-temporal-worker/golang/internal/httpserver"
 )
 
@@ -187,7 +189,7 @@ func executeConfigCommand(ctx context.Context, args []string, options CommandOpt
 	}
 	snapshot, err := config.Compile(ctx, data, options.Resolver)
 	if err != nil {
-		writeCommandError(options.ErrOut, err)
+		writeConfigError(options.ErrOut, err)
 		return 1
 	}
 	if printEffective {
@@ -212,7 +214,7 @@ func executeWorkerCommand(ctx context.Context, args []string, options CommandOpt
 		return 1
 	}
 	if _, err := config.Compile(ctx, data, options.Resolver); err != nil {
-		writeCommandError(options.ErrOut, err)
+		writeConfigError(options.ErrOut, err)
 		return 1
 	}
 	if options.RunWorkerFile == nil && options.RunWorker == nil {
@@ -284,6 +286,10 @@ func writeCommandError(output io.Writer, err error) {
 		return
 	}
 	message := "command failed"
+	if safe, ok := diagnostic.Message(err); ok && len(safe) <= 512 && !strings.Contains(safe, "\n") {
+		_, _ = fmt.Fprintf(output, "%s\n", safe)
+		return
+	}
 	if err != nil {
 		candidate := strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0])
 		lower := strings.ToLower(candidate)
@@ -299,6 +305,34 @@ func writeCommandError(output io.Writer, err error) {
 		if candidate != "" {
 			message = candidate
 		}
+	}
+	_, _ = fmt.Fprintf(output, "%s\n", message)
+}
+
+// quotedInputValue matches the input values that configuration errors echo:
+// backtick-quoted YAML scalars and Go %q-quoted validation values. Field paths
+// are unquoted, so they survive redaction.
+var quotedInputValue = regexp.MustCompile("`[^`]*`|\"(?:[^\"\\\\]|\\\\.)*\"")
+
+// writeConfigError reports configuration compile failures. Errors name the
+// failing field path, which the keyword filter in writeCommandError would hide
+// (field names such as max_output_tokens or state.requests.secret always match
+// it). A value echoed from the input could still be misplaced credential text,
+// so every quoted value is replaced unless the error is a typed operator-safe
+// diagnostic such as an unresolved secret reference.
+func writeConfigError(output io.Writer, err error) {
+	if output == nil {
+		return
+	}
+	if _, safe := diagnostic.Message(err); err == nil || safe {
+		writeCommandError(output, err)
+		return
+	}
+	message := strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0])
+	message = quotedInputValue.ReplaceAllString(message, "<value>")
+	if message == "" || len(message) > 512 {
+		writeCommandError(output, nil)
+		return
 	}
 	_, _ = fmt.Fprintf(output, "%s\n", message)
 }
