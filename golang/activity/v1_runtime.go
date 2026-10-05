@@ -11,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 )
 
@@ -224,16 +225,73 @@ func preferV1DispatchError(rawErr, ctxErr error) bool {
 	return errors.As(rawErr, &providerErr) && providerErr.Code == provider.CodeDeadlineExceeded && providerErr.Phase == provider.PhaseStateLoad
 }
 
-func (activities *Activities) generateV1Temporal(ctx context.Context, request llm.GenerateRequestV1) (*llm.ExecutionResultV1, error) {
-	return activities.GenerateStepV1(ctx, request)
+// The registered v1 handlers take raw payloads so that strict contract
+// decoding and the inline payload limit run inside the Activity, where a
+// failure maps through ToTemporalError to a non-retryable, typed
+// llm_invalid_argument with bounded SafeErrorDetails. Decoding in the SDK
+// before the handler runs would instead surface a retryable, untyped wrapper
+// whose message echoes decoder text (and therefore caller values). The wire
+// format is unchanged: callers still send the typed v1 JSON contract.
+func decodeV1ActivityInput[T any](ctx context.Context, activities *Activities, input converter.RawValue) (T, error) {
+	var value T
+	if ctx != nil && ctx.Err() != nil {
+		return value, ctx.Err()
+	}
+	payload := input.Payload()
+	if payload == nil || len(payload.GetData()) > activities.payloadLimits().inlineBytes() {
+		return value, invalidV1ActivityInput()
+	}
+	if err := converter.GetDefaultDataConverter().FromPayload(payload, &value); err != nil {
+		return value, invalidV1ActivityInput()
+	}
+	return value, nil
 }
 
-func (activities *Activities) compactV1Temporal(ctx context.Context, request llm.CompactRequestV1) (*llm.ExecutionResultV1, error) {
-	return activities.CompactStepV1(ctx, request)
+func invalidV1ActivityInput() error {
+	return ToTemporalError(provider.NewError(provider.CodeInvalidArgument, provider.PhaseDecode, provider.DispatchNotDispatched, provider.RetryNever, "v1 Activity payload is invalid or exceeds its limit"))
 }
 
-func (activities *Activities) queryV1Temporal(ctx context.Context, request llm.QueryRequestV1) (*llm.QueryResponseV1, error) {
-	return activities.QueryV1(ctx, request)
+func rawV1Activity[T, R any](activities *Activities, handler func(context.Context, T) (R, error)) func(context.Context, converter.RawValue) (R, error) {
+	return func(ctx context.Context, input converter.RawValue) (R, error) {
+		request, err := decodeV1ActivityInput[T](ctx, activities, input)
+		if err != nil {
+			var zero R
+			return zero, err
+		}
+		return handler(ctx, request)
+	}
+}
+
+func (activities *Activities) generateV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
+	return rawV1Activity(activities, activities.GenerateStepV1)(ctx, input)
+}
+
+func (activities *Activities) compactV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
+	return rawV1Activity(activities, activities.CompactStepV1)(ctx, input)
+}
+
+func (activities *Activities) queryV1Temporal(ctx context.Context, input converter.RawValue) (*llm.QueryResponseV1, error) {
+	return rawV1Activity(activities, activities.QueryV1)(ctx, input)
+}
+
+func (activities *Activities) prepareV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
+	return rawV1Activity(activities, activities.PrepareExecutionV1)(ctx, input)
+}
+
+func (activities *Activities) acquireBudgetV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
+	return rawV1Activity(activities, activities.AcquireBudgetV1)(ctx, input)
+}
+
+func (activities *Activities) pollV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
+	return rawV1Activity(activities, activities.PollExecutionV1)(ctx, input)
+}
+
+func (activities *Activities) completeV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
+	return rawV1Activity(activities, activities.CompleteExecutionV1)(ctx, input)
+}
+
+func (activities *Activities) planGenerationV1Temporal(ctx context.Context, input converter.RawValue) (*llm.GenerationPlanV1, error) {
+	return rawV1Activity(activities, activities.PlanGenerationV1)(ctx, input)
 }
 
 // RegisterV1 installs the bounded execution steps and the read-only query.
@@ -247,11 +305,11 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	registry.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
 	registry.RegisterActivityWithOptions(activities.compactV1Temporal, sdkactivity.RegisterOptions{Name: CompactActivityName})
 	registry.RegisterActivityWithOptions(activities.queryV1Temporal, sdkactivity.RegisterOptions{Name: QueryActivityName})
-	registry.RegisterActivityWithOptions(activities.PrepareExecutionV1, sdkactivity.RegisterOptions{Name: PrepareActivityName})
-	registry.RegisterActivityWithOptions(activities.AcquireBudgetV1, sdkactivity.RegisterOptions{Name: AcquireBudgetActivityName})
-	registry.RegisterActivityWithOptions(activities.PollExecutionV1, sdkactivity.RegisterOptions{Name: PollActivityName})
-	registry.RegisterActivityWithOptions(activities.CompleteExecutionV1, sdkactivity.RegisterOptions{Name: CompleteActivityName})
-	registry.RegisterActivityWithOptions(activities.PlanGenerationV1, sdkactivity.RegisterOptions{Name: PlanGenerationActivityName})
+	registry.RegisterActivityWithOptions(activities.prepareV1Temporal, sdkactivity.RegisterOptions{Name: PrepareActivityName})
+	registry.RegisterActivityWithOptions(activities.acquireBudgetV1Temporal, sdkactivity.RegisterOptions{Name: AcquireBudgetActivityName})
+	registry.RegisterActivityWithOptions(activities.pollV1Temporal, sdkactivity.RegisterOptions{Name: PollActivityName})
+	registry.RegisterActivityWithOptions(activities.completeV1Temporal, sdkactivity.RegisterOptions{Name: CompleteActivityName})
+	registry.RegisterActivityWithOptions(activities.planGenerationV1Temporal, sdkactivity.RegisterOptions{Name: PlanGenerationActivityName})
 }
 
 func (activities *Activities) payloadLimits() PayloadLimits {

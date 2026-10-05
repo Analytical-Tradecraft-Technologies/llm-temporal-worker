@@ -30,7 +30,12 @@ The Activity adapter rejects payload bytes over the configured application
 limit before JSON decoding, then validates the closed JSON record before
 calling the injected `activity.ExecutionRuntime` (or `V1Runtime` for Query). This ordering keeps malformed or
 adversarial oversized history entries from making the decoder allocate before
-the boundary has failed closed.
+the boundary has failed closed. The registered v1 handlers receive the raw
+Temporal payload and perform this size check and strict decode inside the
+Activity, so a malformed, unknown-field or oversize input fails once as a
+non-retryable `llm_invalid_argument` with bounded `SafeErrorDetails` (phase
+`decode`) and a stable message that does not echo caller values. The wire
+format for valid inputs is the same typed v1 JSON record.
 Responses are validated against the same limit before Temporal serialization;
 errors are converted to bounded `SafeErrorDetails` and never include prompts,
 outputs, provider bodies, or identifiers from a runtime error message.

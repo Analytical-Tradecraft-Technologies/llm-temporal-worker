@@ -12,6 +12,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
@@ -119,14 +120,16 @@ func TestRegisterV1InstallsExactActivityNames(t *testing.T) {
 	if fmt.Sprint(registry.names) != fmt.Sprint(want) {
 		t.Fatalf("registered names = %v, want %v", registry.names, want)
 	}
-	if _, ok := registry.funcs[0].(func(context.Context, llm.GenerateRequestV1) (*llm.ExecutionResultV1, error)); !ok {
-		t.Fatalf("Generate registration has type %T", registry.funcs[0])
-	}
-	if _, ok := registry.funcs[1].(func(context.Context, llm.CompactRequestV1) (*llm.ExecutionResultV1, error)); !ok {
-		t.Fatalf("Compact registration has type %T", registry.funcs[1])
-	}
-	if _, ok := registry.funcs[2].(func(context.Context, llm.QueryRequestV1) (*llm.QueryResponseV1, error)); !ok {
-		t.Fatalf("Query registration has type %T", registry.funcs[2])
+	// Every v1 handler takes a raw payload and decodes it strictly inside the
+	// Activity so decode failures map to typed, non-retryable errors.
+	for index, registered := range registry.funcs {
+		switch registered.(type) {
+		case func(context.Context, converter.RawValue) (*llm.ExecutionResultV1, error),
+			func(context.Context, converter.RawValue) (*llm.QueryResponseV1, error),
+			func(context.Context, converter.RawValue) (*llm.GenerationPlanV1, error):
+		default:
+			t.Fatalf("%s registration has type %T, want a raw-payload handler", registry.names[index], registered)
+		}
 	}
 }
 
@@ -244,7 +247,7 @@ func TestRegisteredV1GenerateExecutesThroughTemporalEnvironment(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	environment := suite.NewTestActivityEnvironment()
 	environment.RegisterActivityWithOptions(generate, sdkactivity.RegisterOptions{Name: GenerateActivityName})
-	result, err := environment.ExecuteActivity(generate, validGenerateV1Request())
+	result, err := environment.ExecuteActivity(GenerateActivityName, validGenerateV1Request())
 	if err != nil {
 		t.Fatal(err)
 	}
