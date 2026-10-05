@@ -265,6 +265,11 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 				}
 				return nil, false, false, fmt.Errorf("function call %q arguments are invalid JSON", call.CallID)
 			}
+			// encoding/json accepts duplicate keys but a normalized tool call
+			// does not. Reject them here as a classified invalid response.
+			if _, err := llm.CanonicalJSON([]byte(call.Arguments)); err != nil {
+				return nil, false, false, fmt.Errorf("function call %q arguments are invalid JSON", call.CallID)
+			}
 			toolCalls = true
 			output = append(output, llm.ToolCall{ID: call.CallID, Name: call.Name, Arguments: []byte(call.Arguments)})
 		case "function_call_output":

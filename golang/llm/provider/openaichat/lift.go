@@ -208,6 +208,11 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 			}
 			return nil, false, false, fmt.Errorf("tool call %q arguments are invalid JSON", call.ID)
 		}
+		// encoding/json accepts duplicate keys but a normalized tool call does
+		// not. Reject them here as a classified invalid response.
+		if _, err := llm.CanonicalJSON([]byte(call.Function.Arguments)); err != nil {
+			return nil, false, false, fmt.Errorf("tool call %q arguments are invalid JSON", call.ID)
+		}
 		hasToolCalls = true
 		output = append(output, llm.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: []byte(call.Function.Arguments)})
 	}

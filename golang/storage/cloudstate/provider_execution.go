@@ -345,8 +345,20 @@ func validExecutionTransition(old, next ProviderExecution) bool {
 }
 
 func equalExecution(left, right ProviderExecution) bool { return equalExecutionJSON(left, right) }
+
+// Saved progress is canonical JSON, while a value still in memory keeps the
+// provider's spelling of raw JSON such as tool-call arguments. Compare the
+// canonical forms so key order alone is never a different terminal result.
 func equalExecutionJSON(left, right any) bool {
-	l, le := json.Marshal(left)
-	r, re := json.Marshal(right)
+	l, le := canonicalExecutionJSON(left)
+	r, re := canonicalExecutionJSON(right)
 	return le == nil && re == nil && bytes.Equal(l, r)
+}
+
+func canonicalExecutionJSON(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return llm.CanonicalJSONWithLimits(encoded, maxPayloadBytes, llm.DefaultCanonicalMaxDepth)
 }

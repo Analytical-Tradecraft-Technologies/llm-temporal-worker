@@ -253,6 +253,11 @@ func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 			if err != nil || !json.Valid(arguments) {
 				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
 			}
+			// encoding/json accepts duplicate keys but a normalized tool call
+			// does not. Reject them here as a classified invalid response.
+			if _, err := llm.CanonicalJSON(arguments); err != nil {
+				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
+			}
 			hasToolCalls = true
 			items = append(items, llm.ToolCall{ID: *value.Value.ToolUseId, Name: *value.Value.Name, Arguments: arguments})
 		case *types.ContentBlockMemberReasoningContent:
