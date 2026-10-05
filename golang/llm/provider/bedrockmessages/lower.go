@@ -79,7 +79,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		}
 	}
 	if request.Reasoning != nil {
-		thinking, err := lowerReasoning(*request.Reasoning)
+		thinking, err := lowerReasoning(*request.Reasoning, strict)
 		if err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
@@ -342,49 +342,59 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 	return nil
 }
 
-func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
+// lowerReasoning returns the Messages thinking object, or nil when the request
+// leaves thinking to the model default. Effort is lowered separately to
+// output_config.effort, which the API accepts independently of thinking, so an
+// effort or summary preference alone never turns thinking on.
+func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
 	mode := reasoning.Mode
 	if mode == "" {
 		mode = llm.ReasoningModeProviderDefault
 	}
-	summary := reasoning.Summary
-	if summary == "" {
-		summary = llm.ReasoningSummaryProviderDefault
+	// The only display controls are "summarized" (the provider default) and
+	// "omitted"; a summary detail level cannot be expressed.
+	display := ""
+	switch reasoning.Summary {
+	case "", llm.ReasoningSummaryProviderDefault:
+	case llm.ReasoningSummaryNone:
+		display = "omitted"
+	case llm.ReasoningSummaryAuto:
+		display = "summarized"
+	case llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed:
+		if strict {
+			return nil, fmt.Errorf("reasoning summary %q is not supported by Bedrock Messages", reasoning.Summary)
+		}
+		display = "summarized"
+	default:
+		return nil, fmt.Errorf("reasoning summary %q is not supported by Bedrock Messages", reasoning.Summary)
 	}
-	if summary != llm.ReasoningSummaryProviderDefault && summary != llm.ReasoningSummaryNone {
-		return nil, fmt.Errorf("reasoning summary %q is not supported by Bedrock Messages", summary)
+	if mode == llm.ReasoningModeProviderDefault {
+		if reasoning.TokenBudget == nil {
+			// display exists only inside an explicit thinking object, so
+			// without a mode the summary preference has no wire form.
+			return nil, nil
+		}
+		mode = llm.ReasoningModeEnabled
 	}
 	if reasoning.Effort != "" && reasoning.Effort != llm.ReasoningEffortProviderDefault && mode != llm.ReasoningModeAdaptive {
 		return nil, fmt.Errorf("reasoning effort %q requires adaptive Bedrock thinking", reasoning.Effort)
 	}
-	if mode == llm.ReasoningModeProviderDefault {
-		if reasoning.TokenBudget == nil && (reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && summary == llm.ReasoningSummaryProviderDefault {
-			return nil, nil
-		}
-		if reasoning.TokenBudget != nil {
-			mode = llm.ReasoningModeEnabled
-		} else {
-			mode = llm.ReasoningModeAdaptive
-		}
-	}
-	if mode == llm.ReasoningModeDisabled {
+	result := map[string]any{}
+	switch mode {
+	case llm.ReasoningModeDisabled:
 		return map[string]any{"type": "disabled"}, nil
-	}
-	if mode != llm.ReasoningModeAdaptive && mode != llm.ReasoningModeEnabled {
-		return nil, fmt.Errorf("reasoning mode %q is not supported by Bedrock Messages", reasoning.Mode)
-	}
-	display := "summarized"
-	if summary == llm.ReasoningSummaryNone {
-		display = "omitted"
-	}
-	result := map[string]any{"type": string(mode)}
-	if mode == llm.ReasoningModeEnabled {
+	case llm.ReasoningModeAdaptive:
+		result["type"] = "adaptive"
+	case llm.ReasoningModeEnabled:
 		if reasoning.TokenBudget == nil || *reasoning.TokenBudget < 1024 {
 			return nil, fmt.Errorf("Bedrock thinking token_budget must be at least 1024")
 		}
+		result["type"] = "enabled"
 		result["budget_tokens"] = *reasoning.TokenBudget
+	default:
+		return nil, fmt.Errorf("reasoning mode %q is not supported by Bedrock Messages", reasoning.Mode)
 	}
-	if summary != llm.ReasoningSummaryProviderDefault {
+	if display != "" {
 		result["display"] = display
 	}
 	return result, nil
