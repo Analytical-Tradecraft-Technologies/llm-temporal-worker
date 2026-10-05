@@ -1179,3 +1179,57 @@ func TestLoadTLSConfigDoesNotExposeCertificateBytes(t *testing.T) {
 		t.Fatalf("TLS error leaked certificate bytes: %v", err)
 	}
 }
+
+func TestRuntimeToleratesTransientDependencyProbeFailuresBeforePausing(t *testing.T) {
+	probe := &mutableRuntimeProbe{}
+	probe.healthy.Store(true)
+	controller := &monitoringWorker{}
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, &testWorker{}, &closed)
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+		return controller, &testRegistry{}, nil
+	}
+	options.DependencyProbes = []DependencyProbe{probe}
+	runtime, err := New(context.Background(), runtimeConfig(t), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("sandbox does not permit loopback listeners: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
+		t.Fatalf("initial state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
+	}
+	probe.healthy.Store(false)
+	for round := 1; round < pauseAfterProbeFailures; round++ {
+		if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if controller.stops.Load() != 0 || !runtime.Health.Ready() {
+			t.Fatalf("failed probe round %d paused the worker (stops=%d ready=%v)", round, controller.stops.Load(), runtime.Health.Ready())
+		}
+	}
+	// A success resets the count, so isolated failures never accumulate.
+	probe.healthy.Store(true)
+	if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	probe.healthy.Store(false)
+	for round := 1; round < pauseAfterProbeFailures; round++ {
+		if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if controller.stops.Load() != 0 {
+		t.Fatal("non-consecutive probe failures paused the worker")
+	}
+	if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Pause drains the worker controller asynchronously.
+	waitForRuntime(t, func() bool { return controller.stops.Load() >= 1 && !runtime.Health.Ready() })
+}

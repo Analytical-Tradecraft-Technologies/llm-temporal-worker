@@ -153,6 +153,9 @@ type Runtime struct {
 	// final Pause/Resume transition. Without this handoff, shutdown could
 	// cancel a monitor tick between its probe result and Worker.Resume.
 	readinessMu sync.Mutex
+	// probeFailures counts consecutive failed dependency probe rounds; it is
+	// guarded by readinessMu.
+	probeFailures int
 }
 
 type runtimeState uint8
@@ -840,6 +843,10 @@ func (runtime *Runtime) currentV1RuntimeRequired() bool {
 // syncDependencyReadiness applies the fail-closed state transition in one
 // place. A failed probe pauses polling and leaves liveness alone; a successful
 // probe resumes only after every required probe passed.
+// pauseAfterProbeFailures is the number of consecutive failed dependency
+// probe rounds tolerated before the worker is paused.
+const pauseAfterProbeFailures = 3
+
 func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 	if runtime == nil || runtime.Worker == nil {
 		return errors.New("runtime is not initialized")
@@ -861,11 +868,21 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 	}
 	runtime.readinessMu.Lock()
 	defer runtime.readinessMu.Unlock()
+	if ctx.Err() == nil && probeErr != nil {
+		// Pausing is a full worker stop that cancels in-flight provider calls
+		// after the graceful stop timeout, so a single slow probe must not
+		// trigger it. Act only after consecutive failures.
+		runtime.probeFailures++
+		if runtime.probeFailures < pauseAfterProbeFailures {
+			return nil
+		}
+	}
 	if ctx.Err() != nil || probeErr != nil {
 		runtime.Health.SetReady(false)
 		runtime.Worker.Pause()
 		return nil
 	}
+	runtime.probeFailures = 0
 	if runtime.Worker.Started() {
 		return nil
 	}
