@@ -65,7 +65,12 @@ type Route struct {
 	AllowedTenants []string
 	AllowedRegions []string
 	Capabilities   CapabilitySet
-	PriceVersion   string
+	// ProviderFeatures carries the complete catalog capability declaration for
+	// the endpoint adapter, including features such as usage, image and
+	// document that route planning does not consume. Planning reads only
+	// Capabilities.
+	ProviderFeatures map[string]Capability
+	PriceVersion     string
 	// PriceAvailable reports whether every service class advertised by this
 	// route had a current quote while the immutable snapshot was compiled. The
 	// engine still resolves each selected candidate and applies its budgeted

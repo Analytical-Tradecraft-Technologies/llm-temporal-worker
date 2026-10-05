@@ -1,11 +1,17 @@
 package runtime
 
 import (
+	"context"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
+	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 )
@@ -76,7 +82,7 @@ func TestEndpointCapabilitiesAcceptsEquivalentFeatureMaps(t *testing.T) {
 		provider.FeatureReasoning:        {State: provider.CapabilityUnknown, Reason: "catalog did not declare this capability"},
 		provider.FeatureContinuation:     {State: provider.CapabilityUnknown, Reason: "catalog did not declare this capability"},
 		provider.FeatureStreaming:        {State: provider.CapabilityUnknown, Reason: "catalog did not declare this capability"},
-		provider.FeatureUsage:            {State: provider.CapabilityUnknown, Reason: "catalog did not declare this capability"},
+		provider.FeatureUsage:            {State: provider.CapabilityNative, Reason: "adapter lifts provider usage"},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("endpointCapabilities() = %#v, want %#v", got, want)
@@ -96,4 +102,52 @@ func cloneRoutingFeatures(features map[routing.Feature]routing.Capability) map[r
 		clone[feature] = capability
 	}
 	return clone
+}
+
+func TestCatalogDerivedChatAdapterCompilesTextAndImageRequests(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	profile := bundle.Capabilities["profile-a"]
+	profile.Set.Features[provider.FeatureImage] = provider.Capability{State: provider.CapabilityNative}
+	bundle.Capabilities["profile-a"] = profile
+	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := routes.Models["logical-model"].Routes[0]
+	if route.ProviderFeatures[string(provider.FeatureImage)].State != routing.CapabilityNative {
+		t.Fatalf("route provider features = %#v, want catalog image capability", route.ProviderFeatures)
+	}
+	if _, leaked := route.Capabilities.Features[routing.Feature("image")]; leaked {
+		t.Fatal("provider-only image capability leaked into routing")
+	}
+
+	route.EndpointID = "azure-chat"
+	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{"model": {Routes: []routing.Route{route}}}}}
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return []byte("test-key"), nil }),
+		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		HTTPClient:     &http.Client{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := factory.buildAdapter(context.Background(), azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"}), snapshot, "azure-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, strict := range []bool{true, false} {
+		_, err = adapter.Compile(context.Background(), provider.CompileInput{
+			Request: llm.Request{OperationKey: "catalog-capabilities", Model: "chat-deployment", ServiceClass: llm.ServiceClassStandard, Input: []llm.Item{
+				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
+					llm.TextPart{Text: "describe"},
+					llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png"},
+				}},
+			}},
+			Query:  provider.CapabilityQuery{EndpointID: "azure-chat", Family: provider.FamilyOpenAIChat, Model: "chat-deployment"},
+			Strict: strict,
+		})
+		if err != nil {
+			t.Fatalf("Compile(strict=%t) error = %v", strict, err)
+		}
+	}
 }

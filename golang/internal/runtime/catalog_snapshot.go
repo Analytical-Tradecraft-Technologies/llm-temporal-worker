@@ -182,6 +182,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				AllowedTenants:      append([]string(nil), modelValue.AllowedTenants...),
 				AllowedRegions:      append([]string(nil), modelValue.DataRegions...),
 				Capabilities:        routingCapabilities(profile.Set),
+				ProviderFeatures:    adapterCapabilities(profile.Set),
 				OutputTokens:        profile.OutputTokens,
 				PriceVersion:        priceVersion,
 				PriceAvailable:      priceAvailable,
@@ -368,6 +369,17 @@ func routingCapabilities(value provider.CapabilitySet) routing.CapabilitySet {
 		if capability, ok := value.Features[source]; ok {
 			result.Features[target] = routing.Capability{State: routing.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
 		}
+	}
+	return result
+}
+
+// adapterCapabilities preserves every provider feature declared by the
+// catalog so the endpoint adapter profile is not limited to the routing
+// projection.
+func adapterCapabilities(value provider.CapabilitySet) map[string]routing.Capability {
+	result := make(map[string]routing.Capability, len(value.Features))
+	for feature, capability := range value.Features {
+		result[string(feature)] = routing.Capability{State: routing.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
 	}
 	return result
 }
