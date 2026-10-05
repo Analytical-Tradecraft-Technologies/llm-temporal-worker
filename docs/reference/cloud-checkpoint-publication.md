@@ -15,7 +15,13 @@ outlive its parent. Configured depth, row, item and byte limits bound publicatio
 Generation records the current append, settings patch and model output, keeping
 exact decimal settings intact. Parent replay verifies the materializer's opaque
 storage scope before attaching the authorized tenant and project. Materialized
-storage scope is not itself a caller identity.
+storage scope is not itself a caller identity. A generated checkpoint whose
+depth is a positive multiple of `MaterializeLimits.SnapshotInterval` (default
+8) also writes a self-contained snapshot of the materialized transcript,
+settings and lineage, which bounds later replays to that many rows. The choice
+depends only on the immutable depth, so a retry publishes identical blobs. If
+the snapshot would exceed the blob byte bound, the checkpoint is published
+without it.
 
 Compaction writes a snapshot containing the summary and the current request's
 retained suffix, with unchanged application settings. Its response blob contains

@@ -61,12 +61,68 @@ length, media type, scope binding, expiry, and the SHA-256 of the bytes before
 returning a copy. A locator or object from another scope is an integrity fault,
 not a cache miss.
 
-`state.DurableCheckpointMaterializer` reads the leaf-to-root metadata graph,
-decodes every referenced delta/response/patch (and an optional verified
-self-contained snapshot), then delegates final validation to the existing
-bounded `CheckpointGraph` materializer. It can accept an opaque handle only
+`state.DurableCheckpointMaterializer` reads metadata rows from the leaf
+towards the root and stops at the newest row that carries a self-contained
+snapshot. It decodes the delta/response/patch of each row newer than that
+snapshot, uses the verified snapshot as the replay base, then delegates final
+validation to the existing bounded `CheckpointGraph` materializer. A lineage
+with no snapshot is walked to its root exactly as before. It can accept an
+opaque handle only
 through the scope-bound `CheckpointHandleVerifier`; the UUID hidden inside a
 verified handle is not exposed in the Activity payload. The materializer itself
 does not publish blobs, delete retained state or dispatch provider work. The
 cloud runtime composes it with those execution and publication boundaries;
 automatic production retention remains separate work.
+
+## Stopping at the newest snapshot
+
+A snapshot holds the complete materialized transcript, the materialized
+settings, the depth and the full root-to-row lineage of its checkpoint, so the
+rows and blobs older than it are not read. The materialized state is
+byte-identical to a full walk: items, settings, pending tool frontier, depth
+and lineage. What the full walk used to establish by reading every ancestor is
+established as follows.
+
+- **Scope and expiry.** Every row that is read, including the snapshot row, is
+  checked against the caller's scope and the materializer clock. Rows older
+  than the snapshot are not re-checked. Publication caps a child's expiry at
+  its parent's, so expiry never increases along a lineage: a live snapshot row
+  means its ancestors were live when it was written and cannot expire before
+  it does. Scope is fixed for a lineage because publication only accepts a
+  parent from the child's own scope.
+- **Snapshot integrity.** The blob reader verifies the snapshot bytes against
+  the digest and length in the row, and the materializer repeats that check.
+  The decoded snapshot must name the row's own depth, end its lineage with the
+  row's own ID, contain exactly `depth + 1` handles, and hash to the row's
+  `CanonicalLineageDigest`, which publication derives from the same handle
+  list. A lineage that repeats one of the newer rows is rejected as a cycle.
+- **No silent fallback.** A snapshot that is present but unreadable, corrupt
+  or inconsistent with its row fails the read. It is never skipped in favour of
+  older deltas, because a compaction snapshot replaces its prefix with a
+  summary and cannot be reproduced from them. The snapshot row's own delta,
+  response and settings-patch blobs are not read.
+- **Depth and row limits.** `Depth` and `Lineage` come from the snapshot, so
+  publication still sees the true depth and lineage length. The leaf row's
+  depth is compared with `MaxDepth` and `MaxRows` before any ancestor or blob
+  is read, and the snapshot lineage counts against `MaxRows`. Item and byte
+  limits apply to the final materialized transcript as before.
+
+## Snapshot cadence
+
+Compaction always writes a snapshot. Generate publication writes one when the
+new checkpoint's depth is a positive multiple of
+`MaterializeLimits.SnapshotInterval` (default `state.DefaultSnapshotInterval`,
+8; it is a limit with a default, not a configuration key). Depth is immutable
+row metadata, so retries and forks make the same choice without extra state.
+A replay therefore reads at most `SnapshotInterval` rows and
+`3 * SnapshotInterval` checkpoint blobs regardless of conversation depth,
+while the full-transcript snapshot blob is written on one turn in eight
+rather than on every turn. A cadence snapshot is only a read optimization: if
+its encoding would exceed the blob byte bound while the transcript itself
+still fits, Generate publishes the checkpoint without it.
+
+Forks need no special handling. A fork from before a snapshot walks its own
+rows and writes its own snapshot at the next boundary; children of a snapshot
+row share that row as their base; each snapshot's lineage names only its own
+branch. A lineage published before cadence snapshots existed stays readable by
+the full walk and starts carrying snapshots at its next depth boundary.
