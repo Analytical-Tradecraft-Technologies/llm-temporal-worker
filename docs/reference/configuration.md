@@ -828,3 +828,13 @@ For OpenAI and Azure Responses endpoints, `provider_storage.permitted: false`
 provider dispatch. Returned responses do not expose provider continuation
 handles under this policy. Set `permitted: true` to permit those provider
 storage features; callers may still explicitly request `store: false`.
+
+Because a request with `store: false` cannot refer back to a stored reasoning
+item, a storage-denied endpoint also requests
+`include: ["reasoning.encrypted_content"]` whenever the request configures
+reasoning or replays reasoning state, in addition to any `include` values the
+caller supplies. The encrypted content is checkpointed with the reasoning item
+and replayed on later turns. A checkpointed reasoning item that has no
+encrypted content is omitted from later requests to a storage-denied endpoint
+rather than sent as an ID the provider cannot resolve; the rest of the
+transcript is unaffected.

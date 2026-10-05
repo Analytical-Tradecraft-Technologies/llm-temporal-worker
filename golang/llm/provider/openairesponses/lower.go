@@ -23,6 +23,13 @@ func providerTier(class llm.ServiceClass) string {
 }
 
 func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
+	return lowerRequestForEndpoint(request, serviceClass, false)
+}
+
+// lowerRequestForEndpoint lowers a request under the endpoint's storage policy.
+// A storage-denied endpoint is used statelessly, so a reasoning item is only
+// replayable when it carries its encrypted content.
+func lowerRequestForEndpoint(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (responses.ResponseNewParams, error) {
 	input := make([]any, 0, len(request.Instructions)+len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
@@ -31,12 +38,17 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 		}
 		input = append(input, item)
 	}
+	items := make([]map[string]any, 0, len(request.Input))
 	for index, item := range request.Input {
 		lowered, err := lowerItem(item)
 		if err != nil {
 			return responses.ResponseNewParams{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		input = append(input, lowered)
+		items = append(items, lowered)
+	}
+	items, reasoningState := replayableItems(items, storageDenied)
+	for _, item := range items {
+		input = append(input, item)
 	}
 	requestMap := map[string]any{
 		"model":        request.Model,
@@ -88,6 +100,9 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 	}
 	if err := lowerExtensions(request.Extensions, requestMap); err != nil {
 		return responses.ResponseNewParams{}, err
+	}
+	if storageDenied && (reasoningState || reasoningRequested(request.Reasoning)) {
+		requestMap["include"] = includeEncryptedReasoning(requestMap["include"])
 	}
 	encoded, err := json.Marshal(requestMap)
 	if err != nil {
@@ -181,6 +196,66 @@ func lowerReasoningState(state llm.ProviderState) (map[string]any, error) {
 		return nil, fmt.Errorf("reasoning provider state has type %v, want reasoning", item["type"])
 	}
 	return item, nil
+}
+
+// replayableItems removes reasoning items the provider would reject. A
+// reasoning item must be followed by the output item it produced, so one left
+// dangling by a reasoning-only incomplete response is dropped. On a
+// storage-denied endpoint the provider cannot resolve a reasoning ID, so an
+// item without encrypted content is dropped as well. Reasoning items are
+// optional context: the messages and tool calls of the transcript are replayed
+// unchanged. The second result reports whether the transcript held a reasoning
+// item at all, which shows the model reasons even when none is replayable.
+func replayableItems(items []map[string]any, storageDenied bool) ([]map[string]any, bool) {
+	keep := make([]bool, len(items))
+	followed, present, dropped := false, false, false
+	for index := len(items) - 1; index >= 0; index-- {
+		item := items[index]
+		if item["type"] != "reasoning" {
+			keep[index] = true
+			followed = item["type"] == "function_call" || (item["type"] == "message" && item["role"] == "assistant")
+			continue
+		}
+		encrypted, _ := item["encrypted_content"].(string)
+		keep[index] = followed && (!storageDenied || encrypted != "")
+		present = true
+		if !keep[index] {
+			dropped = true
+			followed = false
+		}
+	}
+	if !dropped {
+		return items, present
+	}
+	result := make([]map[string]any, 0, len(items))
+	for index, item := range items {
+		if keep[index] {
+			result = append(result, item)
+		}
+	}
+	return result, present
+}
+
+// reasoningRequested reports whether the request configures reasoning, which
+// routes it only to a model that reasons.
+func reasoningRequested(reasoning *llm.ReasoningSpec) bool {
+	return reasoning != nil && reasoning.Mode != llm.ReasoningModeDisabled
+}
+
+// includeEncryptedReasoning adds reasoning.encrypted_content to the caller's
+// include list without repeating a value.
+func includeEncryptedReasoning(existing any) []string {
+	values, _ := existing.([]string)
+	result := make([]string, 0, len(values)+1)
+	seen := make(map[string]struct{}, len(values)+1)
+	for _, value := range append(append([]string(nil), values...), string(responses.ResponseIncludableReasoningEncryptedContent)) {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func lowerParts(parts []llm.Part) ([]any, error) {

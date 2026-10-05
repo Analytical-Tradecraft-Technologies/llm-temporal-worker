@@ -117,7 +117,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability is %s", capability.State))
 		}
 	}
-	params, err := lowerRequest(normalized, serviceClass)
+	params, err := lowerRequestForEndpoint(normalized, serviceClass, adapter.storageDenied)
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}

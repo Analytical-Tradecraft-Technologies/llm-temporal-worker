@@ -119,8 +119,22 @@ break both.
   JSON Schema format before it enters the normalized response. JSON-object mode
   requires a valid top-level object; a provider acknowledgement alone is not
   sufficient evidence for the Temporal boundary.
-- Reasoning encrypted content is retained as provider-state only when requested
-  by capability/configuration.
+- Each reasoning output item is lifted as provider-state and replayed as a
+  reasoning input item on later turns. When the endpoint denies provider
+  storage (`provider_storage.permitted: false`, the default) the request is
+  stateless, so the adapter adds `reasoning.encrypted_content` to `include`,
+  merged with any caller-supplied `include` values without duplicates. It does
+  so only when the request configures reasoning or its transcript already
+  holds reasoning state, because a model that does not reason may reject the
+  value. When storage is permitted `include` is sent only as the caller
+  supplies it.
+- A reasoning item the provider would reject is dropped at lowering, in strict
+  and best-effort portability alike: it is optional context, and the messages,
+  tool calls, and tool results around it are replayed unchanged. This covers a
+  reasoning item with no following assistant message or tool call (for example
+  from a reasoning-only incomplete response) on every endpoint, and a
+  reasoning item without encrypted content on a storage-denied endpoint, where
+  its ID cannot be resolved.
 - `service_tier` is set from the resolved public class and the response tier is
   lifted independently.
 
