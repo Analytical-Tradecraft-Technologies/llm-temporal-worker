@@ -12,7 +12,7 @@ import (
 )
 
 func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {
 			t.Fatalf("request path = %q, want /v1/models", r.URL.Path)
 		}
@@ -57,7 +57,7 @@ func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
 
 func TestListModelsRedactsProviderErrors(t *testing.T) {
 	const secret = "sensitive-provider-response"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, secret, http.StatusBadGateway)
 	}))
 	defer server.Close()
@@ -102,7 +102,7 @@ func TestListModelsRejectsEndpointMismatch(t *testing.T) {
 
 func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
 		if calls == 1 {

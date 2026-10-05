@@ -425,7 +425,7 @@ func newFixtureAdapter(t *testing.T, body []byte) *Adapter {
 func newFixtureAdapterWithTransport(t *testing.T, body []byte, onCall func()) *Adapter {
 	t.Helper()
 	client, err := NewClient(ClientConfig{
-		BaseURL: "http://127.0.0.1/contract",
+		BaseURL: "https://127.0.0.1/contract",
 		APIKey:  "test-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			if onCall != nil {

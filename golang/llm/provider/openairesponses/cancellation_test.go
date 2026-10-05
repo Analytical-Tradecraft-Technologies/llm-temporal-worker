@@ -26,7 +26,7 @@ func TestInvokeCancellationAfterTransportConsumesRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	consumed := false
-	client, err := NewClient(ClientConfig{BaseURL: "http://127.0.0.1/fixture", APIKey: "test-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/fixture", APIKey: "test-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if _, err := io.Copy(io.Discard, request.Body); err != nil {
 			t.Fatal(err)
 		}

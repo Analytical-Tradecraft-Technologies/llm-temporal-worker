@@ -37,10 +37,16 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if config.HTTPClient == nil {
 		return nil, fmt.Errorf("openai responses: HTTP client is required")
 	}
-	return &Client{sdk: openai.NewClient(
+	options := []option.RequestOption{
 		option.WithAPIKey(config.APIKey),
 		option.WithBaseURL(baseURL),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
-	), directOpenAI: true}, nil
+	}
+	if clientconfig.LoopbackHTTP(baseURL) {
+		// The SDK refuses credentials over HTTP unless explicitly allowed, and
+		// then serves loopback requests from its own direct transport.
+		options = append(options, option.WithUnsafeAllowHTTP())
+	}
+	return &Client{sdk: openai.NewClient(options...), directOpenAI: true}, nil
 }

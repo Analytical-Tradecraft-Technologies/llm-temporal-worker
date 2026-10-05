@@ -21,10 +21,22 @@ func BaseURL(raw string) (string, error) {
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("base URL must not contain userinfo, query, or fragment")
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost" || u.Hostname() == "::1")) {
+	if u.Scheme != "https" && !(u.Scheme == "http" && loopbackHost(u.Hostname())) {
 		return "", fmt.Errorf("base URL must use HTTPS outside loopback")
 	}
 	return strings.TrimRight(raw, "/") + "/", nil
+}
+
+// LoopbackHTTP reports whether a validated base URL is a plain-HTTP loopback
+// endpoint. SDKs that refuse to send credentials over HTTP need an explicit
+// opt-in for these local endpoints.
+func LoopbackHTTP(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	return err == nil && u.Scheme == "http" && loopbackHost(u.Hostname())
+}
+
+func loopbackHost(host string) bool {
+	return host == "127.0.0.1" || host == "localhost" || host == "::1"
 }
 
 func Secret(name, value string) error {

@@ -387,7 +387,7 @@ func newChatFixtureClient(t *testing.T, profile chatFixtureProfile, transport ht
 	)
 	switch profile.id {
 	case "openai-chat":
-		client, err = NewClient(ClientConfig{BaseURL: "http://127.0.0.1/v1", APIKey: "fixture-chat-key", HTTPClient: httpClient})
+		client, err = NewClient(ClientConfig{BaseURL: "https://127.0.0.1/v1", APIKey: "fixture-chat-key", HTTPClient: httpClient})
 	case "openrouter-chat":
 		client, err = NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "fixture-openrouter-key", HTTPClient: httpClient})
 	case "exa-chat":

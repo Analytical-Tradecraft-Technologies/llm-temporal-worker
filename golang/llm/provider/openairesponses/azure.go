@@ -47,13 +47,19 @@ func NewAzureClient(config AzureClientConfig) (*Client, error) {
 	if err := clientconfig.Secret("Azure OpenAI API key", config.APIKey); err != nil {
 		return nil, fmt.Errorf("azure responses: %w", err)
 	}
-	return &Client{sdk: openai.NewClient(
+	options := []option.RequestOption{
 		azure.WithEndpoint(endpoint, config.APIVersion),
 		azure.WithAPIKey(config.APIKey),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
 		option.WithMiddleware(azureResponsesPathMiddleware),
-	)}, nil
+	}
+	if clientconfig.LoopbackHTTP(endpoint) {
+		// Azure enforces its own HTTPS-only credential policy; loopback HTTP
+		// needs the Azure opt-in and is served by the SDK's direct transport.
+		options = append(options, azure.WithUnsafeAllowHTTP())
+	}
+	return &Client{sdk: openai.NewClient(options...)}, nil
 }
 
 // NewAzureTokenClient constructs an OpenAI Responses client with the official
@@ -68,13 +74,19 @@ func NewAzureTokenClient(config AzureTokenClientConfig) (*Client, error) {
 	if !validTokenCredential(config.TokenCredential) {
 		return nil, fmt.Errorf("azure responses: token credential is required")
 	}
-	return &Client{sdk: openai.NewClient(
+	options := []option.RequestOption{
 		azure.WithEndpoint(endpoint, config.APIVersion),
 		azure.WithTokenCredential(config.TokenCredential),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
 		option.WithMiddleware(azureResponsesPathMiddleware),
-	)}, nil
+	}
+	if clientconfig.LoopbackHTTP(endpoint) {
+		// Azure enforces its own HTTPS-only credential policy; loopback HTTP
+		// needs the Azure opt-in and is served by the SDK's direct transport.
+		options = append(options, azure.WithUnsafeAllowHTTP())
+	}
+	return &Client{sdk: openai.NewClient(options...)}, nil
 }
 
 func validTokenCredential(credential azcore.TokenCredential) bool {
