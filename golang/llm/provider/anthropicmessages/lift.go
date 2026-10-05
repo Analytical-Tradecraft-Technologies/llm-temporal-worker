@@ -160,7 +160,9 @@ func liftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal bool) 
 			return "", fmt.Errorf("provider stop reason tool_use did not contain a tool call")
 		}
 		return llm.ResponseStatusToolCalls, nil
-	case anthropic.StopReasonMaxTokens:
+	case anthropic.StopReasonMaxTokens, anthropic.StopReasonModelContextWindowExceeded:
+		// Context-window exhaustion is a length truncation: keep the partial
+		// output and usage rather than discarding a paid response.
 		return llm.ResponseStatusLength, nil
 	case anthropic.StopReasonRefusal:
 		return llm.ResponseStatusRefused, nil
