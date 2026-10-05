@@ -35,6 +35,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		if err != nil {
 			return anthropic.MessageNewParams{}, fmt.Errorf("input item %d: %w", index, err)
 		}
+		if emptyModelMessage(item) {
+			continue
+		}
 		messages = append(messages, message)
 	}
 
@@ -166,6 +169,14 @@ func lowerInstructionParts(parts []llm.Part) ([]any, error) {
 		}
 	}
 	return blocks, nil
+}
+
+// emptyModelMessage reports a replayed model turn with no parts (for example a
+// lifted content_filter or empty stop reply). Anthropic Messages rejects an assistant message
+// without content, and it carries no history to preserve.
+func emptyModelMessage(item llm.Item) bool {
+	message, ok := item.(llm.Message)
+	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
 }
 
 func lowerItem(item llm.Item) (map[string]any, error) {

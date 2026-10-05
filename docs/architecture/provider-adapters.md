@@ -119,6 +119,8 @@ other.
 - Instructions lower to the supported top-level instruction/developer form.
 - Semantic messages, tool calls, and tool results become separate typed input
   items; they are never concatenated.
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content.
 - A continuation may use a stored response/conversation identifier only when it
   is pinned to the same endpoint, account, family, and compatible model.
 - Strict structured output uses the provider's JSON Schema form after local
@@ -158,6 +160,9 @@ usage/cost lifter.
 - Instructions lower to top-level system blocks in order.
 - Human/model messages lower to user/assistant messages; tool use and tool
   result blocks retain their IDs.
+- Replayed model messages with no parts (for example a filtered reply) are
+  omitted rather than sent as an assistant message without content. The
+  Bedrock Messages and Bedrock Converse adapters do the same.
 - Consecutive-role merging is permitted only as an explicit, proven transform
   and is recorded as a diagnostic.
 - Thinking, redacted-thinking, and signatures are opaque provider-state. They
@@ -217,6 +222,12 @@ the total are rejected as invalid provider responses.
 
 An unrecognized actual provider tier maps to no public class and returns a
 diagnostic. It must not be mislabeled as `standard`.
+
+Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
+a string, and some compatible providers send an empty string for a tool that
+takes no arguments; an empty or whitespace-only string lifts as the empty
+object `{}` rather than failing the paid response. A call cut off by the output
+limit is still dropped and the response keeps its `length` status.
 
 ## Model inventory pagination
 
