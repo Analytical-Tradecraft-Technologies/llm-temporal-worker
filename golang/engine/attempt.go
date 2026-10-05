@@ -106,7 +106,7 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 			continue
 		}
 		call, err := adapter.Compile(ctx, provider.CompileInput{
-			Request: providerRequest, Query: query, Capability: capability, Strict: request.Portability != llm.PortabilityBestEffort,
+			Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability, Strict: request.Portability != llm.PortabilityBestEffort,
 			Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
 		})
 		if err != nil {
@@ -337,4 +337,14 @@ func admissionCertainty(value provider.DispatchCertainty) admission.DispatchCert
 func mustRequestDigest(request llm.Request) [32]byte {
 	digest, _ := llm.RequestDigest(request)
 	return digest
+}
+
+// candidateProviderRequest compiles a candidate with the service class it is
+// attempting. The semantic request keeps the caller's requested class and
+// fallbacks for identity and reporting; without this, an authorized fallback
+// candidate would be compiled and billed at the originally requested tier.
+func candidateProviderRequest(request llm.Request, candidate routing.Candidate) llm.Request {
+	request.ServiceClass = candidate.AttemptedClass
+	request.ServiceClassFallbacks = nil
+	return request
 }

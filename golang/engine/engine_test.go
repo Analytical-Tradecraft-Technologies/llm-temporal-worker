@@ -34,6 +34,7 @@ type fakeAdapter struct {
 	compiles            int
 	invokes             int
 	calls               []provider.Call
+	compiledClasses     []llm.ServiceClass
 	response            llm.Response
 }
 
@@ -53,6 +54,7 @@ func (adapter *fakeAdapter) Capabilities(context.Context, provider.CapabilityQue
 func (adapter *fakeAdapter) Compile(_ context.Context, input provider.CompileInput) (provider.Call, error) {
 	adapter.mu.Lock()
 	adapter.compiles++
+	adapter.compiledClasses = append(adapter.compiledClasses, input.Request.ServiceClass)
 	adapter.mu.Unlock()
 	return provider.Call{EndpointID: input.Query.EndpointID, Family: input.Query.Family, Model: input.Query.Model, OperationKey: input.Request.OperationKey, ServiceClass: input.Query.ServiceClass, Metadata: input.Metadata}, nil
 }
@@ -412,6 +414,11 @@ func TestGenerateFallbackDoesNotReplayRejectedDispatch(t *testing.T) {
 	defer adapter.mu.Unlock()
 	if len(adapter.calls) != 2 || adapter.calls[0].ServiceClass != llm.ServiceClassPriority || adapter.calls[1].ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("provider calls = %#v, want priority then standard", adapter.calls)
+	}
+	// Adapters lower the provider tier from the compiled request, so the
+	// fallback candidate must be compiled with its attempted class.
+	if len(adapter.compiledClasses) != 2 || adapter.compiledClasses[0] != llm.ServiceClassPriority || adapter.compiledClasses[1] != llm.ServiceClassStandard {
+		t.Fatalf("compiled request classes = %v, want priority then standard", adapter.compiledClasses)
 	}
 	operation, err := harness.admission.Get(context.Background(), response.OperationID)
 	if err != nil {
