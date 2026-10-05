@@ -190,6 +190,9 @@ func lowerModelParts(parts []llm.Part) ([]any, error) {
 		case llm.RefusalPart:
 			content = append(content, map[string]any{"type": "refusal", "refusal": value.Text})
 		default:
+			if part == nil {
+				return nil, fmt.Errorf("part %d: unsupported part <nil>", index)
+			}
 			return nil, fmt.Errorf("part %d: part kind %q is not accepted in Responses assistant history", index, part.PartKind())
 		}
 	}

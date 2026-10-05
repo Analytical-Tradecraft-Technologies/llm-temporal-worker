@@ -274,6 +274,9 @@ func lowerAssistantParts(parts []llm.Part) ([]any, error) {
 			}
 			content = append(content, lowered)
 		default:
+			if part == nil {
+				return nil, fmt.Errorf("part %d: unsupported part <nil>", index)
+			}
 			return nil, fmt.Errorf("part %d: part kind %q is not accepted in Chat Completions assistant history", index, part.PartKind())
 		}
 	}

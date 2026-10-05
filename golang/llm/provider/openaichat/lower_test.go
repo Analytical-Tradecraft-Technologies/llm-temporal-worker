@@ -202,3 +202,12 @@ func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
 		t.Fatalf("assistant image error = %v", err)
 	}
 }
+
+func TestAssistantHistoryRejectsNilPartWithoutPanicking(t *testing.T) {
+	_, err := lowerRequest(llm.Request{Model: "chat-model", Input: []llm.Item{
+		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{nil}},
+	}}, testProfile(), "default")
+	if err == nil || !strings.Contains(err.Error(), "<nil>") {
+		t.Fatalf("nil assistant part error = %v", err)
+	}
+}
