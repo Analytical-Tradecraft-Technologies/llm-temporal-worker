@@ -94,7 +94,7 @@ verified profile.
 | Exa | `openai-go` with compatible base URL | Chat Completions | profile-declared; normally standard until another tier is verified; `service_tier` is not sent because Exa does not define it | Preserve Exa request ID and authoritative `costDollars` when present |
 | Anthropic | `anthropic-sdk-go` | Messages | standard -> `standard_only`; priority -> `auto` only for accounts/models where priority capacity is explicitly enabled; economy unsupported synchronously | Lift the actual service tier from usage |
 | Claude Platform on AWS | Anthropic SDK AWS gateway support | Messages | capability-declared from the selected AWS offering | AWS auth belongs to client construction, not semantic input |
-| Amazon Bedrock | Anthropic SDK Bedrock/Mantle client | Messages | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | `reserved` is deployment capacity, never a public service class; the response tier is read from `usage.service_tier` or, when the body has none, the `X-Amzn-Bedrock-Service-Tier` header |
+| Amazon Bedrock | Anthropic SDK Bedrock/Mantle client | Messages | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them; sent as the `X-Amzn-Bedrock-Service-Tier` request header, never in the Anthropic body | `reserved` is deployment capacity, never a public service class; the response tier is read from `usage.service_tier` or, when the body has none, the `X-Amzn-Bedrock-Service-Tier` header |
 | Amazon Bedrock Converse | AWS SDK for Go v2 `bedrockruntime` | Converse | economy -> `flex`, standard -> `default`, priority -> `priority` where the model supports them | One-shot `Converse` only; live token streaming is outside the Temporal v1 boundary |
 
 This table is a starting profile, not a promise that every model supports every
@@ -231,6 +231,13 @@ usage/cost lifter.
   does not accept URL sources and the worker does not fetch URLs, so a URL
   image or document is an `unsupported_capability` compile error in strict
   and best-effort mode alike. Bedrock Converse accepts text parts only.
+- The service tier is a Bedrock InvokeModel parameter, not an Anthropic body
+  field: the resolved tier (`flex`, `default` or `priority`) is sent as the
+  `X-Amzn-Bedrock-Service-Tier` request header, which the AWS API model binds
+  the `serviceTier` input to, and the body never carries `service_tier`. The
+  header is set before the SDK's Bedrock middleware signs the request, so the
+  SigV4 signature covers it. The served tier is read from the response header
+  of the same name when the body reports none.
 
 Reasoning controls lower the same way on Anthropic Messages and Bedrock
 Messages:

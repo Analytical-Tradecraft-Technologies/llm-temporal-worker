@@ -8,7 +8,7 @@ import (
 
 func TestNoToolsPolicyAllowsCompactionRequest(t *testing.T) {
 	request := llm.Request{Model: "contract-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Summarize this conversation"}}}}, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}
-	params, err := lowerRequest(request, mustBedrockProfile(t, ""), "")
+	params, err := lowerRequest(request, mustBedrockProfile(t, ""))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,7 @@ func TestToolHistoryPreservesJSONNumbers(t *testing.T) {
 	} {
 		t.Run(arguments, func(t *testing.T) {
 			request := llm.Request{Model: "contract-model", Input: []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(arguments)}}}
-			params, err := lowerRequest(request, mustBedrockProfile(t, ""), "")
+			params, err := lowerRequest(request, mustBedrockProfile(t, ""))
 			if err != nil {
 				t.Fatal(err)
 			}

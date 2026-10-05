@@ -108,7 +108,9 @@ func tierTestFamilies() []tierTestFamily {
 			name: "bedrock messages", family: provider.FamilyBedrockMessages, model: "anthropic.claude-tier-v1:0", class: llm.ServiceClassPriority,
 			endpoint: config.EndpointConfig{Family: "bedrock_anthropic_messages", BaseURL: "https://bedrock-runtime.us-east-1.amazonaws.com", OutboundHosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}, Region: "us-east-1", Auth: chain,
 				ServiceClasses: classes("default", "priority")},
-			body: tierTestMessagesBody, tierField: rootField, skipRequestTier: true, unmapped: "reserved",
+			// InvokeModel takes the requested tier as a request header, so the
+			// Anthropic body must not carry one.
+			body: tierTestMessagesBody, tierField: rootField, unmapped: "reserved",
 		},
 		{
 			name: "bedrock converse", family: provider.FamilyBedrockConverse, model: "anthropic.claude-tier-v1:0", class: llm.ServiceClassPriority,
@@ -138,7 +140,7 @@ func TestProductionAdaptersAcceptResponsesWithoutMappableServiceTier(t *testing.
 					tierField = family.tierField(test.tier)
 				}
 				body := jsonTemplate(family.body, tierField)
-				result, request := invokeProductionAdapter(t, family, body, nil)
+				result, request, _ := invokeProductionAdapter(t, family, body, nil)
 				service := result.Response.Service
 				if service.Actual != nil {
 					t.Fatalf("actual class = %q, want none for provider tier %q", *service.Actual, test.tier)
@@ -169,7 +171,7 @@ func TestProductionExaAdapterSendsTextAsRootField(t *testing.T) {
 		if family.name != "exa" {
 			continue
 		}
-		_, request := invokeProductionAdapter(t, family, jsonTemplate(family.body, ""), nil)
+		_, request, _ := invokeProductionAdapter(t, family, jsonTemplate(family.body, ""), nil)
 		if request["text"] != true {
 			t.Fatalf("request text = %v, want root-level true", request["text"])
 		}
@@ -186,10 +188,28 @@ func TestProductionBedrockMessagesAdapterReadsServiceTierHeader(t *testing.T) {
 		if family.family != provider.FamilyBedrockMessages {
 			continue
 		}
-		result, _ := invokeProductionAdapter(t, family, jsonTemplate(family.body, ""), http.Header{"X-Amzn-Bedrock-Service-Tier": {"default"}})
+		result, _, _ := invokeProductionAdapter(t, family, jsonTemplate(family.body, ""), http.Header{"X-Amzn-Bedrock-Service-Tier": {"default"}})
 		service := result.Response.Service
 		if service.Actual == nil || *service.Actual != llm.ServiceClassStandard || service.ProviderValue != "default" || service.Attempted != llm.ServiceClassPriority {
 			t.Fatalf("service facts = %+v, want the header tier lifted as standard", service)
+		}
+	}
+}
+
+// InvokeModel defines the requested tier as the X-Amzn-Bedrock-Service-Tier
+// request header, the same header that reports the served tier. The Anthropic
+// body has no field for a Bedrock tier, so one there is rejected or ignored.
+func TestProductionBedrockMessagesAdapterSendsServiceTierHeader(t *testing.T) {
+	for _, family := range tierTestFamilies() {
+		if family.family != provider.FamilyBedrockMessages {
+			continue
+		}
+		_, request, headers := invokeProductionAdapter(t, family, jsonTemplate(family.body, ""), nil)
+		if got := headers.Get("X-Amzn-Bedrock-Service-Tier"); got != "priority" {
+			t.Fatalf("request service tier header = %q, want %q", got, "priority")
+		}
+		if sent, present := request["service_tier"]; present {
+			t.Fatalf("request body carried service_tier %v, which InvokeModel does not define", sent)
 		}
 	}
 }
@@ -205,16 +225,18 @@ func jsonTemplate(template, tierField string) string {
 
 // invokeProductionAdapter builds the family's adapter through the production
 // factory, serves one canned response over the guarded egress transport and
-// returns the lifted result with the decoded request body.
-func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, headers http.Header) (provider.Result, map[string]any) {
+// returns the lifted result with the decoded request body and headers.
+func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, headers http.Header) (provider.Result, map[string]any, http.Header) {
 	t.Helper()
 	const endpointID = "tier-endpoint"
 	var mu sync.Mutex
 	var captured []byte
+	var capturedHeaders http.Header
 	server, base := newTierTestProvider(t, family.endpoint.OutboundHosts, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		received, _ := io.ReadAll(request.Body)
 		mu.Lock()
 		captured = received
+		capturedHeaders = request.Header.Clone()
 		mu.Unlock()
 		for name, values := range headers {
 			writer.Header()[name] = values
@@ -278,7 +300,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 	if err := json.Unmarshal(captured, &request); err != nil {
 		t.Fatalf("request body %q: %v", captured, err)
 	}
-	return result, request
+	return result, request, capturedHeaders
 }
 
 // newTierTestProvider starts a loopback TLS server whose certificate names the

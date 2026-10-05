@@ -339,8 +339,8 @@ func assertBedrockClassFacts(t *testing.T, adapter *Adapter) {
 			t.Fatalf("%s provider tier = %q, want %q", fact.Class, call.Metadata.ProviderTier, fact.RequestedTier)
 		}
 		params := marshalBedrockWire(t, call.SDKParams)
-		if params["service_tier"] != fact.RequestedTier {
-			t.Fatalf("%s wire tier = %#v, want %q", fact.Class, params["service_tier"], fact.RequestedTier)
+		if tier, present := params["service_tier"]; present {
+			t.Fatalf("%s wire body carried service_tier %#v; InvokeModel takes it as a header", fact.Class, tier)
 		}
 		actual := adapter.profile.actualClass(fact.ActualTier)
 		if actual == nil || *actual != actualByClass[fact.Class] {
