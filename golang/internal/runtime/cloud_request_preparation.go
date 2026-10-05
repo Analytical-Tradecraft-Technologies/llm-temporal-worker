@@ -17,6 +17,7 @@ import (
 type CloudRequestPreparationStore interface {
 	CloudRequestRepository
 	Read(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.Record, error)
+	LookupOperation(context.Context, cloudstate.Operation) (cloudstate.Record, error)
 	SaveRequestPreparation(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestPreparation) error
 	LoadRequestPreparation(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestPreparation, error)
 }
@@ -84,7 +85,23 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 		return PreparedCloudRequest{}, err
 	}
 	scope := cloudstate.Scope{Tenant: caller.Tenant, Project: caller.Project}
-	record, err := p.store.BeginOperation(ctx, cloudstate.Operation{Scope: scope, Kind: kind, Key: key, RequestIndex: index, Manifest: manifest, Now: p.clock()})
+	operation := cloudstate.Operation{Scope: scope, Kind: kind, Key: key, RequestIndex: index, Manifest: manifest, Now: p.clock()}
+	// BeginOperation makes a request discoverable as running, and only a settled
+	// attempt can later fail it. Validate a new operation first so rejected input
+	// never leaves a permanent pending record. An existing operation skips this:
+	// it replays its saved result or preparation without reopening the parent.
+	var initial *cloudstate.RequestPreparation
+	if _, err := p.store.LookupOperation(ctx, operation); errors.Is(err, contracts.ErrNotFound) {
+		candidate := cloudstate.Record{Status: cloudstate.StatusRunning, Request: cloudstate.CreateRequest{Scope: scope, Kind: kind, RequestIndex: index, Manifest: manifest, CreatedAt: operation.Now}}
+		preparation, err := p.materialize(ctx, candidate, caller, parent, checkpointScope, operation.Now.UTC())
+		if err != nil {
+			return PreparedCloudRequest{}, err
+		}
+		initial = &preparation
+	} else if err != nil {
+		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
+	}
+	record, err := p.store.BeginOperation(ctx, operation)
 	if err != nil {
 		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 	}
@@ -94,32 +111,26 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	if record.Status == cloudstate.StatusCompleted || record.Status == cloudstate.StatusFailed {
 		return p.restore(ctx, record, cloudstate.RequestPreparation{}, checkpointScope)
 	}
-	prepared, err := p.prepareActive(ctx, record, caller, parent, checkpointScope)
+	prepared, err := p.prepareActive(ctx, record, caller, parent, checkpointScope, initial)
 	if err != nil {
 		return p.completedAfterError(ctx, record, checkpointScope, err)
 	}
 	return prepared, nil
 }
 
-func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string) (PreparedCloudRequest, error) {
+func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, initial *cloudstate.RequestPreparation) (PreparedCloudRequest, error) {
 	scope := record.Request.Scope
 	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
 	if errors.Is(err, cloudstate.ErrRequestPreparationMissing) {
-		materialized, loadErr := p.replay.materializeAuthorized(ctx, caller, parent, checkpointScope)
-		if loadErr != nil {
-			return PreparedCloudRequest{}, loadErr
-		}
-		preparation = cloudstate.RequestPreparation{Version: 1, ConfigDigest: p.digest, CheckpointScope: checkpointScope, PreparedAt: p.clock().UTC()}
-		if parent != "" {
-			codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxPreparedParentBytes}
-			preparation.ParentSnapshot, err = codec.EncodeSnapshot(*state.NewCheckpointSnapshot(materialized))
+		// Reuse the input validated before BeginOperation unless a competing
+		// initializer created the record after it was prepared.
+		if initial != nil && !initial.PreparedAt.Before(record.Request.CreatedAt) {
+			preparation = *initial
+		} else {
+			preparation, err = p.materialize(ctx, record, caller, parent, checkpointScope, p.clock().UTC())
 			if err != nil {
-				return PreparedCloudRequest{}, checkpointReplayError(provider.CodeInvalidArgument)
+				return PreparedCloudRequest{}, err
 			}
-		}
-		// Validate the input against the materialized parent before writing it.
-		if _, err := p.restore(ctx, record, preparation, checkpointScope); err != nil {
-			return PreparedCloudRequest{}, err
 		}
 		if err := ctx.Err(); err != nil {
 			return PreparedCloudRequest{}, err
@@ -135,6 +146,28 @@ func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record clou
 		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 	}
 	return p.restore(ctx, record, preparation, checkpointScope)
+}
+
+// materialize reads the authorized parent and validates the input against it
+// without writing anything.
+func (p *CloudRequestPreparation) materialize(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, at time.Time) (cloudstate.RequestPreparation, error) {
+	materialized, err := p.replay.materializeAuthorized(ctx, caller, parent, checkpointScope)
+	if err != nil {
+		return cloudstate.RequestPreparation{}, err
+	}
+	preparation := cloudstate.RequestPreparation{Version: 1, ConfigDigest: p.digest, CheckpointScope: checkpointScope, PreparedAt: at}
+	if parent != "" {
+		codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxPreparedParentBytes}
+		preparation.ParentSnapshot, err = codec.EncodeSnapshot(*state.NewCheckpointSnapshot(materialized))
+		if err != nil {
+			return cloudstate.RequestPreparation{}, checkpointReplayError(provider.CodeInvalidArgument)
+		}
+	}
+	// Validate the input against the materialized parent before writing it.
+	if _, err := p.restore(ctx, record, preparation, checkpointScope); err != nil {
+		return cloudstate.RequestPreparation{}, err
+	}
+	return preparation, nil
 }
 
 // Load authenticates the current caller but uses the original immutable input.
