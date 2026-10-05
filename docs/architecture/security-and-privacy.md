@@ -126,10 +126,18 @@ URLs; providers remain responsible for their own fetch-time controls.
 The policy is enforced where a request enters: the v1 Generate request codec
 (`append` items and `settings_patch.instructions`), the legacy Activity payload
 boundary and the engine entry points. It is deliberately not part of the stored
-transcript codec, so a checkpoint written under an earlier policy still
-materializes; only the structural check (a scheme other than `javascript` or
-`data`) applies to stored content. Compact requests carry no content. Blob
-locators address configured stores, not arbitrary URLs.
+transcript codec, so a checkpoint written under an earlier policy still decodes
+and materializes; only the structural check (a scheme other than `javascript`
+or `data`) applies when stored content is decoded. Compact requests carry no
+content of their own.
+
+Stored content is checked again before it can reach a provider. Request
+preparation applies the policy to the whole provider-facing request, replayed
+parent transcript and inherited instructions included, for both Generate and
+Compact. Continuing from a checkpoint that holds a now-blocked URL therefore
+fails as non-retryable `invalid_argument` before the operation is recorded,
+rather than replaying the URL or being retried as a transient storage failure.
+Blob locators address configured stores, not arbitrary URLs.
 
 ## Content and history
 

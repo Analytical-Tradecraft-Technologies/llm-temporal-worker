@@ -70,10 +70,12 @@ func pendingCloudRequests(t *testing.T, f *boundedCloudFixture) int {
 	return pending
 }
 
-// A checkpoint that holds a media URL accepted when it was written must still
-// materialize after the request URL policy is tightened, while the same URL in
-// new request input is rejected without leaving a pending operation.
-func TestCloudExecutionRuntimeMaterializesStoredMediaURLOutsideRequestPolicy(t *testing.T) {
+// A checkpoint that holds a media URL accepted when it was written still
+// decodes and materializes, so the failure is not an untyped decode error that
+// is retried as transient. Continuing from it would replay the URL to a
+// provider, so Generate and Compact fail it as non-retryable invalid_argument
+// before any operation is recorded or any provider work is done.
+func TestCloudExecutionRuntimeFailsStoredBlockedMediaURLAsInvalidArgument(t *testing.T) {
 	for _, raw := range []string{"http://localhost:8080/chart.png", "http://10.0.0.7/chart.png", "http://127.1/chart.png"} {
 		t.Run(raw, func(t *testing.T) {
 			f := boundedCloud(t, false)
@@ -81,29 +83,58 @@ func TestCloudExecutionRuntimeMaterializesStoredMediaURLOutsideRequestPolicy(t *
 			stored := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "describe"}, llm.ImagePart{URL: raw, MediaType: "image/png"}}}
 			parent := publishStoredRoot(t, f, []llm.Item{stored})
 
-			f.request.Parent = &parent
-			f.request.OperationKey = "after-policy"
-			f.request.SettingsPatch = llm.SettingsPatchV1{}
-			prepared, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-			boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
-			loaded, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: prepared.RequestID, Context: f.request.Context})
+			materialized, err := f.cap.Checkpoints.Materializer.MaterializeHandle(ctx, "trusted-scope", string(parent), f.options.Limits)
 			if err != nil {
-				t.Fatalf("load prepared request: %v", err)
+				t.Fatalf("stored checkpoint no longer materializes: %v", err)
 			}
-			if got, _ := json.Marshal(loaded.GenerateReplay.State.Items); !strings.Contains(string(got), raw) {
+			if got, _ := json.Marshal(materialized.Items); !strings.Contains(string(got), raw) {
 				t.Fatalf("materialized parent lost the stored media URL: %s", got)
 			}
 
-			before := pendingCloudRequests(t, f)
-			rejected := f.request
-			rejected.OperationKey = "new-private-url"
-			rejected.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{URL: raw, MediaType: "image/png"}}}}
-			_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &rejected})
-			assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
-			if after := pendingCloudRequests(t, f); after != before {
-				t.Fatalf("rejected request changed pending records from %d to %d", before, after)
+			// The continuation adds no media of its own.
+			f.request.Parent = &parent
+			f.request.OperationKey = "after-policy"
+			f.request.SettingsPatch = llm.SettingsPatchV1{}
+			compact := llm.CompactRequestV1{OperationKey: "compact-after-policy", Context: f.request.Context, Parent: parent, Cache: &llm.CachePolicyV1{}}
+			for name, input := range map[string]llm.PrepareExecutionV1{"generate": {Generate: &f.request}, "compact": {Compact: &compact}} {
+				_, err := f.runtime.PrepareExecutionV1(ctx, input)
+				assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
+				var mapped *provider.Error
+				if !errors.As(err, &mapped) || mapped.Retry != provider.RetryNever {
+					t.Fatalf("%s: error = %#v, want non-retryable", name, err)
+				}
+			}
+			if _, err := f.runtime.PlanGenerationV1(ctx, f.request); err == nil {
+				t.Fatal("generation planning accepted a replayed blocked media URL")
+			}
+			if pending := pendingCloudRequests(t, f); pending != 0 || f.submits.Load() != 0 {
+				t.Fatalf("pending=%d submits=%d after rejected continuations", pending, f.submits.Load())
 			}
 		})
+	}
+}
+
+// A stored public media URL keeps replaying, and a blocked URL in new input is
+// still rejected at request ingress.
+func TestCloudExecutionRuntimeReplaysStoredPublicMediaURL(t *testing.T) {
+	f := boundedCloud(t, false)
+	ctx := context.Background()
+	stored := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "describe"}, llm.ImagePart{URL: "https://cdn1.example.com/chart.png", MediaType: "image/png"}}}
+	parent := publishStoredRoot(t, f, []llm.Item{stored})
+	f.request.Parent = &parent
+	f.request.OperationKey = "public-replay"
+	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	prepared, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
+
+	before := pendingCloudRequests(t, f)
+	rejected := f.request
+	rejected.OperationKey = "new-private-url"
+	rejected.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{URL: "http://127.1/chart.png", MediaType: "image/png"}}}}
+	_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &rejected})
+	assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
+	if after := pendingCloudRequests(t, f); after != before {
+		t.Fatalf("rejected request changed pending records from %d to %d", before, after)
 	}
 }
 

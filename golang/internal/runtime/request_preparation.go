@@ -67,6 +67,13 @@ func PrepareGenerateInput(ctx context.Context, request llm.GenerateRequestV1, re
 	if err != nil {
 		return PreparedGenerateInput{}, preparationError(provider.CodeInvalidArgument)
 	}
+	// The provider fetches every media URL in this request, including ones
+	// replayed from the parent. Stored content decodes without the URL policy,
+	// so a checkpoint written under an earlier policy is checked here and
+	// fails deterministically instead of dispatching a now-blocked URL.
+	if err := llm.ValidateMediaURLs(semantic.Instructions, semantic.Input); err != nil {
+		return PreparedGenerateInput{}, preparationError(provider.CodeInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
 		return PreparedGenerateInput{}, err
 	}
@@ -128,6 +135,11 @@ func PrepareCompactInput(ctx context.Context, request llm.CompactRequestV1, repl
 	source, err := prepareSemanticRequest(request.Context, request.OperationKey, settings, replay.State.Items)
 	if err != nil {
 		return PreparedCompactInput{}, preparationError(provider.CodeStateCorrupt)
+	}
+	// The summarizer is a provider call over the stored transcript, so the
+	// same replayed-URL check applies as for Generate.
+	if err := llm.ValidateMediaURLs(source.Instructions, source.Input); err != nil {
+		return PreparedCompactInput{}, preparationError(provider.CodeInvalidArgument)
 	}
 	var selection compaction.PrefixSelection
 	if len(source.Input) != 0 {
