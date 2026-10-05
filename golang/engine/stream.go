@@ -281,7 +281,7 @@ func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerR
 			continue
 		}
 		call, err := adapter.Compile(ctx, provider.CompileInput{
-			Request: providerRequest, Query: query, Capability: capability, Strict: request.Portability != llm.PortabilityBestEffort,
+			Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability, Strict: request.Portability != llm.PortabilityBestEffort,
 			Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
 		})
 		if err != nil {

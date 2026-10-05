@@ -173,7 +173,7 @@ func (engine *Engine) resumeDispatching(ctx context.Context, request, providerRe
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching capabilities are unavailable", err)
 	}
 	call, err := adapter.Compile(ctx, provider.CompileInput{
-		Request: providerRequest, Query: query, Capability: capability,
+		Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability,
 		Strict:   request.Portability != llm.PortabilityBestEffort,
 		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
 	})
@@ -248,7 +248,7 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "provider pending capabilities are unavailable", err)
 	}
 	call, err := adapter.Compile(ctx, provider.CompileInput{
-		Request: providerRequest, Query: query, Capability: capability,
+		Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability,
 		Strict:   request.Portability != llm.PortabilityBestEffort,
 		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
 	})
