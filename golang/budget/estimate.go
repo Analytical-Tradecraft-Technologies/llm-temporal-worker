@@ -100,6 +100,9 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	if estimator.MaxReasoning > reasoningTokens {
 		reasoningTokens = estimator.MaxReasoning
 	}
+	if estimator.Tokenizer == nil {
+		inputTokens = addMediaAllowance(inputTokens, mediaInputAllowance(request), candidate.ContextTokens, outputTokens, reasoningTokens)
+	}
 	if err := validateContextCounts(candidate.ContextTokens, inputTokens, outputTokens, reasoningTokens); err != nil {
 		return Estimate{}, err
 	}
@@ -217,6 +220,111 @@ func (estimator Estimator) estimateInput(request llm.Request, candidate routing.
 		return 0, fmt.Errorf("request is too large to estimate")
 	}
 	return input, nil
+}
+
+// Media parts (images and documents, whether supplied by URL, inline bytes,
+// or blob reference) are billed by the provider on their decoded content
+// (pixels or pages), not on the bytes this worker serializes. A URL
+// contributes only its string to the UTF-8 fallback, so without an explicit
+// allowance an arbitrarily large remote document would be reserved at a few
+// dozen tokens and bypass the admission cap. The fallback estimator therefore
+// adds a fixed conservative allowance per media part. These constants are
+// reservation bounds, not billing rates; settlement still records actual usage.
+const (
+	// MediaImageInputTokenFloor bounds one image. Supported providers resize
+	// images before tokenization: Anthropic's standard limit is about 1,600
+	// tokens per image, OpenAI patch-based models about 2,500, and
+	// high-resolution modes reach roughly 4,800. 6,000 keeps headroom above
+	// the largest of these.
+	MediaImageInputTokenFloor int64 = 6_000
+	// MediaDocumentPageAssumption is the page count assumed for a document
+	// whose length is unknown at admission (for example a URL). It is the
+	// largest per-request PDF page limit of supported providers: Anthropic
+	// accepts up to 600 pages on 1M-token-context models.
+	MediaDocumentPageAssumption int64 = 600
+	// MediaDocumentTextTokensPerPage bounds the extracted text of one PDF
+	// page (typically 1,500-3,000 tokens for a dense page).
+	MediaDocumentTextTokensPerPage int64 = 3_000
+	// MediaDocumentTokensPerPage bounds one PDF page. Providers such as
+	// Anthropic bill the extracted text plus a rendered image of every page,
+	// so the page image is charged at the full per-image floor.
+	MediaDocumentTokensPerPage = MediaDocumentTextTokensPerPage + MediaImageInputTokenFloor
+	// MediaDocumentInputTokenFloor is the per-document allowance
+	// (600 pages x 9,000 tokens = 5,400,000 tokens). It deliberately exceeds
+	// every supported context window: on a candidate that declares a context
+	// window, addMediaAllowance caps it to the remaining input room, so a
+	// document reserves the whole remaining window (the most the provider
+	// can bill). Only a candidate without a declared window reserves the
+	// full constant.
+	MediaDocumentInputTokenFloor = MediaDocumentPageAssumption * MediaDocumentTokensPerPage
+)
+
+// mediaInputAllowance sums the per-part media allowance over every content
+// location the adapters forward to a provider. Text-only requests return zero.
+func mediaInputAllowance(request llm.Request) int64 {
+	total := int64(0)
+	add := func(parts []llm.Part) {
+		for _, part := range parts {
+			switch part.(type) {
+			case llm.ImagePart, *llm.ImagePart:
+				total = saturatingAdd(total, MediaImageInputTokenFloor)
+			case llm.DocumentPart, *llm.DocumentPart:
+				total = saturatingAdd(total, MediaDocumentInputTokenFloor)
+			}
+		}
+	}
+	for _, instruction := range request.Instructions {
+		add(instruction.Content)
+	}
+	for _, item := range request.Input {
+		switch typed := item.(type) {
+		case llm.Message:
+			add(typed.Content)
+		case *llm.Message:
+			if typed != nil {
+				add(typed.Content)
+			}
+		case llm.ToolResult:
+			add(typed.Content)
+		case *llm.ToolResult:
+			if typed != nil {
+				add(typed.Content)
+			}
+		}
+	}
+	return total
+}
+
+// addMediaAllowance adds the media allowance to the serialized-size estimate.
+// When the candidate declares a context window, the allowance is capped at the
+// room left after the text estimate and the reserved output and reasoning: the
+// provider must reject input beyond its window, so billable media input cannot
+// exceed that room, and the allowance alone never turns an admissible request
+// into a context-limit rejection.
+func addMediaAllowance(input, allowance, contextTokens, output, reasoning int64) int64 {
+	if allowance <= 0 {
+		return input
+	}
+	if contextTokens > 0 {
+		room := contextTokens
+		for _, used := range []int64{input, output, reasoning} {
+			if used >= room {
+				return input
+			}
+			room -= used
+		}
+		if allowance > room {
+			allowance = room
+		}
+	}
+	return saturatingAdd(input, allowance)
+}
+
+func saturatingAdd(left, right int64) int64 {
+	if right > 0 && left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func multiplyCeil(value pricing.MicroUSD, ratio *big.Rat) (pricing.MicroUSD, error) {
