@@ -63,7 +63,7 @@ func (s *cacheFills) readTerminal(ctx context.Context, lease cache.FillLease) (c
 	}
 	data, err := s.responses.repository.readBlob(ctx, stream, pointer.Blob)
 	if err != nil {
-		return cache.FillRecord{}, false, errors.Join(ErrCorrupt, err)
+		return cache.FillRecord{}, false, fillBlobError(err)
 	}
 	var envelope fillEnvelope
 	if json.Unmarshal(data, &envelope) != nil || envelope.Version != 1 || !validFillRecord(envelope.Record) ||
