@@ -91,3 +91,53 @@ func TestExaRejectsNegativeReportedCost(t *testing.T) {
 		t.Fatalf("negative cost error = %v", err)
 	}
 }
+
+func TestExaLiftsCitationsFromSelectedMessage(t *testing.T) {
+	body := `{"id":"exa-generation-2","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer","citations":[{"url":"https://example.com/message-source","title":"Message source"}]}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`
+	client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewExaProfile(ExaProfileConfig{
+		ID: "exa-chat", CapabilityVersion: "exa/v1", BaseURL: exaBaseURL, Capabilities: profileTestCapabilities("exa/v1"),
+		ServiceTiers:              map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""},
+		ActualServiceClasses:      map[string]llm.ServiceClass{"standard": llm.ServiceClassStandard},
+		MissingActualServiceClass: llm.ServiceClassStandard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "exa-a", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "exa-op", Model: "exa"}, Query: provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}, Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Response.Output) != 2 {
+		t.Fatalf("exa output = %#v", result.Response.Output)
+	}
+	reference, ok := result.Response.Output[1].(llm.Reference)
+	if !ok || !strings.Contains(mustMarshal(t, reference), "message-source") {
+		t.Fatalf("exa message citation = %#v", result.Response.Output[1])
+	}
+	if _, ok := result.Response.Provider.Raw["exa_citations"]; !ok {
+		t.Fatalf("exa raw citations missing: %#v", result.Response.Provider.Raw)
+	}
+}
+
+func mustMarshal(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

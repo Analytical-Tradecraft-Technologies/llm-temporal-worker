@@ -150,9 +150,18 @@ func augmentExa(call provider.Call, response *openai.ChatCompletion, lifted *llm
 		addRawFact(lifted.Provider.Raw, "costDollars", costRaw)
 		addRawFact(lifted.Usage.ProviderRaw, "costDollars", costRaw)
 	}
+	// Exa documents citations on the selected message; earlier responses
+	// carried them at the root. Prefer the message and fall back to the root.
+	message, err := exaSelectedMessageFields(response)
+	if err != nil {
+		return err
+	}
 	for _, key := range []string{"results", "sources", "citations"} {
-		value, ok := fields[key]
+		value, ok := message[key]
 		if !ok {
+			value, ok = fields[key]
+		}
+		if !ok || string(value) == "null" {
 			continue
 		}
 		references, err := exaReferences(value, key)
@@ -164,6 +173,21 @@ func augmentExa(call provider.Call, response *openai.ChatCompletion, lifted *llm
 	}
 	_ = call
 	return nil
+}
+
+func exaSelectedMessageFields(response *openai.ChatCompletion) (map[string]json.RawMessage, error) {
+	if len(response.Choices) == 0 {
+		return map[string]json.RawMessage{}, nil
+	}
+	raw := strings.TrimSpace(response.Choices[0].Message.RawJSON())
+	if raw == "" {
+		return map[string]json.RawMessage{}, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil || fields == nil {
+		return nil, fmt.Errorf("exa response message is invalid")
+	}
+	return fields, nil
 }
 
 func exaReferences(raw json.RawMessage, field string) ([]llm.Item, error) {
