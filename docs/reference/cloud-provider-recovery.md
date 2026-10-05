@@ -8,8 +8,8 @@ input and a `ProviderRecoveryBinding` supplied by durable composition.
 
 An initial compiled call can project that binding with
 `planned.RecoveryBinding(route)`. It contains the original configuration and
-compiled request digests, candidate ID, route/cache identity, family, capability
-version, provider tier, requested/attempted classes and an operation-key digest.
+compiled request digests, endpoint digest, candidate ID, route/cache identity,
+family, capability version, provider tier, requested/attempted classes and an operation-key digest.
 Adapter clients, SDK parameters, credentials and raw operation keys are absent.
 The route also keeps the paid operation/generation IDs. A price version resolved
 by budget quoting is allowed when the configured route did not pin a version;
@@ -42,14 +42,22 @@ strict/best-effort portability.
 A disabled, health-open or auth-open original route blocks recovery with
 `no_route` and `same_operation`. Ordinary adapter-resolution/capability/compile
 failures return a sanitized `state_unavailable`/`same_operation` error.
-Incompatible configuration, identity or compiled bindings fail with
-`configuration`/`never`. No error authorizes a different route. A compiler
+Incompatible identity or compiled bindings fail with `configuration`/`never`
+under the original configuration. No error authorizes a different route. A compiler
 reporting possible paid dispatch returns an ambiguous, non-retryable error;
 context cancellation returns no usable call.
 
-Only a snapshot with the original configuration digest and epoch can reconstruct
-the call. A changed configuration is rejected rather than silently substituted.
-Historical snapshot loading is outside this helper. Snapshot catalogs and
+A snapshot with a different configuration digest or epoch can reconstruct the
+call only when nothing the call depends on changed. Each route carries an
+endpoint digest over that endpoint's whole non-secret configuration, including
+its address and credential reference; the budget plan saves it. Recovery then
+requires the same endpoint digest in addition to every check above, so an
+unrelated edit, such as another endpoint, a budget or a server setting, does not
+strand dispatched work. Any mismatch, and any plan saved without an endpoint
+digest, returns `state_unavailable`/`same_operation` instead of a permanent
+failure: the work waits for a compatible worker and is never silently rerouted.
+The cloud runtime uses this only for attempts that already have a saved provider
+execution. Historical snapshot loading is outside this helper. Snapshot catalogs and
 health are detached from later mutations; the injected registry must also belong
 to the captured snapshot. The recovered candidate retains its configured price
 version: use the saved route and exact quote/reservation for admission, including

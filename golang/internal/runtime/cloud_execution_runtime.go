@@ -184,13 +184,17 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	}
 	root := p.Record.Request
 	// Saved terminal provider results need no current adapter or routing config.
-	// Other work must wait for a compatible worker; never poison its operation
-	// key or dispatch under a different configuration during a rollout.
+	// An attempt that may already have reached its provider is polled or
+	// recovered, never submitted again, and only when recovery finds its route
+	// and endpoint unchanged. Other work must wait for a compatible worker;
+	// never poison its operation key or plan, admit or replace an attempt under
+	// a different configuration during a rollout.
 	if p.Preparation.ConfigDigest != r.preparation.digest {
 		attempt, err := r.store.LoadRequestAttempt(ctx, root.Scope, root.ID)
 		if err == nil {
 			saved, loadErr := r.store.LoadProviderExecution(ctx, root.Scope, attempt.ID)
-			if loadErr == nil && (saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed) {
+			replaces := step == cloudAcquire && loadErr == nil && saved.Execution.Stage == cloudstate.ExecutionUnknown && !r.now().Before(saved.Execution.RecoverAfter)
+			if loadErr == nil && !replaces {
 				return r.resumeAttempt(ctx, p, attempt, saved, step)
 			}
 			if loadErr == nil && saved.Execution.Stage == cloudstate.ExecutionUnknown {

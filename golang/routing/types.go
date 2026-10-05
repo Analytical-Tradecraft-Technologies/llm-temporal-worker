@@ -54,8 +54,12 @@ type Route struct {
 	// EndpointAccountHMAC is a non-secret route identity digest used to match
 	// persisted provider affinity without storing an account identifier.
 	EndpointAccountHMAC [32]byte
-	Model               string
-	ModelLineage        string
+	// EndpointDigest identifies the endpoint's own non-secret configuration.
+	// It lets paid work be recovered after an unrelated configuration change.
+	// It is not part of the candidate ID; zero means unknown.
+	EndpointDigest [32]byte
+	Model          string
+	ModelLineage   string
 	// ModelRevision identifies the provider model revision used to establish a
 	// prompt-cache prefix. Empty revisions are normalized to Model when the
 	// catalog is compiled.
@@ -100,6 +104,7 @@ type Candidate struct {
 	Family              string
 	Region              string
 	EndpointAccountHMAC [32]byte
+	EndpointDigest      [32]byte
 	Model               string
 	ModelLineage        string
 	ModelRevision       string
