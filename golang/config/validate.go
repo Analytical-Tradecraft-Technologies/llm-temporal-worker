@@ -224,11 +224,11 @@ func (state StateConfig) validate(environment string) error {
 	case StateKindRedis:
 		// Kept for the existing local Redis-only fixture while the durable
 		// repositories are adopted. It is never accepted as production.
-		if environment == "production" {
+		if IsProductionEnvironment(environment) {
 			return fmt.Errorf("state.kind redis is not permitted in production; use durable")
 		}
 	case StateKindMemory:
-		if environment == "production" {
+		if IsProductionEnvironment(environment) {
 			return fmt.Errorf("state.kind memory is not permitted in production; use durable")
 		}
 	default:
@@ -274,7 +274,7 @@ func (redis RedisConfig) validate(environment string) error {
 	if !redisKeyPrefixPattern.MatchString(redis.KeyPrefix) {
 		return fmt.Errorf("state.redis.key_prefix must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 	}
-	if environment == "production" && !redis.TLS.Enabled {
+	if IsProductionEnvironment(environment) && !redis.TLS.Enabled {
 		return fmt.Errorf("state.redis.tls.enabled must be true in production")
 	}
 	if len(redis.Addresses) == 0 {
@@ -345,7 +345,7 @@ func (blob BlobStoreConfig) validate(environment string) error {
 	}
 	switch blob.Kind {
 	case "memory":
-		if environment != "development" {
+		if IsProductionEnvironment(environment) {
 			return fmt.Errorf("blob_store.kind memory is supported only in development")
 		}
 		if blob.File.Root != "" || blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) {
@@ -361,7 +361,7 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		}
 		return blob.S3.Auth.Validate("blob_store.s3.auth")
 	case "file":
-		if environment != "development" {
+		if IsProductionEnvironment(environment) {
 			return fmt.Errorf("blob_store.kind file is supported only in development")
 		}
 		root := strings.TrimSpace(blob.File.Root)
@@ -710,7 +710,7 @@ func (telemetry TelemetryConfig) validate(environment string) error {
 	default:
 		return fmt.Errorf("telemetry.content_logging must be disabled or redacted")
 	}
-	if environment == "production" && telemetry.ContentLogging != "disabled" {
+	if IsProductionEnvironment(environment) && telemetry.ContentLogging != "disabled" {
 		return fmt.Errorf("telemetry.content_logging must be disabled in production")
 	}
 	if telemetry.Tracing.Enabled {

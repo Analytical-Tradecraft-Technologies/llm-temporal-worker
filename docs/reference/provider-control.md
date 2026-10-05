@@ -9,7 +9,12 @@ The previous SQL adapters have been removed. No existing SQL data is migrated.
 
 Production snapshots bind inference outcomes to the same Redis client and key
 namespace used by the worker. The recorder constructs a validated
-`control.StatusEvent`, then atomically updates the route projection. On the
+`control.StatusEvent`, then atomically updates the route projection. One
+projection exists per route ID and endpoint under a configuration digest; route
+IDs are unique per model only, so the endpoint keeps same-named routes of
+different models apart. Planning reads the projection for the candidate's route
+and endpoint. A stored record whose endpoint, account, provider or family does
+not match the candidate is ignored as "no status" and never fails planning. On the
 cloud Generate/Compact path, settlement records each definite success or
 supported failure as an availability observation, which drives the shared
 route circuit. Those observations always report credit and billing as `ok`:
@@ -141,7 +146,10 @@ The Go wire schemas and typed OCaml client share these values.
 the neutral `control` page contracts with the existing filters and limits
 (default 100, maximum 1,000). Credit queries select the newest route projection
 per provider/endpoint with route ID as the tie breaker, then apply the healthy
-filter. Inventory remains informational and cannot change routing.
+filter. Provider-status pages are ordered by route ID and then endpoint. The
+keyset position is the last route ID, or `route<TAB>endpoint` when a page ends
+between two routes that share an ID. Inventory remains informational and cannot
+change routing.
 
 The first read captures the bounded configuration hash with one atomic
 `HGETALL`. A temporary view pins that data for subsequent pages, including

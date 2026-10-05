@@ -394,7 +394,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	var generationPort redisstore.BudgetGenerationPort
 	streamEnabled := value.State.Redis.CoordinationStreamEnabled != nil && *value.State.Redis.CoordinationStreamEnabled
-	needBudgetKeys := streamEnabled || (value.Environment == "production" && value.State.Kind == config.StateKindDurable)
+	needBudgetKeys := streamEnabled || (config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable)
 	var budgetKeys redisstore.BudgetKeySpace
 	if needBudgetKeys {
 		budgetKeys, err = redisstore.NewBudgetKeySpace(keyOptions)
@@ -407,7 +407,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if streamEnabled {
 		streamKey = budgetKeys.EventsKey()
 	}
-	if factory.options.BudgetStatusReaderFactory != nil && value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if factory.options.BudgetStatusReaderFactory != nil && config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
 			closeOwned()
@@ -516,7 +516,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	var repository CloudRequestRepository
 	var initialization *budget.Initialization
-	if value.Environment == "production" && value.State.Kind == config.StateKindDurable {
+	if config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		repository, err = factory.buildCloudRequests(ctx, value.State.Requests)
 		if err != nil {
 			closeAll()

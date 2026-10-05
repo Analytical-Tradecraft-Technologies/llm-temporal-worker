@@ -475,3 +475,67 @@ func TestCloudReadinessRejectsIncompleteClientsBeforeRuntimeBuilder(t *testing.T
 		})
 	}
 }
+
+// The budget-authority composition (cloud request repository, initialization
+// receipt and authority probe) is production hardening. It must apply to every
+// environment name except development, not only the exact string "production".
+func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, environment := range []string{"Production", "prod", "staging"} {
+		t.Run(environment, func(t *testing.T) {
+			renamed := strings.Replace(string(data), "environment: production", "environment: "+environment, 1)
+			snapshot, err := config.Compile(context.Background(), []byte(renamed), config.ReferenceResolverFunc(func(_ context.Context, c *config.Config) error {
+				c.State.Requests = testCloudConfig()
+				c.Endpoints = map[string]config.EndpointConfig{"openai-prod": c.Endpoints["openai-prod"]}
+				for name, model := range c.Models {
+					model.Routes = model.Routes[:1]
+					c.Models[name] = model
+				}
+				return nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			redis := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
+			defer redis.Close()
+			receipt := testInitialization(testBudgetIdentity(t, snapshot.Config()), time.Now())
+			base := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}
+			var calls []string
+			opened, built := 0, false
+			factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
+					return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{"test": {Routes: []routing.Route{{EndpointID: "openai-prod", Capabilities: routing.CapabilitySet{Version: "test-v1"}}}}}}}, nil
+				}),
+				Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+					if ref.Name == "REQUEST_KEY" {
+						return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
+					}
+					return bytes.Repeat([]byte{7}, 32), nil
+				}),
+				RedisClient: redis, RedisKeySecret: bytes.Repeat([]byte{8}, 32),
+				BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
+					return &cloudBootstrapBlobStore{newTestBlobStore()}, cloudBootstrapCloser{func() {}}, nil
+				},
+				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
+					opened++
+					// The receipt is present but incomplete: startup must refuse it.
+					return &testInitializedRequests{recordingCloudRequests: base, InitializationStore: &initializationTestStore{value: receipt, trace: &calls}}, nil
+				},
+				V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
+					built = true
+					return &cloudInnerRuntime{}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, clients, err := factory.Build(context.Background(), snapshot)
+			if !errors.Is(err, ErrBudgetInitializationRequired) || clients != nil || built || opened != 1 || len(calls) == 0 {
+				t.Fatalf("environment %q skipped the budget initialization check: err=%v built=%v opened=%d reads=%v", environment, err, built, opened, calls)
+			}
+		})
+	}
+}
