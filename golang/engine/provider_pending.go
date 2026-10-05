@@ -80,7 +80,7 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return provider.Result{}, pollStoppedError(err)
 			}
-			return provider.Result{}, err
+			return provider.Result{}, transientPollError(err, maxInterval)
 		}
 		if err := result.ValidateForCall(call); err != nil {
 			mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhasePoll, provider.DispatchAmbiguous, provider.RetryNever, "provider polling response is invalid")
@@ -128,6 +128,27 @@ func minPollDelay(delay, maximum time.Duration) time.Duration {
 		return maximum
 	}
 	return delay
+}
+
+// transientPollError keeps an already durable provider operation pending when
+// the provider only asked the worker to come back later. A RetryAfter answer to
+// a status lookup (for example a rate-limited Poll) says nothing about the
+// provider-owned operation itself, so it must resume the same operation rather
+// than reach ledger finalization, where accepted work becomes ambiguous. The
+// provider delay is preserved but capped by the poll interval bound. Every
+// other poll error, including definite and ambiguous failures, is unchanged.
+func transientPollError(err error, maxInterval time.Duration) error {
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Retry != provider.RetryAfter {
+		return err
+	}
+	copy := *mapped
+	copy.Retry = provider.RetrySameOperation
+	copy.Phase = provider.PhasePoll
+	copy.Dispatch = provider.DispatchAccepted
+	copy.RetryAfter = minPollDelay(mapped.RetryAfter, maxInterval)
+	copy.Cause = err
+	return &copy
 }
 
 func pollStoppedError(cause error) *provider.Error {
