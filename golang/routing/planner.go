@@ -243,10 +243,22 @@ func CompileCatalog(version string, models map[string]Model) (Catalog, error) {
 			route.AllowedTenants = append([]string(nil), route.AllowedTenants...)
 			route.AllowedRegions = append([]string(nil), route.AllowedRegions...)
 			route.ExtensionNames = append([]string(nil), route.ExtensionNames...)
+			route.ProviderFeatures = cloneCapabilityMap(route.ProviderFeatures)
 		}
 		copyModels[name] = model
 	}
 	return Catalog{Version: version, Models: copyModels}, nil
+}
+
+func cloneCapabilityMap(input map[string]Capability) map[string]Capability {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]Capability, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 func cloneClassMap(input map[llm.ServiceClass]string) map[llm.ServiceClass]string {

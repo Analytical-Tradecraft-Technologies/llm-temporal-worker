@@ -150,7 +150,12 @@ func (r *CloudExecutionRuntime) finishTerminalFill(ctx context.Context, p Prepar
 	if err != nil || lease == nil {
 		return err
 	}
-	return r.capabilities.ResponseFills.Complete(ctx, *lease, cache.FillCompletion{Outcome: outcome, CompletedAt: saved.Execution.CompletedAt})
+	if err := r.capabilities.ResponseFills.Complete(ctx, *lease, cache.FillCompletion{Outcome: outcome, CompletedAt: saved.Execution.CompletedAt}); err != nil {
+		// A transient storage failure must stay retryable: otherwise the
+		// Activity fails permanently and the fill stays started for waiters.
+		return cloudRuntimeError(err, true)
+	}
+	return nil
 }
 
 func (r *CloudExecutionRuntime) finishCache(ctx context.Context, p PreparedCloudRequest, origin cache.ResponseEntry) (llm.ExecutionResultV1, error) {

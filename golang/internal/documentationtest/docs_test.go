@@ -1,6 +1,7 @@
 package documentationtest
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -385,4 +386,49 @@ func repositoryRoot(t *testing.T) string {
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(repositoryRoot(t), "golang")
+}
+
+func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
+	baselineBytes, err := os.ReadFile(filepath.Join(moduleRoot(t), "tools", "supplychainverify", "baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseline struct {
+		VulnerabilityExceptions []struct {
+			ID      string `json:"id"`
+			Owner   string `json:"owner"`
+			Expires string `json:"expires"`
+			Scope   string `json:"scope"`
+		} `json:"vulnerability_exceptions"`
+	}
+	if err := json.Unmarshal(baselineBytes, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	docBytes, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "reference", "dependency-baseline.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := 0
+	for _, line := range strings.Split(string(docBytes), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "| `GO-") {
+			documented++
+		}
+	}
+	if documented != len(baseline.VulnerabilityExceptions) {
+		t.Errorf("dependency baseline documents %d vulnerability exceptions, baseline.json has %d", documented, len(baseline.VulnerabilityExceptions))
+	}
+	for _, exception := range baseline.VulnerabilityExceptions {
+		prefix := "| `" + exception.ID + "` | `" + exception.Owner + "` | `" + exception.Expires + "` |"
+		found := false
+		for _, line := range strings.Split(string(docBytes), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, prefix) && strings.HasSuffix(trimmed, "| `"+exception.Scope+"` |") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("dependency baseline documentation does not match exception %s (owner %s, expiry %s, scope %s)", exception.ID, exception.Owner, exception.Expires, exception.Scope)
+		}
+	}
 }

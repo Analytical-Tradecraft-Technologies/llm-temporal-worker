@@ -142,13 +142,13 @@ models:
 capabilities:
   catalogs:
     - file: /etc/llmtw/capabilities.yaml
-      sha256: 0fa6515fcda1c5f1c01356bea6a961e16689b05d8f907f21961f000d3860f044
+      sha256: 58ec16ca53cc32eb4dcf53cec260ad7cf8eeb4ce4d52bc35829a9c5672f65c55
   unknown_in_strict_mode: reject
 
 pricing:
   catalogs:
     - file: /etc/llmtw/prices.yaml
-      sha256: 32dca5614932e84c84feeeebde3701279b9fe989708bf69e3b4c839149c19e5b
+      sha256: 8dddc0bb8f00ddd75efb511da1aea0c48bf6a9dd8e779159642294a5b2d21d11
   require_price_when_budgeted: true
 
 budgets:

@@ -685,3 +685,39 @@ func TestCloudExecutionRuntimeIndependentSamples(t *testing.T) {
 		})
 	}
 }
+
+func TestCloudExecutionRuntimeTerminalFillStorageFailureIsRetryable(t *testing.T) {
+	f := boundedCloud(t, false)
+	f.request.Cache = &llm.CachePolicyV1{}
+	fills := &boundedCompleteFaultFills{FillRepository: f.cap.ResponseFills, failures: 1}
+	f.cap.ResponseFills = fills
+	f.restart(t)
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		f.submits.Add(1)
+		return provider.Result{}, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "rejected")
+	}
+	_, err := f.runtime.GenerateStepV1(context.Background(), f.request)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+		t.Fatalf("transient fill completion error = %#v, want retryable state_unavailable", err)
+	}
+	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	if fills.completes != 2 || f.submits.Load() != 1 {
+		t.Fatalf("fill completes = %d, submits = %d", fills.completes, f.submits.Load())
+	}
+}
+
+type boundedCompleteFaultFills struct {
+	cache.FillRepository
+	failures  int
+	completes int
+}
+
+func (s *boundedCompleteFaultFills) Complete(ctx context.Context, lease cache.FillLease, completion cache.FillCompletion) error {
+	s.completes++
+	if s.completes <= s.failures {
+		return errors.New("throttled: transient storage failure")
+	}
+	return s.FillRepository.Complete(ctx, lease, completion)
+}

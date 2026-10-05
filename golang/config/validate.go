@@ -402,6 +402,15 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 	if _, ok := supportedFamilies[endpoint.Family]; !ok {
 		return fmt.Errorf("%s.family %q is unsupported", path, endpoint.Family)
 	}
+	// YAML resolves unquoted values such as 2024-10-21 to timestamps, which
+	// would later be sent to Azure as 2024-10-21T00:00:00Z.
+	for _, field := range []string{"api_version", "deployment"} {
+		if value, present := endpoint.Extensions["azure"][field]; present {
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("%s.extensions.azure.%s must be a quoted string", path, field)
+			}
+		}
+	}
 	baseHost := ""
 	var err error
 	if endpoint.Family == "bedrock_anthropic_messages" || endpoint.Family == "bedrock_converse" {

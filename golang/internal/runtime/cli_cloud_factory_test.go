@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -430,5 +431,31 @@ func TestProductionRuntimeReportsUnresolvedSecretAsOperatorDiagnostic(t *testing
 	message, ok := diagnostic.Message(err)
 	if !ok || !strings.Contains(message, `environment secret "REDIS_USERNAME" is not set`) {
 		t.Fatalf("production runtime error = %v, diagnostic = %q", err, message)
+	}
+}
+
+func TestKubernetesBaseCatalogsLoadThroughSnapshotLoader(t *testing.T) {
+	base, err := filepath.Abs("../../deploy/kubernetes/base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(base, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.ReplaceAll(string(data), "/etc/llmtw/", base+"/"))
+	snapshot, err := config.Compile(context.Background(), data, newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+		return []byte("test-secret"), nil
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := (CatalogSnapshotLoader{}).Load(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("Kubernetes base catalogs do not load: %v", err)
+	}
+	model, ok := loaded.Routes.Models["default"]
+	if !ok || len(model.Routes) != 1 || model.Routes[0].Model != "replace-with-model" || model.Routes[0].Provider != "openai" || !model.Routes[0].PriceAvailable {
+		t.Fatalf("Kubernetes base routes = %#v", loaded.Routes)
 	}
 }

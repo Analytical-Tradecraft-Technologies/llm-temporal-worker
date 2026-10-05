@@ -1104,7 +1104,7 @@ func endpointCapabilities(snapshot engine.Snapshot, endpointID string) (provider
 			if route.EndpointID != endpointID {
 				continue
 			}
-			capabilities := providerCapabilities(route.Capabilities)
+			capabilities := routeProviderCapabilities(route)
 			if found.Version == "" {
 				found.Version = capabilities.Version
 				found.Features = capabilities.Features
@@ -1152,6 +1152,20 @@ func capabilityFeatureConflict(left, right provider.CapabilitySet) (provider.Fea
 	return "", false
 }
 
+// routeProviderCapabilities prefers the complete catalog declaration carried
+// on the route and falls back to the routing projection for routes built
+// without one.
+func routeProviderCapabilities(route routing.Route) provider.CapabilitySet {
+	if len(route.ProviderFeatures) == 0 {
+		return providerCapabilities(route.Capabilities)
+	}
+	result := provider.CapabilitySet{Version: route.Capabilities.Version, Features: make(map[provider.Feature]provider.Capability, len(route.ProviderFeatures))}
+	for feature, capability := range route.ProviderFeatures {
+		result.Features[provider.Feature(feature)] = provider.Capability{State: provider.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
+	}
+	return result
+}
+
 func providerCapabilities(value routing.CapabilitySet) provider.CapabilitySet {
 	result := provider.CapabilitySet{Version: value.Version, Features: make(map[provider.Feature]provider.Capability)}
 	for source, target := range map[routing.Feature]provider.Feature{
@@ -1173,6 +1187,10 @@ func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
 	for _, feature := range allProviderFeatures {
 		copy.Features[feature] = provider.Capability{State: provider.CapabilityUnknown, Reason: "catalog did not declare this capability"}
 	}
+	// Usage accounting is intrinsic to every production adapter: each one lifts
+	// provider usage from the response. A catalog may still declare it
+	// explicitly to override this default.
+	copy.Features[provider.FeatureUsage] = provider.Capability{State: provider.CapabilityNative, Reason: "adapter lifts provider usage"}
 	for feature, capability := range value.Features {
 		copy.Features[feature] = capability
 	}
