@@ -22,4 +22,17 @@ func TestDuplicateKeyToolArgumentsAreAnAcceptedInvalidResponse(t *testing.T) {
 	if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
 		t.Fatalf("duplicate-key tool arguments error = %#v", err)
 	}
+
+	// On a length truncation the paid response is kept and only the unusable
+	// call is dropped, exactly as for arguments cut off mid-JSON.
+	response.Choices[0].FinishReason = "length"
+	lifted, err := testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, &response, "req")
+	if err != nil || lifted.Status != llm.ResponseStatusLength || lifted.Usage.OutputTokens != 8 {
+		t.Fatalf("truncated response = status %q usage %#v err %v", lifted.Status, lifted.Usage, err)
+	}
+	for _, item := range lifted.Output {
+		if _, ok := item.(llm.ToolCall); ok {
+			t.Fatalf("duplicate-key tool call was kept: %#v", lifted.Output)
+		}
+	}
 }

@@ -254,7 +254,9 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 			if call.CallID == "" || call.Name == "" {
 				return nil, false, false, fmt.Errorf("function call output item %d is missing call ID or name", index)
 			}
-			if !json.Valid([]byte(call.Arguments)) {
+			// encoding/json accepts duplicate keys but a normalized tool call
+			// does not, so arguments must also be canonicalizable.
+			if _, err := llm.CanonicalJSON([]byte(call.Arguments)); err != nil {
 				// Keep the paid incomplete response as a length truncation and
 				// drop only the cut-off call.
 				// Only the item that was itself cut off may be dropped; a
@@ -263,11 +265,6 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 				if truncated && call.Status != responses.ResponseFunctionToolCallStatusCompleted {
 					continue
 				}
-				return nil, false, false, fmt.Errorf("function call %q arguments are invalid JSON", call.CallID)
-			}
-			// encoding/json accepts duplicate keys but a normalized tool call
-			// does not. Reject them here as a classified invalid response.
-			if _, err := llm.CanonicalJSON([]byte(call.Arguments)); err != nil {
 				return nil, false, false, fmt.Errorf("function call %q arguments are invalid JSON", call.CallID)
 			}
 			toolCalls = true
