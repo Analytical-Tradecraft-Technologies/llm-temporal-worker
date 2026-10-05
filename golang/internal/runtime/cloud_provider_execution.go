@@ -434,15 +434,24 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		response.Cost.ActualCostUSD = nil
 		return
 	}
-	if response.Cost.ActualCostUSD != nil && response.Cost.ActualCostUSD.Validate() == nil {
-		response.Cost.Status, response.Cost.Method = llm.CostStatusKnown, string(pricing.CostProviderReported)
-		return
-	}
+	// A provider-reported amount is not promoted to a known cost without a
+	// catalog quote (docs/architecture/pricing-and-budgets.md).
 	if plan.Unpriced {
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
+	if response.Cost.ActualCostUSD != nil && response.Cost.ActualCostUSD.Validate() == nil {
+		response.Cost.Status, response.Cost.Method = llm.CostStatusKnown, string(pricing.CostProviderReported)
+		return
+	}
 	usage := response.Usage
+	// A provider call always consumes input tokens. All-zero usage means the
+	// provider omitted usage, so pricing it would settle a near-zero exact
+	// cost and release the reservation; keep the cost unknown instead.
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
+		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		return
+	}
 	cost, err := pricing.CostFromUsage(plan.Quote.Entry, pricing.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 		ReasoningTokens: usage.ReasoningTokens, CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens})
 	if err != nil || response.Cost.Method != "" {
