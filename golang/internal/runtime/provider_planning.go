@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -146,8 +150,9 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	if ctx.Err() != nil {
 		return PlannedProviderCall{}, ctx.Err()
 	}
+	rejections := plannerRejections(plan.Rejections)
 	if err != nil || len(plan.Candidates) == 0 {
-		return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetryNever)
+		return PlannedProviderCall{}, selectionError(ctx, rejections, false, provider.PhasePlan)
 	}
 	healthBlocked := false
 	// Preserve normal route priority among equally tried candidates, while
@@ -166,10 +171,12 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
 		if !planning.catalog.Models[semantic.Model].Routes[candidate.RouteIndex].SupportsOutputLimit(semantic) {
+			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectCapability})
 			continue
 		}
 		if err := planning.contextEstimator.ValidateContext(semantic, candidate); err != nil {
 			if errors.Is(err, budget.ErrContextLimit) {
+				rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectContext})
 				continue
 			}
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
@@ -180,13 +187,15 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 		}
 		if blocked {
 			healthBlocked = true
+			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectHealth})
 			continue
 		}
-		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
+		planned, rejection, err := planning.compileCandidate(ctx, semantic, candidate)
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}
-		if !usable {
+		if rejection != nil {
+			rejections = append(rejections, *rejection)
 			continue
 		}
 		if accept != nil {
@@ -199,61 +208,59 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			}
 			if !accepted {
 				lastPhase = provider.PhasePrice
+				rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: rejectQuote})
 				continue
 			}
 		}
 		return planned, nil
 	}
-	if healthBlocked {
-		return PlannedProviderCall{}, providerPlanningError(provider.CodeProviderUnavailable, provider.PhasePlan, provider.RetrySameOperation)
-	}
-	return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, lastPhase, provider.RetryNever)
+	return PlannedProviderCall{}, selectionError(ctx, rejections, healthBlocked, lastPhase)
 }
 
 // compileCandidate is shared by new selection and exact-route recovery.
-// An ordinary local failure is unusable; possible dispatch is always fatal.
-func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic llm.Request, candidate routing.Candidate) (PlannedProviderCall, bool, error) {
+// An ordinary local failure returns a rejection; possible dispatch is always fatal.
+func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic llm.Request, candidate routing.Candidate) (PlannedProviderCall, *planningRejection, error) {
 	adapter, err := planning.adapters.Adapter(ctx, candidate)
 	if ctx.Err() != nil {
-		return PlannedProviderCall{}, false, ctx.Err()
+		return PlannedProviderCall{}, nil, ctx.Err()
 	}
 	if err != nil {
-		return PlannedProviderCall{}, false, unsafePlanningFailure(err)
+		return rejectedCandidate(candidate, err, false)
 	}
 	if isNilCapability(adapter) {
-		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
+		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 	}
 	query := provider.CapabilityQuery{EndpointID: candidate.EndpointID, Family: provider.Family(candidate.Family), Model: candidate.Model, ServiceClass: candidate.AttemptedClass}
 	capability, err := adapter.Capabilities(ctx, query)
 	if ctx.Err() != nil {
-		return PlannedProviderCall{}, false, ctx.Err()
+		return PlannedProviderCall{}, nil, ctx.Err()
 	}
 	if err != nil {
-		return PlannedProviderCall{}, false, unsafePlanningFailure(err)
+		return rejectedCandidate(candidate, err, false)
 	}
 	if capability.Version != candidate.CapabilityVersion {
-		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
+		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 	}
 	resolved := resolveCandidateRequest(semantic, candidate, adapter)
 	digest, err := llm.RequestDigest(resolved)
 	if err != nil {
-		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
+		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
 	}
 	call, err := adapter.Compile(ctx, provider.CompileInput{Request: resolved, Query: query,
 		Capability: capability, Strict: semantic.Portability != llm.PortabilityBestEffort,
 		Metadata: provider.CallMetadata{SchemaDigest: digest, CapabilityVersion: candidate.CapabilityVersion, ProviderTier: candidate.ProviderTier}})
 	if ctx.Err() != nil {
-		return PlannedProviderCall{}, false, ctx.Err()
+		return PlannedProviderCall{}, nil, ctx.Err()
 	}
 	if err != nil {
-		return PlannedProviderCall{}, false, unsafePlanningFailure(err)
+		return rejectedCandidate(candidate, err, true)
 	}
 	if !validPlannedCall(call, candidate, semantic.OperationKey, digest) {
-		return PlannedProviderCall{}, false, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
+		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 	}
 	return PlannedProviderCall{Candidate: candidate, CacheIdentity: providerCacheIdentity(candidate),
 		CapabilityVersion: capability.Version, ConfigDigest: planning.configDigest, ConfigEpoch: planning.configEpoch,
-		Call: call, Adapter: adapter}, true, nil
+		Call: call, Adapter: adapter}, nil, nil
 }
 
 func copyBudgetSnapshot(source engine.Snapshot) engine.Snapshot {
@@ -310,6 +317,125 @@ func unsafePlanningFailure(err error) error {
 		return provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseCompile, provider.DispatchAmbiguous, provider.RetryNever, "provider planning reported possible dispatch")
 	}
 	return nil
+}
+
+// Reasons a route was passed over in addition to the routing planner's own
+// rejection codes. Together they are the closed vocabulary of a rejection.
+const (
+	rejectCompile            = "route_compile_rejected"
+	rejectAdapterUnavailable = "route_adapter_unavailable"
+	rejectQuote              = "route_quote_unavailable"
+)
+
+// maxPlanningRejectionDetails and maxPlanningRejectionLogs bound what one
+// failed selection adds to an error and to the log.
+const (
+	maxPlanningRejectionDetails = 4
+	maxPlanningRejectionLogs    = 16
+)
+
+// planningRejection records why one route could not serve a request. Reason
+// and Feature are closed vocabularies and RouteID is operator configuration;
+// compiler and configuration messages are never copied.
+type planningRejection struct {
+	RouteID string
+	Reason  string
+	Feature string
+}
+
+// capability reports whether the route was otherwise eligible but cannot
+// represent the request.
+func (rejection planningRejection) capability() bool {
+	switch rejection.Reason {
+	case routing.RejectCapability, routing.RejectExtension, rejectCompile:
+		return true
+	}
+	return false
+}
+
+func plannerRejections(source []routing.Rejection) []planningRejection {
+	result := make([]planningRejection, 0, len(source))
+	for _, rejection := range source {
+		feature := ""
+		if rejection.Code == routing.RejectCapability {
+			feature = knownFeature(strings.TrimPrefix(rejection.Path, "capabilities."))
+		}
+		result = append(result, planningRejection{RouteID: rejection.RouteID, Reason: rejection.Code, Feature: feature})
+	}
+	return result
+}
+
+// rejectedCandidate classifies a local adapter failure. Only a request the
+// adapter's compiler declined counts against the request; a failed adapter or
+// capability lookup is a worker fault.
+func rejectedCandidate(candidate routing.Candidate, err error, compiled bool) (PlannedProviderCall, *planningRejection, error) {
+	if unsafe := unsafePlanningFailure(err); unsafe != nil {
+		return PlannedProviderCall{}, nil, unsafe
+	}
+	rejection := &planningRejection{RouteID: candidate.RouteID, Reason: rejectAdapterUnavailable}
+	var mapped *provider.Error
+	if compiled && errors.As(err, &mapped) && (mapped.Code == provider.CodeUnsupportedCapability || mapped.Code == provider.CodeInvalidArgument) {
+		rejection.Reason = rejectCompile
+		// Adapters prefix a capability rejection with its feature name.
+		feature, _, _ := strings.Cut(mapped.SafeMessage, ":")
+		rejection.Feature = knownFeature(feature)
+	}
+	return PlannedProviderCall{}, rejection, nil
+}
+
+func knownFeature(name string) string {
+	switch provider.Feature(name) {
+	case provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall, provider.FeatureStructuredOutput,
+		provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage:
+		return name
+	}
+	return ""
+}
+
+// selectionError ends a selection that found no usable candidate. A blocked
+// route may recover and an unpriced or unbudgeted one is a worker fault, so
+// both keep their codes. Otherwise the request is unsupported when a route
+// declined it and no route failed for a reason the request does not control.
+func selectionError(ctx context.Context, rejections []planningRejection, healthBlocked bool, phase provider.Phase) error {
+	code, retry := provider.CodeNoRoute, provider.RetryNever
+	if healthBlocked {
+		code, phase, retry = provider.CodeProviderUnavailable, provider.PhasePlan, provider.RetrySameOperation
+	} else if phase != provider.PhasePrice {
+		unsupported := false
+		for _, rejection := range rejections {
+			unsupported = unsupported || rejection.capability()
+			if rejection.Reason == routing.RejectContext || rejection.Reason == rejectAdapterUnavailable {
+				unsupported = false
+				break
+			}
+		}
+		if unsupported {
+			code = provider.CodeUnsupportedCapability
+		}
+	}
+	failure := provider.NewError(code, phase, provider.DispatchNotDispatched, retry, "provider planning failed")
+	if len(rejections) == 0 {
+		return failure
+	}
+	// Lead with the rejections that explain an unsupported request.
+	sort.SliceStable(rejections, func(i, j int) bool { return rejections[i].capability() && !rejections[j].capability() })
+	failure.SafeDetails = map[string]string{"rejected_routes": strconv.Itoa(len(rejections))}
+	logger := observability.LoggerFromContext(ctx)
+	for index, rejection := range rejections {
+		cause := rejection.Reason
+		if rejection.Feature != "" {
+			cause += ":" + rejection.Feature
+		}
+		if index < maxPlanningRejectionDetails {
+			position := strconv.Itoa(index + 1)
+			failure.SafeDetails["route_"+position], failure.SafeDetails["reason_"+position] = rejection.RouteID, cause
+		}
+		if index < maxPlanningRejectionLogs {
+			logger.Warn(ctx, "route rejected during provider planning", slog.String("route_id", rejection.RouteID), slog.String("cause", cause),
+				slog.String("error_code", string(code)), slog.String("phase", string(phase)))
+		}
+	}
+	return failure
 }
 
 func providerPlanningError(code provider.Code, phase provider.Phase, retry provider.RetryDisposition) error {

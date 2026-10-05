@@ -8,6 +8,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/cache"
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
@@ -113,8 +114,9 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 		// really select it, so run the same selection (health, compilation,
 		// price and budget-policy quote) with a throwaway attempt. Nothing is
 		// reserved or dispatched; any failure leaves compaction requested.
+		// A failure here is the expected reason to compact, so it is not logged.
 		now := r.now()
-		_, err := r.execution.admission.planning.Generate(ctx, input, BudgetAttempt{OperationID: "compaction-plan",
+		_, err := r.execution.admission.planning.Generate(observability.WithLogger(ctx, nil), input, BudgetAttempt{OperationID: "compaction-plan",
 			GenerationID: r.options.BudgetGeneration, QuotedAt: now, ExpiresAt: now.Add(cache.MaxFillLease)})
 		if ctx.Err() != nil {
 			return llm.GenerationPlanV1{}, ctx.Err()

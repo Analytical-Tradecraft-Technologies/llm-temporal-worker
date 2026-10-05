@@ -112,9 +112,20 @@ func planningFixture() (V1RuntimeCapabilities, *planningSource, *planningAdapter
 func assertPlanningError(t *testing.T, err error, code provider.Code) {
 	t.Helper()
 	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != code || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Cause != nil || len(mapped.SafeDetails) != 0 || strings.Contains(err.Error(), "sensitive") {
+	if !errors.As(err, &mapped) || mapped.Code != code || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Cause != nil || strings.Contains(err.Error(), "sensitive") || unsafePlanningDetails(mapped) {
 		t.Fatalf("unsafe or unexpected planning error: %#v", err)
 	}
+}
+
+// unsafePlanningDetails reports a detail outside the closed route-rejection
+// vocabulary: anything that could carry request or compiler text.
+func unsafePlanningDetails(err *provider.Error) bool {
+	for key, value := range err.SafeDetails {
+		if strings.Contains(key+value, "sensitive") || (!strings.HasPrefix(key, "route_") && !strings.HasPrefix(key, "reason_") && key != "rejected_routes") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestProviderPlanningRealCompilerResolvesAliasesAndFallbackForBothPhases(t *testing.T) {

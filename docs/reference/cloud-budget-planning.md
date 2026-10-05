@@ -25,8 +25,10 @@ also satisfy required policy matching and have usable pricing before selection
 succeeds. Missing/inactive prices, unknown required price components and unsafe
 Redis reservation amounts allow the next authorized candidate. Invalid resolver
 responses, price version mismatches, tokenizer errors and ambiguous compilation
-stop planning. Exhausting candidates returns `no_route`; no budget balance was
-consulted or changed. Insufficient available budget remains Redis's immediate
+stop planning. Exhausting candidates returns `no_route` at the `price` phase
+when any candidate was unpriced or unbudgeted, and otherwise the
+[provider planning](cloud-provider-planning.md) classification; no budget
+balance was consulted or changed. Insufficient available budget remains Redis's immediate
 acquired/wait decision and does not authorize a route change here.
 
 Policy matching uses tenant, project, actor, environment, the application's

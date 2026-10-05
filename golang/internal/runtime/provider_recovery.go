@@ -129,11 +129,11 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 		if health, present := planning.health.Routes[candidate.RouteID]; present && (!health.Enabled || health.Open || health.AuthOpen) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetrySameOperation)
 		}
-		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
+		planned, rejection, err := planning.compileCandidate(ctx, semantic, candidate)
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}
-		if !usable {
+		if rejection != nil {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.RetrySameOperation)
 		}
 		// compileCandidate derived its digest through resolveCandidateRequest

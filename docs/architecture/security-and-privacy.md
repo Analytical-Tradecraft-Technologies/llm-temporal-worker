@@ -154,7 +154,8 @@ provider state are sensitive by default. The worker:
 - records provider storage/retention choices in endpoint profiles;
 - is intended to provide content-free audit events for access and deletion;
   these are not yet emitted for Generate/Compact access or scope denials (only
-  query audit and configuration reloads are logged today).
+  query audit, configuration reloads and route rejections during provider
+  planning, with route ID and a bounded cause, are logged today).
 
 The cloud Generate contract stores bounded content-free metadata and references
 for recovery and cache verification. Prompt, tool, output and provider-state

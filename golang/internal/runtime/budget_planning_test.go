@@ -98,7 +98,7 @@ func assertBudgetPlanningError(t *testing.T, err error, code provider.Code) {
 	t.Helper()
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) || mapped.Code != code || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever ||
-		mapped.Cause != nil || len(mapped.SafeDetails) != 0 || strings.Contains(err.Error(), "sensitive") {
+		mapped.Cause != nil || strings.Contains(err.Error(), "sensitive") || unsafePlanningDetails(mapped) {
 		t.Fatalf("unsafe or unexpected budget planning error: %#v", err)
 	}
 }
