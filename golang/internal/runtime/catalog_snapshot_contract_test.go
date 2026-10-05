@@ -584,3 +584,81 @@ func TestCompileRoutesPreservesContextLimit(t *testing.T) {
 		t.Fatalf("context limit=%d", got)
 	}
 }
+
+func TestCompileRoutesLeavesScheduledPriceVersionChangeUnpinned(t *testing.T) {
+	boundary := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	intervals := func(before, after string) []pricing.Entry {
+		first, second := testPriceEntry("endpoint-a", "gpt-test", "standard"), testPriceEntry("endpoint-a", "gpt-test", "standard")
+		first.Version, first.EffectiveUntil = before, boundary
+		second.Version, second.EffectiveFrom = after, boundary
+		return []pricing.Entry{first, second}
+	}
+	for name, test := range map[string]struct {
+		before, after, want string
+	}{
+		"changed version":   {before: "prices-v1", after: "prices-v2", want: ""},
+		"inherited version": {before: "", after: "prices-v2", want: ""},
+		"same version":      {before: "prices-v2", after: "prices-v2", want: "prices-v2"},
+		"omitted versions":  {before: "", after: "", want: "prices-v1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, bundle := testRouteInputs(t)
+			bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", intervals(test.before, test.after))
+			// The pin must not depend on which side of the boundary the load ran.
+			for _, loadedAt := range []time.Time{boundary.Add(-time.Hour), boundary, boundary.Add(time.Hour)} {
+				routes, err := compileRoutes(value, bundle, loadedAt)
+				if err != nil {
+					t.Fatalf("compileRoutes() error = %v", err)
+				}
+				route := routes.Models["logical-model"].Routes[0]
+				if !route.PriceAvailable || route.PriceVersion != test.want {
+					t.Fatalf("loaded at %s: price version = %q available = %t, want %q", loadedAt, route.PriceVersion, route.PriceAvailable, test.want)
+				}
+			}
+		})
+	}
+}
+
+// The catalog is compiled by the real compileRoutes before the boundary and the
+// same snapshot then serves requests on both sides of it, as a worker whose
+// configuration file never changes does.
+func TestCloudExecutionCompletesAcrossScheduledPriceVersionBoundary(t *testing.T) {
+	boundary := time.Date(2026, 10, 4, 2, 0, 0, 0, time.UTC)
+	f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
+		first, second := b.entry, b.entry
+		first.Version, first.EffectiveUntil = "price/v1", boundary
+		second.Version, second.EffectiveFrom = "price/v2", boundary
+		entries := []pricing.Entry{first, second}
+		value := config.Config{
+			Version: "config-v1",
+			Endpoints: map[string]config.EndpointConfig{"endpoint": {
+				Family: string(provider.FamilyOpenAIResponses), Region: "region", CapabilityProfile: "profile", PriceCatalog: "prices",
+				ServiceClasses: map[llm.ServiceClass]config.TierConfig{llm.ServiceClassStandard: {ProviderValue: "default"}},
+			}},
+			Models: map[string]config.ModelConfig{"alias": {AllowedTenants: []string{"tenant"}, Routes: []config.RouteConfig{
+				{ID: "route", Endpoint: "endpoint", Model: "provider-model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}}},
+		}
+		bundle := catalog.Bundle{
+			Capabilities: map[string]catalog.CapabilityProfile{"profile": {ID: "profile", Family: provider.FamilyOpenAIResponses, Model: "provider-model",
+				Set: provider.CapabilitySet{Version: "profile/v1", Features: map[provider.Feature]provider.Capability{provider.FeatureText: {State: provider.CapabilityNative}}}}},
+			Pricing: map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices/v1", entries)},
+		}
+		routes, err := compileRoutes(value, bundle, boundary.Add(-2*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.source.value.Routes = routes
+		b.prices(t, entries)
+	})
+	if !f.now.Before(boundary) {
+		t.Fatal("fixture clock does not start before the boundary")
+	}
+	if result := f.finish(t); result.Generate == nil || f.submits.Load() != 1 {
+		t.Fatal("request before the boundary did not complete once")
+	}
+	f.now = boundary.Add(time.Hour)
+	f.request.OperationKey = "operation-after-boundary"
+	if result := f.finish(t); result.Generate == nil || f.submits.Load() != 2 {
+		t.Fatal("request after the boundary did not complete once")
+	}
+}

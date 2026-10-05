@@ -175,7 +175,9 @@ Each entry also retains its optional `source`/`provenance` audit linkage. When
 both are supplied they must agree, and the linkage contributes to the compiled
 catalog digest. Effective intervals allow a new price source to replace an
 older one without rewriting history; resolution at the boundary selects the
-new interval and preserves the source identity in the quote. A missing source
+new interval and preserves the source identity in the quote. The replacement
+entry may carry a different `version`: the route then binds its price version
+at quote time, so the boundary takes effect without a reload. A missing source
 file, digest mismatch, or invalid replacement rejects the complete candidate
 catalog. Reload publication is atomic, so the last verified snapshot remains
 active during a source outage rather than exposing a partial or guessed price.
