@@ -35,8 +35,6 @@ type boundedCloudFixture struct {
 	request        llm.GenerateRequestV1
 	adapter        *executionAsyncAdapter
 	submits, polls atomic.Int32
-	table          *executionMemoryTable
-	blobs          *executionMemoryBlobs
 }
 
 func boundedCloud(t *testing.T, async bool, configure ...func(*budgetPlanningFixture)) *boundedCloudFixture {
