@@ -580,6 +580,7 @@ func TestValidateMatchesRuntimeParsersForStartupSettings(t *testing.T) {
 	for _, test := range []struct{ from, to, want string }{
 		{from: `sample_ratio: "0.05"`, to: `sample_ratio: "1/20"`, want: "sample_ratio must be a decimal between 0 and 1"},
 		{from: "metrics_address: 0.0.0.0:9090", to: "metrics_address: :8080", want: "must be identical to share a listener"},
+		{from: "metrics_address: 0.0.0.0:9090", to: "metrics_address: 0.0.0.0:08080", want: "must be identical to share a listener"},
 		{from: "metrics_address: 0.0.0.0:9090", to: "metrics_address: 0.0.0.0:99999", want: "port must be between 0 and 65535"},
 		{from: "max_output_tokens: 32768", to: "max_output_tokens: 3000000000", want: "limits.max_output_tokens must not exceed 2147483647"},
 	} {

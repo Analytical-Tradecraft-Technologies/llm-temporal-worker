@@ -144,9 +144,12 @@ func (server ServerConfig) validate() error {
 	// other spelling of the same port (":8080" and "0.0.0.0:8080") would make
 	// the second bind fail at startup.
 	if server.HealthAddress != server.MetricsAddress {
-		_, healthPort, _ := net.SplitHostPort(server.HealthAddress)
-		_, metricsPort, _ := net.SplitHostPort(server.MetricsAddress)
-		if healthPort == metricsPort && healthPort != "0" {
+		_, healthText, _ := net.SplitHostPort(server.HealthAddress)
+		_, metricsText, _ := net.SplitHostPort(server.MetricsAddress)
+		// Compare numeric ports: "8080" and "08080" bind the same port.
+		healthPort, _ := strconv.Atoi(healthText)
+		metricsPort, _ := strconv.Atoi(metricsText)
+		if healthPort == metricsPort && healthPort != 0 {
 			return fmt.Errorf("server.health_address and server.metrics_address must be identical to share a listener, or use different ports")
 		}
 	}
