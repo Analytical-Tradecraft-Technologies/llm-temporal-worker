@@ -53,3 +53,32 @@ func TestCloudLostRecordBlobIsCorruptNotANewOperation(t *testing.T) {
 		t.Fatalf("lost record blob dispatched the provider again: submits=%d", f.submits.Load())
 	}
 }
+
+// A new operation that continues from a checkpoint whose stored payload is lost
+// fails as corrupt. It is neither retried as a storage outage nor blamed on the
+// caller's handle.
+func TestCloudLostParentCheckpointBlobIsCorruptNotRetried(t *testing.T) {
+	f := boundedCloud(t, false)
+	ctx := context.Background()
+	parent := f.finish(t)
+	submits := f.submits.Load()
+
+	f.blobs.mu.Lock()
+	f.blobs.values = map[blob.BlobKey][]byte{}
+	f.blobs.mu.Unlock()
+	f.restart(t)
+
+	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
+	_, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateCorrupt || mapped.Retry != provider.RetryNever {
+		t.Fatalf("replay of a lost parent checkpoint = %#v, want non-retryable state_corrupt", err)
+	}
+	var application *temporal.ApplicationError
+	if !errors.As(activity.ToTemporalError(err), &application) || !application.NonRetryable() {
+		t.Fatalf("lost parent checkpoint is a retryable Activity error: %v", activity.ToTemporalError(err))
+	}
+	if f.submits.Load() != submits {
+		t.Fatalf("lost parent checkpoint dispatched the provider: submits=%d, want %d", f.submits.Load(), submits)
+	}
+}
