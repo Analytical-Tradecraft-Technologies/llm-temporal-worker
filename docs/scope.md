@@ -70,7 +70,9 @@ controller:
   the sampling and reasoning controls the v1 settings patch can express. A
   route whose API cannot honour one of them (for example a seed on Anthropic
   Messages, or stop sequences on OpenAI Responses) rejects the request when it
-  compiles instead of dropping the control.
+  compiles instead of dropping the control. One exception: Bedrock Converse
+  rejects `reasoning_mode` and `reasoning_token_budget` only under strict
+  portability; with `best_effort` it drops them silently.
 - Provider-state parts that remain opaque and byte-for-byte stable.
 - Strict and best-effort portability. Strict mode rejects content a route
   cannot represent; the durable v1 path does not yet emit portability

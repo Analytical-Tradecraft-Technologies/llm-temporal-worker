@@ -174,7 +174,10 @@ an untyped string.  Per-turn overrides remain available through
 dispatch: `top_p` in (0, 1], one to 16 distinct non-empty stop sequences of at
 most 256 characters, a seed between 0 and 2^53 - 1, and a token budget between
 1 and 2147483647.  A route whose API cannot honour a control (for example a
-seed on Anthropic Messages) rejects the request rather than dropping it.
+seed on Anthropic Messages) rejects the request rather than dropping it. The
+exception is Bedrock Converse with `Best_effort` portability, which silently
+drops `reasoning_mode` and `reasoning_token_budget`; under `Strict` it
+rejects them.
 
 The repository's `ocaml/consumer_smoke` project is that downstream-package
 check.  It executes deterministic injected dispatchers for one root Generate,
