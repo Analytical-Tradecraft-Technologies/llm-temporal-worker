@@ -1022,7 +1022,7 @@ let validate_media_source context expected_media_type = function
   | Url uri ->
       let* _ = valid_uri (context ^ " url") uri in
       Ok ()
-  | Bytes value -> let* _ = nonempty (context ^ " bytes") value in Ok ()
+  | Bytes value -> if value = "" then Error (codec_error "%s bytes must not be empty" context) else Ok ()
   | Blob { locator; digest; byte_length; media_type } ->
       let* _ = nonempty (context ^ " locator") locator in
       let* _ = nonempty (context ^ " digest") (Blob_digest.to_string digest) in
