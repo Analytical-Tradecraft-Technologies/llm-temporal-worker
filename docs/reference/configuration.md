@@ -120,7 +120,7 @@ temporal:
     server_name: temporal.example.internal
     ca_file: /var/run/ca/temporal.pem
   worker:
-    max_concurrent_activities: 64
+    max_concurrent_activities: 16
     max_concurrent_activity_task_polls: 8
     graceful_stop_timeout: 30s
     heartbeat_keepalive_interval: 1s
@@ -469,6 +469,14 @@ telemetry:
     sample_ratio: "0.05"
   content_logging: disabled
 ```
+
+`temporal.worker.max_concurrent_activities` bounds in-flight Activities and
+therefore the worker's memory. One Activity on a large-context turn holds about
+20–28 times the materialized transcript in live heap, roughly 96 MiB at the
+4 MiB parent bound, and nothing weights slots by transcript size. Size it so
+`max_concurrent_activities × 96 MiB` stays below `GOMEMLIMIT`: the base
+Kubernetes deployment (`GOMEMLIMIT=1800MiB`, 2Gi limit) ships `16`. Raise it
+only together with the memory limit, or when transcripts are known to be small.
 
 `temporal.worker.heartbeat_keepalive_interval` controls the fixed, redacted
 heartbeat emitted while a one-shot provider call is in flight. It defaults to

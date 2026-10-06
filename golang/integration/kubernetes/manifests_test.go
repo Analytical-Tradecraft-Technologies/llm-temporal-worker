@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -195,4 +196,58 @@ func privateNetwork(cidr string) bool {
 		}
 	}
 	return false
+}
+
+// perActivityHeapMiB is the live heap one in-flight Activity can hold at the
+// 4 MiB parent-transcript bound (20–28x the transcript, measured in #1114).
+const perActivityHeapMiB = 96
+
+func TestBaseActivityConcurrencyFitsTheGoMemoryLimit(t *testing.T) {
+	var deployment struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Env []struct {
+							Name  string `yaml:"name"`
+							Value string `yaml:"value"`
+						} `yaml:"env"`
+					} `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepositoryFile(t, "deploy", "kubernetes", "base", "deployment.yaml")), &deployment); err != nil {
+		t.Fatal(err)
+	}
+	limitMiB := 0
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		for _, env := range container.Env {
+			if env.Name == "GOMEMLIMIT" {
+				value, ok := strings.CutSuffix(env.Value, "MiB")
+				parsed, err := strconv.Atoi(value)
+				if !ok || err != nil {
+					t.Fatalf("GOMEMLIMIT = %q, want a MiB value", env.Value)
+				}
+				limitMiB = parsed
+			}
+		}
+	}
+	if limitMiB == 0 {
+		t.Fatal("base deployment does not set GOMEMLIMIT")
+	}
+	var config struct {
+		Temporal struct {
+			Worker struct {
+				MaxConcurrentActivities int `yaml:"max_concurrent_activities"`
+			} `yaml:"worker"`
+		} `yaml:"temporal"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")), &config); err != nil {
+		t.Fatal(err)
+	}
+	activities := config.Temporal.Worker.MaxConcurrentActivities
+	if activities <= 0 || activities*perActivityHeapMiB >= limitMiB {
+		t.Fatalf("max_concurrent_activities %d x %d MiB must stay below GOMEMLIMIT %d MiB", activities, perActivityHeapMiB, limitMiB)
+	}
 }
