@@ -522,3 +522,17 @@ entries:
 		}
 	}
 }
+
+// A profile that accepts documents must declare a context window; otherwise an
+// unbounded document reserves the 5,400,000-token constant (#1168).
+func TestLoadCapabilitiesRequiresAContextWindowForDocumentInput(t *testing.T) {
+	profile := func(context string) string {
+		return "version: local-mock-v1\nprofiles:\n  local-mock-v1:\n    family: openai_chat\n    model: demo-model\n    input: [text, document]\n    output: [text]\n" + context + "    max_output_tokens: 4096\n"
+	}
+	if _, err := LoadCapabilities(writeCatalog(t, profile(""))); err == nil || !strings.Contains(err.Error(), "context window") {
+		t.Fatalf("LoadCapabilities() error = %v, want a missing context window error", err)
+	}
+	if _, err := LoadCapabilities(writeCatalog(t, profile("    max_context_tokens: 32768\n"))); err != nil {
+		t.Fatalf("document profile with a context window rejected: %v", err)
+	}
+}

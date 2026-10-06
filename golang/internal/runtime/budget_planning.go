@@ -138,20 +138,30 @@ func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, a
 		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeInvalidArgument)
 	}
 	var result PlannedBudgetCall
+	oversized := false
 	_, err = planning.providers.selectCall(ctx, semantic, func(call PlannedProviderCall) (bool, error) {
-		quoted, usable, err := planning.quote(ctx, semantic, call, attempt)
+		quoted, usable, err := planning.quote(ctx, semantic, call, attempt, &oversized)
 		if err == nil && usable {
 			result = quoted
 		}
 		return usable, err
 	}, attempt.PriorCandidates...)
 	if err != nil {
+		// A terminal no-route result after a candidate whose reservation
+		// exceeds a matched window limit can never be admitted; waiting for
+		// capacity would only run out the workflow deadline, so say so. Any
+		// other outcome, such as a retryable health block on a candidate that
+		// would fit, is kept.
+		var mapped *provider.Error
+		if oversized && ctx.Err() == nil && errors.As(err, &mapped) && mapped.Code == provider.CodeNoRoute {
+			return PlannedBudgetCall{}, provider.NewError(provider.CodeBudgetDenied, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "request reservation exceeds a budget window limit")
+		}
 		return PlannedBudgetCall{}, err
 	}
 	return result, nil
 }
 
-func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request, call PlannedProviderCall, attempt BudgetAttempt) (PlannedBudgetCall, bool, error) {
+func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request, call PlannedProviderCall, attempt BudgetAttempt, oversized *bool) (PlannedBudgetCall, bool, error) {
 	snapshot, candidate := planning.providers.budgetSnapshot, call.Candidate
 	route, err := call.Route(attempt.OperationID, attempt.GenerationID)
 	if err != nil {
@@ -227,6 +237,11 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 			return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)
 		}
 		limit, _ := exactWindowLimit(window) // validated when capturing the planner
+		if estimate.CostUSD.Cmp(limit) > 0 {
+			// This candidate can never fit the window; another may.
+			*oversized = true
+			return PlannedBudgetCall{}, false, nil
+		}
 		legacyLimit, err := compatibilityBudgetLimit(limit, window.Limit)
 		if err != nil {
 			return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)

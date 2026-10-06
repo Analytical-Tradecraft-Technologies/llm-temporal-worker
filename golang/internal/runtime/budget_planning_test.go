@@ -583,3 +583,23 @@ func TestBudgetPlanningPrefersLessTriedCandidates(t *testing.T) {
 		t.Fatal("equal attempt counts lost configured priority")
 	}
 }
+
+// A reservation larger than a matched window's limit can never be admitted, so
+// planning fails fast with budget_denied instead of waiting for capacity until
+// the workflow deadline (#1168).
+func TestBudgetPlanningRejectsReservationLargerThanTheWindowLimit(t *testing.T) {
+	f := newBudgetPlanningFixture(t)
+	planned, err := f.planning(t).Generate(context.Background(), f.generate, f.attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost := planned.Reservation.Reservations[0].AmountUSD
+	for i := range f.source.value.BudgetPolicies[0].Windows {
+		f.source.value.BudgetPolicies[0].Windows[i].LimitUSD = pricing.MustUSD("0.000000001")
+	}
+	if cost.Cmp(pricing.MustUSD("0.000000001")) <= 0 {
+		t.Skip("fixture quote is below the smallest limit")
+	}
+	_, err = f.planning(t).Generate(context.Background(), f.generate, f.attempt)
+	assertBudgetPlanningError(t, err, provider.CodeBudgetDenied)
+}
