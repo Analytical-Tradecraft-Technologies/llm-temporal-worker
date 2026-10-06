@@ -119,9 +119,22 @@ func (service ServiceFacts) MarshalJSON() ([]byte, error) {
 }
 
 func decodeServiceFacts(data []byte) (ServiceFacts, error) {
+	return decodeServiceFactsFields(data, false)
+}
+
+// decodeServiceFactsStrict decodes the public v1 service object, whose schema
+// requires fallback_index.
+func decodeServiceFactsStrict(data []byte) (ServiceFacts, error) {
+	return decodeServiceFactsFields(data, true)
+}
+
+func decodeServiceFactsFields(data []byte, requireFallbackIndex bool) (ServiceFacts, error) {
 	fields, err := decodeObject(data)
 	if err != nil {
 		return ServiceFacts{}, err
+	}
+	if _, ok := fields["fallback_index"]; requireFallbackIndex && !ok {
+		return ServiceFacts{}, fmt.Errorf("service fallback_index is required")
 	}
 	if err := checkUnknownFields(fields, "requested", "attempted", "actual", "provider_value", "fallback_index"); err != nil {
 		return ServiceFacts{}, err

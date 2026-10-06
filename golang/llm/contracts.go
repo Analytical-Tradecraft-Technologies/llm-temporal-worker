@@ -1115,7 +1115,9 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 		result.Route = &route
 	}
 	if raw, ok := fields["service"]; ok {
-		service, err := decodeServiceFacts(raw)
+		// The v1 contract requires fallback_index; only stored internal
+		// responses written before the field existed may omit it.
+		service, err := decodeServiceFactsStrict(raw)
 		if err != nil {
 			return err
 		}
