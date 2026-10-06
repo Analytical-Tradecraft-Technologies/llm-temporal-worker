@@ -710,15 +710,17 @@ module Query : sig
     cost : settled_cost;
   }
 
+  (* task_queue must be the Go worker's queue: llm.query.v1 is registered
+     only there. *)
   val execute :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
     ('a response, Temporal.Error.t) result
 
   val start :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
@@ -744,7 +746,8 @@ scheduling.
 let* provider_filter =
   Query.Filter.provider_status ~include_healthy:false ~page_size:100 ()
 in
-Query.execute ~operation_key ~context (Query.Provider_status provider_filter)
+Query.execute ~task_queue ~operation_key ~context
+  (Query.Provider_status provider_filter)
 ~~~
 
 `start` keeps the Activity's Temporal error as the Future error and returns
@@ -758,7 +761,7 @@ the answer as a spend summary:
 
 ~~~ocaml
 let result =
-  Query.execute
+  Query.execute ~task_queue
     ~operation_key:(Operation_key.of_string "budget-check-481")
     ~context
     (Query.Budget_status {
