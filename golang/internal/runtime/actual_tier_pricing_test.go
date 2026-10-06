@@ -16,15 +16,20 @@ func TestPriceExecutionResponseUsesTheClassTheProviderReported(t *testing.T) {
 		return pricing.Entry{Provider: "openai", Family: "openai_responses", EndpointID: "endpoint", Region: "region", Model: "provider-model", ProviderTier: tier, Version: "price/v1",
 			Prices: pricing.UnitPrices{OutputPerMillion: pricing.MustDecimalUSD(output)}}
 	}
+	partial := entry("flex", "0")
+	partial.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentOutput}
 	plan := cloudstate.BudgetPlan{Mode: cloudstate.BudgetFree, AttemptedClass: llm.ServiceClassPriority, Quote: pricing.Quote{Entry: entry("priority", "10")},
-		ClassEntries: map[llm.ServiceClass]pricing.Entry{llm.ServiceClassStandard: entry("default", "1")}}
-	standard := llm.ServiceClassStandard
+		ClassEntries: map[llm.ServiceClass]pricing.Entry{llm.ServiceClassStandard: entry("default", "1"), llm.ServiceClassEconomy: partial}}
+	standard, economy := llm.ServiceClassStandard, llm.ServiceClassEconomy
 	for name, test := range map[string]struct {
 		actual *llm.ServiceClass
 		want   string
 	}{
 		"served at standard": {actual: &standard, want: "0.00001"},
 		"no reported class":  {actual: nil, want: "0.0001"},
+		// A served-class entry that cannot price the usage falls back to the
+		// quoted entry.
+		"served at an unpriceable class": {actual: &economy, want: "0.0001"},
 	} {
 		response := &llm.Response{Usage: llm.Usage{OutputTokens: 10}, Service: llm.ServiceFacts{Actual: test.actual}}
 		priceExecutionResponse(plan, response)

@@ -77,7 +77,10 @@ The reservation is quoted at the attempted class's provider tier. The quote
 also captures, at the same instant, the entries of the route's other service
 classes, so when the provider reports serving a response at another class (for
 example a priority request served at standard), usage is priced with that
-class's entry. A provider-reported exact cost is still used as reported. USD is the only supported denomination: field
+class's entry. A served-class entry that cannot price the usage (a partial
+entry marking a used component unknown) falls back to the quoted entry, so a
+paid response is never discarded. A provider-reported exact cost is still used
+as reported. USD is the only supported denomination: field
 names and the strict `pricing.CompileUSD` boundary establish the denomination;
 there is no generic source `currency` field or caller-supplied FX rate. Logical
 aliases are resolved before pricing.
