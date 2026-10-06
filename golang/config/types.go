@@ -107,13 +107,24 @@ type TemporalConfig struct {
 	TaskQueue      string               `yaml:"task_queue" json:"task_queue"`
 	IdentityPrefix string               `yaml:"identity_prefix" json:"identity_prefix"`
 	TLS            TLSConfig            `yaml:"tls" json:"tls"`
-	Worker         TemporalWorkerConfig `yaml:"worker" json:"worker"`
+	// APIKeyFile names a file holding a Temporal API key the client presents
+	// on every call. It requires TLS.
+	APIKeyFile string `yaml:"api_key_file" json:"api_key_file,omitempty"`
+	// MeshTransport declares that a service mesh supplies transport security
+	// and client identity, so production accepts a connection without worker
+	// TLS or client credentials.
+	MeshTransport bool                 `yaml:"mesh_transport" json:"mesh_transport,omitempty"`
+	Worker        TemporalWorkerConfig `yaml:"worker" json:"worker"`
 }
 
 type TLSConfig struct {
 	Enabled    bool   `yaml:"enabled" json:"enabled"`
 	ServerName string `yaml:"server_name" json:"server_name"`
 	CAFile     string `yaml:"ca_file" json:"ca_file"`
+	// CertFile and KeyFile hold the PEM client certificate and key presented
+	// for mTLS. Only the Temporal connection supports them.
+	CertFile string `yaml:"cert_file" json:"cert_file,omitempty"`
+	KeyFile  string `yaml:"key_file" json:"key_file,omitempty"`
 }
 
 type TemporalWorkerConfig struct {

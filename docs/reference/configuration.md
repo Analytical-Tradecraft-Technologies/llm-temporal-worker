@@ -82,6 +82,16 @@ but production CLI startup rejects it. `llm.query.v1` remains independently
 configured and is not enabled by this policy. See
 [durable runtime composition](durable-v1-runtime.md) for scope and reload details.
 
+Because the worker trusts Temporal to authenticate callers, its own Temporal
+connection must be encrypted and authenticated. The client presents an mTLS
+certificate (`temporal.tls.cert_file` and `key_file`, set together) or an API
+key (`temporal.api_key_file`, one line). Both require `temporal.tls.enabled`.
+In production, startup requires TLS plus one of these credentials. The only
+exception is `temporal.mesh_transport: true`, which declares that a service mesh
+supplies transport security and client identity. All of these fields are
+process-lifetime settings, read at startup; a reload that changes them is
+rejected. Redis TLS does not accept `cert_file` or `key_file`.
+
 ## Output reservations
 
 When a request omits `output.max_tokens`, budgeted execution inserts
@@ -119,6 +129,10 @@ temporal:
     enabled: true
     server_name: temporal.example.internal
     ca_file: /var/run/ca/temporal.pem
+    cert_file: /var/run/ca/temporal-client.pem
+    key_file: /var/run/ca/temporal-client-key.pem
+  # api_key_file: /var/run/ca/temporal-api-key   # instead of cert_file/key_file
+  # mesh_transport: true                          # a service mesh supplies TLS and identity
   worker:
     max_concurrent_activities: 16
     max_concurrent_activity_task_polls: 8

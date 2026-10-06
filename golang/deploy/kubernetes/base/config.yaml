@@ -19,6 +19,10 @@ temporal:
     enabled: true
     server_name: temporal.example.internal
     ca_file: /var/run/secrets/llmtw/temporal-ca.pem
+    # Client certificate for Temporal mTLS. Production requires it, or
+    # temporal.api_key_file, unless temporal.mesh_transport is set.
+    cert_file: /var/run/secrets/llmtw/temporal-client.pem
+    key_file: /var/run/secrets/llmtw/temporal-client-key.pem
   worker:
     # Each in-flight Activity can hold about 96 MiB of live heap at the 4 MiB
     # parent-transcript bound; keep this times 96 MiB under GOMEMLIMIT

@@ -42,7 +42,7 @@ func (config Config) Validate() error {
 	if err := config.Server.validate(); err != nil {
 		return err
 	}
-	if err := config.Temporal.validate(); err != nil {
+	if err := config.Temporal.validate(config.Environment); err != nil {
 		return err
 	}
 	if config.Authorization != nil {
@@ -177,7 +177,7 @@ func (server ServerConfig) validate() error {
 	return nil
 }
 
-func (temporal TemporalConfig) validate() error {
+func (temporal TemporalConfig) validate(environment string) error {
 	if strings.TrimSpace(temporal.Target) == "" || strings.ContainsAny(temporal.Target, "\r\n") {
 		return fmt.Errorf("temporal.target must be non-empty")
 	}
@@ -195,6 +195,23 @@ func (temporal TemporalConfig) validate() error {
 	}
 	if temporal.TLS.Enabled && temporal.TLS.ServerName == "" {
 		return fmt.Errorf("temporal.tls.server_name is required when TLS is enabled")
+	}
+	if (temporal.TLS.CertFile == "") != (temporal.TLS.KeyFile == "") {
+		return fmt.Errorf("temporal.tls.cert_file and temporal.tls.key_file must be set together")
+	}
+	if !temporal.TLS.Enabled && (temporal.TLS.CertFile != "" || temporal.APIKeyFile != "") {
+		return fmt.Errorf("temporal client credentials require temporal.tls.enabled")
+	}
+	// trusted_temporal trusts Temporal to authenticate callers, so production
+	// needs an encrypted, authenticated connection to it: worker TLS with a
+	// client certificate or API key, or a service mesh that supplies both.
+	if IsProductionEnvironment(environment) && !temporal.MeshTransport {
+		if !temporal.TLS.Enabled {
+			return fmt.Errorf("temporal.tls.enabled must be true in production unless temporal.mesh_transport is set")
+		}
+		if temporal.TLS.CertFile == "" && temporal.APIKeyFile == "" {
+			return fmt.Errorf("temporal.tls.cert_file/key_file or temporal.api_key_file is required in production unless temporal.mesh_transport is set")
+		}
 	}
 	if temporal.Worker.MaxConcurrentActivities <= 0 || temporal.Worker.MaxConcurrentActivityTaskPolls <= 0 {
 		return fmt.Errorf("temporal.worker concurrency values must be positive")
@@ -276,6 +293,9 @@ func (state StateConfig) validate(environment string) error {
 func (redis RedisConfig) validate(environment string) error {
 	if !redisKeyPrefixPattern.MatchString(redis.KeyPrefix) {
 		return fmt.Errorf("state.redis.key_prefix must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+	}
+	if redis.TLS.CertFile != "" || redis.TLS.KeyFile != "" {
+		return fmt.Errorf("state.redis.tls.cert_file and key_file are not supported")
 	}
 	if IsProductionEnvironment(environment) && !redis.TLS.Enabled {
 		return fmt.Errorf("state.redis.tls.enabled must be true in production")

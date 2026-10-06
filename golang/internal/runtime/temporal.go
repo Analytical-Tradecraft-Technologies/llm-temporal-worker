@@ -105,6 +105,17 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 			return nil, err
 		}
 		options.ConnectionOptions.TLS = tlsConfig
+		if value.Temporal.APIKeyFile != "" {
+			encoded, err := readFile(value.Temporal.APIKeyFile)
+			if err != nil {
+				return nil, errors.New("read Temporal API key")
+			}
+			key := strings.TrimSpace(string(encoded))
+			if key == "" || strings.ContainsAny(key, "\r\n") {
+				return nil, errors.New("Temporal API key is invalid")
+			}
+			options.Credentials = client.NewAPIKeyStaticCredentials(key)
+		}
 	}
 	dial := factory.DialContext
 	if dial == nil {
@@ -226,11 +237,27 @@ func loadTLSConfig(value config.TLSConfig, readFile func(string) ([]byte, error)
 	if !pool.AppendCertsFromPEM(encoded) {
 		return nil, errors.New("Temporal TLS CA certificate is invalid")
 	}
-	return &tls.Config{
+	result := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		ServerName: value.ServerName,
 		RootCAs:    pool,
-	}, nil
+	}
+	if value.CertFile != "" {
+		certificate, err := readFile(value.CertFile)
+		if err != nil {
+			return nil, errors.New("read Temporal TLS client certificate")
+		}
+		key, err := readFile(value.KeyFile)
+		if err != nil {
+			return nil, errors.New("read Temporal TLS client key")
+		}
+		pair, err := tls.X509KeyPair(certificate, key)
+		if err != nil {
+			return nil, errors.New("Temporal TLS client certificate or key is invalid")
+		}
+		result.Certificates = []tls.Certificate{pair}
+	}
+	return result, nil
 }
 
 func readBoundedFile(path string) ([]byte, error) {

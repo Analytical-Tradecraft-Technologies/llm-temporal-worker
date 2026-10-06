@@ -122,6 +122,15 @@
         "ca_file": { "type": "string" }
       }
     },
+    "temporal_tls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "server_name", "ca_file"],
+      "properties": {
+        "enabled": { "type": "boolean" }, "server_name": { "type": "string" },
+        "ca_file": { "type": "string" },
+        "cert_file": { "type": "string" }, "key_file": { "type": "string" }
+      }
+    },
     "server": {
       "type": "object", "additionalProperties": false,
       "required": ["health_address", "metrics_address", "shutdown_timeout", "finalization_timeout", "readiness_probe_interval", "readiness_probe_timeout", "inline_payload_bytes"],
@@ -140,7 +149,8 @@
       "properties": {
         "target": { "type": "string" }, "namespace": { "type": "string" },
         "task_queue": { "type": "string" }, "identity_prefix": { "type": "string" },
-        "tls": { "$ref": "#/$defs/tls" }, "worker": { "$ref": "#/$defs/worker" }
+        "tls": { "$ref": "#/$defs/temporal_tls" }, "api_key_file": { "type": "string" },
+        "mesh_transport": { "type": "boolean" }, "worker": { "$ref": "#/$defs/worker" }
       }
     },
     "worker": {
