@@ -993,6 +993,12 @@ rejected, so a template that renders an unset tenant as `[~]` cannot widen
 access by accident; a template that renders the whole list as null or empty
 does remove the restriction, so validate rendered files before deploying them.
 
+`models.<name>.data_regions` is required and recorded with the model, but the
+durable v1 path does not enforce it. The planner compares it with a request
+region tag, and v1 requests carry no context tags, so no request is ever
+restricted by it. Do not rely on it for data residency. Restrict residency
+through the routes and endpoints a model lists instead.
+
 ## Price catalog shape
 
 ```yaml

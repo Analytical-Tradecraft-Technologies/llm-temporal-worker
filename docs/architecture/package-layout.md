@@ -29,7 +29,7 @@ current-layout reference.
 │   │   │   ├── openairesponses/    OpenAI Responses lowering/lifting
 │   │   │   ├── openaichat/         OpenAI-compatible Chat lowering/lifting
 │   │   │   ├── anthropicmessages/  Direct and Claude Platform AWS Messages
-│   │   │   ├── bedrockmessages/    Bedrock Mantle and isolated legacy runtime profile
+│   │   │   ├── bedrockmessages/    Bedrock Runtime InvokeModel Messages profile
 │   │   │   └── */testdata/contracts/ Redacted provider wire fixtures by adapter
 │   │   └── testdata/               Shared normalized request and response fixtures
 │   ├── engine/                     End-to-end inference lifecycle composition

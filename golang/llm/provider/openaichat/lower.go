@@ -10,6 +10,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
 // lowerRequestMap builds the intended Chat Completions wire body. lowerRequest
@@ -466,6 +467,11 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 		target["response_format"] = map[string]any{"type": "json_object"}
 		return nil
 	case llm.OutputKindJSONSchema:
+		// Parse with the same subset the lift validates the answer against,
+		// before dispatch: a schema it cannot apply must not be paid for.
+		if _, err := llmschema.Parse(output.Format.Schema); err != nil {
+			return fmt.Errorf("output schema: %w", err)
+		}
 		var schema map[string]any
 		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
 			return fmt.Errorf("output schema: %w", err)

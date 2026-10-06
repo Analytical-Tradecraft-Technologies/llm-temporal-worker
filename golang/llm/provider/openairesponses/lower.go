@@ -10,6 +10,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
 func providerTier(class llm.ServiceClass) string {
@@ -483,6 +484,11 @@ func lowerOutput(output llm.OutputSpec) (map[string]any, error) {
 	case llm.OutputKindJSON:
 		result["text"] = map[string]any{"format": map[string]any{"type": "json_object"}}
 	case llm.OutputKindJSONSchema:
+		// Parse with the same subset the lift validates the answer against,
+		// before dispatch: a schema it cannot apply must not be paid for.
+		if _, err := llmschema.Parse(output.Format.Schema); err != nil {
+			return nil, fmt.Errorf("output schema: %w", err)
+		}
 		var schema map[string]any
 		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
 			return nil, fmt.Errorf("output schema: %w", err)
