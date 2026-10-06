@@ -3,13 +3,18 @@ package architecturetest
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 )
 
 const sloEvidenceSourceRevision = "0123456789abcdef0123456789abcdef01234567"
@@ -635,4 +640,41 @@ func validateSLOEvidenceJSONSchema(schema *jsonschema.Schema, record map[string]
 		return err
 	}
 	return schema.Validate(instance)
+}
+
+// TestSLOEvidenceAcceptsAHealthyWorkerExport feeds the real exporter's scrape
+// of a worker that has completed Activities but never failed one into the
+// evidence command.
+func TestSLOEvidenceAcceptsAHealthyWorkerExport(t *testing.T) {
+	root := repositoryRoot(t)
+	metrics, err := observability.NewMetrics(observability.AllowedValues{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 1000; index++ {
+		metrics.RecordActivity("completed", "none", time.Millisecond, "finalize")
+	}
+	recorder := httptest.NewRecorder()
+	metrics.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	directory := t.TempDir()
+	inputPath := filepath.Join(directory, "metrics.prom")
+	outputPath := filepath.Join(directory, "worker-error-summary.json")
+	if err := os.WriteFile(inputPath, recorder.Body.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
+	if err != nil {
+		t.Fatalf("worker error summary of a healthy export: %v\n%s", err, output)
+	}
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["completed_attempts"] != float64(1000) || summary["worker_failed_attempts"] != float64(0) {
+		t.Fatalf("summary = %#v, want 1000 completed and 0 worker failures", summary)
+	}
 }

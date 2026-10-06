@@ -42,7 +42,7 @@ func TestGenerateActivityRecordsTerminalMetrics(t *testing.T) {
 			if test.origin != "" {
 				assertActivityMetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": test.origin}, 1)
 			} else {
-				assertActivityMetricAbsent(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "worker"})
+				assertActivityFailureCountZero(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "worker"})
 			}
 		})
 	}
@@ -79,7 +79,7 @@ func TestGenerateActivityDoesNotRecordFailureForPreDispatchCancellation(t *testi
 	}
 	_, _ = activities.Generate(context.Background(), validGeneratePayload())
 	for _, origin := range []string{"worker", "caller"} {
-		assertActivityMetricAbsent(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": origin})
+		assertActivityFailureCountZero(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": origin})
 	}
 }
 
@@ -101,7 +101,7 @@ func TestGenerateActivityRecordsWorkerFailureForOversizedResponse(t *testing.T) 
 	}
 	_, _ = activities.Generate(context.Background(), validGeneratePayload())
 	assertActivityMetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "worker"}, 1)
-	assertActivityMetricAbsent(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "caller"})
+	assertActivityFailureCountZero(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "caller"})
 }
 
 func validGeneratePayload() GenerateRequest {
@@ -125,10 +125,12 @@ func assertActivityMetricCounter(t *testing.T, metrics *observability.Metrics, n
 	}
 }
 
-func assertActivityMetricAbsent(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string) {
+// assertActivityFailureCountZero accepts the zero series that the metrics
+// exporter creates up front for every bounded failure origin.
+func assertActivityFailureCountZero(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string) {
 	t.Helper()
-	if got, found := activityMetricValue(t, metrics, name, labels, false); found {
-		t.Fatalf("%s%v = %v, found=%v; want no metric", name, labels, got, found)
+	if got, found := activityMetricValue(t, metrics, name, labels, false); found && got != 0 {
+		t.Fatalf("%s%v = %v; want no failures", name, labels, got)
 	}
 }
 
