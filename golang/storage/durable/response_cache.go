@@ -117,8 +117,13 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 	if route.Provider == "" || route.Endpoint == "" || route.Model == "" || route.Revision == "" || route.Compiler == "" {
 		return nil, fmt.Errorf("%w: a complete resolved route is required", ErrResponseCacheInvalid)
 	}
+	// The lease was stamped by the worker that quoted the attempt. A clock that
+	// lags it is late, not outside the lease: look up as of the acquisition.
 	now := c.now().UTC()
-	if now.Before(lease.AcquiredAt) || !now.Before(lease.ExpiresAt) {
+	if now.Before(lease.AcquiredAt) {
+		now = lease.AcquiredAt.UTC()
+	}
+	if !now.Before(lease.ExpiresAt) {
 		return nil, fmt.Errorf("%w: clock is outside the lease", ErrResponseCacheInvalid)
 	}
 	result, err := cache.Prepare(ctx, c.responses, c.fills, cache.ResponseLookup{Key: lease.Key, Now: now, MaxAge: maxAge}, lease)
