@@ -110,7 +110,7 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
 	for _, candidate := range candidates.Candidates {
-		if candidate.ID != binding.CandidateID {
+		if candidate.ID != binding.CandidateID && !planning.pinnedCandidate(semantic, candidate, binding) {
 			continue
 		}
 		if !planning.containsCandidate(semantic, candidate) || candidate.RouteID != binding.Route.RouteID || candidate.EndpointID != binding.Route.EndpointID ||
@@ -144,6 +144,21 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 		return planned, nil
 	}
 	return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
+}
+
+// pinnedCandidate reports whether the binding recorded this candidate under the
+// ID it carried while its route still pinned the bound price version. A route
+// whose catalog schedules a price version change compiles unpinned, but a plan
+// made by an earlier snapshot of the same configuration, and still awaiting
+// its paid dispatch, names the pinned ID. The bound route, quote and
+// reservation stay exactly as recorded.
+func (planning *ProviderPlanning) pinnedCandidate(request llm.Request, candidate routing.Candidate, binding ProviderRecoveryBinding) bool {
+	if candidate.PriceVersion != "" || binding.Route.PriceVersion == "" || !planning.containsCandidate(request, candidate) {
+		return false
+	}
+	route := planning.catalog.Models[request.Model].Routes[candidate.RouteIndex]
+	id, err := candidate.PinnedPriceID(route, binding.Route.PriceVersion)
+	return err == nil && id == binding.CandidateID
 }
 
 // ProviderRecoveryOperationKeyDigest binds the original key read from durable

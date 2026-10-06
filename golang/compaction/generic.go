@@ -29,8 +29,10 @@ func Prompt(version string) (string, error) {
 // caller's routing and sampling settings, but never mutates the caller and
 // always strips application tools, tool policy, continuation, reasoning, and
 // structured output. It injects the versioned repository prompt and selected
-// summary style as policy instructions. The returned request can therefore
-// only ask for bounded plain text.
+// summary style as policy instructions. The prefix is not replayed as
+// provider turns: it is rendered as text into one delimited human message
+// that ends with the summarize instruction and the length budget. The
+// returned request can therefore only ask for bounded plain text.
 func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, policy Policy) (llm.Request, error) {
 	if operationKey == "" {
 		return llm.Request{}, errors.New("compaction operation key is required")
@@ -48,7 +50,7 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 	maxTokens := policy.OutputReserveTokens
 	result := source
 	result.OperationKey = operationKey
-	result.Input = append([]llm.Item(nil), input...)
+	result.Input = summarizerInput(input, policy)
 	result.Instructions = make([]llm.Instruction, 0, len(source.Instructions)+2)
 	result.Instructions = append(result.Instructions,
 		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: prompt},

@@ -248,10 +248,44 @@ func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
 			if reason == "content_filter" {
 				want = llm.ResponseStatusContentFiltered
 			}
-			text, ok := firstModelText(result.Output)
+			text, ok := finalModelText(result.Output)
 			if result.Status != want || !ok || text != `{"answer":` || result.Usage.InputTokens != 12 || result.Usage.OutputTokens != 4 {
 				t.Fatalf("lost incomplete response: %+v", result)
 			}
 		}
+	}
+}
+
+func TestLiftValidatesFinalAnswerAfterCommentary(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
+	params, err := lowerRequest(llm.Request{
+		Model: "gpt",
+		Output: &llm.OutputSpec{Format: llm.OutputFormat{
+			Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema,
+		}},
+	}, llm.ServiceClassStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := provider.Call{
+		EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt",
+		OperationKey: "op-phase", ServiceClass: llm.ServiceClassStandard, SDKParams: params,
+	}
+	commentary := `{"type":"message","id":"msg-1","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"Let me work on that.","annotations":[]}]}`
+	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
+	response.Output = decodeOutputItems(t, `[`+commentary+`,{"type":"message","id":"msg-2","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}]`)
+	lifted, err := liftResponse(call, &response, "req")
+	if err != nil {
+		t.Fatalf("commentary before the final answer = %v", err)
+	}
+	if lifted.Status != llm.ResponseStatusCompleted || len(lifted.Output) != 2 {
+		t.Fatalf("lifted = %#v", lifted)
+	}
+	// The final answer is still held to the schema.
+	response.Output = decodeOutputItems(t, `[`+commentary+`,{"type":"message","id":"msg-2","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"{\"answer\":3}","annotations":[]}]}]`)
+	_, err = liftResponse(call, &response, "req")
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
+		t.Fatalf("invalid final answer error = %#v", err)
 	}
 }

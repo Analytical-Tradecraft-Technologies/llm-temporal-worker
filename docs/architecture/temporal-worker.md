@@ -272,9 +272,12 @@ dependency probe, so a late success from a client that did not observe
 cancellation cannot be treated as a healthy dependency result. The existing
 worker drain/stop sequencing still owns the final poller transition.
 
-The monitor keeps running while a paused Temporal poller completes its graceful
-drain. It does not start a replacement poller until that drain completes, so a
-transient dependency recovery cannot create overlapping pollers.
+The monitor keeps running while a paused Temporal poller drains. A pause lets
+in-flight Activities finish within the Activity start-to-close timeout instead
+of cancelling them after the graceful stop timeout, which only termination
+applies. The monitor does not start a replacement poller until that drain
+completes, so a transient dependency recovery cannot create overlapping
+pollers.
 
 ## Local Compose recovery proof
 

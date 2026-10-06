@@ -138,7 +138,7 @@ func validateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 	if err := json.Unmarshal(envelope.Text.Format, &format); err != nil {
 		return fmt.Errorf("response format validation: %w", err)
 	}
-	content, ok := firstModelText(output)
+	content, ok := finalModelText(output)
 	if !ok {
 		return fmt.Errorf("provider response did not contain JSON text content")
 	}
@@ -165,9 +165,12 @@ func validateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 	return nil
 }
 
-func firstModelText(output []llm.Item) (string, bool) {
-	for _, item := range output {
-		message, ok := item.(llm.Message)
+// finalModelText returns the text of the last model message. A response can
+// carry commentary messages before the final answer, and only the final answer
+// is the document the requested format describes.
+func finalModelText(output []llm.Item) (string, bool) {
+	for index := len(output) - 1; index >= 0; index-- {
+		message, ok := output[index].(llm.Message)
 		if !ok || message.Actor != llm.ActorModel {
 			continue
 		}

@@ -486,7 +486,9 @@ at most 2 MiB, Temporal's default payload blob limit.
 strictly greater than `temporal.worker.graceful_stop_timeout` plus
 `server.finalization_timeout`; equality is rejected so shutdown still has
 bounded time to close clients and flush telemetry after in-flight Activities
-drain. Kubernetes `terminationGracePeriodSeconds` must then exceed the same
+drain. `graceful_stop_timeout` applies only to termination: a dependency
+pause lets in-flight Activities finish within the `5m` start-to-close timeout
+instead of cancelling them. Kubernetes `terminationGracePeriodSeconds` must then exceed the same
 shutdown budget (with deployment-specific margin), as described in the
 [deployment shutdown contract](../architecture/deployment-and-operations.md#probes-and-shutdown).
 

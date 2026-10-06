@@ -26,8 +26,12 @@ the snapshot would exceed the blob byte bound, the checkpoint is published
 without it.
 
 Compaction writes a snapshot containing the summary and the current request's
-retained suffix, with unchanged application settings. Its response blob contains
-only the summary so a later cache consumer can use its own suffix and lineage.
+retained suffix, with unchanged application settings. The summary leads the
+snapshot as a human-role message (`compaction.SummaryItem`), because Anthropic
+Messages and Bedrock Converse reject a conversation that opens with an
+assistant turn. Its response blob contains only the summary, as the model
+message the summarizer returned, so a later cache consumer can use its own
+suffix and lineage; that blob is never materialized into a transcript.
 Cache callers must supply the validated origin template and corresponding model
 output. A hit creates a distinct zero-cost child, with origin metadata retained
 as provenance. A compact checkpoint retains the `compaction` kind, including

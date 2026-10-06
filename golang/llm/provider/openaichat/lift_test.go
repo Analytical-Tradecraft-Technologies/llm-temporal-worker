@@ -219,3 +219,27 @@ func TestLiftToolCallsWithStopReason(t *testing.T) {
 		})
 	}
 }
+
+func TestLiftAcceptsNullFinishReason(t *testing.T) {
+	call := provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}
+	for _, test := range []struct {
+		message string
+		want    llm.ResponseStatus
+	}{
+		{message: `{"role":"assistant","content":"hello"}`, want: llm.ResponseStatusCompleted},
+		{message: `{"role":"assistant","content":null,"tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}`, want: llm.ResponseStatusToolCalls},
+	} {
+		var response openai.ChatCompletion
+		if err := json.Unmarshal([]byte(`{"id":"gen","object":"chat.completion","model":"model","choices":[{"index":0,"finish_reason":null,"message":`+test.message+`}]}`), &response); err != nil {
+			t.Fatal(err)
+		}
+		got, err := testProfile().liftResponse(call, &response, "req")
+		if err != nil || got.Status != test.want || got.Provider.FinishReason != "" {
+			t.Fatalf("null finish reason = %#v, %v", got, err)
+		}
+	}
+	response := openai.ChatCompletion{ID: "id", Model: "model", Choices: []openai.ChatCompletionChoice{{FinishReason: "error", Message: openai.ChatCompletionMessage{Role: "assistant"}}}}
+	if _, err := testProfile().liftResponse(call, &response, "req"); err == nil {
+		t.Fatal("an unknown finish reason must still be rejected")
+	}
+}

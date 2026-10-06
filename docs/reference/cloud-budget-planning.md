@@ -37,6 +37,12 @@ interval and the route's configured price version. An omitted entry version
 uses the catalog version. `planned.Route.PriceVersion` contains the actual quote
 version, including when the configured route had none.
 
+A route is compiled without a price version when its catalog intervals carry
+more than one version, for example a scheduled price change whose replacement
+entry has a new `version`. Such a route binds the version of the interval that
+is active at quote time, so requests keep succeeding when the effective
+boundary passes without a configuration reload.
+
 The estimator receives the detached provider request: resolved model, attempted
 class, no fallback classes, and the same digest used by the compiler. It reuses
 the configured token estimator, output/reasoning bounds and safety ratio. Each

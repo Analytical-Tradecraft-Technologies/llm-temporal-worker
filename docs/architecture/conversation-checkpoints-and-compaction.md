@@ -449,13 +449,16 @@ from the Generate operation and compaction policy. It:
    open tasks, citations, and recent turns outside the lossy summary;
 4. constructs an internal compaction request with the application's tools
    absent, tool choice forced to none, and the application's structured-output
-   format absent;
+   format absent. The prefix is quoted as text inside one delimited human
+   message that ends with the summarize instruction and a length budget; it
+   is never replayed as provider turns;
 5. invokes the configured summarizer through normal routing, budget, status,
    resumable-operation, and cost accounting;
 6. accepts only bounded plain-text compaction output and records
    prompt/model/policy versions;
-7. writes a compaction checkpoint without changing the stored application tool
-   or output settings; and
+7. writes a compaction checkpoint that starts with the summary as a
+   human-role message, without changing the stored application tool or output
+   settings; and
 8. compiles the requested Generate turn from that child with those application
    settings restored.
 
@@ -473,7 +476,8 @@ Compaction isolation is a security and correctness invariant. The summarizer
 cannot call an application tool, emit a tool call, or be constrained by the
 application's final-answer JSON schema. A provider response that contains a
 tool call or structured-output artifact during compaction is invalid and never
-becomes a checkpoint.
+becomes a checkpoint. Caller and tool-result text in the prefix reaches the
+summarizer only as quoted transcript data, not as live turns.
 
 The summarizer prompt and summary style are policy-level instructions placed
 ahead of the conversation's own instructions. Some routes cannot keep the two

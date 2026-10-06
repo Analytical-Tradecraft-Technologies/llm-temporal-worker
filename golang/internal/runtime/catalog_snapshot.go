@@ -210,6 +210,9 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 	}
 	var priceVersion string
 	priceAvailable := true
+	// scheduled collects the version of every interval that can price this
+	// route, whether or not that interval is active at load time.
+	scheduled := make(map[string]struct{})
 	family := endpointFamily(endpoint.Family)
 	for _, class := range classes {
 		tier := endpoint.ServiceClasses[class].ProviderValue
@@ -218,10 +221,18 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 			entry := &priceCatalog.Catalog.Entries[index]
 			// Keep the identity checks explicit: provider names are catalog data,
 			// while endpoint/family/model/tier are operator configuration.
-			if entry.EndpointID != endpointID || entry.Family != string(family) || entry.Model != model || entry.ProviderTier != tier || !entry.Active(now) {
+			if entry.EndpointID != endpointID || entry.Family != string(family) || entry.Model != model || entry.ProviderTier != tier {
 				continue
 			}
 			if endpoint.Region != "" && entry.Region != endpoint.Region {
+				continue
+			}
+			if entry.Version == "" {
+				scheduled[priceCatalog.Version] = struct{}{}
+			} else {
+				scheduled[entry.Version] = struct{}{}
+			}
+			if !entry.Active(now) {
 				continue
 			}
 			if found != nil {
@@ -246,6 +257,15 @@ func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint confi
 		} else if priceVersion != entryVersion {
 			return "", "", "", false, fmt.Errorf("price entries use multiple versions")
 		}
+	}
+	// The snapshot outlives its load time and nothing reloads it when an
+	// effective boundary passes. A route whose intervals change the price
+	// version is therefore left unpinned: budget planning binds the version of
+	// the entry active at quote time, as it does for a route that had no
+	// active price at load. Pinning the load-time version would reject every
+	// quote on the route once the next interval begins.
+	if len(scheduled) > 1 {
+		priceVersion = ""
 	}
 	return providerName, routeRegion, priceVersion, priceAvailable, nil
 }
