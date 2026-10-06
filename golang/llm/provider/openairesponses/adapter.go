@@ -130,7 +130,13 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err := validateQuery(input.Query, adapter.endpointID); err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}
+	if (input.Request.WebSearch || input.Request.CodeExecution || input.Request.WebFetch) && !adapter.client.directOpenAI {
+		return provider.Call{}, compileError("hosted tools require the direct OpenAI Responses transport")
+	}
 	normalized, err := llm.NormalizeRequest(input.Request)
+	input.Metadata.WebSearch = input.Request.WebSearch
+	input.Metadata.WebFetch = input.Request.WebFetch
+	input.Metadata.CodeExecution = input.Request.CodeExecution
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}

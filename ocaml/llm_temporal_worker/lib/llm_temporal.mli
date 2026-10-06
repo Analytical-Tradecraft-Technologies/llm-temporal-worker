@@ -27,9 +27,23 @@ module Cache_policy : module type of Conversation.Cache_policy
 (** Short names used by the immutable-conversation examples. *)
 module Decimal : module type of Usd_decimal
   with type t = Usd_decimal.t
-module Compaction_policy : sig
-  type t = compaction_policy
-end
+module Compaction_policy : module type of Llm_temporal_compaction_policy
 
 type tool = function_tool
 type output_config = output_spec
+
+module Context : module type of Llm_temporal_helpers.Context
+
+module Item : module type of Llm_temporal_helpers.Item
+
+module Tool : module type of Llm_temporal_helpers.Tool
+
+module Output : module type of Llm_temporal_helpers.Output
+
+module Response : module type of Llm_temporal_helpers.Response
+
+module Failure : module type of Llm_temporal_helpers.Failure
+
+module Compact : module type of Llm_temporal_compact
+
+module Exa : module type of Llm_temporal_exa

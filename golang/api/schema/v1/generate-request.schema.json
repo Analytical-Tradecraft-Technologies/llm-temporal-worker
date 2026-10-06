@@ -41,6 +41,9 @@
     "settings_patch": {
       "type": "object", "additionalProperties": false,
       "properties": {
+        "web_search": {"$ref": "#/$defs/bool_patch"},
+        "web_fetch": {"$ref": "#/$defs/bool_patch"},
+        "code_execution": {"$ref": "#/$defs/bool_patch"},
         "model": {"$ref": "#/$defs/model_patch"},
         "service_class": {"$ref": "#/$defs/service_patch"},
         "service_class_fallbacks": {"$ref": "#/$defs/service_list_patch"},
@@ -56,6 +59,7 @@
         "extensions": {"$ref": "#/$defs/extensions_patch"}
       }
     },
+    "bool_patch": {"oneOf": [{"type":"object","additionalProperties":false,"required":["set"],"properties":{"set":{"type":"boolean"}}},{"type":"object","additionalProperties":false,"required":["clear"],"properties":{"clear":{"const":true}}}]},
     "model_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "string", "minLength": 1, "maxLength": 256}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
     "service_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"enum": ["economy", "standard", "priority"]}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},
     "service_list_patch": {"oneOf": [{"type": "object", "additionalProperties": false, "required": ["set"], "properties": {"set": {"type": "array", "uniqueItems": true, "items": {"enum": ["economy", "standard", "priority"]}}}}, {"type": "object", "additionalProperties": false, "required": ["clear"], "properties": {"clear": {"const": true}}}]},

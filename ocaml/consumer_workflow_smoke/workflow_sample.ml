@@ -75,7 +75,7 @@ let low_level_workflow_examples ~task_queue ~generate_id ~compact_id
     (query_envelope : query_envelope) =
   let generated = invoke_generate ~task_queue ~id:generate_id generation_request in
   let compacted = invoke_compact_v1 ~task_queue ~id:compact_id compaction_request in
-  let queried = invoke_query_v1 ~task_queue query_envelope in
+  let queried = invoke_query_v1 ~task_queue ~id:"query-envelope" query_envelope in
   generated, compacted, queried
 
 let claim_workflow ~input_codec ~output_codec ~task_queue =
@@ -88,14 +88,14 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
           ~refresh_if_older_than_seconds:300L ~page_size:100 ())
       in
       let* credit =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":credit-before")
           ~operation_key:(operation_key input "credit-before")
           ~context:input.context
           (Query.Credit_status credit_filter)
       in
       let* budget_filter = filter_result (Query.Filter.budget_status ()) in
       let* budget =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":budget-before")
           ~operation_key:(operation_key input "budget-before")
           ~context:input.context
           (Query.Budget_status budget_filter)
@@ -149,7 +149,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
           (Query.Filter.provider_status ~include_healthy:false ~page_size:100 ())
       in
       let* provider_status =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":provider-status-after")
           ~operation_key:(operation_key input "provider-status-after")
           ~context:input.context
           (Query.Provider_status provider_filter)
@@ -158,7 +158,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
         filter_result (Query.Filter.model_inventory ~page_size:100 ())
       in
       let* model_inventory =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":model-inventory-after")
           ~operation_key:(operation_key input "model-inventory-after")
           ~context:input.context
           (Query.Model_inventory model_filter)
@@ -171,7 +171,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
              ~operation_kinds:[ Generate; Compact; Query ] ())
       in
       let* spend_summary =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":spend-after")
           ~operation_key:(operation_key input "spend-after")
           ~context:input.context
           (Query.Spend_summary spend_filter)

@@ -26,7 +26,18 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	if err := appendContinuationStates(&messages, request.Continuation, profile, ""); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
+	var containerID string
 	for index, item := range request.Input {
+		if value, ok := item.(llm.ProviderState); ok && value.Provider == "anthropic" && value.EndpointFamily == "messages" && value.MediaType == "application/vnd.anthropic.container+json" {
+			var container struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(value.Opaque, &container) != nil || container.ID == "" {
+				return anthropic.MessageNewParams{}, fmt.Errorf("invalid container provider state")
+			}
+			containerID = container.ID
+			continue
+		}
 		// A reference is an output annotation (for example a citation) that
 		// a replayed transcript still carries. It has no wire form, so it is
 		// left out instead of failing every later turn.
@@ -99,10 +110,22 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 			outputConfig["effort"] = effort
 		}
 	}
-	if len(request.Tools) > 0 {
+	if containerID != "" {
+		requestMap["container"] = containerID
+	}
+	if len(request.Tools) > 0 || request.WebSearch || request.WebFetch || request.CodeExecution {
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
 			return anthropic.MessageNewParams{}, err
+		}
+		if request.WebSearch {
+			tools = append(tools, map[string]any{"type": "web_search_20250305", "name": "web_search", "max_uses": llm.MaxWebSearchCalls})
+		}
+		if request.WebFetch {
+			tools = append(tools, map[string]any{"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": llm.MaxWebSearchCalls, "max_content_tokens": 10000, "citations": map[string]any{"enabled": true}})
+		}
+		if request.CodeExecution {
+			tools = append(tools, map[string]any{"type": "code_execution_20250825", "name": "code_execution"})
 		}
 		requestMap["tools"] = tools
 		choice, err := lowerToolPolicy(request.ToolPolicy)
@@ -115,7 +138,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto && request.ToolPolicy.Mode != llm.ToolChoiceNone {
 		return anthropic.MessageNewParams{}, fmt.Errorf("tool policy %q requires at least one tool", request.ToolPolicy.Mode)
 	}
-	if err := lowerExtensions(profile, request.Extensions, requestMap); err != nil {
+	if err := lowerExtensions(profile, request.Extensions, requestMap, request.WebSearch || request.WebFetch || request.CodeExecution || containerID != ""); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
 
@@ -530,7 +553,7 @@ func reasoningOutputEffort(effort llm.ReasoningEffort) string {
 	}
 }
 
-func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any) error {
+func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any, hosted ...bool) error {
 	for namespace, raw := range extensions {
 		spec, ok := profile.AllowedExtensions[namespace]
 		if !ok {
@@ -554,6 +577,9 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 			var decoded any
 			if err := json.Unmarshal(value, &decoded); err != nil {
 				return fmt.Errorf("extension %q field %q: %w", namespace, name, err)
+			}
+			if len(hosted) > 0 && hosted[0] && (wire == "tools" || wire == "max_tool_calls" || wire == "tool_choice" || wire == "container") {
+				return fmt.Errorf("extension cannot override hosted tool controls")
 			}
 			target[wire] = decoded
 		}
@@ -612,8 +638,16 @@ func rawContentBlock(raw []byte) (json.RawMessage, error) {
 		return nil, fmt.Errorf("provider state: %w", err)
 	}
 	typeValue, _ := block["type"].(string)
-	if typeValue != "thinking" && typeValue != "redacted_thinking" {
+	if !replayableBlockType(typeValue) {
 		return nil, fmt.Errorf("provider state content block type %q is not replayable", typeValue)
 	}
 	return append(json.RawMessage(nil), raw...), nil
+}
+
+func replayableBlockType(kind string) bool {
+	switch kind {
+	case "thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result":
+		return true
+	}
+	return false
 }

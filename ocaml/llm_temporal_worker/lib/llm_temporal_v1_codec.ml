@@ -122,12 +122,13 @@ let portability_of_json context = function
   | _ -> Error (errorf "%s has an invalid portability" context)
 
 let response_status_to_json = function
-  | Completed -> `String "completed" | Tool_calls -> `String "tool_calls" | Refused -> `String "refused" | Length -> `String "length" | Content_filtered -> `String "content_filtered"
+  | Paused -> `String "paused" | Completed -> `String "completed" | Tool_calls -> `String "tool_calls" | Refused -> `String "refused" | Length -> `String "length" | Content_filtered -> `String "content_filtered"
 let response_status_of_json context = function
   | `String "completed" -> Ok Completed
   | `String "tool_calls" -> Ok Tool_calls
   | `String "refused" -> Ok Refused
   | `String "length" -> Ok Length
+  | `String "paused" -> Ok Paused
   | `String "content_filtered" -> Ok Content_filtered
   | _ -> Error (errorf "%s has an invalid response status" context)
 
@@ -246,7 +247,7 @@ let patch_of_json context decode value =
   | None, None -> Error (errorf "%s must contain set or clear" context)
   | Some _, Some _ -> Error (errorf "%s must not contain set and clear" context)
 
-let empty_settings_patch = { model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep }
+let empty_settings_patch = { web_fetch = Keep; code_execution = Keep; web_search = Keep; model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep }
 
 let output_to_json = Llm_temporal_codec.output_to_json
 let instruction_to_json = Llm_temporal_codec.instruction_to_json
@@ -267,12 +268,15 @@ let settings_patch_to_json (value : settings_patch) =
   let fields = add "temperature" usd_to_json value.temperature fields in
   let fields = add "reasoning_effort" (fun value -> `String (match value with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Maximum -> "maximum")) value.reasoning_effort fields in
   let fields = add "reasoning_summary" (fun value -> `String (match value with Summary_default -> "provider_default" | Summary_none -> "none" | Summary_auto -> "auto" | Concise -> "concise" | Detailed -> "detailed")) value.reasoning_summary fields in
+  let fields = add "web_fetch" (fun b -> `Bool b) value.web_fetch fields in
+  let fields = add "code_execution" (fun b -> `Bool b) value.code_execution fields in
+  let fields = add "web_search" (fun b -> `Bool b) value.web_search fields in
   let fields = add "compaction_policy" (fun value -> value) value.compaction_policy fields in
   let fields = add "extensions" (fun value -> `Assoc value) value.extensions fields in
   `Assoc fields
 
 let settings_patch_of_json value =
-  let* fields = closed "settings_patch" ["model"; "service_class"; "service_class_fallbacks"; "portability"; "instructions"; "tools"; "tool_policy"; "output"; "temperature"; "reasoning_effort"; "reasoning_summary"; "compaction_policy"; "extensions"] value in
+  let* fields = closed "settings_patch" ["model"; "service_class"; "service_class_fallbacks"; "portability"; "instructions"; "tools"; "tool_policy"; "output"; "temperature"; "reasoning_effort"; "reasoning_summary"; "compaction_policy"; "extensions"; "web_search"; "web_fetch"; "code_execution"] value in
   let get name decode = match optional name fields with None -> Ok Keep | Some value -> patch_of_json ("settings_patch." ^ name) decode value in
   let* model = get "model" (fun context value -> string context value >>= fun value -> nonempty context value >>= fun value -> Ok (Model_selector.of_string value)) in
   let* service_class = get "service_class" service_class_of_json in
@@ -288,8 +292,11 @@ let settings_patch_of_json value =
   let* reasoning_effort = get "reasoning_effort" effort in
   let* reasoning_summary = get "reasoning_summary" summary in
   let* compaction_policy = get "compaction_policy" (fun context value -> let* fields = assoc context value in Ok (`Assoc fields)) in
+  let* web_fetch = get "web_fetch" bool in
+  let* code_execution = get "code_execution" bool in
+  let* web_search = get "web_search" bool in
   let* extensions = get "extensions" (fun context value -> assoc context value) in
-  Ok { model; service_class; service_class_fallbacks; portability; instructions; tools; tool_policy; output; temperature; reasoning_effort; reasoning_summary; compaction_policy; extensions }
+  Ok { web_fetch; code_execution; web_search; model; service_class; service_class_fallbacks; portability; instructions; tools; tool_policy; output; temperature; reasoning_effort; reasoning_summary; compaction_policy; extensions }
 
 let settings_patch_is_empty value = value = empty_settings_patch
 

@@ -16,6 +16,13 @@ let make ~operation_key ~context ~model ?(settings = Settings.default) ?cache ~i
   | Ok () -> request
   | Error message -> invalid_arg message
 
+let make_checked ~operation_key ~context ~model ?settings ?cache ~input () =
+  try
+    let request = make ~operation_key ~context ~model ?settings ?cache ~input () in
+    Result.map (fun _ -> request)
+      (Temporal.Codec.encode (Temporal.Workflow.input Llm_temporal_invocation.generate_v1_workflow) request)
+  with Invalid_argument message -> Error (Temporal.Error.codec ~message)
+
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
   (request, response) Temporal.Workflow.t ->

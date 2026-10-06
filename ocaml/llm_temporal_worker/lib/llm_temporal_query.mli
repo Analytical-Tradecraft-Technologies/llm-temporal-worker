@@ -1,4 +1,4 @@
-(** Typed query Activities.
+(** Typed query workflows.
 
     The GADT associates each wire filter with exactly one result page.  This
     keeps a provider-status result from being accidentally consumed as a
@@ -92,7 +92,7 @@ val next : 'a t -> 'a response -> ('a t option, Temporal.Error.t) result
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (query_envelope, query_response) Temporal.Activity.t ->
+  (query_envelope, query_response) Temporal.Workflow.t ->
   query_envelope -> (query_response, Temporal.Error.t) result
 
 val execute_with :
@@ -103,14 +103,14 @@ val execute_with :
   'a t -> ('a response, Temporal.Error.t) result
 
 val execute :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t -> id:string ->
   operation_key:Operation_key.t ->
   context:request_context ->
   'a t -> ('a response, Temporal.Error.t) result
 
 type async_dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (query_envelope, query_response) Temporal.Activity.t ->
+  (query_envelope, query_response) Temporal.Workflow.t ->
   query_envelope -> (query_response, Temporal.Error.t) Temporal.Future.t
 
 (** Asynchronous counterpart to [execute_with] for deterministic workflow
@@ -124,7 +124,7 @@ val start_with :
   (('a response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
 val start :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t -> id:string ->
   operation_key:Operation_key.t ->
   context:request_context ->
   'a t ->

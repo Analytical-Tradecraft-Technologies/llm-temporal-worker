@@ -13,9 +13,23 @@ module Settings = Llm_temporal_conversation.Settings
 module Cache_policy = Llm_temporal_conversation.Cache_policy
 module Decimal = Usd_decimal
 
-module Compaction_policy = struct
-  type t = compaction_policy
-end
+module Compaction_policy = Llm_temporal_compaction_policy
 
 type tool = function_tool
 type output_config = output_spec
+
+module Context = Llm_temporal_helpers.Context
+
+module Item = Llm_temporal_helpers.Item
+
+module Tool = Llm_temporal_helpers.Tool
+
+module Output = Llm_temporal_helpers.Output
+
+module Response = Llm_temporal_helpers.Response
+
+module Failure = Llm_temporal_helpers.Failure
+
+module Compact = Llm_temporal_compact
+
+module Exa = Llm_temporal_exa

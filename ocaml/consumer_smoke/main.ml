@@ -92,7 +92,7 @@ let query_response (envelope : query_envelope) result =
     } }
 
 let query_dispatch ?task_queue:_ activity (envelope : query_envelope) =
-  if not (String.equal (Temporal.Activity.name activity) "llm.query.v1") then
+  if not (String.equal (Temporal.Workflow.name activity) "llm.query.workflow.v1") then
     failwith "Query dispatched the wrong Activity";
   let result =
     match envelope.query with

@@ -33,3 +33,7 @@ val wait : 'response handle -> ('response Temporal.Client.terminal_result, Tempo
     termination, timeout, and transport/codec failures are returned as errors;
     this helper never restarts the workflow after a failure. *)
 val await : 'response handle -> ('response, Temporal.Error.t) result
+
+val query_workflow : (query_envelope, query_response) Temporal.Workflow.t
+val start_query : t -> task_queue:Temporal_task_queue.t -> id:string -> request_id:string -> query_envelope -> (query_response handle, Temporal.Error.t) result
+val resume_query : t -> execution:Temporal.Client.execution -> query_envelope -> (query_response handle, Temporal.Error.t) result

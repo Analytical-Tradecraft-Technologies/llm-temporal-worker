@@ -35,7 +35,7 @@ let provider_response_payload cost_fields =
              "result", `Assoc [ "routes", `List [] ] ]
            @ cost_fields)))
 
-let context = { tenant = None; project = None; actor = None; tags = [] }
+let context = { tenant = Some (Tenant_id.of_string "tenant"); project = Some (Project_id.of_string "project"); actor = Some (Actor_id.of_string "actor"); tags = [] }
 let operation_key = Operation_key.of_string "query-test"
 
 let provider_filter ?cursor () =
@@ -83,7 +83,7 @@ let response_for = function
         start_time = filter.start_time; end_time = filter.end_time; buckets = [] })
 
 let dispatch ?task_queue:_ activity envelope =
-  if Temporal.Activity.name activity <> "llm.query.v1" then
+  if Temporal.Workflow.name activity <> "llm.query.workflow.v1" then
     failwith "Query used the wrong Activity descriptor";
   Ok (response_for envelope.query)
 
@@ -317,7 +317,7 @@ let () =
   let async_dispatch_called = ref false in
   let async_dispatch ?task_queue:_ activity envelope =
     async_dispatch_called := true;
-    if Temporal.Activity.name activity <> "llm.query.v1" then
+    if Temporal.Workflow.name activity <> "llm.query.workflow.v1" then
       failwith "Query.start_with used the wrong Activity descriptor";
     Temporal.Future.map
       (fun _ -> response_for envelope.query)
@@ -588,7 +588,7 @@ let () =
   (* [start] performs the same cursor validation before scheduling an
      Activity.  Its error is kept in the successful result channel, matching
      the existing Temporal.Future contract for protocol mismatches. *)
-  let invalid_start = Query.start ~operation_key ~context wrong_kind in
+  let invalid_start = Query.start ~task_queue:(Temporal_task_queue.of_string "llm-worker") ~id:"invalid-query" ~operation_key ~context wrong_kind in
   (match Temporal.Future.peek invalid_start with
    | Some (Ok (Error error)) when String.equal (Temporal.Error.message error)
                                       "query cursor kind mismatch: expected model_inventory, got provider_status" -> ()

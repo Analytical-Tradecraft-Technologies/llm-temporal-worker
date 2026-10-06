@@ -9,7 +9,7 @@
     "api_version": {"const": "llm.temporal/v1"},
     "operation_key": {"type": "string", "minLength": 1},
     "operation_id": {"type": "string", "minLength": 1},
-    "status": {"enum": ["completed", "tool_calls", "refused", "length", "content_filtered"]},
+    "status": {"enum": ["completed", "tool_calls", "refused", "length", "content_filtered", "paused"]},
     "output": {"type": "array", "items": {"$ref": "#/$defs/item"}},
     "checkpoint": {"$ref": "#/$defs/generate_checkpoint"},
     "cache": {"$ref": "#/$defs/cache_disposition"},

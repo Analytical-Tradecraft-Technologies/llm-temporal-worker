@@ -201,6 +201,11 @@ func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lift
 	if lifted.Usage.ProviderRaw == nil {
 		lifted.Usage.ProviderRaw = map[string]json.RawMessage{}
 	}
+	if call.Metadata.WebSearch {
+		lifted.Usage.ProviderRaw["web_search_calls"] = json.RawMessage("null")
+		lifted.Cost.Status = llm.CostStatusUnknown
+	}
+	lifted.Output = append(lifted.Output, llm.WebSearchReferences([]byte(response.RawJSON()))...)
 	lifted.Provider.GenerationID = response.ID
 	fields, err := rawResponseObject(response)
 	if err != nil {
@@ -223,6 +228,17 @@ func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lift
 	var usage map[string]json.RawMessage
 	if err := json.Unmarshal(usageRaw, &usage); err != nil || usage == nil {
 		return fmt.Errorf("openrouter usage metadata is invalid")
+	}
+	if call.Metadata.WebSearch {
+		var server struct {
+			WebSearchRequests *int64 `json:"web_search_requests"`
+		}
+		if raw := usage["server_tool_use"]; len(raw) > 0 && json.Unmarshal(raw, &server) == nil && server.WebSearchRequests != nil {
+			lifted.Usage.ProviderRaw["web_search_calls"], _ = json.Marshal(*server.WebSearchRequests)
+			if _, err := llm.HostedToolCharge(lifted.Usage, call.Model); err == nil {
+				lifted.Cost.Status = ""
+			}
+		}
 	}
 	if costRaw, ok := usage["cost"]; ok {
 		if err := responseAugmentCost(lifted, costRaw, "openrouter_cost", "openrouter_reported"); err != nil {

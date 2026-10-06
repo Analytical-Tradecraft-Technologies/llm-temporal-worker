@@ -11,10 +11,6 @@ val request_codec : request Temporal.Codec.t
 val response_codec : response Temporal.Codec.t
 val generate_workflow : (generate_request, generate_response) Temporal.Workflow.t
 
-(** The one-attempt Temporal retry policy used only by Query activities.
-    Generation and compaction retries belong to the Go workflows. *)
-val activity_retry_policy : Temporal.Activity.Retry_policy.t
-
 (** Deprecated compatibility helper.  It accepts the old [Request.make]
     record, rejects fields which have no v1 representation, and dispatches the
     canonical [llm.generate.workflow.v1] workflow.  The returned response is the typed
@@ -36,13 +32,13 @@ val query_v1_request_codec : query_envelope Temporal.Codec.t
 val query_v1_response_codec : query_response Temporal.Codec.t
 val generate_v1_workflow : (generate_request, generate_response) Temporal.Workflow.t
 val compact_v1_workflow : (compact_request, compaction_response) Temporal.Workflow.t
-val query_v1_activity : (query_envelope, query_response) Temporal.Activity.t
+val query_v1_workflow : (query_envelope, query_response) Temporal.Workflow.t
 
 (** Low-level child workflow calls return exact wire responses. Supply the Go
     worker queue and a deterministic child ID unique within the namespace.
     No cancellation handle or scope is exposed; paid children survive parent
     closure. Prefer [Generate] and [Conversation] for response validation.
-    Query remains a one-attempt Activity. *)
+    Queries run a cancellable child with one activity attempt inside Go. *)
 val start_generate :
   task_queue:Temporal_task_queue.t -> id:string ->
   generate_request ->
@@ -62,12 +58,12 @@ val invoke_compact_v1 :
   compact_request -> (compaction_response, Temporal.Error.t) result
 
 val start_query_v1 :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t -> id:string ->
   query_envelope ->
   (query_response, Temporal.Error.t) Temporal.Future.t
 
 val invoke_query_v1 :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t -> id:string ->
   query_envelope -> (query_response, Temporal.Error.t) result
 
 val invoke_generate_once :
@@ -80,5 +76,5 @@ val invoke_compact_once :
   compact_request -> (compaction_response, Temporal.Error.t) result
 val invoke_query_once :
   ?task_queue:Temporal_task_queue.t ->
-  dispatch:(?task_queue:Temporal_task_queue.t -> (query_envelope, query_response) Temporal.Activity.t -> query_envelope -> (query_response, Temporal.Error.t) result) ->
+  dispatch:(?task_queue:Temporal_task_queue.t -> (query_envelope, query_response) Temporal.Workflow.t -> query_envelope -> (query_response, Temporal.Error.t) result) ->
   query_envelope -> (query_response, Temporal.Error.t) result

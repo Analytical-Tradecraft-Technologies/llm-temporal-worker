@@ -24,6 +24,7 @@ let status_to_string = function
   | Tool_calls -> "tool_calls"
   | Refused -> "refused"
   | Length -> "length"
+  | Paused -> "paused"
   | Content_filtered -> "content_filtered"
 
 let status_of_string = function
@@ -31,6 +32,7 @@ let status_of_string = function
   | "tool_calls" -> Ok Tool_calls
   | "refused" -> Ok Refused
   | "length" -> Ok Length
+  | "paused" -> Ok Paused
   | "content_filtered" -> Ok Content_filtered
   | value -> Error (codec_error "invalid response status %S" value)
 

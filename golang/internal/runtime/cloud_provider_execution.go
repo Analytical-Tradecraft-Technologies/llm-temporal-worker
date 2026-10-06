@@ -732,7 +732,7 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		if classEntry, ok := plan.ClassEntries[*actual]; ok {
 			if cost, err := pricing.CostFromUsage(classEntry, priceUsage); err == nil && response.Cost.Method == "" {
 				response.Cost.CatalogVersion = classEntry.Version
-				response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &cost.USD, string(cost.Method)
+				applyHostedToolCharge(response, cost)
 				return
 			}
 		}
@@ -742,7 +742,7 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
-	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &cost.USD, string(cost.Method)
+	applyHostedToolCharge(response, cost)
 }
 
 // classExecutionResponse records the classes the plan bound on the paid
@@ -831,4 +831,18 @@ func preDispatchContextEnded(failure *provider.Error) bool {
 	return failure != nil && failure.Dispatch == provider.DispatchNotDispatched &&
 		(failure.Code == provider.CodeCanceled || failure.Code == provider.CodeDeadlineExceeded) &&
 		errors.Is(failure, provider.ErrProviderPreDispatch)
+}
+
+func applyHostedToolCharge(response *llm.Response, cost pricing.Cost) {
+	fee, err := llm.HostedToolCharge(response.Usage, response.Route.ResolvedModel)
+	if err != nil {
+		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		return
+	}
+	total, err := cost.USD.Add(fee)
+	if err != nil {
+		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		return
+	}
+	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &total, string(cost.Method)
 }

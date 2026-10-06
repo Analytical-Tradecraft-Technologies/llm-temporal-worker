@@ -21,17 +21,10 @@ type dispatcher =
   generate_request ->
   (generate_response, Temporal.Error.t) result
 
-let activity_retry_policy =
-  match Temporal.Activity.Retry_policy.make ~initial_interval:(Temporal.Duration.of_ms 1L)
-          ~backoff_coefficient:1.0 ~maximum_interval:(Temporal.Duration.of_ms 1L)
-          ~maximum_attempts:1 () with
-  | Ok policy -> policy
-  | Error error -> invalid_arg (Temporal.Error.message error)
-
 (* Validate raw records before a child command can be emitted. Encoders may
    normalize the API version, so check the supplied version before encoding. *)
 let validated_encode ~version ~actual ~encode ~decode request =
-  if actual <> version then Error (Temporal.Error.codec ~message:"unsupported request API version")
+  if actual <> version then Error (Temporal.Error.codec ~message:"unsupported API version")
   else
     let* payload = encode request in
     let* _ = decode payload in
@@ -52,14 +45,18 @@ let compact_v1_request_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:encode_compact ~decode:Llm_temporal_v1_codec.decode_compact_request
 let compact_v1_response_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_compaction_response ~decode:Llm_temporal_v1_codec.decode_compaction_response
+let encode_query (request : query_envelope) =
+  validated_encode ~version:Llm_temporal_v1_codec.query_api_version ~actual:request.api_version
+    ~encode:Llm_temporal_v1_codec.encode_query_envelope ~decode:Llm_temporal_v1_codec.decode_query_envelope request
+
 let query_v1_request_codec =
-  Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_query_envelope ~decode:Llm_temporal_v1_codec.decode_query_envelope
+  Temporal.Codec.make ~encoding:"json/plain" ~encode:encode_query ~decode:Llm_temporal_v1_codec.decode_query_envelope
 let query_v1_response_codec =
   Temporal.Codec.make ~encoding:"json/plain" ~encode:Llm_temporal_v1_codec.encode_query_response ~decode:Llm_temporal_v1_codec.decode_query_response
 
 let generate_v1_workflow = Temporal.Workflow.remote ~name:workflow_name ~input:generate_v1_request_codec ~output:generate_v1_response_codec
 let compact_v1_workflow = Temporal.Workflow.remote ~name:"llm.compact.workflow.v1" ~input:compact_v1_request_codec ~output:compact_v1_response_codec
-let query_v1_activity = Temporal.Activity.remote ~name:"llm.query.v1" ~input:query_v1_request_codec ~output:query_v1_response_codec
+let query_v1_workflow = Temporal.Workflow.remote ~name:"llm.query.workflow.v1" ~input:query_v1_request_codec ~output:query_v1_response_codec
 
 let conversion_error message = Error (Temporal.Error.codec ~message)
 
@@ -192,6 +189,7 @@ let legacy_request_to_generate (request : request) =
             parent = None;
             append = request.input;
             settings_patch = {
+              web_search = Keep; web_fetch = Keep; code_execution = Keep;
               model = Set request.model;
               service_class = Set request.service_class;
               service_class_fallbacks = Set request.service_class_fallbacks;
@@ -233,7 +231,6 @@ let invoke_once ?task_queue ~(dispatch : dispatcher) (input : request) =
    from its own durable request identity. Paid work survives parent closure. *)
 let generate_workflow = generate_v1_workflow
 let workflow () = generate_v1_workflow
-let task_queue_string = Option.map Temporal_task_queue.to_string
 
 let start_child ~task_queue ~id definition request =
   Temporal.Child_workflow.start
@@ -253,19 +250,28 @@ let start_compact_v1 ~task_queue ~id request =
 let invoke_compact_v1 ~task_queue ~id request =
   Temporal.Future.await (start_compact_v1 ~task_queue ~id request)
 
-let start_query_v1 ?task_queue envelope =
-  Temporal.Activity.start
-    ?task_queue:(task_queue_string task_queue)
-    ~retry_policy:activity_retry_policy query_v1_activity envelope
+let start_query_v1 ~task_queue ~id envelope =
+  Temporal.Child_workflow.start
+    ~task_queue:(Temporal_task_queue.to_string task_queue) ~id
+    ~parent_close_policy:Temporal.Child_workflow.Parent_close_policy.Request_cancel
+    ~cancellation_type:Temporal.Child_workflow.Wait_cancellation_completed
+    query_v1_workflow envelope
 
-let invoke_query_v1 ?task_queue envelope =
-  Temporal.Activity.execute
-    ?task_queue:(task_queue_string task_queue)
-    ~retry_policy:activity_retry_policy query_v1_activity envelope
+let invoke_query_v1 ~task_queue ~id envelope =
+  Temporal.Future.await (start_query_v1 ~task_queue ~id envelope)
 
 let invoke_generate_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Workflow.t -> generate_request -> (generate_response, Temporal.Error.t) result) input =
-  dispatch ?task_queue generate_v1_workflow input
+  let* _ = encode_generate input in
+  let* response = dispatch ?task_queue generate_v1_workflow input in
+  let* _ = validated_encode ~version:Llm_temporal_v1_codec.generate_api_version ~actual:response.api_version
+    ~encode:Llm_temporal_v1_codec.encode_generate_response ~decode:Llm_temporal_v1_codec.decode_generate_response response in
+  Ok response
 let invoke_compact_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (compact_request, compaction_response) Temporal.Workflow.t -> compact_request -> (compaction_response, Temporal.Error.t) result) input =
-  dispatch ?task_queue compact_v1_workflow input
-let invoke_query_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (query_envelope, query_response) Temporal.Activity.t -> query_envelope -> (query_response, Temporal.Error.t) result) input =
-  dispatch ?task_queue query_v1_activity input
+  let* _ = encode_compact input in
+  let* response = dispatch ?task_queue compact_v1_workflow input in
+  let* _ = validated_encode ~version:Llm_temporal_v1_codec.compact_api_version ~actual:response.api_version
+    ~encode:Llm_temporal_v1_codec.encode_compaction_response ~decode:Llm_temporal_v1_codec.decode_compaction_response response in
+  Ok response
+let invoke_query_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (query_envelope, query_response) Temporal.Workflow.t -> query_envelope -> (query_response, Temporal.Error.t) result) input =
+  let* _ = encode_query input in
+  dispatch ?task_queue query_v1_workflow input

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -15,6 +17,7 @@ import (
 const (
 	GenerateWorkflowName = "llm.generate.workflow.v1"
 	CompactWorkflowName  = "llm.compact.workflow.v1"
+	QueryWorkflowName    = "llm.query.workflow.v1"
 )
 
 // Register installs the public and internal workflows. Each accepts the raw
@@ -24,6 +27,32 @@ func Register(registry worker.WorkflowRegistry, limits activity.PayloadLimits) {
 	RegisterInternal(registry, limits)
 	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Generate), workflow.RegisterOptions{Name: GenerateWorkflowName})
 	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Compact), workflow.RegisterOptions{Name: CompactWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Query), workflow.RegisterOptions{Name: QueryWorkflowName})
+}
+
+// Query exposes all five control-plane queries through a workflow boundary.
+// One activity attempt preserves the existing query retry contract; unlike paid
+// Generate/Compact work, the query remains cancellable with its caller.
+func Query(ctx workflow.Context, input llm.QueryRequestV1) (*llm.QueryResponseV1, error) {
+	if _, err := input.MarshalJSON(); err != nil {
+		return nil, invalidInput()
+	}
+	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout:    config.ActivityStartToClose,
+		ScheduleToCloseTimeout: config.ActivityStartToClose,
+		RetryPolicy:            &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+	var result llm.QueryResponseV1
+	if err := workflow.ExecuteActivity(ctx, activity.QueryActivityName, input).Get(ctx, &result); err != nil {
+		return nil, err
+	}
+	if result.OperationKey != input.OperationKey || result.Kind != input.Kind {
+		return nil, invalidState()
+	}
+	if _, err := result.MarshalJSON(); err != nil {
+		return nil, invalidState()
+	}
+	return &result, nil
 }
 func childContext(ctx workflow.Context) workflow.Context {
 	return workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON, WaitForCancellation: false})
