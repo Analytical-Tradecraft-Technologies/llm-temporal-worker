@@ -290,7 +290,7 @@ func TestCloudFillsWaiterOwnsAfterUnpublishedEnd(t *testing.T) {
 			// A lease that had expired by the end stays fenced and sees the record.
 			expired := waiter
 			expired.Attempt, expired.AcquiredAt, expired.ExpiresAt = "expired", ended.Add(-time.Minute), ended
-			if decision, err := store.Acquire(ctx, expired); !errors.Is(err, contracts.ErrConflict) || decision.Record.Lease != lease {
+			if decision, err := store.Acquire(ctx, expired, expired.AcquiredAt); !errors.Is(err, contracts.ErrConflict) || decision.Record.Lease != lease {
 				t.Fatalf("expired acquisition = %v, %v", decision, err)
 			}
 			mustAcquireFill(t, store, waiter, cache.FillOwned)
