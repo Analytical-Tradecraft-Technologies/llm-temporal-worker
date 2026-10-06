@@ -17,6 +17,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
@@ -337,7 +338,25 @@ func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 			t.Fatal("CLI did not install planning")
 		}
 		if _, err := v1.QueryV1(context.Background(), llm.QueryRequestV1{}); err == nil {
-			t.Fatal("CLI enabled unconfigured queries")
+			t.Fatal("CLI accepted an invalid query")
+		}
+		// Control queries are composed under the trusted-Temporal allowlist
+		// (#817): an allowed scope gets past authorization to storage, while
+		// another scope is denied before any read.
+		query := func(project string) error {
+			caller := f.request.Context
+			caller.Project = project
+			_, err := v1.QueryV1(context.Background(), llm.QueryRequestV1{APIVersion: llm.QueryAPIVersion, OperationKey: "query-1", Context: caller, Kind: llm.QueryProviderStatus, Query: json.RawMessage(`{"page_size":10}`)})
+			return err
+		}
+		allowed := value.Authorization.AllowedScopes[0]
+		if allowed.Tenant == f.request.Context.Tenant {
+			if err := query(allowed.Project); err == nil || errors.Is(err, control.ErrQueryAuthorization) {
+				t.Fatalf("allowed scope query = %v, want it past authorization", err)
+			}
+		}
+		if err := query("not-allowed"); !errors.Is(err, control.ErrQueryAuthorization) {
+			t.Fatalf("disallowed scope query = %v, want authorization denial", err)
 		}
 		return v1.(*cloudV1Runtime)
 	}
