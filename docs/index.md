@@ -72,6 +72,8 @@ worker database; the service has no deployed SQL data. See the
 ## Reference material
 
 - [Package layout](architecture/package-layout.md)
+- [Cloud retention and blob deletion design (#818)](architecture/cloud-retention-and-deletion.md)
+- [Unknown-cost reconciliation design (#819)](architecture/unknown-cost-reconciliation.md)
 - [Configuration reference](reference/configuration.md)
 - [Command-line reference](reference/cli.md)
 - [Catalog loader contract](reference/catalog-loaders.md)
