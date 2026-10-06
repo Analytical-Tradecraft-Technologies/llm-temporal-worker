@@ -34,12 +34,15 @@ const (
 // A new paid attempt after an unknown outcome requires separate orchestration;
 // it must never replace this plan or reuse its operation ID/consumed claim.
 type BudgetPlan struct {
-	Mode              BudgetMode             `json:"mode"`
-	Unpriced          bool                   `json:"unpriced,omitempty"`
-	Version           int                    `json:"version"`
-	Kind              string                 `json:"kind"`
-	ConfigDigest      [32]byte               `json:"config_digest"`
-	ConfigEpoch       string                 `json:"config_epoch"`
+	Mode         BudgetMode `json:"mode"`
+	Unpriced     bool       `json:"unpriced,omitempty"`
+	Version      int        `json:"version"`
+	Kind         string     `json:"kind"`
+	ConfigDigest [32]byte   `json:"config_digest"`
+	ConfigEpoch  string     `json:"config_epoch"`
+	// EndpointDigest is the hex identity of the planned endpoint's own
+	// configuration. Plans saved before it existed leave it empty.
+	EndpointDigest    string                 `json:"endpoint_digest,omitempty"`
 	RequestDigest     [32]byte               `json:"request_digest"`
 	CapabilityVersion string                 `json:"capability_version"`
 	CompilerVersion   string                 `json:"compiler_version"`
@@ -70,7 +73,7 @@ func (plan BudgetPlan) Validate() error {
 		return ErrInvalid
 	}
 	if plan.Version != 1 || (plan.Kind != "generate" && plan.Kind != "compact") ||
-		plan.ConfigDigest == ([32]byte{}) || plan.RequestDigest == ([32]byte{}) ||
+		plan.ConfigDigest == ([32]byte{}) || plan.RequestDigest == ([32]byte{}) || (plan.EndpointDigest != "" && !hexDigest(plan.EndpointDigest)) ||
 		!safeText(plan.ConfigEpoch, 256) || !safeText(plan.CapabilityVersion, 256) ||
 		!safeText(plan.CompilerVersion, 128) || !safeText(plan.Family, 128) || !safeText(plan.ProviderTier, 128) ||
 		!plan.RequestedClass.Valid() || !plan.AttemptedClass.Valid() || plan.Route.Validate() != nil ||

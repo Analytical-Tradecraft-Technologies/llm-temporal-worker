@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -180,6 +182,10 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				extensions = append(extensions, name)
 			}
 			sort.Strings(extensions)
+			endpointDigest, err := endpointConfigDigest(routeValue.Endpoint, endpoint)
+			if err != nil {
+				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)
+			}
 			routes = append(routes, routing.Route{
 				ID:                  routeValue.ID,
 				EndpointID:          routeValue.Endpoint,
@@ -188,6 +194,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				Region:              routeRegion,
 				AccountRegion:       endpoint.AccountRegion,
 				EndpointAccountHMAC: routing.DeriveEndpointAccountHMAC(providerName, routeValue.Endpoint, endpoint.AccountRegion, routeRegion, value.Version),
+				EndpointDigest:      endpointDigest,
 				Model:               routeValue.Model,
 				ModelLineage:        routeValue.Model,
 				Classes:             append([]llm.ServiceClass(nil), routeValue.Classes...),
@@ -207,6 +214,25 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 		models[modelName] = routing.Model{Name: modelName, Routes: routes}
 	}
 	return routing.CompileCatalog(value.Version, models)
+}
+
+// endpointConfigDigest binds everything configured for one endpoint, including
+// its address and credential reference but no secret. Recovery of dispatched
+// work compares it instead of the whole-configuration digest.
+func endpointConfigDigest(endpointID string, endpoint config.EndpointConfig) ([32]byte, error) {
+	// outbound_hosts is a set (see sameEndpointOutboundHosts); reordering it
+	// is not a change. Maps already marshal with sorted keys.
+	endpoint.OutboundHosts = append([]string(nil), endpoint.OutboundHosts...)
+	sort.Strings(endpoint.OutboundHosts)
+	encoded, err := json.Marshal(endpoint)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("endpoint %q configuration cannot be identified", endpointID)
+	}
+	canonical, err := llm.CanonicalJSON(encoded)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("endpoint %q configuration cannot be identified", endpointID)
+	}
+	return sha256.Sum256(append([]byte("llm-temporal-worker/endpoint-config/v1\x00"+endpointID+"\x00"), canonical...)), nil
 }
 
 func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, now time.Time) (string, string, string, bool, error) {

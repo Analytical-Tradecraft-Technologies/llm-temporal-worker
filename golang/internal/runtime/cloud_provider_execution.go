@@ -281,7 +281,7 @@ func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope c
 	if linked != nil && plan.Route.OperationID != durable.OperationID(linked.ID) {
 		return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 	}
-	binding := ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RequestDigest: plan.RequestDigest, CandidateID: plan.Estimate.CandidateID,
+	binding := ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, EndpointDigest: planEndpointDigest(plan), RequestDigest: plan.RequestDigest, CandidateID: plan.Estimate.CandidateID,
 		Route: plan.Route, Family: plan.Family, CapabilityVersion: plan.CapabilityVersion, ProviderTier: plan.ProviderTier, RequestedClass: plan.RequestedClass, AttemptedClass: plan.AttemptedClass}
 	if plan.Kind == "generate" {
 		var request llm.GenerateRequestV1

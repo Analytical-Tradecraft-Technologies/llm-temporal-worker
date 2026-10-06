@@ -287,7 +287,7 @@ func (planning *ProviderPlanning) containsCandidate(request llm.Request, candida
 	return candidate.FallbackIndex < len(classes) && candidate.AttemptedClass == classes[candidate.FallbackIndex] && candidate.RequestedClass == request.ServiceClass &&
 		candidate.ID != "" && candidate.RouteID == route.ID && candidate.EndpointID == route.EndpointID && candidate.Provider == route.Provider &&
 		provider.Family(candidate.Family).Valid() && candidate.Family == route.Family && candidate.Model == route.Model && candidate.ModelRevision == route.ModelRevision &&
-		candidate.EndpointAccountHMAC == route.EndpointAccountHMAC && candidate.Region == route.Region &&
+		candidate.EndpointAccountHMAC == route.EndpointAccountHMAC && candidate.EndpointDigest == route.EndpointDigest && candidate.Region == route.Region &&
 		candidate.CapabilityVersion != "" && candidate.CapabilityVersion == route.Capabilities.Version && candidate.ProviderTier != "" && candidate.ProviderTier == route.ProviderTiers[candidate.AttemptedClass] &&
 		candidate.PriceVersion == route.PriceVersion && candidate.ContextTokens == route.ContextTokens
 }
