@@ -233,6 +233,12 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, dispatchError(err.Error(), provider.DispatchNotDispatched)
 	}
 	call.SDKParams = params
+	// Encode the ordered schemas before the possible-write boundary, so a
+	// failure here is a definite non-dispatch.
+	ordered, err := schemaOrderOptions(params)
+	if err != nil {
+		return provider.Result{}, dispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
+	}
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
@@ -243,6 +249,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	var rawResponse *http.Response
 	probe := &provider.DispatchProbe{}
 	requestOptions := []option.RequestOption{option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware)}
+	requestOptions = append(requestOptions, ordered...)
 	response, panicked, err := provider.CallRecovered(func() (*responses.Response, error) {
 		return adapter.client.sdk.Responses.New(callContext, params, requestOptions...)
 	})

@@ -207,6 +207,12 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if !ok {
 		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}
+	// Encode the ordered schemas before the possible-write boundary, so a
+	// failure here is a definite non-dispatch.
+	ordered, err := schemaOrderOptions(params)
+	if err != nil {
+		return provider.Result{}, dispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
+	}
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
@@ -219,6 +225,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
 	probe := &provider.DispatchProbe{}
 	requestOptions = append(requestOptions, option.WithMiddleware(probe.Middleware))
+	requestOptions = append(requestOptions, ordered...)
 	response, panicked, err := provider.CallRecovered(func() (*openai.ChatCompletion, error) {
 		return adapter.client.sdk.Chat.Completions.New(callContext, params, requestOptions...)
 	})

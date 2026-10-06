@@ -13,6 +13,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 )
 
 // Adapter owns one official Anthropic Messages SDK client and one immutable
@@ -194,6 +195,14 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if !ok {
 		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}
+	// Providers generate structured output in schema order; write the schemas
+	// with properties in "required" order instead of the SDK's sorted map
+	// encoding (#1096). Encoded before the possible-write boundary, so a
+	// failure here is a definite non-dispatch.
+	overrides, err := schemaorder.MessagesOverrides(params)
+	if err != nil {
+		return provider.Result{}, dispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
+	}
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
@@ -208,7 +217,11 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	}
 	probe := &provider.DispatchProbe{}
 	response, panicked, err := provider.CallRecovered(func() (*anthropic.Message, error) {
-		return messages.New(callContext, params, option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware))
+		requestOptions := []option.RequestOption{option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware)}
+		for _, override := range overrides {
+			requestOptions = append(requestOptions, option.WithJSONSet(override.Path, override.Value))
+		}
+		return messages.New(callContext, params, requestOptions...)
 	})
 	if panicked != nil {
 		return provider.Result{}, provider.WithEndpointID(probe.PanicError(call.OperationKey, panicked), adapter.endpointID)
