@@ -17,6 +17,11 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 	if response == nil {
 		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
 	}
+	if profile.ResponseError != nil {
+		if mapped := profile.ResponseError(call, response, requestID); mapped != nil {
+			return llm.Response{}, mapped
+		}
+	}
 	actual := profile.actualClass(string(response.ServiceTier))
 	if len(response.Choices) == 0 {
 		return llm.Response{}, invalidResponseError(call, requestID, "provider response contained no choices")

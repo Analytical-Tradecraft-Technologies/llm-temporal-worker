@@ -71,7 +71,11 @@ type Profile struct {
 	ReservedWireFields map[string]struct{}
 	// ResponseAugment may add profile-specific facts (for example citations or
 	// provider-reported cost) after the common Chat response has been lifted.
-	ResponseAugment           func(provider.Call, *openai.ChatCompletion, *llm.Response) error
+	ResponseAugment func(provider.Call, *openai.ChatCompletion, *llm.Response) error
+	// ResponseError may report a provider failure that arrived in a
+	// successful (HTTP 200) response body, before the common lift treats the
+	// body as an invalid response.
+	ResponseError             func(call provider.Call, response *openai.ChatCompletion, requestID string) *provider.Error
 	StructuredOutputTransform string
 	directOpenAI              bool
 }
