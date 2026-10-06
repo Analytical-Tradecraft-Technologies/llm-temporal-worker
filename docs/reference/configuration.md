@@ -247,9 +247,10 @@ endpoints:
     extensions:
       azure:
         # Azure API versions are deployment-specific and must be declared.
-        # Quote the value: YAML reads an unquoted date as a timestamp, which
-        # validation rejects.
-        api_version: "2024-10-21"
+        # The /openai/v1 path accepts only "v1" or "preview". Quote dated
+        # values: YAML reads an unquoted date as a timestamp, which validation
+        # rejects.
+        api_version: "v1"
 
   azure-chat-au:
     # Azure Chat is a separate family: never configure this as generic
@@ -274,7 +275,7 @@ endpoints:
     extensions:
       azure:
         # Both values are deployment-specific and required before auth lookup.
-        api_version: "2025-01-01"
+        api_version: "2024-10-21"
         deployment: gpt-example-chat-deployment
 
   openrouter-pinned:

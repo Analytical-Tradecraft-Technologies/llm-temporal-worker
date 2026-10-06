@@ -555,15 +555,15 @@ func TestExampleAzureAPIVersionIsAString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := loaded.Endpoints["azure-openai-au"].Extensions["azure"]["api_version"]; got != "2024-10-21" {
-		t.Fatalf("example Azure api_version = %#v, want string 2024-10-21", got)
+	if got := loaded.Endpoints["azure-openai-au"].Extensions["azure"]["api_version"]; got != "v1" {
+		t.Fatalf("example Azure api_version = %#v, want string v1", got)
 	}
 }
 
 func TestLoadRejectsUnquotedAzureExtensionScalars(t *testing.T) {
 	for _, test := range []struct{ from, to, field string }{
-		{from: `api_version: "2024-10-21"`, to: `api_version: 2024-10-21`, field: "api_version"},
-		{from: `api_version: "2024-10-21"`, to: "api_version: \"2024-10-21\"\n        deployment: 7", field: "deployment"},
+		{from: `api_version: "v1"`, to: `api_version: 2024-10-21`, field: "api_version"},
+		{from: `api_version: "v1"`, to: "api_version: \"v1\"\n        deployment: 7", field: "deployment"},
 	} {
 		data := strings.Replace(string(exampleYAML(t)), test.from, test.to, 1)
 		if data == string(exampleYAML(t)) {

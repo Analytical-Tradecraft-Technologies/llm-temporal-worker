@@ -147,9 +147,10 @@ endpoints:
     extensions:
       azure:
         # Azure API versions are deployment-specific and must be declared;
-        # the runtime intentionally has no implicit provider default. Quote it:
+        # the runtime intentionally has no implicit provider default. The
+        # /openai/v1 path accepts only "v1" or "preview". Quote dated values:
         # YAML reads an unquoted date as a timestamp, which validation rejects.
-        api_version: "2024-10-21"
+        api_version: "v1"
 
   openrouter-pinned:
     family: openai_chat

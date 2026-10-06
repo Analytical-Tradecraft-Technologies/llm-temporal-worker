@@ -348,6 +348,9 @@ func lowerPart(part llm.Part) (map[string]any, error) {
 		if detail == "" {
 			detail = "auto"
 		}
+		if _, ok := imageDetails[detail]; !ok {
+			return nil, fmt.Errorf("image detail %q is not one of low, high, auto or original", detail)
+		}
 		return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url, "detail": detail}}, nil
 	case llm.DocumentPart:
 		return nil, fmt.Errorf("document parts are not representable by Chat Completions")
@@ -506,6 +509,9 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 	if sampling.FrequencyPenalty != nil {
 		target["frequency_penalty"] = *sampling.FrequencyPenalty
 	}
+	if len(sampling.StopSequences) > maxChatStopSequences {
+		return fmt.Errorf("Chat Completions accepts at most %d stop sequences, got %d", maxChatStopSequences, len(sampling.StopSequences))
+	}
 	if len(sampling.StopSequences) == 1 {
 		target["stop"] = sampling.StopSequences[0]
 	} else if len(sampling.StopSequences) > 1 {
@@ -580,3 +586,9 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 	}
 	return nil
 }
+
+// maxChatStopSequences is the Chat Completions limit on stop sequences.
+const maxChatStopSequences = 4
+
+// imageDetails are the image detail values the OpenAI APIs accept.
+var imageDetails = map[string]struct{}{"low": {}, "high": {}, "auto": {}, "original": {}}

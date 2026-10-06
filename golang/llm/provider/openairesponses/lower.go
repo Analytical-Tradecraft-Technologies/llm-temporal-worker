@@ -350,6 +350,9 @@ func lowerPart(part llm.Part) (map[string]any, error) {
 		if detail == "" {
 			detail = "auto"
 		}
+		if _, ok := imageDetails[detail]; !ok {
+			return nil, fmt.Errorf("image detail %q is not one of low, high, auto or original", detail)
+		}
 		return map[string]any{"type": "input_image", "image_url": url, "detail": detail}, nil
 	case llm.DocumentPart:
 		url, data, err := mediaFile(value.URL, value.Bytes, value.MediaType)
@@ -596,3 +599,6 @@ func lowerExtensions(extensions map[string]json.RawMessage, target map[string]an
 	}
 	return nil
 }
+
+// imageDetails are the image detail values the OpenAI APIs accept.
+var imageDetails = map[string]struct{}{"low": {}, "high": {}, "auto": {}, "original": {}}
