@@ -203,6 +203,11 @@ type settings_patch = {
   tool_policy : tool_policy patch;
   output : output_config patch;
   temperature : Usd_decimal.t patch;
+  top_p : Usd_decimal.t patch;
+  stop_sequences : string list patch;
+  seed : int64 patch;
+  reasoning_mode : reasoning_mode patch;
+  reasoning_token_budget : int patch;
   reasoning_effort : reasoning_effort patch;
   reasoning_summary : reasoning_summary patch;
   compaction_policy : compaction_policy patch;
@@ -231,9 +236,9 @@ leaves are Keep. **Set []** emits an empty list and differs from **Clear**.
 the workflow payload.
 
 Effective temperature is validated by the Go worker after inheritance. The
-OCaml builder rejects immediately when it can prove temperature zero with a
-positive variant, but it does not guess an inherited value. Server validation
-remains authoritative and returns a typed Activity error.
+cache variant is independent of temperature: neither side rejects a positive
+variant with temperature zero, because the variant only selects a separate
+cache slot.
 
 Responses use new-turn output and a checkpoint:
 
@@ -246,10 +251,9 @@ type settled_cost =
     }
   | Unknown_cost of { reason : cost_unknown_reason }
 
-type cost = {
-  reserved_cost_usd : Usd_decimal.t;
-  settled : settled_cost;
-}
+(* v1 responses carry [settled_cost] directly as their [cost]; the Go worker
+   reports no reserved amount in a response. Reservations appear only in
+   budget-status query results. *)
 
 type generate_response = {
   operation_key : Operation_key.t;
@@ -260,7 +264,7 @@ type generate_response = {
   cache : cache_disposition;
   route : route option;
   usage : usage;
-  cost : cost;
+  cost : settled_cost;
   diagnostics : diagnostic list;
 }
 ~~~
@@ -269,7 +273,7 @@ There is no transcript field. The Compact protocol has its own request/response
 types and workflow name. Its result identifies a compaction checkpoint,
 provenance, cache disposition, usage, and USD cost. Its request accepts the
 same optional `cache_policy`; omission disables both read and population, and
-the protocol rejects a nonzero variant. Compaction protocol records contain no
+a non-negative variant selects a separate cache slot, as for Generate. Compaction protocol records contain no
 application tool list, tool policy, or structured-output field. Those are
 inherited checkpoint settings restored only by a later Generate.
 
@@ -544,7 +548,8 @@ module Conversation : sig
   val fork : t -> t
 
   val respond :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?settings_patch:Settings.Patch.t ->
     ?cache:Cache_policy.t ->
@@ -553,7 +558,8 @@ module Conversation : sig
     (turn, Temporal.Error.t) result
 
   val start_respond :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?settings_patch:Settings.Patch.t ->
     ?cache:Cache_policy.t ->
@@ -562,7 +568,8 @@ module Conversation : sig
     ((turn, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
   val compact :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?policy:Compaction_policy.t ->
     ?cache:Cache_policy.t ->
@@ -570,7 +577,8 @@ module Conversation : sig
     (compaction_response * t, Temporal.Error.t) result
 
   val start_compact :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?policy:Compaction_policy.t ->
     ?cache:Cache_policy.t ->
@@ -591,19 +599,19 @@ let branch_b = Conversation.fork parent in
 let branch_c = Conversation.fork parent in
 
 let a =
-  Conversation.respond
+  Conversation.respond ~task_queue ~id:"case-a"
     ~operation_key:(Operation_key.of_string "case-a")
     ~append:[Message { actor = Human; content = [Text "Try A"] }]
     branch_a
 in
 let b =
-  Conversation.respond
+  Conversation.respond ~task_queue ~id:"case-b"
     ~operation_key:(Operation_key.of_string "case-b")
     ~append:[Message { actor = Human; content = [Text "Try B"] }]
     branch_b
 in
 let c =
-  Conversation.respond
+  Conversation.respond ~task_queue ~id:"case-c"
     ~operation_key:(Operation_key.of_string "case-c")
     ~append:[Message { actor = Human; content = [Text "Try C"] }]
     branch_c
@@ -682,7 +690,7 @@ typed dispatcher used by deterministic tests. The package-level
 schedule that same v1 workflow. The pre-checkpoint **`Request.make`** and
 **`invoke_once`** names remain recognizable only as deprecated compatibility
 shims. `invoke_once` validates the old record and converts it to the flat
-Generate v1 envelope before dispatching `llm.generate.v1`; controls which have
+Generate v1 envelope before dispatching `llm.generate.workflow.v1`; controls which have
 no v1 representation are rejected rather than silently dropped. New code
 should prefer `Generate`, `Conversation`, or the migrated package-level
 helpers.
@@ -1054,12 +1062,10 @@ selected by stable input order. Choosing from recorded model output is also
 deterministic, but application policy should make that choice explicit and test
 replay.
 
-The positive-variant branches set temperature in the same request, so the
-client can validate them locally. If the patch kept an inherited temperature,
-the Go worker would still validate the materialized value. A zero-temperature
-request with variant 1 or 2 is a typed validation failure and must not reach a
-provider. Omitting **cache** entirely disables both exact-cache reads and
-population for that operation.
+Each positive variant selects its own cache slot; the variant is independent
+of temperature, so zero temperature with variant 1 or 2 is valid and simply
+names separate cached samples. Omitting **cache** entirely disables both
+exact-cache reads and population for that operation.
 
 ### Low-level protocol access
 
@@ -1131,8 +1137,8 @@ does not parse provider messages or schedule replacement paid calls.
 - Go and OCaml golden JSON is byte-equivalent after canonicalization for every
   request/result kind and error.
 - Omitted/Set/Clear survive round trips as three distinct values.
-- Inherited temperature zero plus positive variant is rejected by the server;
-  locally known zero is rejected by the builder.
+- The cache variant is independent of temperature: zero temperature with a
+  positive variant is accepted by both the builder and the server.
 - No float or currency field exists in public money types.
 - Decimal values with 18 fractional digits round-trip exactly.
 - The same immutable parent can produce three distinct child conversations.

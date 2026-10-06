@@ -16,6 +16,7 @@ including typed OCaml callers and explicit trusted-Temporal CLI authorization.
 Deployment and real AWS/restore evidence remain separate release gates. [Scope](scope.md#staged-delivery-and-document-authority)
 separates those gates from implemented behavior.
 
+- [Optional Langfuse export](reference/configuration.md#optional-langfuse-content-export)
 - [Cloud request repository and workflow integration](reference/cloud-request-repository.md)
 - [Redis budget leases](reference/redis-budget-leases.md)
 - [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)
@@ -71,6 +72,8 @@ worker database; the service has no deployed SQL data. See the
 ## Reference material
 
 - [Package layout](architecture/package-layout.md)
+- [Cloud retention and blob deletion design (#818)](architecture/cloud-retention-and-deletion.md)
+- [Unknown-cost reconciliation design (#819)](architecture/unknown-cost-reconciliation.md)
 - [Configuration reference](reference/configuration.md)
 - [Command-line reference](reference/cli.md)
 - [Catalog loader contract](reference/catalog-loaders.md)

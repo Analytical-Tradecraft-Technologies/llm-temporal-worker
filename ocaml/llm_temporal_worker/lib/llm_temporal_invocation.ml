@@ -199,6 +199,10 @@ let legacy_request_to_generate (request : request) =
               tool_policy = Set request.tool_policy;
               output = (match request.output with None -> Clear | Some value -> Set value);
               temperature;
+              (* The legacy converter still rejects these controls above;
+                 it maps only what it carried before they reached v1. *)
+              top_p = Keep; stop_sequences = Keep; seed = Keep;
+              reasoning_mode = Keep; reasoning_token_budget = Keep;
               reasoning_effort;
               reasoning_summary;
               compaction_policy = Keep;

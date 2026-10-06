@@ -289,6 +289,23 @@ func settingsPatchFromModel(model ModelState) SettingsPatch {
 	if model.TemperatureDecimal != nil {
 		patch.TemperatureDecimal = SetPatch(*model.TemperatureDecimal)
 	}
+	// The later sampling and reasoning leaves are emitted only when set, so a
+	// snapshot that does not use them encodes exactly as it did before.
+	if model.TopP != nil {
+		patch.TopP = SetPatch(*model.TopP)
+	}
+	if model.StopSequences != nil {
+		patch.StopSequences = SetPatch(append([]string(nil), model.StopSequences...))
+	}
+	if model.Seed != nil {
+		patch.Seed = SetPatch(*model.Seed)
+	}
+	if model.ReasoningMode != "" {
+		patch.ReasoningMode = SetPatch(model.ReasoningMode)
+	}
+	if model.ReasoningTokenBudget != nil {
+		patch.ReasoningTokenBudget = SetPatch(*model.ReasoningTokenBudget)
+	}
 	if model.CompactionPolicy != nil {
 		patch.CompactionPolicy = SetPatch(append(json.RawMessage(nil), model.CompactionPolicy...))
 	}
@@ -313,6 +330,8 @@ func settingsPatchToWire(patch SettingsPatch) llm.SettingsPatchV1 {
 	return llm.SettingsPatchV1{
 		WebFetch: patchToWire(patch.WebFetch), CodeExecution: patchToWire(patch.CodeExecution), WebSearch: patchToWire(patch.WebSearch), Model: patchToWire(patch.Model), ServiceClass: patchToWire(patch.ServiceClass), ServiceClassFallbacks: patchToWire(patch.ServiceClassFallbacks), Portability: patchToWire(patch.Portability),
 		Instructions: patchToWire(patch.Instructions), Tools: patchToWire(patch.Tools), ToolPolicy: patchToWire(patch.ToolPolicy), Output: patchToWire(patch.Output), Temperature: temperature,
+		TopP: patchToWire(patch.TopP), StopSequences: patchToWire(patch.StopSequences), Seed: patchToWire(patch.Seed),
+		ReasoningMode: patchToWire(patch.ReasoningMode), ReasoningTokenBudget: patchToWire(patch.ReasoningTokenBudget),
 		ReasoningEffort: patchToWire(patch.ReasoningEffort), ReasoningSummary: patchToWire(patch.ReasoningSummary), CompactionPolicy: patchToWire(patch.CompactionPolicy), Extensions: patchToWire(patch.Extensions),
 	}
 }
@@ -325,6 +344,8 @@ func settingsPatchFromWire(wire llm.SettingsPatchV1) (SettingsPatch, error) {
 	patch := SettingsPatch{
 		WebFetch: patchFromWire(wire.WebFetch), CodeExecution: patchFromWire(wire.CodeExecution), WebSearch: patchFromWire(wire.WebSearch), Model: patchFromWire(wire.Model), ServiceClass: patchFromWire(wire.ServiceClass), ServiceClassFallbacks: patchFromWire(wire.ServiceClassFallbacks), Portability: patchFromWire(wire.Portability),
 		Instructions: patchFromWire(wire.Instructions), Tools: patchFromWire(wire.Tools), ToolPolicy: patchFromWire(wire.ToolPolicy), Output: patchFromWire(wire.Output),
+		TopP: patchFromWire(wire.TopP), StopSequences: patchFromWire(wire.StopSequences), Seed: patchFromWire(wire.Seed),
+		ReasoningMode: patchFromWire(wire.ReasoningMode), ReasoningTokenBudget: patchFromWire(wire.ReasoningTokenBudget),
 		ReasoningEffort: patchFromWire(wire.ReasoningEffort), ReasoningSummary: patchFromWire(wire.ReasoningSummary), CompactionPolicy: patchFromWire(wire.CompactionPolicy), Extensions: patchFromWire(wire.Extensions),
 	}
 	patch.TemperatureDecimal.Clear = wire.Temperature.Clear

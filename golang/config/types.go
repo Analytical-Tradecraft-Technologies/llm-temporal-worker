@@ -89,6 +89,7 @@ type Config struct {
 	Budgets       BudgetsConfig             `yaml:"budgets" json:"budgets"`
 	Continuation  ContinuationConfig        `yaml:"continuation" json:"continuation"`
 	Telemetry     TelemetryConfig           `yaml:"telemetry" json:"telemetry"`
+	Langfuse      *LangfuseConfig           `yaml:"langfuse,omitempty" json:"langfuse,omitempty"`
 	// ModelSync is omitted from canonical JSON when unset, so enabling the
 	// feature is the only change that moves an existing configuration digest.
 	ModelSync *ModelSyncConfig `yaml:"model_sync,omitempty" json:"model_sync,omitempty"`
@@ -228,6 +229,7 @@ const (
 )
 
 type EndpointConfig struct {
+	Langfuse          *LangfuseEndpointConfig         `yaml:"langfuse,omitempty" json:"langfuse,omitempty"`
 	Family            string                          `yaml:"family" json:"family"`
 	BaseURL           string                          `yaml:"base_url" json:"base_url"`
 	OutboundHosts     []string                        `yaml:"outbound_hosts" json:"outbound_hosts"`

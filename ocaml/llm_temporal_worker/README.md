@@ -21,8 +21,8 @@ and polling. Await the returned future when the parent needs the response.
 
 The public v1 API uses exact request and response records: service classes are
 exactly `Economy | Standard | Priority`; request controls include portability,
-instructions, items, tools, output, temperature, reasoning effort/summary, and
-extensions; responses carry the v1 checkpoint, route, usage, settled cost, and
+instructions, items, tools, output, temperature, top-p, stop sequences, seed,
+reasoning mode/token budget/effort/summary, and extensions; responses carry the v1 checkpoint, route, usage, settled cost, and
 diagnostics. Only deliberately open contract leaves (schemas, tool arguments,
 extension/provider metadata) use `Yojson.Safe.t`.
 
@@ -168,6 +168,17 @@ an untyped string.  Per-turn overrides remain available through
 `Settings.Patch.set_reasoning_effort` and
 `Settings.Patch.set_reasoning_summary`.
 
+`~top_p`, `~stop_sequences`, `~seed`, `~reasoning_mode` and
+`~reasoning_token_budget` follow the same rules, with matching `set_*` and
+`clear_*` patch helpers.  The codec enforces the worker's bounds before
+dispatch: `top_p` in (0, 1], one to 16 distinct non-empty stop sequences of at
+most 256 characters, a seed between 0 and 2^53 - 1, and a token budget between
+1 and 2147483647.  A route whose API cannot honour a control (for example a
+seed on Anthropic Messages) rejects the request rather than dropping it. The
+exception is Bedrock Converse with `Best_effort` portability, which silently
+drops `reasoning_mode` and `reasoning_token_budget`; under `Strict` it
+rejects them.
+
 The repository's `ocaml/consumer_smoke` project is that downstream-package
 check.  It executes deterministic injected dispatchers for one root Generate,
 three immutable sibling forks, Compact, the post-compaction Generate, and all
@@ -275,9 +286,11 @@ while still-unknown fields remain inherited by the worker.
 `Query.execute`, `Query.start`, `invoke_query_v1` and `start_query_v1` require
 `~task_queue` and `~id`: the `llm.query.workflow.v1` child workflow is
 registered on the Go worker's task queue, so the calling workflow's own queue
-cannot serve it. Use a deterministic child ID unique within the namespace. The production worker does
-not compose a query service yet, so every query kind currently fails with an
-unsupported-query error there (tracked in
+cannot serve it. Use a deterministic child ID unique within the namespace. The
+production worker answers `provider_status`, `model_inventory` and
+`credit_status` from its Redis provider state for the tenant/project pairs in
+its `authorization.allowed_scopes`. `budget_status` and `spend_summary`
+currently return an unsupported-query error there (tracked in
 [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
 The persisted query handler also rejects a positive
 `refresh_if_older_than_seconds`; leave it unset.

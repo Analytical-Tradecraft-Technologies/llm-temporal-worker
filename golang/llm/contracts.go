@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func requiredBool(fields map[string]json.RawMessage, name string) (bool, error) {
@@ -223,10 +224,87 @@ type SettingsPatchV1 struct {
 	ToolPolicy            Patch[ToolPolicy]
 	Output                Patch[OutputSpec]
 	Temperature           Patch[DecimalV1]
-	ReasoningEffort       Patch[ReasoningEffort]
-	ReasoningSummary      Patch[ReasoningSummary]
-	CompactionPolicy      Patch[json.RawMessage]
-	Extensions            Patch[map[string]json.RawMessage]
+	// TopP, StopSequences and Seed are optional sampling leaves. TopP uses the
+	// same exact decimal-string spelling as Temperature.
+	TopP          Patch[DecimalV1]
+	StopSequences Patch[[]string]
+	Seed          Patch[int64]
+	// ReasoningMode and ReasoningTokenBudget select an explicit thinking mode
+	// and budget; adapters reject what their provider cannot honour.
+	ReasoningMode        Patch[ReasoningMode]
+	ReasoningTokenBudget Patch[int]
+	ReasoningEffort      Patch[ReasoningEffort]
+	ReasoningSummary     Patch[ReasoningSummary]
+	CompactionPolicy     Patch[json.RawMessage]
+	Extensions           Patch[map[string]json.RawMessage]
+}
+
+// Bounds for the v1 sampling and reasoning leaves. They are deliberately
+// provider-neutral: an adapter with a tighter limit (for example Chat
+// Completions' four stop sequences) still rejects the request when lowering.
+const (
+	MaxStopSequencesV1        = 16
+	MaxStopSequenceLengthV1   = 256
+	MaxSeedV1                 = 1<<53 - 1
+	MaxReasoningTokenBudgetV1 = math.MaxInt32
+)
+
+// ValidateTopPV1 accepts a canonical decimal in the half-open range (0, 1].
+func ValidateTopPV1(value DecimalV1) error {
+	canonical, err := NewDecimalV1(value.String())
+	if err != nil {
+		return fmt.Errorf("top_p: %w", err)
+	}
+	if canonical == "0" || (canonical != "1" && !strings.HasPrefix(string(canonical), "0.")) {
+		return fmt.Errorf("top_p must be greater than 0 and at most 1")
+	}
+	return nil
+}
+
+// ValidateStopSequencesV1 requires between one and MaxStopSequencesV1 distinct,
+// non-empty sequences of at most MaxStopSequenceLengthV1 characters. Clearing
+// the leaf, not an empty set, removes inherited stop sequences.
+func ValidateStopSequencesV1(values []string) error {
+	if len(values) == 0 || len(values) > MaxStopSequencesV1 {
+		return fmt.Errorf("stop_sequences must contain between 1 and %d values", MaxStopSequencesV1)
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" || !utf8.ValidString(value) || utf8.RuneCountInString(value) > MaxStopSequenceLengthV1 {
+			return fmt.Errorf("stop_sequences values must be non-empty and at most %d characters", MaxStopSequenceLengthV1)
+		}
+		if _, exists := seen[value]; exists {
+			return fmt.Errorf("stop_sequences must not contain duplicates")
+		}
+		seen[value] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateSeedV1 keeps the seed within the integers every JSON client can
+// represent exactly.
+func ValidateSeedV1(value int64) error {
+	if value < 0 || value > MaxSeedV1 {
+		return fmt.Errorf("seed must be between 0 and %d", int64(MaxSeedV1))
+	}
+	return nil
+}
+
+func ValidateReasoningTokenBudgetV1(value int) error {
+	if value < 1 || value > MaxReasoningTokenBudgetV1 {
+		return fmt.Errorf("reasoning_token_budget must be between 1 and %d", MaxReasoningTokenBudgetV1)
+	}
+	return nil
+}
+
+// ValidReasoningModeV1 reports whether value is a closed v1 reasoning mode.
+func ValidReasoningModeV1(value ReasoningMode) bool {
+	switch value {
+	case ReasoningModeProviderDefault, ReasoningModeDisabled, ReasoningModeAdaptive, ReasoningModeEnabled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
@@ -253,6 +331,29 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 	}
 	if patch.ReasoningSummary.Set != nil && !validReasoningSummary(*patch.ReasoningSummary.Set) {
 		return nil, fmt.Errorf("reasoning_summary: invalid value %q", *patch.ReasoningSummary.Set)
+	}
+	if patch.ReasoningMode.Set != nil && !ValidReasoningModeV1(*patch.ReasoningMode.Set) {
+		return nil, fmt.Errorf("reasoning_mode: invalid value %q", *patch.ReasoningMode.Set)
+	}
+	if patch.ReasoningTokenBudget.Set != nil {
+		if err := ValidateReasoningTokenBudgetV1(*patch.ReasoningTokenBudget.Set); err != nil {
+			return nil, err
+		}
+	}
+	if patch.TopP.Set != nil {
+		if err := ValidateTopPV1(*patch.TopP.Set); err != nil {
+			return nil, err
+		}
+	}
+	if patch.StopSequences.Set != nil {
+		if err := ValidateStopSequencesV1(*patch.StopSequences.Set); err != nil {
+			return nil, err
+		}
+	}
+	if patch.Seed.Set != nil {
+		if err := ValidateSeedV1(*patch.Seed.Set); err != nil {
+			return nil, err
+		}
 	}
 	if patch.CompactionPolicy.Set != nil {
 		if _, err := decodeObject(*patch.CompactionPolicy.Set); err != nil {
@@ -315,6 +416,21 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 		if err := add("temperature", value, false); err != nil {
 			return nil, err
 		}
+	}
+	if err := addPatch("top_p", patch.TopP, fields, add); err != nil {
+		return nil, err
+	}
+	if err := addPatch("stop_sequences", patch.StopSequences, fields, add); err != nil {
+		return nil, err
+	}
+	if err := addPatch("seed", patch.Seed, fields, add); err != nil {
+		return nil, err
+	}
+	if err := addPatch("reasoning_mode", patch.ReasoningMode, fields, add); err != nil {
+		return nil, err
+	}
+	if err := addPatch("reasoning_token_budget", patch.ReasoningTokenBudget, fields, add); err != nil {
+		return nil, err
 	}
 	if err := addPatch("reasoning_effort", patch.ReasoningEffort, fields, add); err != nil {
 		return nil, err
@@ -457,6 +573,50 @@ func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 			return zero, fmt.Errorf("%s.set: reasoning summary is invalid", name)
 		}
 		return any(value).(T), nil
+	case ReasoningMode:
+		var value ReasoningMode
+		if err := json.Unmarshal(raw, &value); err != nil || !ValidReasoningModeV1(value) {
+			return zero, fmt.Errorf("%s.set: reasoning mode is invalid", name)
+		}
+		return any(value).(T), nil
+	case DecimalV1:
+		// Only top_p uses this path. Unlike temperature it has no legacy
+		// numeric spelling, so only the canonical decimal string is accepted.
+		var value DecimalV1
+		if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &value) != nil {
+			return zero, fmt.Errorf("%s.set must be a decimal string", name)
+		}
+		if err := ValidateTopPV1(value); err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(value).(T), nil
+	case []string:
+		var value []string
+		if err := decodeJSON(raw, &value); err != nil || value == nil {
+			return zero, fmt.Errorf("%s.set: value must be an array of strings", name)
+		}
+		if err := ValidateStopSequencesV1(value); err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(value).(T), nil
+	case int64:
+		value, err := decodeInt64(raw)
+		if err != nil {
+			return zero, fmt.Errorf("%s.set: value must be an integer", name)
+		}
+		if err := ValidateSeedV1(value); err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(value).(T), nil
+	case int:
+		value, err := decodeInt(raw)
+		if err != nil {
+			return zero, fmt.Errorf("%s.set: value must be an integer", name)
+		}
+		if err := ValidateReasoningTokenBudgetV1(value); err != nil {
+			return zero, fmt.Errorf("%s.set: %w", name, err)
+		}
+		return any(value).(T), nil
 	case json.RawMessage:
 		if _, err := decodeObject(raw); err != nil {
 			return zero, fmt.Errorf("%s.set: value must be an object", name)
@@ -500,7 +660,7 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "model", "service_class", "service_class_fallbacks", "portability", "instructions", "tools", "tool_policy", "output", "temperature", "reasoning_effort", "reasoning_summary", "compaction_policy", "extensions", "web_search", "web_fetch", "code_execution"); err != nil {
+	if err := checkUnknownFields(fields, "model", "service_class", "service_class_fallbacks", "portability", "instructions", "tools", "tool_policy", "output", "temperature", "top_p", "stop_sequences", "seed", "reasoning_mode", "reasoning_token_budget", "reasoning_effort", "reasoning_summary", "compaction_policy", "extensions", "web_search", "web_fetch", "code_execution"); err != nil {
 		return err
 	}
 	result := SettingsPatchV1{}
@@ -530,6 +690,21 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 	}
 	if raw, ok := fields["temperature"]; ok && err == nil {
 		result.Temperature, err = decodeTemperaturePatch(raw)
+	}
+	if raw, ok := fields["top_p"]; ok && err == nil {
+		result.TopP, err = decodePatch[DecimalV1](raw, "top_p")
+	}
+	if raw, ok := fields["stop_sequences"]; ok && err == nil {
+		result.StopSequences, err = decodePatch[[]string](raw, "stop_sequences")
+	}
+	if raw, ok := fields["seed"]; ok && err == nil {
+		result.Seed, err = decodePatch[int64](raw, "seed")
+	}
+	if raw, ok := fields["reasoning_mode"]; ok && err == nil {
+		result.ReasoningMode, err = decodePatch[ReasoningMode](raw, "reasoning_mode")
+	}
+	if raw, ok := fields["reasoning_token_budget"]; ok && err == nil {
+		result.ReasoningTokenBudget, err = decodePatch[int](raw, "reasoning_token_budget")
 	}
 	if raw, ok := fields["reasoning_effort"]; ok && err == nil {
 		result.ReasoningEffort, err = decodePatch[ReasoningEffort](raw, "reasoning_effort")

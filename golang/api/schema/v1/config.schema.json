@@ -32,6 +32,7 @@
     "budgets": { "$ref": "#/$defs/budgets" },
     "continuation": { "$ref": "#/$defs/continuation" },
     "telemetry": { "$ref": "#/$defs/telemetry" },
+    "langfuse": { "$ref": "#/$defs/langfuse" },
     "model_sync": { "$ref": "#/$defs/model_sync" }
   },
   "allOf": [
@@ -117,6 +118,15 @@
       "description": "Exact identifier. Runtime additionally bounds UTF-8 byte length and rejects all Unicode whitespace and control characters."
     },
     "duration": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)([0-9]+(ns|us|µs|ms|s|m|h|d))*$" },
+    "langfuse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["base_url", "public_key", "secret_key"],
+      "properties": {
+        "base_url": { "type": "string", "format": "uri" },
+        "public_key": { "$ref": "#/$defs/secret" },
+        "secret_key": { "$ref": "#/$defs/secret" }
+      }
+    },
     "secret": {
       "type": "object", "additionalProperties": false,
       "required": ["kind", "name", "path", "audience"],
@@ -448,6 +458,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["family", "base_url", "outbound_hosts", "region", "auth", "account_region", "timeout", "service_classes", "capability_profile", "price_catalog", "provider_storage", "extensions"],
       "properties": {
+        "langfuse": { "type": "object", "additionalProperties": false, "properties": { "enabled": { "type": "boolean" } } },
         "family": { "enum": ["openai_responses", "azure_openai_responses", "azure_openai_chat", "openai_chat", "anthropic_messages", "anthropic_aws_messages", "bedrock_anthropic_messages", "bedrock_converse"] },
         "base_url": { "type": "string" },
         "outbound_hosts": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },

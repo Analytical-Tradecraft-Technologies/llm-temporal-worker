@@ -65,9 +65,10 @@ func structuredOutputRequest(schema string) llm.Request {
 }
 
 func TestStructuredOutputSendsProviderValidSchemaAndValidatesCallerSchema(t *testing.T) {
+	// Required properties come first, in "required" order (#1096).
 	const wantSchema = `{"additionalProperties":false,"properties":{` +
-		`"age":{"description":"{minimum: 0}","type":"integer"},` +
 		`"name":{"description":"{minLength: 3}","type":"string"},` +
+		`"age":{"description":"{minimum: 0}","type":"integer"},` +
 		`"tags":{"description":"{maxItems: 2}","items":{"type":"string"},"type":"array"}},` +
 		`"required":["name"],"type":"object"}`
 	for _, test := range []struct {

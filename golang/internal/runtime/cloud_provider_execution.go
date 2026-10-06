@@ -11,8 +11,11 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -31,6 +34,7 @@ type CloudProviderExecutionStore interface {
 // never sleeps, selects a replacement route, or retries paid submission. Scope
 // is supplied by the authorized runtime; provider IDs never leave this layer.
 type CloudProviderExecution struct {
+	capabilities   V1RuntimeCapabilities
 	statusRecorder engine.ProviderStatusRecorder
 	store          CloudProviderExecutionStore
 	admission      *CloudBudgetAdmission
@@ -73,7 +77,7 @@ func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.
 	if clock == nil {
 		clock = time.Now
 	}
-	return &CloudProviderExecution{statusRecorder: capabilities.ProviderStatusRecorder, store: store, admission: admission, clock: clock, saveBackoff: executionSaveBackoff}, nil
+	return &CloudProviderExecution{capabilities: capabilities, statusRecorder: capabilities.ProviderStatusRecorder, store: store, admission: admission, clock: clock, saveBackoff: executionSaveBackoff}, nil
 }
 
 // Submit accepts only a prepared local call and its accepted reservation. The
@@ -129,6 +133,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		return executor.save(ctx, call.scope, call.id, saved, next)
 	}
+	executor.captureLangfuse(ctx, call, saved)
 	observer := &executionObserver{executor: executor, scope: call.scope, id: call.id, saved: saved, claim: claim}
 	// Bound an individual HTTP call independently of workflow waiting. Saving
 	// its outcome has a separate bounded context if this context expires.
@@ -136,13 +141,19 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	defer cancel()
 	var outcome provider.ResumableResult
 	started := time.Now()
+	tracer := observability.FromContext(ctx)
+	attemptCtx, attemptSpan := tracer.Start(callCtx, "llmtw.provider_attempt", attribute.String("endpoint", call.provider.Call.EndpointID), attribute.String("service_class", string(call.provider.Call.ServiceClass)))
 	if resumable, ok := call.provider.Adapter.(provider.ResumableAdapter); ok {
-		outcome, err = resumable.Submit(callCtx, call.provider.Call, observer)
+		outcome, err = resumable.Submit(attemptCtx, call.provider.Call, observer)
 	} else {
 		var result provider.Result
-		result, err = call.provider.Adapter.Invoke(callCtx, call.provider.Call, observer)
+		result, err = call.provider.Adapter.Invoke(attemptCtx, call.provider.Call, observer)
 		outcome = provider.ResumableResult{State: provider.ResumableCompleted, Dispatch: provider.DispatchAccepted, Result: result}
 	}
+	if err != nil {
+		tracer.RecordError(attemptSpan, err)
+	}
+	attemptSpan.End()
 	saved = observer.saved
 	if observer.saveErr != nil {
 		// The observer refused the possible-write boundary and never marked it,
@@ -222,9 +233,11 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		if !ok {
 			return ProviderExecutionResult{}, executionError(provider.CodeConfiguration)
 		}
+		recordCloudPoll(ctx, "started")
 		outcome, err = adapter.Poll(callCtx, planned.Call, saved.Execution.ProviderOperationID, provider.NopObserver{})
 		// A transport failure during a read does not destroy the durable job.
 		if err != nil {
+			recordCloudPoll(ctx, "retry")
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderUnavailable)
 		}
 	} else if recovery, ok := planned.Adapter.(provider.IdempotencyRecovery); ok && (saved.Execution.Claim != nil || !saved.Plan.RequiresReservation()) {
@@ -241,7 +254,22 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		return executor.save(ctx, scope, id, saved, next)
 	}
-	return executor.completeCall(ctx, scope, id, saved, planned, transcript, outcome, nil, true)
+	result, err := executor.completeCall(ctx, scope, id, saved, planned, transcript, outcome, nil, true)
+	if saved.Execution.ProviderOperationID != "" {
+		// Classify the poll by what was saved, so a result that fails
+		// validation counts as failed rather than completed.
+		switch {
+		case err != nil:
+			recordCloudPoll(ctx, "failed")
+		case result.Saved.Execution.Stage == cloudstate.ExecutionSucceeded:
+			recordCloudPoll(ctx, "completed")
+		case result.Saved.Execution.Stage == cloudstate.ExecutionPending:
+			recordCloudPoll(ctx, "retry")
+		default:
+			recordCloudPoll(ctx, "failed")
+		}
+	}
+	return result, err
 }
 
 // settleUnknown charges an unresolved paid attempt at its full reservation

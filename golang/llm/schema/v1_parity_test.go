@@ -127,6 +127,13 @@ func parityGenerateRequests() map[string]llm.GenerateRequestV1 {
 		instructions := []llm.Instruction{{Kind: llm.InstructionKindParts, Level: llm.InstructionLevelApplication, Content: []llm.Part{part}}}
 		requests["instruction-"+name] = llm.GenerateRequestV1{OperationKey: "op", Context: context, SettingsPatch: llm.SettingsPatchV1{Instructions: llm.Patch[[]llm.Instruction]{Set: &instructions}}}
 	}
+	topP, stop, seed, mode, budget := llm.DecimalV1("0.95"), []string{"END", "\n\n"}, int64(llm.MaxSeedV1), llm.ReasoningModeEnabled, 2048
+	requests["sampling-reasoning-set"] = llm.GenerateRequestV1{OperationKey: "op", Context: context, Parent: &parent, SettingsPatch: llm.SettingsPatchV1{
+		TopP: llm.Patch[llm.DecimalV1]{Set: &topP}, StopSequences: llm.Patch[[]string]{Set: &stop}, Seed: llm.Patch[int64]{Set: &seed},
+		ReasoningMode: llm.Patch[llm.ReasoningMode]{Set: &mode}, ReasoningTokenBudget: llm.Patch[int]{Set: &budget}}}
+	requests["sampling-reasoning-clear"] = llm.GenerateRequestV1{OperationKey: "op", Context: context, Parent: &parent, SettingsPatch: llm.SettingsPatchV1{
+		TopP: llm.Patch[llm.DecimalV1]{Clear: true}, StopSequences: llm.Patch[[]string]{Clear: true}, Seed: llm.Patch[int64]{Clear: true},
+		ReasoningMode: llm.Patch[llm.ReasoningMode]{Clear: true}, ReasoningTokenBudget: llm.Patch[int]{Clear: true}}}
 	return requests
 }
 

@@ -59,12 +59,17 @@ Configuration reloads do not prevent finalization of a saved terminal provider
 result. An attempt that has already reached its provider is also polled or
 recovered under a different configuration digest when its route and its
 endpoint's own configuration are unchanged; it is never submitted again. If
-either changed, and for work that still needs planning, budget admission or a
-replacement attempt, an incompatible worker returns a retryable
-state-unavailable error. Restore compatible settings to resume that work without
-resubmission. Planning and admitting not-yet-dispatched work under a changed
-configuration remains tracked in
-[#958](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/958).
+either changed, an incompatible worker returns a retryable state-unavailable
+error until compatible settings return. Work that still needs planning, budget
+admission or a new attempt (including after a retryable provider failure) has
+nothing unfinished paid. A worker whose configuration started serving after
+such a request was prepared returns the same retryable wait for its first 15
+minutes, which covers a rolling deployment, and then fails fast with a
+non-retryable `configuration` error; a worker on an older configuration always
+waits, since a newer one may be rolling out. Submit a failed request again under
+a new operation key; it is never re-planned under the new configuration. The
+saved request is not changed, so restoring its settings still resumes it, and
+only a compatible worker applies the request's attempt limit.
 
 ## Separate or deferred capabilities
 

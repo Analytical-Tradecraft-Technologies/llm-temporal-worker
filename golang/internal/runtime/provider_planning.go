@@ -32,6 +32,8 @@ const cloudCompilerVersion = "cloud-v2"
 // Composition must persist its route/attempt identity and recover earlier paid
 // work before reserving budget; only a fresh Redis claim permits submission.
 type PlannedProviderCall struct {
+	Semantic          llm.Request
+	LogicalModel      string
 	Candidate         routing.Candidate
 	CacheIdentity     cache.RouteIdentity
 	CapabilityVersion string
@@ -267,7 +269,7 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	}
 	return PlannedProviderCall{Candidate: candidate, CacheIdentity: providerCacheIdentity(candidate),
 		CapabilityVersion: capability.Version, ConfigDigest: planning.configDigest, ConfigEpoch: planning.configEpoch,
-		Call: call, Adapter: adapter}, nil, nil
+		Call: call, Adapter: adapter, Semantic: resolved, LogicalModel: semantic.Model}, nil, nil
 }
 
 func copyBudgetSnapshot(source engine.Snapshot) engine.Snapshot {

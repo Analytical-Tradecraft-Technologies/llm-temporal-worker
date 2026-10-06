@@ -1,0 +1,16 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fork-sampling",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "parent": "ckp_v1.parent",
+  "append": [],
+  "settings_patch": {
+    "temperature": {"set": "0.7"},
+    "top_p": {"set": "0.95"},
+    "stop_sequences": {"set": ["END", "\n\nHuman:"]},
+    "seed": {"set": 42},
+    "reasoning_mode": {"set": "enabled"},
+    "reasoning_token_budget": {"set": 2048},
+    "reasoning_summary": {"clear": true}
+  }
+}
