@@ -43,6 +43,67 @@ func ValidateMediaURLs(instructions []Instruction, items []Item) error {
 	return nil
 }
 
+// RejectBlobMedia reports the first image or document part that references
+// its bytes through an external BlobRef. No production path resolves media
+// blob references and no provider adapter accepts one, so request preparation
+// rejects them before routing instead of failing every candidate at compile.
+func RejectBlobMedia(instructions []Instruction, items []Item) error {
+	for index, instruction := range instructions {
+		if err := rejectBlobMediaParts(instruction.Content); err != nil {
+			return fmt.Errorf("instruction %d: %w", index, err)
+		}
+	}
+	for index, item := range items {
+		var content []Part
+		switch item := item.(type) {
+		case Message:
+			content = item.Content
+		case *Message:
+			if item != nil {
+				content = item.Content
+			}
+		case ToolResult:
+			content = item.Content
+		case *ToolResult:
+			if item != nil {
+				content = item.Content
+			}
+		}
+		if err := rejectBlobMediaParts(content); err != nil {
+			return fmt.Errorf("item %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func rejectBlobMediaParts(parts []Part) error {
+	for index, part := range parts {
+		var kind string
+		switch part := part.(type) {
+		case ImagePart:
+			if part.Blob != nil {
+				kind = "image"
+			}
+		case *ImagePart:
+			if part != nil && part.Blob != nil {
+				kind = "image"
+			}
+		case DocumentPart:
+			if part.Blob != nil {
+				kind = "document"
+			}
+		case *DocumentPart:
+			if part != nil && part.Blob != nil {
+				kind = "document"
+			}
+		}
+		if kind != "" {
+			return fmt.Errorf("part %d: %s blob references are not supported; send inline bytes or a URL", index, kind)
+		}
+	}
+	return nil
+}
+
 func validateMediaURLParts(parts []Part) error {
 	for index, part := range parts {
 		var raw, kind string

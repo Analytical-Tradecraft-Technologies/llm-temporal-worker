@@ -59,7 +59,9 @@ controller:
 ### Semantic features
 
 - Developer/system instructions and ordered human/model messages.
-- Text and image input by URL, inline bytes, or external blob reference.
+- Text, image and document input by URL or inline bytes. External blob
+  references on media parts decode but are not resolved in v1: Generate
+  rejects them with `unsupported_capability` before routing.
 - First-class tool definitions, tool calls, and tool results.
 - JSON Schema Draft 2020-12 structured output.
 - Sampling, stop sequences, output limits, and reasoning intent where supported.
@@ -143,9 +145,10 @@ mode rejects a switch that would lose required provider state.
 ### Bounded history
 
 Activity inputs, outputs, heartbeat details, and errors stay well below
-Temporal payload limits. Large binary parts and oversized normalized histories
-use an external `BlobRef`; secrets never use a blob reference passed through
-workflow history.
+Temporal payload limits. Oversized normalized histories use an external
+`BlobRef`; secrets never use a blob reference passed through workflow history.
+Media parts larger than the inline payload bound must be sent by URL, because
+v1 does not resolve media blob references.
 
 ## Quality targets
 

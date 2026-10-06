@@ -428,3 +428,26 @@ func TestPrepareGenerateInputRejectsUndecodableCompactionPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestPrepareGenerateInputRejectsBlobReferencedMediaAsUnsupported(t *testing.T) {
+	blob := &llm.BlobRef{Digest: strings.Repeat("a", 64), ByteLength: 1024, MediaType: "image/png", Locator: "blobs/tenant/image"}
+	for name, part := range map[string]llm.Part{
+		"image":    llm.ImagePart{Blob: blob, MediaType: "image/png"},
+		"document": llm.DocumentPart{Blob: &llm.BlobRef{Digest: strings.Repeat("b", 64), ByteLength: 2048, MediaType: "application/pdf", Locator: "blobs/tenant/doc"}, MediaType: "application/pdf"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request, replay, _ := preparationFixture()
+			request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "describe"}, part}}}
+			if _, err := request.MarshalJSON(); err != nil {
+				t.Fatalf("blob-referenced %s must still decode as a valid v1 request: %v", name, err)
+			}
+			_, err := PrepareGenerateInput(context.Background(), request, replay)
+			assertPreparationError(t, err, provider.CodeUnsupportedCapability)
+		})
+	}
+	request, replay, _ := preparationFixture()
+	request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{Bytes: []byte{0x89, 'P', 'N', 'G'}, MediaType: "image/png"}}}}
+	if _, err := PrepareGenerateInput(context.Background(), request, replay); err != nil {
+		t.Fatalf("inline image rejected: %v", err)
+	}
+}

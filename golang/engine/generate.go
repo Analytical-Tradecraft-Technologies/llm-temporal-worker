@@ -79,6 +79,13 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 		normalizeSpan.End()
 		return llm.Response{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request normalization failed", err)
 	}
+	if err := llm.RejectBlobMedia(normalized.Instructions, normalized.Input); err != nil {
+		// No adapter can lower blob-referenced media; reject it before
+		// admission instead of reserving budget and failing every route.
+		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
+		normalizeSpan.End()
+		return llm.Response{}, engineError(provider.CodeUnsupportedCapability, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "blob-referenced media is not supported", err)
+	}
 	digest, err := llm.RequestDigest(normalized)
 	if err != nil {
 		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
