@@ -173,7 +173,13 @@ operation ends `definite_failed` with the already-incurred cost retained. Only
 `reserved` may be safely reclaimed after a proven lease expiry. A
 `dispatching` lease expiry becomes `ambiguous` unless provider-specific status
 retrieval proves the outcome. `completed` returns the stored response reference
-to every retry. Terminal operation records outlive the maximum Temporal retry
+to every retry. A `definite_failed` operation whose last attempt was a definite,
+retryable rejection (for example HTTP 429 with `Retry-After`) incurred nothing
+and released its reservation, so the identical request under the same operation
+key reserves again and dispatches; any other `definite_failed` operation stays
+terminal. The in-process admission store used by memory mode, the only mode that
+runs this engine Activity, implements the reopen; the legacy Redis admission
+store keeps such operations terminal. Terminal operation records outlive the maximum Temporal retry
 and retention horizon configured for the worker.
 
 The system offers durable at-most-once automatic submission after a possible

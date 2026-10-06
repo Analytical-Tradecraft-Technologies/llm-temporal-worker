@@ -23,9 +23,12 @@ type AdmissionStore struct {
 	clock       func() time.Time
 	operations  map[string]admission.Operation
 	providerIDs map[string]string
-	pollAfter   map[string]time.Time
-	byScope     map[string]string
-	buckets     map[budgetKey]map[int64]pricing.MicroUSD
+	// reopens counts how often a retryable definite failure was reserved
+	// again, so each reopened attempt gets a distinct dispatch token.
+	reopens   map[string]int
+	pollAfter map[string]time.Time
+	byScope   map[string]string
+	buckets   map[budgetKey]map[int64]pricing.MicroUSD
 	// geometry records the widest window seen for each budget key so Sweep
 	// can tell which buckets can no longer contribute to an admission check.
 	geometry map[budgetKey]bucketGeometry
@@ -45,7 +48,7 @@ func NewAdmissionStore(options AdmissionOptions) *AdmissionStore {
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
-	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), providerIDs: make(map[string]string), pollAfter: make(map[string]time.Time), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD), geometry: make(map[budgetKey]bucketGeometry)}
+	return &AdmissionStore{clock: options.Clock, operations: make(map[string]admission.Operation), providerIDs: make(map[string]string), reopens: make(map[string]int), pollAfter: make(map[string]time.Time), byScope: make(map[string]string), buckets: make(map[budgetKey]map[int64]pricing.MicroUSD), geometry: make(map[budgetKey]bucketGeometry)}
 }
 
 // MarkProviderPending mirrors the durable repository transition used by
@@ -132,12 +135,19 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 	// Opportunistic retention cleanup keeps the development store bounded
 	// without a separate lifecycle owner, mirroring the memory blob store.
 	store.sweepLocked(store.clock())
+	var reopened *admission.Operation
 	if operationID, ok := store.byScope[request.ScopeKey]; ok {
 		operation := store.operations[operationID]
 		if operation.RequestDigest != request.RequestDigest {
 			return admission.BeginResult{}, admission.ErrOperationConflict
 		}
-		return admission.BeginResult{Operation: operation.Clone(), Existing: true}, nil
+		// A definite, retryable rejection released its reservation without
+		// reaching the provider, so the identical request may reserve again
+		// under the same operation instead of meeting a terminal conflict.
+		if operation.State != admission.StateDefiniteFailed || !operation.Retryable || operation.ID != request.ID {
+			return admission.BeginResult{Operation: operation.Clone(), Existing: true}, nil
+		}
+		reopened = &operation
 	}
 	if denial := store.checkReservations(request.Reservations, store.clock()); denial != nil {
 		return admission.BeginResult{Denied: denial}, nil
@@ -154,6 +164,12 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 		token = hex.EncodeToString(digest[:])
 	}
 	operation := admission.Operation{ID: request.ID, ScopeKey: request.ScopeKey, RequestDigest: request.RequestDigest, State: admission.StateReserved, ReservedMicroUSD: request.Reservation, Reservations: cloneReservations(request.Reservations), ConfigVersion: request.ConfigVersion, PriceVersion: request.PriceVersion, DispatchToken: token, LeaseUntil: request.LeaseUntil, CreatedAt: now, UpdatedAt: now, ExpiresAt: request.ExpiresAt}
+	if reopened != nil {
+		// A fresh token fences any holder of the failed attempt's token.
+		store.reopens[request.ID]++
+		operation.DispatchToken = fmt.Sprintf("%s-reopen-%d", token, store.reopens[request.ID])
+		operation.CreatedAt = reopened.CreatedAt
+	}
 	if !request.ReservationUSD.IsZero() || request.Reservation == 0 {
 		reserved := request.ReservationUSD
 		operation.ReservedCostUSD = &reserved
@@ -268,6 +284,7 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 			operation.ActualCostUSD = &incurred
 		}
 		operation.ReservedMicroUSD = 0
+		operation.Retryable = request.Retryable && request.Incurred == 0
 	}
 	operation.Attempt = request.Attempt
 	operation.Attempt.Dispatch = request.Certainty
@@ -368,6 +385,7 @@ func (store *AdmissionStore) sweepLocked(now time.Time) int {
 		delete(store.operations, id)
 		delete(store.providerIDs, id)
 		delete(store.pollAfter, id)
+		delete(store.reopens, id)
 		if store.byScope[operation.ScopeKey] == id {
 			delete(store.byScope, operation.ScopeKey)
 		}
