@@ -22,11 +22,23 @@ func TestCloudGenerateRefusesToExtendAParentPastTheExtendableBound(t *testing.T)
 	for i := 0; i < 3; i++ {
 		f.turn(t, fmt.Sprintf("turn-%d", i), chunk)
 	}
+	// Patched settings count too: a small turn that adds a large instruction
+	// would publish a child past the bound.
+	instructions := []llm.Instruction{{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: strings.Repeat("rule ", 140<<10)}}
+	f.request.SettingsPatch.Instructions.Set = &instructions
+	if !f.plan(t, "large-settings", "small") {
+		t.Fatal("planning ignored the patched settings")
+	}
+	before := f.submits.Load()
+	if _, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request}); err == nil || f.submits.Load() != before {
+		t.Fatalf("prepare with large patched settings = %v, want an unpaid rejection", err)
+	}
+	f.request.SettingsPatch = llm.SettingsPatchV1{}
 	// The next turn's transcript exceeds the extendable bound.
 	if !f.plan(t, "too-large", chunk) {
 		t.Fatal("planning did not request compaction for a parent past the extendable bound")
 	}
-	before := f.submits.Load()
+	before = f.submits.Load()
 	_, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request})
 	var failure *provider.Error
 	if !errors.As(err, &failure) || failure.Code != provider.CodeInvalidArgument || failure.Retry != provider.RetryNever || f.submits.Load() != before {

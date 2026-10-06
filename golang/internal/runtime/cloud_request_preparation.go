@@ -187,7 +187,7 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 		if err != nil {
 			return cloudstate.RequestPreparation{}, err
 		}
-		fits, err := extendedParentFits(prepared.GenerateReplay.State, input.Request.Input)
+		fits, err := extendedParentFits(prepared.GenerateReplay.State, input)
 		if err != nil {
 			return cloudstate.RequestPreparation{}, err
 		}
@@ -199,10 +199,12 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 }
 
 // extendedParentFits reports whether a Generate's whole transcript (the
-// parent plus its appended input) stays within MaxExtendableParentBytes.
-func extendedParentFits(parent state.MaterializedState, transcript []llm.Item) (bool, error) {
+// parent plus its appended input) under the settings the child will publish
+// stays within MaxExtendableParentBytes.
+func extendedParentFits(parent state.MaterializedState, input PreparedGenerateInput) (bool, error) {
 	extended := parent
-	extended.Items = transcript
+	extended.Items = input.Request.Input
+	extended.Settings = input.Settings
 	codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxExtendableParentBytes}
 	if _, err := codec.EncodeSnapshot(*state.NewCheckpointSnapshot(extended)); err != nil {
 		if errors.Is(err, state.ErrLimitExceeded) {
