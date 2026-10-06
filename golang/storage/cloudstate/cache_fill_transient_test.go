@@ -48,7 +48,7 @@ func TestCloudFillsTransientBlobReadIsNotCorruption(t *testing.T) {
 					return nil
 				}
 				defer func() { blobs.open = nil }()
-				_, acquireErr := store.Acquire(ctx, lease)
+				_, acquireErr := store.Acquire(ctx, lease, lease.AcquiredAt)
 				failures := map[string]error{"acquire": acquireErr, "complete": store.Complete(ctx, lease, completion)}
 				if stage == "head" {
 					// Start reads only the head; the receipt is not on its path.
@@ -65,7 +65,7 @@ func TestCloudFillsTransientBlobReadIsNotCorruption(t *testing.T) {
 				t.Fatal("retry after transient head read", err)
 			}
 			check("receipt", fillPointerBlob(t, table, store.terminalKey(lease)))
-			decision, err := store.Acquire(ctx, lease)
+			decision, err := store.Acquire(ctx, lease, lease.AcquiredAt)
 			if err != nil || decision.Disposition != cache.FillAttemptFinished || decision.Record.State != cache.FillFinished || decision.Record.Completion != completion {
 				t.Fatalf("retry after transient receipt read = %+v, %v", decision, err)
 			}
@@ -83,7 +83,7 @@ func TestCloudFillsMissingBlobIsCorruption(t *testing.T) {
 	head := fillPointerBlob(t, table, store.responses.key("fill", lease.Key))
 	saved := blobs.values[head]
 	delete(blobs.values, head)
-	if _, err := store.Acquire(ctx, lease); !errors.Is(err, ErrCorrupt) {
+	if _, err := store.Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, ErrCorrupt) {
 		t.Fatal("dangling fill head treated as absent or transient", err)
 	}
 	if err := store.Complete(ctx, lease, completion); !errors.Is(err, ErrCorrupt) {
@@ -95,7 +95,7 @@ func TestCloudFillsMissingBlobIsCorruption(t *testing.T) {
 	}
 	// The sealed receipt binds the terminal head's blob.
 	delete(blobs.values, fillPointerBlob(t, table, store.terminalKey(lease)))
-	if _, err := store.Acquire(ctx, lease); !errors.Is(err, ErrCorrupt) {
+	if _, err := store.Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, ErrCorrupt) {
 		t.Fatal("dangling fill receipt treated as absent or transient", err)
 	}
 	if err := store.Complete(ctx, lease, completion); !errors.Is(err, ErrCorrupt) {

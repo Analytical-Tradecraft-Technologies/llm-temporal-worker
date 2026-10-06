@@ -48,7 +48,7 @@ type validation_error = string
 type portability = Strict | Best_effort
 type actor = Human | Model
 type instruction_level = Application | Policy
-type response_status = Completed | Tool_calls | Refused | Length | Content_filtered
+type response_status = Paused | Completed | Tool_calls | Refused | Length | Content_filtered
 type output_kind = Output_text | Output_json | Output_json_schema
 type reasoning_mode = Provider_default | Reasoning_disabled | Adaptive | Reasoning_enabled
 type reasoning_effort = Effort_default | Minimal | Low | Medium | High | Maximum
@@ -261,6 +261,9 @@ type provenance = {
 }
 
 type settings_patch = {
+  web_search : bool patch;
+  web_fetch : bool patch;
+  code_execution : bool patch;
   model : Model_selector.t patch;
   service_class : service_class patch;
   service_class_fallbacks : service_class list patch;

@@ -20,7 +20,7 @@ import (
 
 type cloudFillTestStore struct{ calls int }
 
-func (s *cloudFillTestStore) Acquire(context.Context, cache.FillLease) (cache.FillDecision, error) {
+func (s *cloudFillTestStore) Acquire(context.Context, cache.FillLease, time.Time) (cache.FillDecision, error) {
 	s.calls++
 	return cache.FillDecision{}, nil
 }
@@ -47,7 +47,7 @@ func TestCloudFillCapabilitiesDelegate(t *testing.T) {
 		t.Fatal("concrete store exposed")
 	}
 	ctx := context.Background()
-	if _, err := capability.Acquire(ctx, cache.FillLease{}); err != nil {
+	if _, err := capability.Acquire(ctx, cache.FillLease{}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := capability.Start(ctx, cache.FillLease{}, time.Time{}); err != nil {

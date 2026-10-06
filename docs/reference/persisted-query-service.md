@@ -25,9 +25,10 @@ authorizes a query exactly when the caller's tenant/project pair is listed in
 `authorization.allowed_scopes`, the same trusted-Temporal policy that gates
 Generate and Compact, and it checks before any storage read. Query cursors are
 signed with an HMAC key derived from the primary `continuation.handle_keys`
-secret under the domain `llmtw:query-cursor:v1`. Rotating that key therefore
-invalidates outstanding cursors, which are short-lived; no extra secret is
-needed. Provider status, model inventory and credit status read the snapshot's
+secret under the domain `llmtw:query-cursor:v1` and the configuration snapshot
+digest. Rotating that key or reloading a changed configuration therefore
+invalidates outstanding cursors, which are short-lived, so a page never resumes
+under another snapshot; no extra secret is needed. Provider status, model inventory and credit status read the snapshot's
 Redis provider state. Budget status needs the separately provisioned
 `budget_status` Redis Function, and spend summary needs a cloud spend reader;
 until a deployment supplies them, both return a typed unsupported-query error.

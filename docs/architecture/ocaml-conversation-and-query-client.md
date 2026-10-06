@@ -2,10 +2,16 @@
 
 ## Status and compatibility
 
+The public client calls only `llm.generate.workflow.v1`,
+`llm.compact.workflow.v1`, and `llm.query.workflow.v1`. Query children require
+the Go worker queue and a deterministic child ID. The Go query workflow owns
+its internal activity; the OCaml client does not expose activity descriptors.
+See the package README for the current checked helpers and hosted-tool flags.
+
 This document specifies changes to the existing
 **ocaml/llm_temporal_worker** package. It does not create another opam package
 or a parallel client. The implementation extends the same **Llm_temporal**
-facade, nominal identifiers, codecs, Activity descriptors, retry policy, and
+facade, nominal identifiers, codecs, workflow descriptors, retry policy, and
 test conventions.
 
 The package currently models one **llm.generate.v1** invocation. The v1
@@ -13,7 +19,7 @@ checkpoint/delta/cache contract removes generic currency and adopts decimal
 USD types. The additive `Llm_temporal.Generate` facade now constructs and
 invokes that exact v1 request directly; it avoids a synthetic conversation
 branch for one-shot callers. The package-level `execute` and `workflow`
-helpers now use the same v1 request/response codecs and Activity descriptor.
+helpers now use the same v1 request/response codecs and workflow descriptor.
 The older pre-checkpoint `Request` and `invoke_once` names remain only as
 deprecated compatibility shims and are not a production Activity boundary.
 
@@ -23,7 +29,7 @@ final Go contract.
 
 The protocol layer now contains the Task 17 Generate, Compact, and Query v1
 wire records, closed Yojson codecs, exact decimal-cost representation, and
-their three Temporal Activity descriptors. The public `Llm_temporal.Query`
+their three Temporal workflow descriptors. The public `Llm_temporal.Query`
 module now adds the five-constructor GADT over those closed query records. The
 companion `Llm_temporal.Conversation` facade now provides immutable v1
 checkpoint roots, forks, Generate/Compact helpers, and persistent
@@ -43,7 +49,7 @@ The package has two conceptual layers:
 
 | Layer | Purpose | Public stability |
 | --- | --- | --- |
-| Protocol | Exact closed OCaml representation of Go JSON and Activity names | Wire-compatible and exhaustive |
+| Protocol | Exact closed OCaml representation of Go JSON and workflow names | Wire-compatible and exhaustive |
 | Ergonomic workflow API | Natural immutable conversations, sparse patch builders, and typed query execution | Source-friendly and hides tag matching |
 
 Existing private modules continue to own identifier validation, model records,
@@ -55,7 +61,7 @@ lib/
   llm_temporal_identifier.ml/.mli       existing, extend
   llm_temporal_models.ml/.mli           existing protocol models, replace in place
   llm_temporal_codec.ml/.mli            existing, extend fixtures
-  llm_temporal_invocation.ml/.mli       existing, add activity descriptors
+  llm_temporal_invocation.ml/.mli       existing, add workflow descriptors
   llm_temporal_conversation.ml/.mli     new ergonomic stateful API
   llm_temporal_query.ml/.mli            new typed query API
   llm_temporal.ml/.mli                  existing unified facade
@@ -222,7 +228,7 @@ type generate_request = {
 The encoder omits every **Keep** leaf and omits **settings_patch** when all
 leaves are Keep. **Set []** emits an empty list and differs from **Clear**.
 **Clear** emits **{"clear":true}**. It never serializes inherited settings into
-the Activity payload.
+the workflow payload.
 
 Effective temperature is validated by the Go worker after inheritance. The
 OCaml builder rejects immediately when it can prove temperature zero with a
@@ -260,7 +266,7 @@ type generate_response = {
 ~~~
 
 There is no transcript field. The Compact protocol has its own request/response
-types and Activity name. Its result identifies a compaction checkpoint,
+types and workflow name. Its result identifies a compaction checkpoint,
 provenance, cache disposition, usage, and USD cost. Its request accepts the
 same optional `cache_policy`; omission disables both read and population, and
 the protocol rejects a nonzero variant. Compaction protocol records contain no
@@ -452,7 +458,7 @@ open metadata or inventory-source member: its closed wire fields are exactly
 the ones shown above, and unknown fields are rejected. Page bounds and
 half-open spend intervals are validated by both the OCaml constructor and Go
 worker. Empty `group_by` means one aggregate bucket. Duplicate dimensions and
-an end time not strictly after the start time fail before Activity scheduling.
+an end time not strictly after the start time fail before child workflow scheduling.
 
 Each codec validates both outer **kind** and inner result constructor. The
 decoder rejects an unknown tag, duplicate/unknown member, malformed cursor,
@@ -673,7 +679,7 @@ constructs and schedules one v1 Generate directly. It does not maintain a loop,
 stream tokens, or hide a checkpoint. `Generate.invoke_with` accepts the same
 typed dispatcher used by deterministic tests. The package-level
 **`execute`/`workflow`** helpers now accept the exact Generate v1 records and
-schedule that same v1 Activity. The pre-checkpoint **`Request.make`** and
+schedule that same v1 workflow. The pre-checkpoint **`Request.make`** and
 **`invoke_once`** names remain recognizable only as deprecated compatibility
 shims. `invoke_once` validates the old record and converts it to the flat
 Generate v1 envelope before dispatching `llm.generate.v1`; controls which have
@@ -710,17 +716,17 @@ module Query : sig
     cost : settled_cost;
   }
 
-  (* task_queue must be the Go worker's queue: llm.query.v1 is registered
-     only there. *)
+  (* task_queue must be the Go worker's queue: llm.query.workflow.v1 is
+     registered only there. id is a deterministic child workflow ID. *)
   val execute :
-    task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t -> id:string ->
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
     ('a response, Temporal.Error.t) result
 
   val start :
-    task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t -> id:string ->
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
@@ -739,18 +745,18 @@ generated protocol values.
 Application Workflow code should use the builders for early validation, and
 the execution facade revalidates the same invariants before calling either a
 synchronous or asynchronous dispatcher. Thus direct GADT construction remains
-source-compatible without allowing an invalid wire query to reach Activity
+source-compatible without allowing an invalid wire query to reach child workflow
 scheduling.
 
 ~~~ocaml
 let* provider_filter =
   Query.Filter.provider_status ~include_healthy:false ~page_size:100 ()
 in
-Query.execute ~task_queue ~operation_key ~context
+Query.execute ~task_queue ~id ~operation_key ~context
   (Query.Provider_status provider_filter)
 ~~~
 
-`start` keeps the Activity's Temporal error as the Future error and returns
+`start` keeps the child workflow's Temporal error as the Future error and returns
 the protocol-kind matcher result as its successful value. This preserves a
 typed error for a mismatched closed result without raising from a workflow
 callback; the current Temporal SDK intentionally exposes no public operation
@@ -761,7 +767,7 @@ the answer as a spend summary:
 
 ~~~ocaml
 let result =
-  Query.execute ~task_queue
+  Query.execute ~task_queue ~id:"budget-check-481"
     ~operation_key:(Operation_key.of_string "budget-check-481")
     ~context
     (Query.Budget_status {
@@ -779,7 +785,7 @@ match result with
 ~~~
 
 Internally, **execute** existentially packages the wire request, schedules the
-single Activity, decodes the closed response, and pattern-matches the matching
+query child workflow, decodes the closed response, and pattern-matches the matching
 result constructor. An impossible mismatch is returned as a protocol
 **Temporal.Error.t** with safe details. It never uses **Obj.magic**, polymorphic
 variants with catch-all values, or an unchecked JSON cast.
@@ -789,8 +795,8 @@ dispatcher returns. A `next_cursor` from a paginated response must carry the
 same query kind as the GADT constructor; budget and spend responses must not
 carry one. This check is deliberately duplicated at the ergonomic boundary so
 tests and custom dispatchers cannot bypass the wire codec's cursor invariant.
-`Query.start` performs the corresponding input check before scheduling an
-Activity and returns the validation error in its typed result value.
+`Query.start` performs the corresponding input check before scheduling a
+child workflow and returns the validation error in its typed result value.
 `Query.start_with` exposes the same asynchronous boundary with an injected
 dispatcher for deterministic Workflow tests; validation errors do not call the
 dispatcher.
@@ -802,24 +808,25 @@ cross-kind reuse before dispatch. **Budget_status** and **Spend_summary** are
 bounded snapshots rather than pages, so their filters and responses must not
 carry a cursor.
 
-## Activity descriptors and Workflow determinism
+## workflow descriptors and Workflow determinism
 
 The invocation module exposes three exact names:
 
 ~~~ocaml
-val generate_v1_activity :
-  (generate_request, generate_response) Temporal.Activity.t
+val generate_v1_workflow :
+  (generate_request, generate_response) Temporal.Workflow.t
 
-val compact_v1_activity :
-  (compact_request, compaction_response) Temporal.Activity.t
+val compact_v1_workflow :
+  (compact_request, compaction_response) Temporal.Workflow.t
 
-val query_v1_activity :
-  (query_envelope, query_response) Temporal.Activity.t
+val query_v1_workflow :
+  (query_envelope, query_response) Temporal.Workflow.t
 ~~~
 
-The direct-style helpers call **Temporal.Activity.execute**. Their **start_***
-forms call **Temporal.Activity.start** and return workflow-owned futures so a
-caller can record sibling Activity commands before awaiting any result. A
+The **start_*** helpers call **Temporal.Child_workflow.start** with the Go
+worker queue and a deterministic child ID. Their direct-style equivalents
+await those workflow-owned futures, so callers can start sibling children
+before awaiting any result. A
 direct helper is exactly **Temporal.Future.await (start_... request)**; it does
 not use an OCaml thread, Lwt promise, or process-global scheduler.
 
@@ -833,7 +840,7 @@ Workflow input/output codec definitions are omitted; the **Llm_temporal**
 calls and Temporal scheduling primitives are concrete. The fixture is
 compile-only: it does not contact a Temporal server or provider.
 
-The example exercises all three Activities and all five typed Query variants:
+The example exercises all three workflows and all five typed Query variants:
 
 - query credit and budget state before spending;
 - create a cached root Generate;
@@ -844,6 +851,11 @@ The example exercises all three Activities and all five typed Query variants:
 - query provider status, model inventory, and exact spend afterward.
 
 ~~~ocaml
+(* External-package compile fixture for the architecture's deterministic,
+   one-shot Conversation sample.  This executable is intentionally not run:
+   it proves that downstream code can type-check every v1 facade without
+   importing private implementation modules or introducing streaming. *)
+
 open Llm_temporal
 
 let ( let* ) = Result.bind
@@ -869,10 +881,17 @@ type workflow_output = {
   credit_status : credit_status_page;
   budget_status : budget_status;
   spend_summary : spend_summary;
-}
+} [@@warning "-69"]
 
 let operation_key input suffix =
   Operation_key.of_string (input.run_key ^ ":" ^ suffix)
+
+(* Query.Filter builders validate before scheduling.  Workflow code that
+   combines their construction with workflow results can deliberately map the
+   package's validation string into the same Temporal error channel. *)
+let filter_result = function
+  | Ok value -> Ok value
+  | Error message -> Error (Temporal.Error.codec ~message)
 
 let decimal_constant value =
   match Decimal.of_string value with
@@ -880,170 +899,140 @@ let decimal_constant value =
   | Error _ -> invalid_arg "invalid source-code decimal constant"
 
 let cache_constant variant =
-  match Cache_policy.accept_up_to
-          ~max_age_seconds:15_552_000L (* 180 days *)
-          ~variant () with
+  match Cache_policy.accept_up_to ~max_age_seconds:15_552_000L ~variant () with
   | Ok value -> value
   | Error _ -> invalid_arg "invalid source-code cache policy"
 
 let cache_0 = cache_constant Int32.zero
 let cache_1 = cache_constant Int32.one
 let cache_2 = cache_constant (Int32.of_int 2)
-let branch_temperature = decimal_constant "0.7"
 
-let message text =
-  Message { actor = Human; content = [ Text text ] }
+let message text = Message { actor = Human; content = [ Text text ] }
 
-let exactly_three_results = function
+let exactly_three_results
+    (branches : (Conversation.turn, Temporal.Error.t) result list) = match branches with
   | [ branch_0; branch_1; branch_2 ] ->
       let* branch_0 = branch_0 in
       let* branch_1 = branch_1 in
       let* branch_2 = branch_2 in
       Ok (branch_0, branch_1, branch_2)
-  | _ ->
-      invalid_arg "Temporal.Future.all changed result cardinality"
+  | _ -> invalid_arg "Temporal.Future.all changed result cardinality"
+
+(* Keep the exact low-level descriptor examples type-checked as well as the
+   ergonomic facade below.  This function is never called: the fixture is a
+   compile-only downstream consumer and must not contact Temporal or a
+   provider at process startup. *)
+let low_level_workflow_examples ~task_queue ~generate_id ~compact_id
+    (generation_request : generate_request)
+    (compaction_request : compact_request)
+    (query_envelope : query_envelope) =
+  let generated = invoke_generate ~task_queue ~id:generate_id generation_request in
+  let compacted = invoke_compact_v1 ~task_queue ~id:compact_id compaction_request in
+  let queried = invoke_query_v1 ~task_queue ~id:"query-envelope" query_envelope in
+  generated, compacted, queried
 
 let claim_workflow ~input_codec ~output_codec ~task_queue =
   Temporal.Workflow.define
     ~name:"claims.cached-branching.v1"
-    ~input:input_codec
-    ~output:output_codec
+    ~input:input_codec ~output:output_codec
     (fun input ->
-      (* Queries are Activities too. No database/provider read occurs in
-         Workflow code. A refresh request remains inside the Go Activity. *)
+      let* credit_filter =
+        filter_result (Query.Filter.credit_status ~include_ok:false
+          ~page_size:100 ())
+      in
       let* credit =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":credit-before")
           ~operation_key:(operation_key input "credit-before")
           ~context:input.context
-          (Query.Credit_status {
-             provider = None;
-             endpoint = None;
-             include_ok = false;
-             refresh_if_older_than_seconds = Some 300L;
-             page_size = 100;
-             cursor = None;
-           })
+          (Query.Credit_status credit_filter)
       in
+      let* budget_filter = filter_result (Query.Filter.budget_status ()) in
       let* budget =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":budget-before")
           ~operation_key:(operation_key input "budget-before")
           ~context:input.context
-          (Query.Budget_status {
-             policy_key = None;
-             active_at = None;
-             include_windows = true;
-           })
+          (Query.Budget_status budget_filter)
       in
-
       let root =
-        Conversation.root
-          ~context:input.context
-          ~model:input.model
-          ~settings:(Settings.make
-            ~temperature:(decimal_constant "0")
-            ~tools:input.tools
-            ~tool_policy:{ choice = Auto; parallel = false }
-            ~output:input.output
-            ())
-          ()
+        Conversation.root ~context:input.context ~model:input.model
+          ~settings:(Settings.make ~temperature:(decimal_constant "0")
+            ~reasoning_effort:Medium ~reasoning_summary:Concise
+            ~tools:input.tools ~tool_policy:{ choice = Auto; parallel = false }
+            ~output:input.output ()) ()
       in
       let* first =
-        Conversation.respond ~task_queue
-          ~operation_key:(operation_key input "turn-1")
-          ~cache:cache_0
-          ~append:[ message input.question ]
-          root
+        Conversation.respond ~task_queue ~id:(input.run_key ^ ":turn-1")
+          ~operation_key:(operation_key input "turn-1") ~cache:cache_0
+          ~append:[ message input.question ] root
       in
-
-      (* All children name the same immutable parent. Non-zero temperature
-         permits explicit variants 0, 1, and 2. Starting every Activity before
-         awaiting enables deterministic Temporal fan-out. *)
       let branch_patch =
         Settings.Patch.keep
-        |> Settings.Patch.set_temperature branch_temperature
+        |> Settings.Patch.set_temperature (decimal_constant "0.7")
         |> Settings.Patch.set_reasoning_effort High
       in
       let start_branch suffix cache =
-        Conversation.start_respond ~task_queue
+        Conversation.start_respond ~task_queue ~id:(input.run_key ^ ":" ^ suffix)
           ~operation_key:(operation_key input suffix)
-          ~settings_patch:branch_patch
-          ~cache
+          ~settings_patch:branch_patch ~cache
           ~append:[ message input.branch_instruction ]
           (Conversation.fork first.conversation)
       in
       let branch_0 = start_branch "branch-0" cache_0 in
       let branch_1 = start_branch "branch-1" cache_1 in
       let branch_2 = start_branch "branch-2" cache_2 in
+      (* Future.await exposes the Future's workflow error channel as a result;
+         successful values are the typed Conversation turns. *)
       let* branch_results =
-        Temporal.Future.await
-          (Temporal.Future.all [ branch_0; branch_1; branch_2 ])
+        Temporal.Future.await (Temporal.Future.all [ branch_0; branch_1; branch_2 ])
       in
-      let* (branch_0, branch_1, branch_2) =
-        exactly_three_results branch_results
-      in
-      let branches = [ branch_0; branch_1; branch_2 ] in
+      let* (branch_0, branch_1, branch_2) = exactly_three_results branch_results in
+      let branches : Conversation.turn list = [ branch_0; branch_1; branch_2 ] in
       let chosen = branch_0 in
-
-      (* Compact accepts no application tool or structured-output arguments.
-         The worker disables both for summarization while retaining the
-         application settings on the returned checkpoint. *)
       let* (compaction, compacted) =
-        Conversation.compact ~task_queue
-          ~operation_key:(operation_key input "compact-chosen")
-          ~cache:cache_0
-          chosen.conversation
+        Conversation.compact ~task_queue ~id:(input.run_key ^ ":compact") ~operation_key:(operation_key input "compact")
+          ~cache:cache_0 chosen.conversation
       in
       let* final =
-        Conversation.respond ~task_queue
-          ~operation_key:(operation_key input "after-compaction")
-          ~cache:cache_0
-          ~append:[ message "Return the final structured answer." ]
-          compacted
+        Conversation.respond ~task_queue ~id:(input.run_key ^ ":after-compaction")
+          ~operation_key:(operation_key input "after-compaction") ~cache:cache_0
+          ~append:[ message "Return the final structured answer." ] compacted
       in
-
+      let* provider_filter =
+        filter_result
+          (Query.Filter.provider_status ~include_healthy:false ~page_size:100 ())
+      in
       let* provider_status =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":provider-status-after")
           ~operation_key:(operation_key input "provider-status-after")
           ~context:input.context
-          (Query.Provider_status {
-             provider = None;
-             endpoint = None;
-             availability = None;
-             include_healthy = false;
-             refresh_if_older_than_seconds = None;
-             page_size = 100;
-             cursor = None;
-           })
+          (Query.Provider_status provider_filter)
+      in
+      let* model_filter =
+        filter_result (Query.Filter.model_inventory ~page_size:100 ())
       in
       let* model_inventory =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":model-inventory-after")
           ~operation_key:(operation_key input "model-inventory-after")
           ~context:input.context
-          (Query.Model_inventory {
-             provider = None;
-             endpoint = None;
-             model_prefix = None;
-             lifecycle = None;
-             refresh_if_older_than_seconds = None;
-             page_size = 100;
-             cursor = None;
-           })
+          (Query.Model_inventory model_filter)
+      in
+      let* spend_filter =
+        filter_result
+          (Query.Filter.spend_summary ~start_time:input.spend_from
+             ~end_time:input.spend_until
+             ~group_by:[ By_operation_kind; By_provider; By_model ]
+             ~operation_kinds:[ Generate; Compact; Query ] ())
       in
       let* spend_summary =
-        Query.execute ~task_queue
+        Query.execute ~task_queue ~id:(input.run_key ^ ":spend-after")
           ~operation_key:(operation_key input "spend-after")
           ~context:input.context
-          (Query.Spend_summary {
-             start_time = input.spend_from;
-             end_time = input.spend_until;
-             group_by = [ By_operation_kind; By_provider; By_model ];
-             operation_kinds = [ Generate; Compact; Query ];
-           })
+          (Query.Spend_summary spend_filter)
       in
       Ok {
         final_turn = final.response;
         branch_checkpoints =
-          List.map (fun branch -> branch.response.checkpoint) branches;
+          List.map (fun (branch : Conversation.turn) -> branch.response.checkpoint) branches;
         compaction;
         provider_status = provider_status.value;
         model_inventory = model_inventory.value;
@@ -1051,9 +1040,14 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
         budget_status = budget.value;
         spend_summary = spend_summary.value;
       })
+
+(* Keep the definition reachable so Dune type-checks its full inferred type,
+   while avoiding a workflow registration or Activity execution at process
+   startup. *)
+let () = ignore (claim_workflow, low_level_workflow_examples)
 ~~~
 
-The result matcher is exhaustive over the Activity Future's typed error channel
+The result matcher is exhaustive over the child workflow Future's typed error channel
 and treats a changed future cardinality as a source-code invariant violation.
 The chosen branch is
 selected by stable input order. Choosing from recorded model output is also
@@ -1073,23 +1067,14 @@ The ergonomic modules are thin wrappers over the exported descriptors.
 Advanced callers and codec tests may schedule exact wire records directly:
 
 ~~~ocaml
-let invoke_generate ~task_queue request =
-  Temporal.Activity.execute
-    ~task_queue:(Temporal_task_queue.to_string task_queue)
-    ~retry_policy:activity_retry_policy
-    generate_v1_activity request
+let invoke_generate ~task_queue ~id request =
+  Llm_temporal.invoke_generate ~task_queue ~id request
 
-let invoke_compact_v1 ~task_queue request =
-  Temporal.Activity.execute
-    ~task_queue:(Temporal_task_queue.to_string task_queue)
-    ~retry_policy:activity_retry_policy
-    compact_v1_activity request
+let invoke_compact_v1 ~task_queue ~id request =
+  Llm_temporal.invoke_compact_v1 ~task_queue ~id request
 
-let invoke_query_v1 ~task_queue envelope =
-  Temporal.Activity.execute
-    ~task_queue:(Temporal_task_queue.to_string task_queue)
-    ~retry_policy:activity_retry_policy
-    query_v1_activity envelope
+let invoke_query_v1 ~task_queue ~id envelope =
+  Llm_temporal.invoke_query_v1 ~task_queue ~id envelope
 ~~~
 
 Application Workflows should normally prefer **Conversation** and **Query**.
@@ -1098,8 +1083,9 @@ Activity payload, poll a provider ID, interpret query JSON with an open cast,
 or add Workflow-level retries. The same operation key is reused when Temporal
 replays one logical call; every fork and distinct query gets a new stable key.
 
-The package reuses validated Activity options and the current one-attempt SDK
-policy; the Go operation ledger owns durable retry/recovery. It does not poll a
+The Go operation ledger owns durable retry/recovery. Query children are
+cancellable and their internal activity has one attempt; paid Generate and
+Compact children survive parent closure. It does not poll a
 provider from Workflow code. A Go Activity retry sees **provider_pending** and
 continues polling the persisted provider ID.
 
@@ -1112,30 +1098,14 @@ no FX input or currency value is exposed to Workflow code now.
 
 ## Error surface
 
-**Temporal.Error.t** is the invocation error surface. The pinned OCaml Temporal
-SDK exposes an error's category, message, retryability and raw detail payloads,
-but not the worker's application error type (`llm_invalid_argument`,
-`llm_operation_conflict`, `llm_budget_wait`, and so on). That type appears only
-inside the diagnostic message, so the client does not yet ship typed
-classification helpers. Callers can branch on `non_retryable` and inspect
-`details`, which carry the worker's `SafeErrorDetails`. Recognizing the safe
-application types below is planned once the SDK exposes the application failure
-type:
+**Temporal.Error.t** is the invocation error surface. The client preserves
+SDK errors, including typed workflow failure details, and exposes
+`Failure.kind` to distinguish validation/protocol errors from Temporal
+failures. Inspect the original error for its message, retryability, and raw
+payloads. Provider failure code and dispatch certainty are retained in the
+Go workflow's application-error detail payload when available; the library
+does not parse provider messages or schedule replacement paid calls.
 
-- invalid checkpoint/patch/variant;
-- operation conflict;
-- cache/state unavailable;
-- cache fill wait expired;
-- checkpoint pinned/corrupt/expired;
-- compaction failed;
-- provider pending/ambiguous;
-- unsupported query refresh/inventory;
-- invalid query cursor;
-- budget wait; and
-- protocol tag mismatch.
-
-Errors never embed raw prompt, output, provider error body, poll ID, cache
-fingerprint, or database value.
 
 ## OCaml implementation order
 
@@ -1147,11 +1117,11 @@ fingerprint, or database value.
 3. Replace generic currency/microUSD response fields with USD decimal fields in
    protocol models, codecs, README, and fixtures.
 4. Add patch/cache/checkpoint/compaction wire records and exhaustive validation.
-5. Add the three Activity descriptors and low-level invoke functions.
+5. Add the three workflow descriptors and low-level invoke functions.
 6. Implement immutable Conversation and settings/cache builders.
 7. Implement every closed query filter/result record and codec.
 8. Implement the Query GADT and safe internal tag matcher.
-9. Add the typed one-shot `Generate` facade on the v1 Activity without a second
+9. Add the typed one-shot `Generate` facade on the v1 workflow without a second
    package; preserve legacy names until a breaking-release decision.
 10. Update Dune module lists/interfaces, opam metadata if a decimal dependency is
     selected, examples, and downstream compile fixtures.
@@ -1173,7 +1143,7 @@ fingerprint, or database value.
 - Every Query GADT constructor decodes only its associated result; mismatch and
   unknown tags fail safely.
 - Query pagination preserves its static result type.
-- Activity names and payload codecs match the Go worker constants exactly.
+- Workflow names and payload codecs match the Go worker constants exactly.
 - The one-shot `Generate` sample uses exact v1 types and no second OCaml
   package/import path is introduced; legacy names remain covered by a
   compatibility smoke assertion.

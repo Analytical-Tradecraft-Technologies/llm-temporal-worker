@@ -572,6 +572,9 @@ func cloneSettingsPatch(patch SettingsPatch) SettingsPatch {
 	result.TemperatureDecimal.Set = clonePointer(patch.TemperatureDecimal.Set)
 	result.ReasoningEffort.Set = clonePointer(patch.ReasoningEffort.Set)
 	result.ReasoningSummary.Set = clonePointer(patch.ReasoningSummary.Set)
+	result.WebFetch.Set = clonePointer(patch.WebFetch.Set)
+	result.CodeExecution.Set = clonePointer(patch.CodeExecution.Set)
+	result.WebSearch.Set = clonePointer(patch.WebSearch.Set)
 	if patch.CompactionPolicy.Set != nil {
 		value := append(json.RawMessage(nil), (*patch.CompactionPolicy.Set)...)
 		result.CompactionPolicy.Set = &value

@@ -156,6 +156,7 @@ func (activities *Activities) QueryV1(ctx context.Context, request llm.QueryRequ
 func (activities *Activities) runV1(ctx context.Context, dispatch func(context.Context) error) (resultErr error) {
 	ctx = observability.WithTracer(ctx, activities.Tracer)
 	ctx = observability.WithMetrics(ctx, activities.Metrics)
+	ctx = observability.WithLogger(ctx, activities.Logger)
 	started := time.Now()
 	var rawErr error
 	defer func() {

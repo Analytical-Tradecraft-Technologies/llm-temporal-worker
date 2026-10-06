@@ -111,7 +111,10 @@ established as follows.
   publication still sees the true depth and lineage length. The leaf row's
   depth is compared with `MaxDepth` and `MaxRows` before any ancestor or blob
   is read, and the snapshot lineage counts against `MaxRows`. Item and byte
-  limits apply to the final materialized transcript as before.
+  limits apply to the final materialized transcript as before. A leaf at
+  `MaxDepth` or `MaxRows` materializes, because publication allowed it, but no
+  child can be published on it; the cloud runtime rejects such a parent in
+  request preparation, before budget and dispatch.
 
 ## Snapshot cadence
 

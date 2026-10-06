@@ -44,7 +44,7 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		response.Service.ProviderValue = call.Metadata.ProviderTier
 	}
 	actual := pricing.Cost{}
-	if candidate.priceKnown() {
+	if candidate.priceKnown() && response.Cost.Status != llm.CostStatusUnknown {
 		var err error
 		// Price at the class the provider reported serving, when it differs
 		// from the attempted class and its price was captured at quote time.
@@ -75,6 +75,12 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 		response.Cost = llm.Cost{Status: llm.CostStatusKnown, ReservedCostUSD: &reservedUSD, ActualCostUSD: &actual.USD, Method: string(actual.Method), CatalogVersion: actual.CatalogVersion}
 	} else {
 		response.Cost = llm.Cost{Status: llm.CostStatusUnknown}
+		if candidate.priceKnown() {
+			reserved := candidate.estimate.CostUSD
+			response.Cost.ReservedCostUSD = &reserved
+			actual.USD = reserved
+			actual.MicroUSD = candidate.estimate.MicroUSD
+		}
 	}
 	if response.Status == "" {
 		response.Status = llm.ResponseStatusCompleted
@@ -139,7 +145,20 @@ func actualCost(entry pricing.Entry, response llm.Response) (pricing.Cost, error
 		}
 		return pricing.Cost{USD: *response.Cost.ActualCostUSD, MicroUSD: legacy, Method: pricing.CostProviderReported, CatalogVersion: entry.Version}, nil
 	}
-	return pricing.CostFromUsage(entry, pricing.Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, ReasoningTokens: response.Usage.ReasoningTokens, CacheReadTokens: response.Usage.CacheReadTokens, CacheWriteTokens: response.Usage.CacheWriteTokens})
+	cost, err := pricing.CostFromUsage(entry, pricing.Usage{InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens, ReasoningTokens: response.Usage.ReasoningTokens, CacheReadTokens: response.Usage.CacheReadTokens, CacheWriteTokens: response.Usage.CacheWriteTokens})
+	if err != nil {
+		return pricing.Cost{}, err
+	}
+	fee, err := llm.HostedToolCharge(response.Usage, response.Route.ResolvedModel)
+	if err != nil {
+		return pricing.Cost{}, err
+	}
+	cost.USD, err = cost.USD.Add(fee)
+	if err != nil {
+		return pricing.Cost{}, err
+	}
+	cost.MicroUSD, err = pricing.CeilMicroFromUSD(cost.USD)
+	return cost, err
 }
 
 func (engine *Engine) persistContinuation(ctx context.Context, request llm.Request, response llm.Response, candidate routing.Candidate, operationID string, parent *state.Continuation, snapshot Snapshot) (continuation *llm.Continuation, resultErr *provider.Error) {

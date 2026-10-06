@@ -34,3 +34,7 @@
 (test
  (name test_codec_boundaries)
  (libraries llm_temporal temporal-sdk yojson ptime))
+
+(test
+ (name test_hosted_tools)
+ (libraries llm_temporal temporal-sdk yojson))

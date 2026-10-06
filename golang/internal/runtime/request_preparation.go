@@ -204,7 +204,7 @@ func prepareSemanticRequest(caller llm.RequestContext, operationKey string, sett
 		Model: settings.Model, ServiceClass: settings.ServiceClass,
 		ServiceClassFallbacks: settings.ServiceClassFallbacks, Portability: settings.Portability,
 		Instructions: settings.Instructions, Input: items, Tools: settings.Tools,
-		ToolPolicy: settings.ToolPolicy, Output: settings.Output, Extensions: settings.Extensions,
+		WebFetch: settings.WebFetch, CodeExecution: settings.CodeExecution, WebSearch: settings.WebSearch, ToolPolicy: settings.ToolPolicy, Output: settings.Output, Extensions: settings.Extensions,
 	}
 	if settings.TemperatureDecimal != nil {
 		value, err := settings.TemperatureDecimal.Float64()

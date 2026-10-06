@@ -5,7 +5,7 @@ let ( let* ) = Result.bind
 module Filter = struct
   (** The wire records remain available for protocol fixtures, but callers
       should prefer these constructors.  They validate values before an
-      Activity is scheduled, so a malformed page or spend interval cannot
+      child workflow is scheduled, so a malformed page or spend interval cannot
       become a workflow-side protocol failure. *)
 
   let validate_page_size ~kind value =
@@ -301,9 +301,18 @@ let next : type a. a t -> a response -> (a t option, Temporal.Error.t) result =
             | Credit_status filter -> Ok (Some (Credit_status { filter with cursor = Some cursor }))
             | Budget_status _ | Spend_summary _ -> Ok None
 
+let validate_envelope envelope =
+  let* payload = Llm_temporal_v1_codec.encode_query_envelope envelope in
+  let* _ = Llm_temporal_v1_codec.decode_query_envelope payload in
+  Ok ()
+
 let of_response : type a. a t -> query_response -> (a response, Temporal.Error.t) result =
   fun query response ->
-    match Llm_temporal_response_validation.validate_query_cost response.cost with
+    if response.api_version <> Llm_temporal_v1_codec.query_api_version then
+      Error (Temporal.Error.codec ~message:"unsupported query response API version")
+    else match Result.bind (Llm_temporal_v1_codec.encode_query_response response)
+      (fun payload -> Result.bind (Llm_temporal_v1_codec.decode_query_response payload)
+        (fun _ -> Llm_temporal_response_validation.validate_query_cost response.cost)) with
     | Error error -> Error error
     | Ok () ->
         match validate_response_pagination query ~complete:response.complete
@@ -324,7 +333,7 @@ let of_response : type a. a t -> query_response -> (a response, Temporal.Error.t
 
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (query_envelope, query_response) Temporal.Activity.t ->
+  (query_envelope, query_response) Temporal.Workflow.t ->
   query_envelope -> (query_response, Temporal.Error.t) result
 
 let execute_with ?task_queue ~dispatch ~operation_key ~context query =
@@ -342,33 +351,29 @@ let execute_with ?task_queue ~dispatch ~operation_key ~context query =
                    ~actual:response.operation_key)
       | Ok response -> of_response query response
 
-let activity_dispatch ?task_queue activity input =
-  Temporal.Activity.execute
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:Llm_temporal_invocation.activity_retry_policy
-    activity input
-
-let execute ~task_queue ~operation_key ~context query =
-  execute_with ~task_queue ~dispatch:activity_dispatch ~operation_key ~context query
+let execute ~task_queue ~id ~operation_key ~context query =
+  let dispatch ?task_queue:_ _workflow input =
+    Llm_temporal_invocation.invoke_query_v1 ~task_queue ~id input in
+  execute_with ~task_queue ~dispatch ~operation_key ~context query
 
 type async_dispatcher =
   ?task_queue:Temporal_task_queue.t ->
-  (query_envelope, query_response) Temporal.Activity.t ->
+  (query_envelope, query_response) Temporal.Workflow.t ->
   query_envelope -> (query_response, Temporal.Error.t) Temporal.Future.t
 
 let start_with ?task_queue ~dispatch ~operation_key ~context query =
-  match validate_query query with
+  match Result.bind (validate_query query) (fun () -> validate_envelope (to_envelope ~operation_key ~context query)) with
   | Error error ->
       (* The public SDK intentionally has no constructor for turning a
          successful Future value into a Future error.  Preserve the same
          value-channel validation contract as [execute_with] without
-         dispatching an Activity.  [Future.all []] is an owner-aware ready
+         dispatching an child workflow.  [Future.all []] is an owner-aware ready
          future inside a Workflow and remains a safe ready value in tests. *)
       Temporal.Future.map (fun _ -> Error error) (Temporal.Future.all [])
   | Ok () ->
       let envelope = to_envelope ~operation_key ~context query in
-      let future = dispatch ?task_queue Llm_temporal_invocation.query_v1_activity envelope in
-      (* [Temporal.Future.map] preserves the Activity's error channel and
+      let future = dispatch ?task_queue Llm_temporal_invocation.query_v1_workflow envelope in
+      (* [Temporal.Future.map] preserves the child workflow's error channel and
          keeps protocol-kind mismatches in the successful value channel
          rather than raising from a workflow callback. *)
       Temporal.Future.map
@@ -381,10 +386,7 @@ let start_with ?task_queue ~dispatch ~operation_key ~context query =
                         ~actual:response.operation_key))
         future
 
-let activity_start_dispatch ?task_queue activity input =
-  Temporal.Activity.start
-    ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
-    ~retry_policy:Llm_temporal_invocation.activity_retry_policy activity input
-
-let start ~task_queue ~operation_key ~context query =
-  start_with ~task_queue ~dispatch:activity_start_dispatch ~operation_key ~context query
+let start ~task_queue ~id ~operation_key ~context query =
+  let dispatch ?task_queue:_ _workflow input =
+    Llm_temporal_invocation.start_query_v1 ~task_queue ~id input in
+  start_with ~task_queue ~dispatch ~operation_key ~context query

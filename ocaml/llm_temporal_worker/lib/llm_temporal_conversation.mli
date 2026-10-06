@@ -5,6 +5,7 @@ open Llm_temporal_models
 module Settings : sig
   type t
 
+
   (** Settings are the locally known effective values used to build the first
       sparse Generate patch. Every field maps to its exact v1 wire type; an
       omitted optional value remains [Keep] so inherited worker state is not
@@ -17,6 +18,10 @@ module Settings : sig
     ?tools:function_tool list ->
     ?tool_policy:tool_policy ->
     ?output:output_spec ->
+    ?web_search:bool ->
+    ?web_fetch:bool ->
+    ?code_execution:bool ->
+    ?compaction_policy:compaction_policy ->
     ?temperature:Usd_decimal.t ->
     ?reasoning_effort:reasoning_effort ->
     ?reasoning_summary:reasoning_summary ->
@@ -28,6 +33,15 @@ module Settings : sig
   module Patch : sig
     type t
     val keep : t
+
+    (** [false] explicitly disables the inherited tool; [clear] restores the worker default (off). *)
+    val set_web_fetch : bool -> t -> t
+    val clear_web_fetch : t -> t
+    val set_code_execution : bool -> t -> t
+    val clear_code_execution : t -> t
+    val set_web_search : bool -> t -> t
+    val clear_web_search : t -> t
+    val set_compaction : compaction_policy -> t -> t
     val set_model : Model_selector.t -> t -> t
     val clear_model : t -> t
     val set_service_class : service_class -> t -> t

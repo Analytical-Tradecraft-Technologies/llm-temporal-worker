@@ -258,7 +258,7 @@ func (codec CheckpointBlobCodec) DecodeSnapshot(data []byte) (CheckpointSnapshot
 }
 
 func settingsPatchFromModel(model ModelState) SettingsPatch {
-	patch := SettingsPatch{Model: SetPatch(model.Model), ServiceClass: SetPatch(model.ServiceClass), Portability: SetPatch(model.Portability), ReasoningEffort: SetPatch(model.ReasoningEffort), ReasoningSummary: SetPatch(model.ReasoningSummary)}
+	patch := SettingsPatch{WebFetch: SetPatch(model.WebFetch), CodeExecution: SetPatch(model.CodeExecution), WebSearch: SetPatch(model.WebSearch), Model: SetPatch(model.Model), ServiceClass: SetPatch(model.ServiceClass), Portability: SetPatch(model.Portability), ReasoningEffort: SetPatch(model.ReasoningEffort), ReasoningSummary: SetPatch(model.ReasoningSummary)}
 	// Empty reasoning values are the materialized zero (provider-inherited)
 	// state, not explicit wire patch values. Leave them omitted so the closed
 	// v1 patch enum cannot emit schema-invalid Set("") values.
@@ -311,7 +311,7 @@ func settingsPatchToWire(patch SettingsPatch) llm.SettingsPatchV1 {
 		temperature.Set = &value
 	}
 	return llm.SettingsPatchV1{
-		Model: patchToWire(patch.Model), ServiceClass: patchToWire(patch.ServiceClass), ServiceClassFallbacks: patchToWire(patch.ServiceClassFallbacks), Portability: patchToWire(patch.Portability),
+		WebFetch: patchToWire(patch.WebFetch), CodeExecution: patchToWire(patch.CodeExecution), WebSearch: patchToWire(patch.WebSearch), Model: patchToWire(patch.Model), ServiceClass: patchToWire(patch.ServiceClass), ServiceClassFallbacks: patchToWire(patch.ServiceClassFallbacks), Portability: patchToWire(patch.Portability),
 		Instructions: patchToWire(patch.Instructions), Tools: patchToWire(patch.Tools), ToolPolicy: patchToWire(patch.ToolPolicy), Output: patchToWire(patch.Output), Temperature: temperature,
 		ReasoningEffort: patchToWire(patch.ReasoningEffort), ReasoningSummary: patchToWire(patch.ReasoningSummary), CompactionPolicy: patchToWire(patch.CompactionPolicy), Extensions: patchToWire(patch.Extensions),
 	}
@@ -323,7 +323,7 @@ func patchToWire[T any](patch Patch[T]) llm.Patch[T] {
 
 func settingsPatchFromWire(wire llm.SettingsPatchV1) (SettingsPatch, error) {
 	patch := SettingsPatch{
-		Model: patchFromWire(wire.Model), ServiceClass: patchFromWire(wire.ServiceClass), ServiceClassFallbacks: patchFromWire(wire.ServiceClassFallbacks), Portability: patchFromWire(wire.Portability),
+		WebFetch: patchFromWire(wire.WebFetch), CodeExecution: patchFromWire(wire.CodeExecution), WebSearch: patchFromWire(wire.WebSearch), Model: patchFromWire(wire.Model), ServiceClass: patchFromWire(wire.ServiceClass), ServiceClassFallbacks: patchFromWire(wire.ServiceClassFallbacks), Portability: patchFromWire(wire.Portability),
 		Instructions: patchFromWire(wire.Instructions), Tools: patchFromWire(wire.Tools), ToolPolicy: patchFromWire(wire.ToolPolicy), Output: patchFromWire(wire.Output),
 		ReasoningEffort: patchFromWire(wire.ReasoningEffort), ReasoningSummary: patchFromWire(wire.ReasoningSummary), CompactionPolicy: patchFromWire(wire.CompactionPolicy), Extensions: patchFromWire(wire.Extensions),
 	}

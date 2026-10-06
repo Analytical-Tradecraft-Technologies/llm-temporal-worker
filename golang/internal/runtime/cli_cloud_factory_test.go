@@ -68,7 +68,7 @@ func TestTrustedTemporalScopeBinding(t *testing.T) {
 	if got, err := options.ResolveScope(ctx, caller); err != nil || got != scope {
 		t.Fatal("actor or tags changed checkpoint scope", err)
 	}
-	if options.CheckpointTTL != time.Duration(value.State.ContinuationRetention) || options.Limits.MaxDepth != int32(value.Limits.ContinuationDepth) {
+	if options.CheckpointTTL != time.Duration(value.State.ContinuationRetention) || options.Limits.MaxDepth != int32(value.Limits.ContinuationDepth) || options.Limits.MaxRows != value.Limits.ContinuationDepth+1 {
 		t.Fatal("lost configured retention or depth")
 	}
 	for _, denied := range []config.AuthorizedScope{{}, {Tenant: "tenant", Project: "missing"}, {Tenant: "other", Project: "project"}, {Tenant: "Tenant", Project: "project"}, {Tenant: " tenant", Project: "project"}} {

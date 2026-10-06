@@ -2,6 +2,10 @@ open Llm_temporal_models
 
 module Settings = struct
   type t = {
+    web_search : bool option;
+    web_fetch : bool option;
+    code_execution : bool option;
+    compaction_policy : Yojson.Safe.t option;
     service_class : service_class;
     service_class_fallbacks : service_class list;
     portability : portability;
@@ -23,12 +27,16 @@ module Settings = struct
       ?(tools = [])
       ?(tool_policy = { choice = Auto; parallel = false })
       ?output
+      ?web_search
+      ?web_fetch
+      ?code_execution
+      ?compaction_policy
       ?temperature
       ?reasoning_effort
       ?reasoning_summary
       ?(extensions = [])
       () =
-    { service_class; service_class_fallbacks; portability; instructions; tools;
+    { web_search; web_fetch; code_execution; compaction_policy = Option.map Llm_temporal_compaction_policy.to_json compaction_policy; service_class; service_class_fallbacks; portability; instructions; tools;
       tool_policy; output; temperature; reasoning_effort; reasoning_summary;
       extensions }
 
@@ -38,12 +46,19 @@ module Settings = struct
     type t = settings_patch
 
     let keep =
-      { model = Keep; service_class = Keep; service_class_fallbacks = Keep;
+      { web_fetch = Keep; code_execution = Keep; web_search = Keep; model = Keep; service_class = Keep; service_class_fallbacks = Keep;
         portability = Keep; instructions = Keep; tools = Keep;
         tool_policy = Keep; output = Keep; temperature = Keep;
         reasoning_effort = Keep; reasoning_summary = Keep;
         compaction_policy = Keep; extensions = Keep }
 
+    let set_web_fetch value (patch : t) = { patch with web_fetch = Set value }
+    let clear_web_fetch (patch : t) = { patch with web_fetch = Clear }
+    let set_code_execution value (patch : t) = { patch with code_execution = Set value }
+    let clear_code_execution (patch : t) = { patch with code_execution = Clear }
+    let set_web_search value (patch : t) = { patch with web_search = Set value }
+    let clear_web_search (patch : t) = { patch with web_search = Clear }
+    let set_compaction value (patch : t) = { patch with compaction_policy = Set (Llm_temporal_compaction_policy.to_json value) }
     let set_model value (patch : t) = { patch with model = (Set value : Model_selector.t patch) }
     let clear_model (patch : t) = { patch with model = Clear }
     let set_service_class value (patch : t) = { patch with service_class = (Set value : service_class patch) }
@@ -140,7 +155,7 @@ let fork conversation = conversation
 
 let patch_override (base : settings_patch) (override : settings_patch) : settings_patch =
   let choose left right = match right with Keep -> left | _ -> right in
-  { model = choose base.model override.model;
+  { web_fetch = choose base.web_fetch override.web_fetch; code_execution = choose base.code_execution override.code_execution; web_search = choose base.web_search override.web_search; model = choose base.model override.model;
     service_class = choose base.service_class override.service_class;
     service_class_fallbacks = choose base.service_class_fallbacks override.service_class_fallbacks;
     portability = choose base.portability override.portability;
@@ -156,7 +171,7 @@ let patch_override (base : settings_patch) (override : settings_patch) : setting
 
 let initial_patch conversation : settings_patch =
   let settings = conversation.settings in
-  { model = (match conversation.model with None -> Keep | Some value -> Set value);
+  { web_fetch = (match settings.web_fetch with None -> Keep | Some value -> Set value); code_execution = (match settings.code_execution with None -> Keep | Some value -> Set value); web_search = (match settings.web_search with None -> Keep | Some value -> Set value); model = (match conversation.model with None -> Keep | Some value -> Set value);
     service_class = Set settings.service_class;
     service_class_fallbacks = Set settings.service_class_fallbacks;
     portability = Set settings.portability;
@@ -167,7 +182,7 @@ let initial_patch conversation : settings_patch =
     temperature = (match settings.temperature with None -> Keep | Some value -> Set value);
     reasoning_effort = (match settings.reasoning_effort with None -> Keep | Some value -> Set value);
     reasoning_summary = (match settings.reasoning_summary with None -> Keep | Some value -> Set value);
-    compaction_policy = Keep;
+    compaction_policy = (match settings.compaction_policy with None -> Keep | Some value -> Set value);
     extensions = Set settings.extensions }
 
 let restore_patch conversation : settings_patch =
@@ -190,7 +205,7 @@ let restore_patch_override (base : settings_patch) (override : settings_patch) :
 let apply_patch (settings : Settings.t) (patch : settings_patch) =
   let value_or ~cleared current = function Keep -> current | Set value -> value | Clear -> cleared in
   let option_or current = function Keep -> current | Set value -> Some value | Clear -> None in
-  ({ service_class = value_or ~cleared:Standard settings.service_class patch.service_class;
+  ({ web_fetch = option_or settings.web_fetch patch.web_fetch; code_execution = option_or settings.code_execution patch.code_execution; web_search = option_or settings.web_search patch.web_search; compaction_policy = option_or settings.compaction_policy patch.compaction_policy; service_class = value_or ~cleared:Standard settings.service_class patch.service_class;
     service_class_fallbacks = value_or ~cleared:[] settings.service_class_fallbacks patch.service_class_fallbacks;
     portability = value_or ~cleared:Strict settings.portability patch.portability;
     instructions = value_or ~cleared:[] settings.instructions patch.instructions;

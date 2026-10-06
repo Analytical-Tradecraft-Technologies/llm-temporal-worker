@@ -714,3 +714,57 @@ func TestCloudExecutionRecoversPlanAdmittedUnderPinnedPriceVersion(t *testing.T)
 		t.Fatal("unpinned identity has no pinned form")
 	}
 }
+
+// The endpoint digest is what lets dispatched work outlive a reload, so it
+// must ignore unrelated settings and follow the endpoint's own configuration.
+func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T) {
+	configData, err := os.ReadFile("../../deploy/local/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	base := string(configData)
+	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
+		data, err := os.ReadFile("../../deploy/local/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		base = strings.ReplaceAll(base, "/etc/llmtw/"+name, path)
+	}
+	load := func(old, replacement string) (routing.Route, [32]byte) {
+		t.Helper()
+		if !strings.Contains(base+"\x00", old) {
+			t.Fatalf("local configuration no longer contains %q", old)
+		}
+		compiled, err := config.Compile(context.Background(), []byte(strings.Replace(base, old, replacement, 1)), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC) }}).Load(context.Background(), compiled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loaded.Routes.Models["demo-model"].Routes[0], loaded.ConfigDigest
+	}
+	original, originalConfig := load("\n", "\n")
+	unrelated, unrelatedConfig := load("shutdown_timeout: 45s", "shutdown_timeout: 44s")
+	moved, _ := load("base_url: https://provider-mock:8081/v1", "base_url: https://provider-mock:8081/v2")
+	hosts, _ := load("outbound_hosts: [provider-mock]", "outbound_hosts: [provider-mock, provider-mirror]")
+	reorderedHosts, _ := load("outbound_hosts: [provider-mock]", "outbound_hosts: [provider-mirror, provider-mock]")
+	if original.EndpointDigest == ([32]byte{}) {
+		t.Fatal("route has no endpoint digest")
+	}
+	if unrelatedConfig == originalConfig || unrelated.EndpointDigest != original.EndpointDigest {
+		t.Fatal("an unrelated setting changed the endpoint digest")
+	}
+	if moved.EndpointDigest == original.EndpointDigest {
+		t.Fatal("a moved endpoint kept its digest")
+	}
+	if hosts.EndpointDigest == original.EndpointDigest || hosts.EndpointDigest != reorderedHosts.EndpointDigest {
+		t.Fatal("outbound hosts must change the digest as a set, not as a list")
+	}
+}

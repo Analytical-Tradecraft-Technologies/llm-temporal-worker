@@ -56,11 +56,15 @@ workflow composition, retries, cache and compaction with deterministic adapters;
 local service gates distinguish real Temporal/Redis from in-memory cloud stores.
 
 Configuration reloads do not prevent finalization of a saved terminal provider
-result. Pending provider work and new budget admission require the original
-configuration digest; an incompatible worker returns a retryable state-unavailable
-error. Restore compatible settings to resume that work without resubmission.
-Route-specific compatibility across different configuration digests remains
-tracked in [#958](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/958).
+result. An attempt that has already reached its provider is also polled or
+recovered under a different configuration digest when its route and its
+endpoint's own configuration are unchanged; it is never submitted again. If
+either changed, and for work that still needs planning, budget admission or a
+replacement attempt, an incompatible worker returns a retryable
+state-unavailable error. Restore compatible settings to resume that work without
+resubmission. Planning and admitting not-yet-dispatched work under a changed
+configuration remains tracked in
+[#958](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/958).
 
 ## Separate or deferred capabilities
 

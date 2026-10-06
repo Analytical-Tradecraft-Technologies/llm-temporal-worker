@@ -116,10 +116,14 @@ saved input using its internal request identifier. The identifier is a locator,
 not authorization. Recovery does not reopen an expired parent. Completed
 operation replay needs neither the preparation nor the parent. A different
 configuration digest does not prevent restoring saved input or completing a
-saved terminal provider result. Work that still needs provider routing or new
-budget admission returns a retryable state-unavailable error until a worker with
-the original compatible configuration handles it. This prevents both silent
-rerouting and permanent workflow failure during a rollout or rollback. Publication's parent metadata
+saved terminal provider result. An attempt that may already have reached its
+provider is polled or recovered, never resubmitted, when
+[recovery](cloud-provider-recovery.md) finds its route and endpoint
+configuration unchanged. Work that still needs provider routing, new budget
+admission or a replacement attempt returns a retryable state-unavailable error
+until a worker with the original compatible configuration handles it. This
+prevents both silent rerouting and permanent workflow failure during a rollout
+or rollback. Publication's parent metadata
 must remain available until outstanding requests have finished.
 
 The bounded cloud runtime composes this boundary, and worker startup registers

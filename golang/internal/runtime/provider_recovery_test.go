@@ -205,8 +205,7 @@ func TestProviderRecoveryDoesNotSelectNewRouteOrFallBack(t *testing.T) {
 func TestProviderRecoveryRejectsChangedBindingsBeforeAdapterLookup(t *testing.T) {
 	mutations := map[string]func(*ProviderRecoveryBinding){
 		"zero config": func(b *ProviderRecoveryBinding) { b.ConfigDigest = [32]byte{} },
-		"config":      func(b *ProviderRecoveryBinding) { b.ConfigDigest[0]++ }, "epoch": func(b *ProviderRecoveryBinding) { b.ConfigEpoch = "other" },
-		"request": func(b *ProviderRecoveryBinding) { b.RequestDigest[0]++ }, "operation key": func(b *ProviderRecoveryBinding) { b.OperationKeyDigest[0]++ },
+		"request":     func(b *ProviderRecoveryBinding) { b.RequestDigest[0]++ }, "operation key": func(b *ProviderRecoveryBinding) { b.OperationKeyDigest[0]++ },
 		"candidate": func(b *ProviderRecoveryBinding) { b.CandidateID = "other" }, "family": func(b *ProviderRecoveryBinding) { b.Family = string(provider.FamilyOpenAIChat) },
 		"capability": func(b *ProviderRecoveryBinding) { b.CapabilityVersion = "other" }, "tier": func(b *ProviderRecoveryBinding) { b.ProviderTier = "other" },
 		"requested class": func(b *ProviderRecoveryBinding) { b.RequestedClass = llm.ServiceClassStandard },
@@ -232,6 +231,32 @@ func TestProviderRecoveryRejectsChangedBindingsBeforeAdapterLookup(t *testing.T)
 			mutate(&binding)
 			_, err = recovery.Generate(context.Background(), prepared, binding)
 			assertRecoveryError(t, err, provider.CodeConfiguration, provider.RetryNever)
+		})
+	}
+	// A binding from another configuration is not invalid: it waits for a
+	// compatible worker unless its endpoint identity proves nothing changed.
+	for name, mutate := range map[string]func(*ProviderRecoveryBinding){
+		"config": func(b *ProviderRecoveryBinding) { b.ConfigDigest[0]++ }, "epoch": func(b *ProviderRecoveryBinding) { b.ConfigEpoch = "other" },
+		"config and endpoint": func(b *ProviderRecoveryBinding) { b.ConfigDigest[0]++; b.EndpointDigest = [32]byte{9} },
+		"config and route": func(b *ProviderRecoveryBinding) {
+			b.ConfigDigest[0]++
+			b.EndpointDigest = [32]byte{9}
+			b.Route.RouteID = "other"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			capabilities, _, _, prepared, _, binding := recoveryFixture(t)
+			capabilities.Adapters = planningRegistryFunc(func(context.Context, routing.Candidate) (provider.Adapter, error) {
+				t.Fatal("incompatible recovery reached adapter lookup")
+				return nil, nil
+			})
+			recovery, err := capabilities.NewProviderRecovery(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(&binding)
+			_, err = recovery.Generate(context.Background(), prepared, binding)
+			assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 		})
 	}
 }
@@ -320,7 +345,7 @@ func TestProviderRecoveryCapturesSnapshotAndHonorsHealthBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = reloaded.Generate(context.Background(), prepared, binding)
-	assertRecoveryError(t, err, provider.CodeConfiguration, provider.RetryNever)
+	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 }
 
 func TestProviderRecoveryPreservesResolvedQuoteVersionWithoutPricing(t *testing.T) {

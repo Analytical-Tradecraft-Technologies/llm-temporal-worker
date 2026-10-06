@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -41,5 +42,34 @@ func TestPriceExecutionResponseDoesNotPromoteProviderCostOnUnpricedPlans(t *test
 	priceExecutionResponse(settlementPricingPlan(false), &response)
 	if response.Cost.Status != llm.CostStatusKnown || response.Cost.Method != string(pricing.CostProviderReported) {
 		t.Fatalf("priced provider cost = %#v, want provider_reported", response.Cost)
+	}
+}
+
+func TestHostedToolsSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		raw      map[string]json.RawMessage
+		reported *pricing.USD
+		unknown  bool
+		total    string
+	}{
+		{name: "search fee", raw: map[string]json.RawMessage{"web_search_calls": json.RawMessage("2")}, total: "0.0200200001"},
+		{name: "execution duration unknown", raw: map[string]json.RawMessage{"hosted_execution_used": json.RawMessage("true")}, unknown: true},
+		{name: "provider total already includes tools", raw: map[string]json.RawMessage{"web_search_calls": json.RawMessage("2")}, reported: func() *pricing.USD { v := pricing.MustUSD("0.5"); return &v }(), total: "0.5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := llm.Response{Usage: llm.Usage{InputTokens: 10, OutputTokens: 5, ProviderRaw: tc.raw}, Cost: llm.Cost{ActualCostUSD: tc.reported}}
+			priceExecutionResponse(settlementPricingPlan(false), &response)
+			if tc.unknown {
+				if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ActualCostUSD != nil {
+					t.Fatalf("cost = %#v", response.Cost)
+				}
+				return
+			}
+			want := pricing.MustUSD(tc.total)
+			if response.Cost.Status != llm.CostStatusKnown || response.Cost.ActualCostUSD == nil || response.Cost.ActualCostUSD.Cmp(want) != 0 {
+				t.Fatalf("cost = %#v, want %s", response.Cost, tc.total)
+			}
+		})
 	}
 }

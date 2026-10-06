@@ -76,6 +76,28 @@ func NewLogger(options LogOptions) (*Logger, error) {
 	return &Logger{logger: slog.New(handler)}, nil
 }
 
+type loggerContextKey struct{}
+
+// WithLogger binds the process logger to a request context. A nil logger is
+// bound too, so a caller can silence a step whose failure is expected.
+func WithLogger(ctx context.Context, logger *Logger) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, loggerContextKey{}, logger)
+}
+
+// LoggerFromContext returns the bound logger, or nil when there is none.
+// Every Logger method accepts a nil receiver.
+func LoggerFromContext(ctx context.Context) *Logger {
+	if ctx != nil {
+		if logger, ok := ctx.Value(loggerContextKey{}).(*Logger); ok {
+			return logger
+		}
+	}
+	return nil
+}
+
 func (logger *Logger) Enabled(ctx context.Context, level slog.Level) bool {
 	return logger != nil && logger.logger != nil && logger.logger.Enabled(ctx, level)
 }

@@ -89,7 +89,7 @@ const queryCursorKeyDomain = "llmtw:query-cursor:v1"
 // trustedTemporalQueryBuilder exposes the persisted control queries under the
 // trusted-Temporal policy: a caller may query exactly the tenant/project pairs
 // it may generate for. Cursors are signed with a key derived from the primary
-// continuation handle key. Query families without a configured reader stay
+// continuation handle key and the configuration snapshot digest. Query families without a configured reader stay
 // explicitly unsupported.
 func trustedTemporalQueryBuilder(factory *ProductionEngineFactory, value config.Config) QueryServiceBuilder {
 	allowed := make(map[config.AuthorizedScope]struct{})
@@ -114,6 +114,10 @@ func trustedTemporalQueryBuilder(factory *ProductionEngineFactory, value config.
 		}
 		mac := hmac.New(sha256.New, primary)
 		mac.Write([]byte(queryCursorKeyDomain))
+		// Bind cursors to this snapshot so a reload fails closed instead of
+		// resuming a page position computed under another configuration.
+		digest := snapshot.Digest()
+		mac.Write(digest[:])
 		builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
 			Authorize: func(ctx context.Context, request control.Authorization) error {
 				if ctx == nil {
@@ -174,6 +178,8 @@ func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, er
 			return scope, nil
 		},
 		CheckpointTTL: time.Duration(value.State.ContinuationRetention),
-		Limits:        state.MaterializeLimits{MaxDepth: int32(value.Limits.ContinuationDepth)},
+		// A lineage of the configured depth holds depth+1 rows. Deriving the row
+		// bound keeps a continuation_depth above the 512-row default effective.
+		Limits: state.MaterializeLimits{MaxDepth: int32(value.Limits.ContinuationDepth), MaxRows: value.Limits.ContinuationDepth + 1},
 	}, nil
 }

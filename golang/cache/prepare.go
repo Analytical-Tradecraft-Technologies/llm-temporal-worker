@@ -30,7 +30,7 @@ func Prepare(ctx context.Context, responses ResponseRepository, fills FillReposi
 	if err != nil || entry != nil {
 		return Preparation{Entry: entry}, err
 	}
-	decision, err := fills.Acquire(ctx, lease)
+	decision, err := fills.Acquire(ctx, lease, lookup.Now)
 	if err != nil {
 		return Preparation{}, err
 	}

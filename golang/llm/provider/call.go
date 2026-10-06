@@ -29,6 +29,9 @@ type Call struct {
 }
 
 type CallMetadata struct {
+	WebSearch           bool
+	WebFetch            bool
+	CodeExecution       bool
 	SchemaDigest        [32]byte
 	EstimatedBytes      int
 	CapabilityVersion   string

@@ -33,13 +33,13 @@ let _invoke_compact :
   Llm_temporal.invoke_compact_v1
 
 let _start_query :
-    task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t -> id:string ->
     query_envelope ->
     (query_response, Temporal.Error.t) Temporal.Future.t =
   Llm_temporal.start_query_v1
 
 let _invoke_query :
-    task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t -> id:string ->
     query_envelope -> (query_response, Temporal.Error.t) result =
   Llm_temporal.invoke_query_v1
 
@@ -62,12 +62,12 @@ let () =
     (Temporal.Workflow.name Llm_temporal.generate_v1_workflow);
   assert_equal "llm.compact.workflow.v1"
     (Temporal.Workflow.name Llm_temporal.compact_v1_workflow);
-  assert_equal "llm.query.v1"
-    (Temporal.Activity.name Llm_temporal.query_v1_activity);
+  assert_equal "llm.query.workflow.v1"
+    (Temporal.Workflow.name Llm_temporal.query_v1_workflow);
   if Option.is_some (Temporal.Workflow.implementation Llm_temporal.generate_v1_workflow)
   then failwith "Generate descriptor unexpectedly contains an OCaml implementation";
   if Option.is_some (Temporal.Workflow.implementation Llm_temporal.compact_v1_workflow)
   then failwith "Compact descriptor unexpectedly contains an OCaml implementation";
-  if Option.is_some (Temporal.Activity.implementation Llm_temporal.query_v1_activity)
+  if Option.is_some (Temporal.Workflow.implementation Llm_temporal.query_v1_workflow)
   then failwith "Query descriptor unexpectedly contains an OCaml implementation";
   print_endline "v1 workflow and Query descriptor tests passed"

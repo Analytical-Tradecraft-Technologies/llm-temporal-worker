@@ -134,7 +134,7 @@ func TestLiftMapsTerminalReasonsAndRejectsUnknownTier(t *testing.T) {
 		{reason: "end_turn", want: llm.ResponseStatusCompleted},
 		{reason: "stop_sequence", want: llm.ResponseStatusCompleted},
 		{reason: "max_tokens", want: llm.ResponseStatusLength},
-		{reason: "pause_turn", want: llm.ResponseStatusCompleted},
+		{reason: "pause_turn", want: llm.ResponseStatusPaused},
 		{reason: "refusal", want: llm.ResponseStatusRefused},
 	} {
 		response := anthropic.Message{ID: "status-" + test.reason, Model: "claude-contract", StopReason: anthropic.StopReason(test.reason), Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTierStandard}}
