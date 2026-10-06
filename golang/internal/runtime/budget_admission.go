@@ -117,6 +117,7 @@ func (admission *BudgetAdmission) reserve(ctx context.Context, route durable.Rou
 		// identical admission is safe; releasing it or changing the quote is not.
 		return durable.ReserveResult{}, budgetAdmissionError(code, provider.DispatchNotDispatched, retry)
 	}
+	recordCloudBudgetAdmission(ctx, request, reservation.Result)
 	return reservation.Result, nil
 }
 

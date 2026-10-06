@@ -135,6 +135,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	var outcome provider.ResumableResult
+	started := time.Now()
 	if resumable, ok := call.provider.Adapter.(provider.ResumableAdapter); ok {
 		outcome, err = resumable.Submit(callCtx, call.provider.Call, observer)
 	} else {
@@ -175,7 +176,11 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		copy.Retry = provider.RetryNever
 		err = &copy
 	}
+	elapsed := time.Since(started)
 	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider, call.transcript, outcome, err, false)
+	if observer.marked {
+		recordCloudProviderAttempt(ctx, call.provider.Call, result.Saved.Execution.Stage, elapsed)
+	}
 	if err != nil && observer.saveErr != nil {
 		return ProviderExecutionResult{}, cloudRuntimeError(observer.saveErr, true)
 	}
@@ -419,6 +424,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 	if err != nil {
 		return result, err
 	}
+	recordCloudExecutionOutcome(ctx, planned.Call, saved.Execution.Stage, result.Saved.Execution)
 	return executor.settle(ctx, scope, id, result.Saved)
 }
 

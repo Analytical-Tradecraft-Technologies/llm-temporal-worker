@@ -262,7 +262,21 @@ and process-lifetime rejections, the `config_field` schema path; see the
 
 ## Required metrics
 
-Metric labels use bounded configured IDs, never tenant-provided free text:
+Metric labels use bounded configured IDs, never tenant-provided free text.
+
+On the durable v1 path (the production CLI), the worker emits the Activity,
+reload, polling and heartbeat series, plus `llmtw_provider_attempt_total`,
+`llmtw_provider_duration_seconds`, `llmtw_service_class_actual_total`,
+`llmtw_budget_admission_total`, `llmtw_cost_usd_total`,
+`llmtw_cost_status_total`, and `llmtw_ambiguous_total`. A provider attempt is
+counted once, when its submission returns. A budget admission is counted once
+per acquire decision and policy, so a request waiting for capacity contributes
+one `denied` per retry. `llmtw_operation_state_total`,
+`llmtw_continuation_total`, the maintenance series, `llmtw_cache_events_total`,
+and `llmtw_provider_poll_total` are emitted only by the legacy engine Activity
+that memory mode runs; on the durable path they stay at zero.
+
+The series are:
 
 - `llmtw_activity_total{status,error_class}`;
 - `llmtw_activity_failure_total{origin}` where Activity classification emits
@@ -307,9 +321,10 @@ unknown-cost/price conditions.
 Dashboards must not reconstruct actual spend by treating an unknown observation
 as zero.
 
-Redis budget telemetry remains deliberately separate from money accounting:
-it exposes bounded counts, denials, reservation age, generation/Stream lag, and
-failure status. Exact amounts remain in storage. The cloud runtime does not
+Redis budget telemetry remains deliberately separate from money accounting.
+Budget denials are counted by `llmtw_budget_admission_total`; reservation age,
+generation/Stream lag, and Redis failure status have no Prometheus series yet,
+and Redis failures surface through readiness. Exact amounts remain in storage. The cloud runtime does not
 currently supply the optional historical spend-query reader, so operators must
 not treat these counters as a supported spend-reporting API.
 
@@ -361,7 +376,9 @@ status, and safe error code. Prompt/output/tool content, continuation handles,
 authorization, provider-state bytes, and raw provider bodies are denied fields.
 
 Tracing spans cover normalization, state load, planning, admission, each
-provider attempt, finalization, and continuation write. When tracing is
+provider attempt, finalization, and continuation write in the legacy engine
+Activity that memory mode runs. The durable v1 path does not yet create
+request spans, so `telemetry.tracing.enabled` exports none there. When tracing is
 enabled, runtime constructs the configured OTLP/gRPC exporter with its secure
 transport default and applies the configured sample ratio; exporter shutdown
 flushes within the worker shutdown deadline. Trace propagation to providers is
