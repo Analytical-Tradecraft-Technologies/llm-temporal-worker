@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
@@ -136,6 +137,7 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 		},
 		ReservedWireFields: map[string]struct{}{"provider": {}},
 		ResponseAugment:    augmentOpenRouter,
+		ResponseError:      openRouterResponseError,
 	})
 }
 
@@ -191,4 +193,78 @@ func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lift
 	}
 	_ = call
 	return nil
+}
+
+// openRouterResponseError maps the failures OpenRouter reports with HTTP 200:
+// a top-level error object when the upstream provider failed before
+// generating, and a choice whose finish_reason is "error" when it failed
+// mid-generation. The error code is the upstream HTTP status, so it goes
+// through the same status table as an HTTP error response. A top-level error
+// carries no generation and is classified like the HTTP error; a failed
+// choice may already have been billed, so it stays accepted and is never
+// retried automatically.
+func openRouterResponseError(call provider.Call, response *openai.ChatCompletion, requestID string) *provider.Error {
+	fields, err := rawResponseObject(response)
+	if err != nil {
+		return nil
+	}
+	if raw, ok := fields["error"]; ok && string(raw) != "null" {
+		return openRouterBodyError(call, requestID, raw, provider.PhaseDispatch, false)
+	}
+	var choices []map[string]json.RawMessage
+	if raw, ok := fields["choices"]; !ok || json.Unmarshal(raw, &choices) != nil {
+		return nil
+	}
+	for _, choice := range choices {
+		var finish string
+		if raw, ok := choice["finish_reason"]; ok {
+			_ = json.Unmarshal(raw, &finish)
+		}
+		raw, hasError := choice["error"]
+		if hasError && string(raw) == "null" {
+			hasError = false
+		}
+		if finish == "error" || hasError {
+			mapped := openRouterBodyError(call, requestID, raw, provider.PhaseLift, true)
+			mapped.Provider.ResponseID = response.ID
+			return mapped
+		}
+	}
+	return nil
+}
+
+func openRouterBodyError(call provider.Call, requestID string, raw json.RawMessage, phase provider.Phase, accepted bool) *provider.Error {
+	status := openRouterErrorStatus(raw)
+	code, retry, dispatch, safe := classifyStatus(status)
+	if accepted {
+		dispatch, retry, safe = provider.DispatchAccepted, provider.RetryNever, "provider failed during generation"
+	}
+	mapped := provider.NewError(code, phase, dispatch, retry, safe+" (reported in a successful response body)")
+	mapped.OperationID = call.OperationKey
+	mapped.Provider.RequestID = requestID
+	mapped.SafeDetails = map[string]string{"provider": "openrouter", "status": strconv.Itoa(status)}
+	return mapped
+}
+
+// openRouterErrorStatus reads the upstream HTTP status from an OpenRouter
+// error object. A missing or non-status code is treated as an upstream
+// failure (502).
+func openRouterErrorStatus(raw json.RawMessage) int {
+	var body struct {
+		Code json.RawMessage `json:"code"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &body) != nil {
+		return http.StatusBadGateway
+	}
+	var number int
+	if json.Unmarshal(body.Code, &number) == nil && number >= 400 && number <= 599 {
+		return number
+	}
+	var text string
+	if json.Unmarshal(body.Code, &text) == nil {
+		if parsed, err := strconv.Atoi(text); err == nil && parsed >= 400 && parsed <= 599 {
+			return parsed
+		}
+	}
+	return http.StatusBadGateway
 }

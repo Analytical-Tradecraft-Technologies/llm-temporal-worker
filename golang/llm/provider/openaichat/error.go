@@ -56,6 +56,30 @@ func mapAPIError(apiErr *openai.Error, profileName string) *provider.Error {
 		return provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetrySameOperation, "provider request failed")
 	}
 	status := apiErr.StatusCode
+	code, retry, dispatch, safe := classifyStatus(status)
+	mapped := provider.NewError(code, provider.PhaseDispatch, dispatch, retry, safe)
+	mapped.Cause = apiErr
+	mapped.SafeDetails = map[string]string{"provider": profileName, "status": fmt.Sprintf("%d", status)}
+	if apiErr.Code != "" {
+		mapped.SafeDetails["provider_code"] = apiErr.Code
+	}
+	if retry == provider.RetryAfter && apiErr.Response != nil {
+		if retryAfter := apiErr.Response.Header.Get("retry-after"); retryAfter != "" {
+			mapped.SafeDetails["retry_after"] = retryAfter
+			if retryDelay, ok := provider.ParseRetryAfter(retryAfter, time.Now()); ok {
+				mapped.RetryAfter = retryDelay
+			}
+		}
+	}
+	if apiErr.Response != nil {
+		mapped.Provider.RequestID = apiErr.Response.Header.Get("x-request-id")
+	}
+	return mapped
+}
+
+// classifyStatus is the provider status table shared by HTTP error responses
+// and by errors a profile finds inside a successful response body.
+func classifyStatus(status int) (provider.Code, provider.RetryDisposition, provider.DispatchCertainty, string) {
 	code := provider.CodeProviderUnavailable
 	retry := provider.RetrySameOperation
 	dispatch := provider.DispatchRejected
@@ -78,22 +102,5 @@ func mapAPIError(apiErr *openai.Error, profileName string) *provider.Error {
 			code, retry, safe = provider.CodeInvalidArgument, provider.RetryNever, "provider rejected the request"
 		}
 	}
-	mapped := provider.NewError(code, provider.PhaseDispatch, dispatch, retry, safe)
-	mapped.Cause = apiErr
-	mapped.SafeDetails = map[string]string{"provider": profileName, "status": fmt.Sprintf("%d", status)}
-	if apiErr.Code != "" {
-		mapped.SafeDetails["provider_code"] = apiErr.Code
-	}
-	if retry == provider.RetryAfter && apiErr.Response != nil {
-		if retryAfter := apiErr.Response.Header.Get("retry-after"); retryAfter != "" {
-			mapped.SafeDetails["retry_after"] = retryAfter
-			if retryDelay, ok := provider.ParseRetryAfter(retryAfter, time.Now()); ok {
-				mapped.RetryAfter = retryDelay
-			}
-		}
-	}
-	if apiErr.Response != nil {
-		mapped.Provider.RequestID = apiErr.Response.Header.Get("x-request-id")
-	}
-	return mapped
+	return code, retry, dispatch, safe
 }
