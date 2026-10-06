@@ -148,10 +148,10 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		}
 	}
 	if input.Strict && adapter.profile.applicationInstructionRole() == "system" && mixedInstructionLevels(normalized.Instructions) {
-		return provider.Call{}, compileError("instruction hierarchy cannot be preserved when application instructions also use the system role in strict portability mode")
+		return provider.Call{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved when application instructions also use the system role in strict portability mode")
 	}
 	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
-		return provider.Call{}, compileError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
+		return provider.Call{}, provider.NewStrictPortabilityError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
 	}
 	params, err := lowerRequest(normalized, adapter.profile, providerTier)
 	if err != nil {

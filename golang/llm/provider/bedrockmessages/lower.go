@@ -24,7 +24,7 @@ func lowerRequest(request llm.Request, profile Profile) (anthropic.MessageNewPar
 
 func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (anthropic.MessageNewParams, error) {
 	if strict && hasMixedInstructionLevels(request.Instructions) {
-		return anthropic.MessageNewParams{}, fmt.Errorf("instruction hierarchy cannot be preserved by Bedrock Messages in strict portability mode")
+		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Messages in strict portability mode")
 	}
 	messages := make([]any, 0, len(request.Input)+1)
 	if err := appendContinuationStates(&messages, request.Continuation, profile); err != nil {

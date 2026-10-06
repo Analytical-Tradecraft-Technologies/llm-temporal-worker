@@ -147,6 +147,14 @@ func NewError(code Code, phase Phase, dispatch DispatchCertainty, retry RetryDis
 	return &Error{Code: code, Phase: phase, Dispatch: dispatch, Retry: retry, SafeMessage: message}
 }
 
+// NewStrictPortabilityError reports a request a route cannot represent
+// losslessly in strict portability mode. It is unsupported_capability, as the
+// portability contract documents, not invalid_argument: the input is valid,
+// this route just cannot carry it.
+func NewStrictPortabilityError(message string) *Error {
+	return NewError(CodeUnsupportedCapability, PhaseCompile, DispatchNotDispatched, RetryNever, message)
+}
+
 // NewEgressDeniedError converts a provider egress preflight denial into the
 // common error contract. The cause remains available for local diagnostics but
 // is never serialized to callers.

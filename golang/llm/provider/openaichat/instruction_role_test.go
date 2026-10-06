@@ -113,7 +113,7 @@ func TestStrictCompileRejectsMixedLevelsWhenApplicationUsesSystemRole(t *testing
 		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "application"},
 	}}
 	query := provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}
-	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: true}); err == nil || !strings.Contains(err.Error(), "instruction hierarchy") {
+	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: true}); err == nil || !strings.Contains(err.Error(), "instruction hierarchy") || !isUnsupportedCapability(err) {
 		t.Fatalf("strict mixed-level compile error = %v", err)
 	}
 	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: false}); err != nil {

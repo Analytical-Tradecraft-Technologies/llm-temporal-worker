@@ -119,7 +119,7 @@ func TestCompileStrictRejectsMixedInstructionLevels(t *testing.T) {
 	if !errors.As(err, &mapped) {
 		t.Fatalf("compile error = %T %v, want provider error", err, err)
 	}
-	if mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(mapped.SafeMessage, "instruction hierarchy") {
+	if mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(mapped.SafeMessage, "instruction hierarchy") {
 		t.Fatalf("compile error = %#v, want strict instruction hierarchy rejection", mapped)
 	}
 }

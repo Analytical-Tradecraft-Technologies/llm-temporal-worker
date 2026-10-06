@@ -11,11 +11,12 @@ import (
 	smithydocumentjson "github.com/aws/smithy-go/document/json"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string, strict bool) (bedrockruntime.ConverseInput, error) {
 	if strict && hasMixedInstructionLevels(request.Instructions) {
-		return bedrockruntime.ConverseInput{}, fmt.Errorf("instruction hierarchy cannot be preserved by Bedrock Converse in strict portability mode")
+		return bedrockruntime.ConverseInput{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Converse in strict portability mode")
 	}
 	if request.Output != nil && (request.Output.Format.Kind == llm.OutputKindJSON || request.Output.Format.Kind == llm.OutputKindJSONSchema) {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("structured output is not implemented by the Bedrock Converse adapter")

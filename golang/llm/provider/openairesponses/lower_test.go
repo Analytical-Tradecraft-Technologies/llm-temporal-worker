@@ -313,7 +313,7 @@ func TestCompileStrictRejectsSuccessfulToolResultWithReservedPrefix(t *testing.T
 			Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 			Strict: strict,
 		})
-		if strict && (err == nil || !strings.Contains(err.Error(), "reserved tool-error prefix")) {
+		if strict && (err == nil || !strings.Contains(err.Error(), "reserved tool-error prefix") || !isUnsupportedCapability(err)) {
 			t.Fatalf("strict error = %v", err)
 		}
 		if !strict && err != nil {
