@@ -3,6 +3,7 @@ package cloudstate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -166,7 +167,7 @@ func TestRegionalOpenSurvivesPrimaryFailureAndRevalidatesMRSC(t *testing.T) {
 	settings := Config{Provider: map[string]any{
 		"type": "aws", "aws": map[string]any{"region": "region-primary", "allow_mrsc": true, "failover": map[string]any{
 			"dynamodb_regions": []string{"region-fallback-a", "region-fallback-b"}, "payload_replicas": []map[string]any{{"region": "region-fallback-a", "bucket": "payloads-replica"}}, "attempt_timeout": "1s"}},
-		"key_value_stores": map[string]any{"requests": "physical-table"}, "blob_stores": map[string]any{"payloads": "payloads-east"}}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}
+		"key_value_stores": map[string]string{"requests": "physical-table"}, "blob_stores": map[string]string{"payloads": "payloads-primary"}}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}
 	initialize := func(_ context.Context, value map[string]any) (provider.StorageProvider, error) {
 		aws := value["aws"].(map[string]any)
 		if aws["failover"] != nil {
@@ -200,5 +201,64 @@ func TestRegionalOpenSurvivesPrimaryFailureAndRevalidatesMRSC(t *testing.T) {
 	eventual.Store(true)
 	if err := repo.Probe(ctx); !errors.Is(err, contracts.ErrUnsupported) {
 		t.Fatalf("MRSC validation skipped during readiness: %v", err)
+	}
+}
+
+func TestRegionalPayloadHandlesCachedButProbesRevalidate(t *testing.T) {
+	ctx := context.Background()
+	backend := &memoryBlobs{values: map[blob.BlobKey][]byte{}}
+	opens := 0
+	fail := false
+	routed := &regionalBlobs{router: regional.Router{Count: 1, Timeout: time.Second}, open: func(context.Context, int) (blob.BlobStore, error) {
+		opens++
+		if fail {
+			return nil, contracts.ErrUnavailable
+		}
+		return backend, nil
+	}}
+	fail = true
+	if err := routed.Create(ctx, "key", strings.NewReader("payload"), 7); !errors.Is(err, contracts.ErrUnavailable) {
+		t.Fatalf("failed initialization: %v", err)
+	}
+	fail = false
+	if err := routed.Create(ctx, "key", strings.NewReader("payload"), 7); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := routed.Open(ctx, "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened.Body.Close()
+	if err := routed.ProbeRead(ctx, "absent-readiness-key"); err != nil {
+		t.Fatal(err)
+	}
+	if opens != 2 {
+		t.Fatalf("operations reopened cached handle: %d opens", opens)
+	}
+	fail = true
+	if err := routed.probe(ctx); !errors.Is(err, contracts.ErrUnavailable) || opens != 3 {
+		t.Fatalf("probe skipped fresh validation: opens=%d err=%v", opens, err)
+	}
+}
+
+func TestRegionalOpenRejectsMalformedProviderMaps(t *testing.T) {
+	for _, field := range []string{"key_value_stores", "blob_stores"} {
+		for _, value := range []any{nil, "invalid", []string{"invalid"}, map[string]any{}, map[string]any{"requests": 42, "payloads": 42}, map[string]any{"requests": "", "payloads": ""}} {
+			t.Run(field+"/"+fmt.Sprintf("%v", value), func(t *testing.T) {
+				settings := Config{Provider: map[string]any{
+					"type": "aws", "aws": map[string]any{"region": "region-primary", "allow_mrsc": true, "failover": map[string]any{
+						"dynamodb_regions": []string{"region-fallback"}, "payload_replicas": []map[string]any{{"region": "region-fallback", "bucket": "replica"}}, "attempt_timeout": "1s"}},
+					"key_value_stores": map[string]any{"requests": "table"}, "blob_stores": map[string]any{"payloads": "bucket"}}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}
+				settings.Provider[field] = value
+				called := false
+				_, err := open(context.Background(), settings, make([]byte, 32), func(context.Context, map[string]any) (provider.StorageProvider, error) {
+					called = true
+					return nil, errors.New("unexpected initialization")
+				})
+				if !errors.Is(err, ErrInvalid) || called {
+					t.Fatalf("malformed map reached initializer: called=%v err=%v", called, err)
+				}
+			})
+		}
 	}
 }

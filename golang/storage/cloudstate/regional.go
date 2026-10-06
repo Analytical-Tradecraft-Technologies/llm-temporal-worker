@@ -152,6 +152,31 @@ func (s *regionalTable) probe(ctx context.Context) error {
 type regionalBlobs struct {
 	router regional.Router
 	open   func(context.Context, int) (blob.BlobStore, error)
+	mu     sync.Mutex
+	stores map[int]blob.BlobStore
+}
+
+func (s *regionalBlobs) store(ctx context.Context, i int) (blob.BlobStore, error) {
+	s.mu.Lock()
+	store := s.stores[i]
+	s.mu.Unlock()
+	if !nilInterface(store) {
+		return store, nil
+	}
+	store, err := s.open(ctx, i)
+	if err != nil {
+		return nil, err
+	}
+	if nilInterface(store) {
+		return nil, ErrInvalid
+	}
+	s.mu.Lock()
+	if s.stores == nil {
+		s.stores = make(map[int]blob.BlobStore)
+	}
+	s.stores[i] = store
+	s.mu.Unlock()
+	return store, nil
 }
 
 func (s *regionalBlobs) Create(ctx context.Context, key blob.BlobKey, body io.Reader, size int64) error {
@@ -167,7 +192,7 @@ func (s *regionalBlobs) Create(ctx context.Context, key blob.BlobKey, body io.Re
 		return contracts.ErrInvalidArgument
 	}
 	_, err = regional.Run(ctx, &s.router, regional.RetryMutation, func(ctx context.Context, i int) (struct{}, error) {
-		store, err := s.open(ctx, i)
+		store, err := s.store(ctx, i)
 		if err != nil {
 			return struct{}{}, err
 		}
@@ -179,7 +204,7 @@ func (s *regionalBlobs) Open(ctx context.Context, key blob.BlobKey) (blob.BlobRe
 	// Consume each stream within its attempt deadline. No partially read body or
 	// canceled stream escapes; repository decryption still verifies integrity.
 	return regional.Run(ctx, &s.router, func(err error) bool { return regional.Unavailable(err) || regional.Missing(err) }, func(ctx context.Context, i int) (blob.BlobReadResult, error) {
-		store, err := s.open(ctx, i)
+		store, err := s.store(ctx, i)
 		if err != nil {
 			return blob.BlobReadResult{}, err
 		}
@@ -220,7 +245,37 @@ func openRegional(ctx context.Context, c Config, secret []byte, initialize func(
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	awsValues := c.Provider["aws"].(map[string]any)
+	// Normalize generic provider maps before inspecting them. External callers may
+	// supply typed maps; malformed documents must return errors rather than panic.
+	data, err := json.Marshal(c.Provider)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	var values map[string]any
+	if json.Unmarshal(data, &values) != nil {
+		return nil, ErrInvalid
+	}
+	awsValues, ok := values["aws"].(map[string]any)
+	if !ok {
+		return nil, ErrInvalid
+	}
+	tables, ok := values["key_value_stores"].(map[string]any)
+	if !ok {
+		return nil, ErrInvalid
+	}
+	physical, ok := tables[c.RequestTable].(string)
+	if !ok || !safeText(physical, 256) {
+		return nil, ErrInvalid
+	}
+	payloads, ok := values["blob_stores"].(map[string]any)
+	if !ok {
+		return nil, ErrInvalid
+	}
+	primaryBucket, ok := payloads[c.PayloadStore].(string)
+	if !ok || !safeText(primaryBucket, 256) {
+		return nil, ErrInvalid
+	}
+	c.Provider = values
 	primary, _ := awsValues["region"].(string)
 	allow, _ := awsValues["allow_mrsc"].(bool)
 	profile, _ := awsValues["profile"].(string)
@@ -280,7 +335,6 @@ func openRegional(ctx context.Context, c Config, secret []byte, initialize func(
 			return nil, err
 		}
 		cfg.Retryer = func() aws.Retryer { return aws.NopRetryer{} }
-		physical, _ := c.Provider["key_value_stores"].(map[string]any)[c.RequestTable].(string)
 		result, err := dynamodb.NewFromConfig(cfg).DescribeTable(ctx, &dynamodb.DescribeTableInput{TableName: aws.String(physical)})
 		if err != nil {
 			return nil, err
@@ -297,7 +351,6 @@ func openRegional(ctx context.Context, c Config, secret []byte, initialize func(
 		}
 		return backend.OpenKeyValueStore(ctx, c.RequestTable)
 	}
-	primaryBucket, _ := c.Provider["blob_stores"].(map[string]any)[c.PayloadStore].(string)
 	buckets := append([]regionalBucket{{Region: primary, Bucket: primaryBucket}}, f.PayloadReplicas...)
 	blobs := &regionalBlobs{router: regional.Router{Count: len(buckets), Timeout: f.timeout}}
 	blobs.open = func(ctx context.Context, i int) (blob.BlobStore, error) {
@@ -352,7 +405,7 @@ func validateMRSCMembership(table *ddbtypes.TableDescription, regions []string, 
 // lookup, the deliberately absent readiness key need not exist in any replica.
 func (s *regionalBlobs) ProbeRead(ctx context.Context, key blob.BlobKey) error {
 	_, err := regional.Run(ctx, &s.router, regional.RetryRead, func(ctx context.Context, i int) (struct{}, error) {
-		store, err := s.open(ctx, i)
+		store, err := s.store(ctx, i)
 		if err != nil {
 			return struct{}{}, err
 		}
