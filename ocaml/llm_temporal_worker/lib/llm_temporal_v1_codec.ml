@@ -59,13 +59,34 @@ let nonnegative context value = if value < 0L then Error (errorf "%s must not be
 let option_field name encode = function None -> [] | Some value -> [name, encode value]
 let list context = function `List values -> Ok values | _ -> Error (errorf "%s must be an array" context)
 
+(* Linear-time duplicate-member check over a whole document: one hash set per
+   object, so a large open value cannot make the boundary check quadratic. *)
+let rec unique_json context = function
+  | `Assoc fields ->
+      let seen = Hashtbl.create (List.length fields) in
+      let rec check = function
+        | [] -> Ok ()
+        | (name, _) :: _ when Hashtbl.mem seen name -> Error (errorf "%s contains duplicate field %S" context name)
+        | (name, value) :: rest ->
+            Hashtbl.add seen name ();
+            (match unique_json context value with Error _ as error -> error | Ok () -> check rest)
+      in
+      check fields
+  | `List values ->
+      let rec check = function
+        | [] -> Ok ()
+        | value :: rest -> (match unique_json context value with Error _ as error -> error | Ok () -> check rest)
+      in
+      check values
+  | _ -> Ok ()
+
 (* Go rejects a duplicate member anywhere in a payload, including open JSON
    content, arguments, schemas and extensions, so the v1 boundary checks the
    whole document in both directions. *)
 let parse_json decoder bytes =
   try
     let value = Yojson.Safe.from_string (Bytes.to_string bytes) in
-    match Llm_temporal_codec.validate_unique_json "payload" value with
+    match unique_json "payload" value with
     | Error _ as error -> error
     | Ok () -> decoder value
   with
@@ -74,7 +95,7 @@ let parse_json decoder bytes =
   | Invalid_argument message -> Error (errorf "invalid JSON value: %s" message)
 
 let to_bytes value =
-  match Llm_temporal_codec.validate_unique_json "payload" value with
+  match unique_json "payload" value with
   | Error _ as error -> error
   | Ok () ->
   try Ok (Bytes.of_string (Yojson.Safe.to_string value)) with
