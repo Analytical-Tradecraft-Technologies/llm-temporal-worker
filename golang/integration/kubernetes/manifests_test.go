@@ -247,7 +247,7 @@ func TestBaseActivityConcurrencyFitsTheGoMemoryLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	activities := config.Temporal.Worker.MaxConcurrentActivities
-	if activities <= 0 || activities*perActivityHeapMiB > limitMiB {
-		t.Fatalf("max_concurrent_activities %d x %d MiB exceeds GOMEMLIMIT %d MiB", activities, perActivityHeapMiB, limitMiB)
+	if activities <= 0 || activities*perActivityHeapMiB >= limitMiB {
+		t.Fatalf("max_concurrent_activities %d x %d MiB must stay below GOMEMLIMIT %d MiB", activities, perActivityHeapMiB, limitMiB)
 	}
 }
