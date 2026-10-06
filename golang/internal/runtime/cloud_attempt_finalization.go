@@ -30,17 +30,57 @@ type CloudAttemptResult struct {
 // active child's immutable parent and terminal execution before projecting its
 // response to the public identity expected by checkpoint publication.
 func (f *CloudFinalizer) LoadAttemptResult(ctx context.Context, scope cloudstate.Scope, rootID cloudstate.RequestID) (CloudAttemptResult, error) {
+	return f.attemptResult(ctx, scope, rootID, nil)
+}
+
+// attemptResult is LoadAttemptResult with the root's preparation as this
+// step validated it, when known (see loadAttemptResult).
+func (f *CloudFinalizer) attemptResult(ctx context.Context, scope cloudstate.Scope, rootID cloudstate.RequestID, validated *cloudValidatedPreparation) (CloudAttemptResult, error) {
 	if f == nil || ctx == nil {
 		return CloudAttemptResult{}, cloudRuntimeError(cloudstate.ErrInvalid, false)
 	}
-	result, _, err := f.loadAttemptResult(ctx, scope, rootID)
+	result, _, err := f.loadAttemptResult(ctx, scope, rootID, validated)
 	if err != nil {
 		return CloudAttemptResult{}, cloudRuntimeError(err, false)
 	}
 	return result, nil
 }
 
-func (f *CloudFinalizer) loadAttemptResult(ctx context.Context, scope cloudstate.Scope, rootID cloudstate.RequestID) (CloudAttemptResult, string, error) {
+// cloudValidatedPreparation is a root request's preparation as the current
+// Activity step loaded and validated it, parent included. It lets a later
+// load of the same preparation in that step skip reading and decoding the
+// unchanged parent again (#1112). It is never kept beyond the step.
+type cloudValidatedPreparation struct {
+	scope       cloudstate.Scope
+	id          cloudstate.RequestID
+	preparation cloudstate.RequestPreparation
+}
+
+// validatedPreparation returns p's preparation when p was loaded from the
+// store, and validated, in this step, and nil otherwise.
+func (p PreparedCloudRequest) validatedPreparation() *cloudValidatedPreparation {
+	if !p.loaded {
+		return nil
+	}
+	return &cloudValidatedPreparation{scope: p.Record.Request.Scope, id: p.Record.Request.ID, preparation: p.Preparation}
+}
+
+// loadValidatedRequestPreparation is loadRequestPreparation of a preparation
+// this step may already have loaded and validated, known. The store still
+// reads and checks the record; only the unchanged, already verified parent
+// is not read or decoded again.
+func loadValidatedRequestPreparation(ctx context.Context, store interface {
+	LoadRequestPreparation(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestPreparation, error)
+}, scope cloudstate.Scope, id cloudstate.RequestID, known *cloudValidatedPreparation) (preparation cloudstate.RequestPreparation, validated bool, err error) {
+	var parent *cloudstate.KnownParent
+	if known != nil && known.scope == scope && known.id == id && len(known.preparation.ParentSnapshot) != 0 {
+		parent = &cloudstate.KnownParent{Snapshot: known.preparation.ParentSnapshot, Verified: true}
+	}
+	preparation, _, validated, err = loadRequestPreparation(ctx, store, scope, id, parent)
+	return preparation, validated, err
+}
+
+func (f *CloudFinalizer) loadAttemptResult(ctx context.Context, scope cloudstate.Scope, rootID cloudstate.RequestID, known *cloudValidatedPreparation) (CloudAttemptResult, string, error) {
 	var zero CloudAttemptResult
 	store, ok := f.requests.(cloudAttemptResultStore)
 	if !ok || isNilCapability(store) {
@@ -70,7 +110,7 @@ func (f *CloudFinalizer) loadAttemptResult(ctx context.Context, scope cloudstate
 	if err != nil {
 		return zero, "", err
 	}
-	preparation, _, validated, err := loadRequestPreparation(ctx, store, scope, rootID)
+	preparation, validated, err := loadValidatedRequestPreparation(ctx, store, scope, rootID, known)
 	if err != nil {
 		return zero, "", err
 	}
@@ -103,12 +143,14 @@ func (f *CloudFinalizer) loadAttemptResult(ctx context.Context, scope cloudstate
 	return CloudAttemptResult{CheckpointScope: preparation.CheckpointScope, Attempt: attempt, Saved: saved, Response: response}, root.Request.Kind, nil
 }
 
-func (f *CloudFinalizer) verifyProviderFinalization(ctx context.Context, scope cloudstate.Scope, rootID cloudstate.RequestID, kind, checkpointScope string, payload cloudFinalizationPayload) error {
+// verifyProviderFinalization checks a finalization against the saved attempt.
+// known, when not nil, is the root's preparation as this step validated it.
+func (f *CloudFinalizer) verifyProviderFinalization(ctx context.Context, scope cloudstate.Scope, rootID cloudstate.RequestID, kind, checkpointScope string, payload cloudFinalizationPayload, known *cloudValidatedPreparation) error {
 	effects := payload.Effects.Provider
 	if effects == nil || effects.AttemptID == "" {
 		return f.verifyUnreserved(ctx, scope, rootID, kind, payload)
 	}
-	result, storedKind, err := f.loadAttemptResult(ctx, scope, rootID)
+	result, storedKind, err := f.loadAttemptResult(ctx, scope, rootID, known)
 	if err != nil {
 		return err
 	}

@@ -71,6 +71,13 @@ func (capabilities V1RuntimeCapabilities) NewCloudBudgetAdmission(ctx context.Co
 }
 
 func (admission *CloudBudgetAdmission) PrepareGenerate(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, replay durable.GenerateReplay, attempt BudgetAttempt) (*CloudBudgetCall, error) {
+	return admission.prepareGenerate(ctx, scope, id, replay, nil, attempt)
+}
+
+// prepareGenerate is PrepareGenerate reusing input, the input this step
+// already prepared with replay, when the attempt's manifest is the one input
+// was prepared from (#1112). With nil input it prepares afresh.
+func (admission *CloudBudgetAdmission) prepareGenerate(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, replay durable.GenerateReplay, input *cloudPreparedInput, attempt BudgetAttempt) (*CloudBudgetCall, error) {
 	record, err := admission.original(ctx, scope, id, "generate")
 	if err != nil {
 		return nil, err
@@ -79,7 +86,7 @@ func (admission *CloudBudgetAdmission) PrepareGenerate(ctx context.Context, scop
 	if json.Unmarshal(record.Request.Manifest, &request) != nil || request.Context.Tenant != scope.Tenant || request.Context.Project != scope.Project {
 		return nil, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	prepared, err := PrepareGenerateInput(ctx, request, replay)
+	prepared, err := input.generateInput(ctx, record.Request.Manifest, request, replay)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +108,11 @@ func (admission *CloudBudgetAdmission) PrepareGenerate(ctx context.Context, scop
 }
 
 func (admission *CloudBudgetAdmission) PrepareCompact(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, replay durable.CompactReplay, attempt BudgetAttempt) (*CloudBudgetCall, error) {
+	return admission.prepareCompact(ctx, scope, id, replay, nil, attempt)
+}
+
+// prepareCompact is prepareGenerate for PrepareCompact.
+func (admission *CloudBudgetAdmission) prepareCompact(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, replay durable.CompactReplay, input *cloudPreparedInput, attempt BudgetAttempt) (*CloudBudgetCall, error) {
 	record, err := admission.original(ctx, scope, id, "compact")
 	if err != nil {
 		return nil, err
@@ -109,7 +121,7 @@ func (admission *CloudBudgetAdmission) PrepareCompact(ctx context.Context, scope
 	if json.Unmarshal(record.Request.Manifest, &request) != nil || request.Context.Tenant != scope.Tenant || request.Context.Project != scope.Project {
 		return nil, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	prepared, err := PrepareCompactInput(ctx, request, replay)
+	prepared, err := input.compactInput(ctx, record.Request.Manifest, request, replay)
 	if err != nil {
 		return nil, err
 	}

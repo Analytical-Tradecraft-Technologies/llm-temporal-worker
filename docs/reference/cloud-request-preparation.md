@@ -142,7 +142,14 @@ large to prepare.
 
 `Load` authorizes the current caller before accessing storage and restores the
 saved input using its internal request identifier. The identifier is a locator,
-not authorization. Recovery does not reopen an expired parent. Completed
+not authorization. Recovery does not reopen an expired parent. Each Activity
+step loads and validates the preparation, parent included, once; admission,
+planning, provider recovery and finalization then use the decoded parent and
+the prepared input from that load instead of reading, decoding or preparing
+the transcript again (#1112). Later checks of the same request's preparation
+in that step still read and check its record, but an identical parent already
+verified in the step is neither read nor decoded again. Nothing is reused
+across steps, so every step validates the preparation afresh. Completed
 operation replay needs neither the preparation nor the parent. A different
 configuration digest does not prevent restoring saved input or completing a
 saved terminal provider result. An attempt that may already have reached its

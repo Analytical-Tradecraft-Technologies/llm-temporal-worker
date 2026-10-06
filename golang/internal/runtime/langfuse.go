@@ -103,7 +103,7 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 	var lineage []state.Handle
 	var caller llm.RequestContext
 	if p.Generate != nil {
-		input, err := PrepareGenerateInput(ctx, *p.Generate, p.GenerateReplay)
+		input, err := p.generateInput(ctx)
 		if err != nil {
 			return
 		}
@@ -111,7 +111,7 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 		lineage = p.GenerateReplay.State.Lineage
 		caller = p.Generate.Context
 	} else {
-		input, err := PrepareCompactInput(ctx, *p.Compact, p.CompactReplay)
+		input, err := p.compactInput(ctx)
 		if err != nil {
 			return
 		}

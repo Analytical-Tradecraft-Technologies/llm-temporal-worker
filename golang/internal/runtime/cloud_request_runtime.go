@@ -126,7 +126,7 @@ func (r *cloudRequestRuntime) execute(ctx context.Context, caller llm.RequestCon
 	var response []byte
 	if r.finalizer != nil {
 		var found bool
-		response, found, err = r.finalizer.replay(ctx, scope, record, kind, key, index)
+		response, found, err = r.finalizer.replay(ctx, scope, record, kind, key, index, nil)
 		if err != nil {
 			return nil, err
 		}

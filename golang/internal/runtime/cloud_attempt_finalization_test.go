@@ -143,7 +143,7 @@ func (f *attemptFinalizationFixture) save() error {
 }
 func (f *attemptFinalizationFixture) replay() error {
 	r := f.repository.record
-	_, found, err := f.finalizer.replay(context.Background(), r.Request.Scope, r, r.Request.Kind, f.generate.OperationKey, 0)
+	_, found, err := f.finalizer.replay(context.Background(), r.Request.Scope, r, r.Request.Kind, f.generate.OperationKey, 0, nil)
 	if err == nil && !found {
 		return cloudstate.ErrFinalizationHandoffMissing
 	}

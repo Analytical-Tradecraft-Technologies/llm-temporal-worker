@@ -199,7 +199,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectHealth})
 			continue
 		}
-		planned, rejection, err := planning.compileCandidate(ctx, semantic, pins, candidate)
+		planned, rejection, err := planning.compileCandidate(ctx, semantic, pins, candidate, nil)
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}
@@ -228,7 +228,8 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 
 // compileCandidate is shared by new selection and exact-route recovery.
 // An ordinary local failure returns a rejection; possible dispatch is always fatal.
-func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic llm.Request, pins providerStatePins, candidate routing.Candidate) (PlannedProviderCall, *planningRejection, error) {
+// resolution, when not nil, is this semantic request, pins and candidate's.
+func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic llm.Request, pins providerStatePins, candidate routing.Candidate, resolution *candidateResolution) (PlannedProviderCall, *planningRejection, error) {
 	adapter, err := planning.adapters.Adapter(ctx, candidate)
 	if ctx.Err() != nil {
 		return PlannedProviderCall{}, nil, ctx.Err()
@@ -250,8 +251,13 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	if capability.Version != candidate.CapabilityVersion {
 		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 	}
-	resolved := resolveCandidateRequest(semantic, pins, candidate, adapter)
-	digest, err := llm.RequestDigest(resolved)
+	if resolution == nil {
+		resolution = newCandidateResolution(semantic, pins, candidate)
+	}
+	// resolveCandidateRequest, sharing any digest the caller already derived.
+	flatten := !preservesInstructionHierarchy(provider.Family(candidate.Family), adapter)
+	resolved := resolution.request(flatten)
+	digest, err := resolution.digest(flatten)
 	if err != nil {
 		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
 	}
@@ -541,13 +547,70 @@ func candidateRequest(semantic llm.Request, pins providerStatePins, candidate ro
 	return resolved
 }
 
-// plausibleCandidateDigest reports whether digest is one resolveCandidateRequest
-// could produce for this input and candidate, without resolving the adapter.
+// candidateResolution is resolveCandidateRequest for one semantic request,
+// pins and candidate, before the adapter decides whether the summarizer
+// instructions are flattened. It derives each form, and the digest of each,
+// at most once. Exact-route recovery checks the bound digest before resolving
+// the adapter and then compiles the same request; sharing one resolution
+// hashes the transcript once instead of up to three times (#1112).
+type candidateResolution struct {
+	plain     llm.Request
+	flattened *llm.Request
+	digests   [2]*candidateDigest
+}
+
+type candidateDigest struct {
+	value [32]byte
+	err   error
+}
+
+func newCandidateResolution(semantic llm.Request, pins providerStatePins, candidate routing.Candidate) *candidateResolution {
+	return &candidateResolution{plain: candidateRequest(semantic, pins, candidate)}
+}
+
+// request returns resolveCandidateRequest's result for an adapter that does
+// (flatten false) or does not (flatten true) preserve the instruction levels.
+func (resolution *candidateResolution) request(flatten bool) llm.Request {
+	if !flatten {
+		return resolution.plain
+	}
+	if resolution.flattened == nil {
+		flattened := compaction.FlattenSummarizerInstructions(resolution.plain)
+		resolution.flattened = &flattened
+	}
+	return *resolution.flattened
+}
+
+// unflattened reports whether flattening leaves the request as it is, so both
+// forms have one digest. FlattenSummarizerInstructions returns its argument
+// unless it rewrites the instructions into a new slice.
+func (resolution *candidateResolution) unflattened() bool {
+	flattened := resolution.request(true)
+	return len(flattened.Instructions) == 0 || &flattened.Instructions[0] == &resolution.plain.Instructions[0]
+}
+
+func (resolution *candidateResolution) digest(flatten bool) ([32]byte, error) {
+	index := 0
+	if flatten && !resolution.unflattened() {
+		index = 1
+	}
+	if resolution.digests[index] == nil {
+		value, err := llm.RequestDigest(resolution.request(index == 1))
+		resolution.digests[index] = &candidateDigest{value: value, err: err}
+	}
+	return resolution.digests[index].value, resolution.digests[index].err
+}
+
+// plausible reports whether digest is one resolveCandidateRequest could
+// produce for this input and candidate, without resolving the adapter.
 // Recovery uses it to reject changed input early; it is not the final check.
-func plausibleCandidateDigest(semantic llm.Request, pins providerStatePins, candidate routing.Candidate, digest [32]byte) bool {
-	resolved := candidateRequest(semantic, pins, candidate)
-	for _, request := range []llm.Request{resolved, compaction.FlattenSummarizerInstructions(resolved)} {
-		if got, err := llm.RequestDigest(request); err == nil && got == digest {
+func (resolution *candidateResolution) plausible(digest [32]byte) bool {
+	for _, flatten := range []bool{false, true} {
+		if flatten && resolution.unflattened() {
+			// The same request, whose digest did not match.
+			return false
+		}
+		if got, err := resolution.digest(flatten); err == nil && got == digest {
 			return true
 		}
 	}

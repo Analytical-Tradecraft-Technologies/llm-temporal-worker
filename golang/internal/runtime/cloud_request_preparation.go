@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,81 @@ type PreparedCloudRequest struct {
 	Compact        *llm.CompactRequestV1
 	GenerateReplay durable.GenerateReplay
 	CompactReplay  durable.CompactReplay
+	// input is the Generate or Compact input that restoring this request
+	// prepared, in the current Activity step, from Record's manifest and the
+	// materialized parent (nil when nothing was prepared). Admission,
+	// planning, recovery and finalization reuse it instead of preparing the
+	// same transcript again (#1112). It never outlives the step.
+	input *cloudPreparedInput
+	// parentSnapshot is the parent snapshot restoring this request decoded,
+	// or was given, in the current Activity step (nil without a parent).
+	parentSnapshot *state.CheckpointSnapshot
+	// loaded reports that Preparation was loaded from the store and validated,
+	// parent included, in the current Activity step.
+	loaded bool
+}
+
+// cloudPreparedInput is one step's prepared input of a request, bound to the
+// manifest it was prepared from.
+type cloudPreparedInput struct {
+	manifest []byte
+	generate *PreparedGenerateInput
+	compact  *PreparedCompactInput
+}
+
+// generateInput returns what PrepareGenerateInput(ctx, request, replay)
+// returns. When request was decoded from manifest and that manifest is the
+// one this step's input was prepared from, with the same replay, the result
+// is a copy of that input instead of a second preparation of the whole
+// transcript. Callers must pass the replay the input was prepared with.
+func (in *cloudPreparedInput) generateInput(ctx context.Context, manifest []byte, request llm.GenerateRequestV1, replay durable.GenerateReplay) (PreparedGenerateInput, error) {
+	if in == nil || in.generate == nil || !bytes.Equal(manifest, in.manifest) {
+		return PrepareGenerateInput(ctx, request, replay)
+	}
+	if err := validatePreparationContext(ctx, replay.Completed != nil || replay.ReconciliationPending != nil); err != nil {
+		return PreparedGenerateInput{}, err
+	}
+	// The copy keeps callers from sharing the request's collections, exactly
+	// as separately prepared inputs never did. Normalizing an already
+	// normalized request is a typed copy that returns the same value.
+	prepared := *in.generate
+	normalized, err := llm.NormalizeRequest(in.generate.Request)
+	if err != nil {
+		return PrepareGenerateInput(ctx, request, replay)
+	}
+	prepared.Request = normalized
+	return prepared, nil
+}
+
+// compactInput is generateInput for PrepareCompactInput.
+func (in *cloudPreparedInput) compactInput(ctx context.Context, manifest []byte, request llm.CompactRequestV1, replay durable.CompactReplay) (PreparedCompactInput, error) {
+	if in == nil || in.compact == nil || !bytes.Equal(manifest, in.manifest) {
+		return PrepareCompactInput(ctx, request, replay)
+	}
+	if err := validatePreparationContext(ctx, replay.Completed != nil || replay.ReconciliationPending != nil); err != nil {
+		return PreparedCompactInput{}, err
+	}
+	prepared := *in.compact
+	if in.compact.Request != nil {
+		summary, err := llm.NormalizeRequest(*in.compact.Request)
+		if err != nil {
+			return PrepareCompactInput(ctx, request, replay)
+		}
+		prepared.Request = &summary
+	}
+	return prepared, nil
+}
+
+// generateInput is PrepareGenerateInput(ctx, *p.Generate, p.GenerateReplay),
+// reusing the input restoring p prepared in this step.
+func (p PreparedCloudRequest) generateInput(ctx context.Context) (PreparedGenerateInput, error) {
+	return p.input.generateInput(ctx, p.Record.Request.Manifest, *p.Generate, p.GenerateReplay)
+}
+
+// compactInput is PrepareCompactInput(ctx, *p.Compact, p.CompactReplay),
+// reusing the input restoring p prepared in this step.
+func (p PreparedCloudRequest) compactInput(ctx context.Context) (PreparedCompactInput, error) {
+	return p.input.compactInput(ctx, p.Record.Request.Manifest, *p.Compact, p.CompactReplay)
 }
 
 func (capabilities V1RuntimeCapabilities) NewCloudRequestPreparation(resolve CheckpointScopeResolver, limits state.MaterializeLimits) (*CloudRequestPreparation, error) {
@@ -91,7 +167,7 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	// attempt can later fail it. Validate a new operation first so rejected input
 	// never leaves a permanent pending record. An existing operation skips this:
 	// it replays its saved result or preparation without reopening the parent.
-	var initial *cloudstate.RequestPreparation
+	var initial *cloudMaterializedPreparation
 	if _, err := p.store.LookupOperation(ctx, operation); errors.Is(err, contracts.ErrNotFound) {
 		// The configured request limits bound new input only. An operation
 		// admitted under an earlier snapshot keeps replaying its saved result.
@@ -99,11 +175,10 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 			return PreparedCloudRequest{}, err
 		}
 		candidate := cloudstate.Record{Status: cloudstate.StatusRunning, Request: cloudstate.CreateRequest{Scope: scope, Kind: kind, RequestIndex: index, Manifest: manifest, CreatedAt: operation.Now}}
-		preparation, err := p.materialize(ctx, candidate, caller, parent, checkpointScope, operation.Now.UTC())
+		initial, err = p.materialize(ctx, candidate, caller, parent, checkpointScope, operation.Now.UTC())
 		if err != nil {
 			return PreparedCloudRequest{}, err
 		}
-		initial = &preparation
 	} else if err != nil {
 		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 	}
@@ -124,9 +199,9 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	return prepared, nil
 }
 
-func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, initial *cloudstate.RequestPreparation) (PreparedCloudRequest, error) {
+func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, initial *cloudMaterializedPreparation) (PreparedCloudRequest, error) {
 	scope := record.Request.Scope
-	preparation, parentSnapshot, validated, err := loadRequestPreparation(ctx, p.store, scope, record.Request.ID)
+	preparation, parentSnapshot, validated, err := loadRequestPreparation(ctx, p.store, scope, record.Request.ID, nil)
 	if errors.Is(err, cloudstate.ErrRequestPreparationMissing) {
 		// Reuse the input validated before BeginOperation. BeginOperation has
 		// verified the immutable manifest binding, so a record created by a
@@ -134,36 +209,57 @@ func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record clou
 		// PreparedAt to that record's creation time (PreparedAt must not precede
 		// CreatedAt) instead of reopening a parent that may since have expired.
 		if initial != nil {
-			preparation = *initial
+			preparation = initial.preparation
 			if preparation.PreparedAt.Before(record.Request.CreatedAt) {
 				preparation.PreparedAt = record.Request.CreatedAt.UTC()
 			}
 		} else {
-			preparation, err = p.materialize(ctx, record, caller, parent, checkpointScope, p.clock().UTC())
+			initial, err = p.materialize(ctx, record, caller, parent, checkpointScope, p.clock().UTC())
 			if err != nil {
 				return PreparedCloudRequest{}, err
 			}
+			preparation = initial.preparation
 		}
 		if err := ctx.Err(); err != nil {
 			return PreparedCloudRequest{}, err
 		}
-		err = p.store.SaveRequestPreparation(ctx, scope, record.Request.ID, preparation)
+		err = saveRequestPreparation(ctx, p.store, scope, record.Request.ID, preparation, initial.known)
 		if err != nil && !errors.Is(err, contracts.ErrConflict) {
 			return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 		}
 		// A competing initializer may have won. Only the durable winner is used.
-		preparation, parentSnapshot, validated, err = loadRequestPreparation(ctx, p.store, scope, record.Request.ID)
+		// Its parent is read and verified again; only an identical parent is
+		// not decoded a second time in this step.
+		preparation, parentSnapshot, validated, err = loadRequestPreparation(ctx, p.store, scope, record.Request.ID, initial.known)
 	}
 	if err != nil {
 		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 	}
-	return p.restoreLoaded(ctx, record, preparation, parentSnapshot, validated, checkpointScope)
+	prepared, err := p.restoreLoaded(ctx, record, preparation, parentSnapshot, validated, checkpointScope)
+	if err != nil {
+		return PreparedCloudRequest{}, err
+	}
+	prepared.loaded = true
+	return prepared, nil
 }
 
-// cloudPreparationParentLoader is implemented by cloudstate.Repository, which
+// cloudMaterializedPreparation is a preparation materialized and validated in
+// the current Activity step, with its parent snapshot as validation decoded
+// it (known is nil without a parent).
+type cloudMaterializedPreparation struct {
+	preparation cloudstate.RequestPreparation
+	known       *cloudstate.KnownParent
+}
+
+// cloudPreparationKnownLoader is implemented by cloudstate.Repository, which
 // validates a preparation, decoding its parent snapshot, while loading it.
-type cloudPreparationParentLoader interface {
-	LoadRequestPreparationParent(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestPreparation, *state.CheckpointSnapshot, error)
+type cloudPreparationKnownLoader interface {
+	LoadRequestPreparationKnown(context.Context, cloudstate.Scope, cloudstate.RequestID, *cloudstate.KnownParent) (cloudstate.RequestPreparation, *state.CheckpointSnapshot, error)
+}
+
+// cloudPreparationKnownSaver is implemented by cloudstate.Repository.
+type cloudPreparationKnownSaver interface {
+	SaveRequestPreparationKnown(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestPreparation, *cloudstate.KnownParent) error
 }
 
 // loadRequestPreparation loads a preparation. validated reports that the store
@@ -171,38 +267,49 @@ type cloudPreparationParentLoader interface {
 // parent is the snapshot that validation decoded (nil without a parent), owned
 // by the caller. Restoring the parent from it instead of validating and
 // decoding the same bytes twice more is the per-step saving of #1112. Other
-// stores leave validation to the caller.
+// stores leave validation to the caller. known, when not nil, is a parent this
+// step already validated (see cloudstate.KnownParent); the store does not
+// decode, or when verified read, an identical parent again.
 func loadRequestPreparation(ctx context.Context, store interface {
 	LoadRequestPreparation(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestPreparation, error)
-}, scope cloudstate.Scope, id cloudstate.RequestID) (preparation cloudstate.RequestPreparation, parent *state.CheckpointSnapshot, validated bool, err error) {
-	if loader, ok := store.(cloudPreparationParentLoader); ok {
-		preparation, parent, err = loader.LoadRequestPreparationParent(ctx, scope, id)
+}, scope cloudstate.Scope, id cloudstate.RequestID, known *cloudstate.KnownParent) (preparation cloudstate.RequestPreparation, parent *state.CheckpointSnapshot, validated bool, err error) {
+	if loader, ok := store.(cloudPreparationKnownLoader); ok {
+		preparation, parent, err = loader.LoadRequestPreparationKnown(ctx, scope, id, known)
 		return preparation, parent, err == nil, err
 	}
 	preparation, err = store.LoadRequestPreparation(ctx, scope, id)
 	return preparation, nil, false, err
 }
 
+// saveRequestPreparation saves a preparation whose parent, known, this step
+// validated, without decoding it again when the store supports that.
+func saveRequestPreparation(ctx context.Context, store CloudRequestPreparationStore, scope cloudstate.Scope, id cloudstate.RequestID, preparation cloudstate.RequestPreparation, known *cloudstate.KnownParent) error {
+	if saver, ok := store.(cloudPreparationKnownSaver); ok {
+		return saver.SaveRequestPreparationKnown(ctx, scope, id, preparation, known)
+	}
+	return store.SaveRequestPreparation(ctx, scope, id, preparation)
+}
+
 // materialize reads the authorized parent and validates the input against it
 // without writing anything.
-func (p *CloudRequestPreparation) materialize(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, at time.Time) (cloudstate.RequestPreparation, error) {
+func (p *CloudRequestPreparation) materialize(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, at time.Time) (*cloudMaterializedPreparation, error) {
 	materialized, err := p.replay.materializeAuthorized(ctx, caller, parent, checkpointScope)
 	if err != nil {
-		return cloudstate.RequestPreparation{}, err
+		return nil, err
 	}
 	preparation := cloudstate.RequestPreparation{Version: 1, ConfigDigest: p.digest, CheckpointScope: checkpointScope, PreparedAt: at}
 	if parent != "" {
 		codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxPreparedParentBytes}
 		preparation.ParentSnapshot, err = codec.EncodeSnapshot(*state.NewCheckpointSnapshot(materialized))
 		if err != nil {
-			return cloudstate.RequestPreparation{}, checkpointReplayError(provider.CodeInvalidArgument)
+			return nil, checkpointReplayError(provider.CodeInvalidArgument)
 		}
 		preparation.ParentProvenance = materialized.ProviderStateProvenance
 	}
 	// Validate the input against the materialized parent before writing it.
 	prepared, err := p.restore(ctx, record, preparation, checkpointScope)
 	if err != nil {
-		return cloudstate.RequestPreparation{}, err
+		return nil, err
 	}
 	// A Generate child holds the parent, the append and at least one output
 	// item; a compaction child never holds more than its parent. Reject a
@@ -212,24 +319,30 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 		items += len(prepared.Generate.Append) + 1
 	}
 	if err := validateLineageCapacity(p.replay.limits, materialized, items); err != nil {
-		return cloudstate.RequestPreparation{}, err
+		return nil, err
 	}
 	// Refuse, before anything is paid, a turn whose child could not be
 	// prepared as a parent again. Compaction stays available on this parent.
 	if prepared.Generate != nil && parent != "" {
-		input, err := PrepareGenerateInput(ctx, *prepared.Generate, prepared.GenerateReplay)
+		input, err := prepared.generateInput(ctx)
 		if err != nil {
-			return cloudstate.RequestPreparation{}, err
+			return nil, err
 		}
 		fits, err := extendedParentFits(prepared.GenerateReplay.State, input)
 		if err != nil {
-			return cloudstate.RequestPreparation{}, err
+			return nil, err
 		}
 		if !fits {
-			return cloudstate.RequestPreparation{}, provider.NewError(provider.CodeInvalidArgument, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "parent checkpoint is too large to extend; compact it first")
+			return nil, provider.NewError(provider.CodeInvalidArgument, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "parent checkpoint is too large to extend; compact it first")
 		}
 	}
-	return preparation, nil
+	result := &cloudMaterializedPreparation{preparation: preparation}
+	if len(preparation.ParentSnapshot) != 0 {
+		// restore validated the parent snapshot just now, decoding it once.
+		// Saving and reloading it in this step need not decode it again.
+		result.known = &cloudstate.KnownParent{Snapshot: preparation.ParentSnapshot, Decoded: prepared.parentSnapshot}
+	}
+	return result, nil
 }
 
 // extendedParentFits reports whether a Generate's whole transcript (the
@@ -270,7 +383,7 @@ func (p *CloudRequestPreparation) Load(ctx context.Context, reference llm.Execut
 	if record.Status == cloudstate.StatusCompleted || record.Status == cloudstate.StatusFailed {
 		return p.restore(ctx, record, cloudstate.RequestPreparation{}, checkpointScope)
 	}
-	preparation, parentSnapshot, validated, err := loadRequestPreparation(ctx, p.store, scope, record.Request.ID)
+	preparation, parentSnapshot, validated, err := loadRequestPreparation(ctx, p.store, scope, record.Request.ID, nil)
 	if err != nil {
 		return p.completedAfterError(ctx, record, checkpointScope, cloudRuntimeError(err, false))
 	}
@@ -278,6 +391,7 @@ func (p *CloudRequestPreparation) Load(ctx context.Context, reference llm.Execut
 	if err != nil {
 		return p.completedAfterError(ctx, record, checkpointScope, err)
 	}
+	prepared.loaded = true
 	return prepared, nil
 }
 
@@ -371,14 +485,24 @@ func (p *CloudRequestPreparation) restoreLoaded(ctx context.Context, record clou
 			ProviderStateProvenance: append([]state.ProviderStateProvenance(nil), preparation.ParentProvenance...)}
 	}
 	result.GenerateReplay.State, result.CompactReplay.State = materialized, materialized
-	var err error
+	// Prepare the input once for the whole step; later stages reuse it.
+	input := &cloudPreparedInput{manifest: record.Request.Manifest}
 	if result.Generate != nil {
-		_, err = PrepareGenerateInput(ctx, *result.Generate, result.GenerateReplay)
+		prepared, err := PrepareGenerateInput(ctx, *result.Generate, result.GenerateReplay)
+		if err != nil {
+			return PreparedCloudRequest{}, err
+		}
+		input.generate = &prepared
 	} else {
-		_, err = PrepareCompactInput(ctx, *result.Compact, result.CompactReplay)
+		prepared, err := PrepareCompactInput(ctx, *result.Compact, result.CompactReplay)
+		if err != nil {
+			return PreparedCloudRequest{}, err
+		}
+		input.compact = &prepared
 	}
-	if err != nil {
-		return PreparedCloudRequest{}, err
+	result.input = input
+	if parent != "" {
+		result.parentSnapshot = parentSnapshot
 	}
 	return result, nil
 }
