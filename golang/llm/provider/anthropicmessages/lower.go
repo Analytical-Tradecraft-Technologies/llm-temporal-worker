@@ -472,7 +472,7 @@ func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, e
 		display = "summarized"
 	case llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed:
 		if strict {
-			return nil, fmt.Errorf("reasoning summary %q is not supported by Anthropic Messages", reasoning.Summary)
+			return nil, provider.NewStrictPortabilityError(fmt.Sprintf("reasoning summary %q is not supported by Anthropic Messages", reasoning.Summary))
 		}
 		display = "summarized"
 	default:

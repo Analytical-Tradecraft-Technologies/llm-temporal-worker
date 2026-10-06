@@ -2,6 +2,7 @@ package anthropicmessages
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -75,7 +76,9 @@ func TestCompileReasoningSummaryMapsToThinkingDisplay(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			wire, err := compileReasoning(t, test.reasoning, test.strict)
 			if test.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				var mapped *provider.Error
+				// Strict representability rejections are unsupported_capability.
+				if err == nil || !strings.Contains(err.Error(), test.wantError) || !errors.As(err, &mapped) || (test.strict && mapped.Code != provider.CodeUnsupportedCapability) {
 					t.Fatalf("Compile() = %v, want substring %q", err, test.wantError)
 				}
 				return

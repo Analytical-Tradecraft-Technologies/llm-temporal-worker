@@ -28,7 +28,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("extensions are not supported by the Bedrock Converse adapter")
 	}
 	if reasoning := request.Reasoning; strict && reasoning != nil && !reasoningIsProviderDefault(*reasoning) {
-		return bedrockruntime.ConverseInput{}, fmt.Errorf("reasoning controls are not implemented by the Bedrock Converse adapter in strict portability mode")
+		return bedrockruntime.ConverseInput{}, provider.NewStrictPortabilityError("reasoning controls are not implemented by the Bedrock Converse adapter in strict portability mode")
 	}
 	if sampling := request.Sampling; sampling != nil && (sampling.TopK != nil || sampling.Seed != nil || sampling.PresencePenalty != nil || sampling.FrequencyPenalty != nil) {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("top_k, seed and penalty sampling controls are not implemented by the Bedrock Converse adapter")
