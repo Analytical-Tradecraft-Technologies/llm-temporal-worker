@@ -200,13 +200,7 @@ verify_evidence() {
 
   python3 - "$evidence" "$tag_commit" "$image_digest" <<'PY'
 import json
-import re
 import sys
-
-INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
-PLATFORMS = ("linux/amd64", "linux/arm64")
-PLATFORM_ARTIFACTS = ("image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64")
-DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 
 path, expected_revision, expected_digest = sys.argv[1:]
 try:
@@ -215,32 +209,12 @@ try:
 except (OSError, json.JSONDecodeError) as error:
     raise SystemExit(f"guarded release: cannot read evidence: {error}")
 
-if not isinstance(evidence, dict):
-    raise SystemExit("guarded release: evidence is not a JSON object")
 source = evidence.get("source")
 image = evidence.get("image")
 if not isinstance(source, dict) or source.get("revision") != expected_revision:
     raise SystemExit("guarded release: evidence revision does not match the release tag commit")
 if not isinstance(image, dict) or image.get("digest") != expected_digest:
     raise SystemExit("guarded release: evidence image digest does not match the requested publication subject")
-# The publication subject must be the multi-platform image index that master
-# scanned and published. A schema-v1 bundle bound only the linux/amd64
-# manifest, so it cannot authorize publishing the index.
-if evidence.get("schema_version") != 2 or image.get("media_type") != INDEX_MEDIA_TYPE:
-    raise SystemExit("guarded release: evidence does not bind the published multi-platform image index")
-platforms = image.get("platforms")
-if not isinstance(platforms, dict) or sorted(platforms) != sorted(PLATFORMS):
-    raise SystemExit("guarded release: evidence must bind exactly the linux/amd64 and linux/arm64 manifests")
-seen = {expected_digest}
-for platform in PLATFORMS:
-    subject = platforms[platform]
-    digest = subject.get("digest") if isinstance(subject, dict) else None
-    if not isinstance(digest, str) or not DIGEST.fullmatch(digest) or digest in seen:
-        raise SystemExit(f"guarded release: evidence {platform} manifest digest is missing, invalid, or repeated")
-    seen.add(digest)
-artifacts = evidence.get("artifacts")
-if not isinstance(artifacts, dict) or any(name not in artifacts for name in PLATFORM_ARTIFACTS):
-    raise SystemExit("guarded release: evidence is missing the image index or a platform SBOM or scan")
 PY
 }
 

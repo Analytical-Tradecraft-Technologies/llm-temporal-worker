@@ -1,71 +1,10 @@
 # Release evidence runbook
 
-Task 23 produces a local, machine-readable release-evidence bundle. The
-`release-evidence` job is a nonpublishing validation and retention step: it
-never signs an image, sends an image to a registry, creates a release, obtains
-provider credentials, or calls a live LLM provider.
-
-The master workflow's separate `container` job does publish. On every master
-push it builds the linux/amd64 and linux/arm64 image to a local OCI layout
-without pushing, scans both platforms with the pinned Trivy configuration, and
-fails on any fixable HIGH or CRITICAL finding. Only then does it copy those
-exact scanned bytes to `docker.io/analyticaltradecraft/llm-temporal-worker:<version>`
-with `skopeo copy --all --preserve-digests`. It records the index digest and
-both platform digests. The `release-evidence` job then binds the whole
-publication: the published OCI image index is the evidence subject, and the
-linux/amd64 and linux/arm64 manifests it references each have their own SBOM
-and Trivy scan in the retained bundle.
-
-## Multi-platform image subject
-
-Evidence `schema_version` 2 records the image index as `image.reference` and
-`image.digest`, with `image.media_type` set to
-`application/vnd.oci.image.index.v1+json`. `image.platforms` names the
-`linux/amd64` and `linux/arm64` manifests, each as a `reference` in the same
-repository and its `digest`:
-
-```json
-"image": {
-  "reference": "docker.io/analyticaltradecraft/llm-temporal-worker@sha256:<index>",
-  "digest": "sha256:<index>",
-  "media_type": "application/vnd.oci.image.index.v1+json",
-  "platforms": {
-    "linux/amd64": {"reference": "docker.io/analyticaltradecraft/llm-temporal-worker@sha256:<amd64>", "digest": "sha256:<amd64>"},
-    "linux/arm64": {"reference": "docker.io/analyticaltradecraft/llm-temporal-worker@sha256:<arm64>", "digest": "sha256:<arm64>"}
-  }
-}
-```
-
-The `release-evidence` job takes the three digests from the `container` job's
-outputs. It retains the exact index bytes the registry serves for the index
-digest as `image-index.json` and checks that their SHA-256 is that digest. It
-then downloads each platform manifest by digest into its own temporary OCI
-directory: `$RUNNER_TEMP/image.oci` for linux/amd64 and
-`$RUNNER_TEMP/arm64/image.oci` for linux/arm64. It requires each directory's
-manifest descriptor to equal the published platform digest, then runs Syft and
-Trivy on each one.
-
-The verifier fails closed unless every part of the publication is bound:
-
-- the SHA-256 of `image-index.json` is `image.digest`;
-- the index satisfies the `oci_image_index` definition in
-  [the artifact schema](artifact.schema.json). It references exactly one
-  linux/amd64 and one linux/arm64 OCI manifest, and nothing else except Buildx
-  attestation manifests (`unknown/unknown` platform) for those two manifests;
-- the index's platform digests equal `image.platforms`, and the index and both
-  platform digests are distinct;
-- `sbom.cdx.json` and `image-scan.json` bind the linux/amd64 manifest, and
-  `sbom-arm64.cdx.json` and `image-scan-arm64.json` bind the linux/arm64
-  manifest. A missing platform artifact, a scan or SBOM bound to the wrong
-  digest, or a HIGH or CRITICAL finding on either platform rejects the bundle.
-
-The amd64 artifact names (`sbom`, `image_scan`) are unchanged from schema
-version 1. The verifier still accepts retained schema-v1 bundles, whose subject
-is the single linux/amd64 manifest. A v1 record cannot carry `media_type`,
-`platforms`, or the index and arm64 artifacts. The recorder writes only schema
-version 2. `guard.sh verify-evidence` requires schema version 2 with the index
-as the subject. A v1 bundle never bound the arm64 image or the index, so it
-cannot authorize publishing them.
+Task 23 produces a local, machine-readable release-evidence bundle. It is a
+nonpublishing validation and retention step: the workflow never signs an
+image, sends an image to a registry, creates a release, obtains provider
+credentials, or calls a live LLM provider. Publication controls remain a
+separate task.
 
 ## Trusted boundary
 
@@ -126,11 +65,8 @@ assertion for:
   output for Redis, Temporal, and the combined stack;
 - rendered Kubernetes manifest digests and object counts;
 - dependency/license inventory from the current `go.mod` and reviewed roots;
-- the exact bytes of the published OCI image index (`image-index.json`);
-- a CycloneDX SBOM and matching Trivy scan for each platform:
-  `sbom.cdx.json` and `image-scan.json` for linux/amd64, and
-  `sbom-arm64.cdx.json` and `image-scan-arm64.json` for linux/arm64. Each is
-  bound to its platform's immutable manifest digest.
+- the CycloneDX SBOM and matching Trivy scan, each bound to the immutable
+  descriptor subject.
 
 The bundle has a closed, root-level filename set: every artifact uses the
 canonical name shown below and the record is always `evidence.json`. Renamed,
@@ -204,29 +140,23 @@ bash scripts/release/collect.sh \
   --image-oci-layout "$oci_layout"
 ```
 
-The collector rejects a layout path inside `release-artifacts/`. Trusted CI
-then retains the published index bytes, downloads both platform manifests into
-temporary layouts, generates and binds each platform's SBOM and scan, and
-records the completed bundle. A local caller must supply the index bytes as
-`release-artifacts/image-index.json`, temporary layout paths outside its
-evidence directory, and the four final SBOM and scan JSON files before it can
-record the exact same bundle:
+The collector rejects a layout path inside `release-artifacts/`. It then
+generates the SBOM and scan from the temporary directory, binds both to the
+descriptor subject above, and records the completed bundle. A local caller
+must supply a temporary layout path outside its evidence directory and the two
+final JSON files before it can record the exact same bundle:
 
 ```sh
-repository="docker.io/analyticaltradecraft/llm-temporal-worker"
-index_digest="sha256:$(sha256sum release-artifacts/image-index.json | cut -d ' ' -f 1)"
-amd64_digest="$(go -C golang run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
-arm64_digest="$(go -C golang run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/arm64/image.oci")"
+digest="$(go -C golang run ./tools/releaseverify layout-digest -layout "$oci_layout")"
+reference="llm-temporal-worker@$digest"
 
 bash scripts/release/record.sh \
   -artifact-dir release-artifacts \
   -output release-artifacts/evidence.json \
   -repository https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker \
   -revision "$(git rev-parse HEAD)" \
-  -image-reference "$repository@$index_digest" \
-  -image-digest "$index_digest" \
-  -amd64-digest "$amd64_digest" \
-  -arm64-digest "$arm64_digest" \
+  -image-reference "$reference" \
+  -image-digest "$digest" \
   -artifact test_summary=test-summary.json \
   -artifact race_summary=race-summary.json \
   -artifact fuzz_summary=fuzz-summary.json \
@@ -241,15 +171,8 @@ bash scripts/release/record.sh \
   -artifact rendered_manifests=rendered-manifests.json \
   -artifact dependency_license=dependencies.json \
   -artifact sbom=sbom.cdx.json \
-  -artifact image_scan=image-scan.json \
-  -artifact image_index=image-index.json \
-  -artifact sbom_arm64=sbom-arm64.cdx.json \
-  -artifact image_scan_arm64=image-scan-arm64.json
+  -artifact image_scan=image-scan.json
 ```
-
-The recorder derives each platform reference from the index repository. It
-rejects the bundle unless the index bytes reference exactly those two platform
-digests.
 
 The recorder validates the entire bundle before atomically writing
 `evidence.json`; a failed validation leaves no final evidence record. Validate
@@ -269,9 +192,9 @@ bash scripts/release/verify.sh \
 ```
 
 After successful verification the master-push job retains the redacted bundle
-for 14 days and removes `$RUNNER_TEMP/image.oci` and `$RUNNER_TEMP/arm64`. It
-never produces or retains `image.oci.tar` or uses `oci-archive:` for scanning;
-the unretained platform directories are the scanner subjects. A separate temporary archive is
+for 14 days and removes `$RUNNER_TEMP/image.oci`. It never produces or
+retains `image.oci.tar` or uses `oci-archive:` for scanning; the extracted,
+unretained directory is the scanner subject. A separate temporary archive is
 used only to load and extract the image, then deleted.
 `release-artifacts/` is ignored by Git and excluded from the Docker build
 context.
@@ -374,11 +297,7 @@ repository path. The guard rejects a missing, malformed, tag-based, or
 different image reference; it also rejects a branch ref, a malformed tag, a
 tag that is not reachable from protected master, a non-numeric run ID, an
 unavailable or untrusted evidence run, an unavailable artifact, or any
-evidence revision/digest mismatch. The image reference must name the published
-image index: `verify-evidence` accepts only schema-v2 evidence whose subject is
-that index digest. The evidence must bind distinct linux/amd64 and linux/arm64
-manifests and include the index plus both platforms' SBOMs and scans. A
-platform manifest digest or a schema-v1 single-manifest bundle is rejected.
+evidence revision/digest mismatch.
 
 The preflight receives only `contents: read` and `actions: read`. It uses the
 automatic, job-scoped `GITHUB_TOKEN` only as the input to GitHub's pinned

@@ -243,73 +243,20 @@ func TestReleaseGuardBindsDownloadedEvidenceToTheTagCommitAndDigest(t *testing.T
 	repository, commit := createGuardedReleaseTestRepository(t)
 	digest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
-	amd64Digest := "sha256:" + strings.Repeat("d", 64)
-	arm64Digest := "sha256:" + strings.Repeat("e", 64)
-	newEvidence := func(revision, imageDigest string) map[string]any {
-		artifacts := map[string]any{}
-		for _, name := range []string{"image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64"} {
-			artifacts[name] = map[string]any{}
-		}
-		return map[string]any{
-			"schema_version": 2,
-			"source":         map[string]any{"revision": revision},
-			"image": map[string]any{
-				"digest":     imageDigest,
-				"media_type": "application/vnd.oci.image.index.v1+json",
-				"platforms": map[string]any{
-					"linux/amd64": map[string]any{"digest": amd64Digest},
-					"linux/arm64": map[string]any{"digest": arm64Digest},
-				},
-			},
-			"artifacts": artifacts,
-		}
-	}
-	image := func(evidence map[string]any) map[string]any { return evidence["image"].(map[string]any) }
-	platforms := func(evidence map[string]any) map[string]any { return image(evidence)["platforms"].(map[string]any) }
-
 	for _, test := range []struct {
-		name      string
-		evidence  map[string]any
-		mutate    func(map[string]any)
-		wantError bool
+		name        string
+		revision    string
+		imageDigest string
+		wantError   bool
 	}{
-		{name: "matching evidence", evidence: newEvidence(commit, digest)},
-		{name: "different revision", evidence: newEvidence("cccccccccccccccccccccccccccccccccccccccc", digest), wantError: true},
-		{name: "different digest", evidence: newEvidence(commit, "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"), wantError: true},
-		{
-			name:      "legacy single-manifest bundle",
-			evidence:  map[string]any{"schema_version": 1, "source": map[string]any{"revision": commit}, "image": map[string]any{"digest": digest}},
-			wantError: true,
-		},
-		{name: "subject is not an index", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
-			image(evidence)["media_type"] = "application/vnd.oci.image.manifest.v1+json"
-		}, wantError: true},
-		{name: "arm64 platform missing", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
-			delete(platforms(evidence), "linux/arm64")
-		}, wantError: true},
-		{name: "extra platform", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
-			platforms(evidence)["linux/s390x"] = map[string]any{"digest": "sha256:" + strings.Repeat("f", 64)}
-		}, wantError: true},
-		{name: "platform repeats the index digest", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
-			platforms(evidence)["linux/amd64"] = map[string]any{"digest": digest}
-		}, wantError: true},
-		{name: "arm64 scan missing", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
-			delete(evidence["artifacts"].(map[string]any), "image_scan_arm64")
-		}, wantError: true},
-		{name: "image index missing", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
-			delete(evidence["artifacts"].(map[string]any), "image_index")
-		}, wantError: true},
+		{name: "matching evidence", revision: commit, imageDigest: digest},
+		{name: "different revision", revision: "cccccccccccccccccccccccccccccccccccccccc", imageDigest: digest, wantError: true},
+		{name: "different digest", revision: commit, imageDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			evidence := filepath.Join(t.TempDir(), "evidence.json")
-			if test.mutate != nil {
-				test.mutate(test.evidence)
-			}
-			content, err := json.Marshal(test.evidence)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(evidence, content, 0o600); err != nil {
+			content := fmt.Sprintf(`{"source":{"revision":%q},"image":{"digest":%q}}`, test.revision, test.imageDigest)
+			if err := os.WriteFile(evidence, []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			result := runReleaseGuard(t, repository, "verify-evidence",
@@ -342,7 +289,7 @@ func TestReleaseGuardAcceptsVerifiedLocalTask23EvidenceFixture(t *testing.T) {
 	result := runReleaseGuard(t, repository, "verify-evidence",
 		"--evidence", filepath.Join(bundle.directory, "evidence.json"),
 		"--tag-commit", commit,
-		"--image-reference", "registry.example.com/team/llm-temporal-worker@"+bundle.indexDigest,
+		"--image-reference", "registry.example.com/team/llm-temporal-worker@"+bundle.imageDigest,
 	)
 	if result.err != nil {
 		t.Fatalf("guard rejected verified local Task 23 evidence: %v\n%s", result.err, result.output)
