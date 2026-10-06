@@ -180,6 +180,15 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			if loadErr == nil && (saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed) {
 				return r.resumeAttempt(ctx, p, attempt, saved, step)
 			}
+			if loadErr == nil && saved.Execution.Stage == cloudstate.ExecutionUnknown {
+				// Settling an expired unknown attempt is accounting only: it
+				// charges the saved reservation and never calls a provider,
+				// so it must not wait for a compatible worker. Otherwise a
+				// drained rollout would hold the claim forever.
+				if _, err := r.execution.settleUnknown(ctx, root.Scope, attempt.ID, saved); err != nil {
+					return llm.ExecutionResultV1{}, err
+				}
+			}
 			if loadErr != nil && !errors.Is(loadErr, cloudstate.ErrProviderExecutionMissing) && !errors.Is(loadErr, cloudstate.ErrBudgetPlanMissing) {
 				return llm.ExecutionResultV1{}, cloudRuntimeError(loadErr, false)
 			}
@@ -202,8 +211,15 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		if step == cloudAcquire && saved.Execution.Stage == cloudstate.ExecutionUnknown && !r.now().Before(saved.Execution.RecoverAfter) {
 			// Charge the old attempt at its reservation before replacing it,
 			// so its claim ages out of each window instead of being held.
-			if _, err := r.execution.Resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay); err != nil {
+			recovered, err := r.execution.Resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay)
+			if err != nil {
 				return llm.ExecutionResultV1{}, err
+			}
+			// Polling or idempotent recovery may have resolved the attempt
+			// (pending, succeeded or failed); finish that outcome instead of
+			// replacing it, which only an unknown attempt permits.
+			if recovered.Saved.Execution.Stage != cloudstate.ExecutionUnknown {
+				return r.resumeAttempt(ctx, p, attempt, recovered.Saved, step)
 			}
 			if err := r.finishUnknownFill(ctx, p, attempt, saved); err != nil {
 				return llm.ExecutionResultV1{}, err

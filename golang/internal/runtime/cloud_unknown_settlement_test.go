@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -114,5 +115,94 @@ func assertUnknownWorkCharged(t *testing.T, saved cloudstate.SavedProviderExecut
 		if event.Kind != budget.JournalFinalizeUnknown || event.AccountedIncreaseUSD.Cmp(event.ReservedDecreaseUSD) != 0 {
 			t.Fatalf("unknown work settled below its reservation: %+v", event)
 		}
+	}
+}
+
+// Settling an expired unknown attempt is accounting only, so a worker with a
+// different configuration settles it while still leaving the request itself
+// to a compatible worker. A drained rollout must not hold the claim forever.
+func TestCloudExecutionRuntimeSettlesExpiredUnknownAcrossConfigRollout(t *testing.T) {
+	f := boundedCloud(t, false, singleReservationLimits)
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		f.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.Result{}, err
+		}
+		return provider.Result{}, errors.New("lost paid response")
+	}
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(16 * time.Minute)
+	rolledOut := f.cap
+	rolledOut.ConfigDigest = [32]byte{42}
+	source := *f.cap.Snapshot.(*planningSource)
+	source.value.ConfigDigest = rolledOut.ConfigDigest
+	rolledOut.Snapshot = &source
+	if rolledOut.composition != nil {
+		composition := *rolledOut.composition
+		composition.Identity.ConfigDigest = rolledOut.ConfigDigest
+		rolledOut.composition = &composition
+	}
+	f.cap = rolledOut
+	f.restart(t)
+	if _, err := f.runtime.AcquireBudgetV1(ctx, ref); err == nil {
+		t.Fatal("incompatible worker advanced the request")
+	}
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
+		t.Fatalf("expired unknown claim not settled by an incompatible worker: %+v %v", saved.Execution, err)
+	}
+	assertUnknownWorkCharged(t, saved)
+	if f.submits.Load() != 1 {
+		t.Fatal("incompatible worker resubmitted", f.submits.Load())
+	}
+}
+
+// When recovery resolves an expired unknown attempt during acquisition, the
+// recovered outcome is finished instead of replacing the attempt.
+func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing.T) {
+	f := boundedCloud(t, true)
+	f.adapter.submit = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.ResumableResult, error) {
+		f.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.ResumableResult{}, err
+		}
+		return provider.ResumableResult{}, errors.New("connection lost after accepting")
+	}
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveries := 0
+	recovery := &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
+		recoveries++
+		v := executionResponse(call)
+		v.Result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
+		return v, nil
+	}}
+	f.cap.Adapters = engine.AdapterMap{"endpoint": recovery}
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(ref.RequestID))
+	if err != nil || attempt.ID != first.ID {
+		t.Fatalf("recovered attempt was replaced: %v", err)
+	}
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || saved.Execution.Stage != cloudstate.ExecutionSucceeded || recoveries != 1 || f.submits.Load() != 1 {
+		t.Fatalf("recovered execution = %+v, recoveries=%d submits=%d, %v", saved.Execution.Stage, recoveries, f.submits.Load(), err)
 	}
 }
