@@ -196,6 +196,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          # The v1 traceability validator proves recorded evidence fresh from
+          # git history, so this full-suite job needs every commit.
+          fetch-depth: 0
 
       - name: Detect Go implementation
         id: go
