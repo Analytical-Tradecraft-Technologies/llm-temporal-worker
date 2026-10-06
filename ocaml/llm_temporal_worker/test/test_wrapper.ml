@@ -126,7 +126,7 @@ let legacy_v1_request =
     ()
 
 let generate_response_value (request : generate_request) = {
-  api_version = V1_codec.generate_api_version;
+  api_version = V1_codec.generate_api_version; service = None;
   operation_key = request.operation_key;
   operation_id = operation_id "legacy-v1-operation";
   status = Completed;
