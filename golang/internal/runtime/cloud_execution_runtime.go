@@ -320,7 +320,13 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	var start func(context.Context) error
 	if lease != nil {
 		start = func(ctx context.Context) error {
-			won, err := r.capabilities.ResponseFills.Start(ctx, *lease, r.now())
+			// The lease was stamped by the quoting worker; a lagging clock starts
+			// the fill as of acquisition rather than failing the paid attempt.
+			now := r.now()
+			if now.Before(lease.AcquiredAt) {
+				now = lease.AcquiredAt
+			}
+			won, err := r.capabilities.ResponseFills.Start(ctx, *lease, now)
 			if err != nil {
 				return err
 			}

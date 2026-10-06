@@ -250,7 +250,7 @@ func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope
 		return executor.result(saved), nil
 	}
 	next := saved.Execution
-	next.UpdatedAt = executor.clock().UTC()
+	next.UpdatedAt = executor.now(saved)
 	next.Settlement = executionSettlement(next)
 	result, err := executor.save(ctx, scope, id, saved, next)
 	if err != nil {
@@ -358,6 +358,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			callErr = executionError(provider.CodeProviderInvalidResponse)
 		}
 	}
+	now := executor.now(saved)
 	if callErr != nil {
 		if polling {
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderInvalidResponse)
@@ -370,7 +371,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		received := outcome.State == provider.ResumableCompleted
 		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched || (received && acceptedInvalidResponse(classified))) {
 			next.Stage = cloudstate.ExecutionFailed
-			next.Failure = executionFailure(classified.Code, classified.Dispatch, classified, executor.clock())
+			next.Failure = executionFailure(classified.Code, classified.Dispatch, classified, now)
 		}
 	} else {
 		if outcome.ProviderOperationID != "" {
@@ -386,7 +387,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			if delay > time.Minute {
 				delay = time.Minute
 			}
-			next.PollAfter = executor.clock().Add(delay).UTC()
+			next.PollAfter = now.Add(delay)
 		case provider.ResumableCompleted:
 			next.Stage, next.Response = cloudstate.ExecutionSucceeded, &outcome.Result.Response
 			if saved.Plan.Kind == "generate" {
@@ -400,13 +401,13 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			if !code.Valid() {
 				code = provider.CodeProviderUnavailable
 			}
-			next.Failure = executionFailure(code, outcome.Dispatch, outcome.Failure, executor.clock())
+			next.Failure = executionFailure(code, outcome.Dispatch, outcome.Failure, now)
 		case provider.ResumableNotFound:
 			next.Stage = cloudstate.ExecutionUnknown
 			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		}
 	}
-	next.UpdatedAt = executor.clock().UTC()
+	next.UpdatedAt = now
 	if next.Stage == cloudstate.ExecutionSucceeded || next.Stage == cloudstate.ExecutionFailed {
 		next.CompletedAt = next.UpdatedAt
 		if saved.Plan.RequiresReservation() {
@@ -453,7 +454,7 @@ func (executor *CloudProviderExecution) save(ctx context.Context, scope cloudsta
 // so server.finalization_timeout bounds the whole settlement path.
 func (executor *CloudProviderExecution) saveWithin(finalCtx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution) (ProviderExecutionResult, error) {
 	next.Revision = saved.Execution.Revision + 1
-	if now := executor.clock().UTC(); now.After(next.UpdatedAt) {
+	if now := executor.now(saved); now.After(next.UpdatedAt) {
 		next.UpdatedAt = now
 	}
 	err := executor.saveOnce(finalCtx, scope, id, saved.Execution.Revision, next, false)
@@ -532,6 +533,17 @@ func sameExecution(left, right cloudstate.ProviderExecution) bool {
 	}
 	l, r := canonical(left), canonical(right)
 	return l != nil && bytes.Equal(l, r)
+}
+
+// now never runs behind the saved execution. A worker whose clock lags the
+// one that wrote the previous revision keeps the attempt's timeline monotonic
+// instead of saving a revision the repository would reject as invalid.
+func (executor *CloudProviderExecution) now(saved cloudstate.SavedProviderExecution) time.Time {
+	now := executor.clock().UTC()
+	if now.Before(saved.Execution.UpdatedAt) {
+		return saved.Execution.UpdatedAt
+	}
+	return now
 }
 
 func (executor *CloudProviderExecution) settle(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {

@@ -88,8 +88,10 @@ func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootI
 			}
 			return r.verifyRequestAttempt(ctx, root, *active)
 		}
+		// A worker whose clock lags the one that last wrote the root is late,
+		// not conflicting: its child begins no earlier than the record it extends.
 		if now.Before(root.UpdatedAt) {
-			return RequestAttempt{}, contracts.ErrConflict
+			now = root.UpdatedAt
 		}
 		number := uint64(1)
 		var priorCandidates []string
@@ -296,8 +298,11 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 		if execution != nil && execution.Stage == ExecutionFailed && execution.Settled && execution.Failure.Retryable && !now.Before(execution.Failure.RetryNotBefore) && record.Status == StatusFailed {
 			return r.repairBudgetPlanIndex(ctx, record)
 		}
-		if executionFinalizing(progress) || now.Before(record.UpdatedAt) {
+		if executionFinalizing(progress) {
 			return contracts.ErrConflict
+		}
+		if now.Before(record.UpdatedAt) {
+			now = record.UpdatedAt
 		}
 		reason, status := "", record.Status
 		expires := active.CreatedAt.Add(durable.BudgetStartLease)

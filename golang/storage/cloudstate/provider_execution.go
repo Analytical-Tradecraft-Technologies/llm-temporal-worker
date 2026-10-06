@@ -219,6 +219,11 @@ func (r *Repository) BeginProviderExecution(ctx context.Context, scope Scope, id
 		if record.Status != StatusRunning || executionFinalizing(progress) {
 			return SavedProviderExecution{}, false, contracts.ErrConflict
 		}
+		// The quoting worker's clock may be ahead of this one. The execution
+		// starts no earlier than the record it extends, never before its quote.
+		if now.Before(record.UpdatedAt) {
+			now = record.UpdatedAt
+		}
 		execution := ProviderExecution{Version: 1, StartToken: startToken.String(), Revision: 1, Stage: ExecutionClaiming, Reservation: reservation, StartedAt: now.UTC(), UpdatedAt: now.UTC(), RecoverAfter: now.UTC().Add(durable.BudgetStartLease)}
 		if execution.Validate(*plan) != nil {
 			return SavedProviderExecution{}, false, ErrInvalid
