@@ -397,6 +397,9 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			next.PollAfter = now.Add(delay)
 		case provider.ResumableCompleted:
 			next.Stage, next.Response = cloudstate.ExecutionSucceeded, &outcome.Result.Response
+			// Strict JSON clients reject a lone surrogate escape, so the
+			// model's open JSON is saved with \ufffd in its place.
+			next.Response.Output = llm.SanitizeOutputSurrogates(next.Response.Output)
 			if saved.Plan.Kind == "generate" {
 				next.Response.Output = uniqueToolCallIDs(saved.Plan.Route.OperationID, transcript, next.Response.Output)
 			}
