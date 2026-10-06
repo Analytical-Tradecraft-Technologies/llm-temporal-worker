@@ -74,21 +74,21 @@ func (capabilities V1RuntimeCapabilities) NewProviderRecovery(ctx context.Contex
 }
 
 func (recovery *ProviderRecovery) Generate(ctx context.Context, prepared PreparedGenerateInput, binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
-	return recovery.recover(ctx, prepared.Request, binding)
+	return recovery.recover(ctx, prepared.Request, prepared.pins, binding)
 }
 
 func (recovery *ProviderRecovery) Compact(ctx context.Context, prepared PreparedCompactInput, binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
 	if prepared.Request == nil {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
 	}
-	return recovery.recover(ctx, *prepared.Request, binding)
+	return recovery.recover(ctx, *prepared.Request, providerStatePins{}, binding)
 }
 
 // recover accepts a binding saved under another configuration only when the
 // bound route, its endpoint configuration and the compiled request are all
 // unchanged. Anything else waits for a compatible worker: a reload or rollout
 // must neither reroute bound work nor fail it permanently.
-func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Request, binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
+func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Request, pins providerStatePins, binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
 	if ctx == nil || recovery == nil || recovery.providers == nil || isNilCapability(recovery.providers.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
@@ -97,7 +97,7 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 	}
 	planning := recovery.providers
 	reloaded := binding.ConfigDigest != ([32]byte{}) && (binding.ConfigDigest != planning.configDigest || binding.ConfigEpoch != planning.configEpoch)
-	planned, err := recovery.recoverBound(ctx, request, binding, reloaded)
+	planned, err := recovery.recoverBound(ctx, request, pins, binding, reloaded)
 	var failure *provider.Error
 	if reloaded && errors.As(err, &failure) && failure.Retry == provider.RetryNever && failure.Dispatch == provider.DispatchNotDispatched {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
@@ -105,7 +105,7 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 	return planned, err
 }
 
-func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.Request, binding ProviderRecoveryBinding, reloaded bool) (PlannedProviderCall, error) {
+func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.Request, pins providerStatePins, binding ProviderRecoveryBinding, reloaded bool) (PlannedProviderCall, error) {
 	planning := recovery.providers
 	if binding.ConfigDigest == ([32]byte{}) || (reloaded && binding.EndpointDigest == ([32]byte{})) ||
 		binding.RequestDigest == ([32]byte{}) || binding.OperationKeyDigest == ([32]byte{}) || binding.CandidateID == "" ||
@@ -145,13 +145,13 @@ func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.
 		// Changed input is rejected before any adapter lookup. Which form of a
 		// summarizer request was bound is an endpoint fact, so this accepts
 		// either and the compiled call settles it below.
-		if !plausibleCandidateDigest(semantic, candidate, binding.RequestDigest) {
+		if !plausibleCandidateDigest(semantic, pins, candidate, binding.RequestDigest) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 		}
 		if health, present := planning.health.Routes[candidate.RouteID]; present && (!health.Enabled || health.Open || health.AuthOpen) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetrySameOperation)
 		}
-		planned, rejection, err := planning.compileCandidate(ctx, semantic, candidate)
+		planned, rejection, err := planning.compileCandidate(ctx, semantic, pins, candidate)
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}

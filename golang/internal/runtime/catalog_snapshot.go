@@ -187,28 +187,29 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)
 			}
 			routes = append(routes, routing.Route{
-				ID:                  routeValue.ID,
-				EndpointID:          routeValue.Endpoint,
-				Provider:            providerName,
-				Family:              string(family),
-				Region:              routeRegion,
-				AccountRegion:       endpoint.AccountRegion,
-				EndpointAccountHMAC: routing.DeriveEndpointAccountHMAC(providerName, routeValue.Endpoint, endpoint.AccountRegion, routeRegion, value.Version),
-				EndpointDigest:      endpointDigest,
-				Model:               routeValue.Model,
-				ModelLineage:        routeValue.Model,
-				Classes:             append([]llm.ServiceClass(nil), routeValue.Classes...),
-				ProviderTiers:       providerTiers,
-				AllowedTenants:      append([]string(nil), modelValue.AllowedTenants...),
-				AllowedRegions:      append([]string(nil), modelValue.DataRegions...),
-				Capabilities:        routingCapabilities(profile.Set),
-				ProviderFeatures:    adapterCapabilities(profile.Set),
-				OutputTokens:        profile.OutputTokens,
-				PriceVersion:        priceVersion,
-				PriceAvailable:      priceAvailable,
-				PricedWindows:       routePricedWindows(bundle.Pricing[endpoint.PriceCatalog].Catalog.Entries, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, providerName, routeRegion),
-				ExtensionNames:      extensions,
-				ContextTokens:       profile.ContextTokens,
+				ID:                    routeValue.ID,
+				EndpointID:            routeValue.Endpoint,
+				Provider:              providerName,
+				Family:                string(family),
+				Region:                routeRegion,
+				AccountRegion:         endpoint.AccountRegion,
+				EndpointAccountHMAC:   routing.DeriveEndpointAccountHMAC(providerName, routeValue.Endpoint, endpoint.AccountRegion, routeRegion, value.Version),
+				EndpointAccountDigest: endpointAccountDigest(providerName, endpoint),
+				EndpointDigest:        endpointDigest,
+				Model:                 routeValue.Model,
+				ModelLineage:          routeValue.Model,
+				Classes:               append([]llm.ServiceClass(nil), routeValue.Classes...),
+				ProviderTiers:         providerTiers,
+				AllowedTenants:        append([]string(nil), modelValue.AllowedTenants...),
+				AllowedRegions:        append([]string(nil), modelValue.DataRegions...),
+				Capabilities:          routingCapabilities(profile.Set),
+				ProviderFeatures:      adapterCapabilities(profile.Set),
+				OutputTokens:          profile.OutputTokens,
+				PriceVersion:          priceVersion,
+				PriceAvailable:        priceAvailable,
+				PricedWindows:         routePricedWindows(bundle.Pricing[endpoint.PriceCatalog].Catalog.Entries, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, providerName, routeRegion),
+				ExtensionNames:        extensions,
+				ContextTokens:         profile.ContextTokens,
 			})
 		}
 		models[modelName] = routing.Model{Name: modelName, Routes: routes}
@@ -219,6 +220,25 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 // endpointConfigDigest binds everything configured for one endpoint, including
 // its address and credential reference but no secret. Recovery of dispatched
 // work compares it instead of the whole-configuration digest.
+// endpointAccountDigest identifies the account an endpoint reaches without the
+// configuration version, so it is stable across reloads that leave the account
+// unchanged. It covers the provider, family, base URL, regions, AWS workspace
+// and the credential reference (never a secret value). Timeouts, tiers,
+// profiles, prices and extensions are not account identity. Pointing an
+// unchanged credential reference at another account's secret is not detected.
+func endpointAccountDigest(providerName string, endpoint config.EndpointConfig) [32]byte {
+	encoded, _ := json.Marshal(struct {
+		Provider       string            `json:"provider"`
+		Family         string            `json:"family"`
+		BaseURL        string            `json:"base_url"`
+		Region         string            `json:"region"`
+		AccountRegion  string            `json:"account_region"`
+		AWSWorkspaceID string            `json:"aws_workspace_id"`
+		Auth           config.AuthConfig `json:"auth"`
+	}{providerName, endpoint.Family, endpoint.BaseURL, endpoint.Region, endpoint.AccountRegion, endpoint.AWSWorkspaceID, endpoint.Auth})
+	return sha256.Sum256(append([]byte("llm-temporal-worker/endpoint-account/v1\x00"), encoded...))
+}
+
 func endpointConfigDigest(endpointID string, endpoint config.EndpointConfig) ([32]byte, error) {
 	// outbound_hosts is a set (see sameEndpointOutboundHosts); reordering it
 	// is not a change. Maps already marshal with sorted keys.

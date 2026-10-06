@@ -210,23 +210,6 @@ operation ID.
 
 ## Portable and pinned continuation
 
-> **Status on the durable v1 path.** The design below is implemented by the
-> routing planner and `state.CheckPinning`, but the durable v1 runtime does not
-> use it yet. It passes no continuation constraints, affinity, or plan time to
-> the planner, and persisted provider-state items record only their provider
-> and API family, not endpoint or account. The only pin there is the adapter's
-> family check: a Responses or Messages lowerer replays only state of its own
-> family, and other families skip the route at compile time. Two routes of the
-> same family, such as OpenAI direct and Azure OpenAI Responses, can therefore
-> both receive a lineage's opaque state. `continuation_pinned`,
-> `provider_state_dropped`, and other portability diagnostics are not produced
-> there; the only diagnostic a v1 response carries is
-> `service_class_provider_downgrade`. A lineage can also switch model alias
-> through `settings_patch.model` and keep its transcript, so when lineages carry
-> opaque state that another account would reject, use a single account per API
-> family across every model alias a lineage can reach, or do not change models
-> on such lineages.
-
 Canonical text/tool history is portable if a new candidate can compile it
 without loss. Provider continuation IDs, encrypted reasoning, signatures,
 redacted thinking, or provider-hosted state are pinned to:
@@ -255,6 +238,65 @@ unpinned opaque bytes be lowered to a provider request.
 An expired provider conversation does not authorize silently replaying the
 prompt. If a complete canonical transcript exists, the compiler may deliberately
 reconstruct a new provider request and records that action.
+
+### Pinning on the durable v1 path
+
+On the durable v1 path, provider state (encrypted reasoning, thinking blocks,
+hosted-tool records) travels inline in the canonical transcript. When a
+checkpoint is published, `ProviderStateProvenance` records, for each response
+item that carries provider state, the route that produced it: provider,
+endpoint ID, account, API family, and resolved provider model, which is the
+model lineage on this path. The account is a digest of the endpoint's provider,
+family, base URL, region, account region, AWS workspace and credential
+reference (never a secret). It does not include the configuration version, so
+it survives unrelated reloads. A reload that points an endpoint ID at another
+base URL, region or credential reference is a different account, and the
+lineage's state is not replayed there. Pointing an unchanged credential
+reference at another account's secret is not detected. OpenAI direct and Azure
+OpenAI Responses routes are different pins. Provenance recorded without an
+account, for example from a plan saved before the account was recorded, fails
+closed: no route, not even the producing endpoint, can prove that account, so
+strict mode reports `continuation_pinned` and best-effort drops the state. A
+route whose catalog entry carries no account likewise never matches a pin. A row records the provenance of its own
+response; a row with a materialized snapshot (a cadence snapshot or a
+compaction) also repeats the provenance it inherited, with compaction moving
+retained items to their new positions. The durable request preparation keeps
+the provenance with the prepared parent, so a request that is retried or
+recovered plans against the same pins.
+
+Planning a Generate derives `state.Constraints` from the newest recorded pin
+and applies `state.CheckPinning` to each candidate the routing planner
+returned. The state is optional (`Required` is false) because the canonical
+transcript is complete without it, so:
+
+- the pinned route is admitted and receives the state, whatever its position
+  in the route order;
+- in strict mode every other route is rejected with `continuation_pinned`. If
+  no route remains, the selection error keeps its stable code (normally
+  `no_route`; `provider_unavailable` when the pinned route's shared health
+  blocked it) and carries the safe detail `continuation=continuation_pinned`
+  and a `continuation_pinned` reason for each such route. The public error
+  code set is unchanged;
+- in best-effort mode another route is admitted, compiles without the
+  provider state recorded for other lineages, and the v1 response carries a
+  `provider_state_dropped` warning in `diagnostics`. The transcript is not
+  rewritten: later turns are pinned to the route that served this one, and
+  older state from the abandoned lineage is never replayed to it.
+
+Provider state without recorded provenance, from checkpoints published before
+provenance existed or supplied by the caller in `append`, is neither a
+constraint nor stripped. It keeps the adapters' family check: a Responses or
+Messages lowerer replays only state of its own family, and other families
+reject it at compile time. A request whose parent recorded no provenance
+therefore plans exactly as before. A lineage that switches model alias through
+`settings_patch.model` to a different provider model is a different lineage:
+strict mode reports `continuation_pinned`, and best-effort drops the state.
+
+Not yet applied on this path: soft provider prompt-cache affinity (no v1
+checkpoint records an affinity, and the planner receives no `Affinity` or
+`Now`), pinning of compaction summarizer requests, and provenance for output
+replayed from the worker response cache, whose provider state keeps the
+family check.
 
 ## Route health
 

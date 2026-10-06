@@ -197,6 +197,7 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 		if err != nil {
 			return cloudstate.RequestPreparation{}, checkpointReplayError(provider.CodeInvalidArgument)
 		}
+		preparation.ParentProvenance = materialized.ProviderStateProvenance
 	}
 	// Validate the input against the materialized parent before writing it.
 	prepared, err := p.restore(ctx, record, preparation, checkpointScope)
@@ -366,7 +367,8 @@ func (p *CloudRequestPreparation) restoreLoaded(ctx context.Context, record clou
 		if err != nil {
 			return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 		}
-		materialized = state.MaterializedState{Handle: state.Handle(parent), Tenant: caller.Tenant, Project: caller.Project, Depth: snapshot.Depth, Items: snapshot.Items, Settings: snapshot.Settings, Lineage: snapshot.Lineage, PendingToolCalls: pending}
+		materialized = state.MaterializedState{Handle: state.Handle(parent), Tenant: caller.Tenant, Project: caller.Project, Depth: snapshot.Depth, Items: snapshot.Items, Settings: snapshot.Settings, Lineage: snapshot.Lineage, PendingToolCalls: pending,
+			ProviderStateProvenance: append([]state.ProviderStateProvenance(nil), preparation.ParentProvenance...)}
 	}
 	result.GenerateReplay.State, result.CompactReplay.State = materialized, materialized
 	var err error

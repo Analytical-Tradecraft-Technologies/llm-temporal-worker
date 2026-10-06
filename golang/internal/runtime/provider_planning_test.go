@@ -121,7 +121,7 @@ func assertPlanningError(t *testing.T, err error, code provider.Code) {
 // vocabulary: anything that could carry request or compiler text.
 func unsafePlanningDetails(err *provider.Error) bool {
 	for key, value := range err.SafeDetails {
-		if strings.Contains(key+value, "sensitive") || (!strings.HasPrefix(key, "route_") && !strings.HasPrefix(key, "reason_") && key != "rejected_routes") {
+		if strings.Contains(key+value, "sensitive") || (!strings.HasPrefix(key, "route_") && !strings.HasPrefix(key, "reason_") && key != "rejected_routes" && key != continuationPinnedSafeDetailKey) {
 			return true
 		}
 	}

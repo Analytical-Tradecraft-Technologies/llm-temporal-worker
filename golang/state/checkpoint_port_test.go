@@ -2,7 +2,9 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,6 +82,42 @@ func TestDurableCheckpointValidationRejectsUnsafeRows(t *testing.T) {
 				t.Fatal("Validate() accepted an invalid durable row")
 			}
 		})
+	}
+}
+
+func TestDurableCheckpointProviderStateProvenanceIsAdditive(t *testing.T) {
+	old := validDurableCheckpoint()
+	encoded, err := json.Marshal(old)
+	if err != nil || strings.Contains(string(encoded), "ProviderStateProvenance") {
+		t.Fatalf("a checkpoint without provenance changed its encoding: %s err=%v", encoded, err)
+	}
+	var decoded DurableCheckpoint
+	if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.ProviderStateProvenance != nil {
+		t.Fatalf("decoded old row = %+v err=%v", decoded.ProviderStateProvenance, err)
+	}
+	empty := old
+	empty.ProviderStateProvenance = []ProviderStateProvenance{}
+	oldDigest, _ := old.CanonicalDigest()
+	emptyDigest, _ := empty.CanonicalDigest()
+	if oldDigest != emptyDigest || oldDigest == ([32]byte{}) {
+		t.Fatal("empty provenance changed the canonical digest")
+	}
+	pinned := old
+	pinned.ProviderStateProvenance = []ProviderStateProvenance{{Ordinal: 1, Provider: "openai", EndpointID: "endpoint", EndpointFamily: "openai_responses", ModelLineage: "model"}}
+	pinnedDigest, err := pinned.CanonicalDigest()
+	if err != nil || pinnedDigest == oldDigest {
+		t.Fatalf("provenance is not part of the digest: err=%v", err)
+	}
+	for _, bad := range [][]ProviderStateProvenance{
+		{{Ordinal: -1, Provider: "openai", EndpointID: "endpoint", EndpointFamily: "openai_responses", ModelLineage: "model"}},
+		{{Ordinal: 1, Provider: "openai", EndpointFamily: "openai_responses", ModelLineage: "model"}},
+		append(append([]ProviderStateProvenance(nil), pinned.ProviderStateProvenance...), pinned.ProviderStateProvenance...),
+	} {
+		invalid := old
+		invalid.ProviderStateProvenance = bad
+		if invalid.Validate(invalid.CreatedAt) == nil {
+			t.Fatalf("accepted provenance %+v", bad)
+		}
 	}
 }
 

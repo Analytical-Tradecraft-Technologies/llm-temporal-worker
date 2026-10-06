@@ -40,7 +40,7 @@ func publishStoredRoot(t *testing.T, f *boundedCloudFixture, delta []llm.Item) l
 	}
 	output := []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
 	items := append(append([]llm.Item(nil), delta...), output...)
-	checkpoint, err = publication.blobs(ctx, checkpoint, state.MaterializedState{}, settings, delta, output, patch, items, false)
+	checkpoint, err = publication.blobs(ctx, checkpoint, state.MaterializedState{}, settings, delta, output, patch, items, false, nil, nil)
 	if err != nil {
 		t.Fatalf("stored root blobs: %v", err)
 	}

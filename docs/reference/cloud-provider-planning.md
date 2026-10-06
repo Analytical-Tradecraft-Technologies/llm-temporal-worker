@@ -56,6 +56,17 @@ one of the routing planner's rejection codes, `route_compile_rejected`,
 `error_code` and `phase`. These details never leave the worker: the Temporal
 error carries only the code, phase and dispatch certainty.
 
+A Generate whose parent recorded provider-state provenance is pinned as
+described in [routing and continuation](../architecture/routing-and-continuation.md#portable-and-pinned-continuation).
+Each candidate on another lineage is rejected with reason
+`continuation_pinned` in strict portability; in best-effort portability it
+compiles without the provider state recorded for other lineages. When any
+route was rejected that way, the error keeps its code (normally `no_route`)
+and adds the safe detail `continuation=continuation_pinned`. Compaction
+summarizer requests are not pinned. The same stripped request is what budget
+quoting estimates and what exact-route recovery recompiles, so its digest is
+reproducible.
+
 `PlannedProviderCall` carries the candidate, process-local adapter/SDK call,
 config digest/epoch, capability version and complete cache route identity. The
 account dimension uses the existing endpoint account HMAC. The identity also

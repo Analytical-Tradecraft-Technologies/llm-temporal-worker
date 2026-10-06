@@ -136,8 +136,57 @@ type DurableCheckpoint struct {
 	CompactedThroughID         *CheckpointID
 	ProviderState              []CheckpointProviderState
 	Affinities                 ProviderCacheAffinitySet
-	CreatedAt                  time.Time
-	ExpiresAt                  time.Time
+	// ProviderStateProvenance pins the provider state that this checkpoint's
+	// own response added to its transcript. A checkpoint with a materialized
+	// snapshot also repeats the provenance it inherited, because a read stops
+	// at the snapshot. The field is additive: a checkpoint written without it
+	// decodes with none, and its provider state keeps family-only pinning.
+	ProviderStateProvenance []ProviderStateProvenance `json:",omitempty"`
+	CreatedAt               time.Time
+	ExpiresAt               time.Time
+}
+
+// ProviderStateProvenance records the route that produced the provider state
+// carried inline by one transcript item. Ordinal is the item's index in the
+// checkpoint's materialized transcript. Unlike CheckpointProviderState, the
+// opaque bytes are not stored separately; they stay in the transcript blobs.
+// The fields form the durable v1 continuation pin: provider, endpoint (which
+// names the configured credential and account), API family and the resolved
+// provider model.
+type ProviderStateProvenance struct {
+	Ordinal        int    `json:"ordinal"`
+	Provider       string `json:"provider"`
+	EndpointID     string `json:"endpoint_id"`
+	EndpointFamily string `json:"endpoint_family"`
+	ModelLineage   string `json:"model_lineage"`
+	// Account is the hex configuration-version-independent account identity
+	// of the endpoint (see routing.Route.EndpointAccountDigest). Empty means
+	// the account was not recorded; consumers must then treat the state as
+	// pinned to an account no route can prove, never as a wildcard.
+	Account string `json:"account,omitempty"`
+}
+
+// Pinning returns the continuation pin this provenance establishes. The
+// account identity is carried in AccountRegion and may be empty; see Account.
+func (provenance ProviderStateProvenance) Pinning() Pinning {
+	return Pinning{Provider: provenance.Provider, EndpointID: provenance.EndpointID, AccountRegion: provenance.Account, Family: provenance.EndpointFamily, ModelLineage: provenance.ModelLineage}
+}
+
+// ValidateProviderStateProvenance checks one checkpoint's or one materialized
+// transcript's provenance list: complete pins, strictly increasing ordinals.
+func ValidateProviderStateProvenance(values []ProviderStateProvenance) error {
+	previous := -1
+	for _, value := range values {
+		if value.Ordinal <= previous {
+			return fmt.Errorf("provider state provenance ordinals must be nonnegative and strictly increasing")
+		}
+		previous = value.Ordinal
+		if strings.TrimSpace(value.Provider) == "" || strings.TrimSpace(value.EndpointID) == "" ||
+			strings.TrimSpace(value.EndpointFamily) == "" || strings.TrimSpace(value.ModelLineage) == "" {
+			return fmt.Errorf("provider state provenance requires provider, endpoint, family and model lineage")
+		}
+	}
+	return nil
 }
 
 // Validate checks invariants that every adapter must enforce before exposing
@@ -217,6 +266,9 @@ func (checkpoint DurableCheckpoint) Validate(_ time.Time) error {
 	if err := checkpoint.Affinities.Validate(checkpoint.CreatedAt); err != nil {
 		return fmt.Errorf("checkpoint affinities: %w", err)
 	}
+	if err := ValidateProviderStateProvenance(checkpoint.ProviderStateProvenance); err != nil {
+		return fmt.Errorf("checkpoint %w", err)
+	}
 	return nil
 }
 
@@ -271,15 +323,18 @@ func (checkpoint DurableCheckpoint) CanonicalDigest() ([32]byte, error) {
 		CompactedThroughID         *CheckpointID
 		ProviderState              []CheckpointProviderState
 		Affinities                 ProviderCacheAffinitySet
-		CreatedAt                  time.Time
-		ExpiresAt                  time.Time
+		// Omitted when empty, so a checkpoint without provenance keeps the
+		// digest it had before the field existed.
+		ProviderStateProvenance []ProviderStateProvenance `json:",omitempty"`
+		CreatedAt               time.Time
+		ExpiresAt               time.Time
 	}{
 		checkpoint.SchemaVersion, checkpoint.ID, checkpoint.ScopeID, hex.EncodeToString(checkpoint.PublicIDHMAC[:]), checkpoint.HandleKeyID,
 		checkpoint.ParentID, checkpoint.Kind, checkpoint.Depth, checkpoint.OriginOperationID, checkpoint.OriginCacheEntryID,
 		encodeBlob(checkpoint.DeltaBlob), encodeBlob(checkpoint.ResponseBlob), encodeBlob(checkpoint.SettingsPatchBlob), nil,
 		hex.EncodeToString(checkpoint.CanonicalLineageDigest[:]), hex.EncodeToString(checkpoint.MaterializedSettingsDigest[:]), hex.EncodeToString(checkpoint.ToolFrontierDigest[:]),
 		checkpoint.CompilerEpoch, checkpoint.CompactionPolicyVersion, checkpoint.CompactionPromptVersion, checkpoint.CompactedThroughID,
-		providerState, affinities, checkpoint.CreatedAt.UTC(), checkpoint.ExpiresAt.UTC(),
+		providerState, affinities, checkpoint.ProviderStateProvenance, checkpoint.CreatedAt.UTC(), checkpoint.ExpiresAt.UTC(),
 	}
 	if checkpoint.MaterializedSnapshotBlob != nil {
 		encoded := encodeBlob(*checkpoint.MaterializedSnapshotBlob)

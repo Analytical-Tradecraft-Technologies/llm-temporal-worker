@@ -25,6 +25,12 @@ type CheckpointPublicationIdentity struct {
 	CheckpointID state.CheckpointID
 	CreatedAt    time.Time
 	ExpiresAt    time.Time
+	// ProviderRoute is the pin of the route that produced a fresh provider
+	// response, read from the persisted budget plan. It is nil for a cache
+	// replay or a no-work compaction. Generate records it as the provenance
+	// of the response's provider state and uses it to report state that the
+	// route compiled without.
+	ProviderRoute *state.Pinning
 }
 
 type CheckpointPublication struct {
@@ -82,6 +88,17 @@ func (p *CheckpointPublication) Generate(ctx context.Context, identity Checkpoin
 		response.Usage = nil
 		response.Service = nil
 	}
+	var provenance []state.ProviderStateProvenance
+	if origin == nil && identity.ProviderRoute != nil {
+		route := *identity.ProviderRoute
+		// Selection compiled this route's request through the same strip, so
+		// recomputing it here reports exactly the state the provider did not
+		// receive, on every publication retry.
+		if _, dropped := prepared.pins.strip(prepared.Request.Input, route); dropped > 0 {
+			response.Diagnostics = append(append([]llm.Diagnostic(nil), response.Diagnostics...), droppedStateDiagnostic())
+		}
+		provenance = responseProvenance(result.Output, len(prepared.Request.Input), route)
+	}
 	if err := validatePublicationCache(origin, disposition, cache.OperationGenerate, identity, prepared.SampleIndex); err != nil {
 		return zero, llm.GenerateResponseV1{}, err
 	}
@@ -100,7 +117,7 @@ func (p *CheckpointPublication) Generate(ctx context.Context, identity Checkpoin
 	// lineage walks short without a full-transcript blob write on each turn.
 	// Depth is immutable, so a retry and every fork make the same choice.
 	snapshot := cp.Depth > 0 && cp.Depth%p.limits.SnapshotInterval == 0
-	cp, err = p.blobs(ctx, cp, replay.State, prepared.Settings, request.Append, result.Output, patch, items, snapshot)
+	cp, err = p.blobs(ctx, cp, replay.State, prepared.Settings, request.Append, result.Output, patch, items, snapshot, replay.State.ProviderStateProvenance, provenance)
 	return cp, response, err
 }
 
@@ -168,10 +185,14 @@ func (p *CheckpointPublication) Compact(ctx context.Context, identity Checkpoint
 	if err != nil {
 		return zero, llm.CompactResponseV1{}, checkpointPublicationError(provider.CodeStateCorrupt)
 	}
+	inherited, err := compactedProvenance(replay.State, prepared.Selection, result != nil)
+	if err != nil {
+		return zero, llm.CompactResponseV1{}, err
+	}
 	// ResponseBlob retains the summary alone, as the summarizer returned it, so
 	// cache consumers can attach it to their own suffix without recovering a
 	// provider ID or copying lineage. Only the snapshot is materialized.
-	cp, err = p.blobs(ctx, cp, replay.State, prepared.Settings, nil, summaryItems, patch, items, true)
+	cp, err = p.blobs(ctx, cp, replay.State, prepared.Settings, nil, summaryItems, patch, items, true, inherited, nil)
 	return cp, response, err
 }
 
@@ -220,7 +241,7 @@ func (p *CheckpointPublication) metadata(ctx context.Context, identity Checkpoin
 	return cp, metadata, nil
 }
 
-func (p *CheckpointPublication) blobs(ctx context.Context, cp state.DurableCheckpoint, replay state.MaterializedState, settings state.ModelState, delta, output []llm.Item, patch []byte, items []llm.Item, snapshot bool) (state.DurableCheckpoint, error) {
+func (p *CheckpointPublication) blobs(ctx context.Context, cp state.DurableCheckpoint, replay state.MaterializedState, settings state.ModelState, delta, output []llm.Item, patch []byte, items []llm.Item, snapshot bool, inherited, own []state.ProviderStateProvenance) (state.DurableCheckpoint, error) {
 	pending, err := state.ValidateTranscript(items)
 	if err != nil || settings.Validate() != nil || len(items) > p.limits.MaxItems || len(replay.Lineage)+1 > p.limits.MaxRows {
 		return state.DurableCheckpoint{}, checkpointPublicationError(provider.CodeStateCorrupt)
@@ -273,8 +294,15 @@ func (p *CheckpointPublication) blobs(ctx context.Context, cp state.DurableCheck
 		}
 	}
 	cp.DeltaBlob, cp.ResponseBlob, cp.SettingsPatchBlob = refs[0], refs[1], refs[2]
+	// A row records the provenance of its own response. A snapshot row also
+	// repeats what it inherited, because a later read stops at its snapshot.
+	cp.ProviderStateProvenance = own
 	if snapshot {
 		cp.MaterializedSnapshotBlob = &refs[3]
+		cp.ProviderStateProvenance = append(append([]state.ProviderStateProvenance(nil), inherited...), own...)
+	}
+	if len(cp.ProviderStateProvenance) == 0 {
+		cp.ProviderStateProvenance = nil
 	}
 	if cp.Validate(cp.CreatedAt) != nil {
 		return state.DurableCheckpoint{}, checkpointPublicationError(provider.CodeStateCorrupt)

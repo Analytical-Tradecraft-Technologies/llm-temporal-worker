@@ -24,6 +24,9 @@ type Source struct {
 	Region              string
 	AccountRegion       string
 	EndpointAccountHMAC [32]byte
+	// EndpointAccountDigest is the configuration-version-independent account
+	// identity copied to each route; see routing.Route.
+	EndpointAccountDigest [32]byte
 	// Tiers maps each service class the endpoint offers to its provider_value.
 	Tiers            map[llm.ServiceClass]string
 	Capabilities     routing.CapabilitySet
@@ -221,22 +224,23 @@ func (source Source) route(model string, classes []llm.ServiceClass, contextToke
 		capabilities.Features[feature] = capability
 	}
 	return routing.Route{
-		EndpointID:          source.EndpointID,
-		Provider:            source.provider(),
-		Family:              source.Family,
-		Region:              source.Region,
-		AccountRegion:       source.AccountRegion,
-		EndpointAccountHMAC: source.EndpointAccountHMAC,
-		Model:               model,
-		ModelLineage:        model,
-		Classes:             classes,
-		ProviderTiers:       providerTiers,
-		Capabilities:        capabilities,
-		ProviderFeatures:    source.ProviderFeatures,
-		PriceAvailable:      true,
-		ExtensionNames:      append([]string(nil), source.ExtensionNames...),
-		OutputTokens:        max(outputTokens, 0),
-		ContextTokens:       max(contextTokens, 0),
+		EndpointID:            source.EndpointID,
+		Provider:              source.provider(),
+		Family:                source.Family,
+		Region:                source.Region,
+		AccountRegion:         source.AccountRegion,
+		EndpointAccountHMAC:   source.EndpointAccountHMAC,
+		EndpointAccountDigest: source.EndpointAccountDigest,
+		Model:                 model,
+		ModelLineage:          model,
+		Classes:               classes,
+		ProviderTiers:         providerTiers,
+		Capabilities:          capabilities,
+		ProviderFeatures:      source.ProviderFeatures,
+		PriceAvailable:        true,
+		ExtensionNames:        append([]string(nil), source.ExtensionNames...),
+		OutputTokens:          max(outputTokens, 0),
+		ContextTokens:         max(contextTokens, 0),
 	}
 }
 

@@ -225,6 +225,10 @@ func (r *CloudExecutionRuntime) finishAttempt(ctx context.Context, p PreparedClo
 		return llm.ExecutionResultV1{}, err
 	}
 	identity := r.publicationIdentity(p, p.Preparation.PreparedAt)
+	// The persisted plan names the route that served this attempt; it pins the
+	// response's provider state and decides any drop diagnostic.
+	served := planPinning(saved.Plan)
+	identity.ProviderRoute = &served
 	effects := &ProviderFinalizationEffects{AttemptID: attempt.ID, Unreserved: !saved.Plan.RequiresReservation(), Uncached: lease == nil, Completion: cache.FillCompletion{Outcome: cache.FillNotCacheable, CompletedAt: saved.Execution.CompletedAt}}
 	if saved.Execution.Settlement != nil {
 		effects.Budget = *saved.Execution.Settlement

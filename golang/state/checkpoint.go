@@ -89,6 +89,10 @@ type MaterializedState struct {
 	Settings         ModelState
 	PendingToolCalls []string
 	Lineage          []Handle
+	// ProviderStateProvenance pins provider state in Items by item index. It
+	// is populated only by DurableCheckpointMaterializer, from rows that
+	// recorded it; items without an entry have no recorded provenance.
+	ProviderStateProvenance []ProviderStateProvenance
 }
 
 // CheckpointGraph is a concurrency-safe in-memory graph suitable for pure

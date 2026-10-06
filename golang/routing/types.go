@@ -54,6 +54,14 @@ type Route struct {
 	// EndpointAccountHMAC is a non-secret route identity digest used to match
 	// persisted provider affinity without storing an account identifier.
 	EndpointAccountHMAC [32]byte
+	// EndpointAccountDigest identifies the account the endpoint reaches
+	// (provider, base URL, regions, workspace and credential reference),
+	// independent of the configuration version. Durable continuation pins
+	// compare it so a reload that points an endpoint ID at another account
+	// cannot receive that endpoint's provider state. It is not part of the
+	// candidate ID; zero means unknown, and an unknown account is never
+	// treated as matching a pin.
+	EndpointAccountDigest [32]byte
 	// EndpointDigest identifies the endpoint's own non-secret configuration.
 	// It lets paid work be recovered after an unrelated configuration change.
 	// It is not part of the candidate ID; zero means unknown.
@@ -119,6 +127,8 @@ type Candidate struct {
 	PriceVersion        string
 	ExtensionDigest     string
 	Pinning             state.Pinning
+	// EndpointAccountDigest is copied from the route; see Route.
+	EndpointAccountDigest [32]byte
 }
 
 func (candidate Candidate) Class() llm.ServiceClass { return candidate.AttemptedClass }

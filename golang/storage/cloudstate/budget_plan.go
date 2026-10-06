@@ -42,7 +42,12 @@ type BudgetPlan struct {
 	ConfigEpoch  string     `json:"config_epoch"`
 	// EndpointDigest is the hex identity of the planned endpoint's own
 	// configuration. Plans saved before it existed leave it empty.
-	EndpointDigest    string                 `json:"endpoint_digest,omitempty"`
+	EndpointDigest string `json:"endpoint_digest,omitempty"`
+	// EndpointAccount is the hex configuration-version-independent account
+	// identity of the planned endpoint. Publication pins the response's
+	// provider state to it. Plans saved before it existed leave it empty,
+	// and state they produce is then pinned to no provable account.
+	EndpointAccount   string                 `json:"endpoint_account,omitempty"`
 	RequestDigest     [32]byte               `json:"request_digest"`
 	CapabilityVersion string                 `json:"capability_version"`
 	CompilerVersion   string                 `json:"compiler_version"`
@@ -73,7 +78,7 @@ func (plan BudgetPlan) Validate() error {
 		return ErrInvalid
 	}
 	if plan.Version != 1 || (plan.Kind != "generate" && plan.Kind != "compact") ||
-		plan.ConfigDigest == ([32]byte{}) || plan.RequestDigest == ([32]byte{}) || (plan.EndpointDigest != "" && !hexDigest(plan.EndpointDigest)) ||
+		plan.ConfigDigest == ([32]byte{}) || plan.RequestDigest == ([32]byte{}) || (plan.EndpointDigest != "" && !hexDigest(plan.EndpointDigest)) || (plan.EndpointAccount != "" && !hexDigest(plan.EndpointAccount)) ||
 		!safeText(plan.ConfigEpoch, 256) || !safeText(plan.CapabilityVersion, 256) ||
 		!safeText(plan.CompilerVersion, 128) || !safeText(plan.Family, 128) || !safeText(plan.ProviderTier, 128) ||
 		!plan.RequestedClass.Valid() || !plan.AttemptedClass.Valid() || plan.Route.Validate() != nil ||

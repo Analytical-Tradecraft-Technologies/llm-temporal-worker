@@ -33,7 +33,10 @@ type RequestPreparation struct {
 	ConfigDigest    [32]byte        `json:"config_digest"`
 	CheckpointScope string          `json:"checkpoint_scope"`
 	ParentSnapshot  json.RawMessage `json:"parent_snapshot,omitempty"`
-	PreparedAt      time.Time       `json:"prepared_at"`
+	// ParentProvenance pins provider state in the parent snapshot's items.
+	// It is additive: a preparation saved without it restores with none.
+	ParentProvenance []state.ProviderStateProvenance `json:"parent_provenance,omitempty"`
+	PreparedAt       time.Time                       `json:"prepared_at"`
 }
 
 func (p RequestPreparation) Validate() error {
@@ -47,6 +50,9 @@ func (p RequestPreparation) Validate() error {
 // (#1112). Each call decodes afresh, so the caller owns the result.
 func (p RequestPreparation) ValidateParent() (*state.CheckpointSnapshot, error) {
 	if p.Version != 1 || p.ConfigDigest == ([32]byte{}) || !safeText(p.CheckpointScope, 512) || !validTime(p.PreparedAt) {
+		return nil, ErrInvalid
+	}
+	if (len(p.ParentProvenance) != 0 && len(p.ParentSnapshot) == 0) || state.ValidateProviderStateProvenance(p.ParentProvenance) != nil {
 		return nil, ErrInvalid
 	}
 	if len(p.ParentSnapshot) == 0 {
