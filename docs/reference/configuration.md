@@ -92,6 +92,85 @@ supplies transport security and client identity. All of these fields are
 process-lifetime settings, read at startup; a reload that changes them is
 rejected. Redis TLS does not accept `cert_file` or `key_file`.
 
+## Temporal payload encryption
+
+By default the worker's Temporal client writes payloads as plaintext JSON.
+Prompts and outputs below `server.inline_payload_bytes` therefore sit
+unencrypted in Temporal history, and history confidentiality depends on the
+Temporal deployment. Set `temporal.payload_codec` to encrypt every payload the
+worker's client writes:
+
+```yaml
+temporal:
+  payload_codec:
+    kind: aes256_gcm
+    keys:
+      - id: codec-2026-10
+        primary: true
+        secret:
+          kind: file
+          path: /var/run/secrets/temporal-codec-2026-10
+      - id: codec-2026-07           # still decrypts older history
+        primary: false
+        secret:
+          kind: file
+          path: /var/run/secrets/temporal-codec-2026-07
+```
+
+The setting is opt-in. When it is omitted, behaviour, payload bytes and the
+`config_version` digest are unchanged.
+
+- **Cipher.** `aes256_gcm` is the only kind. Each configured secret is resolved
+  like `continuation.handle_keys` (an `env` or `file` reference; the worker
+  binary rejects `workload_identity`) and must hold at least 32 bytes of random
+  key material. The AES-256 key is derived from it with HKDF-SHA256, so the
+  secret is never used directly. Each payload is the protobuf-encoded original
+  payload sealed under a random 96-bit nonce; the key ID and cipher name are
+  authenticated, so a tampered, truncated or relabelled payload fails to
+  decode.
+- **Metadata.** An encrypted payload has `encoding: binary/encrypted`,
+  `encryption-cipher: llmtw-aes256-gcm-v1` and `encryption-key-id: <id>`. Key
+  IDs are stored in plaintext, so they must not carry secrets; they are 1-64
+  characters from `A-Z a-z 0-9 . _ -`.
+- **Rotation.** New payloads are encrypted with the single `primary: true` key.
+  Any configured key decrypts. To rotate: add the new key as non-primary to
+  every worker and caller; then make it primary; remove the old key only after
+  every history that used it has passed its retention period. A payload whose
+  key is not configured fails to decode rather than being skipped.
+- **Fail closed.** Validation rejects an unknown kind, an empty key list, a
+  duplicate or malformed key ID, an invalid secret reference, and any count of
+  primary keys other than one. At startup, a secret that cannot be resolved or
+  is shorter than 32 bytes stops the worker before it connects to Temporal; it
+  never falls back to plaintext.
+- **Process lifetime.** The codec is built with the Temporal client at startup.
+  A reload that changes `temporal.payload_codec`, including a key rotation, is
+  rejected; restart the worker to apply it.
+- **Existing history.** Payloads without `binary/encrypted` encoding decode
+  unchanged, so workflows started before the codec was enabled can still be
+  read. Enabling the codec is still a coordinated rollout: a caller without the
+  codec cannot read the worker's encrypted results, and a worker without it
+  cannot read encrypted inputs.
+- **Size.** `server.inline_payload_bytes` limits the plaintext payload.
+  Encryption adds a few dozen bytes per payload, so leave headroom below
+  Temporal's payload size limit.
+- **Scope.** The codec covers payloads: workflow and Activity inputs and
+  results, heartbeat details, and memos. Like any Temporal Payload Codec, it
+  does not encrypt workflow and Activity IDs and type names, search
+  attributes, headers, or failure messages and stack traces. The worker
+  already keeps content out of the errors it returns.
+
+**Callers must use the same codec.** Every client that starts, reads, or runs
+workflows on the same task queue needs this codec and the same keys. Go callers
+can install `temporalcodec.NewAESGCM` from
+`github.com/mfow/llm-temporal-worker/golang/temporalcodec` with
+`converter.NewCodecDataConverter`. The OCaml library does not install a codec:
+an OCaml application that calls the worker must configure an equivalent codec on
+its own Temporal client (the format above), or use a remote codec served by
+`converter.NewPayloadCodecHTTPHandler` over `temporalcodec`, if its SDK supports
+remote codecs. Without one, it cannot decode the worker's results. The Temporal
+UI and CLI also show encrypted payloads as opaque bytes unless they are pointed
+at such a codec server. This repository does not ship a codec server.
+
 ## Output reservations
 
 When a request omits `output.max_tokens`, budgeted execution inserts
@@ -133,6 +212,12 @@ temporal:
     key_file: /var/run/ca/temporal-client-key.pem
   # api_key_file: /var/run/ca/temporal-api-key   # instead of cert_file/key_file
   # mesh_transport: true                          # a service mesh supplies TLS and identity
+  # payload_codec:                                # opt-in history encryption; see above
+  #   kind: aes256_gcm
+  #   keys:
+  #     - id: codec-2026-10
+  #       primary: true
+  #       secret: {kind: file, path: /var/run/secrets/temporal-codec}
   worker:
     max_concurrent_activities: 16
     max_concurrent_activity_task_polls: 8
@@ -1225,6 +1310,8 @@ worker:
 - Temporal, state, blob, endpoint, and provider timeout bounds are valid;
 - routes reference declared endpoints and only use the three public service
   classes mapped by those endpoints;
+- `temporal.payload_codec`, when set, names a supported kind and exactly one
+  primary key among unique, well-formed key IDs;
 - budget windows, continuation keys, Redis numeric bounds, and retention
   inequalities are safe, including window bucket counts, limits Redis can
   represent, policy ID length, and the `state.redis.admission_hash_tag`

@@ -118,6 +118,28 @@ type TemporalConfig struct {
 	// TLS or client credentials.
 	MeshTransport bool                 `yaml:"mesh_transport" json:"mesh_transport,omitempty"`
 	Worker        TemporalWorkerConfig `yaml:"worker" json:"worker"`
+	// PayloadCodec, when set, encrypts every payload the worker's Temporal
+	// client writes. It is omitted from canonical JSON when unset, so
+	// enabling it is the only change that moves an existing digest.
+	PayloadCodec *PayloadCodecConfig `yaml:"payload_codec,omitempty" json:"payload_codec,omitempty"`
+}
+
+// PayloadCodecAES256GCM is the only supported payload codec kind.
+const PayloadCodecAES256GCM = "aes256_gcm"
+
+// PayloadCodecConfig selects a Temporal Payload Codec. Keys follow the same
+// rotation model as continuation.handle_keys: payloads are encrypted with the
+// primary key and decrypted with whichever configured key their metadata
+// names.
+type PayloadCodecConfig struct {
+	Kind string            `yaml:"kind" json:"kind"`
+	Keys []PayloadCodecKey `yaml:"keys" json:"keys"`
+}
+
+type PayloadCodecKey struct {
+	ID      string    `yaml:"id" json:"id"`
+	Primary bool      `yaml:"primary" json:"primary"`
+	Secret  SecretRef `yaml:"secret" json:"secret"`
 }
 
 type TLSConfig struct {

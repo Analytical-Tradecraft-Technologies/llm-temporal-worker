@@ -8,6 +8,12 @@ the Go worker queue and a deterministic child ID. The Go query workflow owns
 its internal activity; the OCaml client does not expose activity descriptors.
 See the package README for the current checked helpers and hosted-tool flags.
 
+The package does not configure a Temporal Payload Codec. When the Go worker
+sets `temporal.payload_codec`, the OCaml application's own Temporal client must
+encode and decode payloads with the same format and keys, or use a remote codec
+server. Otherwise it cannot read the worker's results. See
+[Temporal payload encryption](../reference/configuration.md#temporal-payload-encryption).
+
 This document specifies changes to the existing
 **ocaml/llm_temporal_worker** package. It does not create another opam package
 or a parallel client. The implementation extends the same **Llm_temporal**
