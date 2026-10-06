@@ -38,6 +38,26 @@
     {
       "if": {
         "properties": {
+          "environment": { "not": { "const": "development" } },
+          "temporal": { "not": { "properties": { "mesh_transport": { "const": true } }, "required": ["mesh_transport"] } }
+        },
+        "required": ["environment", "temporal"]
+      },
+      "then": {
+        "properties": {
+          "temporal": {
+            "properties": { "tls": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } },
+            "anyOf": [
+              { "properties": { "tls": { "required": ["cert_file"] } } },
+              { "required": ["api_key_file"] }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
           "blob_store": {
             "properties": { "kind": { "const": "file" } },
             "required": ["kind"]
@@ -123,6 +143,22 @@
         "ca_file": { "type": "string" }
       }
     },
+    "temporal_tls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enabled", "server_name", "ca_file"],
+      "properties": {
+        "enabled": { "type": "boolean" }, "server_name": { "type": "string" },
+        "ca_file": { "type": "string" },
+        "cert_file": { "type": "string" }, "key_file": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["cert_file"] },
+          "then": { "required": ["key_file"], "properties": { "enabled": { "const": true } } }
+        },
+        { "if": { "required": ["key_file"] }, "then": { "required": ["cert_file"] } }
+      ]
+    },
     "server": {
       "type": "object", "additionalProperties": false,
       "required": ["health_address", "metrics_address", "shutdown_timeout", "finalization_timeout", "readiness_probe_interval", "readiness_probe_timeout", "inline_payload_bytes"],
@@ -141,8 +177,11 @@
       "properties": {
         "target": { "type": "string" }, "namespace": { "type": "string" },
         "task_queue": { "type": "string" }, "identity_prefix": { "type": "string" },
-        "tls": { "$ref": "#/$defs/tls" }, "worker": { "$ref": "#/$defs/worker" }
-      }
+        "tls": { "$ref": "#/$defs/temporal_tls" }, "api_key_file": { "type": "string" },
+        "mesh_transport": { "type": "boolean" }, "worker": { "$ref": "#/$defs/worker" }
+      },
+      "if": { "required": ["api_key_file"] },
+      "then": { "properties": { "tls": { "properties": { "enabled": { "const": true } } } } }
     },
     "worker": {
       "type": "object", "additionalProperties": false,

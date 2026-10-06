@@ -19,6 +19,10 @@ temporal:
     enabled: true
     server_name: temporal.example.internal
     ca_file: /var/run/ca/temporal.pem
+    # Client certificate for Temporal mTLS. Production requires it, or
+    # temporal.api_key_file, unless temporal.mesh_transport is set.
+    cert_file: /var/run/ca/temporal-client.pem
+    key_file: /var/run/ca/temporal-client-key.pem
   worker:
     max_concurrent_activities: 16
     max_concurrent_activity_task_polls: 8
