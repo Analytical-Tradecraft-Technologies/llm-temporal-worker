@@ -227,16 +227,10 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			}
 			if retries {
 				// Settle the failure and release its cache ownership; that is
-				// accounting only. Exhaustion is final under any configuration.
+				// accounting only. The attempt limit belongs to the request's
+				// own configuration, so exhaustion waits for a compatible worker.
 				if _, err := r.resumeAttempt(ctx, p, attempt, saved, step); err != nil {
 					return llm.ExecutionResultV1{}, err
-				}
-				if len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
-					failure, err := r.store.FinishRequestExhausted(ctx, root.Scope, root.ID, attempt.ID, r.options.MaxAttempts, r.now())
-					if err != nil {
-						return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
-					}
-					return failure, nil
 				}
 			}
 			if loadErr == nil && saved.Execution.Stage == cloudstate.ExecutionUnknown {
@@ -254,11 +248,13 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		} else if !errors.Is(err, cloudstate.ErrRequestAttemptMissing) {
 			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 		}
-		// Nothing unfinished is paid. Wait while a worker on the previous
-		// configuration may still exist, then fail fast instead of waiting
-		// forever (#1161). The request is not changed, so restoring the
-		// previous configuration resumes it.
-		if r.now().Sub(r.startedAt) >= r.options.ReloadGrace {
+		// Nothing unfinished is paid. A request prepared before this worker's
+		// configuration began serving belongs to an older configuration: wait
+		// while a worker on it may still exist, then fail fast instead of
+		// waiting forever (#1161). A request prepared later may belong to a
+		// newer configuration rolling out, so an older worker always waits.
+		// The request is not changed, so restoring its configuration resumes it.
+		if p.Preparation.PreparedAt.Before(r.startedAt) && r.now().Sub(r.startedAt) >= r.options.ReloadGrace {
 			return llm.ExecutionResultV1{}, cloudConfigurationRetired()
 		}
 		return llm.ExecutionResultV1{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)

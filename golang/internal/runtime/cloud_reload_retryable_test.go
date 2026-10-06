@@ -40,7 +40,7 @@ func (f *boundedCloudFixture) rejectRetryably() {
 
 // A retryable failure found after a reload must wait for a compatible worker
 // to start the next attempt, not hand the same failure back on every
-// acquisition (#1162). Exhaustion stays final under any configuration.
+// acquisition (#1162). Only a compatible worker applies the attempt limit.
 func TestCloudReloadRetryableFailureWaitsForNextAttempt(t *testing.T) {
 	for _, exhausted := range []bool{false, true} {
 		name := "next-attempt"
@@ -61,20 +61,21 @@ func TestCloudReloadRetryableFailureWaitsForNextAttempt(t *testing.T) {
 			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
 			restore := f.reload(t)
 			f.now = f.now.Add(time.Minute)
-			if exhausted {
-				v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionFailed)
-				if v.Retryable {
-					t.Fatal("exhausted request stayed retryable after reload")
-				}
-				return
-			}
 			for i := 0; i < 2; i++ {
 				_, err = f.runtime.AcquireBudgetV1(ctx, ref)
 				assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 			}
 			restore()
 			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			if exhausted {
+				// The request's own attempt limit applies once a compatible
+				// worker serves it.
+				boundedState(t, v, err, llm.ExecutionFailed)
+				if v.Retryable {
+					t.Fatal("exhausted request stayed retryable")
+				}
+				return
+			}
 			boundedState(t, v, err, llm.ExecutionAcquired)
 			if f.submits.Load() != 1 {
 				t.Fatal("reload dispatched with incompatible configuration")
@@ -92,6 +93,7 @@ func TestCloudReloadFailsUnpaidWorkAfterGrace(t *testing.T) {
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
 	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	f.now = f.now.Add(time.Second)
 	restore := f.reload(t)
 	f.now = f.now.Add(defaultCloudReloadGrace - time.Second)
 	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
@@ -114,4 +116,23 @@ func TestCloudReloadFailsUnpaidWorkAfterGrace(t *testing.T) {
 	restore()
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
+}
+
+// A worker still on an older configuration may receive a request prepared by
+// a newer one during a rolling deployment. It must keep waiting however long
+// it has been running, so a compatible worker can take the request.
+func TestCloudReloadOlderWorkerWaitsForNewerRequest(t *testing.T) {
+	ctx := context.Background()
+	f := boundedCloud(t, false)
+	f.now = f.now.Add(time.Hour)
+	restore := f.reload(t)
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	// The older worker started long before the request was prepared.
+	f.now = f.now.Add(-time.Hour)
+	restore()
+	f.now = f.now.Add(time.Hour + defaultCloudReloadGrace)
+	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 }
