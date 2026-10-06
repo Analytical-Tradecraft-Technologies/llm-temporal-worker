@@ -273,6 +273,11 @@ type settings_patch = {
   tool_policy : tool_policy patch;
   output : output_spec patch;
   temperature : Usd_decimal.t patch;
+  top_p : Usd_decimal.t patch;
+  stop_sequences : string list patch;
+  seed : int64 patch;
+  reasoning_mode : reasoning_mode patch;
+  reasoning_token_budget : int patch;
   reasoning_effort : reasoning_effort patch;
   reasoning_summary : reasoning_summary patch;
   compaction_policy : Yojson.Safe.t patch;

@@ -62,7 +62,7 @@ let () =
   if Usd_decimal.to_string decimal <> "1.23" then failwith "decimal was not canonicalized";
   if Usd_decimal.of_string "1.0000000000000000001" |> Result.is_ok then failwith "19 fractional digits accepted";
   let context = { tenant = Some (Tenant_id.of_string "tenant"); project = Some (Project_id.of_string "project"); actor = Some (Actor_id.of_string "actor"); tags = [] } in
-  let keep_patch = { model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep; web_search = Keep; web_fetch = Keep; code_execution = Keep } in
+  let keep_patch = { model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; top_p = Keep; stop_sequences = Keep; seed = Keep; reasoning_mode = Keep; reasoning_token_budget = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep; web_search = Keep; web_fetch = Keep; code_execution = Keep } in
   let request = {
     api_version = V1_codec.generate_api_version; operation_key = Operation_key.of_string "op-1"; context;
     parent = Some (checkpoint "cp-0"); append = [Message { actor = Human; content = [Text "hello"] }];
@@ -71,6 +71,49 @@ let () =
   let request' = ok (V1_codec.decode_generate_request (ok (V1_codec.encode_generate_request request))) in
   if request'.operation_key <> request.operation_key || request'.append <> request.append then failwith "generate round trip";
   error (V1_codec.encode_generate_request { request with context = { context with tags = [("region", "au")] } });
+  (* Sampling and reasoning leaves round trip with the Go wire spelling and
+     the same bounds. *)
+  let decimal_of value = match Usd_decimal.of_string value with Ok value -> value | Error message -> failwith message in
+  let sampling_patch = { keep_patch with top_p = Set (decimal_of "0.95"); stop_sequences = Set ["END"; "\n\n"];
+                                         seed = Set 9_007_199_254_740_991L; reasoning_mode = Set Reasoning_enabled;
+                                         reasoning_token_budget = Set 2048 } in
+  let sampling_request = { request with settings_patch = sampling_patch } in
+  let sampling_bytes = ok (V1_codec.encode_generate_request sampling_request) in
+  let sampling_json = Yojson.Safe.from_string (Bytes.to_string sampling_bytes) in
+  let patch_json = Yojson.Safe.Util.member "settings_patch" sampling_json in
+  let expected_patch = Yojson.Safe.from_string
+      {|{"top_p":{"set":"0.95"},"stop_sequences":{"set":["END","\n\n"]},"seed":{"set":9007199254740991},"reasoning_mode":{"set":"enabled"},"reasoning_token_budget":{"set":2048}}|} in
+  if Yojson.Safe.sort patch_json <> Yojson.Safe.sort expected_patch then
+    failwith ("sampling patch wire form: " ^ Yojson.Safe.to_string patch_json);
+  let decoded_sampling = ok (V1_codec.decode_generate_request sampling_bytes) in
+  if decoded_sampling.settings_patch <> sampling_patch then failwith "sampling patch round trip";
+  let cleared = { keep_patch with top_p = Clear; stop_sequences = Clear; seed = Clear; reasoning_mode = Clear; reasoning_token_budget = Clear } in
+  let decoded_cleared = ok (V1_codec.decode_generate_request (ok (V1_codec.encode_generate_request { request with settings_patch = cleared }))) in
+  if decoded_cleared.settings_patch <> cleared then failwith "sampling clear round trip";
+  List.iter (fun patch -> error (V1_codec.encode_generate_request { request with settings_patch = patch }))
+    [ { keep_patch with top_p = Set Usd_decimal.zero };
+      { keep_patch with top_p = Set (decimal_of "1.5") };
+      { keep_patch with stop_sequences = Set [] };
+      { keep_patch with stop_sequences = Set [""] };
+      { keep_patch with stop_sequences = Set ["a"; "a"] };
+      { keep_patch with stop_sequences = Set (List.init 17 (fun index -> String.make (index + 1) 's')) };
+      { keep_patch with stop_sequences = Set [String.make 257 's'] };
+      { keep_patch with seed = Set (-1L) };
+      { keep_patch with seed = Set 9_007_199_254_740_992L };
+      { keep_patch with reasoning_token_budget = Set 0 } ];
+  (* A 256-character sequence counts characters, not bytes. *)
+  ignore (ok (V1_codec.encode_generate_request
+                { request with settings_patch = { keep_patch with stop_sequences = Set [String.concat "" (List.init 256 (fun _ -> "\xc3\xa9"))] } }));
+  let with_patch patch_text =
+    let fields = Yojson.Safe.Util.to_assoc (Yojson.Safe.from_string (Bytes.to_string (ok (V1_codec.encode_generate_request request)))) in
+    Bytes.of_string (Yojson.Safe.to_string (`Assoc (("settings_patch", Yojson.Safe.from_string patch_text) :: List.remove_assoc "settings_patch" fields)))
+  in
+  List.iter (fun patch_text -> error (V1_codec.decode_generate_request (with_patch patch_text)))
+    [ {|{"top_p":{"set":"0"}}|}; {|{"top_p":{"set":"1.01"}}|}; {|{"top_p":{"set":0.5}}|};
+      {|{"stop_sequences":{"set":[]}}|}; {|{"stop_sequences":{"set":[1]}}|};
+      {|{"seed":{"set":-1}}|}; {|{"seed":{"set":1.5}}|}; {|{"seed":{"set":"1"}}|};
+      {|{"reasoning_mode":{"set":"on"}}|}; {|{"reasoning_token_budget":{"set":0}}|};
+      {|{"reasoning_token_budget":{"set":2147483648}}|} ];
   let generate_response = { api_version = V1_codec.generate_api_version; operation_key = Operation_key.of_string "op-1"; operation_id = Operation_id.of_string "id-1"; status = Completed; output = []; checkpoint = { handle = checkpoint "cp-1"; parent = None; kind = Generation_checkpoint; depth = 0l }; cache = { disposition = Cache_miss_populated; variant = 0l; entry_age_seconds = None }; route = None; service = None; usage = None; cost = Unknown_cost { reason = State_unavailable }; diagnostics = [] } in
   let generate_bytes = ok (V1_codec.encode_generate_response generate_response) in
   let generate_without_diagnostics = ok (V1_codec.decode_generate_response (omit "diagnostics" generate_bytes)) in
@@ -167,6 +210,7 @@ let () =
    refusals, usage.provider_raw, priced costs and diagnostics with details. *)
 let () =
   assert_shared_fixture "generate-request-all-kinds.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
+  assert_shared_fixture "generate-fork-patch-sampling.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
   assert_shared_fixture "generate-response-all-kinds.json" V1_codec.decode_generate_response V1_codec.encode_generate_response;
   assert_shared_fixture "compact-response-priced.json" V1_codec.decode_compaction_response V1_codec.encode_compaction_response;
   let usage : usage = { input_tokens = 6L; output_tokens = 7L; reasoning_tokens = 2L; cache_read_tokens = 3L; cache_write_tokens = 1L; provider_raw = Some ["total_tokens", `Int 17; "details", `Assoc ["audio_tokens", `Int 0]] } in

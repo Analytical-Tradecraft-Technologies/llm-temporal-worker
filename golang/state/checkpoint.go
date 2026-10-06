@@ -570,6 +570,14 @@ func cloneSettingsPatch(patch SettingsPatch) SettingsPatch {
 	result.Output.Set = cloneOutput(patch.Output.Set)
 	result.Temperature.Set = clonePointer(patch.Temperature.Set)
 	result.TemperatureDecimal.Set = clonePointer(patch.TemperatureDecimal.Set)
+	result.TopP.Set = clonePointer(patch.TopP.Set)
+	if patch.StopSequences.Set != nil {
+		value := append([]string(nil), (*patch.StopSequences.Set)...)
+		result.StopSequences.Set = &value
+	}
+	result.Seed.Set = clonePointer(patch.Seed.Set)
+	result.ReasoningMode.Set = clonePointer(patch.ReasoningMode.Set)
+	result.ReasoningTokenBudget.Set = clonePointer(patch.ReasoningTokenBudget.Set)
 	result.ReasoningEffort.Set = clonePointer(patch.ReasoningEffort.Set)
 	result.ReasoningSummary.Set = clonePointer(patch.ReasoningSummary.Set)
 	result.WebFetch.Set = clonePointer(patch.WebFetch.Set)

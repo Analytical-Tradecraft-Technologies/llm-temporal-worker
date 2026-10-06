@@ -247,7 +247,61 @@ let patch_of_json context decode value =
   | None, None -> Error (errorf "%s must contain set or clear" context)
   | Some _, Some _ -> Error (errorf "%s must not contain set and clear" context)
 
-let empty_settings_patch = { web_fetch = Keep; code_execution = Keep; web_search = Keep; model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep }
+let empty_settings_patch = { web_fetch = Keep; code_execution = Keep; web_search = Keep; model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; top_p = Keep; stop_sequences = Keep; seed = Keep; reasoning_mode = Keep; reasoning_token_budget = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep }
+
+(* Bounds shared with the Go SettingsPatchV1 codec and the published schema. *)
+let max_stop_sequences = 16
+let max_stop_sequence_length = 256
+let max_seed = 9_007_199_254_740_991L
+let max_reasoning_token_budget = 2_147_483_647
+
+let validate_top_p context value =
+  let one = match Usd_decimal.of_string "1" with Ok value -> value | Error message -> invalid_arg message in
+  if Usd_decimal.compare value Usd_decimal.zero <= 0 || Usd_decimal.compare value one > 0 then
+    Error (errorf "%s must be greater than 0 and at most 1" context)
+  else Ok value
+
+(* Characters are Unicode code points, as JSON Schema maxLength counts them. *)
+let utf8_length value =
+  let count = ref 0 in
+  String.iter (fun character -> if Char.code character land 0xC0 <> 0x80 then incr count) value;
+  !count
+
+let validate_stop_sequences context values =
+  let count = List.length values in
+  if count < 1 || count > max_stop_sequences then
+    Error (errorf "%s must contain between 1 and %d values" context max_stop_sequences)
+  else if List.exists (fun value -> value = "" || not (String.is_valid_utf_8 value) || utf8_length value > max_stop_sequence_length) values then
+    Error (errorf "%s values must be non-empty and at most %d characters" context max_stop_sequence_length)
+  else if List.length (List.sort_uniq String.compare values) <> count then
+    Error (errorf "%s must not contain duplicates" context)
+  else Ok values
+
+let validate_seed context value =
+  if value < 0L || value > max_seed then Error (errorf "%s must be between 0 and %Ld" context max_seed) else Ok value
+
+let validate_reasoning_token_budget context value =
+  if value < 1 || value > max_reasoning_token_budget then
+    Error (errorf "%s must be between 1 and %d" context max_reasoning_token_budget)
+  else Ok value
+
+let reasoning_mode_to_json = function
+  | Provider_default -> `String "provider_default" | Reasoning_disabled -> `String "disabled"
+  | Adaptive -> `String "adaptive" | Reasoning_enabled -> `String "enabled"
+
+let reasoning_mode_of_json context = function
+  | `String "provider_default" -> Ok Provider_default | `String "disabled" -> Ok Reasoning_disabled
+  | `String "adaptive" -> Ok Adaptive | `String "enabled" -> Ok Reasoning_enabled
+  | _ -> Error (errorf "%s has an invalid reasoning mode" context)
+
+(* Encoding refuses an out-of-bounds Set the same way decoding does, so a
+   caller-built patch fails locally instead of at the worker. *)
+let validate_settings_patch (value : settings_patch) =
+  let check name validate = function Set value -> Result.map (fun _ -> ()) (validate ("settings_patch." ^ name ^ ".set") value) | Keep | Clear -> Ok () in
+  let* () = check "top_p" validate_top_p value.top_p in
+  let* () = check "stop_sequences" validate_stop_sequences value.stop_sequences in
+  let* () = check "seed" validate_seed value.seed in
+  check "reasoning_token_budget" validate_reasoning_token_budget value.reasoning_token_budget
 
 let output_to_json = Llm_temporal_codec.output_to_json
 let instruction_to_json = Llm_temporal_codec.instruction_to_json
@@ -266,6 +320,11 @@ let settings_patch_to_json (value : settings_patch) =
   let fields = add "tool_policy" Llm_temporal_codec.policy_to_json value.tool_policy fields in
   let fields = add "output" output_to_json value.output fields in
   let fields = add "temperature" usd_to_json value.temperature fields in
+  let fields = add "top_p" usd_to_json value.top_p fields in
+  let fields = add "stop_sequences" (fun values -> `List (List.map (fun value -> `String value) values)) value.stop_sequences fields in
+  let fields = add "seed" (fun value -> `Intlit (Int64.to_string value)) value.seed fields in
+  let fields = add "reasoning_mode" reasoning_mode_to_json value.reasoning_mode fields in
+  let fields = add "reasoning_token_budget" (fun value -> `Int value) value.reasoning_token_budget fields in
   let fields = add "reasoning_effort" (fun value -> `String (match value with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Maximum -> "maximum")) value.reasoning_effort fields in
   let fields = add "reasoning_summary" (fun value -> `String (match value with Summary_default -> "provider_default" | Summary_none -> "none" | Summary_auto -> "auto" | Concise -> "concise" | Detailed -> "detailed")) value.reasoning_summary fields in
   let fields = add "web_fetch" (fun b -> `Bool b) value.web_fetch fields in
@@ -276,7 +335,7 @@ let settings_patch_to_json (value : settings_patch) =
   `Assoc fields
 
 let settings_patch_of_json value =
-  let* fields = closed "settings_patch" ["model"; "service_class"; "service_class_fallbacks"; "portability"; "instructions"; "tools"; "tool_policy"; "output"; "temperature"; "reasoning_effort"; "reasoning_summary"; "compaction_policy"; "extensions"; "web_search"; "web_fetch"; "code_execution"] value in
+  let* fields = closed "settings_patch" ["model"; "service_class"; "service_class_fallbacks"; "portability"; "instructions"; "tools"; "tool_policy"; "output"; "temperature"; "top_p"; "stop_sequences"; "seed"; "reasoning_mode"; "reasoning_token_budget"; "reasoning_effort"; "reasoning_summary"; "compaction_policy"; "extensions"; "web_search"; "web_fetch"; "code_execution"] value in
   let get name decode = match optional name fields with None -> Ok Keep | Some value -> patch_of_json ("settings_patch." ^ name) decode value in
   let* model = get "model" (fun context value -> string context value >>= fun value -> nonempty context value >>= fun value -> Ok (Model_selector.of_string value)) in
   let* service_class = get "service_class" service_class_of_json in
@@ -287,6 +346,15 @@ let settings_patch_of_json value =
   let* tool_policy = get "tool_policy" (fun _ value -> Llm_temporal_codec.policy_of_json value) in
   let* output = get "output" (fun _ value -> Llm_temporal_codec.output_of_json value) in
   let* temperature = get "temperature" (fun context value -> usd_of_json context value) in
+  let* top_p = get "top_p" (fun context value -> usd_of_json context value >>= validate_top_p context) in
+  let* stop_sequences = get "stop_sequences" (fun context value -> list context value >>= map_result (string context) >>= validate_stop_sequences context) in
+  let* seed = get "seed" (fun context value -> int64 context value >>= validate_seed context) in
+  let* reasoning_mode = get "reasoning_mode" reasoning_mode_of_json in
+  let* reasoning_token_budget = get "reasoning_token_budget" (fun context value ->
+    let* value = int64 context value in
+    if value < 1L || value > Int64.of_int max_reasoning_token_budget then
+      Error (errorf "%s must be between 1 and %d" context max_reasoning_token_budget)
+    else Ok (Int64.to_int value)) in
   let effort context = function `String "provider_default" -> Ok Effort_default | `String "minimal" -> Ok Minimal | `String "low" -> Ok Low | `String "medium" -> Ok Medium | `String "high" -> Ok High | `String "maximum" -> Ok Maximum | _ -> Error (errorf "%s has an invalid reasoning effort" context) in
   let summary context = function `String "provider_default" -> Ok Summary_default | `String "none" -> Ok Summary_none | `String "auto" -> Ok Summary_auto | `String "concise" -> Ok Concise | `String "detailed" -> Ok Detailed | _ -> Error (errorf "%s has an invalid reasoning summary" context) in
   let* reasoning_effort = get "reasoning_effort" effort in
@@ -296,7 +364,7 @@ let settings_patch_of_json value =
   let* code_execution = get "code_execution" bool in
   let* web_search = get "web_search" bool in
   let* extensions = get "extensions" (fun context value -> assoc context value) in
-  Ok { web_fetch; code_execution; web_search; model; service_class; service_class_fallbacks; portability; instructions; tools; tool_policy; output; temperature; reasoning_effort; reasoning_summary; compaction_policy; extensions }
+  Ok { web_fetch; code_execution; web_search; model; service_class; service_class_fallbacks; portability; instructions; tools; tool_policy; output; temperature; top_p; stop_sequences; seed; reasoning_mode; reasoning_token_budget; reasoning_effort; reasoning_summary; compaction_policy; extensions }
 
 let settings_patch_is_empty value = value = empty_settings_patch
 
@@ -348,6 +416,7 @@ let route_of_v1_json context value =
 
 let generate_request_to_json (value : generate_request) =
   let* () = validate_cache_policy "generate request.cache" value.cache in
+  let* () = validate_settings_patch value.settings_patch in
   let* context = context_to_v1_json value.context in
   let fields = ["api_version", `String generate_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "context", context; "append", `List (List.map item_to_json value.append)] in
   let fields = match value.parent with None -> fields | Some parent -> fields @ ["parent", `String (Checkpoint.to_string parent)] in

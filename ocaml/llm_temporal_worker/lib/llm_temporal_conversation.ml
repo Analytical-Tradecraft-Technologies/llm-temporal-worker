@@ -14,6 +14,11 @@ module Settings = struct
     tool_policy : tool_policy;
     output : output_spec option;
     temperature : Usd_decimal.t option;
+    top_p : Usd_decimal.t option;
+    stop_sequences : string list option;
+    seed : int64 option;
+    reasoning_mode : reasoning_mode option;
+    reasoning_token_budget : int option;
     reasoning_effort : reasoning_effort option;
     reasoning_summary : reasoning_summary option;
     extensions : (string * Yojson.Safe.t) list;
@@ -32,13 +37,18 @@ module Settings = struct
       ?code_execution
       ?compaction_policy
       ?temperature
+      ?top_p
+      ?stop_sequences
+      ?seed
+      ?reasoning_mode
+      ?reasoning_token_budget
       ?reasoning_effort
       ?reasoning_summary
       ?(extensions = [])
       () =
     { web_search; web_fetch; code_execution; compaction_policy = Option.map Llm_temporal_compaction_policy.to_json compaction_policy; service_class; service_class_fallbacks; portability; instructions; tools;
-      tool_policy; output; temperature; reasoning_effort; reasoning_summary;
-      extensions }
+      tool_policy; output; temperature; top_p; stop_sequences; seed; reasoning_mode; reasoning_token_budget;
+      reasoning_effort; reasoning_summary; extensions }
 
   let default = make ()
 
@@ -49,6 +59,8 @@ module Settings = struct
       { web_fetch = Keep; code_execution = Keep; web_search = Keep; model = Keep; service_class = Keep; service_class_fallbacks = Keep;
         portability = Keep; instructions = Keep; tools = Keep;
         tool_policy = Keep; output = Keep; temperature = Keep;
+        top_p = Keep; stop_sequences = Keep; seed = Keep;
+        reasoning_mode = Keep; reasoning_token_budget = Keep;
         reasoning_effort = Keep; reasoning_summary = Keep;
         compaction_policy = Keep; extensions = Keep }
 
@@ -77,6 +89,16 @@ module Settings = struct
     let clear_output (patch : t) = { patch with output = Clear }
     let set_temperature value (patch : t) = { patch with temperature = (Set value : Usd_decimal.t patch) }
     let clear_temperature (patch : t) = { patch with temperature = Clear }
+    let set_top_p value (patch : t) = { patch with top_p = (Set value : Usd_decimal.t patch) }
+    let clear_top_p (patch : t) = { patch with top_p = Clear }
+    let set_stop_sequences value (patch : t) = { patch with stop_sequences = (Set value : string list patch) }
+    let clear_stop_sequences (patch : t) = { patch with stop_sequences = Clear }
+    let set_seed value (patch : t) = { patch with seed = (Set value : int64 patch) }
+    let clear_seed (patch : t) = { patch with seed = Clear }
+    let set_reasoning_mode value (patch : t) = { patch with reasoning_mode = (Set value : reasoning_mode patch) }
+    let clear_reasoning_mode (patch : t) = { patch with reasoning_mode = Clear }
+    let set_reasoning_token_budget value (patch : t) = { patch with reasoning_token_budget = (Set value : int patch) }
+    let clear_reasoning_token_budget (patch : t) = { patch with reasoning_token_budget = Clear }
     let set_reasoning_effort value (patch : t) = { patch with reasoning_effort = (Set value : reasoning_effort patch) }
     let clear_reasoning_effort (patch : t) = { patch with reasoning_effort = Clear }
     let set_reasoning_summary value (patch : t) = { patch with reasoning_summary = (Set value : reasoning_summary patch) }
@@ -164,6 +186,11 @@ let patch_override (base : settings_patch) (override : settings_patch) : setting
     tool_policy = choose base.tool_policy override.tool_policy;
     output = choose base.output override.output;
     temperature = choose base.temperature override.temperature;
+    top_p = choose base.top_p override.top_p;
+    stop_sequences = choose base.stop_sequences override.stop_sequences;
+    seed = choose base.seed override.seed;
+    reasoning_mode = choose base.reasoning_mode override.reasoning_mode;
+    reasoning_token_budget = choose base.reasoning_token_budget override.reasoning_token_budget;
     reasoning_effort = choose base.reasoning_effort override.reasoning_effort;
     reasoning_summary = choose base.reasoning_summary override.reasoning_summary;
     compaction_policy = choose base.compaction_policy override.compaction_policy;
@@ -180,7 +207,12 @@ let initial_patch conversation : settings_patch =
     tool_policy = Set settings.tool_policy;
     output = (match settings.output with None -> Clear | Some value -> Set value);
     temperature = (match settings.temperature with None -> Keep | Some value -> Set value);
-    reasoning_effort = (match settings.reasoning_effort with None -> Keep | Some value -> Set value);
+    top_p = (match settings.top_p with None -> Keep | Some value -> Set value);
+    stop_sequences = (match settings.stop_sequences with None -> Keep | Some value -> Set value);
+    seed = (match settings.seed with None -> Keep | Some value -> Set value);
+    reasoning_mode = (match settings.reasoning_mode with None -> Keep | Some value -> Set value);
+    reasoning_token_budget = (match settings.reasoning_token_budget with None -> Keep | Some value -> Set value);
+    reasoning_effort =(match settings.reasoning_effort with None -> Keep | Some value -> Set value);
     reasoning_summary = (match settings.reasoning_summary with None -> Keep | Some value -> Set value);
     compaction_policy = (match settings.compaction_policy with None -> Keep | Some value -> Set value);
     extensions = Set settings.extensions }
@@ -213,7 +245,12 @@ let apply_patch (settings : Settings.t) (patch : settings_patch) =
     tool_policy = value_or ~cleared:{ choice = Auto; parallel = false } settings.tool_policy patch.tool_policy;
     output = option_or settings.output patch.output;
     temperature = option_or settings.temperature patch.temperature;
-    reasoning_effort = option_or settings.reasoning_effort patch.reasoning_effort;
+    top_p = option_or settings.top_p patch.top_p;
+    stop_sequences = option_or settings.stop_sequences patch.stop_sequences;
+    seed = option_or settings.seed patch.seed;
+    reasoning_mode = option_or settings.reasoning_mode patch.reasoning_mode;
+    reasoning_token_budget = option_or settings.reasoning_token_budget patch.reasoning_token_budget;
+    reasoning_effort =option_or settings.reasoning_effort patch.reasoning_effort;
     reasoning_summary = option_or settings.reasoning_summary patch.reasoning_summary;
     extensions = value_or ~cleared:[] settings.extensions patch.extensions } : Settings.t)
 

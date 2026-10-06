@@ -115,6 +115,36 @@ let () =
    | _ -> failwith "inherited reasoning settings were resent on child");
   if child_request.cache <> None then failwith "cache leaked between calls";
 
+  (* Sampling and reasoning controls follow the same sparse rules: the root
+     sends what Settings.make names, a child inherits by omission, and a
+     per-turn patch sets or clears each leaf independently. *)
+  let top_p = expect_valid (Usd_decimal.of_string "0.9") in
+  let sampled_root = Conversation.root ~context ~model
+      ~settings:(Conversation.Settings.make ~top_p ~stop_sequences:[ "END" ] ~seed:7L
+                   ~reasoning_mode:Reasoning_enabled ~reasoning_token_budget:2048 ()) ()
+  in
+  let sampled_request = Conversation.to_request ~operation_key:(operation_key "sampled") ~append:[] sampled_root in
+  (match sampled_request.settings_patch with
+   | { top_p = Set value; stop_sequences = Set [ "END" ]; seed = Set 7L;
+       reasoning_mode = Set Reasoning_enabled; reasoning_token_budget = Set 2048; _ }
+     when Usd_decimal.to_string value = "0.9" -> ()
+   | _ -> failwith "root sampling and reasoning settings omitted");
+  (match parent_request.settings_patch with
+   | { top_p = Keep; stop_sequences = Keep; seed = Keep; reasoning_mode = Keep; reasoning_token_budget = Keep; _ } -> ()
+   | _ -> failwith "unset sampling and reasoning settings were sent");
+  let sampled_turn = expect_ok (Conversation.respond_with
+      ~task_queue:(Temporal_task_queue.of_string "conversation-queue") ~dispatch
+      ~operation_key:(operation_key "sampled-turn") ~append:[] sampled_root) in
+  let sampled_child = Conversation.to_request ~operation_key:(operation_key "sampled-child") ~append:[]
+      ~settings_patch:(Conversation.Settings.Patch.clear_stop_sequences
+                         (Conversation.Settings.Patch.set_seed 9L
+                            (Conversation.Settings.Patch.clear_reasoning_token_budget Conversation.Settings.Patch.keep)))
+      sampled_turn.conversation
+  in
+  (match sampled_child.settings_patch with
+   | { top_p = Keep; stop_sequences = Clear; seed = Set 9L; reasoning_mode = Keep; reasoning_token_budget = Clear; _ } -> ()
+   | _ -> failwith "child sampling patch did not inherit, set and clear independently");
+
   let mismatched_dispatch ?task_queue:_ activity (request : generate_request) =
     if Temporal.Workflow.name activity <> "llm.generate.workflow.v1" then failwith "wrong Generate descriptor";
     Ok { (response request ~kind:Generation_checkpoint
@@ -226,6 +256,8 @@ let () =
    | Some _, { model = Keep; service_class = Keep; service_class_fallbacks = Keep;
                portability = Keep; instructions = Keep; tools = Keep;
                tool_policy = Keep; output = Keep; temperature = Keep;
+               top_p = Keep; stop_sequences = Keep; seed = Keep;
+               reasoning_mode = Keep; reasoning_token_budget = Keep;
                reasoning_effort = Keep; reasoning_summary = Keep;
                compaction_policy = Keep; extensions = Keep; web_search = Keep; web_fetch = Keep; code_execution = Keep } -> ()
    | _ -> failwith "checkpoint import materialized unknown settings");
@@ -239,6 +271,8 @@ let () =
    | { model = Keep; service_class = Keep; service_class_fallbacks = Keep;
        portability = Keep; instructions = Keep; tools = Keep;
        tool_policy = Keep; output = Keep; temperature = Keep;
+       top_p = Keep; stop_sequences = Keep; seed = Keep;
+       reasoning_mode = Keep; reasoning_token_budget = Keep;
        reasoning_effort = Keep; reasoning_summary = Keep;
        compaction_policy = Keep; extensions = Keep; web_search = Keep; web_fetch = Keep; code_execution = Keep } -> ()
    | _ -> failwith "compaction restored unknown checkpoint settings");
