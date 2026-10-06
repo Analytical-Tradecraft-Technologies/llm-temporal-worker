@@ -235,7 +235,14 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
-	response, err := adapter.client.sdk.Responses.New(callContext, params, option.WithResponseInto(&rawResponse))
+	probe := &provider.DispatchProbe{}
+	requestOptions := []option.RequestOption{option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware)}
+	response, panicked, err := provider.CallRecovered(func() (*responses.Response, error) {
+		return adapter.client.sdk.Responses.New(callContext, params, requestOptions...)
+	})
+	if panicked != nil {
+		return provider.Result{}, provider.WithEndpointID(probe.PanicError(call.OperationKey, panicked), adapter.endpointID)
+	}
 	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
 		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
 	}

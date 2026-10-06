@@ -202,7 +202,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if messages == nil {
 		messages = &adapter.client.sdk.Messages
 	}
-	response, err := messages.New(callContext, params, option.WithResponseInto(&rawResponse))
+	probe := &provider.DispatchProbe{}
+	response, panicked, err := provider.CallRecovered(func() (*anthropic.Message, error) {
+		return messages.New(callContext, params, option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware))
+	})
+	if panicked != nil {
+		return provider.Result{}, provider.WithEndpointID(probe.PanicError(call.OperationKey, panicked), adapter.endpointID)
+	}
 	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
 		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
 	}
