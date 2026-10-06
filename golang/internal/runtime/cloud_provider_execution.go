@@ -238,14 +238,6 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 			recordCloudPoll(ctx, "retry")
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderUnavailable)
 		}
-		switch outcome.State {
-		case provider.ResumableCompleted:
-			recordCloudPoll(ctx, "completed")
-		case provider.ResumablePending:
-			recordCloudPoll(ctx, "retry")
-		default:
-			recordCloudPoll(ctx, "failed")
-		}
 	} else if recovery, ok := planned.Adapter.(provider.IdempotencyRecovery); ok && (saved.Execution.Claim != nil || !saved.Plan.RequiresReservation()) {
 		outcome, err = recovery.RecoverByIdempotencyKey(callCtx, planned.Call, provider.NopObserver{})
 		if err != nil {
@@ -260,7 +252,22 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		return executor.save(ctx, scope, id, saved, next)
 	}
-	return executor.completeCall(ctx, scope, id, saved, planned, transcript, outcome, nil, true)
+	result, err := executor.completeCall(ctx, scope, id, saved, planned, transcript, outcome, nil, true)
+	if saved.Execution.ProviderOperationID != "" {
+		// Classify the poll by what was saved, so a result that fails
+		// validation counts as failed rather than completed.
+		switch {
+		case err != nil:
+			recordCloudPoll(ctx, "failed")
+		case result.Saved.Execution.Stage == cloudstate.ExecutionSucceeded:
+			recordCloudPoll(ctx, "completed")
+		case result.Saved.Execution.Stage == cloudstate.ExecutionPending:
+			recordCloudPoll(ctx, "retry")
+		default:
+			recordCloudPoll(ctx, "failed")
+		}
+	}
+	return result, err
 }
 
 // settleUnknown charges an unresolved paid attempt at its full reservation
