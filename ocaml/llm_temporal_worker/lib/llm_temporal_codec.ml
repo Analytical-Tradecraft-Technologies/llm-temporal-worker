@@ -793,7 +793,10 @@ let output_of_json value =
   let allowed = match kind with "text" | "json" -> [ "kind"; "name"; "description" ] | "json_schema" -> [ "kind"; "name"; "description"; "schema"; "strict" ] | _ -> [] in
   let* _ = validate_fields "output format" allowed format_fields in
   let* name = optional_value "output format" "name" string format_fields in
-  let* () = match name with Some "" -> Error (codec_error "output format name must not be empty when present") | _ -> Ok () in
+  let* () = match name with
+    | Some "" -> Error (codec_error "output format name must not be empty when present")
+    | Some value -> Result.map ignore (valid_tool_name "output format name" value)
+    | None -> Ok () in
   let* description = optional_value "output format" "description" string format_fields in
   let* format = match kind with
     | "text" -> Ok Text_format

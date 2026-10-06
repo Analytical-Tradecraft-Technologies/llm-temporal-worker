@@ -410,6 +410,9 @@ let () =
    | Some { format = Json_format; _ } -> ()
    | _ -> failwith "named json format did not decode");
   expect_error (Temporal.Codec.decode request_codec (output_with [ ("kind", `String "json_schema"); ("name", `String ""); ("schema", schema) ]));
+  (* Like Go, a present name is validated on every kind, including one a
+     plain format then does not keep. *)
+  expect_error (Temporal.Codec.decode request_codec (output_with [ ("kind", `String "json"); ("name", `String "claim summary") ]));
   let decoded_request = expect_ok (Temporal.Codec.decode request_codec request_payload) in
   assert_equal "order-42" (Operation_key.to_string decoded_request.operation_key);
   assert_equal "priority" (match decoded_request.service_class with Economy -> "economy" | Standard -> "standard" | Priority -> "priority");
