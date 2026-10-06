@@ -16,7 +16,8 @@ const (
 	APIVersion           = "llm.temporal/v1"
 	GenerateActivityName = "llm.generate.v1"
 	// LegacyGenerateActivityName is the legacy engine Activity's name. It
-	// takes the legacy llm.Request payload, so it never shares
+	// takes a GenerateRequest envelope (api_version plus the legacy
+	// llm.Request) and returns a GenerateResponse, so it never shares
 	// GenerateActivityName, which is the v1 contract.
 	LegacyGenerateActivityName = "llm.generate.legacy.v1"
 	CompactAPIVersion          = llm.CompactAPIVersion
