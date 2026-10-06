@@ -118,6 +118,9 @@ func compileCapabilityEntry(version string, index int, entry capabilityEntryDocu
 	if err != nil {
 		return CapabilityProfile{}, err
 	}
+	if err := requireDocumentContext(set, entry.Limits.ContextTokens, path); err != nil {
+		return CapabilityProfile{}, err
+	}
 	return CapabilityProfile{
 		ID:                     entry.ID,
 		OutputTokens:           entry.Limits.OutputTokens,
@@ -186,6 +189,9 @@ func compileCapabilityProfile(version, id string, profile capabilityProfileFile)
 	sort.Slice(serviceClasses, func(i, j int) bool { return serviceClasses[i] < serviceClasses[j] })
 	set, err := compileClaims(version, features, "profiles."+id+".features")
 	if err != nil {
+		return CapabilityProfile{}, err
+	}
+	if err := requireDocumentContext(set, profile.MaxContext, "profiles."+id); err != nil {
 		return CapabilityProfile{}, err
 	}
 	return CapabilityProfile{
@@ -324,4 +330,16 @@ func profileFeature(name, path string) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+// requireDocumentContext rejects a profile that accepts documents without a
+// context window. A document whose size cannot be bounded at admission
+// reserves the remaining window; with no window it would reserve the
+// 5,400,000-token constant and could never be admitted under a budget.
+func requireDocumentContext(set provider.CapabilitySet, contextTokens int64, path string) error {
+	capability, ok := set.Features[provider.FeatureDocument]
+	if !ok || (capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated) || contextTokens > 0 {
+		return nil
+	}
+	return fmt.Errorf("%s accepts document input and must declare a context window", path)
 }

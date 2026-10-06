@@ -162,12 +162,14 @@ messages, and tool results:
 |---|---|---|
 | Image | 6,000 tokens | Above the largest documented per-image counts of supported providers (about 1,600 standard, about 2,500 patch-based, about 4,800 high-resolution). |
 | Inline text document (`text/*` media type) | Decoded byte length | The provider tokenizes the content as text and a token covers at least one byte. A quarter of the bytes is counted in the UTF-8 estimate like any other text; the allowance reserves the rest. |
+| Inline PDF with a provable page count | Pages x 9,000 tokens, capped at 5,400,000 | When the PDF has no object streams (`/ObjStm`), every page dictionary appears in the file, so counting `/Type /Page` bounds the pages. An object stream, a `/Type` name written with `#` escapes, or no visible page gives no bound. |
 | Any other document | 5,400,000 tokens | 600 pages (the largest supported PDF page limit, Anthropic on 1M-token-context models) x 9,000 tokens per page (up to 3,000 extracted-text tokens plus the rendered page image, charged at the 6,000-token image allowance). |
 
-Only inline text is bounded by its size. A URL or blob reference has no
-content to measure at admission, and the byte length of an inline PDF does not
-bound its page count (page objects compress, and every page is billed as an
-image), so those keep the unknown-size assumption.
+Inline text is bounded by its size and an inline PDF by its visible pages. A
+URL or blob reference has no content to measure at admission, and a PDF whose
+page dictionaries may be compressed into object streams has no provable page
+count (every page is billed as an image), so those keep the unknown-size
+assumption.
 
 The allowance is added to the serialized-size estimate, so text-only requests
 are unchanged. When the candidate declares a context window, the allowance is
@@ -179,8 +181,12 @@ candidate that declares one, such a document reserves the whole remaining
 input room (the most the
 provider can bill), including on 1M-token-context routes; only a candidate
 without a declared context window reserves the full 5,400,000-token constant.
-Declare `context_tokens` on routes that accept documents to keep that
-reservation bounded by the real window. Context-fit checks and
+A capability profile that accepts documents must declare its context window
+(`context_tokens` / `max_context_tokens`); the catalog is rejected otherwise.
+A reservation larger than a matched budget window's limit can never be
+admitted, so planning skips that candidate, and when every candidate is
+skipped for that reason it fails with a non-retryable `budget_denied` instead
+of waiting for capacity. Context-fit checks and
 compaction planning (`ValidateContext`, `CountInputTokens`) use the same UTF-8
 estimate without the allowance, so inline image and PDF bytes do not count
 against the context window and inline text documents count at the ordinary

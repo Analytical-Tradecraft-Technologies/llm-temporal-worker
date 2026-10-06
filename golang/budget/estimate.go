@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -318,11 +319,14 @@ func mediaInputAllowance(request llm.Request) int64 {
 // token covers at least one byte, so its decoded byte length bounds its
 // tokens; estimateInput counts those bytes at the text baseline and the
 // allowance reserves the remainder. Every other document keeps the
-// unknown-size assumption. That includes inline PDFs: providers bill a
-// rendered image for every page, and compressed page objects mean a small
-// file can still declare the maximum page count, so the byte length does not
-// bound the page count.
+// unknown-size assumption, except an inline PDF whose page count can be
+// proven from its bytes (inlinePDFPageBound): providers bill a rendered image
+// for every page, and compressed page objects mean a small file can still
+// declare the maximum page count, so the byte length alone does not bound it.
 func documentInputAllowance(part llm.DocumentPart) int64 {
+	if pages, ok := inlinePDFPageBound(part); ok {
+		return saturatingMul(pages, MediaDocumentTokensPerPage, MediaDocumentInputTokenFloor)
+	}
 	if !inlineTextDocument(part) {
 		return MediaDocumentInputTokenFloor
 	}
@@ -494,4 +498,96 @@ func multiplyUSD(value pricing.USD, ratio *big.Rat) (pricing.USD, error) {
 func mustRequestJSON(request llm.Request) []byte {
 	data, _ := json.Marshal(request)
 	return data
+}
+
+// inlinePDFPageBound returns an upper bound on the page count of an inline
+// PDF when one can be proven from its bytes. Every page is a dictionary whose
+// /Type is /Page; without object streams (/ObjStm), which can compress those
+// dictionaries, each one appears in the file as written, so counting them
+// bounds the pages (incremental updates only over-count). Anything that could
+// hide a page dictionary, such as an object stream or a /Type name written
+// with # escapes, or a file with no visible page, gives no bound and keeps
+// the unknown-size allowance.
+func inlinePDFPageBound(part llm.DocumentPart) (int64, bool) {
+	if part.Bytes == nil || part.URL != "" || part.Blob != nil {
+		return 0, false
+	}
+	mediaType, _, _ := strings.Cut(part.MediaType, ";")
+	if !strings.EqualFold(strings.TrimSpace(mediaType), "application/pdf") {
+		return 0, false
+	}
+	data := part.Bytes
+	if !bytes.HasPrefix(data, []byte("%PDF-")) || bytes.Contains(data, []byte("/ObjStm")) {
+		return 0, false
+	}
+	pages := int64(0)
+	for offset := 0; ; {
+		index := bytes.Index(data[offset:], []byte("/Type"))
+		if index < 0 {
+			break
+		}
+		at := offset + index + len("/Type")
+		offset = at
+		if at < len(data) && !pdfDelimiterOrSpace(data[at]) {
+			continue // a longer name such as /TypeX
+		}
+		at = skipPDFSpaceAndComments(data, at)
+		if at >= len(data) || data[at] != '/' {
+			continue
+		}
+		end := at + 1
+		for end < len(data) && !pdfDelimiterOrSpace(data[end]) {
+			end++
+		}
+		name := data[at+1 : end]
+		if bytes.IndexByte(name, '#') >= 0 {
+			return 0, false
+		}
+		if string(name) == "Page" {
+			pages++
+		}
+	}
+	if pages == 0 {
+		return 0, false
+	}
+	return pages, true
+}
+
+func pdfDelimiterOrSpace(value byte) bool {
+	switch value {
+	case 0, '\t', '\n', '\f', '\r', ' ', '(', ')', '<', '>', '[', ']', '{', '}', '/', '%':
+		return true
+	}
+	return false
+}
+
+func skipPDFSpaceAndComments(data []byte, at int) int {
+	for at < len(data) {
+		switch data[at] {
+		case 0, '\t', '\n', '\f', '\r', ' ':
+			at++
+		case '%':
+			for at < len(data) && data[at] != '\n' && data[at] != '\r' {
+				at++
+			}
+		default:
+			return at
+		}
+	}
+	return at
+}
+
+// saturatingMul multiplies non-negative values, returning limit when the
+// product would exceed it.
+func saturatingMul(left, right, limit int64) int64 {
+	if left <= 0 || right <= 0 {
+		return 0
+	}
+	if left > limit/right {
+		return limit
+	}
+	if product := left * right; product < limit {
+		return product
+	}
+	return limit
 }
