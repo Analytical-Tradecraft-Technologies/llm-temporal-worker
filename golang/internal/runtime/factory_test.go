@@ -652,3 +652,21 @@ func azureOpenAIChatSnapshot() engine.Snapshot {
 		"model": {Routes: []routing.Route{{EndpointID: "azure-chat", Capabilities: routing.CapabilitySet{Version: "azure-chat/v1"}}}},
 	}}}
 }
+
+func TestBuildRedisServiceMeshSkipsCredentialsAndTLS(t *testing.T) {
+	called := false
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		RedisFactory: func(_ context.Context, value config.RedisConfig, username, password string) (redisclient.UniversalClient, error) {
+			called = true
+			if username != "" || password != "" || value.TLS.Enabled {
+				t.Fatal("mesh client received application credentials or TLS")
+			}
+			return redisclient.NewClient(&redisclient.Options{Addr: "localhost:6379"}), nil
+		},
+	}}
+	client, owned, err := factory.buildRedis(context.Background(), config.Config{State: config.StateConfig{Redis: config.RedisConfig{ServiceMesh: true}}})
+	if err != nil || !called || !owned {
+		t.Fatalf("called=%v owned=%v error=%v", called, owned, err)
+	}
+	defer client.Close()
+}

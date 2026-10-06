@@ -103,6 +103,7 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 		{name: "telemetry.tracing.sample_ratio", changed: before.Telemetry.Tracing.SampleRatio != after.Telemetry.Tracing.SampleRatio},
 		{name: "telemetry.content_logging", changed: before.Telemetry.ContentLogging != after.Telemetry.ContentLogging},
 		{name: "state.kind", changed: before.State.Kind != after.State.Kind},
+		{name: "state.redis.service_mesh", changed: before.State.Redis.ServiceMesh != after.State.Redis.ServiceMesh},
 		{name: "state.redis.key_prefix", changed: before.State.Redis.KeyPrefix != after.State.Redis.KeyPrefix},
 		{name: "state.redis.admission_hash_tag", changed: usesRedis && before.State.Redis.AdmissionHashTag != after.State.Redis.AdmissionHashTag},
 		{name: "state.redis.key_secret", changed: usesRedis && before.State.Redis.KeySecret != after.State.Redis.KeySecret},

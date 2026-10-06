@@ -567,3 +567,48 @@ func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T
 		t.Fatal("development is treated as production")
 	}
 }
+
+func TestRedisServiceMeshSecurityContract(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*config.RedisConfig)
+		valid  bool
+	}{
+		{"mesh", func(*config.RedisConfig) {}, true},
+		{"unprotected production", func(r *config.RedisConfig) { r.ServiceMesh = false }, false},
+		{"application TLS", func(r *config.RedisConfig) { r.TLS.Enabled = true }, false},
+		{"password reference", func(r *config.RedisConfig) {
+			r.Password = config.SecretRef{Kind: config.SecretEnv, Name: "REDIS_PASSWORD"}
+		}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := config.Load(exampleYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			value.State.Redis.ServiceMesh = true
+			value.State.Redis.TLS = config.TLSConfig{}
+			value.State.Redis.Username = config.SecretRef{}
+			value.State.Redis.Password = config.SecretRef{}
+			test.mutate(&value.State.Redis)
+			if err := value.Validate(); (err == nil) != test.valid {
+				t.Fatalf("validation = %v, valid = %v", err, test.valid)
+			}
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := schema.Parse(schemaData)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := compiled.Validate(data); (err == nil) != test.valid {
+				t.Fatalf("schema validation = %v, valid = %v", err, test.valid)
+			}
+		})
+	}
+}

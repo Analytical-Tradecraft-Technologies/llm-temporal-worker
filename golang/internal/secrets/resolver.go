@@ -137,7 +137,7 @@ func (resolver ConfigResolver) Resolve(ctx context.Context, value *config.Config
 		return fmt.Errorf("configuration is nil")
 	}
 	refs := make([]config.SecretRef, 0, 4+len(value.Continuation.HandleKeys))
-	if value.State.Kind != config.StateKindMemory {
+	if value.State.Kind != config.StateKindMemory && !value.State.Redis.ServiceMesh {
 		refs = append(refs, value.State.Redis.Username, value.State.Redis.Password)
 	}
 	for _, key := range value.Continuation.HandleKeys {

@@ -15,3 +15,12 @@ by default and fails closed when its configured dependencies are unsupported.
 
 Start with the [documentation index](docs/index.md), then follow the
 [master implementation sequence](docs/superpowers/plans/2026-07-13-master-sequence.md).
+
+For Redis behind an externally enforced mTLS service mesh, set
+`state.redis.service_mesh: true`, `state.redis.tls.enabled: false`, and omit
+`state.redis.username` and `state.redis.password`. This explicit mode delegates
+transport encryption and client authentication to the mesh; the application
+uses plain Redis connections without AUTH. Deployments must enforce strict mesh
+mTLS and restrict callers by workload identity. Without this opt-in, production
+continues to require application TLS and credential references. The stable
+`state.redis.key_secret` remains required and is unrelated to Redis authentication.
