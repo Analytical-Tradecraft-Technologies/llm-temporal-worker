@@ -10,13 +10,23 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 )
 
-const (
-	AdmissionFunctionLibrary = "llmtw_admission_v1"
-	// Redis Function identifiers permit letters, numbers, and underscores.
-	// Keep the executable identity distinct from the admission record schema
-	// (which remains admission/v1 inside the Lua payload).
-	AdmissionFunctionVersion = "admission_v1"
+// The admission library and function names carry a digest of the Lua source.
+// A release that changes the Lua therefore loads a new library beside the old
+// one instead of replacing it, so old and new workers each call and verify
+// their own Function during a rollout or rollback. Redis Function identifiers
+// permit letters, numbers, and underscores. The executable identity stays
+// distinct from the admission record schema (admission/v1 inside the Lua
+// payload).
+var (
+	AdmissionFunctionLibrary = "llmtw_admission_" + admissionSourceTag()
+	AdmissionFunctionVersion = "admission_" + admissionSourceTag()
 )
+
+// admissionSourceTag is the first 64 bits of the Lua source's SHA-256.
+func admissionSourceTag() string {
+	digest := sha256.Sum256([]byte(admissionFunctionSource))
+	return hex.EncodeToString(digest[:8])
+}
 
 // AdmissionMode selects the server-side transaction contract. Functions are
 // the preferred Redis 7+ path. Lua is retained only for explicitly configured
