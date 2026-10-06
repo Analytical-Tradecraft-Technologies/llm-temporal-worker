@@ -17,10 +17,12 @@
   "checkpoint": {"handle": "ckp_v1.child", "parent": "ckp_v1.parent", "kind": "generation", "depth": 2},
   "cache": {"disposition": "miss_populated", "variant": 0},
   "route": {"route_id": "openai-primary", "endpoint_id": "openai-prod", "api_family": "openai_responses", "requested_model": "claims-reviewer", "resolved_model": "gpt-contract"},
+  "service": {"requested": "priority", "attempted": "priority", "actual": "standard", "provider_value": "default", "fallback_index": 0},
   "usage": {"input_tokens": 612, "output_tokens": 33, "reasoning_tokens": 12, "cache_read_tokens": 100, "cache_write_tokens": 0, "provider_raw": {"total_tokens": 645, "service_tier": "default", "details": {"audio_tokens": 0}}},
   "cost": {"status": "exact", "actual_cost_usd": "0.000014725", "method": "catalog_usage", "catalog_version": "prices-2026-07-13"},
   "diagnostics": [
     {"code": "route_unavailable", "severity": "warning", "message": "Route unavailable", "path": "/settings_patch/model", "details": {"route_id": "route-primary"}},
-    {"code": "transform_applied", "severity": "info", "message": "Instruction levels were flattened"}
+    {"code": "transform_applied", "severity": "info", "message": "Instruction levels were flattened"},
+    {"code": "service_class_provider_downgrade", "severity": "warning", "message": "provider served standard after a priority attempt", "path": "/service/actual", "details": {"attempted": "priority", "actual": "standard"}}
   ]
 }

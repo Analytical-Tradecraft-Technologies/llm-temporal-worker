@@ -1001,6 +1001,7 @@ type GenerateResponseV1 struct {
 	Checkpoint   CheckpointMetadata
 	Cache        CacheDispositionV1
 	Route        *RouteFacts
+	Service      *ServiceFacts
 	Usage        *Usage
 	Cost         CostV1
 	Diagnostics  []Diagnostic
@@ -1027,6 +1028,9 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 	if response.Route != nil {
 		fields["route"] = response.Route
 	}
+	if response.Service != nil {
+		fields["service"] = response.Service
+	}
 	if response.Usage != nil {
 		fields["usage"] = response.Usage
 	}
@@ -1041,7 +1045,7 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "usage", "cost", "diagnostics"); err != nil {
+	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "service", "usage", "cost", "diagnostics"); err != nil {
 		return err
 	}
 	version, err := requiredString(fields, "api_version")
@@ -1109,6 +1113,13 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		result.Route = &route
+	}
+	if raw, ok := fields["service"]; ok {
+		service, err := decodeServiceFacts(raw)
+		if err != nil {
+			return err
+		}
+		result.Service = &service
 	}
 	if raw, ok := fields["usage"]; ok {
 		usage, err := decodeUsage(raw)
