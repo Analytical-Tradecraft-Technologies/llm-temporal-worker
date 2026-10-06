@@ -589,8 +589,10 @@ func (model ModelConfig) validate(path string, endpoints map[string]EndpointConf
 }
 
 func (catalogs CapabilityConfig) validate() error {
-	if catalogs.UnknownInStrictMode != "reject" && catalogs.UnknownInStrictMode != "allow" {
-		return fmt.Errorf("capabilities.unknown_in_strict_mode must be reject or allow")
+	// Strict mode always rejects an unknown capability; no "allow" behaviour
+	// is implemented, so it is not accepted.
+	if catalogs.UnknownInStrictMode != "reject" {
+		return fmt.Errorf("capabilities.unknown_in_strict_mode must be reject")
 	}
 	return validateCatalogs(catalogs.Catalogs, "capabilities.catalogs")
 }
@@ -681,6 +683,12 @@ func hasBudgetMatchRestriction(match BudgetMatch) bool {
 }
 
 func (continuation ContinuationConfig) validate() error {
+	// Checkpoints always keep the canonical transcript, which replay and
+	// compaction depend on; a setting that claims otherwise is rejected
+	// rather than silently ignored.
+	if continuation.RetainCanonicalTranscript != nil && !*continuation.RetainCanonicalTranscript {
+		return fmt.Errorf("continuation.retain_canonical_transcript must be true: checkpoints always retain the canonical transcript")
+	}
 	if len(continuation.HandleKeys) == 0 {
 		return fmt.Errorf("continuation.handle_keys must not be empty")
 	}

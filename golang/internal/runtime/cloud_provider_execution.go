@@ -36,7 +36,13 @@ type CloudProviderExecution struct {
 	admission      *CloudBudgetAdmission
 	clock          func() time.Time
 	saveBackoff    []time.Duration
+	// finalizationTimeout bounds the detached settlement after a provider
+	// result; zero means defaultCloudFinalizationTimeout.
+	finalizationTimeout time.Duration
 }
+
+// defaultCloudFinalizationTimeout is server.finalization_timeout's default.
+const defaultCloudFinalizationTimeout = 10 * time.Second
 
 // One execution save may take executionSaveAttemptTimeout. A failed save is
 // retried after each executionSaveBackoff delay while executionSaveBudget lasts.
@@ -503,7 +509,11 @@ func (executor *CloudProviderExecution) settle(ctx context.Context, scope clouds
 	if saved.Execution.Settlement == nil || saved.Execution.Settled {
 		return executor.result(saved), nil
 	}
-	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	timeout := executor.finalizationTimeout
+	if timeout <= 0 {
+		timeout = defaultCloudFinalizationTimeout
+	}
+	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	// Persisted response + exact event batch precede Redis settlement. A lost
 	// reply only retries this identical batch; it cannot poll/submit/refund twice.

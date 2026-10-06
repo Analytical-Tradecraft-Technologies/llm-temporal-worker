@@ -471,6 +471,19 @@ telemetry:
   content_logging: disabled
 ```
 
+`continuation.allow_provider_hosted_state` is the global switch for provider-held
+conversation state. A Responses endpoint may store responses, run in the
+background or continue from `previous_response_id` only when both this switch
+and the endpoint's `provider_storage.permitted` are true; otherwise it runs
+statelessly. `continuation.retain_canonical_transcript` must be `true` (the
+default when omitted): v1 checkpoints always retain the canonical transcript.
+`capabilities.unknown_in_strict_mode` must be `reject`, the only implemented
+strict-mode behaviour. `limits.items`, `limits.parts_per_item`, `limits.tools`,
+`limits.schema_bytes` and `limits.json_depth` bound each new v1 Generate request
+before it creates any durable record; an operation admitted earlier keeps
+replaying its saved result. `server.finalization_timeout` bounds each detached
+write that records a provider result.
+
 `temporal.worker.max_concurrent_activities` bounds in-flight Activities and
 therefore the worker's memory. One Activity on a large-context turn holds about
 20–28 times the materialized transcript in live heap, roughly 96 MiB at the
