@@ -62,8 +62,8 @@ func cloudResponseFills(repository CloudRequestRepository) (cache.FillRepository
 
 type snapshotResponseFills struct{ delegate cache.FillRepository }
 
-func (s snapshotResponseFills) Acquire(ctx context.Context, lease cache.FillLease) (cache.FillDecision, error) {
-	return s.delegate.Acquire(ctx, lease)
+func (s snapshotResponseFills) Acquire(ctx context.Context, lease cache.FillLease, now time.Time) (cache.FillDecision, error) {
+	return s.delegate.Acquire(ctx, lease, now)
 }
 func (s snapshotResponseFills) Start(ctx context.Context, lease cache.FillLease, now time.Time) (bool, error) {
 	return s.delegate.Start(ctx, lease, now)
