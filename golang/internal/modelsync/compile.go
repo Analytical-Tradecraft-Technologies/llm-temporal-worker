@@ -59,10 +59,11 @@ type Compiled struct {
 	Prices []pricing.Entry
 }
 
-// Compile derives routes and price entries. Every route is unpinned
-// (PriceVersion ""), so a quote binds whichever synced price is current when
-// the request is planned, and a later refresh never invalidates a persisted
-// plan.
+// Compile derives routes and price entries. Direct routes and prices come
+// only from the rules; OpenRouter routes and prices come only from the
+// Document. Every route is unpinned (PriceVersion ""), so a quote binds
+// whichever price is current when the request is planned, and a later
+// refresh never invalidates a persisted plan.
 func Compile(input Input) (Compiled, error) {
 	compiled := Compiled{Models: map[string]routing.Model{}}
 	prices := map[string]pricing.Entry{}
@@ -70,48 +71,73 @@ func Compile(input Input) (Compiled, error) {
 		key := strings.Join([]string{entry.Provider, entry.Family, entry.EndpointID, entry.Region, entry.Model, entry.ProviderTier}, "\x00")
 		prices[key] = entry
 	}
+	listed := map[string]Model{}
+	var documentVersion, documentProvenance string
 	if input.Document != nil {
 		encoded, err := input.Document.Encode()
 		if err != nil {
 			return Compiled{}, err
 		}
-		version := "openrouter/" + Digest(encoded)[:16]
-		provenance := "openrouter@" + input.Document.FetchedAt.UTC().Format("2006-01-02T15:04:05Z")
+		documentVersion = "openrouter/" + Digest(encoded)[:16]
+		documentProvenance = "openrouter@" + input.Document.FetchedAt.UTC().Format("2006-01-02T15:04:05Z")
 		for _, model := range input.Document.Models {
-			if _, reserved := input.Reserved[model.ID]; reserved || input.Rules.Excluded(model.ID) {
-				continue
-			}
-			routes := make([]routing.Route, 0, len(input.Direct)+1)
-			for _, source := range input.Direct {
-				route, entries, ok, err := directRoute(input.Rules, source, model, version, provenance)
-				if err != nil {
-					return Compiled{}, fmt.Errorf("model %q endpoint %q: %w", model.ID, source.EndpointID, err)
-				}
-				if !ok {
-					continue
-				}
-				routes = append(routes, route)
-				for _, entry := range entries {
-					addPrice(entry)
-				}
-			}
-			if input.OpenRouter != nil {
-				route, entries, err := openRouterRoute(*input.OpenRouter, model, version, provenance)
-				if err != nil {
-					return Compiled{}, fmt.Errorf("model %q: %w", model.ID, err)
-				}
-				routes = append(routes, route)
-				for _, entry := range entries {
-					addPrice(entry)
-				}
-			}
-			if len(routes) > 0 {
-				compiled.Models[model.ID] = routing.Model{Name: model.ID, Routes: routes}
-			}
+			listed[model.ID] = model
 		}
 	}
-	if err := compileExtraModels(input, compiled.Models, addPrice); err != nil {
-		return Compiled{}, err
+	names := map[string]struct{}{}
+	for id := range listed {
+		names[id] = struct{}{}
+	}
+	for _, source := range input.Direct {
+		for id := range input.Rules.Providers[source.RulesProvider].Models {
+			names[id] = struct{}{}
+		}
+	}
+	ordered := make([]string, 0, len(names))
+	for id := range names {
+		ordered = append(ordered, id)
+	}
+	sort.Strings(ordered)
+	rulesVersion := "model-sync-rules/" + input.Rules.Digest[:min(16, len(input.Rules.Digest))]
+	for _, id := range ordered {
+		if _, reserved := input.Reserved[id]; reserved || input.Rules.Excluded(id) {
+			continue
+		}
+		model, isListed := listed[id]
+		routes := make([]routing.Route, 0, len(input.Direct)+1)
+		for _, source := range input.Direct {
+			direct, ok := input.Rules.Direct(source.RulesProvider, id)
+			if !ok {
+				continue
+			}
+			route, entries, ok, err := directRoute(source, direct, rulesVersion)
+			if err != nil {
+				return Compiled{}, fmt.Errorf("model %q endpoint %q: %w", id, source.EndpointID, err)
+			}
+			if !ok {
+				continue
+			}
+			if isListed {
+				narrowCapabilities(&route, model)
+			}
+			routes = append(routes, route)
+			for _, entry := range entries {
+				addPrice(entry)
+			}
+		}
+		if input.OpenRouter != nil && isListed {
+			route, entries, err := openRouterRoute(*input.OpenRouter, model, documentVersion, documentProvenance)
+			if err != nil {
+				return Compiled{}, fmt.Errorf("model %q: %w", id, err)
+			}
+			routes = append(routes, route)
+			for _, entry := range entries {
+				addPrice(entry)
+			}
+		}
+		if len(routes) > 0 {
+			compiled.Models[id] = routing.Model{Name: id, Routes: routes}
+		}
 	}
 	keys := make([]string, 0, len(prices))
 	for key := range prices {
@@ -125,95 +151,26 @@ func Compile(input Input) (Compiled, error) {
 	return compiled, nil
 }
 
-// compileExtraModels adds the rules-declared direct-only models.
-func compileExtraModels(input Input, models map[string]routing.Model, addPrice func(pricing.Entry)) error {
-	version := "model-sync-rules/" + input.Rules.Digest[:min(16, len(input.Rules.Digest))]
-	for _, source := range input.Direct {
-		provider := input.Rules.Providers[source.RulesProvider]
-		ids := make([]string, 0, len(provider.ExtraModels))
-		for id := range provider.ExtraModels {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			if _, reserved := input.Reserved[id]; reserved || input.Rules.Excluded(id) {
-				continue
-			}
-			if existing, listed := models[id]; listed && !extraOnly(existing) {
-				// OpenRouter lists the model after all; its published price wins.
-				continue
-			}
-			extra := provider.ExtraModels[id]
-			unit, err := extra.Prices.unitPrices()
-			if err != nil {
-				return fmt.Errorf("extra model %q: %w", id, err)
-			}
-			classes, tiers := source.classes(func(string) bool { return true })
-			route := source.route(extra.Model, classes, extra.ContextTokens, extra.OutputTokens)
-			route.ID = "sync-" + source.EndpointID
-			for _, tier := range tiers {
-				addPrice(pricing.Entry{Provider: source.provider(), Family: source.Family, EndpointID: source.EndpointID, Region: source.Region,
-					Model: extra.Model, ProviderTier: tier, Prices: unit, Provenance: "model-sync-rules", Version: version})
-			}
-			model := models[id]
-			model.Name = id
-			model.Routes = append(model.Routes, route)
-			models[id] = model
-		}
-	}
-	return nil
-}
-
-func extraOnly(model routing.Model) bool {
-	for _, route := range model.Routes {
-		if route.Provider == ProviderOpenRouter {
-			return false
-		}
-	}
-	return true
-}
-
-func directRoute(rules Rules, source Source, model Model, version, provenance string) (routing.Route, []pricing.Entry, bool, error) {
-	directModel, ok := rules.DirectModel(source.RulesProvider, model.ID)
-	if !ok {
-		return routing.Route{}, nil, false, nil
-	}
-	tags := rules.Providers[source.RulesProvider].Tiers
-	byTag := make(map[string]Endpoint, len(model.Endpoints))
-	for _, endpoint := range model.Endpoints {
-		byTag[endpoint.Tag] = endpoint
-	}
-	// A class is offered only when OpenRouter publishes the price of the
-	// upstream tier it maps to.
+// directRoute offers the endpoint's classes whose tier the rules price.
+func directRoute(source Source, direct DirectModel, version string) (routing.Route, []pricing.Entry, bool, error) {
 	classes, tiers := source.classes(func(tier string) bool {
-		_, priced := byTag[tags[tier]]
-		return tags[tier] != "" && priced
+		_, priced := direct.Prices[tier]
+		return priced
 	})
 	if len(classes) == 0 {
 		return routing.Route{}, nil, false, nil
 	}
 	entries := make([]pricing.Entry, 0, len(tiers))
-	contextTokens, outputTokens := model.ContextLength, model.MaxCompletionTokens
-	for _, class := range classes {
-		tier := source.Tiers[class]
-		endpoint := byTag[tags[tier]]
-		unit, err := basePrices(endpoint.Pricing)
+	for _, tier := range tiers {
+		unit, err := direct.Prices[tier].unitPrices()
 		if err != nil {
 			return routing.Route{}, nil, false, err
 		}
 		entries = append(entries, pricing.Entry{Provider: source.provider(), Family: source.Family, EndpointID: source.EndpointID, Region: source.Region,
-			Model: directModel, ProviderTier: tier, Prices: unit, Provenance: provenance + " tag " + endpoint.Tag, Version: version})
-		contextTokens = minPositive(contextTokens, endpoint.ContextLength)
-		outputTokens = minPositive(outputTokens, endpoint.MaxCompletionTokens)
-		// The base price applies only below the first long-prompt override,
-		// so the route never admits a prompt that would be billed above it.
-		if len(endpoint.Pricing.Overrides) > 0 {
-			contextTokens = minPositive(contextTokens, endpoint.Pricing.Overrides[0].MinPromptTokens)
-		}
+			Model: direct.Model, ProviderTier: tier, Prices: unit, Provenance: "model-sync-rules", Version: version})
 	}
-	route := source.route(directModel, classes, contextTokens, outputTokens)
+	route := source.route(direct.Model, classes, direct.ContextTokens, direct.OutputTokens)
 	route.ID = "sync-" + source.EndpointID
-	narrowCapabilities(&route, model)
 	return route, entries, true, nil
 }
 
@@ -327,18 +284,6 @@ func minPositive(current, candidate int64) int64 {
 	default:
 		return min(current, candidate)
 	}
-}
-
-// basePrices converts one endpoint's published base price to catalog unit
-// prices. Reasoning is billed inside output on every synced family, so its
-// separate price is zero. An unlisted cache-read price is charged as input
-// and an unlisted cache-write price as free, matching OpenRouter's listing.
-func basePrices(prices Pricing) (pricing.UnitPrices, error) {
-	cacheRead := prices.InputCacheRead
-	if cacheRead == "" {
-		cacheRead = prices.Prompt
-	}
-	return unitPrices(prices.Prompt, prices.Completion, cacheRead, maxPrice(prices.InputCacheWrite, prices.InputCacheWrite1h), prices.Request)
 }
 
 // maxPrices is the componentwise maximum over every upstream endpoint and

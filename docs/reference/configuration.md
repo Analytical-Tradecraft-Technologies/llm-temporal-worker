@@ -1048,41 +1048,48 @@ model_sync:
 
 ### Model-sync rules
 
-The built-in rules ship in the worker binary
-(`golang/internal/modelsync/rules/default.yaml`). A rules file layered over
-them overrides scalar fields and merges maps key by key; exclusions accumulate.
+Direct models and their prices are hard-coded in the built-in rules file
+`golang/internal/modelsync/rules/default.yaml`, which is compiled into the
+worker binary and so ships in every image. Direct routes never use a fetched
+price. Regenerate the OpenAI and Anthropic sections from the first-party
+prices OpenRouter publishes with `go run ./tools/modelsyncdefaults` (from
+`golang/`) and review the diff; the Exa section is maintained by hand.
+
+Files in `model_sync.rules` are layered over the built-in rules at runtime.
+Model fields override field by field, prices merge per tier, and exclusions
+accumulate, so an override only states what it changes:
 
 ```yaml
 version: model-sync-rules/v1
-exclude: ["openai/gpt-audio*"]       # never routable (path.Match patterns)
+exclude: ["openai/gpt-4*"]            # no route at all (path.Match patterns)
 providers:
   anthropic:
-    prefix: anthropic/
-    model_id: dots_to_dashes          # or verbatim
-    tiers:                            # provider_value -> OpenRouter endpoint tag
-      standard_only: anthropic
-      auto: anthropic
     models:
-      anthropic/claude-3.5-haiku: {model: claude-3-5-haiku-latest}
-      anthropic/claude-legacy: {exclude: true}   # no direct route
-  exa:
-    prefix: exa/
-    model_id: verbatim
-    extra_models:                     # direct-only models OpenRouter omits
-      exa/exa:
-        model: exa
+      anthropic/claude-sonnet-4.5:    # negotiated price for one tier
         prices:
-          input_per_million: "0"
-          output_per_million: "0"
-          cache_read_per_million: "0"
-          cache_write_per_million: "0"
-          per_request: "0.005"
+          standard_only:
+            input_per_million: "2.7"
+            output_per_million: "13.5"
+            cache_read_per_million: "0.27"
+            cache_write_per_million: "3.375"
+            per_request: "0"
+      anthropic/claude-opus-4.5: {exclude: true}   # OpenRouter route only
+      anthropic/claude-internal:                   # a model OpenRouter omits
+        model: claude-internal-20261001
+        context_tokens: 200000
+        output_tokens: 64000
+        prices:
+          standard_only: {input_per_million: "3", output_per_million: "15", cache_read_per_million: "0.3", cache_write_per_million: "3.75", per_request: "0"}
 ```
 
-A direct endpoint serves only the classes whose provider tier maps to an
-OpenRouter endpoint tag that has a published price. A direct route's context
-window is capped at the first long-prompt price threshold, so its base price
-always applies.
+Prices are keyed by the endpoint's `service_classes` `provider_value`; the
+built-in rules price OpenAI `flex`, `default` and `priority`, Anthropic
+`standard_only` and `auto`, and Exa `standard`. A class whose tier has no
+price is not offered on the direct route. Every price component is required.
+A model without `model` derives its provider ID from the OpenRouter ID
+(`model_id: verbatim`, or `dots_to_dashes` for `claude-sonnet-4.5` →
+`claude-sonnet-4-5`). Built-in context limits are capped below any
+long-prompt price threshold so the listed price always applies.
 
 ## Validation
 

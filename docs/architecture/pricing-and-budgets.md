@@ -85,8 +85,9 @@ Catalog precedence is explicit:
 
 1. endpoint-specific operator override;
 2. verified built-in catalog entry;
-3. with `model_sync`, the price OpenRouter publishes for the route's upstream
-   endpoint (see [ADR 0016](../decisions/0016-openrouter-model-sync.md));
+3. with `model_sync`, the checked-in model-sync rules (with operator
+   overrides) for direct routes, and the prices OpenRouter publishes for
+   OpenRouter routes (see [ADR 0016](../decisions/0016-openrouter-model-sync.md));
 4. no price.
 
 A synced price never replaces a configured entry with the same identity. An

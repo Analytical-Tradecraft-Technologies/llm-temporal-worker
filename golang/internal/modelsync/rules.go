@@ -39,39 +39,37 @@ type RulesDocument struct {
 	Providers map[string]ProviderRules `yaml:"providers"`
 }
 
-// ProviderRules maps OpenRouter IDs to one provider's own model IDs.
+// ProviderRules declares one provider's direct models. Every direct model is
+// listed explicitly with its prices, so direct routes never depend on a
+// fetched price.
 type ProviderRules struct {
-	Prefix  string `yaml:"prefix"`
+	Prefix string `yaml:"prefix"`
+	// ModelID derives the provider model ID from the OpenRouter ID when a
+	// model omits model.
 	ModelID string `yaml:"model_id"`
-	// Tiers maps an endpoint's service-class provider_value to the
-	// OpenRouter endpoint tag whose published price applies to it.
-	Tiers map[string]string `yaml:"tiers"`
-	// Models overrides the direct mapping of individual OpenRouter IDs.
-	Models map[string]ModelRule `yaml:"models"`
-	// ExtraModels are served only by this provider's direct endpoints, for
-	// models OpenRouter does not list.
-	ExtraModels map[string]ExtraModel `yaml:"extra_models"`
+	// Models are keyed by OpenRouter ID (or, for models OpenRouter does not
+	// list, an ID under Prefix).
+	Models map[string]DirectModel `yaml:"models"`
 }
 
-// ModelRule overrides one model's direct mapping.
-type ModelRule struct {
-	// Model is the provider model ID; empty keeps the transform's result.
+// DirectModel is one model a provider's direct endpoints serve.
+type DirectModel struct {
+	// Model is the provider model ID; empty applies the ModelID transform.
 	Model string `yaml:"model"`
-	// Exclude removes the direct route; the OpenRouter route remains.
+	// ContextTokens bounds input plus reserved output; zero is unspecified.
+	ContextTokens int64 `yaml:"context_tokens"`
+	OutputTokens  int64 `yaml:"output_tokens"`
+	// Exclude removes the direct route; an OpenRouter route remains.
 	Exclude bool `yaml:"exclude"`
+	// Prices are keyed by the endpoint's service-class provider_value. A
+	// class whose tier has no price is not offered on the direct route.
+	Prices map[string]TierPrices `yaml:"prices"`
 }
 
-// ExtraModel declares a direct-only model and its prices.
-type ExtraModel struct {
-	Model         string      `yaml:"model"`
-	ContextTokens int64       `yaml:"context_tokens"`
-	OutputTokens  int64       `yaml:"output_tokens"`
-	Prices        ExtraPrices `yaml:"prices"`
-}
-
-// ExtraPrices are exact per-million (and per-request) USD decimals. Every
-// component is required: an extra model is never partially priced.
-type ExtraPrices struct {
+// TierPrices are exact per-million (and per-request) USD decimals. Every
+// component is required: a direct model is never partially priced.
+// Reasoning is billed inside output on every supported family.
+type TierPrices struct {
 	Input      string `yaml:"input_per_million"`
 	Output     string `yaml:"output_per_million"`
 	CacheRead  string `yaml:"cache_read_per_million"`
@@ -129,9 +127,7 @@ func MergeRules(documents ...RulesDocument) (Rules, error) {
 			if layer.ModelID != "" {
 				current.ModelID = layer.ModelID
 			}
-			current.Tiers = mergeMap(current.Tiers, layer.Tiers)
-			current.Models = mergeMap(current.Models, layer.Models)
-			current.ExtraModels = mergeMap(current.ExtraModels, layer.ExtraModels)
+			current.Models = mergeModels(current.Models, layer.Models)
 			merged.Providers[name] = current
 		}
 	}
@@ -152,6 +148,35 @@ func mergeMap[V any](base, layer map[string]V) map[string]V {
 	}
 	for key, value := range layer {
 		result[key] = value
+	}
+	return result
+}
+
+// mergeModels layers model rules field by field, so an override can change
+// one price or limit without restating the model. Prices merge per tier.
+func mergeModels(base, layer map[string]DirectModel) map[string]DirectModel {
+	result := mergeMap(base, nil)
+	if result == nil && len(layer) > 0 {
+		result = make(map[string]DirectModel, len(layer))
+	}
+	for id, model := range layer {
+		current, exists := result[id]
+		if !exists {
+			result[id] = model
+			continue
+		}
+		if model.Model != "" {
+			current.Model = model.Model
+		}
+		if model.ContextTokens != 0 {
+			current.ContextTokens = model.ContextTokens
+		}
+		if model.OutputTokens != 0 {
+			current.OutputTokens = model.OutputTokens
+		}
+		current.Exclude = model.Exclude
+		current.Prices = mergeMap(current.Prices, model.Prices)
+		result[id] = current
 	}
 	return result
 }
@@ -179,35 +204,33 @@ func (rules Rules) validate() error {
 		default:
 			return fmt.Errorf("model-sync rules provider %q model_id must be %s or %s", name, ModelIDVerbatim, ModelIDDotsToDashes)
 		}
-		for tier, tag := range provider.Tiers {
-			if validateIdentifier(tier) != nil || validateIdentifier(tag) != nil {
-				return fmt.Errorf("model-sync rules provider %q tier %q tag %q is invalid", name, tier, tag)
-			}
-		}
-		for id, rule := range provider.Models {
+		for id, model := range provider.Models {
 			if !strings.HasPrefix(id, provider.Prefix) || validateIdentifier(id) != nil {
 				return fmt.Errorf("model-sync rules provider %q model %q must start with %q", name, id, provider.Prefix)
 			}
-			if rule.Model != "" && validateIdentifier(rule.Model) != nil {
+			if model.Model != "" && validateIdentifier(model.Model) != nil {
 				return fmt.Errorf("model-sync rules provider %q model %q mapping is invalid", name, id)
 			}
-		}
-		for id, extra := range provider.ExtraModels {
-			if !strings.HasPrefix(id, provider.Prefix) || validateIdentifier(id) != nil || validateIdentifier(extra.Model) != nil {
-				return fmt.Errorf("model-sync rules provider %q extra model %q must start with %q and name a model", name, id, provider.Prefix)
+			if model.ContextTokens < 0 || model.OutputTokens < 0 {
+				return fmt.Errorf("model-sync rules provider %q model %q token limits must not be negative", name, id)
 			}
-			if extra.ContextTokens < 0 || extra.OutputTokens < 0 {
-				return fmt.Errorf("model-sync rules provider %q extra model %q token limits must not be negative", name, id)
+			if !model.Exclude && len(model.Prices) == 0 {
+				return fmt.Errorf("model-sync rules provider %q model %q has no prices", name, id)
 			}
-			if _, err := extra.Prices.unitPrices(); err != nil {
-				return fmt.Errorf("model-sync rules provider %q extra model %q: %w", name, id, err)
+			for tier, prices := range model.Prices {
+				if validateIdentifier(tier) != nil {
+					return fmt.Errorf("model-sync rules provider %q model %q tier %q is invalid", name, id, tier)
+				}
+				if _, err := prices.unitPrices(); err != nil {
+					return fmt.Errorf("model-sync rules provider %q model %q tier %q: %w", name, id, tier, err)
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func (prices ExtraPrices) unitPrices() (pricing.UnitPrices, error) {
+func (prices TierPrices) unitPrices() (pricing.UnitPrices, error) {
 	var result pricing.UnitPrices
 	fields := []struct {
 		name   string
@@ -241,29 +264,23 @@ func (rules Rules) Excluded(id string) bool {
 	return false
 }
 
-// DirectModel returns the provider model ID that serves OpenRouter ID id, or
-// false when the provider does not serve it directly.
-func (rules Rules) DirectModel(providerName, id string) (string, bool) {
+// Direct returns the direct model rule for OpenRouter ID id with its provider
+// model ID resolved, or false when the provider does not serve it directly.
+func (rules Rules) Direct(providerName, id string) (DirectModel, bool) {
 	provider, ok := rules.Providers[providerName]
 	if !ok || !strings.HasPrefix(id, provider.Prefix) {
-		return "", false
+		return DirectModel{}, false
 	}
-	if rule, overridden := provider.Models[id]; overridden {
-		if rule.Exclude {
-			return "", false
+	model, listed := provider.Models[id]
+	if !listed || model.Exclude {
+		return DirectModel{}, false
+	}
+	if model.Model == "" {
+		name := strings.TrimPrefix(id, provider.Prefix)
+		if provider.ModelID == ModelIDDotsToDashes {
+			name = strings.ReplaceAll(name, ".", "-")
 		}
-		if rule.Model != "" {
-			return rule.Model, true
-		}
+		model.Model = name
 	}
-	name := strings.TrimPrefix(id, provider.Prefix)
-	if name == "" {
-		return "", false
-	}
-	switch provider.ModelID {
-	case ModelIDDotsToDashes:
-		return strings.ReplaceAll(name, ".", "-"), true
-	default:
-		return name, true
-	}
+	return model, true
 }

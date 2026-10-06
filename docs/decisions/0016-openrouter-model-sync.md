@@ -34,13 +34,18 @@ prices.
 - **A failed fetch never shrinks the catalog.** A fetch with more than 10% of
   endpoint lookups failing is rejected and the previous document stays
   published. The document has no TTL.
-- **One namespace.** Direct OpenAI, Anthropic and Exa endpoints serve the same
-  OpenRouter IDs. Built-in rules shipped in the binary map the IDs
-  deterministically (OpenAI verbatim; Anthropic version dots to dashes) and map
-  each endpoint tier to the OpenRouter endpoint tag that prices it. Operators
-  layer SHA-256-pinned rule files over the built-in rules to override a
-  mapping, exclude models or declare direct-only models such as `exa/exa`,
-  which OpenRouter does not list.
+- **One namespace, checked-in direct prices.** Direct OpenAI, Anthropic and
+  Exa endpoints serve the same OpenRouter IDs. Their models, provider model
+  IDs, limits and per-tier prices are hard-coded in a checked-in rules file
+  (`golang/internal/modelsync/rules/default.yaml`) that is compiled into the
+  binary and therefore ships in every image; direct routes never depend on a
+  fetched price. `go run ./tools/modelsyncdefaults` regenerates the OpenAI and
+  Anthropic sections from the first-party upstream endpoints OpenRouter
+  publishes (its `openai`, `openai/flex`, `openai/fast` and `anthropic`
+  endpoints, which carry those providers' list prices) for review; Exa, which
+  OpenRouter does not list, is maintained by hand. Operators layer
+  SHA-256-pinned rule files over the built-in rules at runtime to change a
+  price or limit, add or exclude a model, or exclude a model everywhere.
 - **Direct first.** A synced model routes to configured direct endpoints in
   order, then to OpenRouter. A configured `models` entry of the same name always
   wins, and configured price identities win over synced ones.
@@ -52,9 +57,11 @@ prices.
   price is the componentwise maximum over every upstream endpoint and
   long-prompt override, so a reservation never undercounts. OpenRouter's
   reported cost settles the call.
-- **Direct routes stay exact.** A direct route uses its tier's base price, and
-  its context window is capped at the first long-prompt override threshold, so
-  a request the base price does not cover is never admitted.
+- **Direct routes stay exact.** A direct route uses its tier's checked-in
+  price, and its context window is capped at the first long-prompt price
+  threshold, so a request the base price does not cover is never admitted.
+  Anthropic cache writes use the five-minute price, the only cache the
+  adapters request.
 - **In-flight requests are unaffected.** An installed document produces a new
   immutable engine snapshot that keeps the configuration digest and epoch.
   Synced routes are unpinned (empty price version), so each quote binds the
@@ -66,9 +73,9 @@ prices.
 
 ## Consequences
 
-- OpenRouter becomes a price source for deployments that opt in. Its prices
-  are list prices: negotiated discounts and tiers OpenRouter does not publish
-  stay unpriced unless an operator configures them.
+- OpenRouter becomes the price source of OpenRouter routes for deployments
+  that opt in. Direct prices change only with a reviewed rules change or an
+  operator override; negotiated discounts belong in an override file.
 - Media, web search and audio prices OpenRouter publishes have no catalog
   component and are not reserved; such calls rely on reported cost.
 - Recovery of a request whose synced route disappeared in a refresh fails as

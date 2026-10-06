@@ -141,48 +141,106 @@ func TestPerMillionMovesTheDecimalPointExactly(t *testing.T) {
 	}
 }
 
-func TestRulesMapOpenRouterIDsToProviderModels(t *testing.T) {
+const testPrices = `{input_per_million: "1", output_per_million: "2", cache_read_per_million: "0.1", cache_write_per_million: "0", per_request: "0"}`
+
+func TestRulesResolveDirectModelsAndMergeOverrides(t *testing.T) {
 	rules := mergedRules(t, `
 version: model-sync-rules/v1
 exclude: ["openai/gpt-audio*"]
 providers:
   anthropic:
     models:
-      anthropic/claude-3.5-haiku: {model: claude-3-5-haiku-latest}
-      anthropic/claude-legacy: {exclude: true}
+      anthropic/claude-sonnet-4.5:
+        prices:
+          standard_only: {input_per_million: "2.7", output_per_million: "13.5", cache_read_per_million: "0.27", cache_write_per_million: "3.375", per_request: "0"}
+      anthropic/claude-opus-4.5: {exclude: true}
+      anthropic/claude-custom:
+        model: claude-custom-20261001
+        prices:
+          standard_only: `+testPrices+`
 `)
-	cases := []struct {
-		provider, id, want string
-		ok                 bool
-	}{
-		{"openai", "openai/gpt-5.4", "gpt-5.4", true},
-		{"anthropic", "anthropic/claude-sonnet-4.5", "claude-sonnet-4-5", true},
-		{"anthropic", "anthropic/claude-3.5-haiku", "claude-3-5-haiku-latest", true},
-		{"anthropic", "anthropic/claude-legacy", "", false},
-		{"anthropic", "openai/gpt-5.4", "", false},
-		{"unknown", "openai/gpt-5.4", "", false},
+	sonnet, ok := rules.Direct("anthropic", "anthropic/claude-sonnet-4.5")
+	if !ok || sonnet.Model != "claude-sonnet-4-5" || sonnet.ContextTokens != 200000 {
+		t.Fatalf("sonnet = %+v, %v; want the built-in mapping and limits kept", sonnet, ok)
 	}
-	for _, test := range cases {
-		got, ok := rules.DirectModel(test.provider, test.id)
-		if got != test.want || ok != test.ok {
-			t.Fatalf("DirectModel(%q, %q) = %q, %v; want %q, %v", test.provider, test.id, got, ok, test.want, test.ok)
-		}
+	if sonnet.Prices["standard_only"].Input != "2.7" || sonnet.Prices["auto"].Input != "3" {
+		t.Fatalf("sonnet prices = %+v; want one tier overridden and the other kept", sonnet.Prices)
+	}
+	if _, ok := rules.Direct("anthropic", "anthropic/claude-opus-4.5"); ok {
+		t.Fatal("an excluded built-in model still has a direct route")
+	}
+	if custom, ok := rules.Direct("anthropic", "anthropic/claude-custom"); !ok || custom.Model != "claude-custom-20261001" {
+		t.Fatalf("custom model = %+v, %v", custom, ok)
+	}
+	if gpt, ok := rules.Direct("openai", "openai/gpt-5.4"); !ok || gpt.Model != "gpt-5.4" || gpt.ContextTokens != 272000 {
+		t.Fatalf("gpt-5.4 = %+v, %v; want the context capped below the long-prompt price", gpt, ok)
+	}
+	if _, ok := rules.Direct("anthropic", "openai/gpt-5.4"); ok {
+		t.Fatal("a provider served a model outside its prefix")
 	}
 	if !rules.Excluded("openai/gpt-audio-mini") || rules.Excluded("openai/gpt-5.4") {
 		t.Fatal("exclude pattern did not apply")
 	}
-	if rules.Providers["openai"].Tiers["flex"] != "openai/flex" {
-		t.Fatal("a later layer dropped built-in tiers")
+}
+
+func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
+	rules := mergedRules(t)
+	for name, provider := range rules.Providers {
+		if len(provider.Models) == 0 {
+			t.Fatalf("provider %q has no models", name)
+		}
+		for id, model := range provider.Models {
+			if len(model.Prices) == 0 {
+				t.Fatalf("%s has no prices", id)
+			}
+		}
+	}
+	exa, ok := rules.Direct("exa", "exa/exa")
+	if !ok || exa.Model != "exa" || exa.Prices["standard"].PerRequest != "0.005" {
+		t.Fatalf("exa = %+v, %v", exa, ok)
+	}
+	opus, _ := rules.Direct("anthropic", "anthropic/claude-opus-5.5")
+	if got := opus.Prices["standard_only"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.2" || got.CacheWrite != "5" {
+		t.Fatalf("claude-opus-5.5 prices = %+v; want Anthropic's published $4/$20, $0.20 cache read, $5 cache write", got)
+	}
+}
+
+func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
+	document := fetchFixture(t)
+	rendered, err := GenerateDefaultRules(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseRules(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := MergeRules(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpt, ok := rules.Direct("openai", "openai/gpt-5.4")
+	if !ok || gpt.ContextTokens != 272000 || gpt.Prices["flex"].Input != "1.25" || gpt.Prices["default"].Input != "2.5" || gpt.Prices["priority"].Input != "5" {
+		t.Fatalf("generated gpt-5.4 = %+v", gpt)
+	}
+	sonnet, ok := rules.Direct("anthropic", "anthropic/claude-sonnet-4.5")
+	if !ok || sonnet.ContextTokens != 200000 || sonnet.Prices["standard_only"].CacheWrite != "3.75" || sonnet.Prices["auto"].Output != "15" {
+		t.Fatalf("generated sonnet = %+v", sonnet)
+	}
+	if _, ok := rules.Providers["anthropic"].Models["inference-net/schematron-v2-turbo"]; ok {
+		t.Fatal("a third-party model was generated as a direct model")
 	}
 }
 
 func TestRulesRejectInvalidDocuments(t *testing.T) {
 	for name, document := range map[string]string{
-		"version":       "version: v0\n",
-		"unknown field": "version: model-sync-rules/v1\nsurprise: true\n",
-		"transform":     "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x/\n    model_id: lowercase\n",
-		"prefix":        "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x\n    model_id: verbatim\n",
-		"extra price":   "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x/\n    model_id: verbatim\n    extra_models:\n      x/m: {model: m, prices: {input_per_million: \"1\"}}\n",
+		"version":        "version: v0\n",
+		"unknown field":  "version: model-sync-rules/v1\nsurprise: true\n",
+		"transform":      "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x/\n    model_id: lowercase\n",
+		"prefix":         "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x\n    model_id: verbatim\n",
+		"no prices":      "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x/\n    model_id: verbatim\n    models:\n      x/m: {model: m}\n",
+		"partial price":  "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x/\n    model_id: verbatim\n    models:\n      x/m: {prices: {standard: {input_per_million: \"1\"}}}\n",
+		"outside prefix": "version: model-sync-rules/v1\nproviders:\n  x:\n    prefix: x/\n    model_id: verbatim\n    models:\n      y/m: {prices: {standard: " + testPrices + "}}\n",
 	} {
 		document, err := ParseRules([]byte(document))
 		if err == nil {
@@ -247,7 +305,7 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	if direct.Model != "claude-sonnet-4-5" || direct.ContextTokens != 200000 || direct.OutputTokens != 64000 || direct.PriceVersion != "" {
 		t.Fatalf("direct sonnet route = model %q context %d output %d price version %q", direct.Model, direct.ContextTokens, direct.OutputTokens, direct.PriceVersion)
 	}
-	assertPrices(t, priceFor(t, compiled.Prices, "anthropic-direct", "claude-sonnet-4-5", "standard_only"), "3", "15", "0.3", "6")
+	assertPrices(t, priceFor(t, compiled.Prices, "anthropic-direct", "claude-sonnet-4-5", "standard_only"), "3", "15", "0.3", "3.75")
 	// OpenRouter may pick any upstream and any long-prompt tier, so it
 	// reserves at the componentwise maximum.
 	assertPrices(t, priceFor(t, compiled.Prices, "openrouter", "anthropic/claude-sonnet-4.5", "default"), "6.6", "24.75", "0.66", "13.2")
@@ -258,6 +316,10 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	gpt := compiled.Models["openai/gpt-5.4"]
 	if len(gpt.Routes) != 2 || gpt.Routes[0].Model != "gpt-5.4" || len(gpt.Routes[0].Classes) != 3 || gpt.Routes[0].ContextTokens != 272000 {
 		t.Fatalf("gpt direct route = %+v", gpt.Routes[0])
+	}
+	// A model the rules price but OpenRouter did not list routes directly.
+	if routes := compiled.Models["openai/gpt-5.5"].Routes; len(routes) != 1 || routes[0].EndpointID != "openai-direct" {
+		t.Fatalf("rules-only model routes = %+v", routes)
 	}
 	assertPrices(t, priceFor(t, compiled.Prices, "openai-direct", "gpt-5.4", "flex"), "1.25", "7.5", "0.125", "0")
 	assertPrices(t, priceFor(t, compiled.Prices, "openai-direct", "gpt-5.4", "default"), "2.5", "15", "0.25", "0")
@@ -298,15 +360,23 @@ func TestCompileNarrowsFeaturesTheModelCannotAccept(t *testing.T) {
 	}
 }
 
-func TestCompileWithoutDocumentRoutesOnlyExtraModels(t *testing.T) {
+func TestCompileWithoutDocumentRoutesOnlyDirectModels(t *testing.T) {
 	exa := testSource("exa-direct", "exa", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
+	anthropic := testSource("anthropic-direct", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only"})
 	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
-	compiled, err := Compile(Input{Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{exa}})
+	compiled, err := Compile(Input{Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{exa, anthropic}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(compiled.Models) != 1 || len(compiled.Models["exa/exa"].Routes) != 1 {
-		t.Fatalf("models = %+v", compiled.Models)
+	for id, model := range compiled.Models {
+		for _, route := range model.Routes {
+			if route.EndpointID == "openrouter" {
+				t.Fatalf("model %q has an OpenRouter route before any Document", id)
+			}
+		}
+	}
+	if len(compiled.Models["exa/exa"].Routes) != 1 || len(compiled.Models["anthropic/claude-opus-5.5"].Routes) != 1 {
+		t.Fatalf("direct models missing before the first Document: %d models", len(compiled.Models))
 	}
 }
 
