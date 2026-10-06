@@ -147,10 +147,13 @@ func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, a
 		return usable, err
 	}, attempt.PriorCandidates...)
 	if err != nil {
-		// Every candidate whose reservation exceeds a matched window limit can
-		// never be admitted; waiting for capacity would only run out the
-		// workflow deadline, so say so instead of reporting no route.
-		if oversized && ctx.Err() == nil {
+		// A terminal no-route result after a candidate whose reservation
+		// exceeds a matched window limit can never be admitted; waiting for
+		// capacity would only run out the workflow deadline, so say so. Any
+		// other outcome, such as a retryable health block on a candidate that
+		// would fit, is kept.
+		var mapped *provider.Error
+		if oversized && ctx.Err() == nil && errors.As(err, &mapped) && mapped.Code == provider.CodeNoRoute {
 			return PlannedBudgetCall{}, provider.NewError(provider.CodeBudgetDenied, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "request reservation exceeds a budget window limit")
 		}
 		return PlannedBudgetCall{}, err

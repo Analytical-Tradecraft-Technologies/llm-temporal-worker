@@ -517,7 +517,7 @@ func inlinePDFPageBound(part llm.DocumentPart) (int64, bool) {
 		return 0, false
 	}
 	data := part.Bytes
-	if !bytes.HasPrefix(data, []byte("%PDF-")) || bytes.Contains(data, []byte("/ObjStm")) {
+	if !bytes.HasPrefix(data, []byte("%PDF-")) || bytes.Contains(data, []byte("/ObjStm")) || pdfHasEscapedName(data) {
 		return 0, false
 	}
 	pages := int64(0)
@@ -539,11 +539,7 @@ func inlinePDFPageBound(part llm.DocumentPart) (int64, bool) {
 		for end < len(data) && !pdfDelimiterOrSpace(data[end]) {
 			end++
 		}
-		name := data[at+1 : end]
-		if bytes.IndexByte(name, '#') >= 0 {
-			return 0, false
-		}
-		if string(name) == "Page" {
+		if string(data[at+1:end]) == "Page" {
 			pages++
 		}
 	}
@@ -590,4 +586,21 @@ func saturatingMul(left, right, limit int64) int64 {
 		return product
 	}
 	return limit
+}
+
+// pdfHasEscapedName reports whether any PDF name uses a # escape. An escape
+// can spell any key or value (/Ty#70e is /Type, /Obj#53tm is /ObjStm), so a
+// file that uses one gives no provable page bound.
+func pdfHasEscapedName(data []byte) bool {
+	for index := 0; index < len(data); index++ {
+		if data[index] != '/' {
+			continue
+		}
+		for end := index + 1; end < len(data) && !pdfDelimiterOrSpace(data[end]); end++ {
+			if data[end] == '#' {
+				return true
+			}
+		}
+	}
+	return false
 }

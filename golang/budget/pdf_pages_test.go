@@ -20,6 +20,8 @@ func TestDocumentAllowanceBoundsAnInlinePDFByItsVisiblePages(t *testing.T) {
 	for name, part := range map[string]llm.DocumentPart{
 		"object stream":   pdf("3 0 obj <</Type /ObjStm /N 600>> stream x endstream endobj\n4 0 obj <</Type /Page>> endobj"),
 		"escaped name":    pdf("3 0 obj <</Type /Pag#65>> endobj\n4 0 obj <</Type /Page>> endobj"),
+		"escaped key":     pdf("3 0 obj <</Ty#70e /Page>> endobj\n4 0 obj <</Type /Page>> endobj"),
+		"escaped stream":  pdf("3 0 obj <</Type /Obj#53tm /N 600>> endobj\n4 0 obj <</Type /Page>> endobj"),
 		"no visible page": pdf("1 0 obj <</Type /Catalog>> endobj"),
 		"not a PDF":       {Bytes: []byte("<</Type /Page>>"), MediaType: "application/pdf"},
 		"URL":             {URL: "https://example.com/a.pdf", MediaType: "application/pdf"},
