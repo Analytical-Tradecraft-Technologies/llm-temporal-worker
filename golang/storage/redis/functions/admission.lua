@@ -721,12 +721,16 @@ local function durable_int(value)
 end
 
 -- Window geometry arrives as nanoseconds, which can exceed MAX_SAFE for long
--- windows. Only whole milliseconds, rounded up, enter expiry arithmetic; the
--- Go materializer already bounds the nanoseconds by 2^62.
+-- windows, so expiry arithmetic uses whole milliseconds. Configuration only
+-- admits whole-millisecond geometry; anything else is rejected here rather
+-- than rounded, because rounding the bucket width would shift the grid and
+-- could expire waited spend early. The digits are checked as a string so the
+-- test is exact beyond 2^53.
 local function durable_millis(nanos)
-    local value = tonumber(nanos)
-    if value == nil or value <= 0 or value > 4611686018427387904 or value ~= math.floor(value) then return nil end
-    return math.ceil(value / 1000000)
+    if type(nanos) ~= 'string' or not string.match(nanos, '^[1-9][0-9]*000000$') then return nil end
+    local value = tonumber(string.sub(nanos, 1, -7))
+    if value == nil or value <= 0 or value > 4611686018427 then return nil end
+    return value
 end
 
 local function durable_bucket_field(bucket)

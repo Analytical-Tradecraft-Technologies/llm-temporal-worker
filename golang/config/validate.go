@@ -654,6 +654,11 @@ func (budgets BudgetsConfig) validate() error {
 			if window.Bucket > window.Duration {
 				return fmt.Errorf("%s.bucket must not exceed duration", windowPath)
 			}
+			// Redis computes window expiry in whole milliseconds; a
+			// fractional-millisecond geometry would shift its bucket grid.
+			if time.Duration(window.Duration)%time.Millisecond != 0 || time.Duration(window.Bucket)%time.Millisecond != 0 {
+				return fmt.Errorf("%s duration and bucket must be whole milliseconds", windowPath)
+			}
 			if !window.LimitUSD.IsZero() {
 				if err := window.LimitUSD.Validate(); err != nil {
 					return fmt.Errorf("%s.limit_usd: %w", windowPath, err)
