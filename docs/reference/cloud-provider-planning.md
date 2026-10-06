@@ -40,7 +40,21 @@ match the selection. Missing SDK parameters or mismatched calls fail closed.
 A compiler reporting possible dispatch stops with an ambiguous, non-retryable
 error; it cannot become fallback. Context cancellation also stops planning.
 Errors omit raw compiler/configuration messages, provider payloads and causes.
-If no candidate compiles, the result is `no_route` before admission.
+If no candidate compiles, the result is `unsupported_capability` when a route
+declined the request itself (the routing planner found a capability or
+extension it lacks, or its adapter's compiler rejected the request, for
+example in strict portability) and no route was passed over for a context
+limit or a failed adapter lookup; otherwise it is `no_route`. A blocked route
+keeps `provider_unavailable`/`same_operation` and an unpriced or unbudgeted
+one keeps `no_route` at the `price` phase. The error's safe details carry
+`rejected_routes` and, for the first four rejections with the ones that
+explain the code first, `route_<n>` (the configured route ID) and `reason_<n>`:
+one of the routing planner's rejection codes, `route_compile_rejected`,
+`route_adapter_unavailable` or `route_quote_unavailable`, suffixed with
+`:<feature>` when the feature is known. Each rejection is also logged as
+`route rejected during provider planning` with `route_id`, `cause`,
+`error_code` and `phase`. These details never leave the worker: the Temporal
+error carries only the code, phase and dispatch certainty.
 
 `PlannedProviderCall` carries the candidate, process-local adapter/SDK call,
 config digest/epoch, capability version and complete cache route identity. The

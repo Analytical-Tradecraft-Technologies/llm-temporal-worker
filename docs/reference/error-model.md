@@ -49,8 +49,8 @@ Phases are `decode`, `normalize`, `state_load`, `plan`, `price`,
 | Code | Meaning | Default retry |
 | --- | --- | --- |
 | `invalid_argument` | malformed or internally inconsistent request | never |
-| `unsupported_capability` | no strict semantic conversion | never without request/config change |
-| `no_route` | no configured eligible candidate | never without config/health change |
+| `unsupported_capability` | no strict semantic conversion: an otherwise eligible route declined the request | never without request/config change |
+| `no_route` | no configured eligible candidate, or every candidate was passed over for context, adapter, price or budget-policy reasons | never without config/health change |
 | `authentication` | invalid provider/store credentials | never within same snapshot |
 | `permission_denied` | account/model/region denied | never within same snapshot |
 | `budget_denied` | matching limit would be exceeded | at calculated time when horizon permits |
