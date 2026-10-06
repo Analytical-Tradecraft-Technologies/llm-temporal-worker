@@ -21,6 +21,9 @@ Unknown-cost reconciliation is similarly separate: a missing or ambiguous
 provider charge must remain unknown until authoritative evidence resolves it.
 It cannot be replaced with zero to make a maintenance pass finish.
 
+The proposed designs are
+[cloud retention and deletion](../architecture/cloud-retention-and-deletion.md)
+and [unknown-cost reconciliation](../architecture/unknown-cost-reconciliation.md).
 Current work is tracked in [retention and blob deletion #818](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/818)
 and [unknown-cost reconciliation #819](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/819).
 The only budget initialization command is described in
