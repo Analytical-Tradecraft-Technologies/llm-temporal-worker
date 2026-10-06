@@ -185,6 +185,13 @@ The process accepts a YAML file path through `--config`. Provider credentials
 use environment/file/workload-identity references and are resolved after
 parsing.
 
+Temporal history is plaintext unless `temporal.payload_codec` is configured.
+To encrypt it, mount the codec key files as Secrets and give every worker and
+caller of the task queue the same keys in one coordinated rollout; key changes
+need a restart. See
+[Temporal payload encryption](../reference/configuration.md#temporal-payload-encryption)
+for the key format, rotation steps, and the OCaml and Temporal UI limitations.
+
 The Redis key prefix is a process-lifetime deployment setting. The current
 composition reads **state.redis.key_prefix**, optionally overridden by
 **LLMTW_REDIS_KEY_PREFIX**, and uses it for every worker-owned Redis key. The

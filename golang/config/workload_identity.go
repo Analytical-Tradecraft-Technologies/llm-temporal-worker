@@ -25,6 +25,11 @@ func (config Config) WorkloadIdentityPaths() []string {
 	for index, key := range config.Continuation.HandleKeys {
 		add(string(key.Secret.Kind), fmt.Sprintf("continuation.handle_keys[%d].secret", index))
 	}
+	if config.Temporal.PayloadCodec != nil {
+		for index, key := range config.Temporal.PayloadCodec.Keys {
+			add(string(key.Secret.Kind), fmt.Sprintf("temporal.payload_codec.keys[%d].secret", index))
+		}
+	}
 	add(config.BlobStore.S3.Auth.Kind, "blob_store.s3.auth")
 	for name, endpoint := range config.Endpoints {
 		add(endpoint.Auth.Kind, "endpoints."+name+".auth")

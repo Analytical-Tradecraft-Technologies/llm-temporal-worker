@@ -188,10 +188,19 @@
         "target": { "type": "string" }, "namespace": { "type": "string" },
         "task_queue": { "type": "string" }, "identity_prefix": { "type": "string" },
         "tls": { "$ref": "#/$defs/temporal_tls" }, "api_key_file": { "type": "string" },
-        "mesh_transport": { "type": "boolean" }, "worker": { "$ref": "#/$defs/worker" }
+        "mesh_transport": { "type": "boolean" }, "worker": { "$ref": "#/$defs/worker" },
+        "payload_codec": { "$ref": "#/$defs/payload_codec" }
       },
       "if": { "required": ["api_key_file"] },
       "then": { "properties": { "tls": { "properties": { "enabled": { "const": true } } } } }
+    },
+    "payload_codec": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "keys"],
+      "properties": {
+        "kind": { "const": "aes256_gcm" },
+        "keys": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "primary", "secret"], "properties": { "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$" }, "primary": { "type": "boolean" }, "secret": { "$ref": "#/$defs/secret" } } } }
+      }
     },
     "worker": {
       "type": "object", "additionalProperties": false,

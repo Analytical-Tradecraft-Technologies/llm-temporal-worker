@@ -188,12 +188,12 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if options.EngineFactory == nil {
 		return nil, ErrEngineFactoryUnavailable
 	}
+	secretResolver := options.SecretResolver
+	if secretResolver == nil {
+		secretResolver = secrets.New(secrets.Options{})
+	}
 	references := options.Resolver
 	if references == nil {
-		secretResolver := options.SecretResolver
-		if secretResolver == nil {
-			secretResolver = secrets.New(secrets.Options{})
-		}
 		references = secrets.ConfigResolver{Resolver: secretResolver}
 	}
 	builder := app.SnapshotBuilder{References: references}
@@ -256,7 +256,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	options.Logger = logger
 	temporalFactory := options.TemporalFactory
 	if temporalFactory == nil {
-		temporalFactory = DefaultTemporalClientFactory{Identity: options.Identity, Logger: logger}
+		temporalFactory = DefaultTemporalClientFactory{Identity: options.Identity, Logger: logger, SecretResolver: secretResolver}
 	}
 	temporalClient, err := temporalFactory.New(ctx, configuration)
 	if err != nil {
@@ -1102,6 +1102,10 @@ func safeTemporalFactoryError(err error) error {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("construct Temporal client: %w", context.DeadlineExceeded)
+	}
+	var codecError *payloadCodecError
+	if errors.As(err, &codecError) {
+		return fmt.Errorf("construct Temporal client: %s", codecError.safe)
 	}
 	return errors.New("construct Temporal client failed")
 }

@@ -147,7 +147,11 @@ provider state are sensitive by default. The worker:
 - avoids content in logs, metrics, trace attributes, heartbeat details, and
   current v1 ledger records;
 - uses BlobRefs to limit Temporal history content/size;
-- supports an external Temporal Payload Codec for encryption;
+- encrypts Temporal payloads with an opt-in AES-256-GCM Payload Codec when
+  `temporal.payload_codec` is configured; without it, inline prompts and
+  outputs are stored in Temporal history as plaintext, and history
+  confidentiality depends on the Temporal deployment (see
+  [Temporal payload encryption](../reference/configuration.md#temporal-payload-encryption));
 - encrypts production blob/Redis traffic in transit and relies on configured
   at-rest encryption;
 - records retention/expiry metadata; automatic production cleanup is deferred;
