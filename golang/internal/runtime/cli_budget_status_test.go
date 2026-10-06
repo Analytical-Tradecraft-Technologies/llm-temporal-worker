@@ -80,8 +80,11 @@ type cliBudgetFixture struct {
 	generation *cliBudgetGeneration
 	invoker    *cliBudgetInvoker
 	functions  *cliBudgetFunctions
-	service    activity.QueryService
-	now        time.Time
+	// masters, when set, replaces the single node with a cluster-shaped
+	// fan-out over every master, as ForEachMaster does in production.
+	masters []*cliBudgetFunctions
+	service activity.QueryService
+	now     time.Time
 }
 
 // newCLIBudgetFixture composes budget_status exactly as the production CLI
@@ -128,7 +131,18 @@ func newCLIBudgetFixture(t *testing.T) *cliBudgetFixture {
 		now:        now,
 	}
 	clock := func() time.Time { return f.now }
-	reader, err := newCLIBudgetStatusReader(f.functions, redisstore.BudgetStatusReaderOptions{Invoker: f.invoker, Generation: f.generation, Keys: keys, Mode: redisstore.AdmissionModeFunction, Clock: clock})
+	nodes := func(ctx context.Context, fn func(context.Context, budgetFunctionLister) error) error {
+		if f.masters == nil {
+			return fn(ctx, f.functions)
+		}
+		for _, master := range f.masters {
+			if err := fn(ctx, master); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	reader, err := newCLIBudgetStatusReader(nodes, redisstore.BudgetStatusReaderOptions{Invoker: f.invoker, Generation: f.generation, Keys: keys, Mode: redisstore.AdmissionModeFunction, Clock: clock})
 	if err != nil || reader == nil {
 		t.Fatal("CLI budget reader was not composed", err)
 	}
@@ -284,6 +298,53 @@ func TestCLIBudgetStatusUnsupportedWithoutProvisionedState(t *testing.T) {
 	var classified *provider.Error
 	if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable {
 		t.Fatalf("error = %v, want state unavailable", err)
+	}
+}
+
+// FUNCTION LIST is keyless, so in Redis Cluster it reaches an arbitrary
+// master while FCALL reaches the slot owner. Every master must hold the
+// library, or the check fails closed.
+func TestCLIBudgetStatusClusterRequiresFunctionOnEveryMaster(t *testing.T) {
+	provisioned := func() *cliBudgetFunctions { return &cliBudgetFunctions{libraries: provisionedBudgetLibrary()} }
+	f := newCLIBudgetFixture(t)
+	f.masters = []*cliBudgetFunctions{provisioned(), provisioned(), provisioned()}
+	if _, err := f.query("project", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	for index, master := range f.masters {
+		if master.calls != 1 {
+			t.Fatalf("master %d checked %d times", index, master.calls)
+		}
+	}
+	for _, missing := range []int{0, 2} {
+		f := newCLIBudgetFixture(t)
+		f.masters = []*cliBudgetFunctions{provisioned(), provisioned(), provisioned()}
+		f.masters[missing].libraries = nil
+		_, err := f.query("project", `{}`)
+		requireUnsupportedBudget(t, err)
+		if f.invoker.calls != 0 {
+			t.Fatal("partially provisioned cluster reached the budget Function")
+		}
+	}
+	// A topology with no masters proves nothing and must not pass.
+	f = newCLIBudgetFixture(t)
+	f.masters = []*cliBudgetFunctions{}
+	_, err := f.query("project", `{}`)
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable || f.invoker.calls != 0 {
+		t.Fatalf("empty cluster = %v, want state unavailable without a read", err)
+	}
+}
+
+func TestCLIBudgetStatusNodeFanOutMatchesClient(t *testing.T) {
+	cluster := redisclient.NewClusterClient(&redisclient.ClusterOptions{Addrs: []string{"127.0.0.1:0"}})
+	ring := redisclient.NewRing(&redisclient.RingOptions{Addrs: map[string]string{"a": "127.0.0.1:0"}})
+	single := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
+	t.Cleanup(func() { _, _, _ = cluster.Close(), ring.Close(), single.Close() })
+	for name, client := range map[string]redisclient.Scripter{"cluster": cluster, "ring": ring, "single": single} {
+		if budgetFunctionNodesFor(client) == nil {
+			t.Fatalf("%s client has no Function check", name)
+		}
 	}
 }
 

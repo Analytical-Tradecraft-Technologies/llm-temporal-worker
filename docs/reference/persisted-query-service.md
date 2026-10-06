@@ -42,6 +42,12 @@ does not publish that generation itself (see the reader contract below). When ei
 is missing, or the library code differs, `budget_status` returns the typed
 unsupported-query error (`unsupported_capability`, not retryable). An operator
 can load the library or publish a generation without a configuration reload.
+`FUNCTION LIST` is keyless, so with Redis Cluster the CLI runs it on every
+master (`ForEachMaster`; every shard for a Ring client). Every master must
+hold the exact library before the read is attempted. This check does not
+depend on which master owns the budget key's slot, so it stays valid after a
+resharding moves that slot. A cluster with no reachable master fails as
+`state_unavailable`.
 A Redis failure during these checks or during the read is a retryable
 `state_unavailable` error. Neither path invents a value. In `lua` admission mode
 nothing provisions the budget script by SHA, so `budget_status` stays
