@@ -123,6 +123,8 @@ func TestCheckpointPublicationGenerationRoundTripAndFork(t *testing.T) {
 		t.Fatal("lost authorized scope, exact settings or transcript", base)
 	}
 	identity = nextPublication(identity)
+	// A child keeps its own retention deadline even when it outlives its parent.
+	identity.ExpiresAt = identity.ExpiresAt.Add(time.Hour)
 	result.OperationKey = request.OperationKey
 	result.OperationID = string(identity.OperationID)
 	child, out, err := p.Generate(context.Background(), identity, request, base, result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
@@ -131,6 +133,9 @@ func TestCheckpointPublicationGenerationRoundTripAndFork(t *testing.T) {
 	}
 	if child.ParentID == nil || *child.ParentID != cp.ID || child.Depth != 1 {
 		t.Fatal("lost parent")
+	}
+	if !child.ExpiresAt.Equal(identity.ExpiresAt) || !child.ExpiresAt.After(cp.ExpiresAt) {
+		t.Fatalf("child expiry = %v, want own deadline %v after parent %v", child.ExpiresAt, identity.ExpiresAt, cp.ExpiresAt)
 	}
 	store.rows[child.ID] = child
 	request.Parent = &out.Checkpoint.Handle

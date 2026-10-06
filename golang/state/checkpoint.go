@@ -159,15 +159,32 @@ func (graph *CheckpointGraph) putBase(checkpoint Checkpoint) error {
 	return graph.put(checkpoint)
 }
 
+// PutChild publishes a new child. Its parent must still be live: a retained
+// ancestor stays readable only for children created before it expired.
 func (graph *CheckpointGraph) PutChild(checkpoint Checkpoint) error {
+	return graph.putChild(checkpoint, false)
+}
+
+// putRetainedChild replays an already-published child whose ancestors may
+// have expired since; durable materialization uses it to rebuild history.
+func (graph *CheckpointGraph) putRetainedChild(checkpoint Checkpoint) error {
+	return graph.putChild(checkpoint, true)
+}
+
+func (graph *CheckpointGraph) putChild(checkpoint Checkpoint, retained bool) error {
 	if checkpoint.Parent == nil || *checkpoint.Parent == "" {
 		return fmt.Errorf("child checkpoint requires a parent")
 	}
 	graph.mu.RLock()
 	parent, ok := graph.checkpoints[*checkpoint.Parent]
+	_, republished := graph.checkpoints[checkpoint.Handle]
 	graph.mu.RUnlock()
 	if !ok {
 		return ErrNotFound
+	}
+	// An identical republication is settled by put's digest check.
+	if !retained && !republished && !parent.ExpiresAt.IsZero() && !graph.clock().Before(parent.ExpiresAt) {
+		return ErrExpired
 	}
 	if checkpoint.Tenant == "" {
 		checkpoint.Tenant = parent.Tenant
@@ -327,7 +344,11 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		if checkpoint.Tenant != tenant {
 			return MaterializedState{}, ErrTenantMismatch
 		}
-		if !checkpoint.ExpiresAt.IsZero() && !graph.clock().Before(checkpoint.ExpiresAt) {
+		// Only the requested checkpoint's own deadline gates the read. An
+		// ancestor is retained history for its live descendants, so a child
+		// created near its parent's deadline stays usable for its full
+		// retention period.
+		if len(path) == 0 && !checkpoint.ExpiresAt.IsZero() && !graph.clock().Before(checkpoint.ExpiresAt) {
 			return MaterializedState{}, ErrExpired
 		}
 		path = append(path, checkpoint)
