@@ -70,7 +70,7 @@ func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootI
 		if err != nil {
 			return RequestAttempt{}, err
 		}
-		progress, preparation, _, err := requestPreparationProgress(root)
+		progress, preparation, _, err := r.storedPreparationProgress(root)
 		if err != nil {
 			return RequestAttempt{}, err
 		}
@@ -219,7 +219,10 @@ func (r *Repository) verifyRequestAttempt(ctx context.Context, root Record, acti
 	return active, nil
 }
 
-func (r *Repository) createRequestAttempt(ctx context.Context, root Record, preparation RequestPreparation, link RequestAttempt, now time.Time) (Record, error) {
+// createRequestAttempt copies the root's stored preparation as stored: a
+// reference to the parent snapshot blob stays valid in the child, which shares
+// the root's scope, and a legacy inline parent stays inline.
+func (r *Repository) createRequestAttempt(ctx context.Context, root Record, preparation storedRequestPreparation, link RequestAttempt, now time.Time) (Record, error) {
 	request := root.Request
 	request.ID, request.CreatedAt = link.ID, now.UTC()
 	// An interrupted initializer may have only its discovery row. Reuse its
@@ -262,9 +265,9 @@ func (r *Repository) createRequestAttempt(ctx context.Context, root Record, prep
 	}
 	preparation.PreparedAt = link.CreatedAt
 	progress, _ := json.Marshal(struct {
-		Version     int                `json:"version"`
-		Preparation RequestPreparation `json:"request_preparation"`
-		Parent      RequestAttempt     `json:"attempt_parent"`
+		Version     int                      `json:"version"`
+		Preparation storedRequestPreparation `json:"request_preparation"`
+		Parent      RequestAttempt           `json:"attempt_parent"`
 	}{1, preparation, link})
 	return r.TryUpdate(ctx, request.Scope, request.ID, Update{ExpectedRevision: existing.Revision, Token: "attempt-initialize", Status: StatusRunning, Progress: progress, UpdatedAt: link.CreatedAt})
 }

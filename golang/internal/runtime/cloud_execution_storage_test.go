@@ -25,6 +25,8 @@ type executionMemoryTable struct {
 	version uint64
 	hook    func(string, kv.KeyValueItem) (before, after error)
 	trace   func(string)
+	// Operation counters, read by the storage-cost benchmark (#1112).
+	gets, queries, writes uint64
 }
 
 func cloneExecutionItem(item kv.KeyValueItem) kv.KeyValueItem {
@@ -46,6 +48,7 @@ func (s *executionMemoryTable) Get(ctx context.Context, key kv.KeyValueKey) (kv.
 	if err := ctx.Err(); err != nil {
 		return kv.KeyValueRecord{}, err
 	}
+	s.gets++
 	r, ok := s.rows[key]
 	if !ok {
 		return kv.KeyValueRecord{}, contracts.ErrNotFound
@@ -68,6 +71,7 @@ func (s *executionMemoryTable) write(ctx context.Context, op string, item kv.Key
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	s.writes++
 	if s.trace != nil {
 		s.trace(op + ":" + item.PartitionKey)
 	}
@@ -120,6 +124,7 @@ func (s *executionMemoryTable) QueryPartition(ctx context.Context, query kv.KeyV
 	if err := ctx.Err(); err != nil {
 		return kv.KeyValueQueryPage{}, err
 	}
+	s.queries++
 	if query.PageSize == 0 {
 		query.PageSize = 100
 	}
@@ -159,6 +164,8 @@ type executionMemoryBlobs struct {
 	hook   func(blob.BlobKey) (before, after error)
 	open   func(blob.BlobKey) error
 	trace  func(string)
+	// Operation and byte counters, read by the storage-cost benchmark (#1112).
+	opens, openBytes, creates, createBytes uint64
 }
 
 func (s *executionMemoryBlobs) Create(ctx context.Context, key blob.BlobKey, body io.Reader, size int64) error {
@@ -189,6 +196,7 @@ func (s *executionMemoryBlobs) Create(ctx context.Context, key blob.BlobKey, bod
 		return contracts.ErrInvalidArgument
 	}
 	s.values[key] = append([]byte(nil), data...)
+	s.creates, s.createBytes = s.creates+1, s.createBytes+uint64(len(data))
 	return after
 }
 func (s *executionMemoryBlobs) Open(ctx context.Context, key blob.BlobKey) (blob.BlobReadResult, error) {
@@ -206,6 +214,7 @@ func (s *executionMemoryBlobs) Open(ctx context.Context, key blob.BlobKey) (blob
 	if !ok {
 		return blob.BlobReadResult{}, contracts.ErrNotFound
 	}
+	s.opens, s.openBytes = s.opens+1, s.openBytes+uint64(len(data))
 	return blob.BlobReadResult{Body: io.NopCloser(bytes.NewReader(append([]byte(nil), data...))), Size: int64(len(data))}, nil
 }
 func (s *executionMemoryBlobs) Delete(ctx context.Context, key blob.BlobKey) error {
@@ -216,4 +225,23 @@ func (s *executionMemoryBlobs) Delete(ctx context.Context, key blob.BlobKey) err
 	}
 	delete(s.values, key)
 	return nil
+}
+
+// executionStorageCounts is a snapshot of the test doubles' counters.
+type executionStorageCounts struct {
+	gets, queries, writes, opens, openBytes, creates, createBytes uint64
+}
+
+func readExecutionStorageCounts(table *executionMemoryTable, blobs *executionMemoryBlobs) executionStorageCounts {
+	table.mu.Lock()
+	counts := executionStorageCounts{gets: table.gets, queries: table.queries, writes: table.writes}
+	table.mu.Unlock()
+	blobs.mu.Lock()
+	counts.opens, counts.openBytes, counts.creates, counts.createBytes = blobs.opens, blobs.openBytes, blobs.creates, blobs.createBytes
+	blobs.mu.Unlock()
+	return counts
+}
+
+func (c executionStorageCounts) minus(o executionStorageCounts) executionStorageCounts {
+	return executionStorageCounts{c.gets - o.gets, c.queries - o.queries, c.writes - o.writes, c.opens - o.opens, c.openBytes - o.openBytes, c.creates - o.creates, c.createBytes - o.createBytes}
 }

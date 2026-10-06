@@ -150,7 +150,7 @@ func (factory *ProductionEngineFactory) buildCloudRequests(ctx context.Context, 
 			return cloudstate.Open(ctx, c, key)
 		}
 	}
-	repository, err := open(ctx, cloudstate.Config{Provider: parsed, RequestTable: c.RequestTable, PayloadStore: c.PayloadStore, Namespace: c.Namespace}, key)
+	repository, err := open(ctx, cloudstate.Config{Provider: parsed, RequestTable: c.RequestTable, PayloadStore: c.PayloadStore, Namespace: c.Namespace, ParentSnapshotStorage: c.ParentSnapshotStorage}, key)
 	// Provider SDK errors can contain resource names or endpoint details. Startup
 	// errors deliberately report only this bounded classification.
 	if err != nil || isNilCapability(repository) {

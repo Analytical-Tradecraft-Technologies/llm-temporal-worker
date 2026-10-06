@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -212,5 +213,290 @@ func TestRequestPreparationUncertainWritesRepairWithoutChangingInput(t *testing.
 				t.Fatal("uncertain retry appended another event")
 			}
 		})
+	}
+}
+
+// storedPreparationOf returns the durable preparation of a request record.
+func storedPreparationOf(t *testing.T, record Record) storedRequestPreparation {
+	t.Helper()
+	var progress map[string]json.RawMessage
+	var stored storedRequestPreparation
+	if json.Unmarshal(record.Progress, &progress) != nil || json.Unmarshal(progress["request_preparation"], &stored) != nil {
+		t.Fatal("undecodable preparation")
+	}
+	return stored
+}
+
+// rewritePreparation replaces the stored preparation with raw, bypassing
+// SaveRequestPreparation, as a legacy writer or a corruption would.
+func rewritePreparation(t *testing.T, r *Repository, record Record, raw any) Record {
+	t.Helper()
+	var progress map[string]json.RawMessage
+	if json.Unmarshal(record.Progress, &progress) != nil || progress == nil {
+		t.Fatal("undecodable progress")
+	}
+	progress["request_preparation"], _ = json.Marshal(raw)
+	data, _ := json.Marshal(progress)
+	updated, err := r.TryUpdate(context.Background(), record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: fmt.Sprintf("rewrite-%d", record.Revision), Status: record.Status, Progress: data, UpdatedAt: record.UpdatedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return updated
+}
+
+// TestRequestPreparationStoresParentOnceByReference covers #1112: the record
+// keeps only a digest reference, so later progress rewrites leave the
+// encrypted parent blob untouched, and loading resolves it exactly.
+func TestRequestPreparationStoresParentOnceByReference(t *testing.T) {
+	r, table, blobs, record, preparation := preparationFixture(t)
+	r.parentSnapshotBlob = true
+	ctx := context.Background()
+	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+		t.Fatal(err)
+	}
+	current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := storedPreparationOf(t, current)
+	ref := stored.ParentSnapshotRef
+	if ref == nil || len(stored.ParentSnapshot) != 0 || bytes.Contains(current.Progress, []byte(`"parent_snapshot"`)) {
+		t.Fatalf("parent stored inline: %s", current.Progress)
+	}
+	if want := r.newParentSnapshotRef(record.Request.Scope, preparation.ParentSnapshot); *ref != want {
+		t.Fatalf("reference %+v, want %+v", *ref, want)
+	}
+	sealed, ok := blobs.values[blob.BlobKey(ref.Blob)]
+	if !ok || bytes.Contains(sealed, []byte("private parent transcript")) {
+		t.Fatal("parent blob missing or not encrypted")
+	}
+	got, parent, err := reopen(t, table, blobs).LoadRequestPreparationParent(ctx, record.Request.Scope, record.Request.ID)
+	if err != nil || !bytes.Equal(got.ParentSnapshot, preparation.ParentSnapshot) || !equalExecutionJSON(got, preparation) || parent == nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	if decoded, err := got.ValidateParent(); err != nil || !reflect.DeepEqual(*decoded, *parent) {
+		t.Fatalf("returned parent differs from its snapshot: %v", err)
+	}
+	// A later progress write stores only the small record again.
+	before := len(blobs.values)
+	var progress map[string]json.RawMessage
+	_ = json.Unmarshal(current.Progress, &progress)
+	progress["other"] = json.RawMessage(`{"stage":1}`)
+	data, _ := json.Marshal(progress)
+	if _, err := r.TryUpdate(ctx, current.Request.Scope, current.Request.ID, Update{ExpectedRevision: current.Revision, Token: "other", Status: StatusRunning, Progress: data, UpdatedAt: current.UpdatedAt}); err != nil {
+		t.Fatal(err)
+	}
+	if len(blobs.values) != before+1 {
+		t.Fatalf("progress write stored %d blobs", len(blobs.values)-before)
+	}
+	if _, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRequestPreparationLegacyInlineStillLoads keeps preparations saved before
+// #1112, with the snapshot inline, loadable and replayable unchanged.
+func TestRequestPreparationLegacyInlineStillLoads(t *testing.T) {
+	r, table, blobs, record, preparation := preparationFixture(t)
+	ctx := context.Background()
+	rewritePreparation(t, r, record, preparation)
+	reopened := reopen(t, table, blobs)
+	got, parent, err := reopened.LoadRequestPreparationParent(ctx, record.Request.Scope, record.Request.ID)
+	if err != nil || !bytes.Equal(got.ParentSnapshot, preparation.ParentSnapshot) || !equalExecutionJSON(got, preparation) || parent == nil {
+		t.Fatalf("legacy load: %v", err)
+	}
+	// An identical retry recognises the legacy form and writes nothing.
+	table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("legacy replay wrote a row"); return nil, nil }
+	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("legacy replay wrote a blob"); return nil, nil }
+	if err := reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+		t.Fatal(err)
+	}
+	table.hook, blobs.hook = nil, nil
+	changed := preparation
+	changed.ConfigDigest[0]++
+	if err := reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed); !errors.Is(err, contracts.ErrConflict) {
+		t.Fatalf("replaced legacy preparation: %v", err)
+	}
+	// A paid attempt copies the legacy preparation and loads it.
+	attempt, err := reopened.BeginRequestAttempt(ctx, record.Request.Scope, record.Request.ID, "", record.UpdatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child, err := reopened.LoadRequestPreparation(ctx, record.Request.Scope, attempt.ID); err != nil || !bytes.Equal(child.ParentSnapshot, preparation.ParentSnapshot) {
+		t.Fatalf("legacy attempt preparation: %v", err)
+	}
+}
+
+// TestRequestPreparationAttemptSharesParentReference proves an attempt child
+// references the root's parent blob instead of copying the transcript.
+func TestRequestPreparationAttemptSharesParentReference(t *testing.T) {
+	r, _, _, record, preparation := preparationFixture(t)
+	r.parentSnapshotBlob = true
+	ctx := context.Background()
+	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := r.BeginRequestAttempt(ctx, record.Request.Scope, record.Request.ID, "", record.UpdatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := r.Read(ctx, record.Request.Scope, attempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := storedPreparationOf(t, child)
+	if stored.ParentSnapshotRef == nil || *stored.ParentSnapshotRef != r.newParentSnapshotRef(record.Request.Scope, preparation.ParentSnapshot) || len(stored.ParentSnapshot) != 0 {
+		t.Fatal("attempt does not share the parent reference")
+	}
+	got, err := r.LoadRequestPreparation(ctx, record.Request.Scope, attempt.ID)
+	if err != nil || !bytes.Equal(got.ParentSnapshot, preparation.ParentSnapshot) {
+		t.Fatalf("attempt preparation: %v", err)
+	}
+}
+
+// TestRequestPreparationRejectsTamperedOrMissingParent fails closed, as
+// ErrCorrupt and never as a missing preparation, on any parent blob or
+// reference that does not verify.
+func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
+	foreignScope := Scope{Tenant: "other-tenant", Project: "other-project"}
+	cases := map[string]func(*testing.T, *Repository, *memoryBlobs, Record, RequestPreparation, storedRequestPreparation){
+		"missing blob": func(t *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
+			delete(blobs.values, blob.BlobKey(stored.ParentSnapshotRef.Blob))
+		},
+		"tampered blob": func(t *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
+			blobs.values[blob.BlobKey(stored.ParentSnapshotRef.Blob)][20] ^= 1
+		},
+		"wrong digest": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
+			stored.ParentSnapshotRef.Digest = strings.Repeat("0", 64)
+			rewritePreparation(t, r, record, stored)
+		},
+		"wrong length": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
+			stored.ParentSnapshotRef.ByteLength++
+			rewritePreparation(t, r, record, stored)
+		},
+		"other blob": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
+			other, err := r.writeBlob(context.Background(), r.parentSnapshotStream(record.Request.Scope), []byte(`{"other":true}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored.ParentSnapshotRef.Blob = other
+			rewritePreparation(t, r, record, stored)
+		},
+		"other scope": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
+			foreign := r.newParentSnapshotRef(foreignScope, p.ParentSnapshot)
+			if _, err := r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot); err != nil {
+				t.Fatal(err)
+			}
+			stored.ParentSnapshotRef = &foreign
+			rewritePreparation(t, r, record, stored)
+		},
+		"inline and reference": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
+			stored.ParentSnapshot = p.ParentSnapshot
+			rewritePreparation(t, r, record, stored)
+		},
+		"malformed key": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
+			stored.ParentSnapshotRef.Blob += "0"
+			rewritePreparation(t, r, record, stored)
+		},
+		"provenance without parent": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
+			stored.ParentSnapshotRef = nil
+			stored.ParentProvenance = []state.ProviderStateProvenance{{}}
+			rewritePreparation(t, r, record, stored)
+		},
+	}
+	for name, corrupt := range cases {
+		t.Run(name, func(t *testing.T) {
+			r, table, blobs, record, preparation := preparationFixture(t)
+			r.parentSnapshotBlob = true
+			ctx := context.Background()
+			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+				t.Fatal(err)
+			}
+			current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			corrupt(t, r, blobs, current, preparation, storedPreparationOf(t, current))
+			if _, err := reopen(t, table, blobs).LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
+				t.Fatalf("accepted a corrupt parent: %v", err)
+			}
+		})
+	}
+}
+
+// TestRequestPreparationStorageSettingWritesAndReads: the default writes the
+// parent inline, blob writes a reference, and either repository reads both.
+func TestRequestPreparationStorageSettingWritesAndReads(t *testing.T) {
+	for _, writerBlob := range []bool{false, true} {
+		t.Run(fmt.Sprintf("writer-blob=%t", writerBlob), func(t *testing.T) {
+			r, table, blobs, record, preparation := preparationFixture(t)
+			if r.parentSnapshotBlob {
+				t.Fatal("parent-snapshot blob storage is on by default")
+			}
+			r.parentSnapshotBlob = writerBlob
+			ctx := context.Background()
+			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+				t.Fatal(err)
+			}
+			current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := storedPreparationOf(t, current)
+			if (stored.ParentSnapshotRef != nil) != writerBlob || (len(stored.ParentSnapshot) != 0) == writerBlob {
+				t.Fatalf("stored form: reference=%t inline=%t", stored.ParentSnapshotRef != nil, len(stored.ParentSnapshot) != 0)
+			}
+			for _, readerBlob := range []bool{false, true} {
+				reader := reopen(t, table, blobs)
+				reader.parentSnapshotBlob = readerBlob
+				got, err := reader.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)
+				if err != nil || !bytes.Equal(got.ParentSnapshot, preparation.ParentSnapshot) || !equalExecutionJSON(got, preparation) {
+					t.Fatalf("reader blob=%t: %v", readerBlob, err)
+				}
+				// An identical save under the other setting accepts the winner
+				// and writes nothing.
+				table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("identical save wrote a row"); return nil, nil }
+				blobs.hook = func(blob.BlobKey) (error, error) { t.Error("identical save wrote a blob"); return nil, nil }
+				if err := reader.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+					t.Fatalf("identical save, blob=%t: %v", readerBlob, err)
+				}
+				table.hook, blobs.hook = nil, nil
+			}
+		})
+	}
+}
+
+// TestRequestPreparationIdenticalInitializersConverge: concurrent workers
+// saving the same preparation, some with each storage setting, all succeed
+// with one event.
+func TestRequestPreparationIdenticalInitializersConverge(t *testing.T) {
+	r, table, blobs, record, preparation := preparationFixture(t)
+	ctx := context.Background()
+	before := len(blobs.values)
+	var group sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		client := reopen(t, table, blobs)
+		client.parentSnapshotBlob = i%2 == 0
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			if err := client.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	group.Wait()
+	current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
+	if err != nil || current.Revision != record.Revision+1 {
+		t.Fatalf("revision %d: %v", current.Revision, err)
+	}
+	// A losing writer may leave its unpublished record blob, as any competing
+	// writer can, but no more than one parent blob exists: it is content
+	// addressed. Writers of each form leave at most one record blob each.
+	if n := len(blobs.values) - before; n < 1 || n > 3 {
+		t.Fatalf("stored %d blobs", n)
+	}
+	if got, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); err != nil || !equalExecutionJSON(got, preparation) {
+		t.Fatalf("converged preparation: %v", err)
 	}
 }

@@ -355,6 +355,11 @@
         },
         "secret": {
           "$ref": "#/$defs/secret"
+        },
+        "parent_snapshot_storage": {
+          "enum": ["inline", "blob"],
+          "default": "inline",
+          "description": "How new request preparations store the parent snapshot. Enable blob only after every worker reads referenced preparations."
         }
       }
     },

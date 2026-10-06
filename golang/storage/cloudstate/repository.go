@@ -22,6 +22,11 @@ type Options struct {
 	// derived from AWS credentials, Redis passwords, or changing configuration.
 	// Keep it with backups. Key rotation/re-encryption is a separate operation.
 	Secret []byte
+	// ParentSnapshotBlob makes SaveRequestPreparation store a parent snapshot
+	// as a separate referenced blob instead of inline (#1112). Reads accept
+	// both forms either way. Enable it only after every worker reading this
+	// namespace runs a build that reads referenced preparations.
+	ParentSnapshotBlob bool
 }
 
 // Repository owns no network clients. The caller supplies opened stores and
@@ -33,6 +38,8 @@ type Repository struct {
 	namespace string
 	secret    []byte
 	cipher    cipher.AEAD
+	// parentSnapshotBlob selects the referenced form for new preparations.
+	parentSnapshotBlob bool
 	// Set by Open to distinguish missing resources from a missing probe object.
 	probeStores func(context.Context) error
 }
@@ -47,7 +54,7 @@ func NewRepository(options Options) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Repository{table: options.Table, blobs: options.Blobs, namespace: options.Namespace, secret: append([]byte(nil), options.Secret...), cipher: cipher}
+	r := &Repository{table: options.Table, blobs: options.Blobs, namespace: options.Namespace, secret: append([]byte(nil), options.Secret...), cipher: cipher, parentSnapshotBlob: options.ParentSnapshotBlob}
 	r.events, err = events.NewEventStreamStore(options.Table, func() recordPointer { return recordPointer{} }, r.buildState)
 	return r, err
 }

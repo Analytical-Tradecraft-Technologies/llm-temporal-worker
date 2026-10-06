@@ -16,6 +16,19 @@ type Config struct {
 	RequestTable string         `json:"request_table"`
 	PayloadStore string         `json:"payload_store"`
 	Namespace    string         `json:"namespace"`
+	// ParentSnapshotStorage is "" or "inline" (the default) or "blob"; see
+	// Options.ParentSnapshotBlob.
+	ParentSnapshotStorage string `json:"parent_snapshot_storage,omitempty"`
+}
+
+func (c Config) parentSnapshotBlob() (bool, error) {
+	switch c.ParentSnapshotStorage {
+	case "", "inline":
+		return false, nil
+	case "blob":
+		return true, nil
+	}
+	return false, ErrInvalid
 }
 
 // Open uses cloud-storage's provider factory (currently AWS IAM authentication).
@@ -30,6 +43,10 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 	}
 	if !namespacePattern.MatchString(config.Namespace) || !safeText(config.RequestTable, 256) || !safeText(config.PayloadStore, 256) || len(secret) != 32 {
 		return nil, ErrInvalid
+	}
+	parentSnapshotBlob, err := config.parentSnapshotBlob()
+	if err != nil {
+		return nil, err
 	}
 	if aws, ok := config.Provider["aws"].(map[string]any); ok && aws["failover"] != nil {
 		data, err := json.Marshal(aws["failover"])
@@ -57,7 +74,7 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 	if err != nil {
 		return nil, err
 	}
-	repository, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: config.Namespace, Secret: secret})
+	repository, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: config.Namespace, Secret: secret, ParentSnapshotBlob: parentSnapshotBlob})
 	if err != nil {
 		return nil, err
 	}

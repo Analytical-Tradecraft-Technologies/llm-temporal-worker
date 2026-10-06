@@ -102,6 +102,35 @@ returning; storage errors never become permission to materialize again. Exact
 decimal settings and JSON integers retain their original precision. The parent
 snapshot is bounded at 4 MiB to leave room for later execution progress.
 
+By default the parent snapshot is stored inline in the request record
+(`parent_snapshot`). With `state.requests.parent_snapshot_storage: blob`, the
+repository stores it once, as its own immutable encrypted blob in a per-scope
+stream (`request-parent/<scope tag>`). The preparation in the request record
+then holds only `parent_snapshot_ref`: the snapshot's SHA-256, its length and
+the blob's content-addressed key. Later progress writes (budget plan, attempt,
+reservation, execution stages, finalization) rewrite a small record instead of
+the transcript (#1112). The blob is written and read back before the record
+that references it. Every initializer of one preparation derives the same
+reference, and a save accepts an identical winner stored in either form, so
+concurrent initializers still agree on one immutable value whatever their
+setting. Loading verifies the blob against the reference and fails as corrupt,
+never as a missing preparation, if the blob is gone or does not match. Attempt
+children copy the root's stored form.
+
+Every build that has this setting reads both forms, whatever it is set to, so
+the setting only affects new writes and may change on reload. Roll it out in
+two steps:
+
+1. Deploy a build that reads references, leaving the setting at its default
+   `inline`. Wait until no worker runs an older build.
+2. Set `parent_snapshot_storage: blob`.
+
+A later release may make `blob` the default. Rolling back to a build that
+cannot read references is unsafe once any worker has written one: that build
+fails those in-flight requests as corrupt. Setting the option back to `inline`
+stops new references but leaves existing ones in place, so wait for every
+request prepared with `blob` to finish before such a rollback.
+
 A Generate may extend a parent only while the parent plus its appended input,
 measured as an encoded snapshot, stays within 3 MiB. Beyond that, preparation
 refuses the turn with a non-retryable `invalid_argument` before any budget or

@@ -30,7 +30,13 @@ type budgetPlanningFixture struct {
 	estimator budget.Estimator
 	entry     pricing.Entry
 	attempt   BudgetAttempt
+	// parentSnapshotBlob makes boundedCloud's repository store parent
+	// snapshots as referenced blobs (#1112).
+	parentSnapshotBlob bool
 }
+
+// withParentSnapshotBlob is a boundedCloud option for the referenced form.
+func withParentSnapshotBlob(b *budgetPlanningFixture) { b.parentSnapshotBlob = true }
 
 func newBudgetPlanningFixture(t testing.TB) *budgetPlanningFixture {
 	t.Helper()

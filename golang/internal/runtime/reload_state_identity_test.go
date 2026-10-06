@@ -143,3 +143,24 @@ func TestRuntimeReplacementValidatorAllowsStateConnectionChanges(t *testing.T) {
 		t.Fatalf("validateRuntimeReplacement() rejected a connection-only change: %v", err)
 	}
 }
+
+// Parent-snapshot storage only selects how new preparations are written. Every
+// build that has the setting reads both forms, so a reload may change it.
+func TestRuntimeReplacementValidatorAllowsParentSnapshotStorageChange(t *testing.T) {
+	current, err := config.Compile(context.Background(), replacementTestConfig(t, func(*config.Config) {}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := config.Compile(context.Background(), replacementTestConfig(t, func(value *config.Config) {
+		value.State.Requests.ParentSnapshotStorage = config.ParentSnapshotStorageBlob
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRuntimeReplacement(current, replacement); err != nil {
+		t.Fatalf("validateRuntimeReplacement() rejected a parent-snapshot storage change: %v", err)
+	}
+	if err := validateRuntimeReplacement(replacement, current); err != nil {
+		t.Fatalf("validateRuntimeReplacement() rejected switching back to inline: %v", err)
+	}
+}
