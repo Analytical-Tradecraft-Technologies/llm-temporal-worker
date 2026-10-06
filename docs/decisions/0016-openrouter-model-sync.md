@@ -46,8 +46,11 @@ prices.
   fetched price. `go run ./tools/modelsyncdefaults` regenerates the OpenAI and
   Anthropic sections from the first-party upstream endpoints OpenRouter
   publishes (its `openai`, `openai/flex`, `openai/fast` and `anthropic`
-  endpoints, which carry those providers' list prices) for review; Exa, which
-  OpenRouter does not list, is maintained by hand. Operators layer
+  endpoints, which carry those providers' list prices) for review. Exa, which
+  OpenRouter does not list, is maintained by hand: `exa/answer` (the Answer
+  API on Chat Completions, $0.005 per request) and `exa/agent` (the Agent API
+  on Responses, at most $0.10 per request because the adapter always sends a
+  fixed effort no higher than medium). Operators layer
   SHA-256-pinned rule files over the built-in rules at runtime to change a
   price or limit, add or exclude a model, or exclude a model everywhere.
 - **Direct first.** A synced model routes to configured direct endpoints in

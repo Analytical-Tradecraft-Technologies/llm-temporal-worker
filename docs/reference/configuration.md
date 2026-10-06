@@ -1088,7 +1088,42 @@ providers:
 
 Prices are keyed by the endpoint's `service_classes` `provider_value`; the
 built-in rules price OpenAI `flex`, `default` and `priority`, Anthropic
-`standard_only` and `auto`, and Exa `standard`. A class whose tier has no
+`standard_only` and `auto`, and Exa `standard`. A model's optional `family`
+restricts it to endpoints of that family.
+
+The built-in Exa models are:
+
+| Synced name | Exa model | Endpoint | Price |
+|---|---|---|---|
+| `exa/answer` | `exa` (Answer API) | `openai_chat` with the `exa` extension | $0.005 per request |
+| `exa/agent` | `exa-agent` (Agent API) | `openai_responses` with the `exa` extension | at most $0.10 per request |
+
+An Exa Agent request always carries a fixed effort: the caller's `minimal`,
+`low` or `medium`, or `medium` when unset. Exa's default effort, `auto`, is
+metered, and Exa rejects `high` and above on a synchronous request, so the
+worker rejects them too. Exa reports each call's actual cost, which settles
+it.
+
+```yaml
+endpoints:
+  exa-agent:
+    family: openai_responses
+    base_url: https://api.exa.ai
+    outbound_hosts: [api.exa.ai]
+    auth: {kind: header_env, name: EXA_API_KEY}
+    account_region: global
+    timeout: 115s
+    optional: true
+    service_classes:
+      standard: {provider_value: standard}   # never sent; names the price tier
+    capability_profile: exa-agent-v1
+    extensions:
+      exa: {}
+model_sync:
+  direct:
+    - {endpoint: exa-answer, provider: exa}
+    - {endpoint: exa-agent, provider: exa}
+``` A class whose tier has no
 price is not offered on the direct route. Every price component is required.
 A model without `model` derives its provider ID from the OpenRouter ID
 (`model_id: verbatim`, or `dots_to_dashes` for `claude-sonnet-4.5` →

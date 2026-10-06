@@ -21,6 +21,7 @@ type Adapter struct {
 	capabilityVersion string
 	storageDenied     bool
 	omitServiceTier   bool
+	exaAgent          bool
 }
 
 // WithoutRequestServiceTier keeps service_tier out of the request for APIs
@@ -90,6 +91,11 @@ func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.Se
 	}
 	if adapter.omitServiceTier {
 		delete(requestMap, "service_tier")
+	}
+	if adapter.exaAgent {
+		if err := exaAgentRequest(requestMap, request); err != nil {
+			return nil, loweredToolPolicy{}, err
+		}
 	}
 	// A caller's explicit store value is left for enforceStoragePolicy to
 	// accept or reject.
@@ -273,6 +279,17 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	lifted, err := liftResponse(call, response, metadata.RequestID)
 	if err != nil {
 		return provider.Result{}, err
+	}
+	if adapter.exaAgent {
+		cost, costErr := exaAgentCost(response.RawJSON())
+		if costErr != nil {
+			mapped := invalidResponseError(call, metadata.RequestID, costErr.Error())
+			mapped.Provider.ResponseID = response.ID
+			return provider.Result{}, mapped
+		}
+		if cost != nil {
+			lifted.Cost = llm.Cost{ActualCostUSD: cost, Method: "exa_reported"}
+		}
 	}
 	return provider.Result{Response: lifted}, nil
 }

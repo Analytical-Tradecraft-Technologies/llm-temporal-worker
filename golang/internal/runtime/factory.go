@@ -1042,6 +1042,15 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, err
 		}
+		// The exa marker selects Exa's Agent API explicitly; the runtime never
+		// infers provider behavior from the hostname.
+		if _, exa := endpoint.Extensions["exa"]; exa {
+			exaClient, err := openairesponses.NewExaClient(openairesponses.ExaClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
+			if err != nil {
+				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			}
+			return openairesponses.New(exaClient, endpointID, capabilities.Version, openairesponses.WithExaAgent())
+		}
 		openaiClient, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)

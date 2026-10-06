@@ -967,10 +967,12 @@ providers:
     prefix: exa/
     model_id: verbatim
     models:
-      # Exa's chat-completions model "exa" is its /answer API, billed per
-      # request (https://exa.ai/pricing). Exa reports each call's actual cost.
-      exa/exa:
+      # Exa's Answer API, served by its Chat Completions endpoint as model
+      # "exa" and billed per request (https://exa.ai/pricing). Exa reports
+      # each call's actual cost.
+      exa/answer:
         model: exa
+        family: openai_chat
         prices:
           standard:
             input_per_million: "0"
@@ -978,3 +980,19 @@ providers:
             cache_read_per_million: "0"
             cache_write_per_million: "0"
             per_request: "0.005"
+      # Exa's Agent API, served by its Responses endpoint as model
+      # "exa-agent". A fixed effort bills one flat price per request:
+      # minimal $0.012, low $0.025, medium $0.10. The adapter always sends a
+      # fixed effort no higher than medium (Exa rejects high and above on a
+      # synchronous request), so medium bounds the reservation; Exa reports
+      # each call's actual cost.
+      exa/agent:
+        model: exa-agent
+        family: openai_responses
+        prices:
+          standard:
+            input_per_million: "0"
+            output_per_million: "0"
+            cache_read_per_million: "0"
+            cache_write_per_million: "0"
+            per_request: "0.10"

@@ -197,9 +197,13 @@ func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 			}
 		}
 	}
-	exa, ok := rules.Direct("exa", "exa/exa")
-	if !ok || exa.Model != "exa" || exa.Prices["standard"].PerRequest != "0.005" {
-		t.Fatalf("exa = %+v, %v", exa, ok)
+	answer, ok := rules.Direct("exa", "exa/answer")
+	if !ok || answer.Model != "exa" || answer.Family != "openai_chat" || answer.Prices["standard"].PerRequest != "0.005" {
+		t.Fatalf("exa/answer = %+v, %v", answer, ok)
+	}
+	agent, ok := rules.Direct("exa", "exa/agent")
+	if !ok || agent.Model != "exa-agent" || agent.Family != "openai_responses" || agent.Prices["standard"].PerRequest != "0.10" {
+		t.Fatalf("exa/agent = %+v, %v", agent, ok)
 	}
 	opus, _ := rules.Direct("anthropic", "anthropic/claude-opus-5.5")
 	if got := opus.Prices["standard_only"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.2" || got.CacheWrite != "5" {
@@ -290,7 +294,8 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	openai := testSource("openai-direct", "openai", "openai_responses", map[llm.ServiceClass]string{llm.ServiceClassEconomy: "flex", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"})
 	anthropic := testSource("anthropic-direct", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "auto"})
 	exa := testSource("exa-direct", "exa", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
-	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{openai, anthropic, exa},
+	exaAgent := testSource("exa-agent-direct", "exa", "openai_responses", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
+	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{openai, anthropic, exa, exaAgent},
 		Reserved: map[string]struct{}{"inference-net/schematron-v2-turbo": {}}})
 	if err != nil {
 		t.Fatal(err)
@@ -327,9 +332,15 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	assertPrices(t, priceFor(t, compiled.Prices, "openai-direct", "gpt-5.4", "default"), "2.5", "15", "0.25", "0")
 	assertPrices(t, priceFor(t, compiled.Prices, "openai-direct", "gpt-5.4", "priority"), "5", "30", "0.5", "0")
 
-	exaModel := compiled.Models["exa/exa"]
-	if len(exaModel.Routes) != 1 || exaModel.Routes[0].Model != "exa" {
-		t.Fatalf("exa routes = %+v", exaModel.Routes)
+	// Each Exa model routes only to the endpoint family that serves it.
+	if routes := compiled.Models["exa/answer"].Routes; len(routes) != 1 || routes[0].EndpointID != "exa-direct" || routes[0].Model != "exa" {
+		t.Fatalf("exa/answer routes = %+v", routes)
+	}
+	if routes := compiled.Models["exa/agent"].Routes; len(routes) != 1 || routes[0].EndpointID != "exa-agent-direct" || routes[0].Model != "exa-agent" {
+		t.Fatalf("exa/agent routes = %+v", routes)
+	}
+	if got := priceFor(t, compiled.Prices, "exa-agent-direct", "exa-agent", "standard").Prices.PerRequest.CanonicalString(); got != "0.1" {
+		t.Fatalf("exa agent per-request price = %s", got)
 	}
 	if got := priceFor(t, compiled.Prices, "exa-direct", "exa", "standard").Prices.PerRequest.CanonicalString(); got != "0.005" {
 		t.Fatalf("exa per-request price = %s", got)
@@ -377,7 +388,7 @@ func TestCompileWithoutDocumentRoutesOnlyDirectModels(t *testing.T) {
 			}
 		}
 	}
-	if len(compiled.Models["exa/exa"].Routes) != 1 || len(compiled.Models["anthropic/claude-opus-5.5"].Routes) != 1 {
+	if len(compiled.Models["exa/answer"].Routes) != 1 || len(compiled.Models["anthropic/claude-opus-5.5"].Routes) != 1 {
 		t.Fatalf("direct models missing before the first Document: %d models", len(compiled.Models))
 	}
 }

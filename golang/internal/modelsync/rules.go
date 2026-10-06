@@ -56,6 +56,10 @@ type ProviderRules struct {
 type DirectModel struct {
 	// Model is the provider model ID; empty applies the ModelID transform.
 	Model string `yaml:"model"`
+	// Family, when set, restricts the direct route to endpoints of that
+	// family, for a provider whose models need different APIs (Exa's Answer
+	// model is served by Chat Completions, its Agent by Responses).
+	Family string `yaml:"family"`
 	// ContextTokens bounds input plus reserved output; zero is unspecified.
 	ContextTokens int64 `yaml:"context_tokens"`
 	OutputTokens  int64 `yaml:"output_tokens"`
@@ -168,6 +172,9 @@ func mergeModels(base, layer map[string]DirectModel) map[string]DirectModel {
 		if model.Model != "" {
 			current.Model = model.Model
 		}
+		if model.Family != "" {
+			current.Family = model.Family
+		}
 		if model.ContextTokens != 0 {
 			current.ContextTokens = model.ContextTokens
 		}
@@ -210,6 +217,9 @@ func (rules Rules) validate() error {
 			}
 			if model.Model != "" && validateIdentifier(model.Model) != nil {
 				return fmt.Errorf("model-sync rules provider %q model %q mapping is invalid", name, id)
+			}
+			if model.Family != "" && validateIdentifier(model.Family) != nil {
+				return fmt.Errorf("model-sync rules provider %q model %q family is invalid", name, id)
 			}
 			if model.ContextTokens < 0 || model.OutputTokens < 0 {
 				return fmt.Errorf("model-sync rules provider %q model %q token limits must not be negative", name, id)

@@ -107,7 +107,7 @@ func Compile(input Input) (Compiled, error) {
 		routes := make([]routing.Route, 0, len(input.Direct)+1)
 		for _, source := range input.Direct {
 			direct, ok := input.Rules.Direct(source.RulesProvider, id)
-			if !ok {
+			if !ok || (direct.Family != "" && direct.Family != source.Family) {
 				continue
 			}
 			route, entries, ok, err := directRoute(source, direct, rulesVersion)
