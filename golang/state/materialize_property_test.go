@@ -85,6 +85,17 @@ func TestCheckpointGraphLiveChildOutlivesRetainedAncestor(t *testing.T) {
 	if _, err := graph.Materialize("tenant-a", "root"); !errors.Is(err, ErrExpired) {
 		t.Fatalf("materialize expired root = %v, want %v", err, ErrExpired)
 	}
+	// A child cannot be added under a parent that has already expired, so
+	// expired content is never resurrected through a new descendant.
+	late := childCheckpoint("late", "root", "tenant-a", "operation-late", "late")
+	late.ExpiresAt = clock.Add(time.Hour)
+	if err := graph.PutChild(late); !errors.Is(err, ErrExpired) {
+		t.Fatalf("child of expired parent = %v, want %v", err, ErrExpired)
+	}
+	// Republishing the existing child stays idempotent.
+	if err := graph.PutChild(child); err != nil {
+		t.Fatalf("republish child = %v", err)
+	}
 	clock = start.Add(110 * time.Minute)
 	if _, err := graph.Materialize("tenant-a", "child"); !errors.Is(err, ErrExpired) {
 		t.Fatalf("materialize expired child = %v, want %v", err, ErrExpired)

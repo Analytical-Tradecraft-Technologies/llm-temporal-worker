@@ -156,7 +156,7 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 			if err := graph.PutRoot(checkpoint); err != nil {
 				return MaterializedState{}, fmt.Errorf("publish durable root %s: %w", value.row.ID, err)
 			}
-		} else if err := graph.PutChild(checkpoint); err != nil {
+		} else if err := graph.putRetainedChild(checkpoint); err != nil {
 			return MaterializedState{}, fmt.Errorf("publish durable child %s: %w", value.row.ID, err)
 		}
 	}
