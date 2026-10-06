@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 )
 
 func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {

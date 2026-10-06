@@ -3,8 +3,8 @@ package runtime
 import (
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/catalog"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/catalog"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 func TestCatalogReloadRejectsInvalidReplacementWithoutMutatingPriorSnapshot(t *testing.T) {

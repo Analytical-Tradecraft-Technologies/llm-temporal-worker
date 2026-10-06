@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
 
 // BlobStore is an immutable, process-local content-addressed blob store.

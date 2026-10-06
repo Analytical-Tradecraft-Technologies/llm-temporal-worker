@@ -1,7 +1,7 @@
 # Package and Artifact Layout
 
 The Go worker is a standalone module under `golang/` with module path
-`github.com/mfow/llm-temporal-worker/golang`; its Go baseline is 1.26. The
+`github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang`; its Go baseline is 1.26. The
 repository root is intentionally available for additional clients such as the
 OCaml wrapper. Run Go commands from `golang/` (or use the root Makefile
 forwarder). Public reusable packages avoid `internal/`; process wiring and

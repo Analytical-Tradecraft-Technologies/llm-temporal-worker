@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/app"
-	"github.com/mfow/llm-temporal-worker/golang/internal/httpserver"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
 )
 
 type shutdownWorker struct{ events *[]string }

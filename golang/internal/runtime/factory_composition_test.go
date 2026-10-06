@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/engine"
-	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
-	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	durablestore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	"github.com/redis/go-redis/v9"
 )
 

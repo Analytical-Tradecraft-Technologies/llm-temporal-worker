@@ -7,10 +7,10 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	usageutil "github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/usage"
-	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	usageutil "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/usage"
+	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCompletion, requestID string) (llm.Response, error) {

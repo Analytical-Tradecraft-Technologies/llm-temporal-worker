@@ -155,8 +155,8 @@ func TestTemporalOneShotActivityBoundaryRejectsAliasedStreamingTypes(t *testing.
 	file := parseArchitectureSource(t, "aliased-types.go", `package activity
 
 import (
-	model "github.com/mfow/llm-temporal-worker/golang/llm"
-	adapter "github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	model "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	adapter "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 type streamingReferences struct {

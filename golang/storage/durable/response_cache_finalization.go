@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/mfow/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 )
 
 // CompleteAttempt finishes a started Generate or Compact fill after its origin

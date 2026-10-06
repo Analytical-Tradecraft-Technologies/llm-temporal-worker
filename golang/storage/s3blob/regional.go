@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
-	"github.com/mfow/llm-temporal-worker/golang/storage/regional"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/regional"
 )
 
 // RegionalStore preserves content-addressed references across buckets. Writes

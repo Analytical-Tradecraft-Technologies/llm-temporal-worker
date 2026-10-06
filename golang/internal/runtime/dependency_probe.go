@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

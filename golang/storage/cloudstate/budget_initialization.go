@@ -10,8 +10,8 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/google/uuid"
-	"github.com/mfow/llm-temporal-worker/golang/budget"
 )
 
 var _ budget.InitializationStore = (*Repository)(nil)

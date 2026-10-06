@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
-	"github.com/mfow/llm-temporal-worker/golang/state"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
 type OperationState string

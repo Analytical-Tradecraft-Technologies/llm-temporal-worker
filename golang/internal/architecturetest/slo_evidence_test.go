@@ -14,7 +14,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 )
 
 const sloEvidenceSourceRevision = "0123456789abcdef0123456789abcdef01234567"

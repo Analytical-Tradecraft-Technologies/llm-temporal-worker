@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 )
 
 func completeCompositionPorts(materializer BudgetLeaser) CompositionPorts {

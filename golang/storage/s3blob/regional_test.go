@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 	"github.com/aws/smithy-go"
-	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 )
 
 func TestRegionalBlobFailover(t *testing.T) {

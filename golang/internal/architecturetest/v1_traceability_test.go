@@ -16,7 +16,7 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	yaml "go.yaml.in/yaml/v4"
 )
 

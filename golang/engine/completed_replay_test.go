@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/routing"
-	"github.com/mfow/llm-temporal-worker/golang/storage/memory"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/memory"
 )
 
 // A completed operation replays its stored result even after its route was

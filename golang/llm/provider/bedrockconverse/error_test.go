@@ -11,7 +11,7 @@ import (
 
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 func TestMapErrorMapsRetryAfterFromWrappedSmithyResponse(t *testing.T) {

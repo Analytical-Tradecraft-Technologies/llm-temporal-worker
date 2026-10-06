@@ -1,6 +1,6 @@
 package openaichat
 
-import "github.com/mfow/llm-temporal-worker/golang/llm/provider"
+import "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 
 func profileTestCapabilities(version string) provider.CapabilitySet {
 	features := make(map[provider.Feature]provider.Capability, len(allFeatures()))

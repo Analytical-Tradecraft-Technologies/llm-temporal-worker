@@ -1,6 +1,6 @@
 package cloudstate
 
-import "github.com/mfow/llm-temporal-worker/golang/cache"
+import "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 
 // CacheFingerprint uses a namespace-separated key without exposing storage
 // secrets to the activity runtime. It is pure and performs no storage access.

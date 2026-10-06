@@ -3,7 +3,7 @@ package buildinfo_test
 import (
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/buildinfo"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo"
 )
 
 func TestCurrentIncludesEveryImageMetadataField(t *testing.T) {

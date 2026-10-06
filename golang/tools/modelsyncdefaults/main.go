@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/modelsync"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 )
 
 func main() {

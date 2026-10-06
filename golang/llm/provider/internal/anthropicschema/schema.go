@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 // UnsupportedError reports a schema the provider cannot represent even after

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 )
 
 var ErrBudgetBoundaryInvalid = errors.New("durable budget boundary is invalid")

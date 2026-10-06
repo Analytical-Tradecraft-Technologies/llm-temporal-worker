@@ -1,6 +1,6 @@
 package engine
 
-import "github.com/mfow/llm-temporal-worker/golang/llm/provider"
+import "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 
 // providerStateIdentity is the provider/family label an adapter puts on the
 // opaque state it lifts (for example anthropic/messages), keyed by the routing

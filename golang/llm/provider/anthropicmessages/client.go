@@ -12,7 +12,7 @@ import (
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
 
 type ClientConfig struct {

@@ -165,7 +165,7 @@ The setting is opt-in. When it is omitted, behaviour, payload bytes and the
 **Callers must use the same codec.** Every client that starts, reads, or runs
 workflows on the same task queue needs this codec and the same keys. Go callers
 can install `temporalcodec.NewAESGCM` from
-`github.com/mfow/llm-temporal-worker/golang/temporalcodec` with
+`github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/temporalcodec` with
 `converter.NewCodecDataConverter`. The OCaml library does not install a codec:
 an OCaml application that calls the worker must configure an equivalent codec on
 its own Temporal client (the format above), or use a remote codec served by

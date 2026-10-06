@@ -1,6 +1,6 @@
 package runtime
 
-import "github.com/mfow/llm-temporal-worker/golang/storage/durable"
+import "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 
 // The bounded cloud runtime binds Redis directly to the same immutable
 // snapshot. It uses the authoritative Redis budget port and

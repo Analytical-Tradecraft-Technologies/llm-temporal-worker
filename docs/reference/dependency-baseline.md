@@ -125,7 +125,7 @@ The documentation test keeps this table in step with `baseline.json`.
 
 | Field | Value |
 | --- | --- |
-| Module path | `github.com/mfow/llm-temporal-worker` |
+| Module path | `github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang` |
 | API contract | `llm.temporal/v1` |
 | Default SDK retries | Disabled at the unified adapter boundary; retry policy is owned by the routing/Temporal layer and must be recorded per attempt |
 | Domain license | Apache-2.0 (repository `LICENSE`) |

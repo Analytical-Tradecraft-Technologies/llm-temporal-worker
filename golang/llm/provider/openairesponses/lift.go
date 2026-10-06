@@ -7,10 +7,10 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	usageutil "github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/usage"
-	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	usageutil "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/usage"
+	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 func liftResponse(call provider.Call, response *responses.Response, requestID string) (llm.Response, error) {

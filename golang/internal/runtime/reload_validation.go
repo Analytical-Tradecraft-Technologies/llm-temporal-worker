@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 )
 
 var errProcessLifetimeConfigurationChanged = errors.New("process-lifetime configuration cannot change during reload")

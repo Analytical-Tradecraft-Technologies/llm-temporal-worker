@@ -36,11 +36,11 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 		"LLMTW_BUILD_TIMESTAMP=\"${BUILD_TIME}\"",
 		"LLMTW_BUILD_SOURCE=\"${SOURCE}\"",
 		"LLMTW_BUILD_GO_VERSION=\"${GO_VERSION}\"",
-		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION}",
-		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Revision=${REVISION}",
-		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.BuildTime=${BUILD_TIME}",
-		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Source=${SOURCE}",
-		"-X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${go_version}",
+		"-X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION}",
+		"-X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.Revision=${REVISION}",
+		"-X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.BuildTime=${BUILD_TIME}",
+		"-X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.Source=${SOURCE}",
+		"-X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${go_version}",
 	} {
 		if !strings.Contains(dockerfile, want) {
 			t.Errorf("Dockerfile does not stamp %q", want)

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
-	"github.com/mfow/llm-temporal-worker/golang/temporalcodec"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/temporalcodec"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 )

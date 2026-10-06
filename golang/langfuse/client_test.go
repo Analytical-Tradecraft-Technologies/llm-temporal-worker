@@ -3,7 +3,7 @@ package langfuse
 import (
 	"context"
 	"encoding/json"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"net/http"
 	"net/http/httptest"
 	"strings"

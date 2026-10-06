@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/state"
-	"github.com/mfow/llm-temporal-worker/golang/storage/conformance"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/conformance"
 )
 
 func TestStoreFactoryConformance(t *testing.T) {

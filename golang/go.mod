@@ -1,4 +1,4 @@
-module github.com/mfow/llm-temporal-worker/golang
+module github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang
 
 go 1.26.0
 

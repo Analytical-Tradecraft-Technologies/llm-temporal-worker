@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	workerruntime "github.com/mfow/llm-temporal-worker/golang/internal/runtime"
+	workerruntime "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/runtime"
 )
 
 func main() {

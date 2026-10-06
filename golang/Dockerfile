@@ -44,11 +44,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -buildvcs=false \
       -ldflags="-s -w \
-        -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION} \
-        -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Revision=${REVISION} \
-        -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.BuildTime=${BUILD_TIME} \
-        -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.Source=${SOURCE} \
-        -X github.com/mfow/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${go_version}" \
+        -X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.Version=${VERSION} \
+        -X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.Revision=${REVISION} \
+        -X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.BuildTime=${BUILD_TIME} \
+        -X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.Source=${SOURCE} \
+        -X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${go_version}" \
       -o /out/llm-temporal-worker ./cmd/llm-temporal-worker
 
 # Distroless static includes CA roots, time-zone data, and uid 65532, but no

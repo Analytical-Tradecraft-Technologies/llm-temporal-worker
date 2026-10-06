@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func TestApplySettingsPatchV1InheritsReplacesAndClearsSamplingLeaves(t *testing.T) {

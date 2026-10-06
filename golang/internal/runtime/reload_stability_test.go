@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 )
 
 // manualConfigFileWatcher returns a watcher whose ticker never fires in a

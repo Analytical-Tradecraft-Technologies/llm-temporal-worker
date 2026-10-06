@@ -7,8 +7,8 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 func rawResponseObject(response *openai.ChatCompletion) (map[string]json.RawMessage, error) {

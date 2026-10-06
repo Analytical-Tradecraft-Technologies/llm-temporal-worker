@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 const requestID = "llmtw_req_49c0cb63-15ed-4da7-aa74-17a7d711c9a5"

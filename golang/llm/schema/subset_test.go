@@ -3,7 +3,7 @@ package schema_test
 import (
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 func TestSupportedSubsetAcceptsCompositionAndLocalDefs(t *testing.T) {

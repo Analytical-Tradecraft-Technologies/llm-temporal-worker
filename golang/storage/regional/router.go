@@ -10,9 +10,9 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
 )
 
 // Router remembers the last healthy endpoint, without sharing mutable SDK clients.

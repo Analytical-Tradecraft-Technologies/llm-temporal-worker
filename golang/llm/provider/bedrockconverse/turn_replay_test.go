@@ -4,10 +4,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
 
 func TestReplayGroupsParallelToolTurnWithoutReordering(t *testing.T) {

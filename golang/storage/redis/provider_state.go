@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/google/uuid"
-	"github.com/mfow/llm-temporal-worker/golang/control"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

@@ -3,8 +3,8 @@ package bedrockmessages
 import (
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/compaction"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func TestCompactionRequestCompilesInStrictModeWithApplicationInstructions(t *testing.T) {

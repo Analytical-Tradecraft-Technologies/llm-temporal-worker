@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 // BudgetStreamEventKind is the bounded coordination vocabulary for the Redis
