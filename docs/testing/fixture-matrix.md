@@ -13,7 +13,7 @@ The initial fixture suite defines one exact test profile for each path:
 | `exa-chat` | OpenAI-compatible Chat | official OpenAI Go SDK with Exa endpoint | answer/search response and reported cost |
 | `anthropic-direct` | Anthropic Messages | official Anthropic Go SDK | system/tool/thinking/tier behavior |
 | `anthropic-aws` | Claude Platform on AWS Messages | official Anthropic Go SDK AWS support | AWS auth/gateway differences |
-| `bedrock-anthropic` | Amazon Bedrock Messages | official Anthropic Bedrock/Mantle support | enforced Bedrock model/tier/error behavior |
+| `bedrock-anthropic` | Amazon Bedrock Messages | official Anthropic Bedrock Runtime support | enforced Bedrock model/tier/error behavior |
 | `bedrock-converse` | Amazon Bedrock Converse | official AWS Bedrock Runtime Go SDK | enforced one-shot Converse lowering/lifting, usage, and service-tier behavior |
 
 An optional compatible endpoint copies `openrouter-chat`'s common suite but must
