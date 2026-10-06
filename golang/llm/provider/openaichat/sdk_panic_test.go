@@ -46,3 +46,33 @@ func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 		t.Fatalf("Invoke() error = %#v, want an accepted, never-retried invalid response", err)
 	}
 }
+
+func TestInvokeRecoversAnSDKPanicWhileReadingAnErrorResponse(t *testing.T) {
+	client, err := NewClient(ClientConfig{
+		BaseURL: "https://127.0.0.1/contract",
+		APIKey:  "test-key",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: panickingBody{}, Request: request}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "chat-prod", testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "op-panic", Model: "chat-model"},
+		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Invoke(context.Background(), call, nil)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation || mapped.Code != provider.CodeProviderUnavailable {
+		t.Fatalf("Invoke() error = %#v, want the rejected, retryable 503 classification", err)
+	}
+}

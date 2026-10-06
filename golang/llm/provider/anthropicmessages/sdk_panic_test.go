@@ -44,9 +44,6 @@ func panickingTransport() *http.Client {
 	})}
 }
 
-// The Anthropic SDK buffers the response body before it records the
-// response, so a decoder panic there cannot be shown to follow the response;
-// it is still recovered as an ambiguous, never-retried outcome.
 func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 	client, err := NewClient(ClientConfig{BaseURL: "http://127.0.0.1/contract", APIKey: "test-key", HTTPClient: panickingTransport()})
 	if err != nil {
@@ -54,8 +51,8 @@ func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 	}
 	err = invokeWithPanickingResponse(t, client, "http://127.0.0.1/contract", "anthropic-prod")
 	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever || mapped.OperationID != "op-panic" {
-		t.Fatalf("Invoke() error = %#v, want an ambiguous, never-retried outcome", err)
+	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever || mapped.Code != provider.CodeProviderInvalidResponse || mapped.OperationID != "op-panic" {
+		t.Fatalf("Invoke() error = %#v, want an accepted, never-retried invalid response", err)
 	}
 }
 
@@ -70,7 +67,7 @@ func TestInvokeRecoversAnSDKPanicInTheAWSGatewayClient(t *testing.T) {
 	}
 	err = invokeWithPanickingResponse(t, client, "http://127.0.0.1/aws-contract", "anthropic-aws")
 	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever || mapped.OperationID != "op-panic" {
-		t.Fatalf("Invoke() error = %#v, want an ambiguous, never-retried outcome", err)
+	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever || mapped.Code != provider.CodeProviderInvalidResponse || mapped.OperationID != "op-panic" {
+		t.Fatalf("Invoke() error = %#v, want an accepted, never-retried invalid response", err)
 	}
 }

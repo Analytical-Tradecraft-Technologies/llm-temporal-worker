@@ -19,9 +19,6 @@ type panickingBody struct{}
 func (panickingBody) Read([]byte) (int, error) { panic("slice bounds out of range") }
 func (panickingBody) Close() error             { return nil }
 
-// The Bedrock client reads the response in AWS middleware before the SDK
-// records it, so a panic there cannot be shown to follow the response; it is
-// still recovered and never retried.
 func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 	client, err := NewClient(context.Background(), ClientConfig{
 		BaseURL: "http://127.0.0.1",
@@ -46,7 +43,7 @@ func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 	}
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever || mapped.OperationID != "op-panic" {
-		t.Fatalf("Invoke() error = %#v, want an ambiguous, never-retried outcome", err)
+	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever || mapped.Code != provider.CodeProviderInvalidResponse || mapped.OperationID != "op-panic" {
+		t.Fatalf("Invoke() error = %#v, want an accepted, never-retried invalid response", err)
 	}
 }
