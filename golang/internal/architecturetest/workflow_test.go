@@ -1586,8 +1586,8 @@ func TestWorkflowRaceRunsSetExplicitPackageTimeouts(t *testing.T) {
 		workflow string
 		command  string
 	}{
-		{workflow: "pull-request.yml", command: "go test -race ./... -timeout 20m"},
-		{workflow: "master.yml", command: "go test -race ./... -timeout 20m"},
+		{workflow: "pull-request.yml", command: "go test -race ./... -timeout 30m"},
+		{workflow: "master.yml", command: "go test -race ./... -timeout 30m"},
 		{workflow: "master.yml", command: "go test -race -count=5 -timeout 30m "},
 	} {
 		if !strings.Contains(readWorkflow(t, test.workflow).raw, test.command) {

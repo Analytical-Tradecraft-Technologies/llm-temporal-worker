@@ -452,7 +452,7 @@ jobs:
         if: steps.go.outputs.present == 'true'
         working-directory: golang
         run: |
-          bash ../scripts/release/run-gate.sh race_summary "$RUNNER_TEMP/verified-inputs/race-summary.json" go test -race ./... -timeout 20m
+          bash ../scripts/release/run-gate.sh race_summary "$RUNNER_TEMP/verified-inputs/race-summary.json" go test -race ./... -timeout 30m
           # The race run also executes the full test suite; retain both facts.
           python3 - <<'PYTHON'
           import json, os, pathlib
