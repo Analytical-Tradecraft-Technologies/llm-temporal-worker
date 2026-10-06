@@ -89,6 +89,7 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 		{name: "temporal.tls.key_file", changed: before.Temporal.TLS.KeyFile != after.Temporal.TLS.KeyFile},
 		{name: "temporal.api_key_file", changed: before.Temporal.APIKeyFile != after.Temporal.APIKeyFile},
 		{name: "temporal.mesh_transport", changed: before.Temporal.MeshTransport != after.Temporal.MeshTransport},
+		{name: "temporal.payload_codec", changed: !reflect.DeepEqual(before.Temporal.PayloadCodec, after.Temporal.PayloadCodec)},
 		{name: "temporal.worker.max_concurrent_activities", changed: before.Temporal.Worker.MaxConcurrentActivities != after.Temporal.Worker.MaxConcurrentActivities},
 		{name: "temporal.worker.max_concurrent_activity_task_polls", changed: before.Temporal.Worker.MaxConcurrentActivityTaskPolls != after.Temporal.Worker.MaxConcurrentActivityTaskPolls},
 		{name: "temporal.worker.graceful_stop_timeout", changed: before.Temporal.Worker.GracefulStopTimeout != after.Temporal.Worker.GracefulStopTimeout},

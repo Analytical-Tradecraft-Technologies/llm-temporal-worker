@@ -14,7 +14,9 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
+	"github.com/mfow/llm-temporal-worker/golang/temporalcodec"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -68,6 +70,9 @@ type DefaultTemporalClientFactory struct {
 	// DialContext is injectable for tests and custom transports. Production
 	// callers normally leave it nil, which uses the official eager SDK dial.
 	DialContext TemporalDialContext
+	// SecretResolver resolves temporal.payload_codec keys. When omitted, the
+	// default env/file resolver is used.
+	SecretResolver secrets.Resolver
 }
 
 func (factory DefaultTemporalClientFactory) New(ctx context.Context, value config.Config) (client.Client, error) {
@@ -85,15 +90,16 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 			return nil, err
 		}
 	}
+	dataConverter, err := factory.dataConverter(ctx, value)
+	if err != nil {
+		return nil, err
+	}
 	options := client.Options{
-		Logger:    logger.TemporalLogger(),
-		HostPort:  value.Temporal.Target,
-		Namespace: value.Temporal.Namespace,
-		Identity:  factory.identity(value.Temporal.IdentityPrefix),
-		// The client converter is used by the SDK before a registered Activity
-		// handler runs. Install the bounded wrapper here, at the normal decode
-		// path, rather than relying on standalone payload helpers.
-		DataConverter: activity.BoundedDataConverter(activity.PayloadLimits{MaxInlineBytes: value.Server.InlinePayloadBytes}),
+		Logger:        logger.TemporalLogger(),
+		HostPort:      value.Temporal.Target,
+		Namespace:     value.Temporal.Namespace,
+		Identity:      factory.identity(value.Temporal.IdentityPrefix),
+		DataConverter: dataConverter,
 	}
 	if value.Temporal.TLS.Enabled {
 		readFile := factory.ReadFile
@@ -127,6 +133,63 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 		maxBackoff:     temporalDialMaxBackoff,
 	})
 }
+
+// dataConverter returns the client converter. The SDK uses it before a
+// registered Activity handler runs, so the bounded wrapper is installed here,
+// at the normal decode path, rather than relying on standalone payload
+// helpers. When temporal.payload_codec is configured, the codec wraps the
+// bounded converter: inline limits apply to the plaintext payload, and only
+// ciphertext reaches Temporal. Any key that cannot be resolved or used fails
+// client construction rather than falling back to plaintext.
+func (factory DefaultTemporalClientFactory) dataConverter(ctx context.Context, value config.Config) (converter.DataConverter, error) {
+	bounded := activity.BoundedDataConverter(activity.PayloadLimits{MaxInlineBytes: value.Server.InlinePayloadBytes})
+	codecConfig := value.Temporal.PayloadCodec
+	if codecConfig == nil {
+		return bounded, nil
+	}
+	if codecConfig.Kind != config.PayloadCodecAES256GCM {
+		return nil, &payloadCodecError{safe: "Temporal payload codec kind is unsupported"}
+	}
+	resolver := factory.SecretResolver
+	if resolver == nil {
+		resolver = secrets.New(secrets.Options{})
+	}
+	keys := make([]temporalcodec.Key, 0, len(codecConfig.Keys))
+	for _, key := range codecConfig.Keys {
+		secret, err := resolver.Resolve(ctx, key.Secret)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			return nil, &payloadCodecError{safe: fmt.Sprintf("resolve Temporal payload codec key %q failed", key.ID), cause: secrets.MarkReference(err)}
+		}
+		keys = append(keys, temporalcodec.Key{ID: key.ID, Secret: secret, Primary: key.Primary})
+	}
+	// Bound ciphertext by the inline limit so an oversized payload is
+	// rejected before it is decrypted; the bounded converter still checks
+	// the decrypted plaintext.
+	inlineBytes := value.Server.InlinePayloadBytes
+	if inlineBytes <= 0 {
+		inlineBytes = activity.DefaultInlineBytes
+	}
+	codec, err := temporalcodec.NewAESGCMWithOptions(keys, temporalcodec.Options{MaxPayloadBytes: inlineBytes})
+	if err != nil {
+		// NewAESGCM errors name only key IDs and lengths, never key bytes.
+		return nil, &payloadCodecError{safe: "construct Temporal payload codec: " + err.Error(), cause: err}
+	}
+	return converter.NewCodecDataConverter(bounded, codec), nil
+}
+
+// payloadCodecError is a payload codec configuration failure. Its message
+// names only key IDs, so startup can report it without the resolver's cause.
+type payloadCodecError struct {
+	safe  string
+	cause error
+}
+
+func (err *payloadCodecError) Error() string { return err.safe }
+
+func (err *payloadCodecError) Unwrap() error { return err.cause }
 
 // dialTemporalWithRetry retries only gRPC Unavailable responses from the
 // eager GetSystemInfo handshake. Authentication, TLS, malformed-target, and

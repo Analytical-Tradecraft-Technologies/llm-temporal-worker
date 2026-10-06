@@ -59,9 +59,13 @@ Provider identifiers and budget receipts remain in durable runtime storage.
 Checkpoint-aware calls send an opaque parent handle and the new delta/settings
 patch. Materialization loads ancestors inside the worker rather than copying
 lineage into workflow payloads. Inputs and outputs still contain caller content,
-so history confidentiality requires an independently configured Temporal Payload
-Codec; a Data Converter alone is not encryption. Errors and heartbeats carry
-bounded, redacted details rather than provider payloads or secrets.
+so history confidentiality requires a Temporal Payload Codec; a Data Converter
+alone is not encryption. The worker's client installs the opt-in AES-256-GCM
+codec when `temporal.payload_codec` is configured (see the
+[configuration reference](../reference/configuration.md#temporal-payload-encryption));
+every client that reads or writes the same workflows needs the same codec.
+Errors and heartbeats carry bounded, redacted details rather than provider
+payloads or secrets.
 
 ## Required caller options
 

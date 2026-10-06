@@ -40,6 +40,9 @@ func TestRuntimeReplacementValidatorRejectsProcessLifetimeChanges(t *testing.T) 
 		}},
 		{name: "Temporal TLS client certificate", field: "temporal.tls.cert_file", mutate: func(value *config.Config) { value.Temporal.TLS.CertFile = "/var/run/ca/temporal-client-2.pem" }},
 		{name: "Temporal API key", field: "temporal.api_key_file", mutate: func(value *config.Config) { value.Temporal.APIKeyFile = "/var/run/ca/temporal-api-key" }},
+		{name: "Temporal payload codec", field: "temporal.payload_codec", mutate: func(value *config.Config) {
+			value.Temporal.PayloadCodec = &config.PayloadCodecConfig{Kind: config.PayloadCodecAES256GCM, Keys: []config.PayloadCodecKey{{ID: "k1", Primary: true, Secret: config.SecretRef{Kind: config.SecretFile, Path: "/var/run/secrets/temporal-codec"}}}}
+		}},
 		{name: "Temporal TLS server name", field: "temporal.tls.server_name", mutate: func(value *config.Config) { value.Temporal.TLS.ServerName = "temporal-2.example.internal" }},
 		{name: "Temporal TLS CA file", field: "temporal.tls.ca_file", mutate: func(value *config.Config) { value.Temporal.TLS.CAFile = "/var/run/ca/temporal-2.pem" }},
 		{name: "Temporal activity concurrency", field: "temporal.worker.max_concurrent_activities", mutate: func(value *config.Config) { value.Temporal.Worker.MaxConcurrentActivities++ }},

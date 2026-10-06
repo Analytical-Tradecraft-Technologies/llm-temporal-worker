@@ -146,6 +146,12 @@ func (resolver ConfigResolver) Resolve(ctx context.Context, value *config.Config
 	if value.State.Requests != nil {
 		refs = append(refs, value.State.Requests.Secret)
 	}
+	// Appended last so existing reference indexes in diagnostics are stable.
+	if value.Temporal.PayloadCodec != nil {
+		for _, key := range value.Temporal.PayloadCodec.Keys {
+			refs = append(refs, key.Secret)
+		}
+	}
 	for index, ref := range refs {
 		if _, err := resolver.Resolver.Resolve(ctx, ref); err != nil {
 			return diagnostic.Safe(secretReferenceDiagnostic(index, ref, err), MarkReference(err))

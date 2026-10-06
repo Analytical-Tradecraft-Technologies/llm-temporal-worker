@@ -39,6 +39,7 @@ current-layout reference.
 │   ├── admission/                  Operation state machine and atomic store port
 │   ├── state/                      Continuation records, handles, blob references
 │   ├── activity/                   Temporal payloads and Activity implementation
+│   ├── temporalcodec/              Opt-in AES-256-GCM Temporal Payload Codec
 │   ├── integration/                Offline Temporal, Compose, and Kubernetes gates
 │   │   ├── temporal_lifecycle_test.go  Offline Temporal lifecycle gate
 │   │   ├── compose/                Local compose-stack smoke tests
@@ -82,6 +83,7 @@ The permitted dependency direction is:
 cmd -> internal/runtime -> internal/app
 internal/app -> activity/engine/config/storage/provider/observability
 activity -> engine + Temporal SDK
+temporalcodec -> Temporal SDK + Go standard library
 engine -> llm/routing/pricing/budget/admission/state
 provider adapters -> llm/provider + one official provider SDK
 storage implementations -> admission/state/budget ports + backend client

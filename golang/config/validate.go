@@ -234,6 +234,11 @@ func (temporal TemporalConfig) validate(environment string) error {
 			return fmt.Errorf("temporal.tls.cert_file/key_file or temporal.api_key_file is required in production unless temporal.mesh_transport is set")
 		}
 	}
+	if temporal.PayloadCodec != nil {
+		if err := temporal.PayloadCodec.validate(); err != nil {
+			return err
+		}
+	}
 	if temporal.Worker.MaxConcurrentActivities <= 0 || temporal.Worker.MaxConcurrentActivityTaskPolls <= 0 {
 		return fmt.Errorf("temporal.worker concurrency values must be positive")
 	}
@@ -245,6 +250,41 @@ func (temporal TemporalConfig) validate(environment string) error {
 	}
 	if time.Duration(temporal.Worker.HeartbeatKeepaliveInterval) > ActivityHeartbeatTimeout/3 {
 		return fmt.Errorf("temporal.worker.heartbeat_keepalive_interval must be at most %s (one third of the %s Activity heartbeat timeout)", ActivityHeartbeatTimeout/3, ActivityHeartbeatTimeout)
+	}
+	return nil
+}
+
+// payloadCodecKeyIDPattern keeps key IDs short and printable: they are
+// written, unencrypted, into the metadata of every encoded payload.
+var payloadCodecKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+func (codec PayloadCodecConfig) validate() error {
+	if codec.Kind != PayloadCodecAES256GCM {
+		return fmt.Errorf("temporal.payload_codec.kind must be %s", PayloadCodecAES256GCM)
+	}
+	if len(codec.Keys) == 0 {
+		return fmt.Errorf("temporal.payload_codec.keys must not be empty")
+	}
+	primary := 0
+	seen := make(map[string]struct{}, len(codec.Keys))
+	for index, key := range codec.Keys {
+		path := fmt.Sprintf("temporal.payload_codec.keys[%d]", index)
+		if !payloadCodecKeyIDPattern.MatchString(key.ID) {
+			return fmt.Errorf("%s.id must be 1-64 characters from [A-Za-z0-9._-]", path)
+		}
+		if _, exists := seen[key.ID]; exists {
+			return fmt.Errorf("%s duplicate key ID %q", path, key.ID)
+		}
+		seen[key.ID] = struct{}{}
+		if key.Primary {
+			primary++
+		}
+		if err := key.Secret.Validate(path + ".secret"); err != nil {
+			return err
+		}
+	}
+	if primary != 1 {
+		return fmt.Errorf("temporal.payload_codec.keys must contain exactly one primary key")
 	}
 	return nil
 }
