@@ -228,6 +228,33 @@ func responseProvenance(output []llm.Item, offset int, pin state.Pinning) []stat
 	return result
 }
 
+// replayedProvenance is the provenance of output replayed from the worker
+// response cache. origin is the provenance recorded on the checkpoint that
+// first published that output. A cache hit requires the same semantic input,
+// so the origin's transcript was input followed by output, exactly as the
+// replay's is: entries at or after len(input) belong to the output and keep
+// their ordinals, and earlier entries (a snapshot origin repeats what it
+// inherited) are the parent's, which the replay's own lineage already carries.
+// Every output entry must name an output item that carries provider state;
+// anything else means the origin and its cached response disagree.
+func replayedProvenance(origin []state.ProviderStateProvenance, input, output []llm.Item) ([]state.ProviderStateProvenance, bool) {
+	if state.ValidateProviderStateProvenance(origin) != nil {
+		return nil, false
+	}
+	var result []state.ProviderStateProvenance
+	for _, value := range origin {
+		if value.Ordinal < len(input) {
+			continue
+		}
+		index := value.Ordinal - len(input)
+		if index >= len(output) || !itemHasProviderState(output[index]) {
+			return nil, false
+		}
+		result = append(result, value)
+	}
+	return result, true
+}
+
 // compactedProvenance carries the parent's provenance into a compaction child.
 // A no-work child keeps the parent transcript unchanged. Otherwise the child
 // transcript is the summary followed by the retained items: references moved

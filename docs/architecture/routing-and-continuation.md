@@ -292,11 +292,42 @@ therefore plans exactly as before. A lineage that switches model alias through
 `settings_patch.model` to a different provider model is a different lineage:
 strict mode reports `continuation_pinned`, and best-effort drops the state.
 
-Not yet applied on this path: soft provider prompt-cache affinity (no v1
-checkpoint records an affinity, and the planner receives no `Affinity` or
-`Now`), pinning of compaction summarizer requests, and provenance for output
-replayed from the worker response cache, whose provider state keeps the
-family check.
+Output replayed from the worker response cache keeps the provenance of the
+attempt that first produced it. A cache hit requires the same semantic input,
+so the origin checkpoint's transcript is this request's input followed by the
+same output; the replay reads the origin row (which recording the cache use
+reads anyway) and copies its entries at or after the input length, unchanged.
+Neither the cache entry nor any other stored format changes. An origin
+published before provenance existed records none, so its replayed output keeps
+the family check, as before. A provenance entry that does not name provider
+state in the cached output is `state_corrupt`. A replay reports no new
+diagnostics: like the origin's usage, a `provider_state_dropped` warning
+described the origin's provider call, not the replay. A compaction cache hit
+needs nothing extra, because the retained items, not the cached summary, carry
+the provider state, and their provenance comes from the parent.
+
+Compaction summarizer requests are not pinned, because they never carry
+provider state. The summarizer receives the summarized prefix rendered as one
+plain-text message from which provider-state items and parts are left out, no
+retained items, and no `Continuation`. The planner therefore routes it like any
+stateless request. The retained items keep their provenance at their new
+positions in the compacted checkpoint, so the next Generate is pinned as
+before. A summary that itself contains provider state is rejected
+(`compaction.PlainTextSummary`), so a compaction never records new provenance.
+
+Not applied on this path: soft provider prompt-cache affinity. No v1
+publication records a `ProviderCacheAffinitySet`, so there is nothing to
+apply, and recording one needs a provider prompt-cache key and cache usage
+observations that the v1 path does not yet derive. Applying it also needs the
+planning time: `affinityMatchesCandidate` only promotes a candidate whose
+`PriceAvailable` is true, and the planner computes that from priced windows
+only when it receives `Now`. The v1 path does not pass `Now`, because doing so
+changes priced-window evaluation for every request; reordering candidates
+without it could put a route outside its priced window first. Finally,
+`ProviderCacheAffinity` identifies the account by `EndpointAccountHMAC`, which
+includes the configuration version, so a recorded affinity would stop
+matching after every reload. Affinity on this path waits for those three
+changes.
 
 ## Route health
 

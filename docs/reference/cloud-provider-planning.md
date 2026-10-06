@@ -63,7 +63,8 @@ Each candidate on another lineage is rejected with reason
 compiles without the provider state recorded for other lineages. When any
 route was rejected that way, the error keeps its code (normally `no_route`)
 and adds the safe detail `continuation=continuation_pinned`. Compaction
-summarizer requests are not pinned. The same stripped request is what budget
+summarizer requests are not pinned: their input is the summarized prefix as
+plain text, without provider state. The same stripped request is what budget
 quoting estimates and what exact-route recovery recompiles, so its digest is
 reproducible.
 

@@ -124,10 +124,11 @@ controller:
   idempotency contract.
 - Persisting secrets, raw credentials, or bearer tokens in Temporal payloads.
 - Live streaming, token-event delivery, and interactive response transports.
-- On the durable v1 path: checkpoint provider prompt-cache affinity, a
+- On the durable v1 path: checkpoint provider prompt-cache affinity, and a
   dedicated public `continuation_pinned` error code (the closed error-code set
-  is unchanged), pinning of compaction summarizer requests, and pin provenance
-  for output replayed from the worker response cache.
+  is unchanged). Compaction summarizer requests carry no provider state and so
+  need no pin; see
+  [routing and continuation](architecture/routing-and-continuation.md#pinning-on-the-durable-v1-path).
 
 ## Behavioral invariants
 
