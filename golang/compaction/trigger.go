@@ -20,10 +20,13 @@ const (
 // TriggerInput contains counters and provider capabilities projected for the
 // next Generate checkpoint. Counters must describe the request before adding
 // another model turn; zero provider limits disable that corresponding check.
+// RetainedTokens is the part of ProjectedTokens that compaction cannot remove:
+// instructions, tool schemas, the retained recent window and the new turn.
 // Continuation expiry is supplied as a boolean because the engine owns the
 // durable clock/deadline interpretation.
 type TriggerInput struct {
 	ProjectedTokens            int
+	RetainedTokens             int
 	ProjectedBytes             int64
 	ProjectedItems             int
 	ProjectedLineageDepth      int
@@ -46,15 +49,20 @@ type TriggerDecision struct {
 // EvaluateTrigger applies provider limits before policy limits. The provider
 // context check reserves both the generic output budget and any adapter-owned
 // reasoning budget. Policy trigger_tokens is the fallback when no provider
-// context limit is available. The lower target_tokens value prevents a
-// compaction loop: a freshly materialized checkpoint below that target does
-// not trigger again until a limit is crossed.
+// context limit is available; it is skipped when the tokens compaction cannot
+// remove already reach it, because a summary would leave the request over the
+// trigger and every following turn would buy another summarizer call. The
+// lower target_tokens value prevents a compaction loop: a freshly materialized
+// checkpoint below that target does not trigger again until a limit is crossed.
 func (policy Policy) EvaluateTrigger(input TriggerInput) (TriggerDecision, error) {
 	if err := policy.Validate(); err != nil {
 		return TriggerDecision{}, err
 	}
 	if input.ProjectedTokens < 0 {
 		return TriggerDecision{}, fmt.Errorf("projected tokens must be non-negative")
+	}
+	if input.RetainedTokens < 0 {
+		return TriggerDecision{}, fmt.Errorf("retained tokens must be non-negative")
 	}
 	if input.ProjectedBytes < 0 {
 		return TriggerDecision{}, fmt.Errorf("projected bytes must be non-negative")
@@ -84,7 +92,7 @@ func (policy Policy) EvaluateTrigger(input TriggerInput) (TriggerDecision, error
 			return triggered(TriggerReasonContextTokens, policy), nil
 		}
 	}
-	if input.ProjectedTokens >= policy.TriggerTokens {
+	if input.ProjectedTokens >= policy.TriggerTokens && input.RetainedTokens < policy.TriggerTokens {
 		return triggered(TriggerReasonTokens, policy), nil
 	}
 	if input.ProviderItemLimit > 0 && input.ProjectedItems >= input.ProviderItemLimit {

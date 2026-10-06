@@ -51,7 +51,11 @@ overrides fail as invalid arguments. Policy and prompt versions must accompany
 source-content identity in the compaction cache key.
 
 `PreparedCompactInput.Selection` separates the summarizable prefix from the
-recent verbatim suffix. Whole tool exchanges stay together and an unresolved
+recent verbatim suffix through `compaction.SelectRequestPrefix`: the suffix is
+the policy's recent window, shortened oldest turn first when the request that
+remains with it would exceed the effective `target_tokens`, so an explicit
+`target_tokens` override changes the boundary and the summarized prefix.
+Whole tool exchanges stay together and an unresolved
 final exchange remains in the suffix. A nil `Request` means there is no safe
 prefix: the surrounding runtime must handle that case without reserving budget
 or submitting a summarizer. An enabled cache lookup stops before its planner in
