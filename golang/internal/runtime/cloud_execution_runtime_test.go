@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,7 +38,7 @@ type boundedCloudFixture struct {
 	submits, polls atomic.Int32
 }
 
-func boundedCloud(t *testing.T, async bool, configure ...func(*budgetPlanningFixture)) *boundedCloudFixture {
+func boundedCloud(t testing.TB, async bool, configure ...func(*budgetPlanningFixture)) *boundedCloudFixture {
 	t.Helper()
 	f := &boundedCloudFixture{now: time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)}
 	b := newBudgetPlanningFixture(t)
@@ -119,7 +120,7 @@ func boundedCloud(t *testing.T, async bool, configure ...func(*budgetPlanningFix
 	f.restart(t)
 	return f
 }
-func (f *boundedCloudFixture) restart(t *testing.T) {
+func (f *boundedCloudFixture) restart(t testing.TB) {
 	t.Helper()
 	var err error
 	f.runtime, err = f.cap.NewCloudExecutionRuntime(context.Background(), f.options)
@@ -127,14 +128,14 @@ func (f *boundedCloudFixture) restart(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func boundedState(t *testing.T, v llm.ExecutionResultV1, err error, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
+func boundedState(t testing.TB, v llm.ExecutionResultV1, err error, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
 	t.Helper()
 	if err != nil || v.State != want || v.Validate() != nil {
 		t.Fatalf("state=%+v wanted=%s error=%v", v, want, err)
 	}
 	return v
 }
-func (f *boundedCloudFixture) finish(t *testing.T) llm.ExecutionResultV1 {
+func (f *boundedCloudFixture) finish(t testing.TB) llm.ExecutionResultV1 {
 	t.Helper()
 	ctx := context.Background()
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
@@ -763,5 +764,97 @@ func TestCloudExecutionRuntimeRejectedDispatchStaysPermanent(t *testing.T) {
 	boundedState(t, v, err, llm.ExecutionFailed)
 	if v.Retryable {
 		t.Fatal("cancellation without pre-dispatch evidence became retryable")
+	}
+}
+
+// TestCloudRequestPreparationReusesValidatedParent proves that restoring a
+// preparation from the parent snapshot its load already validated (#1112)
+// gives exactly what validating and decoding it again gives.
+func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
+	f := boundedCloud(t, false)
+	parent := f.finish(t)
+	handle := parent.Generate.Checkpoint.Handle
+	child := llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+	ctx := context.Background()
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	scope, id := cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID)
+	record, err := f.repository.Read(ctx, scope, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparation, snapshot, err := f.repository.LoadRequestPreparationParent(ctx, scope, id)
+	if err != nil || snapshot == nil {
+		t.Fatalf("snapshot=%v err=%v", snapshot, err)
+	}
+	if decoded, err := preparation.ValidateParent(); err != nil || !reflect.DeepEqual(*decoded, *snapshot) {
+		t.Fatalf("loaded parent differs from a fresh decode: %v", err)
+	}
+	want, err := f.runtime.preparation.restore(ctx, record, preparation, "trusted-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.runtime.preparation.restoreLoaded(ctx, record, preparation, snapshot, true, "trusted-scope")
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("validated restore differs: err=%v", err)
+	}
+	loaded, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context})
+	if err != nil || !reflect.DeepEqual(loaded.GenerateReplay, want.GenerateReplay) || !reflect.DeepEqual(loaded.Preparation, want.Preparation) {
+		t.Fatalf("Load differs from a fully validated restore: err=%v", err)
+	}
+	// A preparation the store did not validate is still validated in restore.
+	corrupt := preparation
+	corrupt.ParentSnapshot = append(json.RawMessage(nil), preparation.ParentSnapshot[:len(preparation.ParentSnapshot)/2]...)
+	if _, err := f.runtime.preparation.restoreLoaded(ctx, record, corrupt, nil, false, "trusted-scope"); err == nil {
+		t.Fatal("restore accepted a corrupt parent snapshot")
+	}
+}
+
+// BenchmarkCloudExecutionRuntimeTurnLargeParent measures each Activity step of
+// one Generate turn that appends a 64-byte message to a parent transcript of
+// about 1 MB (issue #1112). Only the named step is timed; the other steps run
+// untimed so every iteration is a complete, fresh turn on the same parent.
+func BenchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B) {
+	for _, step := range []string{"prepare", "acquire", "generate", "complete"} {
+		b.Run(step, func(b *testing.B) {
+			f := boundedCloud(b, false)
+			f.request.Append = nil
+			for i := 0; i < 10; i++ {
+				f.request.Append = append(f.request.Append, preparationMessage(strings.Repeat(fmt.Sprintf("parent %d ", i), 100<<10/9)))
+			}
+			parent := f.finish(b)
+			if parent.Generate == nil {
+				b.Fatal("missing parent")
+			}
+			handle := parent.Generate.Checkpoint.Handle
+			child := llm.GenerateRequestV1{Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage(strings.Repeat("x", 64))}}
+			ctx := context.Background()
+			timed := func(name string, run func() (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
+				if name != step {
+					return run()
+				}
+				b.StartTimer()
+				defer b.StopTimer()
+				return run()
+			}
+			b.ReportAllocs()
+			b.StopTimer()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				f.now = f.now.Add(time.Minute)
+				child.OperationKey = fmt.Sprintf("bench-%d", i)
+				v, err := timed("prepare", func() (llm.ExecutionResultV1, error) {
+					return f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
+				})
+				boundedState(b, v, err, llm.ExecutionBudgetRequired)
+				ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
+				v, err = timed("acquire", func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) })
+				boundedState(b, v, err, llm.ExecutionAcquired)
+				v, err = timed("generate", func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, child) })
+				boundedState(b, v, err, llm.ExecutionProviderCompleted)
+				v, err = timed("complete", func() (llm.ExecutionResultV1, error) { return f.runtime.CompleteExecutionV1(ctx, ref) })
+				boundedState(b, v, err, llm.ExecutionCompleted)
+			}
+		})
 	}
 }

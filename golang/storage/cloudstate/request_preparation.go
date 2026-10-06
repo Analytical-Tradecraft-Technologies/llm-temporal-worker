@@ -37,16 +37,27 @@ type RequestPreparation struct {
 }
 
 func (p RequestPreparation) Validate() error {
+	_, err := p.ValidateParent()
+	return err
+}
+
+// ValidateParent validates p exactly as Validate does and also returns the
+// parent snapshot that validation decoded, or nil when p has no parent. A
+// caller that needs the snapshot uses it instead of decoding the parent again
+// (#1112). Each call decodes afresh, so the caller owns the result.
+func (p RequestPreparation) ValidateParent() (*state.CheckpointSnapshot, error) {
 	if p.Version != 1 || p.ConfigDigest == ([32]byte{}) || !safeText(p.CheckpointScope, 512) || !validTime(p.PreparedAt) {
-		return ErrInvalid
+		return nil, ErrInvalid
 	}
-	if len(p.ParentSnapshot) != 0 {
-		codec := state.CheckpointBlobCodec{MaxBytes: MaxPreparedParentBytes}
-		if _, err := codec.DecodeSnapshot(p.ParentSnapshot); err != nil {
-			return ErrInvalid
-		}
+	if len(p.ParentSnapshot) == 0 {
+		return nil, nil
 	}
-	return nil
+	codec := state.CheckpointBlobCodec{MaxBytes: MaxPreparedParentBytes}
+	snapshot, err := codec.DecodeSnapshot(p.ParentSnapshot)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	return &snapshot, nil
 }
 
 // SaveRequestPreparation has one immutable winner and preserves other progress.
@@ -70,7 +81,7 @@ func (r *Repository) SaveRequestPreparation(ctx context.Context, scope Scope, id
 		if err != nil {
 			return err
 		}
-		progress, existing, err := requestPreparationProgress(record)
+		progress, existing, _, err := requestPreparationProgress(record)
 		if err != nil {
 			return err
 		}
@@ -106,24 +117,33 @@ func (r *Repository) SaveRequestPreparation(ctx context.Context, scope Scope, id
 // LoadRequestPreparation never reopens or revalidates expiry of the parent
 // checkpoint. Callers must authorize the request scope before using this method.
 func (r *Repository) LoadRequestPreparation(ctx context.Context, scope Scope, id RequestID) (RequestPreparation, error) {
+	preparation, _, err := r.LoadRequestPreparationParent(ctx, scope, id)
+	return preparation, err
+}
+
+// LoadRequestPreparationParent is LoadRequestPreparation that also returns the
+// parent snapshot decoded while validating the loaded preparation (nil when it
+// has no parent), so a caller restoring the parent does not decode it again.
+// The snapshot is decoded for this call only and belongs to the caller.
+func (r *Repository) LoadRequestPreparationParent(ctx context.Context, scope Scope, id RequestID) (RequestPreparation, *state.CheckpointSnapshot, error) {
 	record, err := r.Read(ctx, scope, id)
 	if err != nil {
-		return RequestPreparation{}, err
+		return RequestPreparation{}, nil, err
 	}
-	progress, preparation, err := requestPreparationProgress(record)
+	progress, preparation, parent, err := requestPreparationProgress(record)
 	if err != nil {
-		return RequestPreparation{}, err
+		return RequestPreparation{}, nil, err
 	}
 	if preparation == nil {
 		if record.Status != StatusRunning || preparationAlreadyStarted(progress) {
-			return RequestPreparation{}, ErrCorrupt
+			return RequestPreparation{}, nil, ErrCorrupt
 		}
-		return RequestPreparation{}, ErrRequestPreparationMissing
+		return RequestPreparation{}, nil, ErrRequestPreparationMissing
 	}
 	if err := r.repairBudgetPlanIndex(ctx, record); err != nil {
-		return RequestPreparation{}, err
+		return RequestPreparation{}, nil, err
 	}
-	return *preparation, nil
+	return *preparation, parent, nil
 }
 
 func preparationAlreadyStarted(progress map[string]json.RawMessage) bool {
@@ -135,18 +155,24 @@ func preparationAlreadyStarted(progress map[string]json.RawMessage) bool {
 	return false
 }
 
-func requestPreparationProgress(record Record) (map[string]json.RawMessage, *RequestPreparation, error) {
+// requestPreparationProgress also returns the parent snapshot that validating
+// the preparation decoded (nil when there is no preparation or no parent).
+func requestPreparationProgress(record Record) (map[string]json.RawMessage, *RequestPreparation, *state.CheckpointSnapshot, error) {
 	var progress map[string]json.RawMessage
 	if json.Unmarshal(record.Progress, &progress) != nil || progress == nil || string(progress["version"]) != "1" {
-		return nil, nil, ErrCorrupt
+		return nil, nil, nil, ErrCorrupt
 	}
 	data, present := progress["request_preparation"]
 	if !present {
-		return progress, nil, nil
+		return progress, nil, nil, nil
 	}
 	var preparation RequestPreparation
-	if json.Unmarshal(data, &preparation) != nil || preparation.Validate() != nil || preparation.PreparedAt.Before(record.Request.CreatedAt) {
-		return nil, nil, ErrCorrupt
+	if json.Unmarshal(data, &preparation) != nil {
+		return nil, nil, nil, ErrCorrupt
 	}
-	return progress, &preparation, nil
+	parent, err := preparation.ValidateParent()
+	if err != nil || preparation.PreparedAt.Before(record.Request.CreatedAt) {
+		return nil, nil, nil, ErrCorrupt
+	}
+	return progress, &preparation, parent, nil
 }
