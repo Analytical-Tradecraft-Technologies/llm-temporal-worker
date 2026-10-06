@@ -110,6 +110,8 @@ func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, er
 			return scope, nil
 		},
 		CheckpointTTL: time.Duration(value.State.ContinuationRetention),
-		Limits:        state.MaterializeLimits{MaxDepth: int32(value.Limits.ContinuationDepth)},
+		// A lineage of the configured depth holds depth+1 rows. Deriving the row
+		// bound keeps a continuation_depth above the 512-row default effective.
+		Limits: state.MaterializeLimits{MaxDepth: int32(value.Limits.ContinuationDepth), MaxRows: value.Limits.ContinuationDepth + 1},
 	}, nil
 }

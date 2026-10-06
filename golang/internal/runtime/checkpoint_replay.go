@@ -143,6 +143,39 @@ func (replay *CheckpointReplay) materializeAuthorized(ctx context.Context, calle
 	return materialized, nil
 }
 
+// lineageLimits applies the materializer's defaults so request preparation and
+// checkpoint publication compare a parent against the bounds its lineage walk
+// used. Zero means the default; negative values are rejected at construction.
+func lineageLimits(limits state.MaterializeLimits) state.MaterializeLimits {
+	if limits.MaxDepth == 0 {
+		limits.MaxDepth = 256
+	}
+	if limits.MaxRows == 0 {
+		limits.MaxRows = 512
+	}
+	if limits.MaxItems == 0 {
+		limits.MaxItems = 4096
+	}
+	if limits.MaxBytes == 0 {
+		limits.MaxBytes = 16 << 20
+	}
+	return limits
+}
+
+// validateLineageCapacity rejects a parent on which no child can be published:
+// its depth or row count is already at the bound, or the transcript leaves no
+// room for the smallest child the operation can produce (items). A parent at
+// the bound is readable, so this runs in preparation, before budget and
+// dispatch, rather than paying for a response that publication must refuse.
+// Publication repeats the comparison against the actual output.
+func validateLineageCapacity(limits state.MaterializeLimits, replay state.MaterializedState, items int) error {
+	limits = lineageLimits(limits)
+	if replay.Depth >= limits.MaxDepth || len(replay.Lineage)+1 > limits.MaxRows || items > limits.MaxItems {
+		return checkpointReplayError(provider.CodeInvalidArgument)
+	}
+	return nil
+}
+
 func equalCheckpointFrontier(left, right []string) bool {
 	if len(left) != len(right) {
 		return false

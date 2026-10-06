@@ -180,6 +180,16 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 	if err != nil {
 		return cloudstate.RequestPreparation{}, err
 	}
+	// A Generate child holds the parent, the append and at least one output
+	// item; a compaction child never holds more than its parent. Reject a
+	// lineage that cannot publish before any budget or provider effect.
+	items := len(materialized.Items)
+	if prepared.Generate != nil {
+		items += len(prepared.Generate.Append) + 1
+	}
+	if err := validateLineageCapacity(p.replay.limits, materialized, items); err != nil {
+		return cloudstate.RequestPreparation{}, err
+	}
 	// Refuse, before anything is paid, a turn whose child could not be
 	// prepared as a parent again. Compaction stays available on this parent.
 	if prepared.Generate != nil && parent != "" {
