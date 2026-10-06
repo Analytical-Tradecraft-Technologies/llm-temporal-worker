@@ -173,15 +173,21 @@ func (results *BlobResultStore) Get(ctx context.Context, operationID string) (ll
 		}
 		return llm.Response{}, fmt.Errorf("load result operation: %w", err)
 	}
-	if operation.ResultRef == nil || !operation.ResultRef.Valid() {
-		return llm.Response{}, engine.ErrResultNotFound
-	}
 	tenant, err := tenantFromScope(operation.ScopeKey)
 	if err != nil {
 		return llm.Response{}, err
 	}
 	ref, ok := results.cached(operationID)
-	if !ok {
+	if operation.ResultRef == nil || !operation.ResultRef.Valid() {
+		// The ledger records the reference only when the operation completes.
+		// A dispatching operation whose result this process already stored
+		// (completion failed after Put) is still readable through the cached
+		// reference, so the engine can finish the completion without calling
+		// the provider again.
+		if !ok || operation.State != admission.StateDispatching {
+			return llm.Response{}, engine.ErrResultNotFound
+		}
+	} else if !ok {
 		if results.resolveRef == nil {
 			return llm.Response{}, engine.ErrResultNotFound
 		}
