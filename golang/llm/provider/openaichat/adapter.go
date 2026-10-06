@@ -217,7 +217,12 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	var rawResponse *http.Response
 	requestOptions := adapter.client.options()
 	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
-	response, err := adapter.client.sdk.Chat.Completions.New(callContext, params, requestOptions...)
+	response, panicked, err := provider.CallRecovered(func() (*openai.ChatCompletion, error) {
+		return adapter.client.sdk.Chat.Completions.New(callContext, params, requestOptions...)
+	})
+	if panicked != nil {
+		return provider.Result{}, provider.WithEndpointID(provider.SDKPanicError(call.OperationKey, panicked, rawResponse != nil), adapter.endpointID)
+	}
 	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
 		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
 	}

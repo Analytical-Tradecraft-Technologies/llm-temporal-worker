@@ -198,7 +198,10 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if call.Metadata.ProviderTier != "" {
 		options = append(options, option.WithHeader(serviceTierHeader, call.Metadata.ProviderTier))
 	}
-	response, err := messages.New(callContext, params, options...)
+	response, panicked, err := provider.CallRecovered(func() (*anthropic.Message, error) { return messages.New(callContext, params, options...) })
+	if panicked != nil {
+		return provider.Result{}, provider.WithEndpointID(provider.SDKPanicError(call.OperationKey, panicked, rawResponse != nil), adapter.endpointID)
+	}
 	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
 		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
 	}

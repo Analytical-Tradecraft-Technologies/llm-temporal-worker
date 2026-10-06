@@ -224,7 +224,12 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
-	response, err := adapter.client.sdk.Responses.New(callContext, params, option.WithResponseInto(&rawResponse))
+	response, panicked, err := provider.CallRecovered(func() (*responses.Response, error) {
+		return adapter.client.sdk.Responses.New(callContext, params, option.WithResponseInto(&rawResponse))
+	})
+	if panicked != nil {
+		return provider.Result{}, provider.WithEndpointID(provider.SDKPanicError(call.OperationKey, panicked, rawResponse != nil), adapter.endpointID)
+	}
 	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
 		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
 	}
