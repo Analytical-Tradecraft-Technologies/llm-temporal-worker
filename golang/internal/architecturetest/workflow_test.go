@@ -135,6 +135,7 @@ func TestWorkflowNativeCISetupHelpersVerifyPinnedDownloads(t *testing.T) {
 		{file: "setup-kubectl.sh", version: "v1.32.6", checksum: "0e31ebf882578b50e50fe6c43e3a0e3db61f6a41c9cded46485bc74d03d576eb"},
 		{file: "setup-syft.sh", version: "v1.44.0", checksum: "0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a"},
 		{file: "setup-trivy.sh", version: "v0.72.0", checksum: "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"},
+		{file: "setup-multinode-buildx.sh", version: "v0.37.1", checksum: "9447199cdb435f25880548343c128a4b6650e8891ee598905d8d29d39a8e359b"},
 	} {
 		t.Run(test.file, func(t *testing.T) {
 			setup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", test.file)

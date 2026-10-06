@@ -18,7 +18,9 @@ jobs:
   container:
     name: Container image
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The merge queue also builds and scans both platforms (arm64 under
+    # emulation), which takes longer than the pull-request build.
+    timeout-minutes: ${{ github.event_name == 'merge_group' && 50 || 20 }}
     permissions:
       contents: read
 
@@ -96,6 +98,44 @@ jobs:
       - name: Remove temporary OCI image
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/image.oci"
+
+      # The merge queue runs master's build-and-scan script on a local builder
+      # with Docker Build Cloud's shape: one node per platform. Build Cloud and
+      # registry credentials stay master-only (their deployment environment
+      # admits only the master branch), so nothing here can publish. This
+      # catches multi-node builder and exporter incompatibilities before merge
+      # instead of on master (#971).
+      - name: Set up multi-node builder like Docker Build Cloud
+        if: github.event_name == 'merge_group'
+        run: bash scripts/ci/setup-multinode-buildx.sh
+
+      - name: Set up pinned Trivy
+        if: github.event_name == 'merge_group'
+        run: bash scripts/ci/setup-trivy.sh
+
+      - name: Build and scan both platforms as master does, without publishing
+        if: github.event_name == 'merge_group'
+        env:
+          IMAGE_VERSION: ${{ steps.metadata.outputs.version }}
+          IMAGE_REVISION: ${{ steps.metadata.outputs.revision }}
+          IMAGE_BUILD_TIME: ${{ steps.metadata.outputs.build_time }}
+          IMAGE_SOURCE: ${{ steps.metadata.outputs.source }}
+          IMAGE_GO_VERSION: ${{ steps.metadata.outputs.go_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(bash scripts/ci/build-scanned-image.sh "$RUNNER_TEMP/candidate.oci")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          verified="$(cd golang && go run ./tools/ocimerge verify -layout "$RUNNER_TEMP/candidate.oci" -platform linux/amd64 -platform linux/arm64)"
+          [[ "$verified" == "$digest" ]]
+          # Literal Markdown backticks in the summary are intentional.
+          # shellcheck disable=SC2016
+          printf 'Built and scanned `linux/amd64` and `linux/arm64` on a multi-node builder (not published)\n\nIndex digest: `%s`\n' \
+            "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove scanned image candidate
+        if: always() && github.event_name == 'merge_group'
+        run: rm -rf -- "$RUNNER_TEMP/candidate.oci"
 
   ocaml:
     name: OCaml package
