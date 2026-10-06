@@ -36,13 +36,15 @@ func TestBuildMemoryKeepsProcessStateAcrossReloads(t *testing.T) {
 		}
 	}
 	build()
-	admissionStore, blobs, continuations := factory.memory.admission, factory.memory.blobs, factory.memory.continuations
+	admissionStore, blobs, continuations, results := factory.memory.admission, factory.memory.blobs, factory.memory.continuations, factory.memory.results
 	begin := admission.BeginRequest{ID: "op", ScopeKey: "tenant/op", RequestDigest: admission.Digest([]byte("request")), LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)}
 	if _, err := admissionStore.Begin(context.Background(), begin); err != nil {
 		t.Fatal(err)
 	}
 	build()
-	if factory.memory.admission != admissionStore || factory.memory.blobs != blobs || factory.memory.continuations != continuations {
+	// The result store keeps the operation-to-locator index that replaying a
+	// completed operation needs; a BlobRef alone cannot rebuild it.
+	if factory.memory.admission != admissionStore || factory.memory.blobs != blobs || factory.memory.continuations != continuations || factory.memory.results != results || results == nil {
 		t.Fatal("an identical reload replaced memory-mode state")
 	}
 	if existing, err := factory.memory.admission.Begin(context.Background(), begin); err != nil || !existing.Existing {
@@ -50,7 +52,7 @@ func TestBuildMemoryKeepsProcessStateAcrossReloads(t *testing.T) {
 	}
 	secret = "abcdefghijabcdefghijabcdefghijab"
 	build()
-	if factory.memory.admission != admissionStore || factory.memory.blobs != blobs {
+	if factory.memory.admission != admissionStore || factory.memory.blobs != blobs || factory.memory.results != results {
 		t.Fatal("a key rotation replaced admission or result state")
 	}
 	if factory.memory.continuations == continuations {

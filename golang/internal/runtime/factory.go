@@ -183,6 +183,8 @@ type memoryState struct {
 	blobs                blob.Store
 	continuations        *memorystore.ContinuationStore
 	continuationIdentity [32]byte
+	results              *BlobResultStore
+	resultsBlobs         blob.Store
 }
 
 // productionClientSet owns the SDK clients built for one immutable snapshot
@@ -840,10 +842,16 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 		}
 		factory.memory.blobs = blobStore
 	}
-	results, err := NewBlobResultStore(blobStore, admissionStore, nil, clock)
-	if err != nil {
-		return nil, nil, err
+	// The result store indexes each operation's full blob locator, which a
+	// stored BlobRef alone cannot rebuild, so it is retained with the blobs.
+	if factory.memory.results == nil || factory.memory.resultsBlobs != blobStore {
+		results, err := NewBlobResultStore(blobStore, admissionStore, nil, clock)
+		if err != nil {
+			return nil, nil, err
+		}
+		factory.memory.results, factory.memory.resultsBlobs = results, blobStore
 	}
+	results := factory.memory.results
 	estimator, err := buildEstimator(value)
 	if err != nil {
 		return nil, nil, err
@@ -940,26 +948,28 @@ func (factory *ProductionEngineFactory) redisKeySecret(ctx context.Context, valu
 // everything the memory continuation store depends on: each key's ID, primary
 // flag and resolved secret, and the depth limit.
 func (factory *ProductionEngineFactory) memoryContinuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, [32]byte, error) {
-	keyring, err := factory.continuationKeyring(ctx, value)
+	// Resolve each secret once, so the keyring and its identity always come
+	// from the same bytes even while a secret file is being rotated.
+	keys, err := factory.continuationKeys(ctx, value)
 	if err != nil {
 		return nil, [32]byte{}, err
 	}
+	keyring, err := state.NewKeyring(keys, nil)
+	if err != nil {
+		return nil, [32]byte{}, fmt.Errorf("construct continuation keyring: %w", err)
+	}
 	digest := sha256.New()
 	fmt.Fprintf(digest, "depth=%d\n", value.Limits.ContinuationDepth)
-	for _, key := range value.Continuation.HandleKeys {
-		secret, err := factory.resolveSecret(ctx, key.Secret)
-		if err != nil {
-			return nil, [32]byte{}, fmt.Errorf("resolve continuation key %q: %w", key.ID, err)
-		}
-		fmt.Fprintf(digest, "%d:%s:%t:%d:", len(key.ID), key.ID, key.Primary, len(secret))
-		digest.Write(secret)
+	for _, key := range keys {
+		fmt.Fprintf(digest, "%d:%s:%t:%d:", len(key.ID), key.ID, key.Primary, len(key.Secret))
+		digest.Write(key.Secret)
 	}
 	var identity [32]byte
 	copy(identity[:], digest.Sum(nil))
 	return keyring, identity, nil
 }
 
-func (factory *ProductionEngineFactory) continuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, error) {
+func (factory *ProductionEngineFactory) continuationKeys(ctx context.Context, value config.Config) ([]state.Key, error) {
 	keys := make([]state.Key, 0, len(value.Continuation.HandleKeys))
 	for _, key := range value.Continuation.HandleKeys {
 		secret, err := factory.resolveSecret(ctx, key.Secret)
@@ -967,6 +977,14 @@ func (factory *ProductionEngineFactory) continuationKeyring(ctx context.Context,
 			return nil, fmt.Errorf("resolve continuation key %q: %w", key.ID, err)
 		}
 		keys = append(keys, state.Key{ID: key.ID, Secret: secret, Primary: key.Primary})
+	}
+	return keys, nil
+}
+
+func (factory *ProductionEngineFactory) continuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, error) {
+	keys, err := factory.continuationKeys(ctx, value)
+	if err != nil {
+		return nil, err
 	}
 	keyring, err := state.NewKeyring(keys, nil)
 	if err != nil {
