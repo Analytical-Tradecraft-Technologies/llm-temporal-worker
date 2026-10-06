@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -279,8 +280,10 @@ func TestWorkerComposeProvisionsAdmissionFunctionBeforeStart(t *testing.T) {
 	for _, required := range []string{
 		"FUNCTION LOAD",
 		"./storage/redis/functions/admission.lua",
-		"llmtw_admission_v1",
-		"admission_v1",
+		// The compiled Function names carry the Lua source digest, so the
+		// fixture must load the library this binary calls.
+		redisstore.AdmissionFunctionLibrary,
+		redisstore.AdmissionFunctionVersion,
 	} {
 		if !strings.Contains(string(raw), required) {
 			t.Errorf("Compose fixture is missing explicit Redis Function provisioning input %q", required)

@@ -109,7 +109,7 @@ services:
             printf '\nend)\n'
           } | redis-cli -h redis --user "$${REDIS_USERNAME}" --pass "$${REDIS_PASSWORD}" -x FUNCTION LOAD
         }
-        load_function llmtw_admission_v1 admission_v1 /opt/llmtw/functions/admission.lua
+        load_function llmtw_admission_bba60419c1306b1f admission_bba60419c1306b1f /opt/llmtw/functions/admission.lua
         load_function llmtw_throttle_v1 throttle_v1 /opt/llmtw/functions/throttle.lua
     volumes:
       - type: bind

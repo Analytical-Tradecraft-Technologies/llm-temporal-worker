@@ -1,4 +1,4 @@
--- llmtw_admission_v1 / admission-v1
+-- llmtw admission Function body (record schema admission/v1). The library and function names carry this source's digest.
 --
 -- The caller supplies every key touched by a transaction. All admission keys
 -- include the same literal hash tag, so this script is safe on Redis Cluster.

@@ -147,8 +147,10 @@ Workers using the same namespace see the same atomic budget state. When
 `state.redis.coordination_stream_enabled` is true, the runtime publishes budget
 events to `<prefix>:{<admission_hash_tag>}:budget:events` in the same Redis
 Function or Lua invocation as the accounting change. The Stream and accounting
-keys share a Redis Cluster slot. Provision the updated admission library before
-starting workers; its digest is pinned in the example and deployment settings.
+keys share a Redis Cluster slot. Provision the release's admission library
+before starting its workers; its digest-derived name and digest are pinned in
+the example and deployment settings, and it is loaded beside earlier releases'
+libraries (see [Readiness and Redis budget policy](configuration.md#readiness-and-redis-budget-policy)).
 Stream publication requires Redis 7 or later and permission for `XADD` and
 `XINFO STREAM`, in addition to the existing accounting commands. A wrong key
 type, denied `XADD`, or exhausted Stream ID is rejected before accounting writes.

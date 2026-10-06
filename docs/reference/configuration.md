@@ -155,9 +155,9 @@ state:
       ca_file: /var/run/ca/redis.pem
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_v1
-    admission_version: admission_v1
-    admission_digest: 35162335a99613fb14dfd12d40a8b50ba75932c742bebafff0e0ef0899ec4243
+    function_library: llmtw_admission_bba60419c1306b1f
+    admission_version: admission_bba60419c1306b1f
+    admission_digest: 9600ab0c0e48381c84527a4dd766d5842d1bd052308827c0c528b453f011b024
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -818,6 +818,18 @@ code. `admission_mode: lua` is an explicit compatibility fallback: its
 `admission_digest` must be the SHA-256 of the preloaded Lua source, and
 readiness requires Redis `SCRIPT EXISTS` for that source. The worker never
 falls back from a missing Lua script to `EVAL` or `SCRIPT LOAD`.
+
+The library and function names carry the first 64 bits of the Lua source's
+SHA-256 (`llmtw_admission_<tag>` / `admission_<tag>`), so each release that
+changes the Lua has its own library and the old one stays loaded beside it. To
+upgrade, `FUNCTION LOAD` the new release's library (no `REPLACE`; the name is
+new), then roll the workers with the new `function_library`,
+`admission_version`, and `admission_digest`. Old workers keep verifying and
+calling their own library throughout. Delete the old library with
+`FUNCTION DELETE` only after no worker of that release remains. Rollback is the
+same rollout in reverse while the old library is still loaded. Prefix-isolated
+fleets on one Redis can run different releases at the same time. Lua mode is
+already content-addressed by the script's SHA-1.
 
 `required_persistence` selects the deployment policy: `aof_and_rdb` requires
 both AOF and a non-empty RDB save policy, while `aof` and `rdb` require only

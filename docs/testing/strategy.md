@@ -81,7 +81,7 @@ This is deliberately not a normal CI target: it refuses any `CI` environment,
 requires both explicit operator gates and an explicit Redis address, and does
 not start Redis, load a Redis Function, or invoke a live provider. The target
 requires a dedicated non-production Redis 7+ deployment with the exact
-preloaded `llmtw_admission_v1` / `admission_v1` Function. It creates state
+preloaded admission Function (its digest-derived `llmtw_admission_<tag>` / `admission_<tag>` names). It creates state
 only beneath a randomly generated bounded key prefix and cleans up only keys
 under that prefix; it never flushes a database.
 
