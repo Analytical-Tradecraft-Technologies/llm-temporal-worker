@@ -130,6 +130,15 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 			}
 		}
 	}
+	if request.WebFetch && !(route.Provider == "anthropic" && string(route.Family) == "anthropic_messages") {
+		return reject(RejectCapability, "web_fetch", "route does not support hosted web fetch")
+	}
+	if request.CodeExecution && !llm.SupportsHostedExecution(route.Provider, string(route.Family)) {
+		return reject(RejectCapability, "code_execution", "route does not support hosted code execution")
+	}
+	if request.WebSearch && !llm.SupportsWebSearch(route.Provider, string(route.Family), route.Model) {
+		return reject(RejectCapability, "web_search", "route does not support provider-hosted web search")
+	}
 	if !route.SupportsOutputLimit(request) {
 		return reject(RejectCapability, "output.max_tokens", "request output limit is missing or exceeds the route output ceiling")
 	}
@@ -168,7 +177,7 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 	if err != nil {
 		return reject(RejectInvalid, "candidate", err.Error())
 	}
-	return Candidate{ID: id, RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: route.Family, Region: route.Region, EndpointAccountHMAC: route.EndpointAccountHMAC, Model: route.Model, ModelLineage: lineage, ModelRevision: revision, PriceAvailable: route.PriceAvailable, RequestedClass: requested, AttemptedClass: attempted, FallbackIndex: fallbackIndex, RouteIndex: routeIndex, ContextTokens: route.ContextTokens, ProviderTier: tier, CapabilityVersion: route.Capabilities.Version, PriceVersion: route.PriceVersion, ExtensionDigest: extensionDigest, Pinning: pin}, Rejection{}, true
+	return Candidate{ID: id, RouteID: route.ID, EndpointID: route.EndpointID, Provider: route.Provider, Family: route.Family, Region: route.Region, EndpointAccountHMAC: route.EndpointAccountHMAC, EndpointDigest: route.EndpointDigest, Model: route.Model, ModelLineage: lineage, ModelRevision: revision, PriceAvailable: route.PriceAvailable, RequestedClass: requested, AttemptedClass: attempted, FallbackIndex: fallbackIndex, RouteIndex: routeIndex, ContextTokens: route.ContextTokens, ProviderTier: tier, CapabilityVersion: route.Capabilities.Version, PriceVersion: route.PriceVersion, ExtensionDigest: extensionDigest, Pinning: pin}, Rejection{}, true
 }
 
 func requiredFeatures(request llm.Request, continuation state.Constraints) []Feature {

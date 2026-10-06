@@ -29,7 +29,7 @@ type cacheFillStub struct {
 	release func(context.Context, cache.FillLease, time.Time) error
 }
 
-func (s *cacheFillStub) Acquire(ctx context.Context, lease cache.FillLease) (cache.FillDecision, error) {
+func (s *cacheFillStub) Acquire(ctx context.Context, lease cache.FillLease, _ time.Time) (cache.FillDecision, error) {
 	return s.acquire(ctx, lease)
 }
 func (s *cacheFillStub) Start(ctx context.Context, lease cache.FillLease, now time.Time) (bool, error) {

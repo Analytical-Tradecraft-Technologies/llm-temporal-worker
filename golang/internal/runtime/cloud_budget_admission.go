@@ -190,7 +190,7 @@ func (admission *CloudBudgetAdmission) prepare(ctx context.Context, record cloud
 	if linked != nil && plan.Route.OperationID != durable.OperationID(linked.ID) {
 		return nil, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	call, err := reconstruct(ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch,
+	call, err := reconstruct(ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, EndpointDigest: planEndpointDigest(plan),
 		RequestDigest: plan.RequestDigest, OperationKeyDigest: ProviderRecoveryOperationKeyDigest(key),
 		CandidateID: plan.Estimate.CandidateID, Route: plan.Route, Family: plan.Family,
 		CapabilityVersion: plan.CapabilityVersion, ProviderTier: plan.ProviderTier,

@@ -1,6 +1,6 @@
 # `llm-temporal-ocaml`
 
-Typed OCaml bindings for the Go worker's public generation and compaction
+Typed OCaml bindings for the Go worker's public generation, compaction, and control-query
 workflows, with exact request and response codecs and an immutable conversation
 facade. `Client` starts remote workflows from application processes and resumes
 waiting after a process restart. Provider polling, budget waiting, and paid
@@ -38,7 +38,7 @@ opam install --yes llm-temporal-ocaml
 ```
 
 Its metadata pins `temporal-sdk` to the validated child-workflow-routing SDK commit
-`74b1a74805306ed3e5763f7ea2c14cd2a431a7e1`. Commit an application lock file
+`0d3f618590ed09501b004d5052b7bd88b81e2723`. Commit an application lock file
 after `opam lock .`, then deploy with `opam install . --locked`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
@@ -74,6 +74,7 @@ before starting. If the start response is lost, retry with the same values.
 is worker idempotency, and `cache.variant` selects an independent cache sample.
 These identifiers serve different purposes.
 
+`Client.start_query` and `resume_query` support the control-query workflow.
 `Client.start_compact` returns a typed compaction handle. `resume_generate` and
 `resume_compact` attach to a saved execution without starting a workflow. They
 require the original request so completed results can be checked against its
@@ -116,7 +117,7 @@ let result = Generate.invoke
 
 For a multi-turn workflow, `Llm_temporal.Conversation` keeps the v1 checkpoint
 branch head as an immutable value. `fork` is a cheap persistent branch
-operation: it does not schedule an Activity or mutate the parent. A successful
+operation: it does not schedule a workflow or mutate the parent. A successful
 `respond` returns the v1 provider response together with a child conversation
 carrying the returned checkpoint. Callers therefore choose explicitly which
 child to retain.
@@ -257,8 +258,8 @@ Advanced workflow code can use `generate_v1_workflow` and `compact_v1_workflow`,
 or `start_generate`/`start_compact_v1` and their `invoke_*` equivalents with
 `~task_queue` and `~id`. These low-level helpers return exact wire responses;
 use `Generate` and `Conversation` for request-bound response validation.
-`query_v1_activity`, `start_query_v1`, and `invoke_query_v1` remain one-attempt
-Activity calls. The query facade validates query result tags.
+`query_v1_workflow`, `start_query_v1`, and `invoke_query_v1` call the public
+query workflow. The query facade validates query result tags and full payloads.
 
 `Conversation.of_checkpoint` intentionally treats the checkpoint's effective
 settings as unknown: a handle does not materialize worker state in Workflow
@@ -272,15 +273,16 @@ while still-unknown fields remain inherited by the worker.
 ## Typed query facade
 
 `Query.execute`, `Query.start`, `invoke_query_v1` and `start_query_v1` require
-`~task_queue`: `llm.query.v1` is registered only on the Go worker's task queue,
-so the calling workflow's own queue cannot serve it. The production worker does
+`~task_queue` and `~id`: the `llm.query.workflow.v1` child workflow is
+registered on the Go worker's task queue, so the calling workflow's own queue
+cannot serve it. Use a deterministic child ID unique within the namespace. The production worker does
 not compose a query service yet, so every query kind currently fails with an
 unsupported-query error there (tracked in
 [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
 The persisted query handler also rejects a positive
 `refresh_if_older_than_seconds`; leave it unset.
 
-`Llm_temporal.Query` adds a closed GADT over the five query Activities. Each
+`Llm_temporal.Query` adds a closed GADT over the five query kinds. Each
 constructor carries its filter and fixes the result type, so pagination and
 result handling remain associated at the call site:
 
@@ -291,7 +293,7 @@ let query =
   }
 
 match Llm_temporal.Query.execute
-        ~task_queue:(Temporal_task_queue.of_string "llm-worker")
+        ~task_queue:(Temporal_task_queue.of_string "llm-worker") ~id:"budget-query"
         ~operation_key:(Llm_temporal.Operation_key.of_string "budget-check")
         ~context query with
 | Ok { value = budget; cost; _ } -> inspect_budget budget cost
@@ -310,7 +312,7 @@ let* provider_filter =
   Llm_temporal.Query.Filter.provider_status
     ~include_healthy:false ~page_size:100 ()
 in
-Llm_temporal.Query.execute ~task_queue ~operation_key ~context
+Llm_temporal.Query.execute ~task_queue ~id ~operation_key ~context
   (Llm_temporal.Query.Provider_status provider_filter)
 ```
 
@@ -322,17 +324,17 @@ let* model_filter =
   Llm_temporal.Query.Filter.model_inventory
     ~model_prefix:(Llm_temporal.Model_prefix.of_string "gpt-") ()
 in
-Llm_temporal.Query.execute ~task_queue ~operation_key ~context
+Llm_temporal.Query.execute ~task_queue ~id ~operation_key ~context
   (Llm_temporal.Query.Model_inventory model_filter)
 ```
 
 The wrapper preserves arbitrary provider model naming and is encoded as the
-same JSON string expected by the Go query Activity.  Use `None` when no prefix
+same JSON string expected by the Go query workflow.  Use `None` when no prefix
 filter is desired.
 
 Model inventory results expose `display_name` as the nominal
 `Model_display_name.t option`, distinct from `Provider_model_id.t`. Both remain
-JSON strings at the Activity boundary, but the wrappers prevent accidental
+JSON strings at the workflow boundary, but the wrappers prevent accidental
 identifier interchange in OCaml code.
 
 Inventory capability labels use `Model_capability.t`. The Go control plane
@@ -344,7 +346,7 @@ diagnostic code, or arbitrary string.
 Provider and credit query results expose safe diagnostic values as
 `Safe_code.t option`, matching the Go control-plane `SafeCode` type. The wrapper
 is distinct from `Diagnostic_code.t` and from arbitrary strings; it is still
-encoded as the unchanged JSON string at the Activity boundary.
+encoded as the unchanged JSON string at the workflow boundary.
 
 Model inventory lifecycle filters use the Go wire values `available`,
 `deprecated`, `unavailable`, and `unknown`. For source compatibility the
@@ -353,7 +355,7 @@ first and third encode as `available` and `unavailable` (never `active` or
 `retired`). This lifecycle is distinct from route `availability`.
 
 Validation failures are ordinary `validation_error` strings and happen before
-an Activity is scheduled, which makes malformed query construction explicit in
+a child workflow is started, which makes malformed query construction explicit in
 deterministic Workflow code.
 
 The `Provider_status`, `Model_inventory`, `Credit_status`, `Budget_status`,
@@ -370,11 +372,11 @@ paths revalidate raw filter records before calling the injected dispatcher.
 For paginated responses, `Query.next query response` constructs the next page
 with the same GADT result type. It returns `Ok None` for the final page and
 rejects a cursor attached to the wrong query kind (or to a snapshot query)
-before another Activity is dispatched:
+before another child workflow is started:
 
 ```ocaml
 match Query.next query response with
-| Ok (Some next_query) -> Query.execute ~task_queue ~operation_key ~context next_query
+| Ok (Some next_query) -> Query.execute ~task_queue ~id ~operation_key ~context next_query
 | Ok None -> Ok_finished
 | Error error -> handle_temporal_error error
 ```
@@ -382,20 +384,19 @@ match Query.next query response with
 The result association is preserved for each paginated constructor:
 `Provider_status` returns a `provider_status_page`, `Model_inventory` returns
 a `model_inventory_page`, and `Credit_status` returns a `credit_status_page`.
-This remains true when a response is marked complete but still supplies a
-cursor; the worker-provided cursor is authoritative for whether another page
-is available.
+A complete page must have no cursor; an incomplete page must carry one.
+The facade rejects inconsistent pagination metadata.
 
 Response cursors retain the query kind that produced them. Reusing a cursor
 returned by one paginated query with a different query kind is rejected by the
-OCaml facade before an Activity is dispatched. `Query_cursor.of_string` remains
+OCaml facade before a child workflow is started. `Query_cursor.of_string` remains
 available for manually supplied or fixture cursors whose origin is unknown;
 those cursors are still validated by the server.
 
 The same boundary applies to injected deterministic dispatchers and to
 `Query.start`: a response cursor must carry the constructor's query kind, and
 budget/spend responses cannot carry a cursor. A mismatched cursor is returned
-as a typed codec error and no Activity is scheduled for an invalid `start`
+as a typed codec error and no child workflow is started for an invalid `start`
 request. This keeps pagination type-associated even when a caller tests the
 facade without going through the JSON codec.
 
@@ -412,24 +413,91 @@ absolute, non-`data:`/non-`javascript:` URI; tool names are restricted to the
 v1 ASCII `[A-Za-z0-9_-]{1,64}` form. Request encoding and response decoding
 fail with `Temporal.Error.t` for invalid identifiers, duplicate service
 fallbacks, negative token/cost limits, invalid media, duplicate open-JSON
-members, and other protocol violations before a Temporal activity is called.
+members, and other protocol violations before a Temporal workflow is started.
 
-`workflow` calls `Temporal.Activity.execute` once against the exact Go
-activity name `llm.generate.v1` with the exported
-`Llm_temporal.activity_retry_policy` (`maximum_attempts = 1`). The Go worker
-must serve the provided task queue (or the SDK's worker queue when omitted).
-Errors are returned unchanged as `Temporal.Error.t`; the wrapper does not
-retry, continue, or stream after an activity result. Callers that inject a
-`dispatch` through `invoke_once` can use the same one-shot/error-propagation
-contract in deterministic unit tests.
+`workflow ()` returns the remote Generate descriptor. The public OCaml
+interface exposes workflows only: Generate, Compact, and Query. Queries use
+`llm.query.workflow.v1`, whose Go implementation executes one attempt of the
+existing independently authorized query activity. Query children cancel with
+the parent; paid Generate/Compact children continue under `Abandon`.
+
 
 Continuation handles and provider-state identifiers/media types are required
 to be non-empty. `continuation.expires_at`, when present, must be an RFC3339
 timestamp (the same format emitted by the Go worker). These cross-language
 invariants are checked during encode and decode so malformed values fail as a
-codec error before an Activity is scheduled or invalid data enters Temporal
+codec error before a child workflow is started or invalid data enters Temporal
 history.
 
 Use `Conversation.Cache_policy.any_age ()` to enable caching without an age limit.
 `accept_up_to` retains an explicit positive maximum age. The typed model stores
 `max_age_seconds` as an option; `None` omits that field on the wire.
+
+## Hosted tools and typed results
+
+Use one shared `code_execution` option for OpenAI Code Interpreter and Anthropic
+code execution. `web_search` enables native search; `web_fetch` enables
+Anthropic fetch. Each defaults off, and explicit `false` disables it.
+
+```ocaml
+let ( let* ) = Result.bind
+
+let build_request ~context ~model =
+  let* output = Output.text ~max_tokens:500 () in
+  Generate.make_checked
+    ~operation_key:(Operation_key.of_string "research-42") ~context ~model
+    ~settings:(Settings.make ~web_search:true ~code_execution:true ~output ())
+    ~input:[Item.human "Research the figures, then calculate their growth."] ()
+```
+
+| Transport | `web_search` | `web_fetch` | `code_execution` |
+| --- | --- | --- | --- |
+| Direct OpenAI Responses | yes | unsupported | yes |
+| Direct Anthropic Messages | yes | yes | yes |
+| OpenRouter OpenAI/Anthropic models | native server search | unsupported | unsupported |
+| Other gateways/providers | unsupported | unsupported | unsupported |
+
+Unsupported routes are rejected, even under best-effort portability; the worker
+never silently removes a requested tool. The selected model must support the
+provider's tool version. This adds no generic OpenRouter plugins or application
+code sandbox. OpenRouter uses the native `openrouter:web_search` server tool,
+not its separate Exa search plugin.
+
+OpenAI requests an automatic 1 GB container and at most three hosted tool calls.
+Anthropic uses `web_search_20250305` and `web_fetch_20250910` (three uses each,
+fetch content capped at 10,000 tokens), and `code_execution_20250825`. These
+server tools execute at the provider. Internal compaction disables them.
+
+`Response.text` reads answer text; `Response.references` reads citations;
+`Response.hosted_calls` reads typed tool observations and retained provider
+payloads; `Response.artifacts` reads generated file identities. OpenAI artifact
+references target its authenticated container-file API. Anthropic exposes Files
+API IDs. Neither is a public or durable download link, and this library does
+not download or upload files. Preserve artifacts before provider expiry.
+
+`Response.outcome` distinguishes completed answers, application tool calls,
+refusal, truncation, filtering, and `Paused_turn`. For an Anthropic pause,
+continue the returned conversation/checkpoint with `~append:[]` and a new
+operation key. The checkpoint retains the server blocks and container ID.
+`Response.tool_calls` contains only application functions that the caller must
+execute. `Response.json`/`decode_json` reject incomplete or non-JSON answers.
+
+Hosted tools need a known model context ceiling for budget admission. The
+reservation includes extra token rounds and tool fees (currently four context
+rounds for OpenAI/OpenRouter, twenty for Anthropic). This is a conservative
+allowance, not a provider-enforced monetary cap. Provider-reported totals take
+precedence. Separately observed native searches add their per-search fee;
+container session/free-tier billing and missing tool usage stay `Unknown_cost`
+instead of being presented as exact token-only costs. Unknown costs retain the
+reservation for reconciliation. These allowances may make hosted requests wait
+for a larger available budget than ordinary generation.
+
+`Context.make`, `Tool.function_`, `Output.*`, `Generate.make_checked`,
+`Compact.make`, and `Compaction_policy.make` provide checked constructors.
+`Failure.kind` classifies worker failures without hiding the original
+`Temporal.Error.t`. Raw records and codecs remain available for compatibility.
+
+`Exa.answer ~operation_key ~context ~model ~question ()` builds an Exa Answer
+Generate request using your configured model selector. Its
+`~include_source_text:false` option and `Exa.sources` helper cover the exposed
+Answer feature; Exa Search/Crawl APIs are not workflows in this worker.

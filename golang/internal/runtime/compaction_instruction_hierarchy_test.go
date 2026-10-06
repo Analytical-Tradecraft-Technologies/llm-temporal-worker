@@ -181,7 +181,7 @@ func TestCompactionWithApplicationInstructionsSurvivesBudgetPlanningAndRecovery(
 			f.generate.Request.Instructions = []llm.Instruction{
 				{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "policy"}, hierarchyApplicationInstruction}
 			_, err = f.planning(t).Generate(context.Background(), f.generate, f.attempt)
-			assertPlanningError(t, err, provider.CodeNoRoute)
+			assertPlanningError(t, err, provider.CodeUnsupportedCapability)
 		})
 	}
 }

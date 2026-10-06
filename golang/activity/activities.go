@@ -22,7 +22,9 @@ type Activities struct {
 	HeartbeatKeepaliveInterval time.Duration
 	Metrics                    *observability.Metrics
 	Tracer                     *observability.Tracer
-	PayloadLimits              PayloadLimits
+	// Logger is optional. The v1 runtime logs content-free diagnostics with it.
+	Logger        *observability.Logger
+	PayloadLimits PayloadLimits
 	// V1Runtime owns durable checkpoint/cache/provider/control state for the
 	// closed v1 Activity records. Runtime composition supplies this explicitly;
 	// a nil value is rejected before dispatch.

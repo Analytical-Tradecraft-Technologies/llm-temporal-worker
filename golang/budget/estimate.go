@@ -110,6 +110,22 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	if err := validateContextCounts(candidate.ContextTokens, inputTokens, outputTokens); err != nil {
 		return Estimate{}, err
 	}
+	// Server tools add inputs that cannot be tokenized before dispatch.
+	// Reserve context for their loop rather than just the original prompt.
+	if request.WebSearch || request.WebFetch || request.CodeExecution {
+		if candidate.ContextTokens <= 0 {
+			return Estimate{}, fmt.Errorf("%w: hosted tools require a known context ceiling", ErrUnusablePrice)
+		}
+		rounds := int64(4)
+		if candidate.Family == "anthropic_messages" {
+			rounds = 20
+		}
+		if candidate.ContextTokens > math.MaxInt64/rounds || outputTokens > math.MaxInt64/rounds {
+			return Estimate{}, fmt.Errorf("hosted tool token allowance overflows")
+		}
+		inputTokens = candidate.ContextTokens * rounds
+		outputTokens *= rounds
+	}
 	cacheWrite := inputTokens
 	components := []struct {
 		component     pricing.PriceComponent
@@ -151,6 +167,19 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		if err != nil {
 			return Estimate{}, fmt.Errorf("%w: estimate %s microUSD compatibility total: %w", ErrUnusablePrice, component.name, err)
 		}
+	}
+	toolAllowance := llm.HostedToolReservation(request, candidate.Family)
+	totalUSD, err = totalUSD.Add(toolAllowance)
+	if err != nil {
+		return Estimate{}, err
+	}
+	allowanceMicro, err := pricing.CeilMicroFromUSD(toolAllowance)
+	if err != nil {
+		return Estimate{}, err
+	}
+	legacyTotal, err = legacyTotal.Add(allowanceMicro)
+	if err != nil {
+		return Estimate{}, err
 	}
 	if estimator.SafetyRatio != nil {
 		if estimator.SafetyRatio.Sign() <= 0 {

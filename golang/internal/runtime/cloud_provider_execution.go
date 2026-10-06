@@ -281,7 +281,7 @@ func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope c
 	if linked != nil && plan.Route.OperationID != durable.OperationID(linked.ID) {
 		return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 	}
-	binding := ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RequestDigest: plan.RequestDigest, CandidateID: plan.Estimate.CandidateID,
+	binding := ProviderRecoveryBinding{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, EndpointDigest: planEndpointDigest(plan), RequestDigest: plan.RequestDigest, CandidateID: plan.Estimate.CandidateID,
 		Route: plan.Route, Family: plan.Family, CapabilityVersion: plan.CapabilityVersion, ProviderTier: plan.ProviderTier, RequestedClass: plan.RequestedClass, AttemptedClass: plan.AttemptedClass}
 	if plan.Kind == "generate" {
 		var request llm.GenerateRequestV1
@@ -735,7 +735,7 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		if classEntry, ok := plan.ClassEntries[*actual]; ok {
 			if cost, err := pricing.CostFromUsage(classEntry, priceUsage); err == nil && response.Cost.Method == "" {
 				response.Cost.CatalogVersion = classEntry.Version
-				response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &cost.USD, string(cost.Method)
+				applyHostedToolCharge(response, cost)
 				return
 			}
 		}
@@ -745,7 +745,7 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
-	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &cost.USD, string(cost.Method)
+	applyHostedToolCharge(response, cost)
 }
 
 // classExecutionResponse records the classes the plan bound on the paid
@@ -834,4 +834,18 @@ func preDispatchContextEnded(failure *provider.Error) bool {
 	return failure != nil && failure.Dispatch == provider.DispatchNotDispatched &&
 		(failure.Code == provider.CodeCanceled || failure.Code == provider.CodeDeadlineExceeded) &&
 		errors.Is(failure, provider.ErrProviderPreDispatch)
+}
+
+func applyHostedToolCharge(response *llm.Response, cost pricing.Cost) {
+	fee, err := llm.HostedToolCharge(response.Usage, response.Route.ResolvedModel)
+	if err != nil {
+		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		return
+	}
+	total, err := cost.USD.Add(fee)
+	if err != nil {
+		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		return
+	}
+	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &total, string(cost.Method)
 }

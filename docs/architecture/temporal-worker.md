@@ -10,6 +10,7 @@ execution and agent loops remain the caller's responsibility.
 | Workflow | Role |
 | --- | --- |
 | `llm.generate.workflow.v1` | Plan compaction, run its child when needed, then generate |
+| `llm.query.workflow.v1` | Public typed control-plane query through one authorized activity attempt |
 | `llm.compact.workflow.v1` | Standalone or child compaction through shared execution |
 | `llm.request.execute.v1` | Internal cache, budget, submit, poll and completion orchestration |
 | `llm.budget.wait.v1` | Internal acquisition loop with Temporal timers |

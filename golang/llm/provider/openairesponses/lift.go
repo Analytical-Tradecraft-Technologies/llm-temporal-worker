@@ -66,6 +66,32 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		CacheWriteTokens: response.Usage.InputTokensDetails.CacheWriteTokens,
 	}
 	usage.ProviderRaw = make(map[string]json.RawMessage)
+	if call.Metadata.WebSearch {
+		calls := 0
+		for _, item := range response.Output {
+			if item.Type == "web_search_call" {
+				var raw struct {
+					Action struct {
+						Type string `json:"type"`
+					} `json:"action"`
+				}
+				if json.Unmarshal([]byte(item.RawJSON()), &raw) == nil && raw.Action.Type == "search" {
+					calls++
+				}
+			}
+		}
+		encoded, _ := json.Marshal(calls)
+		usage.ProviderRaw["web_search_calls"] = encoded
+	}
+	if call.Metadata.CodeExecution {
+		usage.ProviderRaw["hosted_execution"] = json.RawMessage("true")
+		for _, item := range response.Output {
+			if item.Type == "code_interpreter_call" {
+				usage.ProviderRaw["hosted_execution_used"] = json.RawMessage("true")
+			}
+		}
+	}
+	output = append(output, llm.WebSearchReferences([]byte(response.RawJSON()))...)
 	if response.Usage.InputTokens > 0 {
 		encodedInput, _ := json.Marshal(response.Usage.InputTokens)
 		usage.ProviderRaw["input_tokens"] = encodedInput
@@ -96,6 +122,9 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		Usage:        usage,
 		Provider:     providerFacts,
 		Continuation: continuationForResponse(call, response),
+	}
+	if _, err := llm.HostedToolCharge(usage, result.Route.ResolvedModel); err != nil {
+		result.Cost.Status = llm.CostStatusUnknown
 	}
 	return result, nil
 }
@@ -295,6 +324,10 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 				text = string(encoded)
 			}
 			output = append(output, llm.ToolResult{CallID: callOutput.CallID, Content: []llm.Part{llm.TextPart{Text: text}}})
+		case "code_interpreter_call":
+			output = append(output, llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.code-interpreter+json", Opaque: []byte(item.RawJSON())})
+		case "web_search_call":
+			output = append(output, llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.web-search+json", Opaque: []byte(item.RawJSON())})
 		case "reasoning":
 			reasoning := item.AsReasoning()
 			raw := []byte(reasoning.RawJSON())

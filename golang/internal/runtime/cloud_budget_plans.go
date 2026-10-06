@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -56,6 +57,9 @@ func (planned PlannedBudgetCall) BudgetPlan(kind string) (cloudstate.BudgetPlan,
 		Family: providerPlan.Candidate.Family, ProviderTier: providerPlan.Candidate.ProviderTier,
 		RequestedClass: providerPlan.Candidate.RequestedClass, AttemptedClass: providerPlan.Candidate.AttemptedClass,
 		Route: planned.Route, Estimate: planned.Estimate, Reservation: planned.Reservation, QuotedAt: planned.QuotedAt, ClassEntries: planned.ClassEntries}
+	if digest := providerPlan.Candidate.EndpointDigest; digest != ([32]byte{}) {
+		plan.EndpointDigest = hex.EncodeToString(digest[:])
+	}
 	if planned.Quote != nil {
 		plan.Quote = *planned.Quote
 	}

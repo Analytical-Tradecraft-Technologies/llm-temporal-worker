@@ -3,10 +3,13 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
+	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -15,8 +18,11 @@ import (
 // OperationKeyDigest binds the original stored input separately because the
 // semantic request digest deliberately excludes the provider operation key.
 type ProviderRecoveryBinding struct {
-	ConfigDigest       [32]byte
-	ConfigEpoch        string
+	ConfigDigest [32]byte
+	ConfigEpoch  string
+	// EndpointDigest is zero for plans saved before it was recorded. Such a
+	// plan can only be recovered under its original configuration.
+	EndpointDigest     [32]byte
 	RequestDigest      [32]byte
 	OperationKeyDigest [32]byte
 	CandidateID        string
@@ -43,7 +49,7 @@ func (planned PlannedProviderCall) RecoveryBinding(route durable.RoutePlan) (Pro
 	if route != expected || planned.ConfigDigest == ([32]byte{}) || planned.ConfigEpoch == "" || planned.Candidate.ID == "" {
 		return ProviderRecoveryBinding{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
-	return ProviderRecoveryBinding{ConfigDigest: planned.ConfigDigest, ConfigEpoch: planned.ConfigEpoch,
+	return ProviderRecoveryBinding{ConfigDigest: planned.ConfigDigest, ConfigEpoch: planned.ConfigEpoch, EndpointDigest: planned.Candidate.EndpointDigest,
 		RequestDigest: planned.Call.Metadata.SchemaDigest, OperationKeyDigest: ProviderRecoveryOperationKeyDigest(planned.Call.OperationKey),
 		CandidateID: planned.Candidate.ID, Route: route, Family: planned.Candidate.Family,
 		CapabilityVersion: planned.CapabilityVersion, ProviderTier: planned.Candidate.ProviderTier,
@@ -78,6 +84,10 @@ func (recovery *ProviderRecovery) Compact(ctx context.Context, prepared Prepared
 	return recovery.recover(ctx, *prepared.Request, binding)
 }
 
+// recover accepts a binding saved under another configuration only when the
+// bound route, its endpoint configuration and the compiled request are all
+// unchanged. Anything else waits for a compatible worker: a reload or rollout
+// must neither reroute bound work nor fail it permanently.
 func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Request, binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
 	if ctx == nil || recovery == nil || recovery.providers == nil || isNilCapability(recovery.providers.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
@@ -86,7 +96,18 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 		return PlannedProviderCall{}, err
 	}
 	planning := recovery.providers
-	if binding.ConfigDigest == ([32]byte{}) || binding.ConfigDigest != planning.configDigest || binding.ConfigEpoch != planning.configEpoch ||
+	reloaded := binding.ConfigDigest != ([32]byte{}) && (binding.ConfigDigest != planning.configDigest || binding.ConfigEpoch != planning.configEpoch)
+	planned, err := recovery.recoverBound(ctx, request, binding, reloaded)
+	var failure *provider.Error
+	if reloaded && errors.As(err, &failure) && failure.Retry == provider.RetryNever && failure.Dispatch == provider.DispatchNotDispatched {
+		return PlannedProviderCall{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
+	}
+	return planned, err
+}
+
+func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.Request, binding ProviderRecoveryBinding, reloaded bool) (PlannedProviderCall, error) {
+	planning := recovery.providers
+	if binding.ConfigDigest == ([32]byte{}) || (reloaded && binding.EndpointDigest == ([32]byte{})) ||
 		binding.RequestDigest == ([32]byte{}) || binding.OperationKeyDigest == ([32]byte{}) || binding.CandidateID == "" ||
 		binding.Route.Validate() != nil || !provider.Family(binding.Family).Valid() || binding.CapabilityVersion == "" || binding.ProviderTier == "" ||
 		!binding.RequestedClass.Valid() || !binding.AttemptedClass.Valid() {
@@ -117,6 +138,7 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 			candidate.Provider != binding.Route.Provider || candidate.Model != binding.Route.Model || providerCacheIdentity(candidate) != binding.Route.CacheIdentity ||
 			candidate.Family != binding.Family || candidate.CapabilityVersion != binding.CapabilityVersion || candidate.ProviderTier != binding.ProviderTier ||
 			candidate.RequestedClass != binding.RequestedClass || candidate.AttemptedClass != binding.AttemptedClass ||
+			(reloaded && candidate.EndpointDigest != binding.EndpointDigest) ||
 			(candidate.PriceVersion != "" && candidate.PriceVersion != binding.Route.PriceVersion) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
@@ -129,11 +151,11 @@ func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Reque
 		if health, present := planning.health.Routes[candidate.RouteID]; present && (!health.Enabled || health.Open || health.AuthOpen) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetrySameOperation)
 		}
-		planned, usable, err := planning.compileCandidate(ctx, semantic, candidate)
+		planned, rejection, err := planning.compileCandidate(ctx, semantic, candidate)
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}
-		if !usable {
+		if rejection != nil {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.RetrySameOperation)
 		}
 		// compileCandidate derived its digest through resolveCandidateRequest
@@ -159,6 +181,14 @@ func (planning *ProviderPlanning) pinnedCandidate(request llm.Request, candidate
 	route := planning.catalog.Models[request.Model].Routes[candidate.RouteIndex]
 	id, err := candidate.PinnedPriceID(route, binding.Route.PriceVersion)
 	return err == nil && id == binding.CandidateID
+}
+
+func planEndpointDigest(plan cloudstate.BudgetPlan) [32]byte {
+	var digest [32]byte
+	if decoded, err := hex.DecodeString(plan.EndpointDigest); err == nil && len(decoded) == len(digest) {
+		copy(digest[:], decoded)
+	}
+	return digest
 }
 
 // ProviderRecoveryOperationKeyDigest binds the original key read from durable

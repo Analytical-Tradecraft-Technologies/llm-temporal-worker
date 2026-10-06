@@ -76,13 +76,16 @@ func (s *cacheFills) write(ctx context.Context, record cache.FillRecord, version
 	return err
 }
 
-func (s *cacheFills) Acquire(ctx context.Context, lease cache.FillLease) (cache.FillDecision, error) {
+func (s *cacheFills) Acquire(ctx context.Context, lease cache.FillLease, now time.Time) (cache.FillDecision, error) {
 	if err := validContext(ctx); err != nil {
 		return cache.FillDecision{}, err
 	}
 	lease, err := normalizeFillLease(lease)
 	if err != nil {
 		return cache.FillDecision{}, err
+	}
+	if !validTime(now) || now.Before(lease.AcquiredAt) {
+		return cache.FillDecision{}, ErrInvalid
 	}
 	if terminal, found, err := s.readTerminal(ctx, lease); err != nil || found {
 		return cache.FillDecision{Disposition: cache.FillAttemptFinished, Record: terminal}, err
@@ -93,7 +96,7 @@ func (s *cacheFills) Acquire(ctx context.Context, lease cache.FillLease) (cache.
 			return cache.FillDecision{}, err
 		}
 		if err == nil {
-			decision, replace, err := decideFill(current, lease)
+			decision, replace, err := decideFill(current, lease, now)
 			if err != nil || !replace {
 				return decision, err
 			}
@@ -117,7 +120,7 @@ func (s *cacheFills) Acquire(ctx context.Context, lease cache.FillLease) (cache.
 	return cache.FillDecision{}, contracts.ErrConflict
 }
 
-func decideFill(current cache.FillRecord, lease cache.FillLease) (cache.FillDecision, bool, error) {
+func decideFill(current cache.FillRecord, lease cache.FillLease, now time.Time) (cache.FillDecision, bool, error) {
 	decision := cache.FillDecision{Record: current}
 	if current.Lease.Attempt == lease.Attempt {
 		if current.Lease != lease {
@@ -137,7 +140,10 @@ func decideFill(current cache.FillRecord, lease cache.FillLease) (cache.FillDeci
 		decision.Disposition = cache.FillRecoveryNeeded
 		return decision, false, nil
 	}
-	if current.State == cache.FillHeld && lease.AcquiredAt.Before(current.Lease.ExpiresAt) {
+	// Expiry is judged at the acquisition time, not at the lease's acquisition
+	// time: a waiter whose stable lease predates the owner's expiry still
+	// takes the fill over once that expiry has passed.
+	if current.State == cache.FillHeld && now.Before(current.Lease.ExpiresAt) {
 		decision.Disposition = cache.FillWait
 		return decision, false, nil
 	}

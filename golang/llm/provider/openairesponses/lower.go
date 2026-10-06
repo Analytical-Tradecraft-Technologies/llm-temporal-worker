@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -95,6 +96,20 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 		}
 		requestMap["tools"] = tools
 	}
+	if request.WebFetch {
+		return nil, loweredToolPolicy{}, fmt.Errorf("web_fetch is only supported by Anthropic Messages")
+	}
+	if request.CodeExecution {
+		tools, _ := requestMap["tools"].([]any)
+		requestMap["tools"] = append(tools, map[string]any{"type": "code_interpreter", "container": map[string]any{"type": "auto", "memory_limit": "1g"}})
+		requestMap["max_tool_calls"] = llm.MaxWebSearchCalls
+	}
+	if request.WebSearch {
+		tools, _ := requestMap["tools"].([]any)
+		tools = append(tools, map[string]any{"type": "web_search"})
+		requestMap["tools"] = tools
+		requestMap["max_tool_calls"] = llm.MaxWebSearchCalls
+	}
 	policy, err := lowerToolPolicy(request.ToolPolicy)
 	if err != nil {
 		return nil, loweredToolPolicy{}, err
@@ -108,7 +123,7 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 	if continuation != "" {
 		requestMap["previous_response_id"] = continuation
 	}
-	if err := lowerExtensions(request.Extensions, requestMap); err != nil {
+	if err := lowerExtensions(request.Extensions, requestMap, request.WebSearch || request.WebFetch || request.CodeExecution); err != nil {
 		return nil, loweredToolPolicy{}, err
 	}
 	if storageDenied && (reasoningState || reasoningRequested(request.Reasoning)) {
@@ -139,6 +154,9 @@ func requestParams(requestMap map[string]any, policy loweredToolPolicy) (respons
 		params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
 			OfFunctionTool: &responses.ToolChoiceFunctionParam{Name: policy.name},
 		}
+	}
+	if _, hosted := requestMap["max_tool_calls"]; hosted {
+		param.SetJSON(encoded, &params)
 	}
 	return params, nil
 }
@@ -218,6 +236,13 @@ const reasoningStateMediaType = "application/vnd.openai.reasoning+json"
 // Only OpenAI Responses reasoning state is accepted, and its payload must be a
 // reasoning item, so another provider's opaque state can never be injected.
 func lowerReasoningState(state llm.ProviderState) (map[string]any, error) {
+	if state.Provider == "openai" && state.EndpointFamily == "responses" && (state.MediaType == "application/vnd.openai.web-search+json" || state.MediaType == "application/vnd.openai.code-interpreter+json") {
+		var item map[string]any
+		if err := json.Unmarshal(state.Opaque, &item); err != nil || (state.MediaType == "application/vnd.openai.web-search+json" && item["type"] != "web_search_call") || (state.MediaType == "application/vnd.openai.code-interpreter+json" && item["type"] != "code_interpreter_call") {
+			return nil, fmt.Errorf("invalid web search provider state")
+		}
+		return item, nil
+	}
 	if state.Provider != "openai" || state.EndpointFamily != "responses" || state.MediaType != reasoningStateMediaType {
 		return nil, fmt.Errorf("provider state %s/%s %q is not accepted as Responses input", state.Provider, state.EndpointFamily, state.MediaType)
 	}
@@ -246,7 +271,7 @@ func replayableItems(items []map[string]any, storageDenied bool) ([]map[string]a
 		item := items[index]
 		if item["type"] != "reasoning" {
 			keep[index] = true
-			followed = item["type"] == "function_call" || (item["type"] == "message" && item["role"] == "assistant")
+			followed = item["type"] == "function_call" || item["type"] == "web_search_call" || item["type"] == "code_interpreter_call" || (item["type"] == "message" && item["role"] == "assistant")
 			continue
 		}
 		encrypted, _ := item["encrypted_content"].(string)
@@ -575,7 +600,7 @@ func lowerContinuation(continuation *llm.Continuation) (string, error) {
 	return "", fmt.Errorf("continuation does not contain an OpenAI Responses response ID")
 }
 
-func lowerExtensions(extensions map[string]json.RawMessage, target map[string]any) error {
+func lowerExtensions(extensions map[string]json.RawMessage, target map[string]any, hosted ...bool) error {
 	for namespace, raw := range extensions {
 		if namespace != "openai.responses" {
 			return fmt.Errorf("extension namespace %q is not supported by Responses", namespace)
@@ -591,11 +616,15 @@ func lowerExtensions(extensions map[string]json.RawMessage, target map[string]an
 				if err := json.Unmarshal(value, &include); err != nil {
 					return fmt.Errorf("extension include: %w", err)
 				}
+
 				target["include"] = include
 			case "store", "background", "truncation":
 				var decoded any
 				if err := json.Unmarshal(value, &decoded); err != nil {
 					return fmt.Errorf("extension %s: %w", name, err)
+				}
+				if len(hosted) > 0 && hosted[0] && (name == "tools" || name == "max_tool_calls" || name == "tool_choice" || name == "container") {
+					return fmt.Errorf("extension cannot override hosted tool controls")
 				}
 				target[name] = decoded
 			default:

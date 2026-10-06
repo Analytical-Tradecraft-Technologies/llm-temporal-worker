@@ -46,6 +46,20 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 	}
 
 	providerRaw := rawResponseFacts(response)
+	var rawEnvelope map[string]json.RawMessage
+	if json.Unmarshal([]byte(response.RawJSON()), &rawEnvelope) == nil {
+		if raw := rawEnvelope["container"]; len(raw) > 0 {
+			providerRaw["container"] = raw
+			var container struct {
+				ID string `json:"id"`
+			}
+			if json.Unmarshal(raw, &container) == nil && container.ID != "" {
+				state := llm.ProviderState{Provider: "anthropic", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.container+json", Opaque: raw}
+				output = append(output, state)
+				states = append(states, state)
+			}
+		}
+	}
 	providerFacts := llm.ProviderFacts{
 		ResponseID:   response.ID,
 		RequestID:    requestID,
@@ -60,6 +74,31 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		CacheWriteTokens: response.Usage.CacheCreationInputTokens,
 		ProviderRaw:      rawUsageFacts(response),
 	}
+	if usage.ProviderRaw == nil {
+		usage.ProviderRaw = make(map[string]json.RawMessage)
+	}
+	if call.Metadata.CodeExecution {
+		usage.ProviderRaw["hosted_execution"] = json.RawMessage("true")
+		for _, block := range response.Content {
+			if block.Type == "server_tool_use" && (block.Name == "code_execution" || block.Name == "bash_code_execution" || block.Name == "text_editor_code_execution") {
+				usage.ProviderRaw["hosted_execution_used"] = json.RawMessage("true")
+			}
+		}
+	}
+	if call.Metadata.WebSearch {
+		usage.ProviderRaw["web_search_calls"] = json.RawMessage("null")
+		var envelope struct {
+			Usage struct {
+				ServerToolUse *struct {
+					WebSearchRequests *int64 `json:"web_search_requests"`
+				} `json:"server_tool_use"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(response.RawJSON()), &envelope) == nil && envelope.Usage.ServerToolUse != nil && envelope.Usage.ServerToolUse.WebSearchRequests != nil {
+			usage.ProviderRaw["web_search_calls"], _ = json.Marshal(*envelope.Usage.ServerToolUse.WebSearchRequests)
+		}
+	}
+	output = append(output, llm.WebSearchReferences([]byte(response.RawJSON()))...)
 	service := llm.ServiceFacts{
 		Requested:     call.ServiceClass,
 		Attempted:     call.ServiceClass,
@@ -82,6 +121,9 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		Usage:        usage,
 		Provider:     providerFacts,
 		Continuation: continuationForResponse(call, response, states),
+	}
+	if _, err := llm.HostedToolCharge(usage, result.Route.ResolvedModel); err != nil {
+		result.Cost.Status = llm.CostStatusUnknown
 	}
 	return result, nil
 }
@@ -115,7 +157,7 @@ func liftContent(blocks []anthropic.ContentBlockUnion) ([]llm.Item, []llm.Provid
 				}
 			}
 			output = append(output, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}})
-		case "thinking", "redacted_thinking":
+		case "thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result":
 			raw, err := contentBlockRaw(block)
 			if err != nil {
 				return nil, nil, false, false, fmt.Errorf("content block %d: %w", index, err)
@@ -170,7 +212,9 @@ func contentBlockRaw(block anthropic.ContentBlockUnion) ([]byte, error) {
 
 func liftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal bool) (llm.ResponseStatus, error) {
 	switch stopReason {
-	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
+	case anthropic.StopReasonPauseTurn:
+		return llm.ResponseStatusPaused, nil
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence:
 		if hasRefusal {
 			return llm.ResponseStatusRefused, nil
 		}
