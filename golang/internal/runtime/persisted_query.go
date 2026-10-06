@@ -144,22 +144,31 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories QueryRepos
 	if options.Cursor == nil || len(options.Cursor.Key) == 0 {
 		return nil, errors.New("persisted query cursor codec is required")
 	}
+	logger := options.Logger
+	if logger == nil {
+		configuration := snapshot.Config()
+		var err error
+		logger, err = observability.NewLogger(observability.LogOptions{
+			Format: configuration.Telemetry.Logs.Format,
+			Level:  configuration.Telemetry.Logs.Level,
+			Output: os.Stderr,
+		})
+		if err != nil {
+			return nil, errors.New("construct query audit logger failed")
+		}
+	}
 	audit := options.Audit
 	if audit == nil {
-		logger := options.Logger
-		if logger == nil {
-			configuration := snapshot.Config()
-			var err error
-			logger, err = observability.NewLogger(observability.LogOptions{
-				Format: configuration.Telemetry.Logs.Format,
-				Level:  configuration.Telemetry.Logs.Level,
-				Output: os.Stderr,
-			})
-			if err != nil {
-				return nil, errors.New("construct query audit logger failed")
-			}
-		}
 		audit = logger.QueryAudit
+	}
+	// The authorization audit hook is an ordinary structured log of each
+	// decision. QueryService calls Authorize before any cursor decode or
+	// storage read, so a denial is logged even though no query completes.
+	authorize := options.Authorize
+	auditedAuthorize := func(ctx context.Context, request control.Authorization) error {
+		err := authorize(ctx, request)
+		logger.QueryAuthorization(ctx, request, err == nil)
+		return err
 	}
 	clock := options.Clock
 	if clock == nil {
@@ -189,7 +198,7 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories QueryRepos
 	}
 	return &control.QueryService{
 		TypedHandler: handler,
-		Authorize:    options.Authorize,
+		Authorize:    auditedAuthorize,
 		Audit:        audit,
 		CursorCodec:  options.Cursor,
 		Clock:        clock,

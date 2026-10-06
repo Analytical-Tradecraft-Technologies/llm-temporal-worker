@@ -45,8 +45,8 @@ from worker settings. The cloud execution path records provider availability
 into Redis but not yet credit/billing evidence (see
 [provider control](provider-control.md)).
 Content-free access audit events are not yet emitted for Generate/Compact
-access or scope denials; only query audit and configuration reload messages
-reach structured logs. Temporal's own storage
+access or scope denials. Query authorization decisions (allowed and denied),
+completed queries and configuration reloads do reach structured logs. Temporal's own storage
 is independently operated. See [storage responsibilities](../architecture/state-and-storage.md).
 
 The production CLI requires explicit trusted-Temporal authorization policy and
@@ -73,8 +73,14 @@ only a compatible worker applies the request's attempt limit.
 
 ## Separate or deferred capabilities
 
-- Authenticated query composition, budget-status wiring and provider management
-  refresh remain tracked in [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817).
+- The production CLI composes authenticated control queries. Provider status,
+  model inventory and credit status read Redis provider state. Budget status
+  reads the active Redis budget generation once the `llmtw_budget_status_v3`
+  Function is loaded and a generation is published; the worker publishes
+  neither. See [persisted queries](persisted-query-service.md). Spend summary
+  (which needs a durable cloud spend reader), provider management refresh, and
+  Temporal-level query evidence remain tracked in
+  [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817).
   Missing capabilities return typed unsupported errors; no fabricated results
   substitute for a reader.
 - Complete Redis data-loss reconciliation is [#856](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/856).

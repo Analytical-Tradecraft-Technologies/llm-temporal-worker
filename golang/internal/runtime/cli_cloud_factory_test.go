@@ -354,6 +354,15 @@ func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 			if err := query(allowed.Project); err == nil || errors.Is(err, control.ErrQueryAuthorization) {
 				t.Fatalf("allowed scope query = %v, want it past authorization", err)
 			}
+			// budget_status is composed too: with Redis unreachable the
+			// Function check is a retryable outage, not "not configured".
+			caller := f.request.Context
+			caller.Project = allowed.Project
+			_, err := v1.QueryV1(context.Background(), llm.QueryRequestV1{APIVersion: llm.QueryAPIVersion, OperationKey: "query-2", Context: caller, Kind: llm.QueryBudgetStatus, Query: json.RawMessage(`{}`)})
+			var classified *provider.Error
+			if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable {
+				t.Fatalf("budget_status with unreachable Redis = %v, want state unavailable", err)
+			}
 		}
 		if err := query("not-allowed"); !errors.Is(err, control.ErrQueryAuthorization) {
 			t.Fatalf("disallowed scope query = %v, want authorization denial", err)

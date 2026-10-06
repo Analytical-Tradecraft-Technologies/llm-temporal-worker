@@ -78,6 +78,13 @@ func newCLIEngineFactory(options ProductionFactoryOptions) (EngineFactory, error
 		if next.options.QueryServiceBuilder == nil {
 			next.options.QueryServiceBuilder = trustedTemporalQueryBuilder(&next, value)
 		}
+		// budget_status reads the active Redis budget generation through the
+		// separately provisioned Function. The reader checks for the Function
+		// and a published generation per query and stays typed unsupported
+		// without them.
+		if next.options.BudgetStatusReaderFactory == nil {
+			next.options.BudgetStatusReaderFactory = cliBudgetStatusReaderFactory()
+		}
 		return next.Build(ctx, snapshot)
 	}), nil
 }
