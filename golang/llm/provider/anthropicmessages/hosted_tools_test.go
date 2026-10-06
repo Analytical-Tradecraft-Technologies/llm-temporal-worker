@@ -45,4 +45,13 @@ func TestHostedToolsAndPausedContinuation(t *testing.T) {
 	if marshalWire(t, replay)["container"] != "container-1" {
 		t.Fatal("paused continuation lost container")
 	}
+	request.Input = nil
+	request.Continuation = got.Continuation
+	replay, err = lowerRequest(request, profile, "")
+	if err != nil {
+		t.Fatalf("cannot replay continuation state: %v", err)
+	}
+	if marshalWire(t, replay)["container"] != "container-1" {
+		t.Fatal("legacy continuation lost container")
+	}
 }

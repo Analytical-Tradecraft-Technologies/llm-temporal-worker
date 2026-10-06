@@ -156,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           opam pin add --yes --no-action --kind=git temporal-sdk \
-            'git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#b99b095db716b8899bb7474796109a89e833ede7'
+            'git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#0d3f618590ed09501b004d5052b7bd88b81e2723'
           bash ../../scripts/ci/prefetch-temporal-sdk-cargo.sh
           CARGO_NET_OFFLINE=true opam install --yes . --deps-only
 

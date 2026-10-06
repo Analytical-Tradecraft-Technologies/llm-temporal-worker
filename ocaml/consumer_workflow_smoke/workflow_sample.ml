@@ -34,7 +34,7 @@ let operation_key input suffix =
   Operation_key.of_string (input.run_key ^ ":" ^ suffix)
 
 (* Query.Filter builders validate before scheduling.  Workflow code that
-   combines their construction with Activity results can deliberately map the
+   combines their construction with workflow results can deliberately map the
    package's validation string into the same Temporal error channel. *)
 let filter_result = function
   | Ok value -> Ok value
@@ -127,7 +127,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
       let branch_0 = start_branch "branch-0" cache_0 in
       let branch_1 = start_branch "branch-1" cache_1 in
       let branch_2 = start_branch "branch-2" cache_2 in
-      (* Future.await exposes the Future's Activity error channel as a result;
+      (* Future.await exposes the Future's workflow error channel as a result;
          successful values are the typed Conversation turns. *)
       let* branch_results =
         Temporal.Future.await (Temporal.Future.all [ branch_0; branch_1; branch_2 ])

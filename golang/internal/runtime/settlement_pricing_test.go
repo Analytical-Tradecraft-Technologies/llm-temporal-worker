@@ -53,7 +53,7 @@ func TestHostedToolsSettlement(t *testing.T) {
 		unknown  bool
 		total    string
 	}{
-		{name: "search fee", raw: map[string]json.RawMessage{"web_search_calls": json.RawMessage("2")}, total: "0.020020001"},
+		{name: "search fee", raw: map[string]json.RawMessage{"web_search_calls": json.RawMessage("2")}, total: "0.0200200001"},
 		{name: "execution duration unknown", raw: map[string]json.RawMessage{"hosted_execution_used": json.RawMessage("true")}, unknown: true},
 		{name: "provider total already includes tools", raw: map[string]json.RawMessage{"web_search_calls": json.RawMessage("2")}, reported: func() *pricing.USD { v := pricing.MustUSD("0.5"); return &v }(), total: "0.5"},
 	} {
@@ -67,7 +67,7 @@ func TestHostedToolsSettlement(t *testing.T) {
 				return
 			}
 			want := pricing.MustUSD(tc.total)
-			if response.Cost.Status != llm.CostStatusKnown || response.Cost.ActualCostUSD == nil || *response.Cost.ActualCostUSD != want {
+			if response.Cost.Status != llm.CostStatusKnown || response.Cost.ActualCostUSD == nil || response.Cost.ActualCostUSD.Cmp(want) != 0 {
 				t.Fatalf("cost = %#v, want %s", response.Cost, tc.total)
 			}
 		})

@@ -14,7 +14,7 @@ let expect_valid = function
   | Ok value -> value
   | Error error -> failf "unexpected validation error: %s" error
 
-let context = { tenant = None; project = None; actor = None; tags = [] }
+let context = expect_valid (Context.make ~tenant:"consumer" ~project:"smoke" ~actor:"test")
 let model = Model_selector.of_string "consumer-smoke-model"
 let model_capability = Model_capability.of_string "text_generation"
 let operation suffix = Operation_key.of_string ("consumer-smoke-" ^ suffix)

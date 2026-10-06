@@ -23,19 +23,28 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Anthropic Messages in strict portability mode")
 	}
 	messages := make([]any, 0, len(request.Input)+1)
+	var containerID string
+	if request.Continuation != nil {
+		for _, state := range request.Continuation.ProviderStates {
+			if isContainerState(state) {
+				id, err := containerStateID(state)
+				if err != nil {
+					return anthropic.MessageNewParams{}, err
+				}
+				containerID = id
+			}
+		}
+	}
 	if err := appendContinuationStates(&messages, request.Continuation, profile, ""); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
-	var containerID string
 	for index, item := range request.Input {
-		if value, ok := item.(llm.ProviderState); ok && value.Provider == "anthropic" && value.EndpointFamily == "messages" && value.MediaType == "application/vnd.anthropic.container+json" {
-			var container struct {
-				ID string `json:"id"`
+		if value, ok := item.(llm.ProviderState); ok && isContainerState(value) {
+			id, err := containerStateID(value)
+			if err != nil {
+				return anthropic.MessageNewParams{}, err
 			}
-			if json.Unmarshal(value.Opaque, &container) != nil || container.ID == "" {
-				return anthropic.MessageNewParams{}, fmt.Errorf("invalid container provider state")
-			}
-			containerID = container.ID
+			containerID = id
 			continue
 		}
 		// A reference is an output annotation (for example a citation) that
@@ -603,6 +612,12 @@ func appendContinuationStates(messages *[]any, continuation *llm.Continuation, p
 		return fmt.Errorf("Anthropic Messages continuation has no replayable provider state")
 	}
 	for index, state := range continuation.ProviderStates {
+		if isContainerState(state) {
+			if _, err := containerStateID(state); err != nil {
+				return err
+			}
+			continue
+		}
 		block, err := providerStateRaw(state, fmt.Sprintf("continuation provider state %d", index))
 		if err != nil {
 			return err
@@ -650,4 +665,17 @@ func replayableBlockType(kind string) bool {
 		return true
 	}
 	return false
+}
+
+func isContainerState(state llm.ProviderState) bool {
+	return state.Provider == "anthropic" && state.EndpointFamily == "messages" && state.MediaType == "application/vnd.anthropic.container+json"
+}
+func containerStateID(state llm.ProviderState) (string, error) {
+	var container struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(state.Opaque, &container) != nil || container.ID == "" {
+		return "", fmt.Errorf("invalid container provider state")
+	}
+	return container.ID, nil
 }
