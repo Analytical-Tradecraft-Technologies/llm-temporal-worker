@@ -141,6 +141,40 @@ func TestTemporalFactoryFailsClosedOnPayloadCodecErrors(t *testing.T) {
 	}
 }
 
+// The client codec rejects ciphertext above the inline-derived ceiling before
+// decrypting it, and the bounded converter still checks the plaintext.
+func TestTemporalFactoryBoundsCiphertextBeforeDecrypting(t *testing.T) {
+	secret := bytes.Repeat([]byte{4}, 32)
+	value := codecConfig(codecKey("k1", "KEY", true))
+	dataConverter, err := dialPayloadConverter(t, DefaultTemporalClientFactory{SecretResolver: codecSecrets(map[string][]byte{"KEY": secret})}, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbounded, err := temporalcodec.NewAESGCM([]temporalcodec.Key{{ID: "k1", Secret: secret, Primary: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), unbounded)
+	var decoded string
+
+	oversized, err := writer.ToPayload(strings.Repeat("x", temporalcodec.MaxCiphertextBytes(value.Server.InlinePayloadBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dataConverter.FromPayload(oversized, &decoded); err == nil || !strings.Contains(err.Error(), "encrypted payload is") {
+		t.Fatalf("oversized ciphertext = %v, want a pre-decryption size error", err)
+	}
+
+	// Within the ciphertext ceiling but above the plaintext limit.
+	overInline, err := writer.ToPayload(strings.Repeat("x", value.Server.InlinePayloadBytes+16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dataConverter.FromPayload(overInline, &decoded); err == nil || !strings.Contains(err.Error(), "Temporal payload is") {
+		t.Fatalf("over-limit plaintext = %v, want the bounded converter's error", err)
+	}
+}
+
 func TestConfigResolverResolvesPayloadCodecKeys(t *testing.T) {
 	value := codecConfig(codecKey("k1", "MISSING", true))
 	value.State.Kind = config.StateKindMemory

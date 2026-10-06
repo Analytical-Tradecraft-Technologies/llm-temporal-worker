@@ -177,3 +177,37 @@ func TestNewAESGCMRejectsInvalidKeys(t *testing.T) {
 		t.Fatalf("64-byte secret rejected: %v", err)
 	}
 }
+
+// Oversized ciphertext is rejected before decryption; payloads within the
+// ceiling still decode so the caller can apply its own plaintext limit.
+func TestDecodeRejectsCiphertextAboveCeilingBeforeDecrypting(t *testing.T) {
+	keys := []Key{{ID: "k1", Secret: testSecret(1), Primary: true}}
+	unbounded := testCodec(t, keys...)
+	const limit = 64
+	bounded, err := NewAESGCMWithOptions(keys, Options{MaxPayloadBytes: limit})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	small := encodeValue(t, unbounded, strings.Repeat("a", limit-8))
+	if got, err := decodeValue(bounded, small); err != nil || got != strings.Repeat("a", limit-8) {
+		t.Fatalf("decode within the ceiling = %q, %v", got, err)
+	}
+
+	large := encodeValue(t, unbounded, strings.Repeat("a", MaxCiphertextBytes(limit)))
+	if len(large.Data) <= MaxCiphertextBytes(limit) {
+		t.Fatal("fixture does not exceed the ceiling")
+	}
+	if _, err := bounded.Decode([]*commonpb.Payload{large}); err == nil || !strings.Contains(err.Error(), "limit is") {
+		t.Fatalf("Decode() of oversized ciphertext = %v", err)
+	}
+	// With a corrupted tag the error is still the size error, so the
+	// ceiling runs before authentication.
+	large.Data[len(large.Data)-1] ^= 1
+	if _, err := bounded.Decode([]*commonpb.Payload{large}); err == nil || !strings.Contains(err.Error(), "limit is") {
+		t.Fatalf("ceiling did not run before decryption: %v", err)
+	}
+	if _, err := NewAESGCMWithOptions(keys, Options{MaxPayloadBytes: -1}); err == nil {
+		t.Fatal("negative ceiling accepted")
+	}
+}

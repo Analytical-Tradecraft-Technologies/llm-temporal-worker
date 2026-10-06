@@ -152,7 +152,10 @@ The setting is opt-in. When it is omitted, behaviour, payload bytes and the
   cannot read encrypted inputs.
 - **Size.** `server.inline_payload_bytes` limits the plaintext payload.
   Encryption adds a few dozen bytes per payload, so leave headroom below
-  Temporal's payload size limit.
+  Temporal's payload size limit. Before decrypting, the worker rejects
+  ciphertext longer than that limit plus a fixed allowance (4 KiB for metadata
+  and 39 bytes for nonce, tag and framing), so an oversized payload costs no
+  decryption work.
 - **Scope.** The codec covers payloads: workflow and Activity inputs and
   results, heartbeat details, and memos. Like any Temporal Payload Codec, it
   does not encrypt workflow and Activity IDs and type names, search

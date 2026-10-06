@@ -165,7 +165,14 @@ func (factory DefaultTemporalClientFactory) dataConverter(ctx context.Context, v
 		}
 		keys = append(keys, temporalcodec.Key{ID: key.ID, Secret: secret, Primary: key.Primary})
 	}
-	codec, err := temporalcodec.NewAESGCM(keys)
+	// Bound ciphertext by the inline limit so an oversized payload is
+	// rejected before it is decrypted; the bounded converter still checks
+	// the decrypted plaintext.
+	inlineBytes := value.Server.InlinePayloadBytes
+	if inlineBytes <= 0 {
+		inlineBytes = activity.DefaultInlineBytes
+	}
+	codec, err := temporalcodec.NewAESGCMWithOptions(keys, temporalcodec.Options{MaxPayloadBytes: inlineBytes})
 	if err != nil {
 		// NewAESGCM errors name only key IDs and lengths, never key bytes.
 		return nil, &payloadCodecError{safe: "construct Temporal payload codec: " + err.Error(), cause: err}
