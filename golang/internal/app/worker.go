@@ -169,7 +169,12 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 			cancelActivities(nil)
 			return nil, fmt.Errorf("register Temporal Activities: %w", err)
 		}
-		workflows.Register(registry, options.Activities.PayloadLimits)
+		// The v1 workflows schedule the v1 Activities; without a v1 runtime
+		// (development memory mode) they could only stall, so a worker that
+		// has none does not offer them.
+		if options.Activities.V1Runtime != nil {
+			workflows.Register(registry, options.Activities.PayloadLimits)
+		}
 		return &boundController{WorkerController: controller, cancelActivities: cancelActivities}, nil
 	}
 	controller, err := build()
