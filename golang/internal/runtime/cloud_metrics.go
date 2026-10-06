@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -33,6 +35,9 @@ func recordCloudBudgetAdmission(ctx context.Context, request durable.ReserveRequ
 		seen[reservation.PolicyID] = struct{}{}
 		metrics.RecordBudgetAdmission(reservation.PolicyID, outcome)
 	}
+	if result.Accepted {
+		metrics.RecordOperationState("reserved")
+	}
 }
 
 // recordCloudProviderAttempt counts one provider submission and its latency.
@@ -54,9 +59,15 @@ func recordCloudExecutionOutcome(ctx context.Context, plan cloudstate.BudgetPlan
 	}
 	endpoint, model := plan.Route.EndpointID, plan.Route.Model
 	switch next.Stage {
+	case cloudstate.ExecutionSubmitting:
+		metrics.RecordOperationState("dispatching")
+	case cloudstate.ExecutionFailed:
+		metrics.RecordOperationState("failed")
 	case cloudstate.ExecutionUnknown:
+		metrics.RecordOperationState("ambiguous")
 		metrics.RecordAmbiguous(endpoint)
 	case cloudstate.ExecutionSucceeded:
+		metrics.RecordOperationState("completed")
 		if next.Response == nil {
 			return
 		}
@@ -79,4 +90,48 @@ func recordCloudExecutionOutcome(ctx context.Context, plan cloudstate.BudgetPlan
 			metrics.RecordCostStatus(endpoint, model, string(actual), "unknown", "")
 		}
 	}
+}
+
+// recordCloudCache counts a published request's cache outcome: a hit and its
+// use receipt, or a miss and whether it filled the cache.
+func recordCloudCache(ctx context.Context, disposition string) {
+	metrics := observability.MetricsFromContext(ctx)
+	switch disposition {
+	case "hit":
+		metrics.RecordCache("hit")
+		metrics.RecordCache("use")
+	case "miss_populated":
+		metrics.RecordCache("miss")
+		metrics.RecordCache("fill")
+	case "miss_not_populated":
+		metrics.RecordCache("miss")
+	}
+}
+
+// recordCloudPoll counts one poll of a provider-owned job: started, then
+// completed, failed or retry (still pending, or a transient read failure).
+func recordCloudPoll(ctx context.Context, outcome string) {
+	observability.MetricsFromContext(ctx).RecordPendingPoll(outcome)
+}
+
+// tracedStep runs one durable execution step inside a span named for it, with
+// the resulting execution state and any error recorded. The span carries no
+// request content.
+func tracedStep(ctx context.Context, step string, run func(context.Context) (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
+	tracer := observability.FromContext(ctx)
+	spanCtx, span := tracer.Start(ctx, "llmtw.cloud."+step)
+	defer span.End()
+	result, err := run(spanCtx)
+	if err != nil {
+		tracer.RecordError(span, err)
+		return result, err
+	}
+	span.SetAttributes(attribute.String("state", string(result.State)))
+	return result, nil
+}
+
+// recordCloudContinuation counts checkpoint lineage use: a request that
+// extends a parent checkpoint reuses it, and every published child is created.
+func recordCloudContinuation(ctx context.Context, decision string) {
+	observability.MetricsFromContext(ctx).RecordContinuation(decision)
 }

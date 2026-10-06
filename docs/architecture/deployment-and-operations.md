@@ -268,13 +268,16 @@ On the durable v1 path (the production CLI), the worker emits the Activity,
 reload, polling and heartbeat series, plus `llmtw_provider_attempt_total`,
 `llmtw_provider_duration_seconds`, `llmtw_service_class_actual_total`,
 `llmtw_budget_admission_total`, `llmtw_cost_usd_total`,
-`llmtw_cost_status_total`, and `llmtw_ambiguous_total`. A provider attempt is
-counted once, when its submission returns. A budget admission is counted once
-per acquire decision and policy, so a request waiting for capacity contributes
-one `denied` per retry. `llmtw_operation_state_total`,
-`llmtw_continuation_total`, the maintenance series, `llmtw_cache_events_total`,
-and `llmtw_provider_poll_total` are emitted only by the legacy engine Activity
-that memory mode runs; on the durable path they stay at zero.
+`llmtw_cost_status_total`, `llmtw_ambiguous_total`,
+`llmtw_operation_state_total` (reserved, dispatching, completed, failed,
+ambiguous), `llmtw_continuation_total` (`reused` when a request extends a
+parent checkpoint, `created` per published child), `llmtw_cache_events_total`
+(hit/use, miss/fill, and `fill_busy` while waiting on another fill) and
+`llmtw_provider_poll_total`. A provider attempt is counted once, when its
+submission returns. A budget admission is counted once per acquire decision
+and policy, so a request waiting for capacity contributes one `denied` per
+retry. The maintenance series are emitted only by the legacy engine Activity
+that memory mode runs.
 
 The series are:
 
@@ -377,8 +380,11 @@ authorization, provider-state bytes, and raw provider bodies are denied fields.
 
 Tracing spans cover normalization, state load, planning, admission, each
 provider attempt, finalization, and continuation write in the legacy engine
-Activity that memory mode runs. The durable v1 path does not yet create
-request spans, so `telemetry.tracing.enabled` exports none there. When tracing is
+Activity that memory mode runs. On the durable v1 path each execution step is
+a span (`llmtw.cloud.prepare`, `acquire`, `generate`, `compact`, `poll`,
+`complete`) with its resulting state, and each provider submission is an
+`llmtw.provider_attempt` child span labelled with its endpoint and service
+class. When tracing is
 enabled, runtime constructs the configured OTLP/gRPC exporter with its secure
 transport default and applies the configured sample ratio; exporter shutdown
 flushes within the worker shutdown deadline. Trace propagation to providers is
