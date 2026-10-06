@@ -232,7 +232,11 @@ func (engine *Engine) finishFailed(ctx context.Context, operation admission.Oper
 	attempt.Dispatch = admissionCertainty(failure.Dispatch)
 	finalCtx, cancel := engine.finalizationContext(ctx)
 	defer cancel()
-	err := engine.dependencies.Admission.Fail(finalCtx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: attempt.Dispatch, Incurred: incurred, Attempt: attempt, Reason: string(failure.Code)})
+	// A definite rejection that advertises a retry released its reservation
+	// without reaching the provider; the same operation may reserve again.
+	definite := attempt.Dispatch == admission.Rejected || attempt.Dispatch == admission.NotDispatched
+	retryable := definite && incurred == 0 && failure.Retry != provider.RetryNever
+	err := engine.dependencies.Admission.Fail(finalCtx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: attempt.Dispatch, Incurred: incurred, Attempt: attempt, Reason: string(failure.Code), Retryable: retryable})
 	if err != nil {
 		return engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "failed to record provider outcome", err)
 	}

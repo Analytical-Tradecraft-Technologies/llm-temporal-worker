@@ -77,6 +77,9 @@ type Operation struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	ExpiresAt        time.Time
+	// Retryable is set on a definite failure recorded with
+	// FailRequest.Retryable.
+	Retryable bool
 }
 
 func (operation Operation) Clone() Operation {
@@ -191,6 +194,11 @@ type FailRequest struct {
 	IncurredCostUSD pricing.USD
 	Attempt         AttemptFacts
 	Reason          string
+	// Retryable marks a definite failure that never reached the provider
+	// and may be retried under the same operation. A store that supports it
+	// lets the next identical Begin reserve the operation again; others
+	// keep it terminal.
+	Retryable bool
 }
 
 func Digest(value []byte) [32]byte { return sha256.Sum256(value) }
