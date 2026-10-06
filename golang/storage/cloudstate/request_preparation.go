@@ -18,6 +18,12 @@ var ErrRequestPreparationMissing = fmt.Errorf("request preparation missing: %w",
 
 const MaxPreparedParentBytes = 4 << 20
 
+// MaxExtendableParentBytes bounds a Generate's parent plus its appended input,
+// measured as the encoded snapshot of that transcript. The rest of
+// MaxPreparedParentBytes is headroom for the turn's output, so the child it
+// publishes can still be prepared as a parent, at least for compaction.
+const MaxExtendableParentBytes = MaxPreparedParentBytes - MaxPreparedParentBytes/4
+
 // RequestPreparation retains the authorized parent independently of checkpoint
 // expiry. The original public input remains in the immutable request manifest.
 // Snapshot is a versioned CheckpointBlobCodec snapshot, not JSON encoding of

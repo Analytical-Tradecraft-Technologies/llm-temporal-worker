@@ -102,6 +102,15 @@ returning; storage errors never become permission to materialize again. Exact
 decimal settings and JSON integers retain their original precision. The parent
 snapshot is bounded at 4 MiB to leave room for later execution progress.
 
+A Generate may extend a parent only while the parent plus its appended input,
+measured as an encoded snapshot, stays within 3 MiB. Beyond that, preparation
+refuses the turn with a non-retryable `invalid_argument` before any budget or
+provider work, and `PlanGenerationV1` reports `compact_before_generate` whatever
+the compaction policy says. The remaining 1 MiB is headroom for the turn's
+output, so a published child can still be prepared as a parent and compacted. A
+single turn whose output exceeds that headroom can still yield a child too
+large to prepare.
+
 `Load` authorizes the current caller before accessing storage and restores the
 saved input using its internal request identifier. The identifier is a locator,
 not authorization. Recovery does not reopen an expired parent. Completed

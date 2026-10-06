@@ -176,10 +176,41 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 		}
 	}
 	// Validate the input against the materialized parent before writing it.
-	if _, err := p.restore(ctx, record, preparation, checkpointScope); err != nil {
+	prepared, err := p.restore(ctx, record, preparation, checkpointScope)
+	if err != nil {
 		return cloudstate.RequestPreparation{}, err
 	}
+	// Refuse, before anything is paid, a turn whose child could not be
+	// prepared as a parent again. Compaction stays available on this parent.
+	if prepared.Generate != nil && parent != "" {
+		input, err := PrepareGenerateInput(ctx, *prepared.Generate, prepared.GenerateReplay)
+		if err != nil {
+			return cloudstate.RequestPreparation{}, err
+		}
+		fits, err := extendedParentFits(prepared.GenerateReplay.State, input.Request.Input)
+		if err != nil {
+			return cloudstate.RequestPreparation{}, err
+		}
+		if !fits {
+			return cloudstate.RequestPreparation{}, provider.NewError(provider.CodeInvalidArgument, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "parent checkpoint is too large to extend; compact it first")
+		}
+	}
 	return preparation, nil
+}
+
+// extendedParentFits reports whether a Generate's whole transcript (the
+// parent plus its appended input) stays within MaxExtendableParentBytes.
+func extendedParentFits(parent state.MaterializedState, transcript []llm.Item) (bool, error) {
+	extended := parent
+	extended.Items = transcript
+	codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxExtendableParentBytes}
+	if _, err := codec.EncodeSnapshot(*state.NewCheckpointSnapshot(extended)); err != nil {
+		if errors.Is(err, state.ErrLimitExceeded) {
+			return false, nil
+		}
+		return false, checkpointReplayError(provider.CodeInvalidArgument)
+	}
+	return true, nil
 }
 
 // Load authenticates the current caller but uses the original immutable input.

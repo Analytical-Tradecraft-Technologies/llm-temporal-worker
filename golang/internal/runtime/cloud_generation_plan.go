@@ -137,5 +137,14 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 			decision.ShouldCompact = true
 		}
 	}
+	// Preparation refuses to extend a parent past MaxExtendableParentBytes,
+	// whatever the policy says, so compact first instead of failing the turn.
+	if !decision.ShouldCompact {
+		fits, err := extendedParentFits(replay.State, input.Request.Input)
+		if err != nil {
+			return llm.GenerationPlanV1{}, err
+		}
+		decision.ShouldCompact = !fits
+	}
 	return llm.GenerationPlanV1{CompactBeforeGenerate: decision.ShouldCompact}, nil
 }
