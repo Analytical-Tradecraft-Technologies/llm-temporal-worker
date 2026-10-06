@@ -245,10 +245,19 @@ On the durable v1 path, provider state (encrypted reasoning, thinking blocks,
 hosted-tool records) travels inline in the canonical transcript. When a
 checkpoint is published, `ProviderStateProvenance` records, for each response
 item that carries provider state, the route that produced it: provider,
-endpoint ID, API family, and resolved provider model, which is the model
-lineage on this path. The endpoint ID stands for the account: it names one
-configured endpoint and its credentials, so OpenAI direct and Azure OpenAI
-Responses routes are different pins. A row records the provenance of its own
+endpoint ID, account, API family, and resolved provider model, which is the
+model lineage on this path. The account is a digest of the endpoint's provider,
+family, base URL, region, account region, AWS workspace and credential
+reference (never a secret). It does not include the configuration version, so
+it survives unrelated reloads. A reload that points an endpoint ID at another
+base URL, region or credential reference is a different account, and the
+lineage's state is not replayed there. Pointing an unchanged credential
+reference at another account's secret is not detected. OpenAI direct and Azure
+OpenAI Responses routes are different pins. Provenance recorded without an
+account, for example from a plan saved before the account was recorded, fails
+closed: no route, not even the producing endpoint, can prove that account, so
+strict mode reports `continuation_pinned` and best-effort drops the state. A
+route whose catalog entry carries no account likewise never matches a pin. A row records the provenance of its own
 response; a row with a materialized snapshot (a cadence snapshot or a
 compaction) also repeats the provenance it inherited, with compaction moving
 retained items to their new positions. The durable request preparation keeps

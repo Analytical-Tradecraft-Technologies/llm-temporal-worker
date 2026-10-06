@@ -159,12 +159,17 @@ type ProviderStateProvenance struct {
 	EndpointID     string `json:"endpoint_id"`
 	EndpointFamily string `json:"endpoint_family"`
 	ModelLineage   string `json:"model_lineage"`
+	// Account is the hex configuration-version-independent account identity
+	// of the endpoint (see routing.Route.EndpointAccountDigest). Empty means
+	// the account was not recorded; consumers must then treat the state as
+	// pinned to an account no route can prove, never as a wildcard.
+	Account string `json:"account,omitempty"`
 }
 
 // Pinning returns the continuation pin this provenance establishes. The
-// endpoint identifies the account, so AccountRegion stays empty.
+// account identity is carried in AccountRegion and may be empty; see Account.
 func (provenance ProviderStateProvenance) Pinning() Pinning {
-	return Pinning{Provider: provenance.Provider, EndpointID: provenance.EndpointID, Family: provenance.EndpointFamily, ModelLineage: provenance.ModelLineage}
+	return Pinning{Provider: provenance.Provider, EndpointID: provenance.EndpointID, AccountRegion: provenance.Account, Family: provenance.EndpointFamily, ModelLineage: provenance.ModelLineage}
 }
 
 // ValidateProviderStateProvenance checks one checkpoint's or one materialized

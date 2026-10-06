@@ -3,6 +3,8 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -782,9 +785,11 @@ func pinnedCloud(t *testing.T) *pinnedCloudFixture {
 	p.boundedCloudFixture = boundedCloud(t, false, func(b *budgetPlanningFixture) {
 		p.source = b.source
 		model := b.source.value.Routes.Models["alias"]
+		model.Routes = append([]routing.Route(nil), model.Routes...)
+		model.Routes[0].EndpointAccountDigest = pinnedAccount("endpoint")
 		other := model.Routes[0]
-		other.ID, other.EndpointID, other.EndpointAccountHMAC = "route-b", "endpoint-b", [32]byte{9}
-		model.Routes = append(append([]routing.Route(nil), model.Routes...), other)
+		other.ID, other.EndpointID, other.EndpointAccountHMAC, other.EndpointAccountDigest = "route-b", "endpoint-b", [32]byte{9}, pinnedAccount("endpoint-b")
+		model.Routes = append(model.Routes, other)
 		b.source.value.Routes.Models["alias"] = model
 		b.source.value.BudgetPolicies[0].Match.EndpointID = ""
 		second := b.entry
@@ -862,9 +867,13 @@ func (p *pinnedCloudFixture) checkpoint(t *testing.T, result llm.ExecutionResult
 	return row
 }
 
+// pinnedAccount is the test account identity of an endpoint.
+func pinnedAccount(endpoint string) [32]byte { return sha256.Sum256([]byte("account/" + endpoint)) }
+
 func pinnedProvenance(ordinal int, endpoint string) []state.ProviderStateProvenance {
+	account := pinnedAccount(endpoint)
 	return []state.ProviderStateProvenance{{Ordinal: ordinal, Provider: "openai", EndpointID: endpoint,
-		EndpointFamily: string(provider.FamilyOpenAIResponses), ModelLineage: "provider-model"}}
+		EndpointFamily: string(provider.FamilyOpenAIResponses), ModelLineage: "provider-model", Account: hex.EncodeToString(account[:])}}
 }
 
 func TestCloudExecutionRuntimePinnedContinuationRoutesToItsEndpoint(t *testing.T) {
@@ -984,5 +993,102 @@ func TestCloudExecutionRuntimeCheckpointWithoutProvenanceKeepsFamilyPinning(t *t
 	}
 	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint-b")) {
 		t.Fatalf("child provenance = %+v", got)
+	}
+}
+
+// planFailure runs preparation and budget acquisition for p.request and
+// returns the planning failure they report.
+func (p *pinnedCloudFixture) planFailure(t *testing.T) *provider.Error {
+	t.Helper()
+	ctx := context.Background()
+	v, err := p.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &p.request})
+	if err == nil && v.State == llm.ExecutionBudgetRequired {
+		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context})
+	}
+	var failure *provider.Error
+	if !errors.As(err, &failure) || failure.Code != provider.CodeNoRoute || failure.SafeDetails["continuation"] != "continuation_pinned" {
+		t.Fatalf("state=%+v error=%#v, want continuation_pinned", v, err)
+	}
+	return failure
+}
+
+func TestCloudExecutionRuntimeReusedEndpointIDOnAnotherAccountIsNotThePin(t *testing.T) {
+	p := pinnedCloud(t)
+	first := p.finish(t)
+	// A reload points the pinned endpoint ID at another account. The ID
+	// still matches, but the account does not, so the state is not replayed.
+	model := p.source.value.Routes.Models["alias"]
+	model.Routes = append([]routing.Route(nil), model.Routes...)
+	model.Routes[0].EndpointAccountDigest = pinnedAccount("other-account")
+	p.source.value.Routes.Models["alias"] = model
+	p.restart(t)
+	p.child(first, "reused-endpoint-id")
+	p.planFailure(t)
+	if len(p.served) != 1 {
+		t.Fatalf("dispatched to a changed account: %v", p.served)
+	}
+	// Best effort serves the turn on the changed endpoint without the state.
+	mode := llm.PortabilityBestEffort
+	p.request.OperationKey = "reused-endpoint-id-best-effort"
+	p.request.SettingsPatch.Portability.Set = &mode
+	second := p.finish(t)
+	if p.served[1] != "endpoint" || compiledProviderState(p.lastCompiled(t, "endpoint")) != 0 || len(second.Generate.Diagnostics) != 1 {
+		t.Fatalf("served %v diagnostics %+v", p.served, second.Generate.Diagnostics)
+	}
+}
+
+// unrecordedAccountRepository reads provenance as if it had been written
+// without an account identity.
+type unrecordedAccountRepository struct {
+	state.CheckpointRepository
+}
+
+func (repository unrecordedAccountRepository) Get(ctx context.Context, scope string, id state.CheckpointID) (state.DurableCheckpoint, error) {
+	row, err := repository.CheckpointRepository.Get(ctx, scope, id)
+	row.ProviderStateProvenance = append([]state.ProviderStateProvenance(nil), row.ProviderStateProvenance...)
+	for index := range row.ProviderStateProvenance {
+		row.ProviderStateProvenance[index].Account = ""
+	}
+	return row, err
+}
+
+func TestCloudExecutionRuntimeProvenanceWithoutAccountFailsClosed(t *testing.T) {
+	p := pinnedCloud(t)
+	first := p.finish(t)
+	materializer := *p.cap.Checkpoints.Materializer.(*state.DurableCheckpointMaterializer)
+	materializer.Repository = unrecordedAccountRepository{materializer.Repository}
+	p.cap.Checkpoints.Materializer = &materializer
+	p.restart(t)
+	// Even the endpoint that produced the state cannot prove its account.
+	p.child(first, "unproven-account")
+	p.planFailure(t)
+	mode := llm.PortabilityBestEffort
+	p.request.OperationKey = "unproven-account-best-effort"
+	p.request.SettingsPatch.Portability.Set = &mode
+	second := p.finish(t)
+	if p.served[1] != "endpoint" || compiledProviderState(p.lastCompiled(t, "endpoint")) != 0 || len(second.Generate.Diagnostics) != 1 {
+		t.Fatalf("served %v diagnostics %+v", p.served, second.Generate.Diagnostics)
+	}
+}
+
+func TestEndpointAccountDigestIgnoresNonAccountSettings(t *testing.T) {
+	endpoint := config.EndpointConfig{Family: "openai_responses", BaseURL: "https://api.openai.com/v1", Region: "us", Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_API_KEY"}}
+	base := endpointAccountDigest("openai", endpoint)
+	tuned := endpoint
+	tuned.Timeout, tuned.CapabilityProfile, tuned.PriceCatalog = config.Duration(time.Minute), "other-profile", "other-prices"
+	if endpointAccountDigest("openai", tuned) != base {
+		t.Fatal("a non-account setting changed the account identity")
+	}
+	for _, change := range []func(*config.EndpointConfig){
+		func(value *config.EndpointConfig) { value.BaseURL = "https://example.openai.azure.com/openai/v1" },
+		func(value *config.EndpointConfig) { value.Auth.Name = "OTHER_OPENAI_API_KEY" },
+		func(value *config.EndpointConfig) { value.AccountRegion = "eu" },
+		func(value *config.EndpointConfig) { value.AWSWorkspaceID = "workspace" },
+	} {
+		changed := endpoint
+		change(&changed)
+		if endpointAccountDigest("openai", changed) == base {
+			t.Fatalf("account change kept the identity: %+v", changed)
+		}
 	}
 }

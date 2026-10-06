@@ -7,6 +7,7 @@ import (
 
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
@@ -15,7 +16,12 @@ func pinningState(endpoint string) llm.ProviderState {
 }
 
 func pinningProvenance(ordinal int, endpoint string) state.ProviderStateProvenance {
-	return state.ProviderStateProvenance{Ordinal: ordinal, Provider: "openai", EndpointID: endpoint, EndpointFamily: "openai_responses", ModelLineage: "model"}
+	return state.ProviderStateProvenance{Ordinal: ordinal, Provider: "openai", EndpointID: endpoint, EndpointFamily: "openai_responses", ModelLineage: "model", Account: "account-" + endpoint}
+}
+
+// servingPin is the pin of a route on endpoint with the given account.
+func servingPin(endpoint, account string) state.Pinning {
+	return state.Pinning{Provider: "openai", EndpointID: endpoint, AccountRegion: account, Family: "openai_responses", ModelLineage: "model"}
 }
 
 func TestProviderStatePinsStripOnlyOtherLineages(t *testing.T) {
@@ -25,16 +31,40 @@ func TestProviderStatePinsStripOnlyOtherLineages(t *testing.T) {
 	if !ok || pins.latest.EndpointID != "b" {
 		t.Fatalf("pins = %+v ok=%v", pins, ok)
 	}
-	stripped, dropped := pins.strip(items, pinningProvenance(0, "b").Pinning())
+	stripped, dropped := pins.strip(items, servingPin("b", "account-b"))
 	// The unrecorded state is never stripped; the message keeps its text.
 	if dropped != 2 || len(stripped) != 4 || itemHasProviderState(stripped[1]) || !reflect.DeepEqual(stripped[3], items[4]) || !reflect.DeepEqual(stripped[2], items[3]) {
 		t.Fatalf("stripped %d: %+v", dropped, stripped)
 	}
-	if same, dropped := pins.strip(items, pinningProvenance(0, "a").Pinning()); dropped != 1 || len(same) != 4 {
+	if same, dropped := pins.strip(items, servingPin("a", "account-a")); dropped != 1 || len(same) != 4 {
 		t.Fatalf("pinned lineage lost its own state: %d %+v", dropped, same)
 	}
 	if !itemHasProviderState(items[2]) {
 		t.Fatal("strip mutated its input")
+	}
+	// The same endpoint ID on another account is another lineage.
+	if _, dropped := pins.strip(items, servingPin("b", "account-other")); dropped != 3 {
+		t.Fatalf("a reused endpoint ID kept another account's state: dropped %d", dropped)
+	}
+	if pins.admits(llm.PortabilityStrict, routing.Candidate{Provider: "openai", EndpointID: "b", Family: "openai_responses", Model: "model", EndpointAccountDigest: [32]byte{1}}) {
+		t.Fatal("strict mode admitted another account behind the pinned endpoint ID")
+	}
+	// Provenance recorded without an account fails closed: no route, not
+	// even its endpoint's, and not a route of unknown account either.
+	unrecorded := pinningProvenance(4, "b")
+	unrecorded.Account = ""
+	unproven, ok := newProviderStatePins(items, []state.ProviderStateProvenance{unrecorded})
+	if !ok {
+		t.Fatal("provenance without an account was rejected as corrupt")
+	}
+	for _, pin := range []state.Pinning{servingPin("b", "account-b"), servingPin("b", unknownRouteAccount), candidatePinning(routing.Candidate{Provider: "openai", EndpointID: "b", Family: "openai_responses", Model: "model"})} {
+		if _, dropped := unproven.strip(items, pin); dropped != 1 {
+			t.Fatalf("unproven account state replayed to %+v", pin)
+		}
+	}
+	if unproven.admits(llm.PortabilityStrict, routing.Candidate{Provider: "openai", EndpointID: "b", Family: "openai_responses", Model: "model"}) ||
+		!unproven.admits(llm.PortabilityBestEffort, routing.Candidate{Provider: "openai", EndpointID: "b", Family: "openai_responses", Model: "model"}) {
+		t.Fatal("unproven account is not strict-pinned and best-effort portable")
 	}
 	for _, bad := range [][]state.ProviderStateProvenance{
 		{pinningProvenance(0, "a")},                            // not provider state

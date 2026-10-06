@@ -78,8 +78,8 @@ controller:
 - Exactly three request service classes: `economy`, `standard`, and `priority`.
 - Explicit ordered service-class fallback, disabled by default.
 - Durable continuation and endpoint pinning. On the durable v1 path, each
-  checkpoint records which route (provider, endpoint, API family and provider
-  model) produced the provider state in its transcript. Later turns are pinned
+  checkpoint records which route (provider, endpoint, a reload-stable account
+  identity, API family and provider model) produced the provider state in its transcript. Later turns are pinned
   to that route: in strict mode another route is rejected with
   `continuation_pinned` (reported as a safe detail; the error code stays
   `no_route`), and in best-effort mode it may serve the turn without that

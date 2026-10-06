@@ -60,6 +60,9 @@ func (planned PlannedBudgetCall) BudgetPlan(kind string) (cloudstate.BudgetPlan,
 	if digest := providerPlan.Candidate.EndpointDigest; digest != ([32]byte{}) {
 		plan.EndpointDigest = hex.EncodeToString(digest[:])
 	}
+	if account := providerPlan.Candidate.EndpointAccountDigest; account != ([32]byte{}) {
+		plan.EndpointAccount = hex.EncodeToString(account[:])
+	}
 	if planned.Quote != nil {
 		plan.Quote = *planned.Quote
 	}

@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"encoding/hex"
+
 	"github.com/mfow/llm-temporal-worker/golang/compaction"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -13,8 +15,9 @@ import (
 //
 // Provider state (encrypted reasoning, thinking signatures, hosted-tool
 // records) travels inline in the canonical transcript. Publication records,
-// per transcript item, the route that produced it: provider, endpoint, API
-// family and resolved provider model. Planning derives state.Constraints from
+// per transcript item, the route that produced it: provider, endpoint, the
+// endpoint's configuration-version-independent account identity, API family
+// and resolved provider model. Planning derives state.Constraints from
 // the newest recorded pin and applies state.CheckPinning to every candidate,
 // exactly as the legacy engine does, with the state marked optional because
 // the canonical transcript stays complete. A candidate on another lineage is
@@ -26,12 +29,40 @@ import (
 // existed, or state supplied by the caller in Append) are never constraints
 // and are never stripped: they keep the adapters' family-only check. A request
 // with no recorded provenance therefore plans exactly as before.
+//
+// An account is compared only when both sides prove it. Provenance recorded
+// without an account, and a route or saved plan without one, each get their
+// own sentinel that matches nothing: such state stays off every route (strict
+// mode reports continuation_pinned, best-effort drops it). That fails closed;
+// treating a missing account as a wildcard could replay account-bound state
+// to another account after a reload reused the endpoint ID.
 
 const (
 	diagnosticContinuationPinned    = "continuation_pinned"
 	diagnosticProviderStateDropped  = "provider_state_dropped"
 	continuationPinnedSafeDetailKey = "continuation"
+
+	// Never valid hex digests, and different from each other, so an unproven
+	// account can match neither a real account nor the other side's gap.
+	unrecordedPinAccount = "unrecorded-account"
+	unknownRouteAccount  = "unknown-route-account"
 )
+
+// recordedPinning is the pin of one recorded provenance entry.
+func recordedPinning(value state.ProviderStateProvenance) state.Pinning {
+	pin := value.Pinning()
+	if pin.AccountRegion == "" {
+		pin.AccountRegion = unrecordedPinAccount
+	}
+	return pin
+}
+
+func accountKey(digest [32]byte) string {
+	if digest == ([32]byte{}) {
+		return unknownRouteAccount
+	}
+	return hex.EncodeToString(digest[:])
+}
 
 // providerStatePins maps an index of the semantic request's Input to the pin
 // of the route that produced the provider state in that item.
@@ -57,9 +88,9 @@ func newProviderStatePins(items []llm.Item, provenance []state.ProviderStateProv
 		if value.Ordinal >= len(items) || !itemHasProviderState(items[value.Ordinal]) {
 			return providerStatePins{}, false
 		}
-		pins.byIndex[value.Ordinal] = value.Pinning()
+		pins.byIndex[value.Ordinal] = recordedPinning(value)
 		// Ordinals are strictly increasing, so the last entry is the newest.
-		pins.latest = value.Pinning()
+		pins.latest = recordedPinning(value)
 	}
 	return pins, true
 }
@@ -71,7 +102,7 @@ func (pins providerStatePins) constraints(mode llm.PortabilityMode) state.Constr
 		return state.Constraints{}
 	}
 	return state.Constraints{Present: true, Provider: pins.latest.Provider, EndpointID: pins.latest.EndpointID,
-		Family: pins.latest.Family, ModelLineage: pins.latest.ModelLineage, TranscriptComplete: true, Portability: mode}
+		AccountRegion: pins.latest.AccountRegion, Family: pins.latest.Family, ModelLineage: pins.latest.ModelLineage, TranscriptComplete: true, Portability: mode}
 }
 
 // admits applies state.CheckPinning to one candidate. It always admits a
@@ -87,12 +118,17 @@ func (pins providerStatePins) admits(mode llm.PortabilityMode, candidate routing
 // candidate. It is derived from candidate fields, which every planner sets,
 // rather than from Candidate.Pinning, which a custom planner may leave empty.
 func candidatePinning(candidate routing.Candidate) state.Pinning {
-	return state.Pinning{Provider: candidate.Provider, EndpointID: candidate.EndpointID, Family: candidate.Family, ModelLineage: candidate.Model}
+	return state.Pinning{Provider: candidate.Provider, EndpointID: candidate.EndpointID, AccountRegion: accountKey(candidate.EndpointAccountDigest),
+		Family: candidate.Family, ModelLineage: candidate.Model}
 }
 
 // planPinning is the same pin read back from a saved budget plan.
 func planPinning(plan cloudstate.BudgetPlan) state.Pinning {
-	return state.Pinning{Provider: plan.Route.Provider, EndpointID: plan.Route.EndpointID, Family: plan.Family, ModelLineage: plan.Route.Model}
+	account := unknownRouteAccount
+	if plan.EndpointAccount != "" {
+		account = plan.EndpointAccount
+	}
+	return state.Pinning{Provider: plan.Route.Provider, EndpointID: plan.Route.EndpointID, AccountRegion: account, Family: plan.Family, ModelLineage: plan.Route.Model}
 }
 
 // strip returns input without the provider state pinned to another lineage
@@ -180,8 +216,13 @@ func responseProvenance(output []llm.Item, offset int, pin state.Pinning) []stat
 	var result []state.ProviderStateProvenance
 	for index, item := range output {
 		if itemHasProviderState(item) {
+			account := pin.AccountRegion
+			if account == unknownRouteAccount {
+				// Recorded empty, which later reads as unproven.
+				account = ""
+			}
 			result = append(result, state.ProviderStateProvenance{Ordinal: offset + index, Provider: pin.Provider,
-				EndpointID: pin.EndpointID, EndpointFamily: pin.Family, ModelLineage: pin.ModelLineage})
+				EndpointID: pin.EndpointID, EndpointFamily: pin.Family, ModelLineage: pin.ModelLineage, Account: account})
 		}
 	}
 	return result

@@ -125,16 +125,17 @@ func modelSyncSource(value config.Config, bundle catalog.Bundle, endpointID, rul
 	}
 	sort.Strings(extensions)
 	return modelsync.Source{
-		EndpointID:          endpointID,
-		RulesProvider:       rulesProvider,
-		Family:              string(family),
-		Region:              region,
-		AccountRegion:       endpoint.AccountRegion,
-		EndpointAccountHMAC: routing.DeriveEndpointAccountHMAC(providerName, endpointID, endpoint.AccountRegion, region, value.Version),
-		Tiers:               tiers,
-		Capabilities:        routingCapabilities(profile.Set),
-		ProviderFeatures:    adapterCapabilities(profile.Set),
-		ExtensionNames:      extensions,
+		EndpointID:            endpointID,
+		RulesProvider:         rulesProvider,
+		Family:                string(family),
+		Region:                region,
+		AccountRegion:         endpoint.AccountRegion,
+		EndpointAccountHMAC:   routing.DeriveEndpointAccountHMAC(providerName, endpointID, endpoint.AccountRegion, region, value.Version),
+		EndpointAccountDigest: endpointAccountDigest(providerName, endpoint),
+		Tiers:                 tiers,
+		Capabilities:          routingCapabilities(profile.Set),
+		ProviderFeatures:      adapterCapabilities(profile.Set),
+		ExtensionNames:        extensions,
 	}, nil
 }
 
