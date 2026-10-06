@@ -8,12 +8,16 @@ or a parallel client. The implementation extends the same **Llm_temporal**
 facade, nominal identifiers, codecs, Activity descriptors, retry policy, and
 test conventions.
 
-The package currently models one **llm.generate.v1** invocation. The v1
-checkpoint/delta/cache contract removes generic currency and adopts decimal
-USD types. The additive `Llm_temporal.Generate` facade now constructs and
-invokes that exact v1 request directly; it avoids a synthetic conversation
-branch for one-shot callers. The package-level `execute` and `workflow`
-helpers now use the same v1 request/response codecs and Activity descriptor.
+Generate and Compact run as the Go worker's public child workflows,
+**llm.generate.workflow.v1** and **llm.compact.workflow.v1**, started on the
+Go worker's task queue with a caller-supplied deterministic workflow ID
+(`~task_queue` and `~id` are required). Queries use the **llm.query.v1**
+Activity on that same queue. The v1 checkpoint/delta/cache contract removes
+generic currency and adopts decimal USD types. The additive
+`Llm_temporal.Generate` facade constructs and starts that exact v1 request
+directly; it avoids a synthetic conversation branch for one-shot callers. The
+package-level `execute` and `workflow` helpers use the same v1 request/response
+codecs and workflow descriptor.
 The older pre-checkpoint `Request` and `invoke_once` names remain only as
 deprecated compatibility shims and are not a production Activity boundary.
 
@@ -23,7 +27,7 @@ final Go contract.
 
 The protocol layer now contains the Task 17 Generate, Compact, and Query v1
 wire records, closed Yojson codecs, exact decimal-cost representation, and
-their three Temporal Activity descriptors. The public `Llm_temporal.Query`
+their two workflow descriptors and one Activity descriptor. The public `Llm_temporal.Query`
 module now adds the five-constructor GADT over those closed query records. The
 companion `Llm_temporal.Conversation` facade now provides immutable v1
 checkpoint roots, forks, Generate/Compact helpers, and persistent
@@ -225,9 +229,9 @@ leaves are Keep. **Set []** emits an empty list and differs from **Clear**.
 the Activity payload.
 
 Effective temperature is validated by the Go worker after inheritance. The
-OCaml builder rejects immediately when it can prove temperature zero with a
-positive variant, but it does not guess an inherited value. Server validation
-remains authoritative and returns a typed Activity error.
+cache variant is independent of temperature: neither side rejects a positive
+variant with temperature zero, because the variant only selects a separate
+cache slot.
 
 Responses use new-turn output and a checkpoint:
 
@@ -240,10 +244,9 @@ type settled_cost =
     }
   | Unknown_cost of { reason : cost_unknown_reason }
 
-type cost = {
-  reserved_cost_usd : Usd_decimal.t;
-  settled : settled_cost;
-}
+(* v1 responses carry [settled_cost] directly as their [cost]; the Go worker
+   reports no reserved amount in a response. Reservations appear only in
+   budget-status query results. *)
 
 type generate_response = {
   operation_key : Operation_key.t;
@@ -260,10 +263,10 @@ type generate_response = {
 ~~~
 
 There is no transcript field. The Compact protocol has its own request/response
-types and Activity name. Its result identifies a compaction checkpoint,
+types and workflow name. Its result identifies a compaction checkpoint,
 provenance, cache disposition, usage, and USD cost. Its request accepts the
 same optional `cache_policy`; omission disables both read and population, and
-the protocol rejects a nonzero variant. Compaction protocol records contain no
+a non-negative variant selects a separate cache slot, as for Generate. Compaction protocol records contain no
 application tool list, tool policy, or structured-output field. Those are
 inherited checkpoint settings restored only by a later Generate.
 
@@ -538,7 +541,8 @@ module Conversation : sig
   val fork : t -> t
 
   val respond :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?settings_patch:Settings.Patch.t ->
     ?cache:Cache_policy.t ->
@@ -547,7 +551,8 @@ module Conversation : sig
     (turn, Temporal.Error.t) result
 
   val start_respond :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?settings_patch:Settings.Patch.t ->
     ?cache:Cache_policy.t ->
@@ -556,7 +561,8 @@ module Conversation : sig
     ((turn, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
   val compact :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?policy:Compaction_policy.t ->
     ?cache:Cache_policy.t ->
@@ -564,7 +570,8 @@ module Conversation : sig
     (compaction_response * t, Temporal.Error.t) result
 
   val start_compact :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
+    id:string ->
     operation_key:Operation_key.t ->
     ?policy:Compaction_policy.t ->
     ?cache:Cache_policy.t ->
@@ -585,19 +592,19 @@ let branch_b = Conversation.fork parent in
 let branch_c = Conversation.fork parent in
 
 let a =
-  Conversation.respond
+  Conversation.respond ~task_queue ~id:"case-a"
     ~operation_key:(Operation_key.of_string "case-a")
     ~append:[Message { actor = Human; content = [Text "Try A"] }]
     branch_a
 in
 let b =
-  Conversation.respond
+  Conversation.respond ~task_queue ~id:"case-b"
     ~operation_key:(Operation_key.of_string "case-b")
     ~append:[Message { actor = Human; content = [Text "Try B"] }]
     branch_b
 in
 let c =
-  Conversation.respond
+  Conversation.respond ~task_queue ~id:"case-c"
     ~operation_key:(Operation_key.of_string "case-c")
     ~append:[Message { actor = Human; content = [Text "Try C"] }]
     branch_c
@@ -673,10 +680,10 @@ constructs and schedules one v1 Generate directly. It does not maintain a loop,
 stream tokens, or hide a checkpoint. `Generate.invoke_with` accepts the same
 typed dispatcher used by deterministic tests. The package-level
 **`execute`/`workflow`** helpers now accept the exact Generate v1 records and
-schedule that same v1 Activity. The pre-checkpoint **`Request.make`** and
+start that same v1 child workflow. The pre-checkpoint **`Request.make`** and
 **`invoke_once`** names remain recognizable only as deprecated compatibility
 shims. `invoke_once` validates the old record and converts it to the flat
-Generate v1 envelope before dispatching `llm.generate.v1`; controls which have
+Generate v1 envelope before dispatching `llm.generate.workflow.v1`; controls which have
 no v1 representation are rejected rather than silently dropped. New code
 should prefer `Generate`, `Conversation`, or the migrated package-level
 helpers.
@@ -802,24 +809,26 @@ cross-kind reuse before dispatch. **Budget_status** and **Spend_summary** are
 bounded snapshots rather than pages, so their filters and responses must not
 carry a cursor.
 
-## Activity descriptors and Workflow determinism
+## Workflow and Activity descriptors and Workflow determinism
 
 The invocation module exposes three exact names:
 
 ~~~ocaml
-val generate_v1_activity :
-  (generate_request, generate_response) Temporal.Activity.t
+val generate_v1_workflow :
+  (generate_request, generate_response) Temporal.Workflow.t
 
-val compact_v1_activity :
-  (compact_request, compaction_response) Temporal.Activity.t
+val compact_v1_workflow :
+  (compact_request, compaction_response) Temporal.Workflow.t
 
 val query_v1_activity :
   (query_envelope, query_response) Temporal.Activity.t
 ~~~
 
-The direct-style helpers call **Temporal.Activity.execute**. Their **start_***
-forms call **Temporal.Activity.start** and return workflow-owned futures so a
-caller can record sibling Activity commands before awaiting any result. A
+Generate and Compact start child workflows (**Temporal.Child_workflow.start**)
+on the required `~task_queue` with the required `~id`, abandoning them on parent
+close so paid work survives; queries call **Temporal.Activity.execute** or
+**start**. The **start_*** forms return workflow-owned futures so a caller can
+record sibling commands before awaiting any result. A
 direct helper is exactly **Temporal.Future.await (start_... request)**; it does
 not use an OCaml thread, Lwt promise, or process-global scheduler.
 
@@ -833,7 +842,12 @@ Workflow input/output codec definitions are omitted; the **Llm_temporal**
 calls and Temporal scheduling primitives are concrete. The fixture is
 compile-only: it does not contact a Temporal server or provider.
 
-The example exercises all three Activities and all five typed Query variants:
+The example exercises both workflows, the query Activity and all five typed
+Query variants. It is a compile fixture: on the production CLI every query kind
+currently fails with an unsupported-query error until the query service is
+composed
+([#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)),
+so a real workflow must not depend on the opening credit and budget queries:
 
 - query credit and budget state before spending;
 - create a cached root Generate;
@@ -948,7 +962,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
           ()
       in
       let* first =
-        Conversation.respond ~task_queue
+        Conversation.respond ~task_queue ~id:(input.run_key ^ ":turn-1")
           ~operation_key:(operation_key input "turn-1")
           ~cache:cache_0
           ~append:[ message input.question ]
@@ -964,7 +978,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
         |> Settings.Patch.set_reasoning_effort High
       in
       let start_branch suffix cache =
-        Conversation.start_respond ~task_queue
+        Conversation.start_respond ~task_queue ~id:(input.run_key ^ ":" ^ suffix)
           ~operation_key:(operation_key input suffix)
           ~settings_patch:branch_patch
           ~cache
@@ -988,13 +1002,13 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
          The worker disables both for summarization while retaining the
          application settings on the returned checkpoint. *)
       let* (compaction, compacted) =
-        Conversation.compact ~task_queue
+        Conversation.compact ~task_queue ~id:(input.run_key ^ ":compact-chosen")
           ~operation_key:(operation_key input "compact-chosen")
           ~cache:cache_0
           chosen.conversation
       in
       let* final =
-        Conversation.respond ~task_queue
+        Conversation.respond ~task_queue ~id:(input.run_key ^ ":after-compaction")
           ~operation_key:(operation_key input "after-compaction")
           ~cache:cache_0
           ~append:[ message "Return the final structured answer." ]
