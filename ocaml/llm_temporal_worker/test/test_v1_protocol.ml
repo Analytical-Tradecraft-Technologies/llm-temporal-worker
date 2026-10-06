@@ -130,6 +130,25 @@ let () =
   } in
   ignore (ok (V1_codec.decode_query_response (ok (V1_codec.encode_query_response query_response))));
   error (V1_codec.decode_generate_request (Bytes.of_string "{\"api_version\":\"llm.temporal/v1\",\"operation_key\":\"x\",\"context\":{\"tenant\":\"t\",\"project\":\"p\",\"actor\":\"a\"},\"parent\":null,\"append\":[],\"settings_patch\":{},\"cache\":null,\"extra\":true}"));
+  (* Go rejects a duplicate member anywhere in the document, including open
+     JSON content, so the v1 decoder must too. *)
+  let all_kinds = fixture_in "v1" "generate-request-all-kinds.json" in
+  let duplicated =
+    let target = "{\"claim\": 4831," in
+    let rec find index =
+      if index + String.length target > String.length all_kinds then None
+      else if String.sub all_kinds index (String.length target) = target then Some index
+      else find (index + 1)
+    in
+    match find 0 with
+    | None -> all_kinds
+    | Some index ->
+        let after = index + String.length target in
+        String.sub all_kinds 0 after ^ " \"claim\": 4832," ^ String.sub all_kinds after (String.length all_kinds - after)
+  in
+  if duplicated = all_kinds then failwith "duplicate-key fixture edit did not apply";
+  ignore (ok (V1_codec.decode_generate_request (Bytes.of_string all_kinds)));
+  error (V1_codec.decode_generate_request (Bytes.of_string duplicated));
   assert_fixture "generate-request.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
   assert_rejected "generate-request.invalid-temperature.json" V1_codec.decode_generate_request;
   assert_fixture "compact-request.json" V1_codec.decode_compact_request V1_codec.encode_compact_request;

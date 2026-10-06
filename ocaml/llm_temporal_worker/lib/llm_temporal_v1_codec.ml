@@ -59,16 +59,24 @@ let nonnegative context value = if value < 0L then Error (errorf "%s must not be
 let option_field name encode = function None -> [] | Some value -> [name, encode value]
 let list context = function `List values -> Ok values | _ -> Error (errorf "%s must be an array" context)
 
+(* Go rejects a duplicate member anywhere in a payload, including open JSON
+   content, arguments, schemas and extensions, so the v1 boundary checks the
+   whole document in both directions. *)
 let parse_json decoder bytes =
   try
     let value = Yojson.Safe.from_string (Bytes.to_string bytes) in
-    decoder value
+    match Llm_temporal_codec.validate_unique_json "payload" value with
+    | Error _ as error -> error
+    | Ok () -> decoder value
   with
   | Yojson.Json_error message -> Error (errorf "invalid JSON: %s" message)
   | Failure message -> Error (errorf "invalid JSON: %s" message)
   | Invalid_argument message -> Error (errorf "invalid JSON value: %s" message)
 
 let to_bytes value =
+  match Llm_temporal_codec.validate_unique_json "payload" value with
+  | Error _ as error -> error
+  | Ok () ->
   try Ok (Bytes.of_string (Yojson.Safe.to_string value)) with
   | Yojson.Json_error message -> Error (errorf "failed to encode JSON: %s" message)
 
