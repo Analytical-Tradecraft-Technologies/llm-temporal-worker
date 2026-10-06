@@ -271,6 +271,15 @@ while still-unknown fields remain inherited by the worker.
 
 ## Typed query facade
 
+`Query.execute`, `Query.start`, `invoke_query_v1` and `start_query_v1` require
+`~task_queue`: `llm.query.v1` is registered only on the Go worker's task queue,
+so the calling workflow's own queue cannot serve it. The production worker does
+not compose a query service yet, so every query kind currently fails with an
+unsupported-query error there (tracked in
+[#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
+The persisted query handler also rejects a positive
+`refresh_if_older_than_seconds`; leave it unset.
+
 `Llm_temporal.Query` adds a closed GADT over the five query Activities. Each
 constructor carries its filter and fixes the result type, so pagination and
 result handling remain associated at the call site:
@@ -282,6 +291,7 @@ let query =
   }
 
 match Llm_temporal.Query.execute
+        ~task_queue:(Temporal_task_queue.of_string "llm-worker")
         ~operation_key:(Llm_temporal.Operation_key.of_string "budget-check")
         ~context query with
 | Ok { value = budget; cost; _ } -> inspect_budget budget cost
@@ -298,10 +308,9 @@ dimensions.  The raw filter records remain available for protocol fixtures.
 ```ocaml
 let* provider_filter =
   Llm_temporal.Query.Filter.provider_status
-    ~include_healthy:false ~page_size:100
-    ~refresh_if_older_than_seconds:300L ()
+    ~include_healthy:false ~page_size:100 ()
 in
-Llm_temporal.Query.execute ~operation_key ~context
+Llm_temporal.Query.execute ~task_queue ~operation_key ~context
   (Llm_temporal.Query.Provider_status provider_filter)
 ```
 
@@ -313,7 +322,7 @@ let* model_filter =
   Llm_temporal.Query.Filter.model_inventory
     ~model_prefix:(Llm_temporal.Model_prefix.of_string "gpt-") ()
 in
-Llm_temporal.Query.execute ~operation_key ~context
+Llm_temporal.Query.execute ~task_queue ~operation_key ~context
   (Llm_temporal.Query.Model_inventory model_filter)
 ```
 
@@ -365,7 +374,7 @@ before another Activity is dispatched:
 
 ```ocaml
 match Query.next query response with
-| Ok (Some next_query) -> Query.execute ~operation_key ~context next_query
+| Ok (Some next_query) -> Query.execute ~task_queue ~operation_key ~context next_query
 | Ok None -> Ok_finished
 | Error error -> handle_temporal_error error
 ```

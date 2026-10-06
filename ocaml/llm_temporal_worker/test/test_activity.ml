@@ -33,13 +33,13 @@ let _invoke_compact :
   Llm_temporal.invoke_compact_v1
 
 let _start_query :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
     query_envelope ->
     (query_response, Temporal.Error.t) Temporal.Future.t =
   Llm_temporal.start_query_v1
 
 let _invoke_query :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
     query_envelope -> (query_response, Temporal.Error.t) result =
   Llm_temporal.invoke_query_v1
 

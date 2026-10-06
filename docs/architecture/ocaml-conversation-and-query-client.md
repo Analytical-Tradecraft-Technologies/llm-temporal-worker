@@ -710,15 +710,17 @@ module Query : sig
     cost : settled_cost;
   }
 
+  (* task_queue must be the Go worker's queue: llm.query.v1 is registered
+     only there. *)
   val execute :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
     ('a response, Temporal.Error.t) result
 
   val start :
-    ?task_queue:Temporal_task_queue.t ->
+    task_queue:Temporal_task_queue.t ->
     operation_key:Operation_key.t ->
     context:request_context ->
     'a t ->
@@ -744,7 +746,8 @@ scheduling.
 let* provider_filter =
   Query.Filter.provider_status ~include_healthy:false ~page_size:100 ()
 in
-Query.execute ~operation_key ~context (Query.Provider_status provider_filter)
+Query.execute ~task_queue ~operation_key ~context
+  (Query.Provider_status provider_filter)
 ~~~
 
 `start` keeps the Activity's Temporal error as the Future error and returns
@@ -758,7 +761,7 @@ the answer as a spend summary:
 
 ~~~ocaml
 let result =
-  Query.execute
+  Query.execute ~task_queue
     ~operation_key:(Operation_key.of_string "budget-check-481")
     ~context
     (Query.Budget_status {
@@ -1109,8 +1112,15 @@ no FX input or currency value is exposed to Workflow code now.
 
 ## Error surface
 
-Keep **Temporal.Error.t** as the invocation error surface, with helpers that
-recognize new safe application types:
+**Temporal.Error.t** is the invocation error surface. The pinned OCaml Temporal
+SDK exposes an error's category, message, retryability and raw detail payloads,
+but not the worker's application error type (`llm_invalid_argument`,
+`llm_operation_conflict`, `llm_budget_wait`, and so on). That type appears only
+inside the diagnostic message, so the client does not yet ship typed
+classification helpers. Callers can branch on `non_retryable` and inspect
+`details`, which carry the worker's `SafeErrorDetails`. Recognizing the safe
+application types below is planned once the SDK exposes the application failure
+type:
 
 - invalid checkpoint/patch/variant;
 - operation conflict;

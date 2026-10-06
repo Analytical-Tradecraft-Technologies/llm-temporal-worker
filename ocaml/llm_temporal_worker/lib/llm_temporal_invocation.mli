@@ -62,12 +62,12 @@ val invoke_compact_v1 :
   compact_request -> (compaction_response, Temporal.Error.t) result
 
 val start_query_v1 :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t ->
   query_envelope ->
   (query_response, Temporal.Error.t) Temporal.Future.t
 
 val invoke_query_v1 :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t ->
   query_envelope -> (query_response, Temporal.Error.t) result
 
 val invoke_generate_once :

@@ -233,7 +233,6 @@ let invoke_once ?task_queue ~(dispatch : dispatcher) (input : request) =
    from its own durable request identity. Paid work survives parent closure. *)
 let generate_workflow = generate_v1_workflow
 let workflow () = generate_v1_workflow
-let task_queue_string = Option.map Temporal_task_queue.to_string
 
 let start_child ~task_queue ~id definition request =
   Temporal.Child_workflow.start
@@ -253,14 +252,14 @@ let start_compact_v1 ~task_queue ~id request =
 let invoke_compact_v1 ~task_queue ~id request =
   Temporal.Future.await (start_compact_v1 ~task_queue ~id request)
 
-let start_query_v1 ?task_queue envelope =
+let start_query_v1 ~task_queue envelope =
   Temporal.Activity.start
-    ?task_queue:(task_queue_string task_queue)
+    ~task_queue:(Temporal_task_queue.to_string task_queue)
     ~retry_policy:activity_retry_policy query_v1_activity envelope
 
-let invoke_query_v1 ?task_queue envelope =
+let invoke_query_v1 ~task_queue envelope =
   Temporal.Activity.execute
-    ?task_queue:(task_queue_string task_queue)
+    ~task_queue:(Temporal_task_queue.to_string task_queue)
     ~retry_policy:activity_retry_policy query_v1_activity envelope
 
 let invoke_generate_once ?task_queue ~(dispatch : ?task_queue:Temporal_task_queue.t -> (generate_request, generate_response) Temporal.Workflow.t -> generate_request -> (generate_response, Temporal.Error.t) result) input =

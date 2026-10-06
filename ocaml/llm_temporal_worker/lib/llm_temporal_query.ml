@@ -348,8 +348,8 @@ let activity_dispatch ?task_queue activity input =
     ~retry_policy:Llm_temporal_invocation.activity_retry_policy
     activity input
 
-let execute ?task_queue ~operation_key ~context query =
-  execute_with ?task_queue ~dispatch:activity_dispatch ~operation_key ~context query
+let execute ~task_queue ~operation_key ~context query =
+  execute_with ~task_queue ~dispatch:activity_dispatch ~operation_key ~context query
 
 type async_dispatcher =
   ?task_queue:Temporal_task_queue.t ->
@@ -386,5 +386,5 @@ let activity_start_dispatch ?task_queue activity input =
     ?task_queue:(Option.map Temporal_task_queue.to_string task_queue)
     ~retry_policy:Llm_temporal_invocation.activity_retry_policy activity input
 
-let start ?task_queue ~operation_key ~context query =
-  start_with ?task_queue ~dispatch:activity_start_dispatch ~operation_key ~context query
+let start ~task_queue ~operation_key ~context query =
+  start_with ~task_queue ~dispatch:activity_start_dispatch ~operation_key ~context query
