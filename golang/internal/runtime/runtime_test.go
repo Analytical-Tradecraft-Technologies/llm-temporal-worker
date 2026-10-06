@@ -1383,3 +1383,54 @@ func TestDependencyReadinessDiscardsAProbeOfASupersededSnapshot(t *testing.T) {
 		t.Fatalf("probe failures = %d after a failure of superseded clients, want 0", failures)
 	}
 }
+
+// blockingStartWorker blocks in Start until released, as a Temporal worker
+// doing its startup RPCs does.
+type blockingStartWorker struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (worker *blockingStartWorker) Start() error {
+	close(worker.entered)
+	<-worker.release
+	return nil
+}
+
+func (worker *blockingStartWorker) Stop() {}
+
+func TestDependencyReadinessReleasesItsSnapshotLeaseBeforeResume(t *testing.T) {
+	healthy := &mutableRuntimeProbe{}
+	healthy.healthy.Store(true)
+	controller := &blockingStartWorker{entered: make(chan struct{}), release: make(chan struct{})}
+	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
+	options.V1Runtime = nil
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+		return controller, &testRegistry{}, nil
+	}
+	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
+		return testEngine{}, &testDependencyProbeClientSet{probes: []DependencyProbe{healthy}}, nil
+	})
+	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", -1))
+	runtime, err := New(context.Background(), configuration, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	synced := make(chan error, 1)
+	go func() { synced <- runtime.syncDependencyReadiness(context.Background()) }()
+	waitForRuntimeEvent(t, controller.entered, "worker start during dependency recovery")
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- runtime.App.Reload(context.Background(), configuration) }()
+	select {
+	case err := <-reloaded:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reload waited for the recovery Resume to drain the probed snapshot")
+	}
+	close(controller.release)
+	if err := <-synced; err != nil {
+		t.Fatal(err)
+	}
+}

@@ -911,16 +911,18 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 		// no readiness decision on this pass.
 		return nil
 	}
-	if lease != nil {
-		defer lease.Release()
-	}
 	var probeErr error
 	if len(probes) > 0 {
 		probeErr = CheckDependencyProbes(ctx, probes, runtime.readinessProbeTimeout)
 	}
 	runtime.readinessMu.Lock()
 	defer runtime.readinessMu.Unlock()
-	if lease != nil && runtime.App.Current() != lease.Snapshot() {
+	superseded := lease != nil && runtime.App.Current() != lease.Snapshot()
+	// Release before any Pause/Resume: Resume starts the Temporal worker
+	// synchronously, and a held lease would keep a concurrent reload waiting
+	// to drain the old clients for that long.
+	lease.Release()
+	if superseded {
 		return nil
 	}
 	if ctx.Err() == nil && probeErr != nil {
