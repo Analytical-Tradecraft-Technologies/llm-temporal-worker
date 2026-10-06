@@ -183,8 +183,12 @@ bounds:
   caller can still stop waiting when its own context ends.
 - **Timeout.** Each endpoint's complete listing is bounded by 10 seconds.
   Endpoints in scope are refreshed in parallel.
-- **Per-query bound.** At most four endpoints are refreshed per query. Further
-  matching endpoints are not fetched.
+- **Per-query bound.** At most four endpoints are fetched per query. The bound
+  counts only endpoints whose persisted listing is too old, so endpoints that
+  are already fresh never use it up. Further stale endpoints are not fetched.
+- **Recheck before fetch.** The owner of an endpoint's shared fetch re-reads
+  the persisted listing first and skips the provider call when another
+  refresh has just written a fresh one.
 - **Validity.** A refreshed listing is reported current for one hour.
 
 Refresh happens only on the first page. A continuation page reads the view

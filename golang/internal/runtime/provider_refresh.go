@@ -166,17 +166,35 @@ func (refresher *ProviderRefresher) RefreshInventory(ctx context.Context, provid
 	if olderThan < refresher.minInterval {
 		olderThan = refresher.minInterval
 	}
-	if len(targets) > refresher.maxEndpoints {
-		report.Skipped = len(targets) - refresher.maxEndpoints
-		targets = targets[:refresher.maxEndpoints]
+	// Check persisted ages first and cap only the endpoints that actually need
+	// a fetch, so endpoints that are already fresh cannot use up the bound and
+	// starve stale ones.
+	stale := make([]ProviderRefreshTarget, 0, len(targets))
+	for _, target := range targets {
+		fresh, err := refresher.persistedFresh(ctx, target, olderThan)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return report, ctxErr
+			}
+			return report, err
+		}
+		if fresh {
+			report.Fresh++
+			continue
+		}
+		stale = append(stale, target)
+	}
+	if len(stale) > refresher.maxEndpoints {
+		report.Skipped = len(stale) - refresher.maxEndpoints
+		stale = stale[:refresher.maxEndpoints]
 	}
 	type outcome struct {
 		fresh bool
 		err   error
 	}
-	results := make([]outcome, len(targets))
+	results := make([]outcome, len(stale))
 	var wg sync.WaitGroup
-	for index, target := range targets {
+	for index, target := range stale {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -213,19 +231,38 @@ type refreshStateUnavailable struct{ err error }
 
 func (err refreshStateUnavailable) Error() string { return err.err.Error() }
 
-func (refresher *ProviderRefresher) refreshTarget(ctx context.Context, target ProviderRefreshTarget, olderThan time.Duration) (bool, error) {
+// persistedFresh reports whether the endpoint's persisted provider listing is
+// younger than olderThan. A Redis read failure is returned unwrapped.
+func (refresher *ProviderRefresher) persistedFresh(ctx context.Context, target ProviderRefreshTarget, olderThan time.Duration) (bool, error) {
 	existing, err := refresher.store.GetInventorySnapshot(ctx, refresher.configDigest, target.Provider, target.EndpointID, target.EndpointAccountHMAC)
 	switch {
 	case err == nil:
-		if existing.Source == control.InventoryProviderAPI && refresher.clock().Sub(existing.ObservedAt) < olderThan {
+		return existing.Source == control.InventoryProviderAPI && refresher.clock().Sub(existing.ObservedAt) < olderThan, nil
+	case errors.Is(err, control.ErrInventorySnapshotNotFound):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// refreshTarget fetches and persists one endpoint's listing through the
+// endpoint's flight. It reports fresh=true when the flight owner found a
+// listing that another refresh had written in the meantime.
+func (refresher *ProviderRefresher) refreshTarget(ctx context.Context, target ProviderRefreshTarget, olderThan time.Duration) (bool, error) {
+	key := refreshTargetKey(target)
+	return refresher.flights.do(ctx, key, func() (bool, error) {
+		// Re-read after becoming the flight owner: a flight that finished
+		// between this caller's age check and acquiring the flight may already
+		// have written a fresh listing, and fetching again would be redundant.
+		recheckCtx, cancelRecheck := context.WithTimeout(context.WithoutCancel(ctx), refresher.timeout)
+		fresh, err := refresher.persistedFresh(recheckCtx, target, olderThan)
+		cancelRecheck()
+		if err != nil {
+			return false, refreshStateUnavailable{err}
+		}
+		if fresh {
 			return true, nil
 		}
-	case errors.Is(err, control.ErrInventorySnapshotNotFound):
-	default:
-		return false, refreshStateUnavailable{err}
-	}
-	key := refreshTargetKey(target)
-	return false, refresher.flights.do(ctx, key, func() error {
 		// The shared fetch is detached from the first caller's cancellation so
 		// one canceled caller cannot fail every collapsed waiter. The timeout
 		// still bounds it.
@@ -233,7 +270,7 @@ func (refresher *ProviderRefresher) refreshTarget(ctx context.Context, target Pr
 		defer cancel()
 		models, err := provider.CollectModelInventory(fetchCtx, target.Lister, provider.ModelListQuery{EndpointID: target.EndpointID, Limit: providerRefreshListPageSize})
 		if err != nil {
-			return err
+			return false, err
 		}
 		observed := refresher.clock().UTC()
 		snapshot := control.InventorySnapshot{
@@ -251,10 +288,10 @@ func (refresher *ProviderRefresher) refreshTarget(ctx context.Context, target Pr
 		}
 		snapshot.InventoryDigest = control.InventoryDigest(snapshot.Models)
 		if err := snapshot.Validate(); err != nil {
-			return fmt.Errorf("refreshed inventory is invalid: %w", err)
+			return false, fmt.Errorf("refreshed inventory is invalid: %w", err)
 		}
 		_, err = refresher.store.PersistInventorySnapshot(fetchCtx, snapshot)
-		return err
+		return false, err
 	})
 }
 
@@ -320,11 +357,12 @@ type refreshFlightGroup struct {
 
 type refreshFlight struct {
 	done    chan struct{}
+	fresh   bool
 	err     error
 	waiters int
 }
 
-func (group *refreshFlightGroup) do(ctx context.Context, key string, fn func() error) error {
+func (group *refreshFlightGroup) do(ctx context.Context, key string, fn func() (bool, error)) (bool, error) {
 	group.mu.Lock()
 	if group.calls == nil {
 		group.calls = make(map[string]*refreshFlight)
@@ -334,9 +372,9 @@ func (group *refreshFlightGroup) do(ctx context.Context, key string, fn func() e
 		group.mu.Unlock()
 		select {
 		case <-call.done:
-			return call.err
+			return call.fresh, call.err
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		}
 	}
 	call := &refreshFlight{done: make(chan struct{})}
@@ -350,13 +388,13 @@ func (group *refreshFlightGroup) do(ctx context.Context, key string, fn func() e
 			group.mu.Unlock()
 			close(call.done)
 		}()
-		call.err = fn()
+		call.fresh, call.err = fn()
 	}()
 	select {
 	case <-call.done:
-		return call.err
+		return call.fresh, call.err
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	}
 }
 

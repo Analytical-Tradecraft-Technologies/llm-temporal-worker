@@ -374,3 +374,52 @@ func TestProviderRefreshTargetsRequireListerAndUnambiguousIdentity(t *testing.T)
 		t.Fatalf("targets: count=%v supported=%v", count, supported)
 	}
 }
+
+// TestProviderRefreshCapCountsOnlyStaleEndpoints checks that endpoints whose
+// listing is already fresh do not use up the per-query endpoint bound.
+func TestProviderRefreshCapCountsOnlyStaleEndpoints(t *testing.T) {
+	store := newMemoryInventoryStore()
+	seedInventory(t, store, "a", refreshTestNow, "gpt-a")
+	seedInventory(t, store, "b", refreshTestNow, "gpt-b")
+	listers := []*countingLister{{}, {}, {models: []provider.Model{{ProviderModelID: "gpt-c", Lifecycle: provider.ModelAvailable}}}}
+	targets := []ProviderRefreshTarget{refreshTarget("a", listers[0]), refreshTarget("b", listers[1]), refreshTarget("c", listers[2])}
+	service, _ := refreshTestService(t, store, nil, ProviderRefresherOptions{Targets: targets, MaxEndpoints: 1})
+	response, err := service.Execute(context.Background(), inventoryRefreshRequest(t, llm.QueryModelInventory, "", time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listers[0].calls.Load() != 0 || listers[1].calls.Load() != 0 || listers[2].calls.Load() != 1 {
+		t.Fatalf("fetch counts = %d,%d,%d, want 0,0,1", listers[0].calls.Load(), listers[1].calls.Load(), listers[2].calls.Load())
+	}
+	if response.Source != string(control.QuerySourcePersistedRefreshed) || response.Freshness != string(control.QueryFreshCurrent) {
+		t.Fatalf("source=%s freshness=%s, want refreshed/current", response.Source, response.Freshness)
+	}
+	if ids := inventoryModelIDs(t, response); len(ids) != 3 {
+		t.Fatalf("models = %v, want all three endpoints", ids)
+	}
+}
+
+// TestProviderRefreshFlightOwnerRechecksFreshness covers a caller that saw a
+// stale listing, but another flight wrote a fresh one before this caller
+// became the flight owner. The owner must re-read and skip the fetch.
+func TestProviderRefreshFlightOwnerRechecksFreshness(t *testing.T) {
+	store := newMemoryInventoryStore()
+	seedInventory(t, store, "primary", refreshTestNow.Add(-2*time.Hour), "gpt-old")
+	lister := &countingLister{models: []provider.Model{{ProviderModelID: "gpt-other", Lifecycle: provider.ModelAvailable}}}
+	target := refreshTarget("primary", lister)
+	_, refresher := refreshTestService(t, store, nil, ProviderRefresherOptions{Targets: []ProviderRefreshTarget{target}})
+	fresh, err := refresher.persistedFresh(context.Background(), target, time.Minute)
+	if err != nil || fresh {
+		t.Fatalf("precondition: fresh=%v err=%v, want stale", fresh, err)
+	}
+	// A previous flight finishes and writes a fresh listing after the age
+	// check above, before this caller acquires the flight.
+	seedInventory(t, store, "primary", refreshTestNow, "gpt-new")
+	fresh, err = refresher.refreshTarget(context.Background(), target, time.Minute)
+	if err != nil || !fresh {
+		t.Fatalf("refreshTarget fresh=%v err=%v, want fresh without fetch", fresh, err)
+	}
+	if lister.calls.Load() != 0 || store.persists != 2 {
+		t.Fatalf("owner refetched: calls=%d persists=%d", lister.calls.Load(), store.persists)
+	}
+}
