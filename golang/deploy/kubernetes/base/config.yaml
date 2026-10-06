@@ -20,7 +20,10 @@ temporal:
     server_name: temporal.example.internal
     ca_file: /var/run/secrets/llmtw/temporal-ca.pem
   worker:
-    max_concurrent_activities: 64
+    # Each in-flight Activity can hold about 96 MiB of live heap at the 4 MiB
+    # parent-transcript bound; keep this times 96 MiB under GOMEMLIMIT
+    # (deployment.yaml). See docs/reference/configuration.md.
+    max_concurrent_activities: 16
     max_concurrent_activity_task_polls: 8
     graceful_stop_timeout: 45s
     heartbeat_keepalive_interval: 1s
