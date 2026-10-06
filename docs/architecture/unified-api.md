@@ -252,6 +252,16 @@ close objects that leave `additionalProperties` unset; see
 cannot be represented this way, such as a recursive schema or, in strict
 mode, an explicitly open object, fails before dispatch.
 
+Providers generate structured output in schema property order, so a
+"reasoning before answer" schema depends on it. The canonical request form
+sorts object keys, so the caller's literal order cannot survive. Instead, each
+object's `properties` are sent in the order of its `required` array, followed
+by any optional properties in sorted order; list `required` in the order fields
+should be generated. This applies to the output schema and function tool
+parameters on the OpenAI Responses, Chat, Anthropic Messages and Bedrock
+Messages routes. Bedrock Converse tool schemas keep the AWS SDK's sorted
+encoding.
+
 ## Portability
 
 `portability` is either `strict` or `best_effort`.
