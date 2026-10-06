@@ -100,7 +100,7 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestMap, _, err := adapter.lowerRequestMap(normalized, serviceClass)
+	requestMap, _, err := adapter.lowerRequestMap(normalized, serviceClass, "")
 	if err != nil {
 		t.Fatal(err)
 	}

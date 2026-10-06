@@ -45,7 +45,7 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			params, err := fixtureAdapterForProfile(t, profile).lowerRequest(normalized, serviceClass)
+			params, err := fixtureAdapterForProfile(t, profile).lowerRequest(normalized, serviceClass, "")
 			if err != nil {
 				t.Fatal(err)
 			}

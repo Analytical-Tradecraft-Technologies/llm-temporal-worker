@@ -92,7 +92,7 @@ verified profile.
 
 | Profile | Official client | Initial API family | Service-class lowering | Important policy |
 | --- | --- | --- | --- | --- |
-| OpenAI | `openai-go` | Responses | economy -> `flex`, standard -> `default`, priority -> `priority` when the model supports them | Capture response `service_tier`; a downgrade is observable |
+| OpenAI | `openai-go` | Responses | The endpoint's configured `service_classes.<class>.provider_value`, which also keys pricing; without one, economy -> `flex`, standard -> `default`, priority -> `priority` when the model supports them | Capture response `service_tier`; a downgrade is observable |
 | Azure OpenAI | `openai-go` with Azure base URL/auth options | Responses or Chat, declared per deployment | the configured tier selects eligibility and pricing only; `service_tier` is not sent because the Azure specification does not define it | Never infer capability from the base URL alone |
 | OpenRouter | `openai-go` with compatible base URL | Chat Completions | configured only when a verified provider/model path offers the requested behavior | Disable hidden provider fallback and require declared parameters |
 | Exa | `openai-go` with compatible base URL | Chat Completions | profile-declared; normally standard until another tier is verified; `service_tier` is not sent because Exa does not define it | Preserve Exa request ID and authoritative `costDollars` when present |

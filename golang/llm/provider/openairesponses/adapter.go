@@ -77,11 +77,16 @@ func (adapter *Adapter) Name() string { return adapterName }
 
 // lowerRequestMap builds the intended wire body for this endpoint: the common
 // lowering with the endpoint's request policy applied to the map itself, so
-// the body that is sent is exactly the body that was intended.
-func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass) (map[string]any, loweredToolPolicy, error) {
+// the body that is sent is exactly the body that was intended. tier is the
+// endpoint's configured provider value for the class; empty keeps the
+// canonical Responses tier for the class.
+func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, tier string) (map[string]any, loweredToolPolicy, error) {
 	requestMap, policy, err := lowerRequestMap(request, serviceClass, adapter.storageDenied)
 	if err != nil {
 		return nil, loweredToolPolicy{}, err
+	}
+	if tier != "" {
+		requestMap["service_tier"] = tier
 	}
 	if adapter.omitServiceTier {
 		delete(requestMap, "service_tier")
@@ -94,8 +99,8 @@ func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.Se
 	return requestMap, policy, nil
 }
 
-func (adapter *Adapter) lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	requestMap, policy, err := adapter.lowerRequestMap(request, serviceClass)
+func (adapter *Adapter) lowerRequest(request llm.Request, serviceClass llm.ServiceClass, tier string) (responses.ResponseNewParams, error) {
+	requestMap, policy, err := adapter.lowerRequestMap(request, serviceClass, tier)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -155,7 +160,13 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
 		return provider.Call{}, compileError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
 	}
-	params, err := adapter.lowerRequest(normalized, serviceClass)
+	// Routing and pricing key the request on the endpoint's configured
+	// provider value, so the request must carry the same tier.
+	tier := input.Metadata.ProviderTier
+	if tier == "" {
+		tier = providerTier(serviceClass)
+	}
+	params, err := adapter.lowerRequest(normalized, serviceClass, tier)
 	if err != nil {
 		return provider.Call{}, compileError(err.Error())
 	}
@@ -172,7 +183,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	metadata := input.Metadata
 	metadata.SchemaDigest = digest
 	metadata.CapabilityVersion = set.Version
-	metadata.ProviderTier = string(providerTier(serviceClass))
+	metadata.ProviderTier = tier
 	metadata.OpaqueStateRequired = normalized.Continuation != nil
 	if metadata.EstimatedBytes == 0 {
 		canonical, canonicalErr := canonicalRequestBytes(normalized)
