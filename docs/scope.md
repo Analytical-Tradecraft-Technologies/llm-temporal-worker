@@ -115,11 +115,14 @@ controller:
   error, checkpoint cache affinity, and portability diagnostics on the durable
   v1 path. The planner receives no continuation constraints there, so a lineage
   can move between two routes of the same API family.
-- Requesting top-p, stop sequences, a sampling seed, or an explicit reasoning
-  mode or token budget through the v1 contract. The provider adapters implement
-  these controls internally, but `SettingsPatchV1` has no leaves for them; adding
-  the leaves is a contract, checkpoint-settings and client change planned after
-  v1.
+- First-class, provider-neutral settings for top-p, stop sequences, a sampling
+  seed, or an explicit reasoning mode or token budget. `SettingsPatchV1` has no
+  leaves for them, although the provider adapters implement the controls
+  internally. Where an endpoint's configured `extensions` allow-list names a
+  provider field (for example `top_p` on an `openai_chat` endpoint), callers can
+  set it through `SettingsPatchV1.Extensions`, unvalidated and per provider.
+  Adding first-class leaves is a contract, checkpoint-settings and client change
+  planned after v1.
 
 ## Behavioral invariants
 
