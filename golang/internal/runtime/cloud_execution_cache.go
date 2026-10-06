@@ -237,6 +237,20 @@ func (r *CloudExecutionRuntime) finishAttempt(ctx context.Context, p PreparedClo
 	return r.publish(ctx, p, identity, &result.Response, disposition, nil, FinalizationEffects{Provider: effects})
 }
 func (r *CloudExecutionRuntime) publish(ctx context.Context, p PreparedCloudRequest, identity CheckpointPublicationIdentity, model *llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry, effects FinalizationEffects) (llm.ExecutionResultV1, error) {
+	result, err := r.publishOnce(ctx, p, identity, model, disposition, origin, effects)
+	// Publication errors carry dispatch=accepted because they normally follow
+	// a paid provider call. A no-work compaction or a cache replay made no
+	// call for this request, so it must not report one.
+	var failure *provider.Error
+	if err != nil && (effects.NoWork != nil || origin != nil) && errors.As(err, &failure) && failure.Dispatch == provider.DispatchAccepted {
+		relabeled := *failure
+		relabeled.Dispatch = provider.DispatchNotDispatched
+		err = &relabeled
+	}
+	return result, err
+}
+
+func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloudRequest, identity CheckpointPublicationIdentity, model *llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry, effects FinalizationEffects) (llm.ExecutionResultV1, error) {
 	var data []byte
 	if p.Generate != nil {
 		cp, response, err := r.publication.Generate(ctx, identity, *p.Generate, p.GenerateReplay, *model, disposition, origin)
