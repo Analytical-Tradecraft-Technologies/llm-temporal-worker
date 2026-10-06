@@ -1321,3 +1321,28 @@ func TestRuntimeDependencyPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(
 		t.Fatal("in-flight Activity did not complete under a live context")
 	}
 }
+
+func TestStopDependencyMonitorHonoursTheShutdownDeadlineDuringABlockedResume(t *testing.T) {
+	runtime := &Runtime{}
+	// A dependency-recovery Resume blocked in controller Start holds the
+	// readiness lock for as long as Start runs.
+	runtime.readinessMu.Lock()
+	defer runtime.readinessMu.Unlock()
+	runtime.mu.Lock()
+	runtime.monitorCancel = func() {}
+	runtime.monitorDone = make(chan struct{})
+	runtime.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	stopped := make(chan struct{})
+	go func() {
+		runtime.stopDependencyMonitor(ctx)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stopDependencyMonitor ignored its 20ms deadline while Resume held the readiness lock")
+	}
+}
