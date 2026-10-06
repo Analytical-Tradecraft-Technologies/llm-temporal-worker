@@ -11,6 +11,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func cloudMetricTotal(t *testing.T, metrics *observability.Metrics, name string) float64 {
@@ -55,6 +56,9 @@ func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
 	}
 	if cloudMetricTotal(t, metrics, "llmtw_ambiguous_total") != 0 {
 		t.Fatal("a completed request was counted as ambiguous")
+	}
+	if cloudMetricTotal(t, metrics, "llmtw_operation_state_total") == 0 {
+		t.Fatal("operation states were not recorded on the cloud path")
 	}
 	// A lost paid response is ambiguous.
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
@@ -104,5 +108,60 @@ func TestCloudMetricsCountTransitionsAndProviderAnswers(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// Polls of provider-owned jobs and cache outcomes are counted on the cloud
+// path (#1217).
+func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithMetrics(context.Background(), metrics)
+	f := boundedCloud(t, true)
+	f.request.Cache = &llm.CachePolicyV1{}
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	f.now = f.now.Add(2 * time.Second)
+	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if got := cloudMetricTotal(t, metrics, "llmtw_provider_poll_total"); got != 2 {
+		t.Fatalf("poll events = %v, want started and completed", got)
+	}
+	// An identical request under another key is served from the cache.
+	f.request.OperationKey = "cached-repeat"
+	v, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	if err != nil || v.State != llm.ExecutionCompleted {
+		ref = llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+		v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	}
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if got := cloudMetricTotal(t, metrics, "llmtw_continuation_total"); got < 2 {
+		t.Fatalf("continuation events = %v, want a created checkpoint per completed request", got)
+	}
+	if got := cloudMetricTotal(t, metrics, "llmtw_cache_events_total"); got < 4 {
+		t.Fatalf("cache events = %v, want a miss and fill, then a hit and use", got)
+	}
+}
+
+// Each durable step and each provider attempt is a span on the cloud path
+// (#1217).
+func TestCloudRuntimeRecordsStepAndAttemptSpans(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	ctx := observability.WithTracer(context.Background(), tracer)
+	f := boundedCloud(t, false)
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	names := map[string]bool{}
+	for _, span := range exporter.GetSpans() {
+		names[span.Name] = true
+	}
+	if !names["llmtw.cloud.generate"] || !names["llmtw.provider_attempt"] {
+		t.Fatalf("spans = %v, want the generate step and the provider attempt", names)
 	}
 }

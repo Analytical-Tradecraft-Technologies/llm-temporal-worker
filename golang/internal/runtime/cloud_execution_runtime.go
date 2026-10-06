@@ -106,22 +106,32 @@ const (
 )
 
 func (r *CloudExecutionRuntime) PrepareExecutionV1(ctx context.Context, input llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
-	return r.prepareStep(ctx, input, cloudPrepare)
+	return tracedStep(ctx, "prepare", func(ctx context.Context) (llm.ExecutionResultV1, error) {
+		return r.prepareStep(ctx, input, cloudPrepare)
+	})
 }
 func (r *CloudExecutionRuntime) GenerateStepV1(ctx context.Context, input llm.GenerateRequestV1) (llm.ExecutionResultV1, error) {
-	return r.prepareStep(ctx, llm.PrepareExecutionV1{Generate: &input}, cloudSubmit)
+	return tracedStep(ctx, "generate", func(ctx context.Context) (llm.ExecutionResultV1, error) {
+		return r.prepareStep(ctx, llm.PrepareExecutionV1{Generate: &input}, cloudSubmit)
+	})
 }
 func (r *CloudExecutionRuntime) CompactStepV1(ctx context.Context, input llm.CompactRequestV1) (llm.ExecutionResultV1, error) {
-	return r.prepareStep(ctx, llm.PrepareExecutionV1{Compact: &input}, cloudSubmit)
+	return tracedStep(ctx, "compact", func(ctx context.Context) (llm.ExecutionResultV1, error) {
+		return r.prepareStep(ctx, llm.PrepareExecutionV1{Compact: &input}, cloudSubmit)
+	})
 }
 func (r *CloudExecutionRuntime) AcquireBudgetV1(ctx context.Context, ref llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	return r.referenceStep(ctx, ref, cloudAcquire)
+	return tracedStep(ctx, "acquire", func(ctx context.Context) (llm.ExecutionResultV1, error) {
+		return r.referenceStep(ctx, ref, cloudAcquire)
+	})
 }
 func (r *CloudExecutionRuntime) PollExecutionV1(ctx context.Context, ref llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	return r.referenceStep(ctx, ref, cloudPoll)
+	return tracedStep(ctx, "poll", func(ctx context.Context) (llm.ExecutionResultV1, error) { return r.referenceStep(ctx, ref, cloudPoll) })
 }
 func (r *CloudExecutionRuntime) CompleteExecutionV1(ctx context.Context, ref llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	return r.referenceStep(ctx, ref, cloudComplete)
+	return tracedStep(ctx, "complete", func(ctx context.Context) (llm.ExecutionResultV1, error) {
+		return r.referenceStep(ctx, ref, cloudComplete)
+	})
 }
 func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.PrepareExecutionV1, step cloudStep) (llm.ExecutionResultV1, error) {
 	if r == nil {

@@ -10,6 +10,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
+	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
@@ -113,6 +114,7 @@ func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedClou
 	case durable.CacheMiss:
 		return llm.ExecutionResultV1{}, false, nil
 	case durable.CacheWait, durable.CacheRecoveryRequired:
+		observability.MetricsFromContext(ctx).RecordCache("fill_busy")
 		return cloudStatus(p, llm.ExecutionCacheWait, 5*time.Second), true, nil
 	default:
 		return llm.ExecutionResultV1{}, false, executionError(provider.CodeStateCorrupt)
@@ -283,5 +285,13 @@ func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloud
 			return llm.ExecutionResultV1{}, err
 		}
 	}
-	return r.storeResult(ctx, p, data)
+	result, err := r.storeResult(ctx, p, data)
+	if err == nil {
+		recordCloudCache(ctx, disposition.Disposition)
+		if p.Compact != nil || (p.Generate != nil && p.Generate.Parent != nil) {
+			recordCloudContinuation(ctx, "reused")
+		}
+		recordCloudContinuation(ctx, "created")
+	}
+	return result, err
 }
