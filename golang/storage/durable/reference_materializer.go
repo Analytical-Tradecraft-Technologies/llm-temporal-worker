@@ -253,8 +253,14 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 			expiresAt = request.ExpiresAt
 		}
 		operation.startBy = expiresAt
+		// A quote may have waited for capacity in an earlier bucket. Spend
+		// counts through the window from acceptance, never from the quote.
+		windowExpiresAt := reservation.windowExpiresAt
+		if accepted := referenceWindowExpiry(now, reservation.bucketNanos, reservation.durationNanos); accepted.After(windowExpiresAt) {
+			windowExpiresAt = accepted
+		}
 		bucket.entries[request.OperationID] = referenceEntry{reserved: reservation.amountUSD, expiresAt: expiresAt, status: referenceReserved, lastRevision: 1}
-		operation.reservations[key] = referenceReservation{key: key, amount: reservation.amountUSD, limit: reservation.limitUSD, bucketStartNanos: reservation.bucketStartNanos, expiresAt: expiresAt, windowExpiresAt: reservation.windowExpiresAt, revision: 1}
+		operation.reservations[key] = referenceReservation{key: key, amount: reservation.amountUSD, limit: reservation.limitUSD, bucketStartNanos: reservation.bucketStartNanos, expiresAt: expiresAt, windowExpiresAt: windowExpiresAt, revision: 1}
 		operation.result.Events = append(operation.result.Events, event)
 	}
 	operation.result = cloneReserveResult(operation.result)
@@ -514,7 +520,7 @@ func canonicalReferenceReservations(values []admission.WindowReservation) ([]can
 			return nil, fmt.Errorf("reservation %d duplicates window/bucket start", index)
 		}
 		seenStarts[startKey] = struct{}{}
-		windowExpires := time.Unix(0, bucketStart).Add(time.Duration(value.DurationNanos)).Add(time.Duration(value.BucketNanos)).UTC()
+		windowExpires := referenceWindowExpiry(time.Unix(0, bucketStart), value.BucketNanos, value.DurationNanos)
 		result = append(result, canonicalReferenceReservation{policyID: value.PolicyID, windowID: value.WindowID, bucket: value.Bucket, amountUSD: amount, limitUSD: limit, bucketNanos: value.BucketNanos, durationNanos: value.DurationNanos, bucketStartNanos: bucketStart, windowExpiresAt: windowExpires})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -527,6 +533,14 @@ func canonicalReferenceReservations(values []admission.WindowReservation) ([]can
 		return result[i].bucket < result[j].bucket
 	})
 	return result, nil
+}
+
+// referenceWindowExpiry is when spend booked at a time leaves a sliding
+// window: the end of the bucket containing that time plus the window duration,
+// matching the conservative full-first-bucket accounting rule.
+func referenceWindowExpiry(at time.Time, bucketNanos, durationNanos int64) time.Time {
+	bucketStart := at.UnixNano() / bucketNanos * bucketNanos
+	return time.Unix(0, bucketStart).Add(time.Duration(durationNanos)).Add(time.Duration(bucketNanos)).UTC()
 }
 
 func referenceAmount(exact pricing.USD, legacy pricing.MicroUSD) (pricing.USD, error) {

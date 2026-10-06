@@ -47,7 +47,10 @@ The estimator receives the detached provider request: resolved model, attempted
 class, no fallback classes, and the same digest used by the compiler. It reuses
 the configured token estimator, output/reasoning bounds and safety ratio. Each
 matched window receives the same exact USD quote, its exact configured limit,
-the bucket at `QuotedAt`, and the window's durations. Legacy window limits are
+the bucket at `QuotedAt`, and the window's durations. The bucket identifies the
+reservation; the window expiry of its spend is set by Redis at acceptance, so a
+quote that waited for capacity is not forgotten early (see
+[Redis budget leases](redis-budget-leases.md)). Legacy window limits are
 explicitly converted to USD. Redis materializes charges upwards and limits
 downwards to nanoUSD; unsafe amounts and limits cannot cross this boundary.
 Compatibility microUSD fields remain alongside the authoritative exact values.

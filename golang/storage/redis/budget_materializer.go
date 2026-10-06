@@ -491,6 +491,8 @@ func canonicalDurableReservations(operation durable.OperationID, generation dura
 			return nil, fmt.Errorf("reservation %d limit materialization: %w", index, err)
 		}
 		bucketStart := value.Bucket * value.BucketNanos
+		// The quote-time expiry is a floor: the Function raises it to the
+		// acceptance bucket's end plus the window duration under Redis TIME.
 		windowExpiry := time.Unix(0, bucketStart).Add(time.Duration(value.DurationNanos)).Add(time.Duration(value.BucketNanos)).UTC()
 		reservationExpiry := now.Add(durable.BudgetStartLease)
 		if !expiresAt.IsZero() {
