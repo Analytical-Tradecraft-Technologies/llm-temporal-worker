@@ -164,7 +164,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		}
 	}
 	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
-		return provider.Call{}, compileError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
+		return provider.Call{}, provider.NewStrictPortabilityError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
 	}
 	// Routing and pricing key the request on the endpoint's configured
 	// provider value, so the request must carry the same tier.

@@ -3,6 +3,7 @@ package bedrockconverse
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -118,6 +119,10 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := lowerRequest(normalized, adapter.profile, tier, input.Strict)
 	if err != nil {
+		var strict *provider.Error
+		if errors.As(err, &strict) {
+			return provider.Call{}, strict
+		}
 		return provider.Call{}, compileError(err.Error())
 	}
 	digest := input.Metadata.SchemaDigest

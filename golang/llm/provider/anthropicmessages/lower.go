@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
@@ -19,7 +20,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ant
 
 func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier string, strict bool) (anthropic.MessageNewParams, error) {
 	if strict && hasMixedInstructionLevels(request.Instructions) {
-		return anthropic.MessageNewParams{}, fmt.Errorf("instruction hierarchy cannot be preserved by Anthropic Messages in strict portability mode")
+		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Anthropic Messages in strict portability mode")
 	}
 	messages := make([]any, 0, len(request.Input)+1)
 	if err := appendContinuationStates(&messages, request.Continuation, profile, ""); err != nil {
@@ -471,7 +472,7 @@ func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, e
 		display = "summarized"
 	case llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed:
 		if strict {
-			return nil, fmt.Errorf("reasoning summary %q is not supported by Anthropic Messages", reasoning.Summary)
+			return nil, provider.NewStrictPortabilityError(fmt.Sprintf("reasoning summary %q is not supported by Anthropic Messages", reasoning.Summary))
 		}
 		display = "summarized"
 	default:

@@ -2,12 +2,14 @@ package bedrockconverse
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 func TestLiftOmitsReasoningContentWithoutFailingTheResponse(t *testing.T) {
@@ -63,6 +65,10 @@ func TestLoweringRejectsReasoningAndExtensionsItCannotSend(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("lowerRequest() error = %v, want %q", err, test.wantErr)
+			}
+			var mapped *provider.Error
+			if strings.Contains(test.wantErr, "reasoning controls") && (!errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability) {
+				t.Fatalf("strict reasoning rejection = %v, want unsupported_capability", err)
 			}
 		})
 	}

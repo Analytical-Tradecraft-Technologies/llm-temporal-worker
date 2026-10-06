@@ -137,6 +137,10 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		if errors.As(err, &unsupported) {
 			return provider.Call{}, unsupportedError(provider.FeatureStructuredOutput, err.Error())
 		}
+		var strict *provider.Error
+		if errors.As(err, &strict) {
+			return provider.Call{}, strict
+		}
 		return provider.Call{}, compileError(err.Error())
 	}
 	digest := input.Metadata.SchemaDigest

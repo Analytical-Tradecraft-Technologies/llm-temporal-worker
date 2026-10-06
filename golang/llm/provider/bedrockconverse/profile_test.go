@@ -1,11 +1,13 @@
 package bedrockconverse
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 func TestDefaultProfileMapsExplicitServiceClasses(t *testing.T) {
@@ -48,7 +50,9 @@ func TestLowerRequestRejectsMixedInstructionHierarchyInStrictMode(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lowerRequest(request, profile, string(types.ServiceTierTypeDefault), true); err == nil {
-		t.Fatal("expected strict mixed hierarchy to be rejected")
+	_, err = lowerRequest(request, profile, string(types.ServiceTierTypeDefault), true)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability {
+		t.Fatalf("strict mixed hierarchy = %v, want an unsupported_capability rejection", err)
 	}
 }

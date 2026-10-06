@@ -11,11 +11,12 @@ import (
 	smithydocumentjson "github.com/aws/smithy-go/document/json"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string, strict bool) (bedrockruntime.ConverseInput, error) {
 	if strict && hasMixedInstructionLevels(request.Instructions) {
-		return bedrockruntime.ConverseInput{}, fmt.Errorf("instruction hierarchy cannot be preserved by Bedrock Converse in strict portability mode")
+		return bedrockruntime.ConverseInput{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Converse in strict portability mode")
 	}
 	if request.Output != nil && (request.Output.Format.Kind == llm.OutputKindJSON || request.Output.Format.Kind == llm.OutputKindJSONSchema) {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("structured output is not implemented by the Bedrock Converse adapter")
@@ -27,7 +28,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("extensions are not supported by the Bedrock Converse adapter")
 	}
 	if reasoning := request.Reasoning; strict && reasoning != nil && !reasoningIsProviderDefault(*reasoning) {
-		return bedrockruntime.ConverseInput{}, fmt.Errorf("reasoning controls are not implemented by the Bedrock Converse adapter in strict portability mode")
+		return bedrockruntime.ConverseInput{}, provider.NewStrictPortabilityError("reasoning controls are not implemented by the Bedrock Converse adapter in strict portability mode")
 	}
 	if sampling := request.Sampling; sampling != nil && (sampling.TopK != nil || sampling.Seed != nil || sampling.PresencePenalty != nil || sampling.FrequencyPenalty != nil) {
 		return bedrockruntime.ConverseInput{}, fmt.Errorf("top_k, seed and penalty sampling controls are not implemented by the Bedrock Converse adapter")
