@@ -33,17 +33,17 @@ type cloudExecutionStore interface {
 // CloudExecutionOptions supplies deployment-owned authorization and signing.
 // No default resolver trusts the tenant/project fields of an incoming payload.
 type CloudExecutionOptions struct {
-	ResolveScope     CheckpointScopeResolver
-	Keyring          *state.Keyring
-	Limits           state.MaterializeLimits
-	RequestLimits    CloudRequestLimits
+	ResolveScope  CheckpointScopeResolver
+	Keyring       *state.Keyring
+	Limits        state.MaterializeLimits
+	RequestLimits CloudRequestLimits
 	// FinalizationTimeout bounds each detached write that records a result
 	// after the caller may have gone (server.finalization_timeout). Zero
 	// means 10 seconds.
 	FinalizationTimeout time.Duration
-	CheckpointTTL    time.Duration
-	BudgetGeneration durable.GenerationID
-	MaxAttempts      int
+	CheckpointTTL       time.Duration
+	BudgetGeneration    durable.GenerationID
+	MaxAttempts         int
 }
 
 // CloudExecutionRuntime implements the bounded activity state machine. All
