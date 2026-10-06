@@ -102,6 +102,22 @@ returning; storage errors never become permission to materialize again. Exact
 decimal settings and JSON integers retain their original precision. The parent
 snapshot is bounded at 4 MiB to leave room for later execution progress.
 
+The repository stores the parent snapshot once, as its own immutable encrypted
+blob in a per-scope stream (`request-parent/<scope tag>`). The preparation in
+the request record holds only `parent_snapshot_ref`: the snapshot's SHA-256,
+its length and the blob's content-addressed key. Later progress writes (budget
+plan, attempt, reservation, execution stages, finalization) therefore rewrite a
+small record instead of the transcript (#1112). The blob is written and read
+back before the record that references it. Every initializer of one
+preparation derives the same reference, so concurrent initializers still agree
+on one immutable value. Loading verifies the blob against the reference and
+fails as corrupt, never as a missing preparation, if the blob is gone or does
+not match. Attempt children copy the root's reference. Preparations saved
+before this change keep `parent_snapshot` inline and still load unchanged.
+Workers built before this change cannot read a referenced preparation and fail
+it as corrupt, so do not run both versions against the same in-flight
+requests.
+
 A Generate may extend a parent only while the parent plus its appended input,
 measured as an encoded snapshot, stays within 3 MiB. Beyond that, preparation
 refuses the turn with a non-retryable `invalid_argument` before any budget or

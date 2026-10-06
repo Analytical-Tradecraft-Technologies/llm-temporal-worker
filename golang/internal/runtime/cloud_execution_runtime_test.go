@@ -1110,6 +1110,10 @@ func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The record references the parent snapshot blob instead of embedding it.
+	if !bytes.Contains(record.Progress, []byte(`"parent_snapshot_ref"`)) || bytes.Contains(record.Progress, []byte(`"parent_snapshot"`)) {
+		t.Fatal("request record embeds the parent snapshot")
+	}
 	preparation, snapshot, err := f.repository.LoadRequestPreparationParent(ctx, scope, id)
 	if err != nil || snapshot == nil {
 		t.Fatalf("snapshot=%v err=%v", snapshot, err)
@@ -1167,6 +1171,7 @@ func BenchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B) {
 			b.ReportAllocs()
 			b.StopTimer()
 			b.ResetTimer()
+			start := readExecutionStorageCounts(f.table, f.blobs)
 			for i := 0; i < b.N; i++ {
 				f.now = f.now.Add(time.Minute)
 				child.OperationKey = fmt.Sprintf("bench-%d", i)
@@ -1182,6 +1187,16 @@ func BenchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B) {
 				v, err = timed("complete", func() (llm.ExecutionResultV1, error) { return f.runtime.CompleteExecutionV1(ctx, ref) })
 				boundedState(b, v, err, llm.ExecutionCompleted)
 			}
+			// Storage traffic of a whole turn (all four steps), not only the
+			// timed step: the same in every sub-benchmark.
+			used, n := readExecutionStorageCounts(f.table, f.blobs).minus(start), float64(b.N)
+			b.ReportMetric(float64(used.gets)/n, "kv-get/turn")
+			b.ReportMetric(float64(used.queries)/n, "kv-query/turn")
+			b.ReportMetric(float64(used.writes)/n, "kv-write/turn")
+			b.ReportMetric(float64(used.opens)/n, "blob-get/turn")
+			b.ReportMetric(float64(used.openBytes)/n, "blob-get-B/turn")
+			b.ReportMetric(float64(used.creates)/n, "blob-put/turn")
+			b.ReportMetric(float64(used.createBytes)/n, "blob-put-B/turn")
 		})
 	}
 }
