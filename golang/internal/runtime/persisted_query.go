@@ -94,6 +94,9 @@ type PersistedQueryOptions struct {
 	// BudgetStatus is required to expose budget_status. It must be backed by
 	// the active Redis generation.
 	BudgetStatus BudgetStatusReader
+	// Refresh serves refresh_if_older_than_seconds. When nil, a refresh
+	// request is rejected as unsupported, exactly as before refresh existed.
+	Refresh *ProviderRefresher
 }
 
 // PersistedQueryBuilderOptions supplies deployment-owned security inputs and
@@ -127,6 +130,7 @@ func NewPersistedQueryServiceBuilder(options PersistedQueryBuilderOptions) (Quer
 			Clock:        options.Clock,
 			ResolveScope: repositories.ScopeResolver,
 			BudgetStatus: repositories.BudgetStatus,
+			Refresh:      repositories.Refresh,
 		})
 	}, nil
 }
@@ -196,6 +200,9 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories QueryRepos
 	if !isNilCapability(options.BudgetStatus) {
 		handler.budget = options.BudgetStatus
 	}
+	if options.Refresh != nil {
+		handler.refresh = options.Refresh
+	}
 	return &control.QueryService{
 		TypedHandler: handler,
 		Authorize:    auditedAuthorize,
@@ -211,6 +218,7 @@ type persistedQueryHandler struct {
 	inventory    inventoryReader
 	spend        control.SpendSummaryReader
 	budget       BudgetStatusReader
+	refresh      *ProviderRefresher
 	resolveScope QueryScopeResolver
 	cursor       *control.CursorCodec
 	clock        func() time.Time
@@ -226,9 +234,54 @@ func (handler *persistedQueryHandler) ExecuteTypedQuery(ctx context.Context, req
 	if now.IsZero() {
 		return control.QueryResponse{}, errors.New("persisted query clock returned zero")
 	}
-	if refreshRequested(request.Filter) {
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "refresh is not configured for the persisted-only composition")
+	// Refresh runs only for the first page. A continuation reads the view
+	// pinned by its signed cursor and never triggers another provider call.
+	if refreshRequested(request.Filter) && claims == nil {
+		refreshed, err := handler.refreshProviderState(ctx, request)
+		if err != nil {
+			return control.QueryResponse{}, err
+		}
+		response, err := handler.execute(ctx, request, claims, now)
+		if err != nil {
+			return control.QueryResponse{}, err
+		}
+		if refreshed.Refreshed > 0 {
+			response.Provenance.Source = control.QuerySourcePersistedRefreshed
+		}
+		if refreshed.Degraded() {
+			// The last persisted state is returned unchanged, so the response
+			// is explicitly stale rather than presented as a current listing.
+			response.Provenance.Freshness = control.QueryFreshStale
+		}
+		return response, nil
 	}
+	return handler.execute(ctx, request, claims, now)
+}
+
+// refreshProviderState refreshes provider state for the query scope. Only
+// model inventory has a provider fetcher; provider status and credit status
+// refreshes are explicitly unsupported. All errors are returned before any
+// read so an unsupported refresh never looks like a persisted answer.
+func (handler *persistedQueryHandler) refreshProviderState(ctx context.Context, request control.QueryRequest) (ProviderRefreshReport, error) {
+	if handler.refresh == nil {
+		return ProviderRefreshReport{}, unsupportedQuery(request.Kind, "refresh is not configured for the persisted-only composition")
+	}
+	query, ok := request.Filter.(control.ModelInventoryQuery)
+	if !ok {
+		return ProviderRefreshReport{}, unsupportedQuery(request.Kind, "refresh is unsupported because no provider exposes a management API for this query kind")
+	}
+	if handler.inventory == nil {
+		return ProviderRefreshReport{}, unsupportedQuery(request.Kind, "model inventory repository is not configured")
+	}
+	report, err := handler.refresh.RefreshInventory(ctx, stringValue(query.Provider), stringValue(query.Endpoint), query.RefreshIfOlderThan)
+	var unsupported errRefreshUnsupported
+	if errors.As(err, &unsupported) {
+		return report, unsupportedQuery(request.Kind, unsupported.reason)
+	}
+	return report, err
+}
+
+func (handler *persistedQueryHandler) execute(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
 	switch request.Kind {
 	case llm.QueryProviderStatus:
 		return handler.providerStatus(ctx, request, claims, now)

@@ -29,7 +29,9 @@ provider result. Memory-mode snapshots do not create external stores.
 read interfaces. `V1RuntimeCapabilities.ProviderInventory` exposes
 `control.InventoryStore` to deployment-owned refresh scheduling. Authorized
 query service composition still requires explicit authorization and cursor
-keys. This change does not add automatic model refreshes or provider API calls.
+keys. There is no scheduled model refresh. An authorized `model_inventory`
+query can request an on-demand refresh; see
+[provider management refresh](persisted-query-service.md#provider-management-refresh).
 
 ## Status and credit
 
@@ -96,9 +98,10 @@ bound to a digest of the fetched snapshot; if the provider changes the listing
 during pagination, the worker fails closed instead of skipping or duplicating
 models. Compatible OpenAI endpoints (including Azure) remain explicitly
 unsupported until they have a provider-specific management contract; a
-deployment must not infer inventory from inference responses. A deployment
-still owns refresh scheduling and must persist each page through
-`ProviderStateStore.PersistInventorySnapshot`; when no supported lister is configured, the existing
+deployment must not infer inventory from inference responses. The query
+refresh path persists each listing through
+`ProviderStateStore.PersistInventorySnapshot`. Any scheduled refresh remains a
+deployment concern; when no supported lister is configured, the existing
 `configured_only` or `unsupported` inventory sources remain the honest result.
 
 ## Redis persistence and retention

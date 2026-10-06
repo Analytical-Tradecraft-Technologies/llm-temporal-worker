@@ -432,6 +432,14 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	var providerControl engine.ProviderStatusRecorder = providerState
 	queryRepos := QueryRepositories{}
 	queryRepos.ProviderStatus, queryRepos.Inventory = providerState, providerState
+	queryRepos.Refresh, err = NewProviderRefresher(ProviderRefresherOptions{
+		ConfigDigest: snapshot.Digest(), Store: providerState, Clock: factory.options.Clock,
+		Targets: providerRefreshTargets(engineSnapshot.Routes, adapters),
+	})
+	if err != nil {
+		closeOwned()
+		return nil, nil, fmt.Errorf("construct provider refresher: %w", err)
+	}
 	var queryService activity.QueryService
 	clock := factory.options.Clock
 	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: keyOptions, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})

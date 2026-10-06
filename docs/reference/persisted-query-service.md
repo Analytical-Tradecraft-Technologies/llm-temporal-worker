@@ -58,8 +58,7 @@ fields, and the response is always complete with no `next_cursor`.
 
 Spend summary stays a typed unsupported-query error until a durable cloud spend
 reader exists. Refresh requests (`refresh_if_older_than_seconds` > 0) are
-also rejected as unsupported because no management refresh adapter is
-composed.
+served as described in [Provider management refresh](#provider-management-refresh).
 
 Every authorization decision is logged as an ordinary structured log entry,
 `control query access decision`. Each entry has `outcome` (`allowed` at info,
@@ -127,8 +126,9 @@ PostgreSQL. For the same reload-safety reason, spend summary obtains its
 scope resolver from `QueryRepositories.ScopeResolver`, not from
 process-lifetime builder options.
 
-The storage composition is persisted-only. Refresh requests are rejected
-until an explicit management refresh adapter is supplied. Budget status
+Refresh requests need `QueryRepositories.Refresh`. The production factory
+supplies it for durable snapshots; without it, refresh requests are rejected as
+unsupported. Budget status
 remains fail-closed until the deployment explicitly composes the built-in
 versioned Redis generation/window reader through `BudgetStatus`. The storage
 package provides `redis.NewRedisBudgetStatusReader`. A library caller of
@@ -145,6 +145,69 @@ SQL spend-summary implementation has been removed. Spend summary remains a
 typed unsupported capability until a deployment supplies an authenticated
 aggregation reader. No empty success or invented zero cost substitutes for the
 missing reader.
+
+## Provider management refresh
+
+A `provider_status`, `model_inventory` or `credit_status` query with
+`refresh_if_older_than_seconds` > 0 asks the worker to fetch fresh provider
+state before reading Redis. The production factory composes a
+`runtime.ProviderRefresher` for each durable snapshot from its routing catalog
+and provider adapters. Refresh runs inside the authorized handler, so a query
+denied by `Authorize` never reaches a provider.
+
+Only model inventory has a provider fetcher today: the `provider.ModelLister`
+extension, implemented by the direct OpenAI Chat and Responses adapters (see
+[provider control](provider-control.md#provider-model-list-capability)).
+No adapter exposes a provider status or credit/balance management API, so:
+
+- `provider_status` and `credit_status` refresh requests return the typed
+  unsupported-query error (`unsupported_capability`, not retryable).
+- A `model_inventory` refresh returns the same error, before any fetch, when no
+  configured endpoint matches the `provider`/`endpoint` filter, or when any
+  matching endpoint has no model-list fetcher. An endpoint is also unsupported
+  when its routes disagree on provider, family, region or account identity,
+  because the listing would otherwise be written under a guessed identity.
+  Narrow the filter to a supported endpoint to refresh it.
+
+For each matching endpoint whose last provider listing is older than
+`refresh_if_older_than_seconds`, the worker lists the provider's models and
+writes the listing with `PersistInventorySnapshot`. The worker applies these
+bounds:
+
+- **Minimum interval.** A listing younger than one minute is never refetched,
+  whatever the request asks. An authorized caller therefore cannot turn queries
+  into a high-rate provider management API client.
+- **Collapsed concurrency.** Concurrent refreshes of the same endpoint identity
+  share one provider fetch. The shared fetch is detached from the first
+  caller's cancellation, so one canceled caller does not fail the others; each
+  caller can still stop waiting when its own context ends.
+- **Timeout.** Each endpoint's complete listing is bounded by 10 seconds.
+  Endpoints in scope are refreshed in parallel.
+- **Per-query bound.** At most four endpoints are fetched per query. The bound
+  counts only endpoints whose persisted listing is too old, so endpoints that
+  are already fresh never use it up. Further stale endpoints are not fetched.
+- **Recheck before fetch.** The owner of an endpoint's shared fetch re-reads
+  the persisted listing first and skips the provider call when another
+  refresh has just written a fresh one.
+- **Validity.** A refreshed listing is reported current for one hour.
+
+Refresh happens only on the first page. A continuation page reads the view
+pinned by its signed cursor and never calls the provider again.
+
+The response reports the outcome explicitly:
+
+- When at least one endpoint was refreshed, the source is
+  `persisted_and_refreshed`. Otherwise it is `persisted`.
+- When a fetch fails, times out or returns an invalid listing, or an endpoint
+  was skipped by the per-query bound, the existing Redis listing is left
+  unchanged and returned with freshness `stale`. The worker never fabricates
+  or clears a listing on failure.
+- A Redis failure while reading the existing listing is the retryable
+  `state_unavailable` error, as for an ordinary read.
+
+Known limitation: the Redis store caches a query view for one second of
+horizon. A non-refresh read in the same second just before a refresh can make
+that refresh's first page omit the new listing; the next query sees it.
 
 ## Versioned budget-status reader contract
 
