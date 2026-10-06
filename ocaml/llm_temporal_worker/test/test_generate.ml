@@ -16,7 +16,7 @@ let require_codec_rejection label = function
   | Ok _ -> malformed_response_failures := label :: !malformed_response_failures
 
 let response (request : generate_request) =
-  { api_version = V1_codec.generate_api_version;
+  { api_version = V1_codec.generate_api_version; service = None;
     operation_key = request.operation_key;
     operation_id = Operation_id.of_string "generate-test-id";
     status = Completed;

@@ -362,11 +362,11 @@ let generate_request_of_json value =
 let generate_response_to_json (value : generate_response) =
   let* () = Llm_temporal_response_validation.validate_generate_response value in
   let fields = ["api_version", `String generate_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "operation_id", `String (Operation_id.to_string value.operation_id); "status", response_status_to_json value.status; "output", `List (List.map item_to_json value.output); "checkpoint", checkpoint_to_json value.checkpoint; "cache", cache_disposition_to_json value.cache; "cost", settled_cost_to_json value.cost] in
-  let fields = fields @ option_field "route" route_to_v1_json value.route @ option_field "usage" usage_to_json value.usage in
+  let fields = fields @ option_field "route" route_to_v1_json value.route @ option_field "service" Llm_temporal_codec.service_to_json value.service @ option_field "usage" usage_to_json value.usage in
   Ok (`Assoc (fields @ ["diagnostics", `List (List.map diagnostic_to_json value.diagnostics)]))
 
 let generate_response_of_json value =
-  let* fields = closed "generate response" ["api_version"; "operation_key"; "operation_id"; "status"; "output"; "checkpoint"; "cache"; "route"; "usage"; "cost"; "diagnostics"] value in
+  let* fields = closed "generate response" ["api_version"; "operation_key"; "operation_id"; "status"; "output"; "checkpoint"; "cache"; "route"; "service"; "usage"; "cost"; "diagnostics"] value in
   let* version = required "generate response" "api_version" fields >>= string "generate response.api_version" in
   let* () = if version = generate_api_version then Ok () else Error (errorf "unsupported generate api_version %S" version) in
   let* operation_key = required "generate response" "operation_key" fields >>= string "generate response.operation_key" >>= fun value -> nonempty "generate response.operation_key" value in
@@ -376,10 +376,11 @@ let generate_response_of_json value =
   let* checkpoint = required "generate response" "checkpoint" fields >>= checkpoint_of_json "generate response.checkpoint" in
   let* cache = required "generate response" "cache" fields >>= cache_disposition_of_json "generate response.cache" in
   let* route = match optional "route" fields with None | Some `Null -> Ok None | Some value -> let* value = route_of_v1_json "generate response.route" value in Ok (Some value) in
+  let* service = match optional "service" fields with None | Some `Null -> Ok None | Some value -> let* value = Llm_temporal_codec.service_of_json value in Ok (Some value) in
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "generate response.usage" value in Ok (Some value) in
   let* cost = required "generate response" "cost" fields >>= settled_cost_of_json "generate response.cost" in
   let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "generate response.diagnostics" value >>= map_result (diagnostic_of_json "generate response.diagnostic") in
-  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; usage; cost; diagnostics } in
+  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; service; usage; cost; diagnostics } in
   let* () = Llm_temporal_response_validation.validate_generate_response response in
   Ok response
 

@@ -14,6 +14,7 @@
     "checkpoint": {"$ref": "#/$defs/generate_checkpoint"},
     "cache": {"$ref": "#/$defs/cache_disposition"},
     "route": {"$ref": "#/$defs/route"},
+    "service": {"$ref": "#/$defs/service"},
     "usage": {"$ref": "#/$defs/usage"},
     "cost": {"$ref": "#/$defs/cost"},
     "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
@@ -55,6 +56,8 @@
       ]
     },
     "route": {"type": "object", "additionalProperties": false, "properties": {"route_id": {"type": "string"}, "endpoint_id": {"type": "string"}, "api_family": {"type": "string"}, "requested_model": {"type": "string"}, "resolved_model": {"type": "string"}}},
+    "service_class": {"enum": ["economy", "standard", "priority"]},
+    "service": {"type": "object", "additionalProperties": false, "required": ["requested", "attempted", "fallback_index"], "description": "Service classes of the provider call that produced this response; omitted on a cache replay, which ran no provider call.", "properties": {"requested": {"$ref": "#/$defs/service_class"}, "attempted": {"$ref": "#/$defs/service_class"}, "actual": {"$ref": "#/$defs/service_class", "description": "The class the provider reported serving; omitted when the provider reported no mappable tier."}, "provider_value": {"type": "string", "description": "The provider's own tier label, kept for audit."}, "fallback_index": {"type": "integer", "minimum": 0, "description": "Position of the attempted class in the request's class list: 0 is the requested class, n is service_class_fallbacks[n-1]."}}},
     "usage": {"type": "object", "additionalProperties": false, "required": ["input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens", "cache_write_tokens"], "properties": {"input_tokens": {"type": "integer", "minimum": 0}, "output_tokens": {"type": "integer", "minimum": 0}, "reasoning_tokens": {"type": "integer", "minimum": 0}, "cache_read_tokens": {"type": "integer", "minimum": 0}, "cache_write_tokens": {"type": "integer", "minimum": 0}, "provider_raw": {"type": "object", "description": "Provider-specific usage facts that have no normalized field; keys and values are provider-defined."}}},
     "diagnostic": {"type": "object", "additionalProperties": false, "required": ["code", "severity", "message"], "properties": {"code": {"type": "string", "minLength": 1}, "severity": {"enum": ["info", "warning", "error"]}, "path": {"type": "string"}, "message": {"type": "string", "minLength": 1}, "details": {"type": "object", "additionalProperties": {"type": "string"}}}},
     "item": {

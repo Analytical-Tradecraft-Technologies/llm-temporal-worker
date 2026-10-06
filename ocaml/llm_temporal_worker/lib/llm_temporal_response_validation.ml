@@ -17,7 +17,11 @@ let validate_compaction_checkpoint (checkpoint : checkpoint_metadata) =
       error "compact response checkpoint must be compaction"
 
 let validate_generate_response (response : generate_response) =
-  validate_generate_checkpoint response.checkpoint
+  match validate_generate_checkpoint response.checkpoint, response.service with
+  | Error error, _ -> Error error
+  | Ok (), Some { fallback_index; _ } when fallback_index < 0 ->
+      error "generate response service fallback_index must not be negative"
+  | Ok (), _ -> Ok ()
 
 let validate_compaction_response (response : compaction_response) =
   validate_compaction_checkpoint response.checkpoint

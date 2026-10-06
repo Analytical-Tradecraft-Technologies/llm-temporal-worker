@@ -175,7 +175,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		copy.Retry = provider.RetryNever
 		err = &copy
 	}
-	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider.Call, call.transcript, outcome, err, false)
+	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider, call.transcript, outcome, err, false)
 	if err != nil && observer.saveErr != nil {
 		return ProviderExecutionResult{}, cloudRuntimeError(observer.saveErr, true)
 	}
@@ -234,7 +234,7 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		return executor.save(ctx, scope, id, saved, next)
 	}
-	return executor.completeCall(ctx, scope, id, saved, planned.Call, transcript, outcome, nil, true)
+	return executor.completeCall(ctx, scope, id, saved, planned, transcript, outcome, nil, true)
 }
 
 func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, plan cloudstate.BudgetPlan, generate durable.GenerateReplay, compact durable.CompactReplay) (PlannedProviderCall, []llm.Item, error) {
@@ -322,11 +322,11 @@ func (*executionObserver) AfterResponseHeaders(context.Context, provider.Respons
 }
 func (*executionObserver) OnProgress(context.Context, provider.Progress) {}
 
-func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, call provider.Call, transcript []llm.Item, outcome provider.ResumableResult, callErr error, polling bool) (ProviderExecutionResult, error) {
+func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, planned PlannedProviderCall, transcript []llm.Item, outcome provider.ResumableResult, callErr error, polling bool) (ProviderExecutionResult, error) {
 	next := saved.Execution
 	next.PollAfter, next.Failure = time.Time{}, nil
 	if callErr == nil {
-		callErr = outcome.ValidateForCall(call)
+		callErr = outcome.ValidateForCall(planned.Call)
 		if callErr == nil && outcome.State == provider.ResumableCompleted {
 			if _, err := outcome.Result.Response.MarshalJSON(); err != nil {
 				callErr = provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider response cannot be saved")
@@ -371,6 +371,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 				next.Response.Output = uniqueToolCallIDs(saved.Plan.Route.OperationID, transcript, next.Response.Output)
 			}
 			priceExecutionResponse(saved.Plan, next.Response)
+			classExecutionResponse(planned, next.Response)
 		case provider.ResumableFailed:
 			next.Stage = cloudstate.ExecutionFailed
 			code := outcome.Failure.Code
@@ -681,6 +682,25 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		return
 	}
 	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &cost.USD, string(cost.Method)
+}
+
+// classExecutionResponse records the classes the plan bound on the paid
+// response. An adapter only knows the class it was asked to attempt, so the
+// requested class and fallback position come from the selected candidate, as
+// engine finalization does. A provider-classified response below the
+// attempted class carries the downgrade diagnostic the contract requires.
+func classExecutionResponse(planned PlannedProviderCall, response *llm.Response) {
+	response.Service.Requested = planned.Candidate.RequestedClass
+	response.Service.Attempted = planned.Candidate.AttemptedClass
+	response.Service.FallbackIndex = planned.Candidate.FallbackIndex
+	// The request tier stands in for a missing label only when the adapter
+	// classified the response; otherwise no tier label was reported.
+	if response.Service.ProviderValue == "" && response.Service.Actual != nil {
+		response.Service.ProviderValue = planned.Call.Metadata.ProviderTier
+	}
+	if diagnostic, ok := response.Service.ProviderDowngradeDiagnostic(); ok {
+		response.Diagnostics = append(response.Diagnostics, diagnostic)
+	}
 }
 
 func executionSettlement(execution cloudstate.ProviderExecution) *durable.ReconcileRequest {

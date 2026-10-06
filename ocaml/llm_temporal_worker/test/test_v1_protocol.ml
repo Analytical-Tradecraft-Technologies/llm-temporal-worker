@@ -71,7 +71,7 @@ let () =
   let request' = ok (V1_codec.decode_generate_request (ok (V1_codec.encode_generate_request request))) in
   if request'.operation_key <> request.operation_key || request'.append <> request.append then failwith "generate round trip";
   error (V1_codec.encode_generate_request { request with context = { context with tags = [("region", "au")] } });
-  let generate_response = { api_version = V1_codec.generate_api_version; operation_key = Operation_key.of_string "op-1"; operation_id = Operation_id.of_string "id-1"; status = Completed; output = []; checkpoint = { handle = checkpoint "cp-1"; parent = None; kind = Generation_checkpoint; depth = 0l }; cache = { disposition = Cache_miss_populated; variant = 0l; entry_age_seconds = None }; route = None; usage = None; cost = Unknown_cost { reason = State_unavailable }; diagnostics = [] } in
+  let generate_response = { api_version = V1_codec.generate_api_version; operation_key = Operation_key.of_string "op-1"; operation_id = Operation_id.of_string "id-1"; status = Completed; output = []; checkpoint = { handle = checkpoint "cp-1"; parent = None; kind = Generation_checkpoint; depth = 0l }; cache = { disposition = Cache_miss_populated; variant = 0l; entry_age_seconds = None }; route = None; service = None; usage = None; cost = Unknown_cost { reason = State_unavailable }; diagnostics = [] } in
   let generate_bytes = ok (V1_codec.encode_generate_response generate_response) in
   let generate_without_diagnostics = ok (V1_codec.decode_generate_response (omit "diagnostics" generate_bytes)) in
   if generate_without_diagnostics.diagnostics <> [] then failwith "omitted generate diagnostics";
