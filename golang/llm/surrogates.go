@@ -6,7 +6,7 @@ import (
 )
 
 // SanitizeLoneSurrogates replaces every \u escape of an unpaired UTF-16
-// surrogate in raw JSON with �. Go's JSON decoder tolerates a lone
+// surrogate in raw JSON with \ufffd. Go's JSON decoder tolerates a lone
 // surrogate, but strict decoders (the OCaml client among them) reject the
 // whole document, so a paid response carrying model-generated JSON with one
 // would be undecodable for those callers. Escapes are only valid inside JSON
@@ -50,7 +50,7 @@ func SanitizeLoneSurrogates(raw json.RawMessage) json.RawMessage {
 		}
 		if out != nil {
 			if lone {
-				out = append(out, `�`...)
+				out = append(out, `\ufffd`...)
 			} else {
 				out = append(out, raw[index:min(index+width, len(raw))]...)
 			}
@@ -81,16 +81,42 @@ func SanitizeOutputSurrogates(items []Item) []Item {
 	}
 	result := make([]Item, len(items))
 	for index, item := range items {
+		// Pointer forms satisfy Item too; sanitize a copy so the caller's
+		// value is never mutated.
 		switch value := item.(type) {
 		case ToolCall:
 			value.Arguments = SanitizeLoneSurrogates(value.Arguments)
 			result[index] = value
+		case *ToolCall:
+			if value == nil {
+				result[index] = item
+				continue
+			}
+			copy := *value
+			copy.Arguments = SanitizeLoneSurrogates(copy.Arguments)
+			result[index] = &copy
 		case Message:
 			value.Content = sanitizePartSurrogates(value.Content)
 			result[index] = value
+		case *Message:
+			if value == nil {
+				result[index] = item
+				continue
+			}
+			copy := *value
+			copy.Content = sanitizePartSurrogates(copy.Content)
+			result[index] = &copy
 		case ToolResult:
 			value.Content = sanitizePartSurrogates(value.Content)
 			result[index] = value
+		case *ToolResult:
+			if value == nil {
+				result[index] = item
+				continue
+			}
+			copy := *value
+			copy.Content = sanitizePartSurrogates(copy.Content)
+			result[index] = &copy
 		default:
 			result[index] = item
 		}
@@ -104,12 +130,21 @@ func sanitizePartSurrogates(parts []Part) []Part {
 	}
 	result := make([]Part, len(parts))
 	for index, part := range parts {
-		if value, ok := part.(JSONPart); ok {
+		switch value := part.(type) {
+		case JSONPart:
 			value.Value = SanitizeLoneSurrogates(value.Value)
 			result[index] = value
-			continue
+		case *JSONPart:
+			if value == nil {
+				result[index] = part
+				continue
+			}
+			copy := *value
+			copy.Value = SanitizeLoneSurrogates(copy.Value)
+			result[index] = &copy
+		default:
+			result[index] = part
 		}
-		result[index] = part
 	}
 	return result
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // A model's tool call arguments with a lone surrogate escape are saved and
-// returned with �, so strict JSON clients can decode the paid response
+// returned with \ufffd, so strict JSON clients can decode the paid response
 // (#1110).
 func TestCloudGenerateSanitizesLoneSurrogatesInModelJSON(t *testing.T) {
 	f := boundedCloud(t, false)
@@ -30,7 +30,9 @@ func TestCloudGenerateSanitizesLoneSurrogatesInModelJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), `\ud83d`) || !strings.Contains(string(encoded), `x�`) {
+	// The canonical encoder may write the replacement as the \ufffd escape or
+	// as the character itself; both are valid for every strict decoder.
+	if strings.Contains(string(encoded), `\ud83d`) || (!strings.Contains(string(encoded), `x\ufffd`) && !strings.Contains(string(encoded), "x\ufffd")) {
 		t.Fatalf("output = %s, want the lone surrogate replaced", encoded)
 	}
 }
