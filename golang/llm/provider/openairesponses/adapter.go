@@ -225,8 +225,9 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	}
 	var rawResponse *http.Response
 	probe := &provider.DispatchProbe{}
+	requestOptions := []option.RequestOption{option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware)}
 	response, panicked, err := provider.CallRecovered(func() (*responses.Response, error) {
-		return adapter.client.sdk.Responses.New(callContext, params, option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware))
+		return adapter.client.sdk.Responses.New(callContext, params, requestOptions...)
 	})
 	if panicked != nil {
 		return provider.Result{}, provider.WithEndpointID(probe.PanicError(call.OperationKey, panicked), adapter.endpointID)
