@@ -211,6 +211,9 @@ func (patch Patch[T]) validate() error {
 }
 
 type SettingsPatchV1 struct {
+	WebSearch             Patch[bool]
+	WebFetch              Patch[bool]
+	CodeExecution         Patch[bool]
 	Model                 Patch[string]
 	ServiceClass          Patch[ServiceClass]
 	ServiceClassFallbacks Patch[[]ServiceClass]
@@ -319,6 +322,15 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 	if err := addPatch("reasoning_summary", patch.ReasoningSummary, fields, add); err != nil {
 		return nil, err
 	}
+	if err := addPatch("web_fetch", patch.WebFetch, fields, add); err != nil {
+		return nil, err
+	}
+	if err := addPatch("code_execution", patch.CodeExecution, fields, add); err != nil {
+		return nil, err
+	}
+	if err := addPatch("web_search", patch.WebSearch, fields, add); err != nil {
+		return nil, err
+	}
 	if err := addPatch("compaction_policy", patch.CompactionPolicy, fields, add); err != nil {
 		return nil, err
 	}
@@ -375,6 +387,12 @@ func decodePatch[T any](raw json.RawMessage, name string) (Patch[T], error) {
 func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 	var zero T
 	switch any(zero).(type) {
+	case bool:
+		var value bool
+		if string(raw) == "null" || json.Unmarshal(raw, &value) != nil {
+			return zero, fmt.Errorf("%s.set: value must be a boolean", name)
+		}
+		return any(value).(T), nil
 	case []Instruction:
 		value, err := decodeInstructions(raw)
 		if err != nil {
@@ -482,7 +500,7 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "model", "service_class", "service_class_fallbacks", "portability", "instructions", "tools", "tool_policy", "output", "temperature", "reasoning_effort", "reasoning_summary", "compaction_policy", "extensions"); err != nil {
+	if err := checkUnknownFields(fields, "model", "service_class", "service_class_fallbacks", "portability", "instructions", "tools", "tool_policy", "output", "temperature", "reasoning_effort", "reasoning_summary", "compaction_policy", "extensions", "web_search", "web_fetch", "code_execution"); err != nil {
 		return err
 	}
 	result := SettingsPatchV1{}
@@ -518,6 +536,15 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 	}
 	if raw, ok := fields["reasoning_summary"]; ok && err == nil {
 		result.ReasoningSummary, err = decodePatch[ReasoningSummary](raw, "reasoning_summary")
+	}
+	if raw, ok := fields["web_fetch"]; ok && err == nil {
+		result.WebFetch, err = decodePatch[bool](raw, "web_fetch")
+	}
+	if raw, ok := fields["code_execution"]; ok && err == nil {
+		result.CodeExecution, err = decodePatch[bool](raw, "code_execution")
+	}
+	if raw, ok := fields["web_search"]; ok && err == nil {
+		result.WebSearch, err = decodePatch[bool](raw, "web_search")
 	}
 	if raw, ok := fields["compaction_policy"]; ok && err == nil {
 		result.CompactionPolicy, err = decodePatch[json.RawMessage](raw, "compaction_policy")

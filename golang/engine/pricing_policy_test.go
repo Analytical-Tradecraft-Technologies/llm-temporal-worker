@@ -291,3 +291,27 @@ func TestGenerateRejectsContextOverflowBeforePricedOrUnpricedDispatch(t *testing
 		}
 	}
 }
+
+func TestGenerateKeepsUnknownProviderChargeReserved(t *testing.T) {
+	paid := successfulResponse()
+	paid.Cost.Status = llm.CostStatusUnknown
+	adapter := &fakeAdapter{name: "fake", response: paid}
+	harness := newHarness(t, adapter)
+	response, err := harness.engine.Generate(context.Background(), baseRequest("unknown-hosted-charge"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ActualCostUSD != nil || response.Cost.ReservedCostUSD == nil {
+		t.Fatalf("unknown charge lost its reservation: %#v", response.Cost)
+	}
+	operation, err := harness.admission.Get(context.Background(), response.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.IncurredCostUSD == nil || operation.IncurredCostUSD.Cmp(*response.Cost.ReservedCostUSD) != 0 {
+		t.Fatalf("unknown paid work released its reserve: %#v", operation)
+	}
+	if len(response.Output) == 0 {
+		t.Fatal("unknown charge discarded the paid answer")
+	}
+}

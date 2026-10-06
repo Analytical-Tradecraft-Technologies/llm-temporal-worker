@@ -62,7 +62,7 @@ let () =
   if Usd_decimal.to_string decimal <> "1.23" then failwith "decimal was not canonicalized";
   if Usd_decimal.of_string "1.0000000000000000001" |> Result.is_ok then failwith "19 fractional digits accepted";
   let context = { tenant = Some (Tenant_id.of_string "tenant"); project = Some (Project_id.of_string "project"); actor = Some (Actor_id.of_string "actor"); tags = [] } in
-  let keep_patch = { model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep } in
+  let keep_patch = { model = Keep; service_class = Keep; service_class_fallbacks = Keep; portability = Keep; instructions = Keep; tools = Keep; tool_policy = Keep; output = Keep; temperature = Keep; reasoning_effort = Keep; reasoning_summary = Keep; compaction_policy = Keep; extensions = Keep; web_search = Keep; web_fetch = Keep; code_execution = Keep } in
   let request = {
     api_version = V1_codec.generate_api_version; operation_key = Operation_key.of_string "op-1"; context;
     parent = Some (checkpoint "cp-0"); append = [Message { actor = Human; content = [Text "hello"] }];

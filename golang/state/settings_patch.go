@@ -34,6 +34,9 @@ func (patch Patch[T]) Validate() error {
 // deliberately independent from the wire codec so materialization can be
 // tested without dispatching an Activity.
 type SettingsPatch struct {
+	WebSearch             Patch[bool]
+	WebFetch              Patch[bool]
+	CodeExecution         Patch[bool]
 	Model                 Patch[string]
 	ServiceClass          Patch[llm.ServiceClass]
 	ServiceClassFallbacks Patch[[]llm.ServiceClass]
@@ -58,7 +61,7 @@ func (patch SettingsPatch) Validate() error {
 		name  string
 		value interface{ Validate() error }
 	}{
-		{"model", patch.Model}, {"service_class", patch.ServiceClass},
+		{"web_fetch", patch.WebFetch}, {"code_execution", patch.CodeExecution}, {"web_search", patch.WebSearch}, {"model", patch.Model}, {"service_class", patch.ServiceClass},
 		{"service_class_fallbacks", patch.ServiceClassFallbacks}, {"portability", patch.Portability},
 		{"instructions", patch.Instructions}, {"tools", patch.Tools}, {"tool_policy", patch.ToolPolicy},
 		{"output", patch.Output}, {"temperature", patch.Temperature},

@@ -187,3 +187,26 @@ func TestEstimateRejectsOverlappingReasoningPrices(t *testing.T) {
 		}
 	}
 }
+
+func TestHostedToolAllowanceAndKnownContext(t *testing.T) {
+	request := llm.Request{OperationKey: "hosted", Model: "logical", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "calculate"}}}}, Output: &llm.OutputSpec{MaxTokens: intPointer(100)}}
+	candidate := routing.Candidate{ID: "openai", Family: "openai_responses", ContextTokens: 1000}
+	entry := pricing.Entry{Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1"), OutputPerMillion: pricing.MustDecimalUSD("2")}}
+	estimator := Estimator{SafetyRatio: big.NewRat(1, 1)}
+	plain, err := estimator.EstimateCandidate(request, candidate, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.WebSearch, request.CodeExecution = true, true
+	hosted, err := estimator.EstimateCandidate(request, candidate, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hosted.CostUSD.Cmp(plain.CostUSD) <= 0 || hosted.InputTokens != 4000 || hosted.OutputTokens != 400 {
+		t.Fatalf("allowance=%+v plain=%+v", hosted, plain)
+	}
+	candidate.ContextTokens = 0
+	if _, err := estimator.EstimateCandidate(request, candidate, entry); !errors.Is(err, ErrUnusablePrice) {
+		t.Fatalf("unknown context accepted: %v", err)
+	}
+}

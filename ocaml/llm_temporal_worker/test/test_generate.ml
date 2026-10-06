@@ -6,7 +6,7 @@ let expect_ok = function
   | Ok value -> value
   | Error error -> failf "unexpected Temporal error: %s" (Temporal.Error.message error)
 
-let context = { tenant = None; project = None; actor = None; tags = [] }
+let context = { tenant = Some (Tenant_id.of_string "tenant"); project = Some (Project_id.of_string "project"); actor = Some (Actor_id.of_string "actor"); tags = [] }
 let operation_key = Operation_key.of_string "generate-test"
 let model = Model_selector.of_string "arbitrary-model"
 let input = [ Message { actor = Human; content = [ Text "hello" ] } ]
@@ -118,7 +118,7 @@ let () =
   let queue = Temporal_task_queue.of_string "llm-worker" in
   let invalid = { request with api_version = "future-version" } in
   (match Temporal.Future.peek (Generate.start ~task_queue:queue ~id:"invalid" invalid) with
-   | Some (Error error) when Temporal.Error.message error = "unsupported request API version" -> ()
+   | Some (Error error) when Temporal.Error.message error = "unsupported API version" -> ()
    | _ -> failwith "invalid raw request was not rejected before child scheduling");
   (match Temporal.Codec.encode (Temporal.Workflow.input generate_v1_workflow)
            { request with operation_key = Operation_key.of_string "" } with

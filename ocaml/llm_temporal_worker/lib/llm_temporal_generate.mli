@@ -17,6 +17,9 @@ val make :
   input:item list ->
   unit -> request
 
+(** Validates the complete request locally, returning errors as values. *)
+val make_checked : operation_key:Operation_key.t -> context:request_context -> model:Model_selector.t -> ?settings:Settings.t -> ?cache:Cache_policy.t -> input:item list -> unit -> (request, Temporal.Error.t) result
+
 type dispatcher =
   ?task_queue:Temporal_task_queue.t ->
   (request, response) Temporal.Workflow.t ->

@@ -14,6 +14,9 @@ import (
 // checkpoint.  A checkpoint stores patches; this value is only materialized
 // in memory and is always returned as an independent copy.
 type ModelState struct {
+	WebSearch             bool
+	WebFetch              bool
+	CodeExecution         bool
 	Model                 string
 	ServiceClass          llm.ServiceClass
 	ServiceClassFallbacks []llm.ServiceClass
@@ -173,6 +176,21 @@ func ApplySettingsPatch(base ModelState, patch SettingsPatch) (ModelState, error
 		result.CompactionPolicy = append(json.RawMessage(nil), (*patch.CompactionPolicy.Set)...)
 	} else if patch.CompactionPolicy.Clear {
 		result.CompactionPolicy = nil
+	}
+	if patch.WebFetch.Set != nil {
+		result.WebFetch = *patch.WebFetch.Set
+	} else if patch.WebFetch.Clear {
+		result.WebFetch = false
+	}
+	if patch.CodeExecution.Set != nil {
+		result.CodeExecution = *patch.CodeExecution.Set
+	} else if patch.CodeExecution.Clear {
+		result.CodeExecution = false
+	}
+	if patch.WebSearch.Set != nil {
+		result.WebSearch = *patch.WebSearch.Set
+	} else if patch.WebSearch.Clear {
+		result.WebSearch = false
 	}
 	if patch.Extensions.Set != nil {
 		result.Extensions = cloneRawMap(*patch.Extensions.Set)

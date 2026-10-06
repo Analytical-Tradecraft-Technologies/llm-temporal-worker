@@ -11,11 +11,15 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/openai/openai-go/v3/packages/param"
 )
 
 // lowerRequestMap builds the intended Chat Completions wire body. lowerRequest
 // carries it into the SDK parameter type; the two must stay wire-equivalent.
 func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (map[string]any, error) {
+	if request.WebFetch || request.CodeExecution {
+		return nil, fmt.Errorf("this Chat Completions transport does not support web_fetch or code_execution")
+	}
 	messages := make([]any, 0, len(request.Instructions)+len(request.Input))
 	toolCalls := make(map[string]struct{})
 	for index, instruction := range request.Instructions {
@@ -60,27 +64,34 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 			return nil, err
 		}
 	}
-	if len(request.Tools) > 0 {
+	if len(request.Tools) > 0 || request.WebSearch {
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
 			return nil, err
 		}
+		if request.WebSearch {
+			if profile.ExpectedBaseURL != openRouterBaseURL || !(strings.HasPrefix(request.Model, "openai/") || strings.HasPrefix(request.Model, "anthropic/")) {
+				return nil, fmt.Errorf("web_search requires an OpenRouter OpenAI or Anthropic model")
+			}
+			tools = append(tools, map[string]any{"type": "openrouter:web_search", "parameters": map[string]any{"engine": "native", "max_uses": llm.MaxWebSearchCalls}})
+			requestMap["max_tool_calls"] = llm.MaxWebSearchCalls
+		}
 		requestMap["tools"] = tools
 	}
-	policy, err := lowerToolPolicy(request.ToolPolicy, len(request.Tools) > 0)
+	policy, err := lowerToolPolicy(request.ToolPolicy, len(request.Tools) > 0 || request.WebSearch)
 	if err != nil {
 		return nil, err
 	}
-	if len(request.Tools) > 0 && policy != nil {
+	if (len(request.Tools) > 0 || request.WebSearch) && policy != nil {
 		requestMap["tool_choice"] = policy
 	}
-	if len(request.Tools) > 0 {
+	if len(request.Tools) > 0 || request.WebSearch {
 		requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
 	}
 	if request.Continuation != nil {
 		return nil, fmt.Errorf("continuation is not representable by Chat Completions")
 	}
-	if err := lowerExtensions(profile, request.Extensions, requestMap); err != nil {
+	if err := lowerExtensions(profile, request.Extensions, requestMap, request.WebSearch || request.WebFetch || request.CodeExecution); err != nil {
 		return nil, err
 	}
 	return requestMap, nil
@@ -137,6 +148,9 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	}
 	if len(extras) > 0 {
 		params.SetExtraFields(extras)
+	}
+	if _, hosted := requestMap["max_tool_calls"]; hosted {
+		param.SetJSON(encoded, &params)
 	}
 	return params, nil
 }
@@ -556,7 +570,7 @@ func lowerReasoning(reasoning llm.ReasoningSpec, target map[string]any) error {
 	return nil
 }
 
-func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any) error {
+func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any, hosted ...bool) error {
 	if len(extensions) == 0 {
 		return nil
 	}
@@ -586,6 +600,9 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 			var decoded any
 			if err := json.Unmarshal(value, &decoded); err != nil {
 				return fmt.Errorf("extension %q field %q: %w", namespace, field, err)
+			}
+			if len(hosted) > 0 && hosted[0] && (wire == "tools" || wire == "max_tool_calls" || wire == "tool_choice" || wire == "container") {
+				return fmt.Errorf("extension cannot override hosted tool controls")
 			}
 			target[wire] = decoded
 		}

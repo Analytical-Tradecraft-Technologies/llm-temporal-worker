@@ -7,7 +7,13 @@ import (
 	"time"
 )
 
+// MaxWebSearchCalls bounds provider-hosted search execution per generation.
+const MaxWebSearchCalls = 3
+
 type Request struct {
+	WebSearch             bool
+	WebFetch              bool
+	CodeExecution         bool
 	APIVersion            string
 	OperationKey          string
 	Context               RequestContext
@@ -725,6 +731,15 @@ func (request Request) MarshalJSON() ([]byte, error) {
 		"continuation":            request.Continuation,
 		"extensions":              extensions,
 	}
+	if request.WebFetch {
+		fields["web_fetch"] = true
+	}
+	if request.CodeExecution {
+		fields["code_execution"] = true
+	}
+	if request.WebSearch {
+		fields["web_search"] = true
+	}
 	if !request.Context.empty() {
 		fields["context"] = request.Context
 	}
@@ -745,7 +760,7 @@ func (request *Request) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "model", "service_class", "service_class_fallbacks", "portability", "instructions", "input", "tools", "tool_policy", "output", "sampling", "reasoning", "continuation", "extensions"); err != nil {
+	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "model", "service_class", "service_class_fallbacks", "portability", "instructions", "input", "tools", "tool_policy", "output", "sampling", "reasoning", "continuation", "extensions", "web_search", "web_fetch", "code_execution"); err != nil {
 		return err
 	}
 	apiVersion, err := requiredString(fields, "api_version")
@@ -856,6 +871,30 @@ func (request *Request) UnmarshalJSON(data []byte) error {
 		result.Continuation, err = decodeContinuation(raw)
 		if err != nil {
 			return fmt.Errorf("continuation: %w", err)
+		}
+	}
+	if raw, ok := fields["web_fetch"]; ok {
+		if string(raw) == "null" {
+			return fmt.Errorf("web_fetch must be boolean")
+		}
+		if err := decodeJSON(raw, &result.WebFetch); err != nil {
+			return err
+		}
+	}
+	if raw, ok := fields["code_execution"]; ok {
+		if string(raw) == "null" {
+			return fmt.Errorf("code_execution must be boolean")
+		}
+		if err := decodeJSON(raw, &result.CodeExecution); err != nil {
+			return err
+		}
+	}
+	if raw, ok := fields["web_search"]; ok {
+		if string(raw) == "null" {
+			return fmt.Errorf("web_search must be boolean")
+		}
+		if err := decodeJSON(raw, &result.WebSearch); err != nil {
+			return fmt.Errorf("web_search: %w", err)
 		}
 	}
 	if raw, ok := fields["extensions"]; ok {

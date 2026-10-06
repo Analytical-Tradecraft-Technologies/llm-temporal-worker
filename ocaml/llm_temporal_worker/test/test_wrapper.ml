@@ -152,12 +152,6 @@ let () =
   assert_equal "llm.generate.workflow.v1" (Temporal.Workflow.name generate_workflow);
   assert_equal "llm.generate.workflow.v1" (Temporal.Workflow.name (workflow ()));
   if Temporal.Workflow.implementation generate_workflow <> None then failwith "remote Go activity has an OCaml implementation";
-  if Temporal.Activity.Retry_policy.maximum_attempts activity_retry_policy <> 1 then
-    failwith "activity retry policy must permit exactly one attempt";
-  if Temporal.Duration.to_ms (Temporal.Activity.Retry_policy.initial_interval activity_retry_policy) <> 1L then
-    failwith "activity retry policy initial interval changed";
-  if Temporal.Duration.to_ms (Temporal.Activity.Retry_policy.maximum_interval activity_retry_policy) <> 1L then
-    failwith "activity retry policy maximum interval changed";
   let valid_tool = {
     kind = Function; name = tool_name "lookup"; description = "lookup";
     input_schema = `Assoc []; output_schema = None;

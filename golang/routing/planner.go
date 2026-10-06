@@ -130,6 +130,15 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 			}
 		}
 	}
+	if request.WebFetch && !(route.Provider == "anthropic" && string(route.Family) == "anthropic_messages") {
+		return reject(RejectCapability, "web_fetch", "route does not support hosted web fetch")
+	}
+	if request.CodeExecution && !llm.SupportsHostedExecution(route.Provider, string(route.Family)) {
+		return reject(RejectCapability, "code_execution", "route does not support hosted code execution")
+	}
+	if request.WebSearch && !llm.SupportsWebSearch(route.Provider, string(route.Family), route.Model) {
+		return reject(RejectCapability, "web_search", "route does not support provider-hosted web search")
+	}
 	if !route.SupportsOutputLimit(request) {
 		return reject(RejectCapability, "output.max_tokens", "request output limit is missing or exceeds the route output ceiling")
 	}

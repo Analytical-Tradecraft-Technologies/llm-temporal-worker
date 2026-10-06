@@ -10,6 +10,7 @@ import (
 type ResponseStatus string
 
 const (
+	ResponseStatusPaused          ResponseStatus = "paused"
 	ResponseStatusCompleted       ResponseStatus = "completed"
 	ResponseStatusToolCalls       ResponseStatus = "tool_calls"
 	ResponseStatusRefused         ResponseStatus = "refused"
@@ -19,7 +20,7 @@ const (
 
 func (status ResponseStatus) Valid() bool {
 	switch status {
-	case ResponseStatusCompleted, ResponseStatusToolCalls, ResponseStatusRefused, ResponseStatusLength, ResponseStatusContentFiltered:
+	case ResponseStatusPaused, ResponseStatusCompleted, ResponseStatusToolCalls, ResponseStatusRefused, ResponseStatusLength, ResponseStatusContentFiltered:
 		return true
 	default:
 		return false

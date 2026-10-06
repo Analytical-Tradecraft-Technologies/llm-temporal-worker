@@ -13,6 +13,7 @@ type 'response handle = Handle : {
   } -> 'response handle
 
 let generate_workflow = Llm_temporal_invocation.generate_v1_workflow
+let query_workflow = Llm_temporal_invocation.query_v1_workflow
 let compact_workflow = Llm_temporal_invocation.compact_v1_workflow
 
 let create ?identity ~target_url ~namespace () =
@@ -22,6 +23,16 @@ let shutdown owner = Temporal.Client.shutdown owner.client
 
 let validate_generate = Llm_temporal_response_validation.validate_generate_response_for_request
 let validate_compact = Llm_temporal_response_validation.validate_compaction_response_for_request
+
+let validate_query (request : query_envelope) (response : query_response) =
+  let kind = function Provider_status_request _ -> 0 | Model_inventory_request _ -> 1 | Credit_status_request _ -> 2 | Budget_status_request _ -> 3 | Spend_summary_request _ -> 4 in
+  let result_kind = function Provider_status_result _ -> 0 | Model_inventory_result _ -> 1 | Credit_status_result _ -> 2 | Budget_status_result _ -> 3 | Spend_summary_result _ -> 4 in
+  if response.operation_key <> request.operation_key || kind request.query <> result_kind response.result then
+    Error (Temporal.Error.codec ~message:"query response does not match request")
+  else
+    let* payload = Llm_temporal_v1_codec.encode_query_response response in
+    let* _ = Llm_temporal_v1_codec.decode_query_response payload in
+    Ok ()
 
 let validate_request workflow request =
   let* encoded = Temporal.Codec.encode (Temporal.Workflow.input workflow) request in
@@ -80,8 +91,8 @@ let await first =
       let* result = wait current in
       match result with
       | Temporal.Client.Completed response -> Ok response
-      | Temporal.Client.Failed error | Temporal.Client.Cancelled error
-      | Temporal.Client.Terminated error | Temporal.Client.Timed_out error -> Error error
+      | Temporal.Client.Failed { error; _ } | Temporal.Client.Cancelled error
+      | Temporal.Client.Terminated error | Temporal.Client.Timed_out { error; _ } -> Error error
       | Temporal.Client.Continued_as_new successor ->
           if successor.workflow_id <> identity.workflow_id then
             Error (Temporal.Error.codec ~message:"workflow continuation changed workflow identity")
@@ -90,3 +101,10 @@ let await first =
             next seen (Handle { handle with run })
   in
   next Runs.empty first
+
+let start_query owner ~task_queue ~id ~request_id (request : query_envelope) =
+  let* () = validate_version Llm_temporal_v1_codec.query_api_version request.api_version in
+  start owner query_workflow validate_query ~task_queue ~id ~request_id request
+let resume_query owner ~execution (request : query_envelope) =
+  let* () = validate_version Llm_temporal_v1_codec.query_api_version request.api_version in
+  resume owner query_workflow validate_query ~execution request

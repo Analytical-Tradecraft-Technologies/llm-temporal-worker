@@ -14,7 +14,7 @@ let expect_valid = function
   | Ok value -> value
   | Error error -> failf "unexpected validation error: %s" error
 
-let context = { tenant = None; project = None; actor = None; tags = [] }
+let context = expect_valid (Context.make ~tenant:"consumer" ~project:"smoke" ~actor:"test")
 let model = Model_selector.of_string "consumer-smoke-model"
 let model_capability = Model_capability.of_string "text_generation"
 let operation suffix = Operation_key.of_string ("consumer-smoke-" ^ suffix)
@@ -92,7 +92,7 @@ let query_response (envelope : query_envelope) result =
     } }
 
 let query_dispatch ?task_queue:_ activity (envelope : query_envelope) =
-  if not (String.equal (Temporal.Activity.name activity) "llm.query.v1") then
+  if not (String.equal (Temporal.Workflow.name activity) "llm.query.workflow.v1") then
     failwith "Query dispatched the wrong Activity";
   let result =
     match envelope.query with

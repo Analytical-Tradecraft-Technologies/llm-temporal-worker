@@ -7,7 +7,7 @@ let context = {
   tenant = Some (Tenant_id.of_string "tenant");
   project = Some (Project_id.of_string "project");
   actor = Some (Actor_id.of_string "actor");
-  tags = [ ("suite", "conversation") ] }
+  tags = [] }
 let model = Model_selector.of_string "gpt-test"
 let operation_key value = Operation_key.of_string value
 let message text = Message { actor = Human; content = [ Text text ] }
@@ -227,7 +227,7 @@ let () =
                portability = Keep; instructions = Keep; tools = Keep;
                tool_policy = Keep; output = Keep; temperature = Keep;
                reasoning_effort = Keep; reasoning_summary = Keep;
-               compaction_policy = Keep; extensions = Keep } -> ()
+               compaction_policy = Keep; extensions = Keep; web_search = Keep; web_fetch = Keep; code_execution = Keep } -> ()
    | _ -> failwith "checkpoint import materialized unknown settings");
   let _, imported_compacted = expect_ok (Conversation.compact_with
       ~task_queue:(Temporal_task_queue.of_string "compact-queue") ~dispatch:compact_dispatch
@@ -240,7 +240,7 @@ let () =
        portability = Keep; instructions = Keep; tools = Keep;
        tool_policy = Keep; output = Keep; temperature = Keep;
        reasoning_effort = Keep; reasoning_summary = Keep;
-       compaction_policy = Keep; extensions = Keep } -> ()
+       compaction_policy = Keep; extensions = Keep; web_search = Keep; web_fetch = Keep; code_execution = Keep } -> ()
    | _ -> failwith "compaction restored unknown checkpoint settings");
 
   (* Once an imported conversation receives explicit tool/output settings,

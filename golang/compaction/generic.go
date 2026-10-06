@@ -57,6 +57,7 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 		llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "Summary style: " + string(policy.SummaryStyle)},
 	)
 	result.Instructions = append(result.Instructions, source.Instructions...)
+	result.WebSearch, result.WebFetch, result.CodeExecution = false, false, false
 	result.Tools = nil
 	result.ToolPolicy = llm.ToolPolicy{Mode: llm.ToolChoiceNone}
 	result.Output = &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindText}}
