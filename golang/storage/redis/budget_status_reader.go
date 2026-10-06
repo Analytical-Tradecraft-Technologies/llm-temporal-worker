@@ -410,6 +410,7 @@ for i = 1, count do
     redis.call('HINCRBY', window_key, 'reserved_nano_usd', tostring(-delta))
     redis.call('ZREM', expiry_key, item)
   end
+  if #expired >= expiry_limit and #redis.call('ZRANGEBYSCORE', expiry_key, '-inf', tostring(now), 'LIMIT', 0, 1) > 0 then return {'state_unavailable', ''} end
   local values = redis.call('HMGET', window_key, 'schema', 'generation_id', 'incarnation_id', 'manifest_digest', 'member_key', 'limit_nano_usd', 'reserved_nano_usd', 'accounted_nano_usd', 'coverage_start', 'coverage_end')
   for _, value in ipairs(values) do if value == false or value == nil then return {'state_unavailable', ''} end end
   local limit, reserved, accounted = integer(values[6]), integer(values[7]), integer(values[8])

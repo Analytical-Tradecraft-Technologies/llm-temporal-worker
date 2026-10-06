@@ -149,7 +149,10 @@ func (p *CheckpointPublication) Compact(ctx context.Context, identity Checkpoint
 			return zero, response, checkpointPublicationError(provider.CodeStateCorrupt)
 		}
 		summaryItems = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: summary}}}}
-		items = append(append([]llm.Item(nil), summaryItems...), prepared.Selection.Retained...)
+		// The transcript opens with the summary as a human-role message:
+		// Messages and Converse reject a conversation that starts with an
+		// assistant turn.
+		items = append([]llm.Item{compaction.SummaryItem(summary)}, prepared.Selection.Retained...)
 		response.Cost, response.Usage, response.Diagnostics = publicationCost(result.Cost), &result.Usage, result.Diagnostics
 		source = "provider"
 		if origin != nil {
@@ -172,8 +175,9 @@ func (p *CheckpointPublication) Compact(ctx context.Context, identity Checkpoint
 	if err != nil {
 		return zero, llm.CompactResponseV1{}, checkpointPublicationError(provider.CodeStateCorrupt)
 	}
-	// ResponseBlob retains the summary alone, so cache consumers can attach it
-	// to their own suffix without recovering a provider ID or copying lineage.
+	// ResponseBlob retains the summary alone, as the summarizer returned it, so
+	// cache consumers can attach it to their own suffix without recovering a
+	// provider ID or copying lineage. Only the snapshot is materialized.
 	cp, err = p.blobs(ctx, cp, replay.State, prepared.Settings, nil, summaryItems, patch, items, true)
 	return cp, response, err
 }

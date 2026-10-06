@@ -55,7 +55,8 @@ recent verbatim suffix. Whole tool exchanges stay together and an unresolved
 final exchange remains in the suffix. A nil `Request` means there is no safe
 prefix: the surrounding runtime must handle that case without reserving budget
 or submitting a summarizer. An enabled cache lookup stops before its planner in
-that case. Otherwise the request uses the repository-owned prompt, plain-text
+that case. Otherwise the request carries the prefix as one delimited human
+message of quoted transcript text and uses the repository-owned prompt, plain-text
 output and explicit output-token bound; it strips application tools, tool policy,
 structured output, reasoning and provider continuation through
 `compaction.PrepareRequest`. Application checkpoint settings are retained

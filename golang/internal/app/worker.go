@@ -44,17 +44,65 @@ type WorkerOptions struct {
 	MaxConcurrentActivities        int
 	MaxConcurrentActivityTaskPolls int
 	GracefulStopTimeout            time.Duration
-	Activities                     *activity.Activities
-	Health                         *httpserver.HealthState
-	Metrics                        *observability.Metrics
-	Factory                        WorkerFactory
+	// PauseDrainTimeout bounds how long a paused controller lets in-flight
+	// Activities finish before the Temporal SDK cancels them. A pause is not a
+	// process exit, so it should cover the longest Activity rather than the
+	// graceful stop timeout. Zero falls back to GracefulStopTimeout.
+	PauseDrainTimeout time.Duration
+	Activities        *activity.Activities
+	Health            *httpserver.HealthState
+	Metrics           *observability.Metrics
+	Factory           WorkerFactory
+}
+
+// boundController pairs a Temporal worker controller with the cancel function
+// of the BackgroundActivityContext it was built with. The SDK worker's own
+// stop timeout is the pause drain window, so a Pause lets in-flight Activities
+// finish; a permanent Stop cancels them itself once the graceful stop timeout
+// elapses, which is what the SDK did when that was its stop timeout.
+type boundController struct {
+	WorkerController
+	cancelActivities context.CancelCauseFunc
+}
+
+// drain stops the controller and lets in-flight Activities run to completion
+// within the pause drain window.
+func (controller *boundController) drain() {
+	controller.WorkerController.Stop()
+	controller.cancelActivities(nil)
+}
+
+// stopGracefully stops the controller and cancels in-flight Activities when
+// the graceful stop timeout elapses before they complete.
+func (controller *boundController) stopGracefully(graceful time.Duration) {
+	stopped := make(chan struct{})
+	go func() {
+		controller.WorkerController.Stop()
+		close(stopped)
+	}()
+	controller.awaitStop(stopped, graceful)
+}
+
+// awaitStop waits for a stop already in progress on the controller, cancelling
+// its in-flight Activities when the graceful stop timeout elapses first.
+func (controller *boundController) awaitStop(stopped <-chan struct{}, graceful time.Duration) {
+	timer := time.NewTimer(graceful)
+	defer timer.Stop()
+	select {
+	case <-stopped:
+	case <-timer.C:
+		controller.cancelActivities(sdkworker.ErrWorkerShutdown)
+		<-stopped
+	}
+	controller.cancelActivities(nil)
 }
 
 type TemporalWorker struct {
-	controller WorkerController
-	build      func() (WorkerController, error)
-	health     *httpserver.HealthState
-	metrics    *observability.Metrics
+	controller   *boundController
+	build        func() (*boundController, error)
+	gracefulStop time.Duration
+	health       *httpserver.HealthState
+	metrics      *observability.Metrics
 
 	mu       sync.Mutex
 	started  bool
@@ -68,6 +116,7 @@ type TemporalWorker struct {
 
 	startDone chan struct{}
 	drainDone chan struct{}
+	draining  *boundController
 	stopDone  chan struct{}
 }
 
@@ -87,36 +136,47 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 	if options.GracefulStopTimeout <= 0 {
 		return nil, fmt.Errorf("Temporal graceful stop timeout must be positive")
 	}
+	if options.PauseDrainTimeout < 0 {
+		return nil, fmt.Errorf("Temporal pause drain timeout must not be negative")
+	}
+	if options.PauseDrainTimeout < options.GracefulStopTimeout {
+		options.PauseDrainTimeout = options.GracefulStopTimeout
+	}
 	if options.Health == nil {
 		options.Health = httpserver.NewHealthState()
 	}
 	if options.Factory == nil {
 		options.Factory = defaultWorkerFactory
 	}
-	build := func() (WorkerController, error) {
+	build := func() (*boundController, error) {
+		activityContext, cancelActivities := context.WithCancelCause(context.Background())
 		controller, registry, err := options.Factory(options.Client, options.TaskQueue, sdkworker.Options{
 			Identity:                           options.Identity,
 			MaxConcurrentActivityExecutionSize: options.MaxConcurrentActivities,
 			MaxConcurrentActivityTaskPollers:   options.MaxConcurrentActivityTaskPolls,
-			WorkerStopTimeout:                  options.GracefulStopTimeout,
+			WorkerStopTimeout:                  options.PauseDrainTimeout,
+			BackgroundActivityContext:          activityContext,
 		})
 		if err != nil {
+			cancelActivities(nil)
 			return nil, fmt.Errorf("construct Temporal worker: %w", err)
 		}
 		if controller == nil || registry == nil {
+			cancelActivities(nil)
 			return nil, fmt.Errorf("Temporal worker factory returned incomplete worker")
 		}
 		if err := options.Activities.RegisterForTaskQueue(registry, options.TaskQueue); err != nil {
+			cancelActivities(nil)
 			return nil, fmt.Errorf("register Temporal Activities: %w", err)
 		}
 		workflows.Register(registry, options.Activities.PayloadLimits)
-		return controller, nil
+		return &boundController{WorkerController: controller, cancelActivities: cancelActivities}, nil
 	}
 	controller, err := build()
 	if err != nil {
 		return nil, err
 	}
-	return &TemporalWorker{controller: controller, build: build, health: options.Health, metrics: options.Metrics}, nil
+	return &TemporalWorker{controller: controller, build: build, gracefulStop: options.GracefulStopTimeout, health: options.Health, metrics: options.Metrics}, nil
 }
 
 func defaultWorkerFactory(workflowClient client.Client, taskQueue string, options sdkworker.Options) (WorkerController, WorkerRegistry, error) {
@@ -213,7 +273,7 @@ func (worker *TemporalWorker) Resume() error {
 	return worker.startController(controller)
 }
 
-func (worker *TemporalWorker) startController(controller WorkerController) error {
+func (worker *TemporalWorker) startController(controller *boundController) error {
 	if controller == nil {
 		if worker.build == nil {
 			worker.finishStartFailure(nil)
@@ -238,7 +298,7 @@ func (worker *TemporalWorker) startController(controller WorkerController) error
 	if worker.stopping {
 		worker.controller = nil
 		worker.mu.Unlock()
-		controller.Stop()
+		controller.stopGracefully(worker.gracefulStop)
 		worker.mu.Lock()
 		worker.finishStartLocked()
 		worker.mu.Unlock()
@@ -265,7 +325,7 @@ func (worker *TemporalWorker) startController(controller WorkerController) error
 // the paused check and permission commit under one lock makes a Pause that
 // wins before this point cancel the pending start without blocking on a slow
 // controller.Start call.
-func (worker *TemporalWorker) authorizeStart(controller WorkerController) (bool, error) {
+func (worker *TemporalWorker) authorizeStart(controller *boundController) (bool, error) {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
 	if worker.stopping {
@@ -274,6 +334,7 @@ func (worker *TemporalWorker) authorizeStart(controller WorkerController) (bool,
 	}
 	if worker.paused {
 		worker.controller = nil
+		controller.cancelActivities(nil)
 		worker.finishStartLocked()
 		return false, nil
 	}
@@ -286,12 +347,12 @@ func (worker *TemporalWorker) authorizeStart(controller WorkerController) (bool,
 // WorkerController ownership transfers at authorizeStart, and remains with the
 // start attempt until cleanup returns so Resume cannot overlap a replacement
 // and Stop waits for that cleanup.
-func (worker *TemporalWorker) finishStartFailure(controller WorkerController) {
+func (worker *TemporalWorker) finishStartFailure(controller *boundController) {
 	worker.mu.Lock()
 	worker.setNotReadyLocked()
 	worker.mu.Unlock()
 	if controller != nil {
-		controller.Stop()
+		controller.stopGracefully(worker.gracefulStop)
 	}
 	worker.mu.Lock()
 	worker.controller = nil
@@ -323,24 +384,26 @@ func (worker *TemporalWorker) finishStartLocked() {
 	worker.startDone = nil
 }
 
-func (worker *TemporalWorker) beginDrainLocked(controller WorkerController) (chan struct{}, bool) {
+func (worker *TemporalWorker) beginDrainLocked(controller *boundController) (chan struct{}, bool) {
 	if controller == nil || worker.drainDone != nil {
 		return worker.drainDone, false
 	}
 	done := make(chan struct{})
 	worker.drainDone = done
+	worker.draining = controller
 	return done, true
 }
 
-func (worker *TemporalWorker) drainController(controller WorkerController, done chan struct{}) {
+func (worker *TemporalWorker) drainController(controller *boundController, done chan struct{}) {
 	if controller == nil || done == nil {
 		return
 	}
 	go func() {
-		controller.Stop()
+		controller.drain()
 		worker.mu.Lock()
 		if worker.drainDone == done {
 			worker.drainDone = nil
+			worker.draining = nil
 		}
 		worker.mu.Unlock()
 		close(done)
@@ -348,8 +411,8 @@ func (worker *TemporalWorker) drainController(controller WorkerController, done 
 }
 
 // Stop turns readiness off before stopping pollers. A permanent stop waits for
-// an owned pause drain before allowing client teardown to continue. The
-// Temporal SDK owns the configured graceful wait for in-flight Activity calls.
+// an owned pause drain before allowing client teardown to continue. In-flight
+// Activity calls get the configured graceful wait and are then cancelled.
 func (worker *TemporalWorker) Stop() {
 	if worker == nil {
 		return
@@ -370,6 +433,7 @@ func (worker *TemporalWorker) Stop() {
 	starting := worker.starting
 	startDone := worker.startDone
 	drainDone := worker.drainDone
+	draining := worker.draining
 	started := worker.started
 	controller := worker.controller
 	if !starting && drainDone == nil {
@@ -385,11 +449,11 @@ func (worker *TemporalWorker) Stop() {
 		return
 	}
 	if drainDone != nil {
-		<-drainDone
+		draining.awaitStop(drainDone, worker.gracefulStop)
 		return
 	}
 	if started && controller != nil {
-		controller.Stop()
+		controller.stopGracefully(worker.gracefulStop)
 	}
 }
 

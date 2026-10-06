@@ -298,10 +298,13 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		MaxConcurrentActivities:        configuration.Temporal.Worker.MaxConcurrentActivities,
 		MaxConcurrentActivityTaskPolls: configuration.Temporal.Worker.MaxConcurrentActivityTaskPolls,
 		GracefulStopTimeout:            time.Duration(configuration.Temporal.Worker.GracefulStopTimeout),
-		Activities:                     activities,
-		Health:                         health,
-		Metrics:                        metrics,
-		Factory:                        options.WorkerFactory,
+		// A dependency pause must not cancel paid provider calls, so the
+		// detached controller waits as long as any Activity may legitimately run.
+		PauseDrainTimeout: config.ActivityStartToClose,
+		Activities:        activities,
+		Health:            health,
+		Metrics:           metrics,
+		Factory:           options.WorkerFactory,
 	})
 	if err != nil {
 		_ = tracer.Shutdown(context.Background())
@@ -904,8 +907,8 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 	runtime.readinessMu.Lock()
 	defer runtime.readinessMu.Unlock()
 	if ctx.Err() == nil && probeErr != nil {
-		// Pausing is a full worker stop that cancels in-flight provider calls
-		// after the graceful stop timeout, so a single slow probe must not
+		// Pausing is a full worker stop whose drain blocks Resume until every
+		// in-flight provider call completes, so a single slow probe must not
 		// trigger it. Act only after consecutive failures.
 		runtime.probeFailures++
 		if runtime.probeFailures < pauseAfterProbeFailures {

@@ -226,7 +226,11 @@ func TestPrepareCompactInputUsesVersionedBoundedSummarizerAndRetainsToolFrontier
 	if prepared.Policy.Version != compaction.PolicyVersion || prepared.Policy.PromptVersion != compaction.PromptVersion || prepared.Policy.TargetTokens != 1000 || prepared.Policy.SummaryStyle != compaction.SummaryConcise || !strings.Contains(got.Instructions[1].Text, "concise") || prepared.Settings.Output.Format.Kind != llm.OutputKindJSONSchema || len(prepared.Settings.Tools) != 1 {
 		t.Fatal("lost effective policy or application's checkpoint settings")
 	}
-	got.Input[1].(llm.ToolCall).Arguments[0] = '['
+	// The prefix reaches the summarizer as one quoted human message, never as
+	// replayed tool turns.
+	if len(got.Input) != 1 || got.Input[0].(llm.Message).Actor != llm.ActorHuman || !strings.Contains(got.Input[0].(llm.Message).Content[0].(llm.TextPart).Text, `model tool call id="closed" name="lookup"`) {
+		t.Fatalf("summarizer input = %+v", got.Input)
+	}
 	got.Instructions[2].Text = "changed"
 	prepared.Selection.Retained[0] = preparationMessage("changed")
 	if prepared.Selection.Prefix[1].(llm.ToolCall).Arguments[0] != '{' || parent.Items[1].(llm.ToolCall).Arguments[0] != '{' || parent.Items[3].(llm.ToolCall).ID != "pending" || parent.Settings.Instructions[0].Text != "application instructions" {
