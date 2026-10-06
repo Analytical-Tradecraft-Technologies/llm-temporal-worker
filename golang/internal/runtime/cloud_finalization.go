@@ -211,16 +211,19 @@ func (f *CloudFinalizer) replay(ctx context.Context, scope cloudstate.Scope, rec
 	if err != nil || operationID != handoff.OperationID {
 		return nil, true, cloudRuntimeError(cloudstate.ErrCorrupt, true)
 	}
+	// A cache replay or no-work compaction made no provider call, so a failure
+	// while resuming its publication must not report a paid dispatch.
+	paid := payload.Effects.Provider != nil
 	if err := f.verifyProviderFinalization(ctx, scope, record.Request.ID, kind, handoff.CheckpointScope, payload); err != nil {
-		return nil, true, cloudRuntimeError(err, true)
+		return nil, true, cloudRuntimeError(err, paid)
 	}
 	if resumeCheckpoint {
 		if _, err := f.plans.ResumeCheckpointFinalization(ctx, scope, record.Request.ID, f.clock()); err != nil {
-			return nil, true, cloudRuntimeError(err, true)
+			return nil, true, cloudRuntimeError(err, paid)
 		}
 	}
 	if err := f.finish(ctx, payload.Effects); err != nil {
-		return nil, true, cloudRuntimeError(err, true)
+		return nil, true, cloudRuntimeError(err, paid)
 	}
 	return payload.Response, true, nil
 }
