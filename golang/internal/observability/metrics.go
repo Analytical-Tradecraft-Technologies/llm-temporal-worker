@@ -165,6 +165,13 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 			return nil, err
 		}
 	}
+	// Export every bounded failure origin from the start. A counter series
+	// that appears only on its first increment is missing from a healthy
+	// worker's scrape, and the release SLO evidence requires the worker
+	// failure series to be present.
+	for origin := range activityFailureOrigins {
+		m.activityFailureTotal.WithLabelValues(origin)
+	}
 	return m, nil
 }
 
