@@ -697,8 +697,22 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
-	cost, err := pricing.CostFromUsage(plan.Quote.Entry, pricing.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
-		ReasoningTokens: usage.ReasoningTokens, CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens})
+	priceUsage := pricing.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		ReasoningTokens: usage.ReasoningTokens, CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens}
+	// Price at the class the provider reported serving, when it differs from
+	// the attempted class and the plan captured that class's price. A
+	// served-class entry that cannot price this usage (a partial entry with an
+	// unknown component) falls back to the quoted entry, as the engine does.
+	if actual := response.Service.Actual; actual != nil && *actual != plan.AttemptedClass {
+		if classEntry, ok := plan.ClassEntries[*actual]; ok {
+			if cost, err := pricing.CostFromUsage(classEntry, priceUsage); err == nil && response.Cost.Method == "" {
+				response.Cost.CatalogVersion = classEntry.Version
+				response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &cost.USD, string(cost.Method)
+				return
+			}
+		}
+	}
+	cost, err := pricing.CostFromUsage(plan.Quote.Entry, priceUsage)
 	if err != nil || response.Cost.Method != "" {
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return

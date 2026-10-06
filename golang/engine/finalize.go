@@ -43,7 +43,21 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	actual := pricing.Cost{}
 	if candidate.priceKnown() {
 		var err error
-		actual, err = actualCost(*candidate.entry, response)
+		// Price at the class the provider reported serving, when it differs
+		// from the attempted class and its price was captured at quote time.
+		// A served-class entry that cannot price this usage (a partial entry
+		// with an unknown component) falls back to the quoted entry, so a
+		// paid response is never discarded for an alternate price.
+		priced := false
+		if served := response.Service.Actual; served != nil && *served != candidate.candidate.AttemptedClass {
+			if classEntry, ok := candidate.classEntries[*served]; ok {
+				actual, err = actualCost(classEntry, response)
+				priced = err == nil
+			}
+		}
+		if !priced {
+			actual, err = actualCost(*candidate.entry, response)
+		}
 		if err != nil {
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "response usage could not be priced", err), candidate.estimate.MicroUSD)
 		}

@@ -30,6 +30,9 @@ type quotedCandidate struct {
 	entry        *pricing.Entry
 	estimate     budget.Estimate
 	reservations []admission.WindowReservation
+	// classEntries price the route's other service classes at quote time, so
+	// a response the provider served at another class is priced at it.
+	classEntries map[llm.ServiceClass]pricing.Entry
 }
 
 func (candidate quotedCandidate) priceKnown() bool { return candidate.entry != nil }
@@ -283,7 +286,8 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 			return quotedPlan{}, engineError(provider.CodeInvalidArgument, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "candidate cost estimate failed", err)
 		}
 		reservations := reservations(matches, estimate.MicroUSD, estimate.CostUSD, now)
-		quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate, entry: &entry, estimate: estimate, reservations: reservations})
+		quoted.candidates = append(quoted.candidates, quotedCandidate{candidate: candidate, entry: &entry, estimate: estimate, reservations: reservations,
+			classEntries: classPriceEntries(snapshot, request, candidate, now)})
 		if estimate.MicroUSD > quoted.maximum {
 			quoted.maximum = estimate.MicroUSD
 		}
@@ -542,4 +546,34 @@ func (engine *Engine) replayCompleted(ctx context.Context, request llm.Request, 
 		return llm.Response{}, false, nil
 	}
 	return *response, true, nil
+}
+
+// classPriceEntries resolves, at the quote time, the price entry of every
+// other service class the candidate's route offers. A class without an active
+// price is left out.
+func classPriceEntries(snapshot Snapshot, request llm.Request, candidate routing.Candidate, now time.Time) map[llm.ServiceClass]pricing.Entry {
+	model := snapshot.Routes.Models[request.Model]
+	if snapshot.Prices == nil || candidate.RouteIndex < 0 || candidate.RouteIndex >= len(model.Routes) || model.Routes[candidate.RouteIndex].ID != candidate.RouteID {
+		return nil
+	}
+	var entries map[llm.ServiceClass]pricing.Entry
+	for class, tier := range model.Routes[candidate.RouteIndex].ProviderTiers {
+		if class == candidate.AttemptedClass || tier == "" {
+			continue
+		}
+		quote, err := snapshot.Prices.Resolve(pricing.Query{Provider: candidate.Provider, Family: candidate.Family, EndpointID: candidate.EndpointID,
+			Region: candidate.Region, Model: candidate.Model, ProviderTier: tier, At: now})
+		if err != nil {
+			continue
+		}
+		entry := quote.Entry
+		if entry.Version == "" {
+			entry.Version = quote.CatalogVersion
+		}
+		if entries == nil {
+			entries = make(map[llm.ServiceClass]pricing.Entry)
+		}
+		entries[class] = entry
+	}
+	return entries
 }

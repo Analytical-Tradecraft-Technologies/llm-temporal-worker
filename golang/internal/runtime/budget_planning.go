@@ -12,6 +12,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
@@ -40,6 +41,8 @@ type PlannedBudgetCall struct {
 	Estimate    budget.Estimate
 	Reservation durable.ReserveRequest
 	QuotedAt    time.Time
+	// ClassEntries price the route's other service classes at QuotedAt.
+	ClassEntries map[llm.ServiceClass]pricing.Entry
 }
 
 // RequiresReservation distinguishes a positive matched quote from known-free
@@ -198,6 +201,7 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 	quote.Entry = entry
 	quote.Entry.UnknownComponents = append([]pricing.PriceComponent(nil), entry.UnknownComponents...)
 	result.Route.PriceVersion = entry.Version
+	result.ClassEntries = planning.classEntries(semantic, candidate, query)
 	// Estimate the provider model, attempted tier and exact compiled input.
 	resolved := resolveCandidateRequest(semantic, candidate, call.Adapter)
 	digest, err := llm.RequestDigest(resolved)
@@ -281,4 +285,41 @@ func safeQuoteTime(at time.Time) bool {
 
 func budgetPlanningError(code provider.Code) error {
 	return provider.NewError(code, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "budget planning failed")
+}
+
+// classEntries resolves, at the quote time, the price entry of every other
+// service class the candidate's route offers. A provider may serve a response
+// at another class than attempted (for example a priority request served at
+// standard), and that response is priced at the class it was served at. A
+// class without an active price is left out and priced at the attempted entry.
+func (planning *BudgetPlanning) classEntries(semantic llm.Request, candidate routing.Candidate, query pricing.Query) map[llm.ServiceClass]pricing.Entry {
+	model := planning.providers.catalog.Models[semantic.Model]
+	if candidate.RouteIndex < 0 || candidate.RouteIndex >= len(model.Routes) || model.Routes[candidate.RouteIndex].ID != candidate.RouteID {
+		return nil
+	}
+	var entries map[llm.ServiceClass]pricing.Entry
+	for class, tier := range model.Routes[candidate.RouteIndex].ProviderTiers {
+		if class == candidate.AttemptedClass || tier == "" {
+			continue
+		}
+		classQuery := query
+		classQuery.ProviderTier = tier
+		quote, err := planning.providers.budgetSnapshot.Prices.Resolve(classQuery)
+		if err != nil {
+			continue
+		}
+		entry := quote.Entry
+		if entry.Version == "" {
+			entry.Version = quote.CatalogVersion
+		}
+		if !validBudgetQuote(quote, entry, classQuery) {
+			continue
+		}
+		entry.UnknownComponents = append([]pricing.PriceComponent(nil), entry.UnknownComponents...)
+		if entries == nil {
+			entries = make(map[llm.ServiceClass]pricing.Entry)
+		}
+		entries[class] = entry
+	}
+	return entries
 }
