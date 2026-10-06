@@ -597,8 +597,13 @@ means the v1 contract. Its input is the `activity.GenerateRequest` envelope
 envelope `{"api_version": "llm.temporal/v1", "response": <llm.Response>, "metadata": {...}}`. Trying
 the v1 API locally requires `state.kind: durable` with cloud storage and Redis.
 
-Operations, checkpoints, budget/throttle state, and blobs are process local;
-restart loses everything and provider-pending jobs cannot be recovered after
+Operations, checkpoints, budget/throttle state, and blobs are process local.
+A configuration reload keeps them: the admission, result and continuation
+stores belong to the process, not to a snapshot, so completed operations still
+replay after a reload. A continuation key rotation or `limits.continuation_depth`
+change rebuilds only the continuation store, and the memory blob store keeps
+the first snapshot's `blob_store.inline_bytes` until restart. A restart loses
+everything and provider-pending jobs cannot be recovered after
 process loss. The mode must not be used for durable continuation/recovery
 guarantees, multi-replica admission, backups, or production readiness. Redis
 addresses and credentials are ignored by the memory factory and

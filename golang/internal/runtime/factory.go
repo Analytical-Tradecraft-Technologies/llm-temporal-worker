@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -165,6 +167,22 @@ type ProductionFactoryOptions struct {
 type ProductionEngineFactory struct {
 	options                   ProductionFactoryOptions
 	automaticV1RuntimeBuilder bool
+	// memory is the process-owned state of memory mode. Every snapshot this
+	// factory (and any copy of it) builds shares it, so a reload keeps
+	// completed-operation deduplication, stored results and continuations.
+	memory *memoryState
+}
+
+// memoryState holds memory mode's stores across reloads. state.kind is a
+// process-lifetime setting, so a reload never moves between memory and durable
+// state. The continuation store is reused only while its keyring and depth
+// limit are unchanged; a rotation rebuilds it, as a restart would.
+type memoryState struct {
+	mu                   sync.Mutex
+	admission            *memorystore.AdmissionStore
+	blobs                blob.Store
+	continuations        *memorystore.ContinuationStore
+	continuationIdentity [32]byte
 }
 
 // productionClientSet owns the SDK clients built for one immutable snapshot
@@ -312,7 +330,7 @@ func NewProductionEngineFactory(options ProductionFactoryOptions) (*ProductionEn
 	if automaticV1RuntimeBuilder {
 		options.V1RuntimeBuilder = NewDurableV1RuntimeBuilder()
 	}
-	return &ProductionEngineFactory{options: options, automaticV1RuntimeBuilder: automaticV1RuntimeBuilder}, nil
+	return &ProductionEngineFactory{options: options, automaticV1RuntimeBuilder: automaticV1RuntimeBuilder, memory: &memoryState{}}, nil
 }
 
 var _ EngineFactory = (*ProductionEngineFactory)(nil)
@@ -785,25 +803,42 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	if clock == nil {
 		clock = time.Now
 	}
-	keyring, err := factory.continuationKeyring(ctx, value)
+	keyring, identity, err := factory.memoryContinuationKeyring(ctx, value)
 	if err != nil {
 		return nil, nil, err
 	}
-	admissionStore := memorystore.NewAdmissionStore(memorystore.AdmissionOptions{Clock: clock})
-	continuationStore, err := memorystore.NewContinuationStore(memorystore.ContinuationOptions{Keyring: keyring, Clock: clock, MaxDepth: value.Limits.ContinuationDepth})
-	if err != nil {
-		return nil, nil, fmt.Errorf("construct memory continuation store: %w", err)
+	if factory.memory == nil {
+		factory.memory = &memoryState{}
 	}
+	factory.memory.mu.Lock()
+	defer factory.memory.mu.Unlock()
+	if factory.memory.admission == nil {
+		factory.memory.admission = memorystore.NewAdmissionStore(memorystore.AdmissionOptions{Clock: clock})
+	}
+	admissionStore := factory.memory.admission
+	if factory.memory.continuations == nil || factory.memory.continuationIdentity != identity {
+		continuations, err := memorystore.NewContinuationStore(memorystore.ContinuationOptions{Keyring: keyring, Clock: clock, MaxDepth: value.Limits.ContinuationDepth})
+		if err != nil {
+			return nil, nil, fmt.Errorf("construct memory continuation store: %w", err)
+		}
+		factory.memory.continuations, factory.memory.continuationIdentity = continuations, identity
+	}
+	continuationStore := factory.memory.continuations
 	var blobStore blob.Store = factory.options.BlobStore
 	if blobStore != nil {
 		if _, ok := blobStore.(*memorystore.BlobStore); !ok {
 			return nil, nil, fmt.Errorf("memory state requires the process-local memory blob store")
 		}
+	} else if factory.memory.blobs != nil {
+		// The first snapshot's inline_bytes bounds the retained store, as it
+		// would until a restart.
+		blobStore = factory.memory.blobs
 	} else {
 		blobStore, err = memorystore.NewBlobStore(memorystore.BlobOptions{MaxBytes: int64(value.BlobStore.InlineBytes), Clock: clock})
 		if err != nil {
 			return nil, nil, fmt.Errorf("construct memory blob store: %w", err)
 		}
+		factory.memory.blobs = blobStore
 	}
 	results, err := NewBlobResultStore(blobStore, admissionStore, nil, clock)
 	if err != nil {
@@ -899,6 +934,29 @@ func (factory *ProductionEngineFactory) redisKeySecret(ctx context.Context, valu
 		return nil, fmt.Errorf("%w: Redis key secret requires at least 32 bytes", ErrDependencyUnavailable)
 	}
 	return append([]byte(nil), secret...), nil
+}
+
+// memoryContinuationKeyring returns the continuation keyring and a digest of
+// everything the memory continuation store depends on: each key's ID, primary
+// flag and resolved secret, and the depth limit.
+func (factory *ProductionEngineFactory) memoryContinuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, [32]byte, error) {
+	keyring, err := factory.continuationKeyring(ctx, value)
+	if err != nil {
+		return nil, [32]byte{}, err
+	}
+	digest := sha256.New()
+	fmt.Fprintf(digest, "depth=%d\n", value.Limits.ContinuationDepth)
+	for _, key := range value.Continuation.HandleKeys {
+		secret, err := factory.resolveSecret(ctx, key.Secret)
+		if err != nil {
+			return nil, [32]byte{}, fmt.Errorf("resolve continuation key %q: %w", key.ID, err)
+		}
+		fmt.Fprintf(digest, "%d:%s:%t:%d:", len(key.ID), key.ID, key.Primary, len(secret))
+		digest.Write(secret)
+	}
+	var identity [32]byte
+	copy(identity[:], digest.Sum(nil))
+	return keyring, identity, nil
 }
 
 func (factory *ProductionEngineFactory) continuationKeyring(ctx context.Context, value config.Config) (*state.Keyring, error) {
