@@ -196,7 +196,8 @@ func toProviderContinuation(continuation state.Continuation) *llm.Continuation {
 			result.Handle = string(value.Data)
 			continue
 		}
-		result.ProviderStates = append(result.ProviderStates, llm.ProviderState{Provider: value.Provider, EndpointFamily: value.Family, MediaType: value.Media, Opaque: append([]byte(nil), value.Data...)})
+		stateProvider, stateFamily := adapterStateLabel(value.Family, value.Provider)
+		result.ProviderStates = append(result.ProviderStates, llm.ProviderState{Provider: stateProvider, EndpointFamily: stateFamily, MediaType: value.Media, Opaque: append([]byte(nil), value.Data...)})
 	}
 	return result
 }
