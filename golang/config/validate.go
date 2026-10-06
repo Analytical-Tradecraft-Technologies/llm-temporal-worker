@@ -72,11 +72,22 @@ func (config Config) Validate() error {
 		if len(name) > maxAdmissionFieldBytes {
 			return fmt.Errorf("endpoints.%s exceeds the %d-byte admission field limit", name, maxAdmissionFieldBytes)
 		}
-		if err := config.Endpoints[name].validate("endpoints."+name, config.Limits.ProviderTimeout); err != nil {
+		// An endpoint that only model_sync uses is priced from the synced
+		// catalog, so it does not need a configured price catalog.
+		priceCatalogOptional := config.ModelSyncEndpoint(name) && !config.RoutedEndpoint(name)
+		if err := config.Endpoints[name].validate("endpoints."+name, config.Limits.ProviderTimeout, priceCatalogOptional); err != nil {
 			return err
 		}
+		if config.Endpoints[name].Optional {
+			if !config.ModelSyncEndpoint(name) || config.RoutedEndpoint(name) {
+				return fmt.Errorf("endpoints.%s.optional is only valid for an endpoint that model_sync uses and no models route references", name)
+			}
+			if kind := config.Endpoints[name].Auth.Kind; kind != "bearer_env" && kind != "header_env" {
+				return fmt.Errorf("endpoints.%s.optional requires bearer_env or header_env auth", name)
+			}
+		}
 	}
-	if len(config.Models) == 0 {
+	if len(config.Models) == 0 && config.ModelSync == nil {
 		return fmt.Errorf("models must not be empty")
 	}
 	for _, name := range sortedKeys(config.Models) {
@@ -87,8 +98,13 @@ func (config Config) Validate() error {
 	if err := config.Capabilities.validate(); err != nil {
 		return err
 	}
-	if err := config.Pricing.validate(); err != nil {
+	if err := config.Pricing.validate(config.ModelSync != nil); err != nil {
 		return err
+	}
+	if config.ModelSync != nil {
+		if err := config.ModelSync.validate(config.Endpoints); err != nil {
+			return err
+		}
 	}
 	if err := config.Budgets.validate(); err != nil {
 		return err
@@ -432,7 +448,7 @@ func (limits LimitsConfig) validate() error {
 	return nil
 }
 
-func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) error {
+func (endpoint EndpointConfig) validate(path string, providerTimeout Duration, priceCatalogOptional bool) error {
 	if _, ok := supportedFamilies[endpoint.Family]; !ok {
 		return fmt.Errorf("%s.family %q is unsupported", path, endpoint.Family)
 	}
@@ -499,7 +515,7 @@ func (endpoint EndpointConfig) validate(path string, providerTimeout Duration) e
 	if endpoint.Timeout > providerTimeout {
 		return fmt.Errorf("%s.timeout must not exceed limits.provider_timeout", path)
 	}
-	if endpoint.CapabilityProfile == "" || endpoint.PriceCatalog == "" {
+	if endpoint.CapabilityProfile == "" || (endpoint.PriceCatalog == "" && !priceCatalogOptional) {
 		return fmt.Errorf("%s capability_profile and price_catalog are required", path)
 	}
 	if len(endpoint.ServiceClasses) == 0 {
@@ -595,8 +611,63 @@ func (catalogs CapabilityConfig) validate() error {
 	return validateCatalogs(catalogs.Catalogs, "capabilities.catalogs")
 }
 
-func (pricing PricingConfig) validate() error {
+func (pricing PricingConfig) validate(modelSync bool) error {
+	// A model_sync deployment can be priced entirely from the synced catalog.
+	if modelSync && len(pricing.Catalogs) == 0 {
+		return nil
+	}
 	return validateCatalogs(pricing.Catalogs, "pricing.catalogs")
+}
+
+// RoutedEndpoint reports whether any configured models route references
+// endpointID.
+func (config Config) RoutedEndpoint(endpointID string) bool {
+	for _, model := range config.Models {
+		for _, route := range model.Routes {
+			if route.Endpoint == endpointID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (sync ModelSyncConfig) validate(endpoints map[string]EndpointConfig) error {
+	const path = "model_sync"
+	openrouter, ok := endpoints[sync.OpenRouter.Endpoint]
+	if sync.OpenRouter.Endpoint == "" || !ok {
+		return fmt.Errorf("%s.openrouter.endpoint %q is not configured", path, sync.OpenRouter.Endpoint)
+	}
+	if _, marked := openrouter.Extensions["openrouter"]; openrouter.Family != "openai_chat" || !marked {
+		return fmt.Errorf("%s.openrouter.endpoint must be an openai_chat endpoint with the openrouter extension", path)
+	}
+	if order, present := openrouter.Extensions["openrouter"]["provider_order"]; present && order != nil {
+		return fmt.Errorf("%s.openrouter.endpoint must not pin provider_order; OpenRouter selects the upstream for synced models", path)
+	}
+	seen := map[string]struct{}{sync.OpenRouter.Endpoint: {}}
+	for index, direct := range sync.Direct {
+		directPath := fmt.Sprintf("%s.direct[%d]", path, index)
+		if _, ok := endpoints[direct.Endpoint]; direct.Endpoint == "" || !ok {
+			return fmt.Errorf("%s.endpoint %q is not configured", directPath, direct.Endpoint)
+		}
+		if _, duplicate := seen[direct.Endpoint]; duplicate {
+			return fmt.Errorf("%s.endpoint %q is already used by model_sync", directPath, direct.Endpoint)
+		}
+		seen[direct.Endpoint] = struct{}{}
+		if err := validateIdentifier(direct.Provider, directPath+".provider"); err != nil {
+			return err
+		}
+	}
+	if len(sync.Rules) > 0 {
+		if err := validateCatalogs(sync.Rules, path+".rules"); err != nil {
+			return err
+		}
+	}
+	minimum, maximum := time.Duration(sync.RefreshIntervalMin), time.Duration(sync.RefreshIntervalMax)
+	if minimum < time.Minute || maximum > 24*time.Hour || maximum < minimum {
+		return fmt.Errorf("%s refresh interval must satisfy 1m <= refresh_interval_min <= refresh_interval_max <= 24h", path)
+	}
+	return nil
 }
 
 func validateCatalogs(catalogs []CatalogRef, path string) error {

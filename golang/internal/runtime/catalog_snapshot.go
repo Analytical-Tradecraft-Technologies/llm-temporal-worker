@@ -40,11 +40,24 @@ type CatalogSnapshotLoader struct {
 }
 
 func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.Snapshot) (engine.Snapshot, error) {
+	loaded, err := loader.load(ctx, snapshot)
+	return loaded.snapshot, err
+}
+
+// loadedCatalogs is the engine snapshot together with the verified catalogs
+// it was compiled from, which model sync layers its routes and prices over.
+type loadedCatalogs struct {
+	snapshot engine.Snapshot
+	bundle   catalog.Bundle
+	prices   pricing.Catalog
+}
+
+func (loader CatalogSnapshotLoader) load(ctx context.Context, snapshot *config.Snapshot) (loadedCatalogs, error) {
 	if snapshot == nil {
-		return engine.Snapshot{}, fmt.Errorf("configuration snapshot is required")
+		return loadedCatalogs{}, fmt.Errorf("configuration snapshot is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return engine.Snapshot{}, err
+		return loadedCatalogs{}, err
 	}
 	clock := loader.Clock
 	if clock == nil {
@@ -53,22 +66,22 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 	value := snapshot.Config()
 	bundle, err := catalog.LoadWithOptions(value, loader.CatalogOptions)
 	if err != nil {
-		return engine.Snapshot{}, fmt.Errorf("load verified catalogs: %w", &catalogLoadError{cause: err})
+		return loadedCatalogs{}, fmt.Errorf("load verified catalogs: %w", &catalogLoadError{cause: err})
 	}
 	now := clock()
-	price, err := mergePricingCatalogs(bundle, snapshot.ConfigVersion())
+	price, err := mergePricingCatalogs(bundle, snapshot.ConfigVersion(), value.ModelSync != nil)
 	if err != nil {
-		return engine.Snapshot{}, err
+		return loadedCatalogs{}, err
 	}
 	routes, err := compileRoutes(value, bundle, now)
 	if err != nil {
-		return engine.Snapshot{}, err
+		return loadedCatalogs{}, err
 	}
 	policies, err := compileBudgetPolicies(value)
 	if err != nil {
-		return engine.Snapshot{}, err
+		return loadedCatalogs{}, err
 	}
-	return engine.Snapshot{
+	return loadedCatalogs{bundle: bundle, prices: price, snapshot: engine.Snapshot{
 		Version:                  snapshot.ConfigVersion(),
 		ConfigDigest:             snapshot.Digest(),
 		ConfigEpoch:              snapshot.ConfigVersion(),
@@ -82,16 +95,16 @@ func (loader CatalogSnapshotLoader) Load(ctx context.Context, snapshot *config.S
 		ReservationLease:         time.Duration(value.State.ReservationLease),
 		OperationRetention:       time.Duration(value.State.OperationTerminalRetention),
 		ContinuationRetention:    time.Duration(value.State.ContinuationRetention),
-	}, nil
+	}}, nil
 }
 
-func mergePricingCatalogs(bundle catalog.Bundle, configVersion string) (pricing.Catalog, error) {
+func mergePricingCatalogs(bundle catalog.Bundle, configVersion string, modelSync bool) (pricing.Catalog, error) {
 	ids := make([]string, 0, len(bundle.Pricing))
 	for id := range bundle.Pricing {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	if len(ids) == 0 {
+	if len(ids) == 0 && !modelSync {
 		return pricing.Catalog{}, fmt.Errorf("verified pricing catalogs are required")
 	}
 	entries := make([]pricing.Entry, 0)

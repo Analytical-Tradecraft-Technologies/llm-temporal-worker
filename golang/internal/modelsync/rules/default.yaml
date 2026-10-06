@@ -1,0 +1,44 @@
+# Built-in model-sync rules, compiled into the worker binary and therefore
+# shipped in its image. Operators layer their own files over these with
+# model_sync.rules; a later file overrides an earlier one.
+#
+# Every routable model is named by its OpenRouter ID. A provider entry maps
+# the OpenRouter IDs under its prefix to the model IDs its own API accepts,
+# so a configured direct endpoint for that provider serves the same name.
+version: model-sync-rules/v1
+
+providers:
+  openai:
+    prefix: openai/
+    # OpenRouter's openai/<id> is OpenAI's <id>.
+    model_id: verbatim
+    # OpenRouter endpoint tag priced for each provider tier, keyed by the
+    # endpoint's service_classes provider_value.
+    tiers:
+      default: openai
+      flex: openai/flex
+      priority: openai/fast
+
+  anthropic:
+    prefix: anthropic/
+    # OpenRouter's anthropic/claude-sonnet-4.5 is Anthropic's claude-sonnet-4-5.
+    model_id: dots_to_dashes
+    tiers:
+      standard_only: anthropic
+      auto: anthropic
+
+  exa:
+    prefix: exa/
+    model_id: verbatim
+    # OpenRouter does not list Exa, so its models and prices are declared
+    # here. Exa reports each call's actual cost; these prices bound the budget
+    # reservation. Source: https://exa.ai/pricing (Answer, $5 per 1k requests).
+    extra_models:
+      exa/exa:
+        model: exa
+        prices:
+          input_per_million: "0"
+          output_per_million: "0"
+          cache_read_per_million: "0"
+          cache_write_per_million: "0"
+          per_request: "0.005"

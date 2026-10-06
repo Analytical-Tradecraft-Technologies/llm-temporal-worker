@@ -114,7 +114,7 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 		"z": compiledPriceCatalog(t, "z", "z-v1", []pricing.Entry{testPriceEntry("endpoint-z", "model-z", "standard")}),
 		"a": compiledPriceCatalog(t, "a", "a-v1", []pricing.Entry{testPriceEntry("endpoint-a", "model-a", "standard")}),
 	}}
-	merged, err := mergePricingCatalogs(bundle, "config-v1")
+	merged, err := mergePricingCatalogs(bundle, "config-v1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 		t.Fatal("merged catalog has no digest")
 	}
 
-	if got, err := mergePricingCatalogs(bundle, " "); err != nil || got.Version != "runtime-prices" {
+	if got, err := mergePricingCatalogs(bundle, " ", false); err != nil || got.Version != "runtime-prices" {
 		t.Fatalf("blank config version = %#v, %v", got, err)
 	}
 	for name, invalid := range map[string]catalog.Bundle{
@@ -141,7 +141,7 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := mergePricingCatalogs(invalid, "config-v1"); err == nil {
+			if _, err := mergePricingCatalogs(invalid, "config-v1", false); err == nil {
 				t.Fatal("mergePricingCatalogs() unexpectedly succeeded")
 			}
 		})

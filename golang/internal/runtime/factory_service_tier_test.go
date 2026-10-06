@@ -276,7 +276,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "tier-test/v1"}, ProviderFeatures: features}}},
 	}}}
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: family.endpoint}}
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}

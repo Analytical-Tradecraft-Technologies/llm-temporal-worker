@@ -64,9 +64,13 @@ type OpenRouterProfileConfig struct {
 	ActualServiceClasses      map[string]llm.ServiceClass
 	MissingActualServiceClass llm.ServiceClass
 	ProviderOrder             []string
-	AllowFallbacks            bool
-	RequireParameters         bool
-	AllowedExtensions         map[string]ExtensionSpec
+	// SelectUpstream lets OpenRouter choose (and fail over between) upstream
+	// providers instead of pinning ProviderOrder. Budget admission must then
+	// price the route at its most expensive upstream; model sync does.
+	SelectUpstream    bool
+	AllowFallbacks    bool
+	RequireParameters bool
+	AllowedExtensions map[string]ExtensionSpec
 }
 
 func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
@@ -76,6 +80,9 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 	}
 	if baseURL != openRouterBaseURL {
 		return Profile{}, fmt.Errorf("openrouter chat profile: base URL must be exactly %q", openRouterBaseURL)
+	}
+	if config.SelectUpstream {
+		return newOpenRouterUpstreamProfile(config, baseURL)
 	}
 	if len(config.ProviderOrder) == 0 {
 		return Profile{}, fmt.Errorf("openrouter chat profile: provider order is required")
@@ -138,6 +145,41 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 		ReservedWireFields: map[string]struct{}{"provider": {}},
 		ResponseAugment:    augmentOpenRouter,
 		ResponseError:      openRouterResponseError,
+	})
+}
+
+// newOpenRouterUpstreamProfile builds the profile for an endpoint on which
+// OpenRouter selects the upstream provider. Only require_parameters is sent,
+// so OpenRouter never routes to an upstream that would drop a request field.
+// Callers cannot steer the upstream through the openrouter extension.
+func newOpenRouterUpstreamProfile(config OpenRouterProfileConfig, baseURL string) (Profile, error) {
+	if len(config.ProviderOrder) != 0 {
+		return Profile{}, fmt.Errorf("openrouter chat profile: provider order must be empty when OpenRouter selects the upstream")
+	}
+	if !config.RequireParameters {
+		return Profile{}, fmt.Errorf("openrouter chat profile: require_parameters must be true")
+	}
+	providerRaw, err := json.Marshal(map[string]any{"require_parameters": true})
+	if err != nil {
+		return Profile{}, fmt.Errorf("openrouter chat profile: provider defaults: %w", err)
+	}
+	allowed := cloneExtensions(config.AllowedExtensions)
+	delete(allowed, "openrouter")
+	return NewProfile(Profile{
+		ApplicationInstructionRole: "system",
+		ID:                         config.ID,
+		CapabilityVersion:          config.CapabilityVersion,
+		Capabilities:               config.Capabilities,
+		ServiceTiers:               config.ServiceTiers,
+		ActualServiceClasses:       config.ActualServiceClasses,
+		MissingActualServiceClass:  config.MissingActualServiceClass,
+		AllowedExtensions:          allowed,
+		ExpectedBaseURL:            baseURL,
+		ExpectedModel:              config.Model,
+		WireDefaults:               map[string]json.RawMessage{"provider": providerRaw},
+		ReservedWireFields:         map[string]struct{}{"provider": {}},
+		ResponseAugment:            augmentOpenRouter,
+		ResponseError:              openRouterResponseError,
 	})
 }
 

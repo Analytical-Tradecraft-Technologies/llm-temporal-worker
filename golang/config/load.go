@@ -116,6 +116,14 @@ func applyDefaults(config *Config) {
 	if config.State.Redis.StreamTrimSafety == 0 && config.State.Redis.CoordinationStreamEnabled != nil && *config.State.Redis.CoordinationStreamEnabled {
 		config.State.Redis.StreamTrimSafety = Duration(10 * time.Minute)
 	}
+	if config.ModelSync != nil {
+		if config.ModelSync.RefreshIntervalMin == 0 {
+			config.ModelSync.RefreshIntervalMin = Duration(DefaultModelSyncRefreshMin)
+		}
+		if config.ModelSync.RefreshIntervalMax == 0 {
+			config.ModelSync.RefreshIntervalMax = Duration(DefaultModelSyncRefreshMax)
+		}
+	}
 	if config.BlobStore.Kind == "" {
 		if config.State.Kind == StateKindMemory {
 			config.BlobStore.Kind = "memory"

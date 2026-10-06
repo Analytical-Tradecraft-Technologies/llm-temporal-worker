@@ -131,7 +131,7 @@ func TestCatalogDerivedChatAdapterCompilesTextAndImageRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := factory.buildAdapter(context.Background(), azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"}), snapshot, "azure-chat")
+	adapter, err := factory.buildAdapter(context.Background(), azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"}), snapshot, "azure-chat", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

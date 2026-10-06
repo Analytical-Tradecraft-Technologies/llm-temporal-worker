@@ -80,7 +80,7 @@ func TestProductionFactoryBuildsBedrockAdaptersWithAWSRegion(t *testing.T) {
 				"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
 			}}}
 
-			adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+			adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 			if err != nil {
 				t.Fatalf("buildAdapter() error = %v", err)
 			}
@@ -122,7 +122,7 @@ func TestProductionFactoryRejectsNonDefaultBedrockAuthBeforeDependencies(t *test
 				"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
 			}}}
 
-			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 			if !errors.Is(err, ErrUnsupportedProviderAuth) {
 				t.Fatalf("buildAdapter() error = %v, want ErrUnsupportedProviderAuth", err)
 			}
@@ -162,7 +162,7 @@ func TestProductionFactoryBuildsBedrockMessagesWithGeneratedProfile(t *testing.T
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
 	}}}
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}
@@ -203,7 +203,7 @@ func TestProductionFactoryBuildsBedrockConverseWithGeneratedProfile(t *testing.T
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
 	}}}
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}
@@ -246,7 +246,7 @@ func TestProductionFactoryFailsClosedWhenBedrockAWSConfigFactoryFails(t *testing
 			snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 				"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
 			}}}
-			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 			if !errors.Is(err, wantErr) {
 				t.Fatalf("buildAdapter() error = %v, want AWS config error", err)
 			}

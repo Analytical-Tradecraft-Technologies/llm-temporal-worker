@@ -85,7 +85,13 @@ Catalog precedence is explicit:
 
 1. endpoint-specific operator override;
 2. verified built-in catalog entry;
-3. no price.
+3. with `model_sync`, the price OpenRouter publishes for the route's upstream
+   endpoint (see [ADR 0016](../decisions/0016-openrouter-model-sync.md));
+4. no price.
+
+A synced price never replaces a configured entry with the same identity. An
+OpenRouter route on which OpenRouter selects the upstream is priced at the
+componentwise maximum over every upstream endpoint and long-prompt override.
 
 There is no guessed price. A candidate with any matching monetary budget is
 ineligible without a current price. `pricing.require_price_when_budgeted: true`

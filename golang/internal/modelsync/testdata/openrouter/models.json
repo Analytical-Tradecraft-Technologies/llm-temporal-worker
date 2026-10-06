@@ -1,0 +1,424 @@
+{
+ "data": [
+  {
+   "architecture": {
+    "input_modalities": [
+     "text"
+    ],
+    "instruct_type": null,
+    "modality": "text->text",
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Other"
+   },
+   "canonical_slug": "inference-net/schematron-v2-turbo-20260902",
+   "context_length": 128000,
+   "created": 1789176949,
+   "default_parameters": {},
+   "expiration_date": null,
+   "hugging_face_id": "inference-net/schematron-v2-granite-4.0-h-micro",
+   "id": "inference-net/schematron-v2-turbo",
+   "knowledge_cutoff": null,
+   "links": {
+    "details": "/api/v1/models/inference-net/schematron-v2-turbo-20260902/endpoints"
+   },
+   "name": "Inference.net: Schematron V2 Turbo",
+   "per_request_limits": null,
+   "pricing": {
+    "completion": "0.00000015",
+    "input_cache_read": "0.00000003",
+    "prompt": "0.00000003"
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "logit_bias",
+    "max_tokens",
+    "min_p",
+    "presence_penalty",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "top_k",
+    "top_p"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": 128000,
+    "is_moderated": false,
+    "max_completion_tokens": 8192
+   }
+  },
+  {
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "audio",
+     "file",
+     "video"
+    ],
+    "instruct_type": null,
+    "modality": "text+image+file+audio+video->text+image",
+    "output_modalities": [
+     "text",
+     "image"
+    ],
+    "tokenizer": "Router"
+   },
+   "canonical_slug": "openrouter/auto-beta",
+   "context_length": 2000000,
+   "created": 1784311165,
+   "default_parameters": {},
+   "expiration_date": null,
+   "hugging_face_id": null,
+   "id": "openrouter/auto-beta",
+   "knowledge_cutoff": null,
+   "links": {
+    "details": "/api/v1/models/openrouter/auto-beta/endpoints"
+   },
+   "name": "Auto Router (Beta)",
+   "per_request_limits": null,
+   "pricing": {
+    "completion": "-1",
+    "prompt": "-1"
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "include_reasoning",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "min_p",
+    "prediction",
+    "presence_penalty",
+    "reasoning",
+    "reasoning_effort",
+    "repetition_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_a",
+    "top_k",
+    "top_logprobs",
+    "top_p",
+    "web_search_options"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": null,
+    "is_moderated": false,
+    "max_completion_tokens": null
+   }
+  },
+  {
+   "alias_target": {
+    "name": "Anthropic: Claude Sonnet 5.5",
+    "slug": "anthropic/claude-sonnet-5.5"
+   },
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "instruct_type": null,
+    "modality": "text+image+file->text",
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Router"
+   },
+   "canonical_slug": "~anthropic/claude-sonnet-latest",
+   "context_length": 1000000,
+   "created": 1777318368,
+   "default_parameters": {},
+   "expiration_date": null,
+   "hugging_face_id": null,
+   "id": "~anthropic/claude-sonnet-latest",
+   "knowledge_cutoff": null,
+   "links": {
+    "details": "/api/v1/models/~anthropic/claude-sonnet-latest/endpoints"
+   },
+   "name": "Anthropic: Claude Sonnet Latest",
+   "per_request_limits": null,
+   "pricing": {
+    "completion": "0.00001",
+    "input_cache_read": "0.0000002",
+    "input_cache_write": "0.0000025",
+    "input_cache_write_1h": "0.000004",
+    "prompt": "0.000002",
+    "web_search": "0.01"
+   },
+   "reasoning": {
+    "default_effort": "high",
+    "mandatory": true,
+    "supported_efforts": [
+     "max",
+     "xhigh",
+     "high",
+     "medium",
+     "low"
+    ]
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": 1000000,
+    "is_moderated": false,
+    "max_completion_tokens": 128000
+   }
+  },
+  {
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "instruct_type": null,
+    "modality": "text+image+file->text",
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "GPT"
+   },
+   "canonical_slug": "openai/gpt-5.4-20260305",
+   "context_length": 1050000,
+   "created": 1772734352,
+   "default_parameters": {
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null,
+    "temperature": null,
+    "top_k": null,
+    "top_p": null
+   },
+   "expiration_date": null,
+   "hugging_face_id": "",
+   "id": "openai/gpt-5.4",
+   "knowledge_cutoff": null,
+   "links": {
+    "details": "/api/v1/models/openai/gpt-5.4-20260305/endpoints"
+   },
+   "name": "OpenAI: GPT-5.4",
+   "per_request_limits": null,
+   "pricing": {
+    "completion": "0.000015",
+    "input_cache_read": "0.00000025",
+    "overrides": [
+     {
+      "completion": "0.0000225",
+      "input_cache_read": "0.0000005",
+      "min_prompt_tokens": 272000,
+      "prompt": "0.000005"
+     }
+    ],
+    "prompt": "0.0000025",
+    "web_search": "0.01"
+   },
+   "reasoning": {
+    "default_effort": "medium",
+    "default_enabled": false,
+    "mandatory": false,
+    "supported_efforts": [
+     "xhigh",
+     "high",
+     "medium",
+     "low",
+     "none"
+    ]
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "structured_outputs",
+    "tool_choice",
+    "tools",
+    "verbosity"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": 1050000,
+    "is_moderated": true,
+    "max_completion_tokens": 128000
+   }
+  },
+  {
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "instruct_type": null,
+    "modality": "text+image+file->text",
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Claude"
+   },
+   "canonical_slug": "anthropic/claude-4.5-sonnet-20250929",
+   "context_length": 1000000,
+   "created": 1759161676,
+   "default_parameters": {
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null,
+    "temperature": 1,
+    "top_k": null,
+    "top_p": 1
+   },
+   "expiration_date": null,
+   "hugging_face_id": "",
+   "id": "anthropic/claude-sonnet-4.5",
+   "knowledge_cutoff": "2025-01-31",
+   "links": {
+    "details": "/api/v1/models/anthropic/claude-4.5-sonnet-20250929/endpoints"
+   },
+   "name": "Anthropic: Claude Sonnet 4.5",
+   "per_request_limits": null,
+   "pricing": {
+    "completion": "0.000015",
+    "input_cache_read": "0.0000003",
+    "input_cache_write": "0.00000375",
+    "input_cache_write_1h": "0.000006",
+    "overrides": [
+     {
+      "completion": "0.0000225",
+      "input_cache_read": "0.0000006",
+      "input_cache_write": "0.0000075",
+      "input_cache_write_1h": "0.000012",
+      "min_prompt_tokens": 200000,
+      "prompt": "0.000006"
+     }
+    ],
+    "prompt": "0.000003",
+    "web_search": "0.01"
+   },
+   "reasoning": {
+    "mandatory": false
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_completion_tokens",
+    "max_tokens",
+    "reasoning",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": 1000000,
+    "is_moderated": true,
+    "max_completion_tokens": 64000
+   }
+  },
+  {
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "image",
+     "file"
+    ],
+    "instruct_type": null,
+    "modality": "text+image+file->text",
+    "output_modalities": [
+     "text"
+    ],
+    "tokenizer": "Claude"
+   },
+   "canonical_slug": "anthropic/claude-4.5-sonnet-20250929",
+   "context_length": 1000000,
+   "created": 1759161676,
+   "default_parameters": {
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null,
+    "temperature": 1,
+    "top_k": null,
+    "top_p": 1
+   },
+   "expiration_date": null,
+   "hugging_face_id": "",
+   "id": "anthropic/claude-sonnet-4.5:batch",
+   "knowledge_cutoff": "2025-01-31",
+   "links": {
+    "details": "/api/v1/models/anthropic/claude-4.5-sonnet-20250929/endpoints"
+   },
+   "name": "Anthropic: Claude Sonnet 4.5 (batch)",
+   "per_request_limits": null,
+   "pricing": {
+    "completion": "0.0000075",
+    "input_cache_read": "0.00000015",
+    "input_cache_write": "0.000001875",
+    "input_cache_write_1h": "0.000003",
+    "overrides": [
+     {
+      "completion": "0.00001125",
+      "input_cache_read": "0.0000003",
+      "input_cache_write": "0.00000375",
+      "input_cache_write_1h": "0.000006",
+      "min_prompt_tokens": 200000,
+      "prompt": "0.000003"
+     }
+    ],
+    "prompt": "0.0000015",
+    "web_search": "0.01"
+   },
+   "reasoning": {
+    "mandatory": false
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "max_tokens",
+    "reasoning",
+    "response_format",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_k",
+    "top_p"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": 1000000,
+    "is_moderated": true,
+    "max_completion_tokens": 64000
+   }
+  }
+ ]
+}

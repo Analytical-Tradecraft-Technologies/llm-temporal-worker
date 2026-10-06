@@ -49,7 +49,7 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 	}
 	for _, endpointID := range []string{"openai", "azure"} {
 		t.Run(endpointID, func(t *testing.T) {
-			adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID)
+			adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 			if err != nil {
 				t.Fatalf("buildAdapter() error = %v", err)
 			}
