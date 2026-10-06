@@ -34,6 +34,31 @@ cannot contain its own closing marker. The summarizer therefore never receives
 a trailing assistant turn, tool blocks without tool definitions, or media, on
 any endpoint family.
 
+### Settings the summarizer inherits
+
+The summarizer runs on the parent checkpoint's settings, filtered as follows:
+
+| Setting | Summarizer | Reason |
+| --- | --- | --- |
+| `model`, `service_class`, fallback classes, `portability` | Inherited | Routing stays the application's choice. |
+| Application instructions | Inherited, below the summarizer's policy instructions | They describe the domain being summarized. |
+| `temperature`, `top_p` (and the other distribution controls `top_k`, presence and frequency penalties) | Inherited | They shape how tokens are sampled, not where output ends. `top_p` follows `temperature`, which compaction has always inherited, so cache keys for parents that set it are unchanged. |
+| `stop_sequences` | Dropped | An application stop sequence could truncate the summary. |
+| `seed` | Dropped | A seed chosen to reproduce an application answer has no meaning for a different prompt. |
+| `reasoning_mode`, `reasoning_token_budget`, reasoning effort and summary | Dropped | The summarizer is a bounded plain-text call; reasoning would reserve tokens outside `output_reserve_tokens`. |
+| Tools, tool policy, web search/fetch, code execution, structured output, output limit, continuation | Dropped or replaced | The call is forced to `ToolChoiceNone` and text output capped at `output_reserve_tokens`. |
+| Extensions | Inherited | Output-affecting extensions stay part of the request. |
+
+A sampling spec left with no control after this filtering is omitted, so a
+parent that set only `stop_sequences` or `seed` produces the same summarizer
+request as one that set neither.
+
+The compaction cache fingerprint hashes the filtered summarizer request.
+Parents that set none of `stop_sequences` or `seed` keep their existing cache
+keys. Before issue #1245 the summarizer also received the parent's stop
+sequences and seed, so a compaction under a parent that set either now misses
+any summary cached before that change, and is summarized again once.
+
 `SummaryItem` is the transcript form of an accepted summary: a human-role
 message that opens with a fixed heading identifying it as a summary of the
 compacted conversation. A compaction checkpoint starts with it, so the next

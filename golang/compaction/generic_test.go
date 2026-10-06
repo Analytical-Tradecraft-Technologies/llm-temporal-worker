@@ -114,8 +114,14 @@ func TestPrepareRequestPreservesGenerateSettingsForFollowingGenerate(t *testing.
 		!reflect.DeepEqual(compact.ServiceClassFallbacks, source.ServiceClassFallbacks) ||
 		compact.Portability != source.Portability || !reflect.DeepEqual(compact.Context, source.Context) ||
 		!reflect.DeepEqual(compact.Instructions[2:], source.Instructions) ||
-		!reflect.DeepEqual(compact.Sampling, source.Sampling) || !reflect.DeepEqual(compact.Extensions, source.Extensions) {
+		!reflect.DeepEqual(compact.Sampling, &llm.SamplingSpec{Temperature: &temperature, TopP: &topP, TopK: &topK}) ||
+		!reflect.DeepEqual(compact.Extensions, source.Extensions) {
 		t.Fatal("compaction request did not preserve Generate routing and sampling settings")
+	}
+	// Stop sequences and the seed are application output controls; an
+	// application stop sequence must never truncate a summary.
+	if compact.Sampling.StopSequences != nil || compact.Sampling.Seed != nil {
+		t.Fatalf("compaction inherited stop sequences or seed: %+v", compact.Sampling)
 	}
 
 	// The compaction child stores no application settings of its own. A later
@@ -217,5 +223,22 @@ func TestFlattenSummarizerInstructionsOnlyForApplicationCallers(t *testing.T) {
 	}}
 	if got := FlattenSummarizerInstructions(ordinary); !reflect.DeepEqual(got, ordinary) {
 		t.Fatalf("non-summarizer request changed: %#v", got)
+	}
+}
+
+func TestPrepareRequestOmitsSamplingWithOnlyStopSequencesAndSeed(t *testing.T) {
+	seed := int64(3)
+	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "prefix"}}}}
+	source := llm.Request{OperationKey: "generate", Model: "model-1", Input: input,
+		Sampling: &llm.SamplingSpec{Seed: &seed, StopSequences: []string{"END"}}}
+	compact, err := PrepareRequest(source, "generate/compact", input, DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compact.Sampling != nil {
+		t.Fatalf("summarizer sampling = %+v; want nil", compact.Sampling)
+	}
+	if source.Sampling.Seed == nil || len(source.Sampling.StopSequences) != 1 {
+		t.Fatal("PrepareRequest mutated the source sampling")
 	}
 }

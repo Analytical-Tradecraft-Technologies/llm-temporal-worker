@@ -27,8 +27,8 @@ func Prompt(version string) (string, error) {
 
 // PrepareRequest constructs the isolated summarizer call.  It copies the
 // caller's routing and sampling settings, but never mutates the caller and
-// always strips application tools, tool policy, continuation, reasoning, and
-// structured output. It injects the versioned repository prompt and selected
+// always strips application tools, tool policy, continuation, reasoning,
+// stop sequences, the sampling seed, and structured output. It injects the versioned repository prompt and selected
 // summary style as policy instructions. The prefix is not replayed as
 // provider turns: it is rendered as text into one delimited human message
 // that ends with the summarize instruction and the length budget. The
@@ -69,12 +69,30 @@ func PrepareRequest(source llm.Request, operationKey string, input []llm.Item, p
 	if source.ServiceClassFallbacks != nil {
 		result.ServiceClassFallbacks = append([]llm.ServiceClass(nil), source.ServiceClassFallbacks...)
 	}
-	if source.Sampling != nil {
-		value := *source.Sampling
-		value.StopSequences = append([]string(nil), source.Sampling.StopSequences...)
-		result.Sampling = &value
-	}
+	result.Sampling = summarizerSampling(source.Sampling)
 	return result, nil
+}
+
+// summarizerSampling returns the sampling controls the summarizer inherits.
+// Temperature, top_p and the remaining distribution controls shape how the
+// model samples, so they are inherited as temperature always has been. Stop
+// sequences and the seed are application output controls: an application
+// stop sequence can truncate a summary, and a seed chosen to reproduce an
+// application answer has no meaning for a different prompt. Both are dropped.
+// A spec left with no control is omitted, so a parent that only set dropped
+// controls compiles to the same summarizer request (and compaction cache key)
+// as a parent that set none.
+func summarizerSampling(source *llm.SamplingSpec) *llm.SamplingSpec {
+	if source == nil {
+		return nil
+	}
+	value := *source
+	value.Seed = nil
+	value.StopSequences = nil
+	if value.Temperature == nil && value.TopP == nil && value.TopK == nil && value.PresencePenalty == nil && value.FrequencyPenalty == nil {
+		return nil
+	}
+	return &value
 }
 
 // PlainTextSummary extracts only a completed model message containing text
