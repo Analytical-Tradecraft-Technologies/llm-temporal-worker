@@ -1,10 +1,50 @@
 # Release evidence runbook
 
-Task 23 produces a local, machine-readable release-evidence bundle. It is a
-nonpublishing validation and retention step: the workflow never signs an
-image, sends an image to a registry, creates a release, obtains provider
-credentials, or calls a live LLM provider. Publication controls remain a
-separate task.
+Task 23 produces a local, machine-readable release-evidence bundle. The
+`release-evidence` job is a nonpublishing validation and retention step: it
+never signs an image, sends an image to a registry, creates a release, obtains
+provider credentials, or calls a live LLM provider.
+
+## Master image publication
+
+The master workflow's separate `container` job does publish. On every master
+push it runs `scripts/ci/build-scanned-image.sh` on Docker Build Cloud, which:
+
+1. builds linux/amd64 and linux/arm64 as two single-platform builds, each
+   exported to its own OCI layout with provenance (`mode=max`) and SBOM
+   attestations. Build Cloud is a multi-node builder (one node per platform),
+   and Buildx cannot export a multi-platform OCI archive from it
+   (`oci for multi-node builds currently not supported`); a single-platform
+   build runs on one node, so the OCI exporter works;
+2. scans each layout with the pinned Trivy configuration and `--exit-code 1`,
+   so any fixable HIGH or CRITICAL finding on either platform stops the job.
+   Each scan must report the image config of the platform manifest that will
+   be published;
+3. assembles the two scanned layouts into one OCI layout with
+   `go run ./tools/ocimerge merge`. Its image index lists each platform
+   manifest, followed by that platform's attestation manifests with their
+   `vnd.docker.reference.*` annotations, which is the index a single
+   multi-platform build produces.
+
+Nothing is pushed until both platforms pass. The job then copies those exact
+scanned bytes to `docker.io/analyticaltradecraft/llm-temporal-worker:<version>`
+with `skopeo copy --all --preserve-digests`. It checks that the tag resolves to
+the local index digest and lists exactly linux/amd64 and linux/arm64. It records
+the index digest and the linux/amd64 digest. The `release-evidence` job then
+downloads the published linux/amd64 manifest by digest and binds its SBOM and
+scan into the evidence. The arm64 platform is scanned before publication but is
+not yet part of the retained evidence bundle.
+
+The merge queue runs the same script in the required `Container image` check,
+on an uncredentialed local builder with Build Cloud's shape. The builder has one
+linux/amd64 node and one linux/arm64 node, the arm64 node running under QEMU,
+and is set up by `scripts/ci/setup-multinode-buildx.sh`. That setup first proves
+the builder is multi-node by checking that Buildx rejects a multi-platform OCI
+export from it. The merge-queue job verifies the assembled two-platform index
+with `ocimerge verify` and never publishes. Build Cloud and registry credentials
+remain restricted to master by the `docker_push` environment, so a builder or
+exporter incompatibility now fails in the merge queue without credentials
+leaving master. Pull-request runs (outside the merge queue) skip these steps.
 
 ## Trusted boundary
 

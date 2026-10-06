@@ -30,7 +30,7 @@ jobs:
     needs: [verify, verify-static, verify-race, verify-race-repeat, verify-cloud-workflow, verify-redis, verify-image, ocaml, fuzz-shard]
     environment: docker_push
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       contents: read
 
@@ -39,6 +39,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: golang/.go-version
+          cache: false
 
       - name: Set up Docker Build Cloud
         env:
@@ -60,44 +66,80 @@ jobs:
             printf 'go_version=%s\n' "go$(cat golang/.go-version)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push multi-platform image
+      - name: Set up pinned Trivy
+        run: bash scripts/ci/setup-trivy.sh
+
+      - name: Build and scan each platform without publishing
+        id: candidate
+        env:
+          IMAGE_VERSION: ${{ steps.metadata.outputs.version }}
+          IMAGE_REVISION: ${{ steps.metadata.outputs.revision }}
+          IMAGE_BUILD_TIME: ${{ steps.metadata.outputs.build_time }}
+          IMAGE_SOURCE: ${{ steps.metadata.outputs.source }}
+          IMAGE_GO_VERSION: ${{ steps.metadata.outputs.go_version }}
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx build \
-            --file ./golang/Dockerfile \
-            --builder "$BUILDX_BUILDER" \
-            --platform linux/amd64,linux/arm64 \
-            --tag analyticaltradecraft/llm-temporal-worker:${{ steps.metadata.outputs.version }} \
-            --push --pull --provenance=mode=max --sbom=true \
-            --metadata-file "$RUNNER_TEMP/published-image.json" \
-            --build-arg VERSION=${{ steps.metadata.outputs.version }} \
-            --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
-            --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
-            --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
-            --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
-            ./golang
+          # Build Cloud is multi-node (one node per platform) and cannot export
+          # a multi-platform OCI archive, so each platform is built to its own
+          # OCI layout, scanned, and then assembled into one image index.
+          # Nothing reaches the registry unless both platforms pass the scan,
+          # and the scanned bytes are the ones published (#971).
+          digest="$(bash scripts/ci/build-scanned-image.sh "$RUNNER_TEMP/candidate.oci")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Verify published architectures and record digest
-        id: published
+      - name: Install pinned image copy tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes skopeo
+
+      - name: Publish the scanned image without rebuilding
         env:
           IMAGE_TAG: ${{ steps.metadata.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          skopeo --command-timeout 10m copy --all --preserve-digests \
+            --authfile "$DOCKER_CONFIG/config.json" \
+            "oci:$RUNNER_TEMP/candidate.oci" \
+            "docker://docker.io/analyticaltradecraft/llm-temporal-worker:$IMAGE_TAG"
+
+      - name: Verify published architectures and record digest
+        id: published
+        env:
+          IMAGE_TAG: ${{ steps.metadata.outputs.version }}
+          CANDIDATE_DIGEST: ${{ steps.candidate.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
           image="analyticaltradecraft/llm-temporal-worker"
-          digest="$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/published-image.json")"
+          digest="$CANDIDATE_DIGEST"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker buildx imagetools inspect "$image@$digest" --raw > "$RUNNER_TEMP/published-manifest.json"
+          # The published tag must resolve to the exact scanned image index.
+          docker buildx imagetools inspect "$image:$IMAGE_TAG" --raw > "$RUNNER_TEMP/published-manifest.json"
+          published="sha256:$(sha256sum "$RUNNER_TEMP/published-manifest.json" | cut -d ' ' -f 1)"
+          if [[ "$published" != "$digest" ]]; then
+            echo "Published $image:$IMAGE_TAG is $published, not the scanned index $digest" >&2
+            exit 1
+          fi
           jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]' \
             "$RUNNER_TEMP/published-manifest.json"
           amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' "$RUNNER_TEMP/published-manifest.json")"
-          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' "$RUNNER_TEMP/published-manifest.json")"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ && "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'digest=%s\namd64_digest=%s\n' "$digest" "$amd64_digest" >> "$GITHUB_OUTPUT"
           # Literal Markdown backticks in the summary are intentional.
           # shellcheck disable=SC2016
-          printf 'Published `%s:%s`\n\nDigest: `%s`\n\nPlatforms: `linux/amd64`, `linux/arm64`\n' \
-            "$image" "$IMAGE_TAG" "$digest" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Published `%s:%s` after scanning both platforms\n\nIndex digest: `%s`\n\nlinux/amd64: `%s`\n\nlinux/arm64: `%s`\n' \
+            "$image" "$IMAGE_TAG" "$digest" "$amd64_digest" "$arm64_digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove scanned image candidate
+        if: always()
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/candidate.oci"
 
       - name: Remove Docker Cloud credentials
         if: always()
