@@ -51,34 +51,10 @@ func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudR
 		request = *input.Request
 		policyVersion, promptVersion = input.Policy.Version, input.Policy.PromptVersion
 	}
-	// Hash the complete normalized semantic payload at the request bound, then
-	// put that digest in the small keyed cache manifest. Large transcripts do
-	// not hit the manifest's 256 KiB audit bound. The exact v1 temperature also participates before provider projection.
-	// The exact top_p does too; it is omitted when unset so existing cache keys
-	// are unchanged.
-	request.OperationKey = "cache-semantic-input"
-	request.Context = llm.RequestContext{}
-	request.ServiceClass, request.ServiceClassFallbacks = llm.ServiceClassStandard, nil
-	request.Continuation = nil
-	request, err := llm.NormalizeRequest(request)
+	request, digest, err := cacheSemanticDigest(request, temperature, topP, policyVersion, promptVersion)
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(struct {
-		Request       llm.Request
-		Temperature   *llm.DecimalV1
-		TopP          *llm.DecimalV1 `json:",omitempty"`
-		PolicyVersion string
-		PromptVersion string
-	}{request, temperature, topP, policyVersion, promptVersion})
-	if err != nil {
-		return nil, err
-	}
-	canonical, err := llm.CanonicalJSONWithLimits(encoded, 16<<20, 128)
-	if err != nil {
-		return nil, executionError(provider.CodeInvalidArgument)
-	}
-	digest := sha256.Sum256(canonical)
 	scope := p.Record.Request.Scope
 	input := cache.Input{Operation: cache.OperationKind(p.Record.Request.Kind), Namespace: cache.Namespace{Tenant: scope.Tenant, Project: scope.Project}, Config: cache.ConfigDigest(hex.EncodeToString(plan.ConfigDigest[:])),
 		Route: plan.Route.CacheIdentity, CapabilityLowering: cache.CapabilityVersion(plan.CapabilityVersion), Epoch: cache.CacheEpoch(plan.CompilerVersion), Conversation: cache.ConversationDigest(hex.EncodeToString(digest[:])),
@@ -89,6 +65,39 @@ func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudR
 	}
 	return &cache.FillLease{Key: cache.ResponseKey{ScopeID: p.Preparation.CheckpointScope, Operation: input.Operation, Route: plan.Route.CacheIdentity, Fingerprint: fingerprint, RequestIndex: p.Record.Request.RequestIndex},
 		OperationID: state.OperationID(p.Record.Request.ID), Attempt: string(attempt.ID), AcquiredAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}, nil
+}
+
+// cacheSemanticDigest hashes the complete normalized semantic payload at the
+// request bound; the caller puts that digest in the small keyed cache
+// manifest, so large transcripts do not hit the manifest's 256 KiB audit
+// bound. The exact v1 temperature also participates before provider
+// projection. The exact top_p does too; it is omitted when unset so existing
+// cache keys are unchanged. The normalized request is returned because its
+// model names the cache entry.
+func cacheSemanticDigest(request llm.Request, temperature, topP *llm.DecimalV1, policyVersion, promptVersion string) (llm.Request, [sha256.Size]byte, error) {
+	request.OperationKey = "cache-semantic-input"
+	request.Context = llm.RequestContext{}
+	request.ServiceClass, request.ServiceClassFallbacks = llm.ServiceClassStandard, nil
+	request.Continuation = nil
+	request, err := llm.NormalizeRequest(request)
+	if err != nil {
+		return llm.Request{}, [sha256.Size]byte{}, err
+	}
+	encoded, err := json.Marshal(struct {
+		Request       llm.Request
+		Temperature   *llm.DecimalV1
+		TopP          *llm.DecimalV1 `json:",omitempty"`
+		PolicyVersion string
+		PromptVersion string
+	}{request, temperature, topP, policyVersion, promptVersion})
+	if err != nil {
+		return llm.Request{}, [sha256.Size]byte{}, err
+	}
+	canonical, err := llm.CanonicalJSONWithLimits(encoded, 16<<20, 128)
+	if err != nil {
+		return llm.Request{}, [sha256.Size]byte{}, executionError(provider.CodeInvalidArgument)
+	}
+	return request, sha256.Sum256(canonical), nil
 }
 
 func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedCloudRequest, lease cache.FillLease) (llm.ExecutionResultV1, bool, error) {

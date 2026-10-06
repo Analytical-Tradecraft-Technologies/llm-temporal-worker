@@ -409,7 +409,10 @@ Compaction is an LLM call and therefore participates in opt-in exact-response
 caching. Its fingerprint is domain-separated from Generate and includes parent
 semantic state, retained-turn boundary, prompt/policy/summarizer equivalence,
 compiler/capability versions, and every other summary-affecting control.
-Compaction sampling is fixed to the compaction contract. A cache variant is
+Compaction sampling is fixed to the compaction contract: the summarizer
+inherits the parent's temperature and top_p but never its stop sequences,
+seed or reasoning controls (see
+[generic compaction](../reference/generic-compaction.md#settings-the-summarizer-inherits)). A cache variant is
 accepted as for Generate: it only selects a separate cache slot, and zero
 remains a named slot even if the underlying provider is not perfectly
 deterministic. On a hit the worker creates a new
