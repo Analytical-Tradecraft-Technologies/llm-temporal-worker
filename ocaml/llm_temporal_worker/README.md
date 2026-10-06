@@ -289,8 +289,14 @@ registered on the Go worker's task queue, so the calling workflow's own queue
 cannot serve it. Use a deterministic child ID unique within the namespace. The
 production worker answers `provider_status`, `model_inventory` and
 `credit_status` from its Redis provider state for the tenant/project pairs in
-its `authorization.allowed_scopes`. `budget_status` and `spend_summary`
-currently return an unsupported-query error there (tracked in
+its `authorization.allowed_scopes`. It answers `budget_status` from the
+active Redis budget generation, but only when Redis uses Function admission
+mode, the `llmtw_budget_status_v3` library is loaded and a budget generation
+is published. Otherwise `budget_status` returns an unsupported-query error. A
+`budget_status` result is one complete snapshot with no cursor, and
+`include_windows = false` returns an empty window list.
+`spend_summary` always returns an unsupported-query error there until a cloud
+spend reader exists (tracked in
 [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
 The persisted query handler also rejects a positive
 `refresh_if_older_than_seconds`; leave it unset.

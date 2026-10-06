@@ -29,9 +29,40 @@ secret under the domain `llmtw:query-cursor:v1` and the configuration snapshot
 digest. Rotating that key or reloading a changed configuration therefore
 invalidates outstanding cursors, which are short-lived, so a page never resumes
 under another snapshot; no extra secret is needed. Provider status, model inventory and credit status read the snapshot's
-Redis provider state. Budget status needs the separately provisioned
-`budget_status` Redis Function, and spend summary needs a cloud spend reader;
-until a deployment supplies them, both return a typed unsupported-query error.
+Redis provider state.
+
+Budget status reads the active Redis budget generation through the built-in
+`redis.NewRedisBudgetStatusReader` when `state.redis.admission_mode` is
+`function`. The worker never loads Redis code, so before every budget read the
+CLI runs `FUNCTION LIST LIBRARYNAME llmtw_budget_status_v3 WITHCODE` and
+requires that exact library code (the digest of
+`redis.BudgetStatusFunctionLibrarySource()`) with its `budget_status_v3`
+Function, and then requires a published active budget generation. The worker
+does not publish that generation itself (see the reader contract below). When either
+is missing, or the library code differs, `budget_status` returns the typed
+unsupported-query error (`unsupported_capability`, not retryable). An operator
+can load the library or publish a generation without a configuration reload.
+A Redis failure during these checks or during the read is a retryable
+`state_unavailable` error. Neither path invents a value. In `lua` admission mode
+nothing provisions the budget script by SHA, so `budget_status` stays
+unsupported. The query honours `policy_key` and `include_windows=false`. The
+latter returns the generation provenance with an empty `windows` array. It is
+a single bounded snapshot, so `page_size` and `cursor` are rejected as unknown
+fields, and the response is always complete with no `next_cursor`.
+
+Spend summary stays a typed unsupported-query error until a durable cloud spend
+reader exists. Refresh requests (`refresh_if_older_than_seconds` > 0) are
+also rejected as unsupported because no management refresh adapter is
+composed.
+
+Every authorization decision is logged as an ordinary structured log entry,
+`control query access decision`. Each entry has `outcome` (`allowed` at info,
+`denied` at warn), `query_kind`, `tenant_hash` and `project_hash`. The actor,
+query body, cursor and the authorizer's error are never logged. Because
+authorization precedes any cursor decode or storage read, a denied query is
+logged even though it never completes. Completed queries are still logged
+separately as `control query completed`. Both are best-effort logs, not a
+durable audit store.
 
 The low-level `NewPersistedQueryService` constructor requires
 `control.AuthorizeFunc` for tenant/project/actor authorization and a keyed
@@ -94,9 +125,10 @@ The storage composition is persisted-only. Refresh requests are rejected
 until an explicit management refresh adapter is supplied. Budget status
 remains fail-closed until the deployment explicitly composes the built-in
 versioned Redis generation/window reader through `BudgetStatus`. The storage
-package provides `redis.NewRedisBudgetStatusReader`, but default production
-composition does not activate it: the deployment must supply
-`ProductionFactoryOptions.BudgetStatusReaderFactory`. The production factory
+package provides `redis.NewRedisBudgetStatusReader`. A library caller of
+`NewProductionEngineFactory` must supply
+`ProductionFactoryOptions.BudgetStatusReaderFactory`; the production CLI
+supplies its Function-checking factory itself (see above). The production factory
 then supplies the snapshot-owned Redis client, generation port, key space, and
 approved Function version needed for the bounded read. A nil factory or
 incomplete Redis capability leaves `budget_status` unsupported; after a reader
