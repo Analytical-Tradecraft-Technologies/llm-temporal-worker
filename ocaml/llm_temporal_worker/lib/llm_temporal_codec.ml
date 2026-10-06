@@ -586,7 +586,8 @@ let output_to_json output =
     | Text_format -> `Assoc [ ("kind", `String "text") ]
     | Json_format -> `Assoc [ ("kind", `String "json") ]
     | Json_schema_format { name; description; schema; strict } ->
-        `Assoc ([ ("kind", `String "json_schema"); ("name", `String name); ("schema", schema); ("strict", `Bool strict) ] @ option_field "description" (fun value -> `String value) description) in
+        (* An empty name is an absent one, as in the Go codec. *)
+        `Assoc ([ ("kind", `String "json_schema") ] @ (if name = "" then [] else [ ("name", `String name) ]) @ [ ("schema", schema); ("strict", `Bool strict) ] @ option_field "description" (fun value -> `String value) description) in
   `Assoc ([ ("format", format) ] @ option_field "max_tokens" (fun value -> `Int value) output.max_tokens)
 
 let sampling_to_json (sampling : sampling) =
@@ -786,18 +787,22 @@ let output_of_json value =
   let* format_value = required "output" "format" fields in
   let* format_fields = unique_object "output format" format_value in
   let* kind = required_value "output format" "kind" string format_fields in
-  let allowed = match kind with "text" | "json" -> [ "kind" ] | "json_schema" -> [ "kind"; "name"; "description"; "schema"; "strict" ] | _ -> [] in
+  (* Mirror the Go codec: name and description are accepted on every kind but
+     only json_schema uses them (no adapter reads them for text or json), and a
+     json_schema name and strict flag are optional. *)
+  let allowed = match kind with "text" | "json" -> [ "kind"; "name"; "description" ] | "json_schema" -> [ "kind"; "name"; "description"; "schema"; "strict" ] | _ -> [] in
   let* _ = validate_fields "output format" allowed format_fields in
+  let* name = optional_value "output format" "name" string format_fields in
+  let* () = match name with Some "" -> Error (codec_error "output format name must not be empty when present") | _ -> Ok () in
+  let* description = optional_value "output format" "description" string format_fields in
   let* format = match kind with
     | "text" -> Ok Text_format
     | "json" -> Ok Json_format
     | "json_schema" ->
-        let* name = required_value "output format" "name" string format_fields in
-        let* description = optional_value "output format" "description" string format_fields in
         let* schema = required "output format" "schema" format_fields in
         let* schema = json_object "output json_schema schema" schema in
-        let* strict = required_value "output format" "strict" bool format_fields in
-        Ok (Json_schema_format { name; description; schema; strict })
+        let* strict = optional_value "output format" "strict" bool format_fields in
+        Ok (Json_schema_format { name = Option.value name ~default:""; description; schema; strict = Option.value strict ~default:false })
     | value -> Error (codec_error "invalid output format kind %S" value)
   in
   let* max_tokens = optional_value "output" "max_tokens" int fields in
@@ -1085,7 +1090,7 @@ let validate_request_semantics (request : request) =
     | None -> Ok ()
     | Some { max_tokens; format } ->
         let* () = match max_tokens with None -> Ok () | Some value when value >= 0 -> Ok () | Some _ -> Error (codec_error "request output max_tokens must not be negative") in
-        (match format with Json_schema_format { name; schema; _ } -> let* _ = valid_tool_name "request output schema name" name in validate_unique_json "request output schema" schema | _ -> Ok ())
+        (match format with Json_schema_format { name; schema; _ } -> let* _ = if name = "" then Ok "" else valid_tool_name "request output schema name" name in validate_unique_json "request output schema" schema | _ -> Ok ())
   in
   let* () = match request.reasoning with None -> Ok () | Some { token_budget; _ } -> match token_budget with None -> Ok () | Some value when value >= 0 -> Ok () | Some _ -> Error (codec_error "request reasoning token_budget must not be negative") in
   let* () = match request.sampling with

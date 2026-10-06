@@ -389,6 +389,20 @@ let () =
   expect_error
     (Temporal.Codec.decode request_codec
        (request_payload_with (replace_field "output" invalid_output encoded_request)));
+  (* Go accepts a json_schema format without a name or strict flag, and a
+     name and description on a plain json format (#788). *)
+  let output_with format = request_payload_with (replace_field "output" (`Assoc [ ("format", `Assoc format) ]) encoded_request) in
+  let schema = `Assoc [ ("type", `String "object") ] in
+  (match (expect_ok (Temporal.Codec.decode request_codec (output_with [ ("kind", `String "json_schema"); ("schema", schema) ]))).output with
+   | Some { format = Json_schema_format { name = ""; strict = false; _ }; _ } -> ()
+   | _ -> failwith "json_schema without name or strict did not decode to the Go defaults");
+  (match (expect_ok (Temporal.Codec.decode request_codec (output_with [ ("kind", `String "json_schema"); ("name", `String "result"); ("schema", schema) ]))).output with
+   | Some { format = Json_schema_format { name = "result"; strict = false; _ }; _ } -> ()
+   | _ -> failwith "json_schema without strict did not default to false");
+  (match (expect_ok (Temporal.Codec.decode request_codec (output_with [ ("kind", `String "json"); ("name", `String "result"); ("description", `String "d") ]))).output with
+   | Some { format = Json_format; _ } -> ()
+   | _ -> failwith "named json format did not decode");
+  expect_error (Temporal.Codec.decode request_codec (output_with [ ("kind", `String "json_schema"); ("name", `String ""); ("schema", schema) ]));
   let decoded_request = expect_ok (Temporal.Codec.decode request_codec request_payload) in
   assert_equal "order-42" (Operation_key.to_string decoded_request.operation_key);
   assert_equal "priority" (match decoded_request.service_class with Economy -> "economy" | Standard -> "standard" | Priority -> "priority");
