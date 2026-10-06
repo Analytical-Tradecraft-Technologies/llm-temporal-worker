@@ -40,9 +40,10 @@ func TestCloudModelProcessingFailureRetainsPaidClaim(t *testing.T) {
 		t.Fatalf("retry reused paid attempt: %v", err)
 	}
 	original, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
-	if err != nil || original.Execution.Settled || original.Execution.Claim == nil {
-		t.Fatalf("new budget acquisition refunded unknown work: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
+	assertUnknownWorkCharged(t, original)
 	if f.submits.Load() != 1 {
 		t.Fatal("budget acquisition resubmitted provider work")
 	}

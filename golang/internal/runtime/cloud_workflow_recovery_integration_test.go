@@ -262,10 +262,16 @@ func liveLeaseTotals(t *testing.T, record liveCloudLease, held bool) map[string]
 	for _, reservation := range record.Reservations {
 		amount := reservation.Accounted
 		if held {
-			if reservation.Status != "reserved" || reservation.Accounted != "0" {
-				t.Fatal("unknown paid work was released or settled")
+			// Unknown paid work is either still held at its reservation or,
+			// after its recovery window, settled as finalize_unknown at that
+			// full amount (status ambiguous). It is never released.
+			switch {
+			case reservation.Status == "reserved" && reservation.Accounted == "0":
+				amount = reservation.Reserved
+			case reservation.Status == "ambiguous" && reservation.Reserved == "0":
+			default:
+				t.Fatal("unknown paid work was released")
 			}
-			amount = reservation.Reserved
 		} else if reservation.Status != "finalized" || reservation.Reserved != "0" {
 			t.Fatal("completed paid work was not settled")
 		}

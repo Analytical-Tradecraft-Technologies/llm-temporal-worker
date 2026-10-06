@@ -56,9 +56,10 @@ func TestCloudExecutionExhaustionRetainsUnknownPaidWork(t *testing.T) {
 	}
 	for _, attempt := range attempts {
 		saved, err := f.repository.LoadProviderExecution(ctx, scope, attempt.ID)
-		if err != nil || saved.Execution.Settled || saved.Execution.Claim == nil {
-			t.Fatal("unknown budget released", err)
+		if err != nil {
+			t.Fatal(err)
 		}
+		assertUnknownWorkCharged(t, saved)
 		shard, _ := cloudstate.PendingShard(attempt.ID)
 		page, err := f.repository.ListPending(ctx, shard, 100, "")
 		if err != nil {

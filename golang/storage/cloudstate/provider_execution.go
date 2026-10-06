@@ -11,6 +11,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/google/uuid"
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
@@ -141,7 +142,7 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 		if !validTime(execution.CompletedAt) || execution.CompletedAt.Before(execution.StartedAt) || execution.CompletedAt.After(execution.UpdatedAt) {
 			return ErrInvalid
 		}
-	} else if !execution.CompletedAt.IsZero() || execution.Settled {
+	} else if !execution.CompletedAt.IsZero() || (execution.Settled && execution.Stage != ExecutionUnknown) {
 		return ErrInvalid
 	}
 	if !paid && terminal && !execution.Settled {
@@ -149,7 +150,10 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 	}
 	if execution.Settlement != nil {
 		settlement := execution.Settlement
-		if execution.Claim == nil || (execution.Stage != ExecutionSucceeded && execution.Stage != ExecutionFailed) || settlement.Validate() != nil ||
+		// An unknown outcome may only be settled at its full reservation, and
+		// only once its recovery window has elapsed.
+		unknown := execution.Stage == ExecutionUnknown
+		if execution.Claim == nil || (!terminal && !unknown) || (unknown && execution.UpdatedAt.Before(execution.RecoverAfter)) || settlement.Validate() != nil ||
 			settlement.OperationID != plan.Route.OperationID || settlement.GenerationID != plan.Route.GenerationID || settlement.IncarnationID != execution.Reservation.IncarnationID ||
 			len(settlement.Events) != len(execution.Reservation.Events) {
 			return ErrInvalid
@@ -157,7 +161,7 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 		for i, event := range settlement.Events {
 			reserved := execution.Reservation.Events[i]
 			if event.WindowID != reserved.WindowID || !event.BucketStart.Equal(reserved.BucketStart) || event.ReservationRevision != reserved.ReservationRevision+1 ||
-				event.ReservedDecreaseUSD.Cmp(reserved.AmountUSD) != 0 {
+				event.ReservedDecreaseUSD.Cmp(reserved.AmountUSD) != 0 || (unknown && event.Kind != budget.JournalFinalizeUnknown) {
 				return ErrInvalid
 			}
 		}
@@ -334,6 +338,12 @@ func validExecutionTransition(old, next ProviderExecution) bool {
 		copy.UpdatedAt = old.UpdatedAt
 		copy.Settled = old.Settled
 		return !old.Settled && next.Settled && equalExecution(old, copy)
+	}
+	if old.Stage == ExecutionUnknown && old.Settlement != nil {
+		// A settled unknown outcome is closed at its conservative charge. Only
+		// the settlement acknowledgement may follow; an exact outcome learned
+		// later is an authorized correction, never a second settlement.
+		return next.Stage == ExecutionUnknown && equalExecutionJSON(old.Settlement, next.Settlement) && (next.Settled || !old.Settled)
 	}
 	switch old.Stage {
 	case ExecutionClaiming:
