@@ -233,7 +233,6 @@ let invoke_once ?task_queue ~(dispatch : dispatcher) (input : request) =
    from its own durable request identity. Paid work survives parent closure. *)
 let generate_workflow = generate_v1_workflow
 let workflow () = generate_v1_workflow
-let task_queue_string = Option.map Temporal_task_queue.to_string
 
 let start_child ~task_queue ~id definition request =
   Temporal.Child_workflow.start
