@@ -102,6 +102,17 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 		return llm.Response{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
 	}
 	now := engine.dependencies.Clock()
+	// A completed operation replays its stored result without the gates a
+	// new dispatch needs: its route, price or continuation may have changed
+	// or expired since. Only an identical request may replay it; a digest
+	// mismatch is left to admission, which reports the conflict.
+	if response, ok, err := engine.replayCompleted(planCtx, normalized, digest, now); err != nil || ok {
+		planSpan.End()
+		if err != nil {
+			return llm.Response{}, err
+		}
+		return response, nil
+	}
 	stateCtx, stateSpan := engine.startTrace(planCtx, "llmtw.state.load", requestTraceAttrs(normalized)...)
 	providerRequest, constraints, parent, err := engine.loadContinuation(stateCtx, normalized, now)
 	if err != nil {
@@ -506,4 +517,23 @@ func engineError(code provider.Code, phase provider.Phase, dispatch provider.Dis
 	result := provider.NewError(code, phase, dispatch, retry, message)
 	result.Cause = cause
 	return result
+}
+
+// replayCompleted returns the stored result of an identical, already
+// completed operation before any planning. It reports false when there is no
+// such operation, so the request continues through admission.
+func (engine *Engine) replayCompleted(ctx context.Context, request llm.Request, digest [32]byte, now time.Time) (llm.Response, bool, error) {
+	operationID, _ := operationIdentity(request, digest)
+	operation, err := engine.dependencies.Admission.Get(ctx, operationID)
+	if err != nil || operation.State != admission.StateCompleted || operation.RequestDigest != digest {
+		return llm.Response{}, false, nil
+	}
+	response, _, err := engine.resolveExisting(ctx, operation, now)
+	if err != nil {
+		return llm.Response{}, false, err
+	}
+	if response == nil {
+		return llm.Response{}, false, nil
+	}
+	return *response, true, nil
 }
