@@ -13,7 +13,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "enum": [1, 2]
     },
     "generated_at": {
       "type": "string",
@@ -49,8 +49,22 @@
           "minLength": 1
         },
         "digest": {
-          "type": "string",
-          "pattern": "^sha256:[a-f0-9]{64}$"
+          "$ref": "#/$defs/digest"
+        },
+        "media_type": {
+          "const": "application/vnd.oci.image.index.v1+json"
+        },
+        "platforms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "linux/amd64",
+            "linux/arm64"
+          ],
+          "properties": {
+            "linux/amd64": { "$ref": "#/$defs/platform_subject" },
+            "linux/arm64": { "$ref": "#/$defs/platform_subject" }
+          }
         }
       }
     },
@@ -90,11 +104,81 @@
         "dependency_license": { "$ref": "#/$defs/artifact" },
         "vulnerability_results": { "$ref": "#/$defs/artifact" },
         "sbom": { "$ref": "#/$defs/artifact" },
-        "image_scan": { "$ref": "#/$defs/artifact" }
+        "image_scan": { "$ref": "#/$defs/artifact" },
+        "image_index": { "$ref": "#/$defs/artifact" },
+        "sbom_arm64": { "$ref": "#/$defs/artifact" },
+        "image_scan_arm64": { "$ref": "#/$defs/artifact" }
       }
     }
   },
+  "allOf": [
+    {
+      "$comment": "Schema version 2 binds the published OCI image index and both linux/amd64 and linux/arm64 manifests. Version 1 bound one linux/amd64 manifest and stays verifiable, but cannot carry multi-platform fields.",
+      "if": {
+        "required": ["schema_version"],
+        "properties": { "schema_version": { "const": 2 } }
+      },
+      "then": {
+        "properties": {
+          "image": {
+            "required": ["reference", "digest", "media_type", "platforms"]
+          },
+          "artifacts": {
+            "required": [
+              "benchmark_summary",
+              "image_index",
+              "sbom_arm64",
+              "image_scan_arm64"
+            ],
+            "not": { "required": ["vulnerability_results"] }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "image": {
+            "not": {
+              "anyOf": [
+                { "required": ["media_type"] },
+                { "required": ["platforms"] }
+              ]
+            }
+          },
+          "artifacts": {
+            "not": {
+              "anyOf": [
+                { "required": ["image_index"] },
+                { "required": ["sbom_arm64"] },
+                { "required": ["image_scan_arm64"] }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "platform_subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "digest"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
     "provenance_url": {
       "type": "string",
       "allOf": [

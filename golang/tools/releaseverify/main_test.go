@@ -132,14 +132,33 @@ func TestArtifactArgumentsMapForRequiredRejectsMalformedInput(t *testing.T) {
 
 func TestValidateEvidenceMetadataEnforcesImmutableReleaseSubjects(t *testing.T) {
 	digest := strings.Repeat("a", 64)
-	valid := evidence{
-		SchemaVersion: evidenceSchemaVersion,
-		GeneratedAt:   "2026-07-19T00:00:00Z",
-		Source:        source{Repository: "https://github.com/example/project", Revision: strings.Repeat("b", 40)},
-		Image:         image{Reference: "registry.example/project@sha256:" + digest, Digest: "sha256:" + digest},
+	amd64 := "sha256:" + strings.Repeat("d", 64)
+	arm64 := "sha256:" + strings.Repeat("e", 64)
+	newValid := func() evidence {
+		return evidence{
+			SchemaVersion: evidenceSchemaVersion,
+			GeneratedAt:   "2026-07-19T00:00:00Z",
+			Source:        source{Repository: "https://github.com/example/project", Revision: strings.Repeat("b", 40)},
+			Image: image{
+				Reference: "registry.example/project@sha256:" + digest,
+				Digest:    "sha256:" + digest,
+				MediaType: ociImageIndexMediaType,
+				Platforms: &imagePlatforms{
+					LinuxAMD64: imageSubject{Reference: "registry.example/project@" + amd64, Digest: amd64},
+					LinuxARM64: imageSubject{Reference: "registry.example/project@" + arm64, Digest: arm64},
+				},
+			},
+		}
 	}
-	if err := validateEvidenceMetadata(valid); err != nil {
+	if err := validateEvidenceMetadata(newValid()); err != nil {
 		t.Fatalf("valid evidence metadata rejected: %v", err)
+	}
+	legacy := newValid()
+	legacy.SchemaVersion = legacyEvidenceSchemaVersion
+	legacy.Image.MediaType = ""
+	legacy.Image.Platforms = nil
+	if err := validateEvidenceMetadata(legacy); err != nil {
+		t.Fatalf("valid single-manifest v1 evidence metadata rejected: %v", err)
 	}
 
 	tests := []struct {
@@ -151,10 +170,26 @@ func TestValidateEvidenceMetadataEnforcesImmutableReleaseSubjects(t *testing.T) 
 		{name: "short revision", mutate: func(record *evidence) { record.Source.Revision = strings.Repeat("b", 39) }, want: "full lowercase Git SHA"},
 		{name: "digest mismatch", mutate: func(record *evidence) { record.Image.Digest = "sha256:" + strings.Repeat("c", 64) }, want: "immutable digest reference"},
 		{name: "mutable tag", mutate: func(record *evidence) { record.Image.Reference = "registry.example/project:latest@sha256:" + digest }, want: "must not include a mutable tag"},
+		{name: "unknown schema version", mutate: func(record *evidence) { record.SchemaVersion = 3 }, want: "schema_version must be"},
+		{name: "subject is not an index", mutate: func(record *evidence) { record.Image.MediaType = ociImageManifestMediaType }, want: "must be an OCI image index"},
+		{name: "platforms missing", mutate: func(record *evidence) { record.Image.Platforms = nil }, want: "must record linux/amd64 and linux/arm64"},
+		{name: "invalid arm64 digest", mutate: func(record *evidence) {
+			record.Image.Platforms.LinuxARM64 = imageSubject{Reference: "registry.example/project@sha256:ABC", Digest: "sha256:ABC"}
+		}, want: "linux/arm64 digest must be a sha256 digest"},
+		{name: "arm64 reference in another repository", mutate: func(record *evidence) {
+			record.Image.Platforms.LinuxARM64.Reference = "registry.example/other@" + arm64
+		}, want: "linux/arm64 reference must be the image index repository"},
+		{name: "arm64 repeats amd64", mutate: func(record *evidence) {
+			record.Image.Platforms.LinuxARM64 = record.Image.Platforms.LinuxAMD64
+		}, want: "linux/arm64 digest repeats the linux/amd64 digest"},
+		{name: "v1 with platforms", mutate: func(record *evidence) {
+			record.SchemaVersion = legacyEvidenceSchemaVersion
+			record.Image.MediaType = ""
+		}, want: "schema-v1 evidence binds a single manifest"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			record := valid
+			record := newValid()
 			test.mutate(&record)
 			if err := validateEvidenceMetadata(record); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateEvidenceMetadata() error = %v, want substring %q", err, test.want)
@@ -319,36 +354,12 @@ func TestRunLayoutDigestRejectsDuplicateDescriptorMembers(t *testing.T) {
 }
 
 func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
-	root := t.TempDir()
-	artifactDir := filepath.Join(root, "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactDir = resolvedArtifactDir
-	digest := strings.Repeat("a", 64)
-	image := "registry.example/project@sha256:" + digest
-	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 	schemaPath := releaseEvidenceSchemaPath(t)
 
-	recordArgs := []string{
-		"record",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-output", filepath.Join(artifactDir, "evidence.json"),
-		"-repository", "https://github.com/example/project",
-		"-revision", strings.Repeat("b", 40),
-		"-image-reference", image,
-		"-image-digest", "sha256:" + digest,
-	}
-	for _, name := range requiredArtifacts {
-		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
-	}
 	var stdout bytes.Buffer
-	if err := run(recordArgs, &stdout); err != nil {
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), &stdout); err != nil {
 		t.Fatalf("record smoke test failed: %v", err)
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "release evidence recorded" {
@@ -391,20 +402,249 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceRecordsTheImageIndexAsTheSubject(t *testing.T) {
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
+	schemaPath := releaseEvidenceSchemaPath(t)
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
+		t.Fatalf("record rejected a complete multi-platform bundle: %v", err)
+	}
+	record := readEvidenceRecord(t, artifactDir)
+	if got := record["schema_version"]; got != float64(evidenceSchemaVersion) {
+		t.Fatalf("schema_version = %v, want %d", got, evidenceSchemaVersion)
+	}
+	image := record["image"].(map[string]any)
+	if image["digest"] != subjects.indexDigest || image["reference"] != subjects.indexReference {
+		t.Fatalf("evidence subject = %#v, want the image index %s", image, subjects.indexReference)
+	}
+	if image["media_type"] != ociImageIndexMediaType {
+		t.Fatalf("evidence subject media type = %#v", image["media_type"])
+	}
+	platforms := image["platforms"].(map[string]any)
+	for platform, digest := range map[string]string{platformLinuxAMD64: subjects.amd64Digest, platformLinuxARM64: subjects.arm64Digest} {
+		subject := platforms[platform].(map[string]any)
+		if subject["digest"] != digest || subject["reference"] != subjects.repository+"@"+digest {
+			t.Fatalf("evidence %s subject = %#v, want %s", platform, subject, digest)
+		}
+	}
+	artifacts := record["artifacts"].(map[string]any)
+	for _, name := range []string{"image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64"} {
+		if _, ok := artifacts[name]; !ok {
+			t.Fatalf("evidence omitted %s: %#v", name, artifacts)
+		}
+	}
+}
+
+func TestReleaseEvidenceRejectsMissingOrMismatchedPlatformEvidence(t *testing.T) {
+	schemaPath := releaseEvidenceSchemaPath(t)
+	otherDigest := "sha256:" + strings.Repeat("9", 64)
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string)
+		want   string
+	}{
+		{
+			name: "arm64 SBOM bound to the amd64 manifest",
+			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, _ *[]string) {
+				writeArtifactJSON(t, directory, "sbom_arm64", releaseEvidenceSBOM(subjects.repository+"@"+subjects.amd64Digest, subjects.amd64Digest))
+			},
+			want: "linux/arm64 SBOM immutable image subject",
+		},
+		{
+			name: "amd64 scan bound to the image index",
+			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, _ *[]string) {
+				writeArtifactJSON(t, directory, "image_scan", releaseEvidenceScan(subjects.indexReference, subjects.indexDigest))
+			},
+			want: "linux/amd64 final-image scan immutable image subject",
+		},
+		{
+			name: "missing arm64 scan",
+			mutate: func(t *testing.T, directory string, _ *releaseEvidenceSubjects, arguments *[]string) {
+				removeArtifact(t, directory, "image_scan_arm64", arguments)
+			},
+			want: "missing required artifacts: image_scan_arm64",
+		},
+		{
+			name: "missing image index",
+			mutate: func(t *testing.T, directory string, _ *releaseEvidenceSubjects, arguments *[]string) {
+				removeArtifact(t, directory, "image_index", arguments)
+			},
+			want: "missing required artifacts: image_index",
+		},
+		{
+			name: "missing arm64 digest",
+			mutate: func(_ *testing.T, _ string, _ *releaseEvidenceSubjects, arguments *[]string) {
+				replaceArgument(arguments, "-arm64-digest", "")
+			},
+			want: "-arm64-digest",
+		},
+		{
+			name: "subject is a platform manifest rather than the index",
+			mutate: func(_ *testing.T, _ string, subjects *releaseEvidenceSubjects, arguments *[]string) {
+				replaceArgument(arguments, "-image-reference", subjects.repository+"@"+subjects.amd64Digest)
+				replaceArgument(arguments, "-image-digest", subjects.amd64Digest)
+			},
+			want: "evidence linux/amd64 digest repeats the image index digest",
+		},
+		{
+			name: "recorded arm64 digest is not in the index",
+			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string) {
+				replaceArgument(arguments, "-arm64-digest", otherDigest)
+				writeArtifactJSON(t, directory, "sbom_arm64", releaseEvidenceSBOM(subjects.repository+"@"+otherDigest, otherDigest))
+				writeArtifactJSON(t, directory, "image_scan_arm64", releaseEvidenceScan(subjects.repository+"@"+otherDigest, otherDigest))
+			},
+			want: "image index linux/arm64 digest does not match the recorded platform digest",
+		},
+		{
+			name: "index bytes differ from the published digest",
+			mutate: func(t *testing.T, directory string, _ *releaseEvidenceSubjects, _ *[]string) {
+				path := filepath.Join(directory, canonicalArtifactPaths["image_index"])
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "image index bytes do not match the evidence image digest",
+		},
+		{
+			name: "index without arm64",
+			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string) {
+				rewriteImageIndex(t, directory, subjects, arguments, func(manifests []any) []any {
+					return []any{manifests[0], manifests[2]}
+				})
+			},
+			want: "image index does not reference linux/arm64",
+		},
+		{
+			name: "index with an extra platform",
+			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string) {
+				rewriteImageIndex(t, directory, subjects, arguments, func(manifests []any) []any {
+					extra := indexDescriptor(otherDigest, "linux", "amd64", nil)
+					return append(manifests, extra)
+				})
+			},
+			want: "image index references linux/amd64 more than once",
+		},
+		{
+			name: "index with an unallowlisted platform",
+			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string) {
+				rewriteImageIndex(t, directory, subjects, arguments, func(manifests []any) []any {
+					return append(manifests, indexDescriptor(otherDigest, "windows", "amd64", nil))
+				})
+			},
+			want: "does not satisfy the allowlisted schema",
+		},
+		{
+			name: "attestation for a foreign manifest",
+			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string) {
+				rewriteImageIndex(t, directory, subjects, arguments, func(manifests []any) []any {
+					return append(manifests, indexDescriptor("sha256:"+strings.Repeat("8", 64), "unknown", "unknown", map[string]any{
+						attestationReferenceTypeKey:   attestationReferenceType,
+						attestationReferenceDigestKey: otherDigest,
+					}))
+				})
+			},
+			want: "attestation does not reference a release platform manifest",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			artifactDir := newReleaseEvidenceArtifactDirectory(t)
+			subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
+			arguments := releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects)
+			test.mutate(t, artifactDir, &subjects, &arguments)
+			if err := run(arguments, io.Discard); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("record error = %v, want substring %q", err, test.want)
+			}
+			if _, err := os.Stat(filepath.Join(artifactDir, "evidence.json")); !os.IsNotExist(err) {
+				t.Fatalf("record left evidence after rejecting %s: %v", test.name, err)
+			}
+		})
+	}
+}
+
+func TestReleaseEvidenceVerifyRejectsDowngradedOrIncompleteMultiPlatformRecords(t *testing.T) {
+	schemaPath := releaseEvidenceSchemaPath(t)
+	tests := []struct {
+		name   string
+		mutate func(record map[string]any)
+		want   string
+	}{
+		{
+			name: "platforms removed",
+			mutate: func(record map[string]any) {
+				delete(record["image"].(map[string]any), "platforms")
+			},
+			want: "does not satisfy schema",
+		},
+		{
+			name: "arm64 SBOM entry removed",
+			mutate: func(record map[string]any) {
+				delete(record["artifacts"].(map[string]any), "sbom_arm64")
+			},
+			want: "does not satisfy schema",
+		},
+		{
+			name: "relabelled as schema v1",
+			mutate: func(record map[string]any) {
+				record["schema_version"] = 1
+			},
+			want: "does not satisfy schema",
+		},
+		{
+			name: "platform reference from another repository",
+			mutate: func(record map[string]any) {
+				arm64 := record["image"].(map[string]any)["platforms"].(map[string]any)[platformLinuxARM64].(map[string]any)
+				arm64["reference"] = "registry.example/other@" + arm64["digest"].(string)
+			},
+			want: "evidence linux/arm64 reference must be the image index repository",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			artifactDir := newReleaseEvidenceArtifactDirectory(t)
+			subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
+			if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			record := readEvidenceRecord(t, artifactDir)
+			test.mutate(record)
+			writeEvidenceRecord(t, artifactDir, record)
+			err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("verify error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestReleaseEvidenceVerifyAcceptsSingleManifestV1Bundle(t *testing.T) {
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
+	schemaPath := releaseEvidenceSchemaPath(t)
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	record := downgradeToSingleManifestV1(t, artifactDir, subjects)
+	writeEvidenceRecord(t, artifactDir, record)
+	if err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}, io.Discard); err != nil {
+		t.Fatalf("retained single-manifest v1 bundle was rejected: %v", err)
+	}
+
+	// A v1 record must not smuggle multi-platform fields past the v1 rules.
+	record["image"].(map[string]any)["media_type"] = ociImageIndexMediaType
+	writeEvidenceRecord(t, artifactDir, record)
+	if err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}, io.Discard); err == nil {
+		t.Fatal("v1 record with an image index media type was accepted")
+	}
+}
+
 func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
-	root := t.TempDir()
-	artifactDir := filepath.Join(root, "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactDir = resolvedArtifactDir
-	digest := strings.Repeat("a", 64)
-	image := "registry.example/project@sha256:" + digest
-	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 	workerSummary := map[string]any{
 		"schema_version":         1,
 		"kind":                   "worker_error_summary",
@@ -420,28 +660,13 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	schemaPath := releaseEvidenceSchemaPath(t)
-	recordArgs := []string{
-		"record", "-schema", schemaPath, "-artifact-dir", artifactDir,
-		"-output", filepath.Join(artifactDir, "evidence.json"),
-		"-repository", "https://github.com/example/project", "-revision", strings.Repeat("b", 40),
-		"-image-reference", image, "-image-digest", "sha256:" + digest,
-	}
-	for _, name := range requiredArtifacts {
-		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
-	}
+	recordArgs := releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects)
 	recordArgs = append(recordArgs, "-artifact", "worker_error_summary="+canonicalArtifactPaths["worker_error_summary"])
 	if err := run(recordArgs, io.Discard); err != nil {
 		t.Fatalf("record rejected optional worker error summary: %v", err)
 	}
 	evidencePath := filepath.Join(artifactDir, "evidence.json")
-	data, err := os.ReadFile(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var record map[string]any
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatal(err)
-	}
+	record := readEvidenceRecord(t, artifactDir)
 	artifacts, ok := record["artifacts"].(map[string]any)
 	if !ok {
 		t.Fatal("evidence artifacts are not an object")
@@ -455,19 +680,8 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 }
 
 func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
-	root := t.TempDir()
-	artifactDir := filepath.Join(root, "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactDir = resolvedArtifactDir
-	digest := strings.Repeat("a", 64)
-	image := "registry.example/project@sha256:" + digest
-	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 
 	// Simulate a retained schema-v1 benchmark summary from before target_status
 	// was introduced. The legacy schema branch must remain verify-compatible.
@@ -486,20 +700,7 @@ func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 	}
 
 	schemaPath := releaseEvidenceSchemaPath(t)
-	recordArgs := []string{
-		"record",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-output", filepath.Join(artifactDir, "evidence.json"),
-		"-repository", "https://github.com/example/project",
-		"-revision", strings.Repeat("b", 40),
-		"-image-reference", image,
-		"-image-digest", "sha256:" + digest,
-	}
-	for _, name := range requiredArtifacts {
-		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
-	}
-	if err := run(recordArgs, io.Discard); err != nil {
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
 		t.Fatalf("record rejected pre-target_status benchmark summary: %v", err)
 	}
 	if err := run([]string{
@@ -513,19 +714,8 @@ func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 }
 
 func TestReleaseEvidenceRejectsCurrentBenchmarkAtTargetBoundary(t *testing.T) {
-	root := t.TempDir()
-	artifactDir := filepath.Join(root, "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactDir = resolvedArtifactDir
-	digest := strings.Repeat("a", 64)
-	image := "registry.example/project@sha256:" + digest
-	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 
 	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
 	benchmarkData, err := os.ReadFile(benchmarkPath)
@@ -542,67 +732,21 @@ func TestReleaseEvidenceRejectsCurrentBenchmarkAtTargetBoundary(t *testing.T) {
 	}
 
 	schemaPath := releaseEvidenceSchemaPath(t)
-	recordArgs := []string{
-		"record",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-output", filepath.Join(artifactDir, "evidence.json"),
-		"-repository", "https://github.com/example/project",
-		"-revision", strings.Repeat("b", 40),
-		"-image-reference", image,
-		"-image-digest", "sha256:" + digest,
-	}
-	for _, name := range requiredArtifacts {
-		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
-	}
-	if err := run(recordArgs, io.Discard); err == nil || !strings.Contains(err.Error(), "p99_ms_per_op") {
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err == nil || !strings.Contains(err.Error(), "p99_ms_per_op") {
 		t.Fatalf("record accepted current target-boundary benchmark summary: %v", err)
 	}
 }
 
 func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
-	root := t.TempDir()
-	artifactDir := filepath.Join(root, "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	resolvedArtifactDir, err := filepath.EvalSymlinks(artifactDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifactDir = resolvedArtifactDir
-	digest := strings.Repeat("a", 64)
-	image := "registry.example/project@sha256:" + digest
-	writeReleaseEvidenceArtifacts(t, artifactDir, image, "sha256:"+digest)
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 	schemaPath := releaseEvidenceSchemaPath(t)
-
-	recordArgs := []string{
-		"record",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-output", filepath.Join(artifactDir, "evidence.json"),
-		"-repository", "https://github.com/example/project",
-		"-revision", strings.Repeat("b", 40),
-		"-image-reference", image,
-		"-image-digest", "sha256:" + digest,
-	}
-	for _, name := range requiredArtifacts {
-		recordArgs = append(recordArgs, "-artifact", name+"="+canonicalArtifactPaths[name])
-	}
-	if err := run(recordArgs, io.Discard); err != nil {
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
 		t.Fatalf("record smoke test failed: %v", err)
 	}
 
 	// Simulate a retained v1 bundle from before benchmark_summary existed.
-	evidencePath := filepath.Join(artifactDir, "evidence.json")
-	evidenceData, err := os.ReadFile(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var record map[string]any
-	if err := json.Unmarshal(evidenceData, &record); err != nil {
-		t.Fatal(err)
-	}
+	record := downgradeToSingleManifestV1(t, artifactDir, subjects)
 	artifacts, ok := record["artifacts"].(map[string]any)
 	if !ok {
 		t.Fatal("evidence artifacts are not an object")
@@ -619,15 +763,13 @@ func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 	artifacts["vulnerability_results"] = map[string]any{
 		"path": canonicalArtifactPaths["vulnerability_results"], "sha256": sha256Hex(legacyVulnerabilities), "bytes": len(legacyVulnerabilities), "redacted": true,
 	}
-	if err := os.WriteFile(evidencePath, append(mustJSON(t, record), '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeEvidenceRecord(t, artifactDir, record)
 
 	if err := run([]string{
 		"verify",
 		"-schema", schemaPath,
 		"-artifact-dir", artifactDir,
-		"-evidence", evidencePath,
+		"-evidence", filepath.Join(artifactDir, "evidence.json"),
 	}, io.Discard); err != nil {
 		t.Fatalf("pre-benchmark v1 bundle was rejected: %v", err)
 	}
@@ -642,9 +784,208 @@ func releaseEvidenceSchemaPath(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "..", "docs", "release", "evidence.schema.json")
 }
 
-func writeReleaseEvidenceArtifacts(t *testing.T, directory, imageReference, imageDigest string) {
+// releaseEvidenceSubjects names the published image index and the two
+// platform manifests it references, as the master container job reports them.
+type releaseEvidenceSubjects struct {
+	repository     string
+	indexReference string
+	indexDigest    string
+	amd64Digest    string
+	arm64Digest    string
+}
+
+func newReleaseEvidenceArtifactDirectory(t *testing.T) string {
+	t.Helper()
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	if err := os.Mkdir(artifactDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(artifactDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+func releaseEvidenceRecordArguments(schemaPath, artifactDir string, subjects releaseEvidenceSubjects) []string {
+	arguments := []string{
+		"record",
+		"-schema", schemaPath,
+		"-artifact-dir", artifactDir,
+		"-output", filepath.Join(artifactDir, "evidence.json"),
+		"-repository", "https://github.com/example/project",
+		"-revision", strings.Repeat("b", 40),
+		"-image-reference", subjects.indexReference,
+		"-image-digest", subjects.indexDigest,
+		"-amd64-digest", subjects.amd64Digest,
+		"-arm64-digest", subjects.arm64Digest,
+	}
+	for _, name := range requiredArtifacts {
+		arguments = append(arguments, "-artifact", name+"="+canonicalArtifactPaths[name])
+	}
+	return arguments
+}
+
+func replaceArgument(arguments *[]string, flagName, value string) {
+	for index := 0; index < len(*arguments)-1; index++ {
+		if (*arguments)[index] == flagName {
+			(*arguments)[index+1] = value
+			return
+		}
+	}
+	panic("missing argument " + flagName)
+}
+
+func removeArtifact(t *testing.T, directory, name string, arguments *[]string) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(directory, canonicalArtifactPaths[name])); err != nil {
+		t.Fatal(err)
+	}
+	kept := (*arguments)[:0]
+	for index := 0; index < len(*arguments); index++ {
+		if (*arguments)[index] == "-artifact" && index+1 < len(*arguments) && strings.HasPrefix((*arguments)[index+1], name+"=") {
+			index++
+			continue
+		}
+		kept = append(kept, (*arguments)[index])
+	}
+	*arguments = kept
+}
+
+func indexDescriptor(digest, operatingSystem, architecture string, annotations map[string]any) map[string]any {
+	descriptor := map[string]any{
+		"mediaType": ociImageManifestMediaType,
+		"digest":    digest,
+		"size":      1024,
+		"platform":  map[string]any{"os": operatingSystem, "architecture": architecture},
+	}
+	if annotations != nil {
+		descriptor["annotations"] = annotations
+	}
+	return descriptor
+}
+
+func imageIndexDocument(manifests []any) []byte {
+	data, err := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     ociImageIndexMediaType,
+		"manifests":     manifests,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+// rewriteImageIndex replaces the retained index and moves the evidence subject
+// to the new index digest, so only the index content is under test.
+func rewriteImageIndex(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string, mutate func([]any) []any) {
+	t.Helper()
+	path := filepath.Join(directory, canonicalArtifactPaths["image_index"])
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifests := mustUnmarshalMap(t, data)["manifests"].([]any)
+	updated := imageIndexDocument(mutate(manifests))
+	if err := os.WriteFile(path, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	subjects.indexDigest = "sha256:" + sha256Hex(updated)
+	subjects.indexReference = subjects.repository + "@" + subjects.indexDigest
+	replaceArgument(arguments, "-image-reference", subjects.indexReference)
+	replaceArgument(arguments, "-image-digest", subjects.indexDigest)
+}
+
+func readEvidenceRecord(t *testing.T, directory string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(directory, "evidence.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mustUnmarshalMap(t, data)
+}
+
+func writeEvidenceRecord(t *testing.T, directory string, record map[string]any) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(directory, "evidence.json"), append(mustJSON(t, record), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// downgradeToSingleManifestV1 rewrites a freshly recorded bundle into the shape
+// retained before #1235: schema version 1, the linux/amd64 manifest as the
+// subject, and no image index or arm64 artifacts.
+func downgradeToSingleManifestV1(t *testing.T, directory string, subjects releaseEvidenceSubjects) map[string]any {
+	t.Helper()
+	record := readEvidenceRecord(t, directory)
+	record["schema_version"] = legacyEvidenceSchemaVersion
+	record["image"] = map[string]any{
+		"reference": subjects.repository + "@" + subjects.amd64Digest,
+		"digest":    subjects.amd64Digest,
+	}
+	artifacts := record["artifacts"].(map[string]any)
+	for _, name := range []string{"image_index", "sbom_arm64", "image_scan_arm64"} {
+		delete(artifacts, name)
+		if err := os.Remove(filepath.Join(directory, canonicalArtifactPaths[name])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return record
+}
+
+func writeArtifactJSON(t *testing.T, directory, name string, value any) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(directory, canonicalArtifactPaths[name]), mustJSON(t, value), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+func releaseEvidenceSBOM(reference, digest string) map[string]any {
+	return map[string]any{
+		"bomFormat": "CycloneDX", "specVersion": "1.5",
+		"metadata": map[string]any{"component": map[string]any{
+			"type": "container", "properties": []any{
+				map[string]any{"name": "org.opencontainers.image.ref.name", "value": reference},
+				map[string]any{"name": "org.opencontainers.image.manifest.digest", "value": digest},
+			},
+		}},
+	}
+}
+
+func releaseEvidenceScan(reference, digest string) map[string]any {
+	return map[string]any{
+		"SchemaVersion": 2, "ArtifactType": "container_image", "ArtifactName": "image.oci",
+		"release_subject": map[string]any{"reference": reference, "digest": digest},
+		"Results":         []any{map[string]any{"Vulnerabilities": []any{}}},
+	}
+}
+
+func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEvidenceSubjects {
 	t.Helper()
 	digest := strings.Repeat("c", 64)
+	repository := "registry.example/project"
+	amd64Digest := "sha256:" + strings.Repeat("a", 64)
+	arm64Digest := "sha256:" + strings.Repeat("e", 64)
+	index := imageIndexDocument([]any{
+		indexDescriptor(amd64Digest, "linux", "amd64", nil),
+		indexDescriptor(arm64Digest, "linux", "arm64", nil),
+		indexDescriptor("sha256:"+strings.Repeat("f", 64), "unknown", "unknown", map[string]any{
+			attestationReferenceTypeKey:   attestationReferenceType,
+			attestationReferenceDigestKey: amd64Digest,
+		}),
+	})
+	indexDigest := "sha256:" + sha256Hex(index)
+	subjects := releaseEvidenceSubjects{
+		repository:     repository,
+		indexReference: repository + "@" + indexDigest,
+		indexDigest:    indexDigest,
+		amd64Digest:    amd64Digest,
+		arm64Digest:    arm64Digest,
+	}
+	if err := os.WriteFile(filepath.Join(directory, canonicalArtifactPaths["image_index"]), index, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	artifacts := map[string]any{
 		"test_summary": gateSummary("test_summary"),
 		"race_summary": gateSummary("race_summary"),
@@ -682,27 +1023,15 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory, imageReference, imag
 			"schema_version": 1, "kind": "dependency_license", "status": "pass", "baseline_sha256": digest,
 			"direct_modules": []any{map[string]any{"path": "github.com/example/module", "version": "v1.0.0", "license": "MIT", "source": "https://github.com/example/module"}}, "redacted": true,
 		},
-		"sbom": map[string]any{
-			"bomFormat": "CycloneDX", "specVersion": "1.5",
-			"metadata": map[string]any{"component": map[string]any{
-				"type": "container", "properties": []any{
-					map[string]any{"name": "org.opencontainers.image.ref.name", "value": imageReference},
-					map[string]any{"name": "org.opencontainers.image.manifest.digest", "value": imageDigest},
-				},
-			}},
-		},
-		"image_scan": map[string]any{
-			"SchemaVersion": 2, "ArtifactType": "container_image", "ArtifactName": "image.oci",
-			"release_subject": map[string]any{"reference": imageReference, "digest": imageDigest},
-			"Results":         []any{map[string]any{"Vulnerabilities": []any{}}},
-		},
+		"sbom":             releaseEvidenceSBOM(repository+"@"+amd64Digest, amd64Digest),
+		"image_scan":       releaseEvidenceScan(repository+"@"+amd64Digest, amd64Digest),
+		"sbom_arm64":       releaseEvidenceSBOM(repository+"@"+arm64Digest, arm64Digest),
+		"image_scan_arm64": releaseEvidenceScan(repository+"@"+arm64Digest, arm64Digest),
 	}
 	for name, value := range artifacts {
-		path := filepath.Join(directory, canonicalArtifactPaths[name])
-		if err := os.WriteFile(path, mustJSON(t, value), 0o600); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
+		writeArtifactJSON(t, directory, name, value)
 	}
+	return subjects
 }
 
 func gateSummary(kind string) map[string]any {
@@ -722,8 +1051,163 @@ func redactedLog(kind, service string, events map[string]int) map[string]any {
 	}
 }
 
+// publishedBuildxImageIndex is the exact image index the registry served for
+// docker.io/analyticaltradecraft/llm-temporal-worker:20261006.999. It pins
+// the real Buildx shape: two platform manifests and one provenance
+// attestation for each of them.
+const publishedBuildxImageIndex = `{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:2adc39fc186ecf407191f28be11630076903e462d2e1bb3363f8ba7ecdfbe631",
+      "size": 2935,
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:e6f7efed13893c947601f21f00b1ef1dca1b9110a546f619f7027c69bacf0f56",
+      "size": 1111,
+      "annotations": {
+        "vnd.docker.reference.digest": "sha256:2adc39fc186ecf407191f28be11630076903e462d2e1bb3363f8ba7ecdfbe631",
+        "vnd.docker.reference.type": "attestation-manifest"
+      },
+      "platform": {
+        "architecture": "unknown",
+        "os": "unknown"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:245c33dbdc7b4504c0b12483f39b58a864b0fa315f7f073c32529cb475dd6844",
+      "size": 2935,
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:ad35672d5a540148585b58e155c2241ce7216713b931eb7efa55f476f2fd56ab",
+      "size": 1111,
+      "annotations": {
+        "vnd.docker.reference.digest": "sha256:245c33dbdc7b4504c0b12483f39b58a864b0fa315f7f073c32529cb475dd6844",
+        "vnd.docker.reference.type": "attestation-manifest"
+      },
+      "platform": {
+        "architecture": "unknown",
+        "os": "unknown"
+      }
+    }
+  ]
+}`
+
+func TestValidateImageIndexAcceptsThePublishedBuildxIndex(t *testing.T) {
+	const (
+		repository  = "docker.io/analyticaltradecraft/llm-temporal-worker"
+		indexDigest = "sha256:97fe0a95a4e9e0d5ff7d866a6c682e9cb26c3377ed264c3806a557f3066b72b7"
+		amd64Digest = "sha256:2adc39fc186ecf407191f28be11630076903e462d2e1bb3363f8ba7ecdfbe631"
+		arm64Digest = "sha256:245c33dbdc7b4504c0b12483f39b58a864b0fa315f7f073c32529cb475dd6844"
+	)
+	path := filepath.Join(t.TempDir(), "image-index.json")
+	if err := os.WriteFile(path, []byte(publishedBuildxImageIndex), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	subject := image{
+		Reference: repository + "@" + indexDigest,
+		Digest:    indexDigest,
+		MediaType: ociImageIndexMediaType,
+		Platforms: &imagePlatforms{
+			LinuxAMD64: imageSubject{Reference: repository + "@" + amd64Digest, Digest: amd64Digest},
+			LinuxARM64: imageSubject{Reference: repository + "@" + arm64Digest, Digest: arm64Digest},
+		},
+	}
+	if err := validateImageIndex(releaseEvidenceSchemaPath(t), path, subject); err != nil {
+		t.Fatalf("published Buildx image index rejected: %v", err)
+	}
+
+	swapped := subject
+	swapped.Platforms = &imagePlatforms{LinuxAMD64: subject.Platforms.LinuxARM64, LinuxARM64: subject.Platforms.LinuxAMD64}
+	if err := validateImageIndex(releaseEvidenceSchemaPath(t), path, swapped); err == nil || !strings.Contains(err.Error(), "linux/amd64 digest does not match") {
+		t.Fatalf("validateImageIndex() with swapped platforms error = %v", err)
+	}
+}
+
+// ocimergeImageIndex is the exact image index that golang/tools/ocimerge wrote
+// when merging two single-platform Buildx OCI layouts (linux/amd64 and
+// linux/arm64, each with provenance and SBOM attestations), as
+// scripts/ci/build-scanned-image.sh does on master before skopeo publishes it
+// unchanged. The master container job reports this index digest and the two
+// platform digests to release-evidence.
+const ocimergeImageIndex = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:103a17a20256719b77e2225687396cbed19e8ecd7157b9c93ecc2333dc83fadd","size":476,"platform":{"architecture":"amd64","os":"linux"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:737aff019753c41d2c088330f1c6ce29fc96bb3bd0fbba4781f2c05b75dd89f1","size":1106,"annotations":{"vnd.docker.reference.digest":"sha256:103a17a20256719b77e2225687396cbed19e8ecd7157b9c93ecc2333dc83fadd","vnd.docker.reference.type":"attestation-manifest"},"platform":{"architecture":"unknown","os":"unknown"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:62d2a8140f08c175599d9db1a09c7210f4d84e1a9742e0eb86eedf1b947ca164","size":476,"platform":{"architecture":"arm64","os":"linux"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:017ee1203a707a727b3594cd11108ce00e0ce0782429cc04480be0015b2cd4a7","size":1106,"annotations":{"vnd.docker.reference.digest":"sha256:62d2a8140f08c175599d9db1a09c7210f4d84e1a9742e0eb86eedf1b947ca164","vnd.docker.reference.type":"attestation-manifest"},"platform":{"architecture":"unknown","os":"unknown"}}]}`
+
+func TestReleaseEvidenceRecordsAndVerifiesTheOCIMergeIndex(t *testing.T) {
+	const (
+		repository  = "docker.io/analyticaltradecraft/llm-temporal-worker"
+		amd64Digest = "sha256:103a17a20256719b77e2225687396cbed19e8ecd7157b9c93ecc2333dc83fadd"
+		arm64Digest = "sha256:62d2a8140f08c175599d9db1a09c7210f4d84e1a9742e0eb86eedf1b947ca164"
+	)
+	indexDigest := "sha256:" + sha256Hex([]byte(ocimergeImageIndex))
+	if indexDigest != "sha256:e5795212f7ae719c4008afc269e0c799435ed1ae9a3fb43d417dd5dae4c05fc1" {
+		t.Fatalf("ocimerge fixture digest changed: %s", indexDigest)
+	}
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	writeReleaseEvidenceArtifacts(t, artifactDir)
+	if err := os.WriteFile(filepath.Join(artifactDir, canonicalArtifactPaths["image_index"]), []byte(ocimergeImageIndex), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeArtifactJSON(t, artifactDir, "sbom", releaseEvidenceSBOM(repository+"@"+amd64Digest, amd64Digest))
+	writeArtifactJSON(t, artifactDir, "image_scan", releaseEvidenceScan(repository+"@"+amd64Digest, amd64Digest))
+	writeArtifactJSON(t, artifactDir, "sbom_arm64", releaseEvidenceSBOM(repository+"@"+arm64Digest, arm64Digest))
+	writeArtifactJSON(t, artifactDir, "image_scan_arm64", releaseEvidenceScan(repository+"@"+arm64Digest, arm64Digest))
+	subjects := releaseEvidenceSubjects{
+		repository:     repository,
+		indexReference: repository + "@" + indexDigest,
+		indexDigest:    indexDigest,
+		amd64Digest:    amd64Digest,
+		arm64Digest:    arm64Digest,
+	}
+	schemaPath := releaseEvidenceSchemaPath(t)
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
+		t.Fatalf("record rejected the ocimerge index: %v", err)
+	}
+	verify := []string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}
+	if err := run(verify, io.Discard); err != nil {
+		t.Fatalf("verify rejected the ocimerge index: %v", err)
+	}
+
+	// The container job reads the platform digests from this same index, so a
+	// platform digest that is not in it, or swapped platforms, fail closed.
+	for _, test := range []struct {
+		name         string
+		amd64, arm64 string
+	}{
+		{name: "swapped platforms", amd64: arm64Digest, arm64: amd64Digest},
+		{name: "arm64 not in the index", amd64: amd64Digest, arm64: "sha256:" + strings.Repeat("9", 64)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			subject := image{
+				Reference: subjects.indexReference,
+				Digest:    indexDigest,
+				MediaType: ociImageIndexMediaType,
+				Platforms: &imagePlatforms{
+					LinuxAMD64: imageSubject{Reference: repository + "@" + test.amd64, Digest: test.amd64},
+					LinuxARM64: imageSubject{Reference: repository + "@" + test.arm64, Digest: test.arm64},
+				},
+			}
+			if err := validateImageIndex(schemaPath, filepath.Join(artifactDir, canonicalArtifactPaths["image_index"]), subject); err == nil {
+				t.Fatal("validateImageIndex accepted platform digests that do not match the index")
+			}
+		})
+	}
+}
+
 func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
-	image := image{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
+	image := imageSubject{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
 	valid := map[string]any{
 		"bomFormat":   "CycloneDX",
 		"specVersion": "1.5",
@@ -778,7 +1262,7 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 }
 
 func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
-	image := image{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
+	image := imageSubject{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
 	valid := map[string]any{
 		"SchemaVersion": 2,
 		"ArtifactType":  "container_image",

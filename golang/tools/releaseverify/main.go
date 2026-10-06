@@ -26,13 +26,21 @@ import (
 )
 
 const (
-	evidenceSchemaVersion = 1
-	schemaResourceURL     = "urn:llmtw:release-evidence:v1"
-	artifactSchemaURL     = "urn:llmtw:release-evidence-artifact:v1"
-	maxArtifactBytes      = 32 * 1024 * 1024
-	maxOCIExpandedBytes   = 1024 * 1024 * 1024
-	maxOCIMetadataBytes   = 1024 * 1024
-	maxJSONDepth          = 128
+	// Schema version 2 binds the published OCI image index and both platform
+	// manifests. Version 1 bundles bound a single linux/amd64 manifest and stay
+	// verifiable, but the recorder only writes version 2.
+	evidenceSchemaVersion       = 2
+	legacyEvidenceSchemaVersion = 1
+	schemaResourceURL           = "urn:llmtw:release-evidence:v1"
+	artifactSchemaURL           = "urn:llmtw:release-evidence-artifact:v1"
+	maxArtifactBytes            = 32 * 1024 * 1024
+	maxOCIExpandedBytes         = 1024 * 1024 * 1024
+	maxOCIMetadataBytes         = 1024 * 1024
+	maxJSONDepth                = 128
+
+	platformLinuxAMD64  = "linux/amd64"
+	platformLinuxARM64  = "linux/arm64"
+	imageIndexSchemaDef = "#/$defs/oci_image_index"
 )
 
 var (
@@ -54,6 +62,29 @@ var (
 )
 
 var requiredArtifacts = []string{
+	"test_summary",
+	"race_summary",
+	"fuzz_summary",
+	"benchmark_summary",
+	"fixture_manifest",
+	"redis_summary",
+	"temporal_summary",
+	"compose_summary",
+	"redis_log",
+	"temporal_log",
+	"compose_log",
+	"rendered_manifests",
+	"dependency_license",
+	"sbom",
+	"image_scan",
+	"image_index",
+	"sbom_arm64",
+	"image_scan_arm64",
+}
+
+// Schema-v1 bundles bound only the linux/amd64 manifest. They remain
+// verifiable through requiredArtifactsForRecord, but are never recorded.
+var v1RequiredArtifacts = []string{
 	"test_summary",
 	"race_summary",
 	"fuzz_summary",
@@ -118,6 +149,9 @@ var canonicalArtifactPaths = map[string]string{
 	"vulnerability_results": "vulnerabilities.json",
 	"sbom":                  "sbom.cdx.json",
 	"image_scan":            "image-scan.json",
+	"image_index":           "image-index.json",
+	"sbom_arm64":            "sbom-arm64.cdx.json",
+	"image_scan_arm64":      "image-scan-arm64.json",
 }
 
 var summaryArtifacts = map[string]struct{}{
@@ -197,6 +231,21 @@ type source struct {
 }
 
 type image struct {
+	Reference string          `json:"reference"`
+	Digest    string          `json:"digest"`
+	MediaType string          `json:"media_type,omitempty"`
+	Platforms *imagePlatforms `json:"platforms,omitempty"`
+}
+
+// imagePlatforms names the two platform manifests that the published image
+// index must reference. Each SBOM and scan is bound to exactly one of them.
+type imagePlatforms struct {
+	LinuxAMD64 imageSubject `json:"linux/amd64"`
+	LinuxARM64 imageSubject `json:"linux/arm64"`
+}
+
+// imageSubject is one immutable digest reference that an SBOM or scan binds.
+type imageSubject struct {
 	Reference string `json:"reference"`
 	Digest    string `json:"digest"`
 }
@@ -288,15 +337,17 @@ func runRecord(args []string, stdout io.Writer) error {
 	outputPath := flags.String("output", "", "evidence record output path")
 	repository := flags.String("repository", "", "HTTPS source repository URL")
 	revision := flags.String("revision", "", "source revision SHA")
-	imageReference := flags.String("image-reference", "", "local image reference")
-	imageDigest := flags.String("image-digest", "", "final local image digest")
+	imageReference := flags.String("image-reference", "", "immutable image index reference")
+	imageDigest := flags.String("image-digest", "", "published OCI image index digest")
+	amd64Digest := flags.String("amd64-digest", "", "linux/amd64 manifest digest referenced by the image index")
+	arm64Digest := flags.String("arm64-digest", "", "linux/arm64 manifest digest referenced by the image index")
 	var artifacts artifactArguments
 	flags.Var(&artifacts, "artifact", "artifact reference in the form name=relative-path; repeat for every required artifact")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || *schemaPath == "" || *artifactDir == "" || *outputPath == "" || *repository == "" || *revision == "" || *imageReference == "" || *imageDigest == "" {
-		return errors.New("record requires -schema, -artifact-dir, -output, -repository, -revision, -image-reference, -image-digest, and every -artifact")
+	if flags.NArg() != 0 || *schemaPath == "" || *artifactDir == "" || *outputPath == "" || *repository == "" || *revision == "" || *imageReference == "" || *imageDigest == "" || *amd64Digest == "" || *arm64Digest == "" {
+		return errors.New("record requires -schema, -artifact-dir, -output, -repository, -revision, -image-reference, -image-digest, -amd64-digest, -arm64-digest, and every -artifact")
 	}
 
 	artifactDirectory, err := absoluteDirectory(*artifactDir)
@@ -370,8 +421,16 @@ func runRecord(args []string, stdout io.Writer) error {
 		SchemaVersion: evidenceSchemaVersion,
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
 		Source:        source{Repository: *repository, Revision: *revision},
-		Image:         image{Reference: *imageReference, Digest: *imageDigest},
-		Artifacts:     evidenceArtifacts,
+		Image: image{
+			Reference: *imageReference,
+			Digest:    *imageDigest,
+			MediaType: ociImageIndexMediaType,
+			Platforms: &imagePlatforms{
+				LinuxAMD64: imageSubject{Reference: repositoryOf(*imageReference) + "@" + *amd64Digest, Digest: *amd64Digest},
+				LinuxARM64: imageSubject{Reference: repositoryOf(*imageReference) + "@" + *arm64Digest, Digest: *arm64Digest},
+			},
+		},
+		Artifacts: evidenceArtifacts,
 	}
 	if err := validateEvidenceMetadata(record); err != nil {
 		return err
@@ -382,10 +441,7 @@ func runRecord(args []string, stdout io.Writer) error {
 	if err := validateFixtureManifest(paths["fixture_manifest"]); err != nil {
 		return err
 	}
-	if err := validateCycloneDXSBOM(paths["sbom"], record.Image); err != nil {
-		return err
-	}
-	if err := validateTrivyScan(paths["image_scan"], record.Image); err != nil {
+	if err := validateImageArtifacts(*schemaPath, paths, record.Image); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(record, "", "  ")
@@ -534,13 +590,141 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 	if err := validateFixtureManifest(paths["fixture_manifest"]); err != nil {
 		return err
 	}
-	if err := validateCycloneDXSBOM(paths["sbom"], record.Image); err != nil {
+	return validateImageArtifacts(schemaPath, paths, record.Image)
+}
+
+// validateImageArtifacts binds every retained image artifact to the evidence
+// subject. A schema-v1 subject is the single linux/amd64 manifest. A schema-v2
+// subject is the published OCI image index: its retained bytes must hash to
+// the subject digest, it must reference exactly the recorded linux/amd64 and
+// linux/arm64 manifests, and each platform's SBOM and scan must bind that
+// platform's manifest. Any missing or mismatched platform fails closed.
+func validateImageArtifacts(schemaPath string, paths map[string]string, subject image) error {
+	if subject.Platforms == nil {
+		single := imageSubject{Reference: subject.Reference, Digest: subject.Digest}
+		if err := validateCycloneDXSBOM(paths["sbom"], single); err != nil {
+			return err
+		}
+		return validateTrivyScan(paths["image_scan"], single)
+	}
+	for _, name := range []string{"image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64"} {
+		if _, ok := paths[name]; !ok {
+			return fmt.Errorf("multi-platform evidence is missing artifact %q", name)
+		}
+	}
+	if err := validateImageIndex(schemaPath, paths["image_index"], subject); err != nil {
 		return err
 	}
-	if err := validateTrivyScan(paths["image_scan"], record.Image); err != nil {
-		return err
+	for _, platform := range []struct {
+		name    string
+		subject imageSubject
+		sbom    string
+		scan    string
+	}{
+		{name: platformLinuxAMD64, subject: subject.Platforms.LinuxAMD64, sbom: "sbom", scan: "image_scan"},
+		{name: platformLinuxARM64, subject: subject.Platforms.LinuxARM64, sbom: "sbom_arm64", scan: "image_scan_arm64"},
+	} {
+		if err := validateCycloneDXSBOM(paths[platform.sbom], platform.subject); err != nil {
+			return fmt.Errorf("%s %w", platform.name, err)
+		}
+		if err := validateTrivyScan(paths[platform.scan], platform.subject); err != nil {
+			return fmt.Errorf("%s %w", platform.name, err)
+		}
 	}
 	return nil
+}
+
+// ociIndexPlatformDescriptor is the subset of an image index descriptor the
+// verifier interprets. The artifact schema closes every other member.
+type ociIndexPlatformDescriptor struct {
+	Digest      string            `json:"digest"`
+	Annotations map[string]string `json:"annotations"`
+	Platform    struct {
+		OS           string `json:"os"`
+		Architecture string `json:"architecture"`
+	} `json:"platform"`
+}
+
+const (
+	attestationReferenceType       = "attestation-manifest"
+	attestationReferenceTypeKey    = "vnd.docker.reference.type"
+	attestationReferenceDigestKey  = "vnd.docker.reference.digest"
+	attestationPlatformPlaceholder = "unknown"
+)
+
+func validateImageIndex(schemaPath, path string, subject image) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return errors.New("cannot read image index")
+	}
+	if "sha256:"+sha256Hex(data) != subject.Digest {
+		return errors.New("image index bytes do not match the evidence image digest")
+	}
+	schema, err := compileArtifactSchemaDefinition(schemaPath, imageIndexSchemaDef)
+	if err != nil {
+		return err
+	}
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	if err != nil {
+		return errors.New("image index is not valid JSON")
+	}
+	if err := schema.Validate(instance); err != nil {
+		return fmt.Errorf("image index does not satisfy the allowlisted schema: %w", err)
+	}
+	var index struct {
+		Manifests []ociIndexPlatformDescriptor `json:"manifests"`
+	}
+	if err := json.Unmarshal(data, &index); err != nil {
+		return errors.New("image index is not valid JSON")
+	}
+	platformDigests := make(map[string]string, 2)
+	var attestations []ociIndexPlatformDescriptor
+	for _, descriptor := range index.Manifests {
+		switch {
+		case descriptor.Platform.OS == "linux":
+			platform := "linux/" + descriptor.Platform.Architecture
+			if platform != platformLinuxAMD64 && platform != platformLinuxARM64 {
+				return fmt.Errorf("image index references an unexpected platform %q", platform)
+			}
+			if _, duplicate := platformDigests[platform]; duplicate {
+				return fmt.Errorf("image index references %s more than once", platform)
+			}
+			platformDigests[platform] = descriptor.Digest
+		case descriptor.Platform.OS == attestationPlatformPlaceholder &&
+			descriptor.Platform.Architecture == attestationPlatformPlaceholder &&
+			descriptor.Annotations[attestationReferenceTypeKey] == attestationReferenceType:
+			attestations = append(attestations, descriptor)
+		default:
+			return errors.New("image index references a manifest that is neither a release platform nor a build attestation")
+		}
+	}
+	for _, platform := range []struct {
+		name    string
+		subject imageSubject
+	}{
+		{name: platformLinuxAMD64, subject: subject.Platforms.LinuxAMD64},
+		{name: platformLinuxARM64, subject: subject.Platforms.LinuxARM64},
+	} {
+		digest, ok := platformDigests[platform.name]
+		if !ok {
+			return fmt.Errorf("image index does not reference %s", platform.name)
+		}
+		if digest != platform.subject.Digest {
+			return fmt.Errorf("image index %s digest does not match the recorded platform digest", platform.name)
+		}
+	}
+	for _, attestation := range attestations {
+		referenced := attestation.Annotations[attestationReferenceDigestKey]
+		if referenced != subject.Platforms.LinuxAMD64.Digest && referenced != subject.Platforms.LinuxARM64.Digest {
+			return errors.New("image index attestation does not reference a release platform manifest")
+		}
+	}
+	return nil
+}
+
+func repositoryOf(reference string) string {
+	repository, _, _ := strings.Cut(reference, "@")
+	return repository
 }
 
 func validateSchema(schemaData, evidenceData []byte) error {
@@ -568,6 +752,12 @@ func validateSchema(schemaData, evidenceData []byte) error {
 }
 
 func compileArtifactSchema(evidenceSchemaPath string) (*jsonschema.Schema, error) {
+	return compileArtifactSchemaDefinition(evidenceSchemaPath, "")
+}
+
+// compileArtifactSchemaDefinition compiles the artifact schema root, or one of
+// its definitions when fragment is a JSON pointer such as "#/$defs/name".
+func compileArtifactSchemaDefinition(evidenceSchemaPath, fragment string) (*jsonschema.Schema, error) {
 	artifactSchemaPath := filepath.Join(filepath.Dir(evidenceSchemaPath), "artifact.schema.json")
 	data, err := os.ReadFile(artifactSchemaPath)
 	if err != nil {
@@ -582,7 +772,7 @@ func compileArtifactSchema(evidenceSchemaPath string) (*jsonschema.Schema, error
 	if err := compiler.AddResource(artifactSchemaURL, document); err != nil {
 		return nil, fmt.Errorf("cannot load release evidence artifact schema: %w", err)
 	}
-	compiled, err := compiler.Compile(artifactSchemaURL)
+	compiled, err := compiler.Compile(artifactSchemaURL + fragment)
 	if err != nil {
 		return nil, fmt.Errorf("cannot compile release evidence artifact schema: %w", err)
 	}
@@ -768,8 +958,8 @@ func validateRedactedLogArtifact(name string, data []byte) error {
 }
 
 func validateEvidenceMetadata(record evidence) error {
-	if record.SchemaVersion != evidenceSchemaVersion {
-		return fmt.Errorf("evidence schema_version must be %d", evidenceSchemaVersion)
+	if record.SchemaVersion != evidenceSchemaVersion && record.SchemaVersion != legacyEvidenceSchemaVersion {
+		return fmt.Errorf("evidence schema_version must be %d or legacy %d", evidenceSchemaVersion, legacyEvidenceSchemaVersion)
 	}
 	if _, err := time.Parse(time.RFC3339, record.GeneratedAt); err != nil {
 		return errors.New("evidence generated_at is not RFC 3339")
@@ -794,15 +984,49 @@ func validateEvidenceMetadata(record evidence) error {
 	if strings.Contains(referenceParts[0][lastSlash+1:], ":") {
 		return errors.New("evidence image reference must not include a mutable tag")
 	}
+	if record.SchemaVersion == legacyEvidenceSchemaVersion {
+		if record.Image.MediaType != "" || record.Image.Platforms != nil {
+			return errors.New("schema-v1 evidence binds a single manifest and must not record platforms")
+		}
+		return nil
+	}
+	if record.Image.MediaType != ociImageIndexMediaType {
+		return errors.New("evidence image subject must be an OCI image index")
+	}
+	if record.Image.Platforms == nil {
+		return errors.New("evidence image index must record linux/amd64 and linux/arm64 platform manifests")
+	}
+	seen := map[string]string{record.Image.Digest: "image index"}
+	for _, platform := range []struct {
+		name    string
+		subject imageSubject
+	}{
+		{name: platformLinuxAMD64, subject: record.Image.Platforms.LinuxAMD64},
+		{name: platformLinuxARM64, subject: record.Image.Platforms.LinuxARM64},
+	} {
+		digest := platform.subject.Digest
+		if !strings.HasPrefix(digest, "sha256:") || !digestPattern.MatchString(strings.TrimPrefix(digest, "sha256:")) {
+			return fmt.Errorf("evidence %s digest must be a sha256 digest", platform.name)
+		}
+		if platform.subject.Reference != referenceParts[0]+"@"+digest {
+			return fmt.Errorf("evidence %s reference must be the image index repository at the %s digest", platform.name, platform.name)
+		}
+		if previous, duplicate := seen[digest]; duplicate {
+			return fmt.Errorf("evidence %s digest repeats the %s digest", platform.name, previous)
+		}
+		seen[digest] = platform.name
+	}
 	return nil
 }
 
 func requiredArtifactsForRecord(record evidence) []string {
 	artifactNames := requiredArtifacts
-	if _, present := record.Artifacts["benchmark_summary"]; present {
-		artifactNames = requiredArtifacts
-	} else {
-		artifactNames = legacyRequiredArtifacts
+	if record.SchemaVersion == legacyEvidenceSchemaVersion {
+		if _, present := record.Artifacts["benchmark_summary"]; present {
+			artifactNames = v1RequiredArtifacts
+		} else {
+			artifactNames = legacyRequiredArtifacts
+		}
 	}
 	if _, present := record.Artifacts["worker_error_summary"]; present {
 		artifactNames = append(append([]string(nil), artifactNames...), "worker_error_summary")
@@ -1177,7 +1401,7 @@ func ociDescriptorEntry(entries map[string]ociLayoutEntry, descriptor ociDescrip
 	return entry, path, nil
 }
 
-func validateCycloneDXSBOM(path string, image image) error {
+func validateCycloneDXSBOM(path string, image imageSubject) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return errors.New("cannot read SBOM")
@@ -1219,7 +1443,7 @@ func validateCycloneDXSBOM(path string, image image) error {
 	return nil
 }
 
-func validateTrivyScan(path string, image image) error {
+func validateTrivyScan(path string, image imageSubject) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return errors.New("cannot read final-image scan")

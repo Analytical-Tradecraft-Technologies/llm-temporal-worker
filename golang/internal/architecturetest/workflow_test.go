@@ -502,6 +502,157 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 	if err := validateReleaseEvidenceTemporaryOCIDirectoryPolicy(master); err != nil {
 		t.Fatal(err)
 	}
+	if err := validateReleaseEvidenceBindsImageIndex(master); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkflowReleaseEvidenceImageIndexPolicyRejectsSinglePlatformEvidence(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	for _, mutation := range []struct {
+		name      string
+		old       string
+		new       string
+		container bool
+	}{
+		{
+			name: "platform manifest as the subject",
+			old:  `-image-digest "${{ steps.image.outputs.index_digest }}"`,
+			new:  `-image-digest "${{ steps.image.outputs.amd64_digest }}"`,
+		},
+		{
+			name: "index digest not taken from the container job",
+			old:  "INDEX_DIGEST: ${{ needs.container.outputs.digest }}",
+			new:  "INDEX_DIGEST: ${{ needs.container.outputs.amd64_digest }}",
+		},
+		{
+			name: "arm64 SBOM not recorded",
+			old:  "            -artifact sbom_arm64=sbom-arm64.cdx.json \\\n",
+			new:  "",
+		},
+		{
+			name: "arm64 scan not recorded",
+			old:  "            -artifact image_scan_arm64=image-scan-arm64.json \\\n",
+			new:  "",
+		},
+		{
+			name: "image index not retained",
+			old:  "            -artifact image_index=image-index.json \\\n",
+			new:  "",
+		},
+		{
+			name:      "container job does not expose the arm64 digest",
+			old:       "      arm64_digest: ${{ steps.published.outputs.arm64_digest }}\n",
+			new:       "",
+			container: true,
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			var raw string
+			if mutation.container {
+				raw = strings.Replace(master.raw, mutation.old, mutation.new, 1)
+				if raw == master.raw {
+					t.Fatalf("test fixture is missing container mutation anchor %q", mutation.old)
+				}
+			} else {
+				raw = replaceReleaseEvidenceJobSection(t, master.raw, mutation.old, mutation.new)
+			}
+			mutated := parseWorkflow(t, master.name, raw)
+			if err := validateReleaseEvidenceBindsImageIndex(mutated); err == nil {
+				t.Fatalf("release evidence image index policy accepted %s", mutation.name)
+			}
+		})
+	}
+}
+
+// validateReleaseEvidenceBindsImageIndex requires the retained evidence to bind
+// the published image index as its subject together with both platform
+// manifests, each with its own SBOM and scan (#1235).
+func validateReleaseEvidenceBindsImageIndex(workflow workflowDocument) error {
+	container, ok := workflowJobMapping(workflow, "container")
+	if !ok {
+		return fmt.Errorf("%s is missing container job", workflow.name)
+	}
+	// The container job reads all three digests from the published index it
+	// verified, and release-evidence consumes them through these outputs.
+	outputs, _ := container["outputs"].(map[string]any)
+	for name, want := range map[string]string{
+		"digest":       "${{ steps.published.outputs.digest }}",
+		"amd64_digest": "${{ steps.published.outputs.amd64_digest }}",
+		"arm64_digest": "${{ steps.published.outputs.arm64_digest }}",
+	} {
+		if outputs[name] != want {
+			return fmt.Errorf("%s container job output %s is %v, want %s", workflow.name, name, outputs[name], want)
+		}
+	}
+	job, ok := workflowJobMapping(workflow, "release-evidence")
+	if !ok {
+		return fmt.Errorf("%s is missing release-evidence job", workflow.name)
+	}
+	publishedDigests := map[string]string{
+		"INDEX_DIGEST": "${{ needs.container.outputs.digest }}",
+		"AMD64_DIGEST": "${{ needs.container.outputs.amd64_digest }}",
+		"ARM64_DIGEST": "${{ needs.container.outputs.arm64_digest }}",
+	}
+	bound := make(map[string]bool, len(publishedDigests))
+	var runs strings.Builder
+	steps, _ := job["steps"].([]any)
+	for _, rawStep := range steps {
+		step, ok := rawStep.(map[string]any)
+		if !ok {
+			continue
+		}
+		if run, ok := step["run"].(string); ok {
+			runs.WriteString(run)
+			runs.WriteString("\n")
+		}
+		environment, _ := step["env"].(map[string]any)
+		for name, want := range publishedDigests {
+			value, present := environment[name]
+			if !present {
+				continue
+			}
+			if value != want {
+				return fmt.Errorf("%s release-evidence binds %s to %v, want %s", workflow.name, name, value, want)
+			}
+			bound[name] = true
+		}
+	}
+	for name, want := range publishedDigests {
+		if !bound[name] {
+			return fmt.Errorf("%s release-evidence does not take %s from %s", workflow.name, name, want)
+		}
+	}
+	for _, want := range []string{
+		`inspect --raw "$repository@$INDEX_DIGEST" > release-artifacts/image-index.json`,
+		`-image-reference "${{ steps.image.outputs.index_reference }}"`,
+		`-image-digest "${{ steps.image.outputs.index_digest }}"`,
+		`-amd64-digest "${{ steps.image.outputs.amd64_digest }}"`,
+		`-arm64-digest "${{ steps.image.outputs.arm64_digest }}"`,
+		"--output release-artifacts/sbom.cdx.json",
+		"--output release-artifacts/sbom-arm64.cdx.json",
+		"--output release-artifacts/image-scan.json",
+		"--output release-artifacts/image-scan-arm64.json",
+		"-artifact sbom=sbom.cdx.json",
+		"-artifact image_scan=image-scan.json",
+		"-artifact image_index=image-index.json",
+		"-artifact sbom_arm64=sbom-arm64.cdx.json",
+		"-artifact image_scan_arm64=image-scan-arm64.json",
+	} {
+		if !strings.Contains(runs.String(), want) {
+			return fmt.Errorf("%s release-evidence does not bind the multi-platform image index: missing %q", workflow.name, want)
+		}
+	}
+	return nil
+}
+
+func workflowJobMapping(workflow workflowDocument, name string) (map[string]any, bool) {
+	jobs, ok := workflow.fields["jobs"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	job, ok := jobs[name].(map[string]any)
+	return job, ok
 }
 
 func TestWorkflowReleaseEvidenceTemporaryOCIDirectoryPolicyRejectsRetentionAndMissingCleanup(t *testing.T) {
@@ -1231,7 +1382,10 @@ func validateReleaseEvidenceTemporaryOCIDirectoryPolicy(workflow workflowDocumen
 		"layout-digest -layout \"$RUNNER_TEMP/image.oci\"",
 		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
 		"--input \"$RUNNER_TEMP/image.oci\"",
-		`rm -rf -- "$RUNNER_TEMP/image.oci"`,
+		"layout-digest -layout \"$RUNNER_TEMP/arm64/image.oci\"",
+		"oci-dir:\"$RUNNER_TEMP/arm64/image.oci\"",
+		"--input \"$RUNNER_TEMP/arm64/image.oci\"",
+		`rm -rf -- "$RUNNER_TEMP/image.oci" "$RUNNER_TEMP/arm64"`,
 	} {
 		if !strings.Contains(workflow.raw, required) {
 			return fmt.Errorf("%s does not use the required temporary OCI directory boundary %q", workflow.name, required)
@@ -1242,6 +1396,7 @@ func validateReleaseEvidenceTemporaryOCIDirectoryPolicy(workflow workflowDocumen
 		"oci-archive:",
 		"docker load --input",
 		"release-artifacts/image.oci",
+		"release-artifacts/arm64",
 		"-artifact image_layout=",
 	} {
 		if strings.Contains(workflow.raw, forbidden) {
