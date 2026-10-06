@@ -536,3 +536,64 @@ func TestProviderStatusPreservesUnknownAvailabilityAndBillingIncident(t *testing
 		}
 	}
 }
+
+type pagedInventoryReader struct {
+	pages []control.InventoryModelPage
+	after []control.InventoryModelPosition
+}
+
+func (reader *pagedInventoryReader) ListInventoryModels(_ context.Context, options control.InventoryModelListOptions) (control.InventoryModelPage, error) {
+	reader.after = append(reader.after, options.After)
+	page := reader.pages[len(reader.after)-1]
+	return page, nil
+}
+
+// TestPersistedQueryInventoryPagesWithRealisticPositions pages a model
+// inventory whose positions are ordinary provider, endpoint, snapshot and
+// model IDs. Each continuation cursor must fit the 512-byte token limit.
+func TestPersistedQueryInventoryPagesWithRealisticPositions(t *testing.T) {
+	horizon := time.Date(2026, time.July, 21, 23, 0, 0, 0, time.UTC)
+	snapshot := control.InventorySnapshotInfo{ID: uuid.MustParse("6f1c2a8e-4b7d-4e2f-9a51-0c3d8e7f6a2b"), Provider: "openai", EndpointID: "primary", Source: control.InventoryProviderAPI, ObservedAt: horizon, ExpiresAt: horizon.Add(time.Hour), Complete: true}
+	bedrock := snapshot
+	bedrock.Provider, bedrock.EndpointID = "bedrock", "bedrock-us-east-1-production-account"
+	record := func(info control.InventorySnapshotInfo, model string) control.InventoryModelRecord {
+		return control.InventoryModelRecord{Snapshot: info, Model: control.Model{ProviderModelID: model, Lifecycle: control.LifecycleAvailable}}
+	}
+	positions := []control.InventoryModelPosition{
+		{Provider: "openai", EndpointID: "primary", SnapshotID: snapshot.ID, ProviderModelID: "gpt-4.1-mini"},
+		{Provider: "bedrock", EndpointID: bedrock.EndpointID, SnapshotID: bedrock.ID, ProviderModelID: "anthropic.claude-sonnet-4-5-20250929-v1:0"},
+	}
+	reader := &pagedInventoryReader{pages: []control.InventoryModelPage{
+		{Models: []control.InventoryModelRecord{record(snapshot, "gpt-4.1")}, Next: &positions[0], SnapshotHorizon: horizon},
+		{Models: []control.InventoryModelRecord{record(snapshot, "gpt-4.1-mini")}, Next: &positions[1], SnapshotHorizon: horizon},
+		{Models: []control.InventoryModelRecord{record(bedrock, "anthropic.claude-sonnet-4-5-20250929-v1:0")}, SnapshotHorizon: horizon},
+	}}
+	service := persistedQueryTestService(t, nil, nil)
+	service.TypedHandler.(*persistedQueryHandler).inventory = reader
+	provider := control.ProviderID("openai")
+	var cursor *control.QueryCursor
+	for page := 0; page < 3; page++ {
+		request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "inventory-op", Scope: control.QueryScope{Tenant: "tenant-production-eu", Project: "project-forecasting", Actor: "service-account-batch"}, Kind: llm.QueryModelInventory, Filter: control.ModelInventoryQuery{Provider: &provider, Page: control.QueryPage{Size: 1, Cursor: cursor}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := service.Execute(context.Background(), request)
+		if err != nil {
+			t.Fatalf("page %d: %v", page+1, err)
+		}
+		if page == 2 {
+			if response.NextCursor != nil {
+				t.Fatalf("last page returned a cursor")
+			}
+			break
+		}
+		if response.NextCursor == nil || len(*response.NextCursor) > 512 {
+			t.Fatalf("page %d cursor = %v, want one within 512 bytes", page+1, response.NextCursor)
+		}
+		next := control.QueryCursor(*response.NextCursor)
+		cursor = &next
+	}
+	if len(reader.after) != 3 || reader.after[1] != positions[0] || reader.after[2] != positions[1] {
+		t.Fatalf("continuations resumed after %+v, want %+v", reader.after, positions)
+	}
+}
