@@ -26,7 +26,13 @@ func (r *Repository) Probe(ctx context.Context) error {
 	if _, err := r.table.QueryPartition(ctx, kv.KeyValueQuery{PartitionKey: r.partition(0), PageSize: 1}); err != nil {
 		return err
 	}
-	opened, err := r.blobs.Open(ctx, blob.BlobKey(r.namespace+"/payload/"+r.digest("readiness", nil)))
+	probeKey := blob.BlobKey(r.namespace + "/payload/" + r.digest("readiness", nil))
+	if regional, ok := r.blobs.(interface {
+		ProbeRead(context.Context, blob.BlobKey) error
+	}); ok {
+		return regional.ProbeRead(ctx, probeKey)
+	}
+	opened, err := r.blobs.Open(ctx, probeKey)
 	if err == nil {
 		if opened.Body == nil {
 			return ErrCorrupt

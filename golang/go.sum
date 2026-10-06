@@ -4,8 +4,12 @@ github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/provi
 github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts v0.1.0/go.mod h1:6jxA+uXCVn5gd2xbbBP78haMqmaqSvbDCwVHoHYxZHI=
 github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.0 h1:plqH/ohhRlgAjafwxwbpkuXegY+6beOQDIcWc5kizCk=
 github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.0/go.mod h1:n7JA1QKWWAbAqJpgJfhWpDUc2twJC/B/9iweJHJMvcg=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.1-0.20261006071928-a61f746a491e h1:Ptcgd1UQnOZK0FbfZnbTh3ZAy3ukRxd/a4qsmQSv9ow=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.1-0.20261006071928-a61f746a491e/go.mod h1:n7JA1QKWWAbAqJpgJfhWpDUc2twJC/B/9iweJHJMvcg=
 github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.0 h1:/x1Yb95VHllqvE2Qa2pXf1V5QhhT4rEvr7sL2hqnTtc=
 github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.0/go.mod h1:qOovlFbZYVMWqKuUQGlLl32LWCCYjRFyUEIDafLnvUQ=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.1-0.20261006071928-a61f746a491e h1:dP2a24C06CKvNy9e2ekMDceRi/uttU95GN7Y1F2by1I=
+github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.1-0.20261006071928-a61f746a491e/go.mod h1:qOovlFbZYVMWqKuUQGlLl32LWCCYjRFyUEIDafLnvUQ=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2 h1:utpeoEeZjd+A8J41zvoLsOOrqXHhX1Kx/X/tCW9dEYQ=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2/go.mod h1:iptorS+VYKFL2N6PnebpS91dubG35eAOEERnT4PJbQU=
 github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1 h1:u93s+zU2JD62im61Bm5CZIc1ZrOJaIAWEg0WOrMVkEo=

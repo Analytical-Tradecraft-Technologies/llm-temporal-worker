@@ -199,10 +199,11 @@ type FileBlobConfig struct {
 }
 
 type S3Config struct {
-	Bucket string     `yaml:"bucket" json:"bucket"`
-	Region string     `yaml:"region" json:"region"`
-	Prefix string     `yaml:"prefix" json:"prefix"`
-	Auth   AuthConfig `yaml:"auth" json:"auth"`
+	Bucket   string              `yaml:"bucket" json:"bucket"`
+	Region   string              `yaml:"region" json:"region"`
+	Prefix   string              `yaml:"prefix" json:"prefix"`
+	Auth     AuthConfig          `yaml:"auth" json:"auth"`
+	Failover *BlobFailoverConfig `yaml:"failover,omitempty" json:"failover,omitempty"`
 }
 
 type LimitsConfig struct {

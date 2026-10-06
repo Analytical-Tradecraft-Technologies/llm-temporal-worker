@@ -390,7 +390,7 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		if IsProductionEnvironment(environment) {
 			return fmt.Errorf("blob_store.kind memory is supported only in development")
 		}
-		if blob.File.Root != "" || blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) {
+		if blob.File.Root != "" || blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) || blob.S3.Failover != nil {
 			return fmt.Errorf("blob_store.file and blob_store.s3 are not valid when blob_store.kind is memory")
 		}
 		return nil
@@ -400,6 +400,14 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		}
 		if blob.S3.Bucket == "" || blob.S3.Region == "" || blob.S3.Prefix == "" {
 			return fmt.Errorf("blob_store.s3 bucket, region, and prefix are required")
+		}
+		if f := blob.S3.Failover; f != nil {
+			if err := validateRegionalBuckets(blob.S3.Region, blob.S3.Bucket, f.Replicas); err != nil {
+				return err
+			}
+			if err := validateAttemptTimeout(f.AttemptTimeout); err != nil {
+				return err
+			}
 		}
 		return blob.S3.Auth.Validate("blob_store.s3.auth")
 	case "file":
@@ -418,7 +426,7 @@ func (blob BlobStoreConfig) validate(environment string) error {
 		if filepath.Clean(root) == string(filepath.Separator) {
 			return fmt.Errorf("blob_store.file.root must not be the filesystem root")
 		}
-		if blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) {
+		if blob.S3.Bucket != "" || blob.S3.Region != "" || blob.S3.Prefix != "" || blob.S3.Auth != (AuthConfig{}) || blob.S3.Failover != nil {
 			return fmt.Errorf("blob_store.s3 is only valid when blob_store.kind is s3")
 		}
 		return nil
