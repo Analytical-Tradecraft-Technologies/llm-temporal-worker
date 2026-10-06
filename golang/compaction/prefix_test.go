@@ -388,3 +388,21 @@ func TestSelectRequestPrefixRejectsInvalidPolicy(t *testing.T) {
 		t.Fatal("invalid policy accepted")
 	}
 }
+
+// Inline media bytes are not text: a recent image that a provider bills on its
+// pixels stays in the window instead of being moved into the lossy summary
+// because its base64 is large.
+func TestSelectRequestPrefixDoesNotCountInlineMediaBytesAsText(t *testing.T) {
+	image := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look"}, llm.ImagePart{Bytes: make([]byte, 64<<10), MediaType: "image/png"}}}
+	items := []llm.Item{textMessage(llm.ActorHuman, "one"), textMessage(llm.ActorModel, "two"), image, textMessage(llm.ActorModel, "four")}
+	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items}
+	policy := DefaultPolicy()
+	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens = 2, 2000, 600
+	selection, err := SelectRequestPrefix(source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.RetainedTurns != 2 || !reflect.DeepEqual(selection.Retained, items[2:]) {
+		t.Fatalf("retained = %#v (%d turns), want the image turn kept", selection.Retained, selection.RetainedTurns)
+	}
+}

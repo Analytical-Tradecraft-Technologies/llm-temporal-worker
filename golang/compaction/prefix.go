@@ -1,10 +1,11 @@
 package compaction
 
 import (
-	"encoding/json"
 	"fmt"
 
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
@@ -117,14 +118,22 @@ func SelectRequestPrefix(source llm.Request, policy Policy) (PrefixSelection, er
 	return selection, nil
 }
 
+// retainedRequestTokens sizes the request left after compaction with the
+// budget estimator's provider-independent fallback, which excludes inline
+// media bytes: providers bill images and PDFs on their content, not on the
+// base64 this worker serializes, so a recent attachment that fits the
+// provider's budget is not pushed into the lossy summary.
 func retainedRequestTokens(source llm.Request, retained []llm.Item) (int, error) {
 	probe := source
 	probe.Input = retained
-	data, err := json.Marshal(probe)
+	tokens, err := budget.Estimator{}.CountInputTokens(probe, routing.Candidate{})
 	if err != nil {
 		return 0, fmt.Errorf("compaction retained request: %w", err)
 	}
-	return (len(data) + 3) / 4, nil
+	if tokens > int64(^uint(0)>>1) {
+		return 0, fmt.Errorf("compaction retained request is too large")
+	}
+	return int(tokens), nil
 }
 
 type turnRange struct {
