@@ -184,7 +184,14 @@ let () =
                            format = Json_schema_format {
                              name; description = None; schema = `Assoc [];
                              strict = true; } } }))
-    [ ""; "claim summary"; "claim.summary"; String.make 65 'a' ];
+    [ "claim summary"; "claim.summary"; String.make 65 'a' ];
+  (* An empty name is an absent one, as in the Go codec (#788). *)
+  (match Temporal.Codec.encode request_codec
+     { request_value with
+       output = Some { max_tokens = None;
+                       format = Json_schema_format { name = ""; description = None; schema = `Assoc []; strict = false } } } with
+   | Ok _ -> ()
+   | Error _ -> failwith "schema without a name rejected");
   (match Temporal.Codec.encode request_codec
      { request_value with
        output = Some { max_tokens = None;
