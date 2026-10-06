@@ -66,12 +66,16 @@ controller:
 - JSON Schema Draft 2020-12 structured output.
 - Sampling, stop sequences, output limits, and reasoning intent where supported.
 - Provider-state parts that remain opaque and byte-for-byte stable.
-- Strict and best-effort portability with machine-readable diagnostics.
+- Strict and best-effort portability. Strict mode rejects content a route
+  cannot represent; the durable v1 path does not yet emit portability
+  diagnostics.
 - Generation and compaction workflows that return final normalized responses.
   No live streaming or token-event API is supported in v1.
 - Exactly three request service classes: `economy`, `standard`, and `priority`.
 - Explicit ordered service-class fallback, disabled by default.
-- Durable continuation and endpoint pinning.
+- Durable continuation. On the durable v1 path, opaque provider state is
+  pinned only by provider API family: an adapter replays only state of its own
+  family, and other routes skip it at compile time.
 - Configurable deterministic routing, bounded failover, and circuit breaking.
 - Versioned price catalogs and provider-reported cost reconciliation.
 - Multiple overlapping, conservatively enforced sliding-window budgets.
@@ -105,6 +109,10 @@ controller:
   idempotency contract.
 - Persisting secrets, raw credentials, or bearer tokens in Temporal payloads.
 - Live streaming, token-event delivery, and interactive response transports.
+- Endpoint- and account-level continuation pinning, the `continuation_pinned`
+  error, checkpoint cache affinity, and portability diagnostics on the durable
+  v1 path. The planner receives no continuation constraints there, so a lineage
+  can move between two routes of the same API family.
 
 ## Behavioral invariants
 

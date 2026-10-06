@@ -210,6 +210,23 @@ operation ID.
 
 ## Portable and pinned continuation
 
+> **Status on the durable v1 path.** The design below is implemented by the
+> routing planner and `state.CheckPinning`, but the durable v1 runtime does not
+> use it yet. It passes no continuation constraints, affinity, or plan time to
+> the planner, and persisted provider-state items record only their provider
+> and API family, not endpoint or account. The only pin there is the adapter's
+> family check: a Responses or Messages lowerer replays only state of its own
+> family, and other families skip the route at compile time. Two routes of the
+> same family, such as OpenAI direct and Azure OpenAI Responses, can therefore
+> both receive a lineage's opaque state. `continuation_pinned`,
+> `provider_state_dropped`, and other portability diagnostics are not produced
+> there; the only diagnostic a v1 response carries is
+> `service_class_provider_downgrade`. A lineage can also switch model alias
+> through `settings_patch.model` and keep its transcript, so when lineages carry
+> opaque state that another account would reject, use a single account per API
+> family across every model alias a lineage can reach, or do not change models
+> on such lineages.
+
 Canonical text/tool history is portable if a new candidate can compile it
 without loss. Provider continuation IDs, encrypted reasoning, signatures,
 redacted thinking, or provider-hosted state are pinned to:
