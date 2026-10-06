@@ -71,7 +71,7 @@ func TestGenerateRecoveryCompletesWithStoredResultReferenceAndCost(t *testing.T)
 	if recovered.Actual != first.Actual || recovered.ActualCostUSD.String() != first.ActualCostUSD.String() || recovered.CostStatus != first.CostStatus || recovered.CostMethod != first.CostMethod {
 		t.Fatalf("recovery cost = %d/%s/%s/%s, want %d/%s/%s/%s", recovered.Actual, recovered.ActualCostUSD, recovered.CostStatus, recovered.CostMethod, first.Actual, first.ActualCostUSD, first.CostStatus, first.CostMethod)
 	}
-	if recovered.Attempt.Dispatch != admission.Accepted || recovered.Attempt.ProviderRequestID != first.Attempt.ProviderRequestID {
-		t.Fatalf("recovery attempt = %+v, want accepted with provider request %q", recovered.Attempt, first.Attempt.ProviderRequestID)
+	if recovered.Attempt != first.Attempt {
+		t.Fatalf("recovery attempt = %+v, want the finalization attempt %+v", recovered.Attempt, first.Attempt)
 	}
 }

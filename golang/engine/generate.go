@@ -377,6 +377,11 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 			}
 			attempt := operation.Attempt
 			attempt.Dispatch = admission.Accepted
+			// Admission stores record one more than the attempt number
+			// MarkDispatching was given; finalization records the given one.
+			if attempt.AttemptNumber > 0 {
+				attempt.AttemptNumber--
+			}
 			if attempt.ProviderRequestID == "" {
 				attempt.ProviderRequestID = response.Provider.RequestID
 			}
