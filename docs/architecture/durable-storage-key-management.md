@@ -261,7 +261,9 @@ at most 64 KiB; the resolver's existing limit):
     {"id": "k2026-10", "key": "<base64 of 32 bytes>", "state": "primary"},
     {"id": "k2026-04", "key": "<base64 of 32 bytes>", "state": "decrypt"}
   ],
-  "retired": ["k2025-10"]
+  "retired": [
+    {"id": "k2025-10", "fingerprint": "<16 hex digits>"}
+  ]
 }
 ```
 
@@ -272,7 +274,13 @@ These rules are validated on every load and every refresh:
 - There is exactly one `primary`. Other keys are `decrypt`. A key may also be
   `pending`: loaded and readable, but announced as not yet safe to promote.
   The rotation tooling uses this, and readers treat it like `decrypt`.
-- `retired` lists IDs that must not appear in `keys`.
+- `retired` is a permanent tombstone list. Each entry records the key ID and
+  its [fingerprint](#redaction-guarantees). A retired ID must not appear in
+  `keys`, with one exception: a break-glass reinstatement. That entry has
+  `"state": "decrypt"` and `"reinstated": true`, and its bytes must match the
+  tombstone fingerprint. It can never be `primary` or `pending`. The tombstone
+  stays in `retired` while the key is reinstated, so a freshly started worker
+  can check the fingerprint without any last-good keyring.
 - `legacy_unversioned` is `decrypt` or `retired`.
 
 These transition rules apply against the worker's last-good keyring. A refresh
@@ -282,7 +290,11 @@ fires.
 - **Key IDs are immutable.** An ID present in both versions must have
   identical bytes.
 - **No silent removal.** A key may leave `keys` only if the same document
-  lists it in `retired`. A retired ID may never come back.
+  lists it in `retired`.
+- **No silent return.** A retired ID may return to `keys` only as a
+  break-glass reinstatement (above), under its *original* ID and with matching
+  bytes. Workers accept it and raise a `keyring_key_reinstated` alarm. Any other
+  return of a retired ID, or a reinstatement with different bytes, is rejected.
 - `legacy_unversioned` may go from `decrypt` to `retired`, never back.
 
 The identity key stays in its own secret, `state.requests.secret`. It is
@@ -374,21 +386,38 @@ Rotation is a staged change to the keyring document. Each stage is published
 as a new Secrets Manager version (`PutSecretValue`, which moves `AWSCURRENT`).
 Workers pick it up within one `refresh_interval` (plus jitter and backoff).
 The *convergence window* `W` is `refresh_interval × 2 + rollout time for any
-worker that has the keyring configured but has not restarted`. Every gate
-below is checked with the `keyring_info{primary, key_ids, version}` status
-metric, not only by waiting.
+worker that has the keyring configured but has not restarted`. `W` is only a
+minimum wait. **Elapsed time is never evidence of convergence.** A worker whose
+refreshes keep failing keeps its last-good keyring indefinitely, and readiness
+does not change, so a stage gate passes only on positive per-worker evidence.
+
+**Gate check.** List every live worker instance: Temporal task-queue pollers
+for the worker's task queues, plus the deployment's running pods or tasks.
+Then match each one to its `keyring_info{instance, primary, key_ids,
+fingerprints, version}` status. The gate passes only when every listed instance
+reports the required state with the expected key fingerprints. Any instance
+that is unverified (missing metrics, stale status, unknown identity) must be
+drained or restarted before the stage proceeds. A restarted worker loads the
+current document at startup and fails closed if it cannot, so it is verified
+by construction once it reports. The rotation tooling (Phase 5) runs this check
+and refuses to publish the next stage until it passes. It has no time-based
+override.
 
 Workers can hold different snapshots at the same time, because refresh
 intervals drift and new workers start during a rollout. The stages make every
 mix of adjacent snapshots safe.
 
-1. **Add** the new key `K2` as `pending`. Primary stays `K1`. Wait until every
-   worker reports `K2` loaded, or wait `W` if metrics are missing.
+1. **Add** the new key `K2` as `pending`. Primary stays `K1`. Wait at least
+   `W`. Then pass the gate check: every live worker reports `K2` loaded with the
+   expected fingerprint, or is drained or restarted. Do not promote on elapsed
+   time alone.
    - *Mixed state:* all workers write with `K1`. Workers that already have
      `K2` cannot see any `K2` data, because none exists yet.
-2. **Promote** `K2` to `primary` and demote `K1` to `decrypt`. Wait `W`.
+2. **Promote** `K2` to `primary` and demote `K1` to `decrypt`. Pass the gate
+   check again: every live worker reports `K2` as primary.
    - *Mixed state:* some workers write `K1`, others `K2`. Every worker can read
-     both: all have `K2` after stage 1, and `K1` is still listed.
+     both: the stage-1 gate verified that every worker has `K2`, and `K1` is
+     still listed. A worker that starts later loads the current document.
      Content-addressed collisions are safe: whichever key wrote the first copy
      of a blob, the `AlreadyExists` compare path decrypts it with the key named
      in its header.
@@ -430,8 +459,9 @@ incident.
 A decrypt-only key, or `legacy_unversioned`, may be retired only when all of
 these hold:
 
-1. It is not primary, and it has not been primary for at least `W` plus the
-   longest in-flight Activity time, so no straggler is still writing with it.
+1. It is not primary. The gate check shows that no live worker reports it as
+   primary, and that has been true for at least the longest in-flight Activity
+   time. So no straggler is still writing with it.
 2. A key inventory scan of the payload bucket(s), including regional replicas,
    reports **zero** live objects under that key ID (or zero v0 objects for the
    legacy key). The scanner reads each object's header bytes. Objects are
@@ -445,9 +475,23 @@ these hold:
 Retirement is an explicit edit: move the key from `keys` to `retired`.
 Afterwards, a stray object under that key yields `ErrKeyRetired` rather than a
 silent `ErrCorrupt`. Stranded data is visible, and it can be recovered by
-restoring the key from escrow. A retired ID cannot return to the keyring, so
-recovery means a new keyring entry under a *new* ID with the same bytes. The
-runbook names this the break-glass path, because the reader matches by ID.
+restoring the key from escrow.
+
+**Break-glass reinstatement** must use the key's *original* ID. Each v1 header
+carries the key ID, the header is authenticated as AAD, and the reader selects
+a key by that ID. The same bytes under a new ID would never be tried, and the
+blobs would still return `ErrKeyRetired`. Procedure:
+
+1. Fetch the key from escrow (restore role, with MFA or approval).
+2. Publish a document that adds it to `keys` with its original ID,
+   `"state": "decrypt"` and `"reinstated": true`. Keep its tombstone in
+   `retired`. Workers check the bytes against the tombstone fingerprint.
+3. Confirm with the gate check that every worker has loaded it.
+4. Rerun the inventory scan. Retire the key again, by removing it from `keys`,
+   only after the stranded data has been handled.
+
+This is the only controlled exception to the no-return rule. The rotation
+tooling requires the break-glass role to publish it.
 
 ## Backup and restore
 
@@ -464,8 +508,9 @@ them at least as long as the data.
   1. Restore the identity secret byte-identically. The namespace canary
      verifies this.
   2. Restore a keyring that contains every key ID present in the restored
-     data. A retired ID needed again comes back under a new ID with the same
-     bytes, per the retirement section.
+     data, each under its original ID. A retired ID that is needed again comes
+     back as a break-glass reinstatement (original ID, matching fingerprint),
+     per the retirement section. It never comes back under a new ID.
   3. Restore data.
   4. Run the inventory scan and a sample read of each key ID before
      re-enabling workers.
@@ -581,7 +626,9 @@ as its acceptance gate. Phases 1 and 2 have no AWS dependency.
   identity canary. Configuration fields and reload validation.
 - Tests:
   - document validation table;
-  - each transition rule (immutable IDs, no silent removal, legacy one-way);
+  - each transition rule (immutable IDs, no silent removal, legacy one-way,
+    reinstatement only under the original ID with a matching fingerprint);
+  - a retired-key blob becomes readable again after reinstatement;
   - **mixed workers:** two repositories on shared in-memory stores, with
     snapshots {v0-only, K1 pending, K1 primary, K2 primary} in every adjacent
     pair, write and read each other's data;
@@ -629,12 +676,16 @@ as its acceptance gate. Phases 1 and 2 have no AWS dependency.
 - Offline keyring tooling to generate a key (written to a 0600 file, never to
   stdout), validate a document, and check a proposed transition against the
   current one. The tooling refuses unsafe documents.
+- Per-worker convergence gate check (live pollers and instances matched to
+  `keyring_info`), with no time-based override.
 - Key inventory scanner, and a runbook covering rotation, rollback,
   retirement, escrow and restore.
 - Operator documentation in `reference/configuration.md` and the cloud request
   repository reference.
 - Link the att-deps infrastructure work.
 - Tests: tooling transition checks match the worker's rules (shared code);
+  the gate check blocks promotion when any live instance is unverified or
+  missing `K2`, even after `W` has elapsed;
   the scanner counts v0/v1 per key ID on fixtures; the restore-drill script
   runs in the AWS gate.
 
