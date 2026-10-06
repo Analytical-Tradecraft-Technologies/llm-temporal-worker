@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 )
 
 // Only a retryable definite failure reopens on an identical Begin; it gets a

@@ -3,8 +3,8 @@ package openairesponses
 import (
 	"io"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/streamdecode"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamdecode"
 )
 
 // DecodeStream consumes an OpenAI Responses SSE stream and returns neutral

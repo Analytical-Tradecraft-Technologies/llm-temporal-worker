@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/admission"
-	"github.com/mfow/llm-temporal-worker/golang/engine"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/state"
-	"github.com/mfow/llm-temporal-worker/golang/storage/blob"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
 
 // BlobRefResolver reconstructs the opaque object-store locator from the

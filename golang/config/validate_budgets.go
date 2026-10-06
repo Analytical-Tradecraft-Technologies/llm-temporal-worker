@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 // maxAdmissionHashTagBytes and the forbidden characters mirror the Redis key

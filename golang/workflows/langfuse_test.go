@@ -3,8 +3,8 @@ package workflows
 import (
 	"context"
 	"errors"
-	"github.com/mfow/llm-temporal-worker/golang/activity"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"

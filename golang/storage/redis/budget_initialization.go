@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/mfow/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

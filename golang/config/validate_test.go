@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testing.T) {

@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/control"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

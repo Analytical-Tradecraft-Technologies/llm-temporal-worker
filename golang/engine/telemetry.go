@@ -3,9 +3,9 @@ package engine
 import (
 	"context"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/routing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )

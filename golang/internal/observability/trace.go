@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/trace"
@@ -51,7 +51,7 @@ func NewTracer(options TraceOptions) *Tracer {
 		}
 	}
 	provider := trace.NewTracerProvider(providerOptions...)
-	return &Tracer{provider: provider, tracer: provider.Tracer("github.com/mfow/llm-temporal-worker")}
+	return &Tracer{provider: provider, tracer: provider.Tracer("github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker")}
 }
 
 var noopTracer = NewTracer(TraceOptions{})

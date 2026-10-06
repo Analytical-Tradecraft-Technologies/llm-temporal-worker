@@ -2,9 +2,9 @@ package anthropicmessages
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"testing"
 )
 

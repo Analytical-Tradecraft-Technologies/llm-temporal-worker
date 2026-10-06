@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/google/uuid"
-	"github.com/mfow/llm-temporal-worker/golang/control"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/routing"
 )
 
 // memoryInventoryStore is a minimal control.InventoryStore with the same

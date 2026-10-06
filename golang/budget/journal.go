@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 // JournalEventKind is the budget accounting event vocabulary. The historical

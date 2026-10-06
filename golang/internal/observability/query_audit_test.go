@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/control"
-	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func TestQueryAuditLogsMetadataWithoutPayloadsOrRawIdentifiers(t *testing.T) {

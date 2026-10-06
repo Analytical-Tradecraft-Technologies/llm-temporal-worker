@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 // Regression for #776: a checkpoint larger than the low-level canonicalizer's

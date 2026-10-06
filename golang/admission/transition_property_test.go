@@ -3,7 +3,7 @@ package admission
 import (
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 func TestTransitionAndDispatchInvariants(t *testing.T) {

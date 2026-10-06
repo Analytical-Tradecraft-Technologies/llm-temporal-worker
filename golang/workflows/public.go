@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/mfow/llm-temporal-worker/golang/activity"
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"

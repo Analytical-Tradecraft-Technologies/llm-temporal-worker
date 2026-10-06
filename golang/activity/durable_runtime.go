@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
 // QueryV1Func is the narrow control-plane callback used by DurableV1Runtime.

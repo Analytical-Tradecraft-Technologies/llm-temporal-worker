@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/admission"
-	"github.com/mfow/llm-temporal-worker/golang/budget"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
-	durable "github.com/mfow/llm-temporal-worker/golang/storage/durable"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
+	durable "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

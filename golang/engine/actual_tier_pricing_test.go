@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 // A priority request the provider served at standard is priced at standard

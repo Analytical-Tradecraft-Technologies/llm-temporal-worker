@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/streamtest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
 func TestDecodeStreamIsFragmentationInvariant(t *testing.T) {

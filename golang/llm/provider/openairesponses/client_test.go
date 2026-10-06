@@ -12,7 +12,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/contract"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestSDKRetriesDisabled(t *testing.T) {

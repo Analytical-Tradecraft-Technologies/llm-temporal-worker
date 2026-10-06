@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 // Patch keeps the three wire states distinct: a nil Set is omitted, Set is an

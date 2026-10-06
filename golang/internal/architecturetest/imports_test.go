@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-const modulePath = "github.com/mfow/llm-temporal-worker/golang"
+const modulePath = "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang"
 
 type listedPackage struct {
 	ImportPath string

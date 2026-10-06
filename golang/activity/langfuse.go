@@ -3,8 +3,8 @@ package activity
 import (
 	"context"
 	"errors"
-	"github.com/mfow/llm-temporal-worker/golang/langfuse"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 )

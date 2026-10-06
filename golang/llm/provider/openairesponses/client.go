@@ -8,7 +8,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
 
 // ClientConfig contains only resolved values for one adapter endpoint. The

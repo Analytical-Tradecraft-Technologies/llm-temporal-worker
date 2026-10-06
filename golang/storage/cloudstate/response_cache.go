@@ -9,8 +9,8 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
-	"github.com/mfow/llm-temporal-worker/golang/cache"
-	"github.com/mfow/llm-temporal-worker/golang/state"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
 // Responses shares the configured KV/blob stores and encryption secret. Cache

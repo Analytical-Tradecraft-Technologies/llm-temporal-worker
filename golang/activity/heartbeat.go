@@ -6,7 +6,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	sdkactivity "go.temporal.io/sdk/activity"
 )
 

@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/state"
-	memory "github.com/mfow/llm-temporal-worker/golang/storage/memory"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
+	memory "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/memory"
 )
 
 func TestGenerateEmitsSafeLifecycleSpans(t *testing.T) {

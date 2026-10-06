@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

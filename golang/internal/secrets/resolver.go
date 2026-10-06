@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
 )
 
 const DefaultMaxBytes int64 = 64 << 10

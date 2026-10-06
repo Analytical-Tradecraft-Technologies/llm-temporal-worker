@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/internal/catalog"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/catalog"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 var priceCatalogExample = regexp.MustCompile("(?s)```yaml\n(version: llmtw-prices/[^`]*?)```")

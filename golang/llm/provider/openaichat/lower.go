@@ -8,9 +8,9 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 	"github.com/openai/openai-go/v3/packages/param"
 )
 
@@ -20,7 +20,7 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 	if request.WebFetch || request.CodeExecution {
 		return nil, fmt.Errorf("this Chat Completions transport does not support web_fetch or code_execution")
 	}
-	messages := make([]any, 0, len(request.Instructions)+len(request.Input))
+	messages := make([]any, 0, len(request.Input))
 	toolCalls := make(map[string]struct{})
 	for index, instruction := range request.Instructions {
 		message, err := lowerInstruction(instruction, profile.applicationInstructionRole())

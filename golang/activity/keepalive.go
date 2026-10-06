@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/engine"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 // DefaultHeartbeatKeepaliveInterval is deliberately independent of any

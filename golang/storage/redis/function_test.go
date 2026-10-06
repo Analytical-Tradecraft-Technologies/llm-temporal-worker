@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

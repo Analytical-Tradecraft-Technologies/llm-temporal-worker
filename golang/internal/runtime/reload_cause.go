@@ -7,10 +7,10 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/internal/app"
-	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
-	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 )
 
 // The reload failure classes are a closed set, so they are safe as a log

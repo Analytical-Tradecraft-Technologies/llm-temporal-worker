@@ -9,7 +9,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
-	"github.com/mfow/llm-temporal-worker/golang/state"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
 const checkpointFormat = 1

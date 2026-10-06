@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 var errSimulatedWorkerCrash = errors.New("simulated worker crash before Redis reconciliation")

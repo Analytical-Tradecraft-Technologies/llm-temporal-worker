@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 var registryProfileIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)

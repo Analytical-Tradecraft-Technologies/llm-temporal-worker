@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/httpserver"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
 )
 
 type FlushFunc func(context.Context) error

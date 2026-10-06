@@ -3,9 +3,9 @@ package engine
 import (
 	"context"
 
-	"github.com/mfow/llm-temporal-worker/golang/admission"
-	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func recordAdmission(ctx context.Context, reservations []admission.WindowReservation, outcome string) {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"go.temporal.io/sdk/testsuite"
 )
 

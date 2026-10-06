@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/internal/buildinfo"
-	"github.com/mfow/llm-temporal-worker/golang/internal/diagnostic"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
 )
 
 func TestVersionCommandEmitsBuildMetadata(t *testing.T) {

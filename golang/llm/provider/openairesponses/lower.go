@@ -9,9 +9,9 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	llmschema "github.com/mfow/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 func providerTier(class llm.ServiceClass) string {
@@ -30,7 +30,7 @@ func providerTier(class llm.ServiceClass) string {
 // storage-denied endpoint is used statelessly, so a reasoning item is only
 // replayable when it carries its encrypted content.
 func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (map[string]any, loweredToolPolicy, error) {
-	input := make([]any, 0, len(request.Instructions)+len(request.Input))
+	input := make([]any, 0, len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
 		if err != nil {

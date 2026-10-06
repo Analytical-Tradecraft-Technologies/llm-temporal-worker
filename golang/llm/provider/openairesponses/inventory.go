@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 // ListModels implements the optional provider management capability for the

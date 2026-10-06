@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	domainactivity "github.com/mfow/llm-temporal-worker/golang/activity"
-	"github.com/mfow/llm-temporal-worker/golang/internal/app"
-	"github.com/mfow/llm-temporal-worker/golang/workflows"
+	domainactivity "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"

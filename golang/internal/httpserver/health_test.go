@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/httpserver"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
 )
 
 func TestProbeStateFailsClosedAndDoesNotExposeDetails(t *testing.T) {

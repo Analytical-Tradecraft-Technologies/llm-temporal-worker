@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
+	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

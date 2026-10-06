@@ -2,8 +2,8 @@ package runtime
 
 import (
 	"context"
-	"github.com/mfow/llm-temporal-worker/golang/activity"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 var _ activity.ExecutionRuntime = (*snapshotV1Runtime)(nil)

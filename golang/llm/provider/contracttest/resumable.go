@@ -3,7 +3,7 @@ package contracttest
 import (
 	"fmt"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 // ResumableSequence is the observable part of a resumable adapter contract.

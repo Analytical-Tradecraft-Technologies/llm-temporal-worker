@@ -12,16 +12,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
-	"github.com/mfow/llm-temporal-worker/golang/budget"
-	"github.com/mfow/llm-temporal-worker/golang/engine"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockconverse"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/bedrockmessages"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/openaichat"
-	"github.com/mfow/llm-temporal-worker/golang/pricing"
-	"github.com/mfow/llm-temporal-worker/golang/routing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockconverse"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockmessages"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openaichat"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
 
 // hierarchyRoute is one endpoint that cannot keep policy and application

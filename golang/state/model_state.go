@@ -7,7 +7,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 // ModelState is the effective provider-neutral model configuration at one

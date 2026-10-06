@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 // panickingBody panics when the SDK decodes the response, as an SDK

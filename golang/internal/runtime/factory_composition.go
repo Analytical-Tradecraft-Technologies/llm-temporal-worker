@@ -4,9 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	durablestore "github.com/mfow/llm-temporal-worker/golang/storage/durable"
+	durablestore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 )
 
 // requireDurableV1RuntimeBuilder prevents a production durable snapshot from

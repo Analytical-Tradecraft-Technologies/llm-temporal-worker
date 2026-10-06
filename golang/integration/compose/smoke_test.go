@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	redisstore "github.com/mfow/llm-temporal-worker/golang/storage/redis"
+	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	"go.yaml.in/yaml/v4"
 )
 

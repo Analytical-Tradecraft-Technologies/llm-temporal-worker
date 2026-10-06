@@ -9,8 +9,8 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	"github.com/google/uuid"
-	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
 var ErrRequestAttemptMissing = errors.New("request attempt missing")

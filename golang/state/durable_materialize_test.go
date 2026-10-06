@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/google/uuid"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
 )
 
 type durableMaterializeFixture struct {

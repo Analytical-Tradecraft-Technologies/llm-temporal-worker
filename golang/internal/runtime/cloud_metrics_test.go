@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
-	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 

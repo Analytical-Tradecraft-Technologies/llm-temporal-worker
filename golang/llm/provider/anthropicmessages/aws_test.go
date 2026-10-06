@@ -13,8 +13,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {

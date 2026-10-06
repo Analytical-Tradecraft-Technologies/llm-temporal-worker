@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func TestContinuationSecurityHandleFixturesFailClosed(t *testing.T) {

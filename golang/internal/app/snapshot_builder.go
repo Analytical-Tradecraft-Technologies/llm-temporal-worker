@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 )
 
 // SnapshotBuilder is the only app boundary that turns external bytes into an

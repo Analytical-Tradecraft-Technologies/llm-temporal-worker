@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func TestV1GenerateAndCompactFixturesRoundTrip(t *testing.T) {

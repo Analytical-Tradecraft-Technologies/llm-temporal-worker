@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 )
 
 func providerTestEvent(t *testing.T, at time.Time, route string, mutate func(*control.StatusObservation)) control.StatusEvent {

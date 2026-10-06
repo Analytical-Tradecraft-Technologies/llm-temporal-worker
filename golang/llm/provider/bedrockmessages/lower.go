@@ -9,9 +9,9 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
-	"github.com/mfow/llm-temporal-worker/golang/llm"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
-	"github.com/mfow/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 )
 
 // lowerRequest builds the Anthropic body InvokeModel forwards to the model.
@@ -26,7 +26,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	if strict && hasMixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Messages in strict portability mode")
 	}
-	messages := make([]any, 0, len(request.Input)+1)
+	messages := make([]any, 0, len(request.Input))
 	if err := appendContinuationStates(&messages, request.Continuation, profile); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}

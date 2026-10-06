@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mfow/llm-temporal-worker/golang/cache"
-	"github.com/mfow/llm-temporal-worker/golang/config"
-	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
-	"github.com/mfow/llm-temporal-worker/golang/state"
-	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
 
 // CloudRequestRepository is snapshot-owned. It records operations; it does not

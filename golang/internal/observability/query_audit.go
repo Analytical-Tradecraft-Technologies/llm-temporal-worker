@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 
-	"github.com/mfow/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 )
 
 // QueryAudit logs a content-free summary of a completed control query. Request

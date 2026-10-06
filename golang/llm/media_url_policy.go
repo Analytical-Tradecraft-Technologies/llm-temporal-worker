@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/mfow/llm-temporal-worker/golang/internal/netpolicy"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/netpolicy"
 )
 
 // ValidateMediaURLs applies the remote-media URL policy to every image and
