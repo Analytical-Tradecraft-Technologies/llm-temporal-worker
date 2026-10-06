@@ -1,5 +1,5 @@
 (** Typed clients and protocol bindings for the Go worker.
-    [Client] invokes the public generation and compaction workflows from an
+    [Client] invokes the public Generate, Compact, and Query workflows from an
     application process; the other invocation helpers are workflow-native.
 
     Identifier modules intentionally wrap arbitrary strings nominally.  They
