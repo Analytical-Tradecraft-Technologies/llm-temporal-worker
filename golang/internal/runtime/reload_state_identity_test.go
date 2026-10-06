@@ -31,6 +31,10 @@ func TestRuntimeReplacementValidatorRejectsStateIdentityChanges(t *testing.T) {
 		{field: "state.redis.key_secret", mutate: func(value *config.Config) { value.State.Redis.KeySecret.Path = "/var/run/secrets/llmtw/other-key" }},
 		{field: "state.requests.provider.aws.region", mutate: func(value *config.Config) { value.State.Requests.Provider.AWS.Region = "us-east-1" }},
 		{field: "state.requests.provider.aws.profile", mutate: func(value *config.Config) { value.State.Requests.Provider.AWS.Profile = "other-account" }},
+		{field: "state.requests.provider.aws.failover", base: func(value *config.Config) { value.State.Requests.Provider.AWS.AllowMRSC = true }, mutate: func(value *config.Config) {
+			value.State.Requests.Provider.AWS.Failover = &config.CloudFailoverConfig{DynamoDBRegions: []string{"region-primary", "region-fallback-a"}, PayloadReplicas: []config.RegionalBucket{{Region: "region-fallback-a", Bucket: "fallback-payloads"}}, AttemptTimeout: config.Duration(time.Second)}
+		}},
+		{field: "state.requests.provider.aws.allow_mrsc", mutate: func(value *config.Config) { value.State.Requests.Provider.AWS.AllowMRSC = true }},
 		{field: "state.requests.provider.aws.temp_directory", mutate: func(value *config.Config) { value.State.Requests.Provider.AWS.TempDirectory = "/var/tmp/other" }},
 		{field: "state.requests.provider.key_value_stores", mutate: func(value *config.Config) {
 			value.State.Requests.Provider.KeyValueStores = map[string]string{"requests": "other-physical-table"}
@@ -48,6 +52,9 @@ func TestRuntimeReplacementValidatorRejectsStateIdentityChanges(t *testing.T) {
 		}},
 		{field: "blob_store.s3.bucket", mutate: func(value *config.Config) { value.BlobStore.S3.Bucket = "other-results-bucket" }},
 		{field: "blob_store.s3.region", mutate: func(value *config.Config) { value.BlobStore.S3.Region = "us-east-1" }},
+		{field: "blob_store.s3.failover", mutate: func(value *config.Config) {
+			value.BlobStore.S3.Failover = &config.BlobFailoverConfig{Replicas: []config.RegionalBucket{{Region: "region-fallback-a", Bucket: "fallback-results"}}, AttemptTimeout: config.Duration(time.Second)}
+		}},
 		{field: "blob_store.s3.prefix", mutate: func(value *config.Config) { value.BlobStore.S3.Prefix = "v2" }},
 	}
 	for _, test := range tests {

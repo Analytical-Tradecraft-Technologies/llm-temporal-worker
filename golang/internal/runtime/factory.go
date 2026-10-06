@@ -1692,6 +1692,22 @@ func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, i
 	if err != nil {
 		return nil, nil, err
 	}
+	if f := value.BlobStore.S3.Failover; f != nil {
+		stores := []*s3blob.Store{store}
+		for _, replica := range f.Replicas {
+			cfg, err := defaultAWSConfigFactory(ctx, replica.Region)
+			if err != nil {
+				return nil, nil, err
+			}
+			next, err := s3blob.New(s3blob.Options{Client: s3.NewFromConfig(cfg), Bucket: replica.Bucket, Prefix: value.BlobStore.S3.Prefix, MaxBytes: blobMaxBytes(value.Limits)})
+			if err != nil {
+				return nil, nil, err
+			}
+			stores = append(stores, next)
+		}
+		regional, err := s3blob.NewRegional(stores, time.Duration(f.AttemptTimeout))
+		return regional, nil, err
+	}
 	return store, nil, nil
 }
 

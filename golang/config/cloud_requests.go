@@ -19,7 +19,8 @@ type CloudRequestConfig struct {
 }
 
 // CloudStorageProviderConfig mirrors the portable provider factory's JSON
-// shape. Typed fields keep credentials and unknown options out of snapshots.
+// shape, plus worker-owned regional failover settings. Typed fields keep
+// credentials and unknown options out of snapshots.
 type CloudStorageProviderConfig struct {
 	Type           string                `yaml:"type" json:"type"`
 	AWS            CloudStorageAWSConfig `yaml:"aws" json:"aws"`
@@ -31,6 +32,10 @@ type CloudStorageAWSConfig struct {
 	Region        string `yaml:"region" json:"region"`
 	Profile       string `yaml:"profile,omitempty" json:"profile,omitempty"`
 	TempDirectory string `yaml:"temp_directory,omitempty" json:"temp_directory,omitempty"`
+	// AllowMRSC permits explicitly strongly consistent DynamoDB global tables.
+	// It defaults to false; Failover separately enables regional routing.
+	AllowMRSC bool                 `yaml:"allow_mrsc,omitempty" json:"allow_mrsc,omitempty"`
+	Failover  *CloudFailoverConfig `yaml:"failover,omitempty" json:"failover,omitempty"`
 }
 
 var cloudNamespacePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -60,6 +65,27 @@ func (c CloudRequestConfig) validate() error {
 	}
 	if c.Secret.Kind == SecretWorkloadIdentity {
 		return fmt.Errorf("state.requests.secret must be a stable file or environment secret")
+	}
+	if f := c.Provider.AWS.Failover; f != nil {
+		if !c.Provider.AWS.AllowMRSC {
+			return fmt.Errorf("state.requests AWS failover requires allow_mrsc")
+		}
+		if len(f.DynamoDBRegions) < 1 || len(f.DynamoDBRegions) > 2 {
+			return fmt.Errorf("DynamoDB failover requires one or two fallback regions")
+		}
+		seen := map[string]bool{c.Provider.AWS.Region: true}
+		for _, region := range f.DynamoDBRegions {
+			if strings.TrimSpace(region) == "" || strings.TrimSpace(region) != region || seen[region] {
+				return fmt.Errorf("DynamoDB failover regions must be distinct and nonempty")
+			}
+			seen[region] = true
+		}
+		if err := validateRegionalBuckets(c.Provider.AWS.Region, c.Provider.BlobStores[c.PayloadStore], f.PayloadReplicas); err != nil {
+			return err
+		}
+		if err := validateAttemptTimeout(f.AttemptTimeout); err != nil {
+			return err
+		}
 	}
 	return c.Secret.Validate("state.requests.secret")
 }

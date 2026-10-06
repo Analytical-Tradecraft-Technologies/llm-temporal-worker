@@ -9,7 +9,7 @@ tool golang.org/x/vuln/cmd/govulncheck
 require (
 	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/eventsourcing v0.1.0
 	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts v0.1.0
-	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.0
+	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.1-0.20261006071928-a61f746a491e
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/anthropics/anthropic-sdk-go v1.78.0
@@ -37,7 +37,7 @@ require (
 )
 
 require (
-	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.0 // indirect
+	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.1-0.20261006071928-a61f746a491e // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 // indirect

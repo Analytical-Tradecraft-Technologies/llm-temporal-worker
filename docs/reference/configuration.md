@@ -550,6 +550,14 @@ resolved credentials.
 **state.requests**. Redis owns budget reservations, claims, settlement,
 throttles and provider operational state. Cloud key-value/blob storage holds
 requests, attempts, pending records, response caches and continuation data.
+Optional `state.requests.provider.aws.allow_mrsc: true` permits strongly
+consistent DynamoDB global tables. It defaults to false and requires a restart
+to change. Optional AWS `failover` settings add regional endpoint routing;
+configure `blob_store.s3.failover` separately for result blobs. S3 replication
+is asynchronous, and surviving-region writes accept a replication risk.
+See [multi-region storage](cloud-request-repository.md#optional-multi-region-storage)
+for replica configuration and regional failover constraints.
+
 See [cloud request storage](cloud-request-repository.md#worker-integration)
 for IAM configuration, table/bucket aliases and the encryption secret.
 

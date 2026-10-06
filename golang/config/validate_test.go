@@ -50,6 +50,52 @@ func TestConfigExampleMatchesJSONSchema(t *testing.T) {
 	}
 }
 
+func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	aws := document["state"].(map[string]any)["requests"].(map[string]any)["provider"].(map[string]any)["aws"].(map[string]any)
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		value any
+		valid bool
+	}{
+		{"enabled", true, true},
+		{"disabled", false, true},
+		{"string", "true", false},
+		{"number", 1, false},
+		{"null", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			aws["allow_mrsc"] = tc.value
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := compiled.Validate(encoded); (err == nil) != tc.valid {
+				t.Fatalf("allow_mrsc = %v: validation error = %v, want valid = %v", tc.value, err, tc.valid)
+			}
+		})
+	}
+}
+
 func TestConfigSchemaAcceptsDevelopmentFileBlobStore(t *testing.T) {
 	loaded, err := config.Load(developmentFileBlobYAML(t))
 	if err != nil {

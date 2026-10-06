@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
@@ -538,5 +541,43 @@ func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *test
 				t.Fatalf("environment %q skipped the budget initialization check: err=%v built=%v opened=%d reads=%v", environment, err, built, opened, calls)
 			}
 		})
+	}
+}
+
+func TestCloudRepositoryFactoryForwardsMRSCOptIn(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		for _, region := range []string{"region-primary", "region-fallback-a", "region-fallback-b"} {
+			t.Run(region+"/"+fmt.Sprint(allow), func(t *testing.T) {
+				called := false
+				factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+					Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+						return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))), nil
+					}),
+					CloudRequestFactory: func(_ context.Context, c cloudstate.Config, _ []byte) (CloudRequestRepository, error) {
+						called = true
+						aws := c.Provider["aws"].(map[string]any)
+						value, exists := aws["allow_mrsc"]
+						if aws["region"] != region || (allow && value != true) || (!allow && exists) {
+							t.Fatalf("wrong AWS configuration: %+v", aws)
+						}
+						// Validate the actual pinned cloud-storage factory accepts
+						// the forwarded option without opening any AWS resources.
+						if _, err := providers.FromJSON(context.Background(), c.Provider); err != nil {
+							t.Fatal(err)
+						}
+						return &recordingCloudRequests{}, nil
+					},
+				}}
+				t.Setenv("AWS_CONFIG_FILE", t.TempDir()+"/absent")
+				t.Setenv("AWS_SHARED_CREDENTIALS_FILE", t.TempDir()+"/absent")
+				t.Setenv("AWS_PROFILE", "")
+				t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+				cfg := testCloudConfig()
+				cfg.Provider.AWS.Region, cfg.Provider.AWS.AllowMRSC = region, allow
+				if _, err := factory.buildCloudRequests(context.Background(), cfg); err != nil || !called {
+					t.Fatalf("called=%t err=%v", called, err)
+				}
+			})
+		}
 	}
 }
