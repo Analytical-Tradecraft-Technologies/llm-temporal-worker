@@ -139,21 +139,34 @@ func providerPollAfter(now func() time.Time, delay time.Duration) time.Time {
 	return now().Add(delay)
 }
 
+// recordedAttemptCandidate finds the plan candidate that made the recorded
+// attempt. Several candidates can share an endpoint (one per service class
+// fallback), so every recorded identity field must match; fields an older
+// record left empty are not compared, but the endpoint always is.
+func recordedAttemptCandidate(quoted quotedPlan, attempt admission.AttemptFacts) int {
+	for i, quotedCandidate := range quoted.candidates {
+		candidate := quotedCandidate.candidate
+		if candidate.EndpointID != attempt.EndpointID ||
+			(attempt.RouteID != "" && candidate.RouteID != attempt.RouteID) ||
+			(attempt.Provider != "" && candidate.Provider != attempt.Provider) ||
+			(attempt.ResolvedModel != "" && candidate.Model != attempt.ResolvedModel) ||
+			(attempt.ServiceClass != "" && string(candidate.AttemptedClass) != attempt.ServiceClass) {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
 // resumeDispatching closes the acceptance/persistence crash window for
 // resumable adapters. A dispatching row means a previous worker crossed the
 // durable possible-write boundary but did not record a provider operation ID.
 // The route is pinned by the durable attempt facts and invokeAttempt performs
 // only RecoverByIdempotencyKey; adapters without that extension fail closed.
 func (engine *Engine) resumeDispatching(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation) (llm.Response, error) {
-	index := -1
-	for i, candidate := range quoted.candidates {
-		if candidate.candidate.EndpointID == operation.Attempt.EndpointID {
-			index = i
-			break
-		}
-	}
+	index := recordedAttemptCandidate(quoted, operation.Attempt)
 	if index < 0 {
-		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, "dispatching endpoint is not in the current route plan", nil)
+		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, "dispatching attempt is not in the current route plan", nil)
 	}
 	candidate := quoted.candidates[index]
 	adapter, err := engine.dependencies.Adapters.Adapter(ctx, candidate.candidate)
@@ -223,15 +236,9 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 			initialDelay = pollAfter.Sub(now)
 		}
 	}
-	index := -1
-	for i, candidate := range quoted.candidates {
-		if candidate.candidate.EndpointID == operation.Attempt.EndpointID {
-			index = i
-			break
-		}
-	}
+	index := recordedAttemptCandidate(quoted, operation.Attempt)
 	if index < 0 {
-		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, "provider pending endpoint is not in the current route plan", nil)
+		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, "provider pending attempt is not in the current route plan", nil)
 	}
 	candidate := quoted.candidates[index]
 	adapter, err := engine.dependencies.Adapters.Adapter(ctx, candidate.candidate)
