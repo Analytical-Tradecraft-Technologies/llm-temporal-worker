@@ -8,6 +8,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 )
 
 // FinishRequestFailure removes a settled failed child from pending discovery.
@@ -50,7 +51,17 @@ func (r *Repository) FinishRequestFailure(ctx context.Context, scope Scope, root
 		}
 		switch execution.Stage {
 		case ExecutionFailed:
-			if failure.FailureCode != "provider_error" || failure.Retryable != execution.Failure.Retryable {
+			// The failure must report the saved attempt's facts. Records written
+			// before error_code/dispatch existed carry neither.
+			definite := execution.Failure.Dispatch == provider.DispatchRejected || execution.Failure.Dispatch == provider.DispatchNotDispatched
+			wantCode := "provider_error"
+			if definite && failure.ErrorCode != "" {
+				wantCode = "provider_rejected"
+			}
+			if failure.FailureCode != wantCode || failure.Retryable != execution.Failure.Retryable {
+				return ErrInvalid
+			}
+			if failure.ErrorCode != "" && (failure.ErrorCode != string(execution.Failure.Code) || failure.Dispatch != string(execution.Failure.Dispatch)) {
 				return ErrInvalid
 			}
 		case ExecutionSucceeded:

@@ -37,6 +37,18 @@
         "incomplete_response"
       ]
     },
+    "error_code": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]{1,64}$"
+    },
+    "dispatch": {
+      "enum": [
+        "not_dispatched",
+        "rejected",
+        "accepted",
+        "ambiguous"
+      ]
+    },
     "retryable": {
       "type": "boolean"
     },
@@ -395,6 +407,63 @@
             ]
           }
         ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "not": {
+              "const": "failed"
+            }
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "error_code"
+              ]
+            },
+            {
+              "required": [
+                "dispatch"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "failure_code": {
+            "const": "provider_rejected"
+          }
+        },
+        "required": [
+          "failure_code"
+        ]
+      },
+      "then": {
+        "required": [
+          "dispatch"
+        ],
+        "properties": {
+          "dispatch": {
+            "enum": [
+              "not_dispatched",
+              "rejected"
+            ]
+          }
+        }
       }
     }
   ]
