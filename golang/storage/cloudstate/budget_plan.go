@@ -52,6 +52,10 @@ type BudgetPlan struct {
 	Estimate          budget.Estimate        `json:"estimate"`
 	Reservation       durable.ReserveRequest `json:"reservation"`
 	QuotedAt          time.Time              `json:"quoted_at"`
+	// ClassEntries are the price entries active at QuotedAt for the route's
+	// other service classes, keyed by class. A response the provider served
+	// at another class than attempted is priced with that class's entry.
+	ClassEntries map[llm.ServiceClass]pricing.Entry `json:"class_entries,omitempty"`
 }
 
 func (plan BudgetPlan) RequiresReservation() bool { return plan.Mode == BudgetReserved }
@@ -73,6 +77,11 @@ func (plan BudgetPlan) Validate() error {
 		!budgetPlanTime(plan.QuotedAt) || !budgetPlanTime(plan.Reservation.ExpiresAt) || !plan.Reservation.ExpiresAt.After(plan.QuotedAt) ||
 		plan.Reservation.OperationID != plan.Route.OperationID || plan.Reservation.GenerationID != plan.Route.GenerationID {
 		return ErrInvalid
+	}
+	for class, classEntry := range plan.ClassEntries {
+		if !class.Valid() || class == plan.AttemptedClass || classEntry.Provider != plan.Quote.Entry.Provider || classEntry.EndpointID != plan.Quote.Entry.EndpointID || classEntry.Model != plan.Quote.Entry.Model {
+			return ErrInvalid
+		}
 	}
 	identity, entry := plan.Route.CacheIdentity, plan.Quote.Entry
 	if string(identity.Provider) != plan.Route.Provider ||

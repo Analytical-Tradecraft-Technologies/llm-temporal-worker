@@ -675,7 +675,16 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
-	cost, err := pricing.CostFromUsage(plan.Quote.Entry, pricing.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+	entry := plan.Quote.Entry
+	// Price at the class the provider reported serving, when it differs from
+	// the attempted class and the plan captured that class's price.
+	if actual := response.Service.Actual; actual != nil && *actual != plan.AttemptedClass {
+		if classEntry, ok := plan.ClassEntries[*actual]; ok {
+			entry = classEntry
+			response.Cost.CatalogVersion = classEntry.Version
+		}
+	}
+	cost, err := pricing.CostFromUsage(entry, pricing.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 		ReasoningTokens: usage.ReasoningTokens, CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens})
 	if err != nil || response.Cost.Method != "" {
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil

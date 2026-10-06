@@ -55,7 +55,7 @@ func (planned PlannedBudgetCall) BudgetPlan(kind string) (cloudstate.BudgetPlan,
 		RequestDigest: providerPlan.Call.Metadata.SchemaDigest, CapabilityVersion: providerPlan.CapabilityVersion, CompilerVersion: cloudCompilerVersion,
 		Family: providerPlan.Candidate.Family, ProviderTier: providerPlan.Candidate.ProviderTier,
 		RequestedClass: providerPlan.Candidate.RequestedClass, AttemptedClass: providerPlan.Candidate.AttemptedClass,
-		Route: planned.Route, Estimate: planned.Estimate, Reservation: planned.Reservation, QuotedAt: planned.QuotedAt}
+		Route: planned.Route, Estimate: planned.Estimate, Reservation: planned.Reservation, QuotedAt: planned.QuotedAt, ClassEntries: planned.ClassEntries}
 	if planned.Quote != nil {
 		plan.Quote = *planned.Quote
 	}
