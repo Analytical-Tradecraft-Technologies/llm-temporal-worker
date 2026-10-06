@@ -89,12 +89,13 @@ and lineage. What the full walk used to establish by reading every ancestor is
 established as follows.
 
 - **Scope and expiry.** Every row that is read, including the snapshot row, is
-  checked against the caller's scope and the materializer clock. Rows older
-  than the snapshot are not re-checked. Publication caps a child's expiry at
-  its parent's, so expiry never increases along a lineage: a live snapshot row
-  means its ancestors were live when it was written and cannot expire before
-  it does. Scope is fixed for a lineage because publication only accepts a
-  parent from the child's own scope.
+  checked against the caller's scope. Only the requested checkpoint is checked
+  against the materializer clock: each checkpoint keeps its own retention
+  deadline, and an ancestor past its deadline is retained history that stays
+  readable through its live descendants. Rows older than the snapshot are not
+  re-checked. Scope is fixed for a lineage because publication only accepts a
+  parent from the child's own scope. Retention must therefore keep every
+  ancestor that a live checkpoint still reads.
 - **Snapshot integrity.** The blob reader verifies the snapshot bytes against
   the digest and length in the row, and the materializer repeats that check.
   The decoded snapshot must name the row's own depth, end its lineage with the

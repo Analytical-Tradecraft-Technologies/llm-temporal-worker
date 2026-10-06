@@ -272,8 +272,10 @@ digest as replaying the lineage. Snapshot creation never changes a public
 handle or the logical graph. Compaction always writes a snapshot, and Generate
 writes one whenever the new checkpoint's depth is a positive multiple of the
 snapshot interval (default 8), so a turn reads at most that many rows however
-long the conversation is. Because a child's expiry is capped at its parent's,
-a live snapshot row implies that the ancestors it replaces had not expired.
+long the conversation is. Each checkpoint keeps its own retention deadline,
+and materialization enforces only the requested checkpoint's deadline: an
+ancestor past its own deadline is retained history for its live descendants
+and stays readable through them.
 See [Checkpoint graph materializer](checkpoint-materializer.md) for the exact
 rules.
 

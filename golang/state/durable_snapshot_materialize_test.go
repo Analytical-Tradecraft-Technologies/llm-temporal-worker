@@ -291,7 +291,6 @@ func TestDurableCheckpointMaterializerRejectsUnusableSnapshotRows(t *testing.T) 
 		limits MaterializeLimits
 		scope  string
 	}{
-		"expired":     {mutate: func(fixture *snapshotLineageFixture, row *DurableCheckpoint) { row.ExpiresAt = fixture.now }, want: ErrExpired},
 		"wrong scope": {mutate: func(_ *snapshotLineageFixture, row *DurableCheckpoint) { row.ScopeID = "scope-b" }, want: ErrTenantMismatch},
 		"other scope": {mutate: func(*snapshotLineageFixture, *DurableCheckpoint) {}, want: ErrTenantMismatch, scope: "scope-b"},
 		"depth limit": {mutate: func(*snapshotLineageFixture, *DurableCheckpoint) {}, want: ErrLimitExceeded, limits: MaterializeLimits{MaxDepth: 8}},
@@ -349,5 +348,24 @@ func TestDurableCheckpointMaterializerRejectsUnusableSnapshotRows(t *testing.T) 
 				t.Fatalf("materialize = %v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDurableCheckpointMaterializerEnforcesOnlyRequestedRowExpiry(t *testing.T) {
+	fixture := newSnapshotLineageFixture(t)
+	fixture.chain("main", "", 0, 10, 8, false)
+	// A retained ancestor past its own deadline does not block a live child.
+	row := fixture.snapshotted.rows["main-08"]
+	row.ExpiresAt = fixture.now
+	fixture.snapshotted.rows["main-08"] = row
+	if _, err := fixture.materializer(fixture.snapshotted).Materialize(context.Background(), "scope-a", "main-10", MaterializeLimits{}); err != nil {
+		t.Fatalf("materialize with expired ancestor = %v", err)
+	}
+	// The requested row's own deadline still gates the read.
+	leaf := fixture.snapshotted.rows["main-10"]
+	leaf.ExpiresAt = fixture.now
+	fixture.snapshotted.rows["main-10"] = leaf
+	if _, err := fixture.materializer(fixture.snapshotted).Materialize(context.Background(), "scope-a", "main-10", MaterializeLimits{}); !errors.Is(err, ErrExpired) {
+		t.Fatalf("materialize expired leaf = %v, want %v", err, ErrExpired)
 	}
 }

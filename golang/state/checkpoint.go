@@ -327,7 +327,11 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		if checkpoint.Tenant != tenant {
 			return MaterializedState{}, ErrTenantMismatch
 		}
-		if !checkpoint.ExpiresAt.IsZero() && !graph.clock().Before(checkpoint.ExpiresAt) {
+		// Only the requested checkpoint's own deadline gates the read. An
+		// ancestor is retained history for its live descendants, so a child
+		// created near its parent's deadline stays usable for its full
+		// retention period.
+		if len(path) == 0 && !checkpoint.ExpiresAt.IsZero() && !graph.clock().Before(checkpoint.ExpiresAt) {
 			return MaterializedState{}, ErrExpired
 		}
 		path = append(path, checkpoint)

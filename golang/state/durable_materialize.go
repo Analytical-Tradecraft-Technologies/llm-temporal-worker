@@ -54,10 +54,9 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 	// gap is rejected before any graph node is exposed to callers.
 	//
 	// Rows older than the snapshot are not read, so they are not re-checked.
-	// That is safe because every row that is read is scope- and expiry-checked,
-	// publication caps a child's expiry at its parent's (so a live snapshot row
-	// implies its ancestors were live when it was written and can only expire
-	// with or after it), and the snapshot is bound to its row by the blob
+	// That is safe because every row that is read is scope-checked, only the
+	// requested row's own expiry gates the read (retained ancestors of a live
+	// child stay usable), and the snapshot is bound to its row by the blob
 	// digest, the row depth and the row's canonical lineage digest. A snapshot
 	// that is present but unreadable or inconsistent fails the read; it is never
 	// skipped, because a compaction snapshot is not reproducible from deltas.

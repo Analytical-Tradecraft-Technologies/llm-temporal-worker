@@ -208,10 +208,10 @@ func (p *CheckpointPublication) metadata(ctx context.Context, identity Checkpoin
 		if replay.Depth >= p.limits.MaxDepth {
 			return state.DurableCheckpoint{}, metadata, checkpointPublicationError(provider.CodeInvalidArgument)
 		}
+		// A child keeps its own retention deadline. Materialization enforces
+		// expiry only on the requested checkpoint, so a live child stays
+		// usable while its retained ancestors are past their own deadlines.
 		cp.ParentID, cp.Depth = &parentID, replay.Depth+1
-		if row.ExpiresAt.Before(cp.ExpiresAt) {
-			cp.ExpiresAt = row.ExpiresAt
-		}
 	}
 	if origin != nil {
 		originID := origin.ID
