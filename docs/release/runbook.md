@@ -1,10 +1,20 @@
 # Release evidence runbook
 
-Task 23 produces a local, machine-readable release-evidence bundle. It is a
-nonpublishing validation and retention step: the workflow never signs an
-image, sends an image to a registry, creates a release, obtains provider
-credentials, or calls a live LLM provider. Publication controls remain a
-separate task.
+Task 23 produces a local, machine-readable release-evidence bundle. The
+`release-evidence` job is a nonpublishing validation and retention step: it
+never signs an image, sends an image to a registry, creates a release, obtains
+provider credentials, or calls a live LLM provider.
+
+The master workflow's separate `container` job does publish. On every master
+push it builds the linux/amd64 and linux/arm64 image to a local OCI layout
+without pushing, scans both platforms with the pinned Trivy configuration, and
+fails on any fixable HIGH or CRITICAL finding. Only then does it copy those
+exact scanned bytes to `docker.io/analyticaltradecraft/llm-temporal-worker:<version>`
+with `skopeo copy --all --preserve-digests`. It records the index digest and
+both platform digests. The `release-evidence` job then downloads the published
+linux/amd64 manifest by digest and binds its SBOM and scan into the evidence.
+The arm64 platform is scanned before publication but is not yet part of the
+retained evidence bundle.
 
 ## Trusted boundary
 
