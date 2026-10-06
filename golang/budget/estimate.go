@@ -345,9 +345,15 @@ func textBaselineTokens(length int64) int64 {
 	return length/4 + (length%4+3)/4
 }
 
+// mediaBytesPlaceholder stands in for stripped inline media bytes. The codec
+// rejects empty inline bytes, so one byte is kept; it adds at most one token
+// per part to the text estimate, which only over-reserves.
+var mediaBytesPlaceholder = []byte{0}
+
 // withoutInlineMediaBytes returns a copy of the request whose inline image
-// and document parts carry no bytes, plus the total decoded length of the
-// inline text documents. The request itself is not modified.
+// and document parts carry a one-byte placeholder instead of their bytes,
+// plus the total decoded length of the inline text documents. The request
+// itself is not modified.
 func withoutInlineMediaBytes(request llm.Request) (llm.Request, int64) {
 	textBytes := int64(0)
 	strip := func(parts []llm.Part) []llm.Part {
@@ -362,13 +368,13 @@ func withoutInlineMediaBytes(request llm.Request) (llm.Request, int64) {
 			switch typed := part.(type) {
 			case llm.ImagePart:
 				if len(typed.Bytes) > 0 {
-					typed.Bytes = []byte{}
+					typed.Bytes = mediaBytesPlaceholder
 					replace(index, typed)
 				}
 			case *llm.ImagePart:
 				if typed != nil && len(typed.Bytes) > 0 {
 					value := *typed
-					value.Bytes = []byte{}
+					value.Bytes = mediaBytesPlaceholder
 					replace(index, value)
 				}
 			case llm.DocumentPart:
@@ -376,7 +382,7 @@ func withoutInlineMediaBytes(request llm.Request) (llm.Request, int64) {
 					if inlineTextDocument(typed) {
 						textBytes = saturatingAdd(textBytes, int64(len(typed.Bytes)))
 					}
-					typed.Bytes = []byte{}
+					typed.Bytes = mediaBytesPlaceholder
 					replace(index, typed)
 				}
 			case *llm.DocumentPart:
@@ -385,7 +391,7 @@ func withoutInlineMediaBytes(request llm.Request) (llm.Request, int64) {
 					if inlineTextDocument(value) {
 						textBytes = saturatingAdd(textBytes, int64(len(value.Bytes)))
 					}
-					value.Bytes = []byte{}
+					value.Bytes = mediaBytesPlaceholder
 					replace(index, value)
 				}
 			}
