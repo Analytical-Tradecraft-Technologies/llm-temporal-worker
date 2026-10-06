@@ -195,6 +195,17 @@ func (r *CloudExecutionRuntime) finishCache(ctx context.Context, p PreparedCloud
 			return llm.ExecutionResultV1{}, executionError(provider.CodeStateCorrupt)
 		}
 		model.Status, model.Output, model.Route = response.Status, response.Output, *response.Route
+		// The origin checkpoint records which route produced the replayed
+		// provider state. Recording the cache use reads the same row, so this
+		// adds no new dependency on its retention.
+		cp, err := r.capabilities.Checkpoints.Repository.Get(ctx, identity.Scope, origin.OriginCheckpointID)
+		if err != nil {
+			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+		}
+		if cp.ScopeID != identity.Scope || cp.ID != origin.OriginCheckpointID || cp.Kind != state.CheckpointGeneration || cp.OriginOperationID != origin.OriginOperationID {
+			return llm.ExecutionResultV1{}, executionError(provider.CodeStateCorrupt)
+		}
+		identity.OriginProvenance = cp.ProviderStateProvenance
 	} else {
 		cp, err := r.capabilities.Checkpoints.Repository.Get(ctx, identity.Scope, origin.OriginCheckpointID)
 		if err != nil {

@@ -773,11 +773,13 @@ func TestCloudExecutionRuntimeRejectedDispatchStaysPermanent(t *testing.T) {
 
 // pinnedCloudFixture is a boundedCloud with two OpenAI Responses routes for
 // one model on different endpoints (accounts). Every response carries an
-// encrypted reasoning item ahead of its answer.
+// encrypted reasoning item ahead of its answer, except while plain is set
+// (a compaction summary must be plain text).
 type pinnedCloudFixture struct {
 	*boundedCloudFixture
 	source *planningSource
 	served []string
+	plain  bool
 }
 
 func pinnedCloud(t *testing.T) *pinnedCloudFixture {
@@ -809,6 +811,9 @@ func pinnedCloud(t *testing.T) *pinnedCloudFixture {
 			llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json",
 				Opaque: []byte(`{"type":"reasoning","encrypted_content":"` + call.EndpointID + `"}`)},
 			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}},
+		}
+		if p.plain {
+			result.Response.Output = result.Response.Output[1:]
 		}
 		return result, nil
 	}
@@ -1069,6 +1074,107 @@ func TestCloudExecutionRuntimeProvenanceWithoutAccountFailsClosed(t *testing.T) 
 	second := p.finish(t)
 	if p.served[1] != "endpoint" || compiledProviderState(p.lastCompiled(t, "endpoint")) != 0 || len(second.Generate.Diagnostics) != 1 {
 		t.Fatalf("served %v diagnostics %+v", p.served, second.Generate.Diagnostics)
+	}
+}
+
+// row reads the checkpoint a handle names.
+func (p *pinnedCloudFixture) row(t *testing.T, handle llm.CheckpointHandle) state.DurableCheckpoint {
+	t.Helper()
+	id, err := p.options.Keyring.VerifyCheckpointHandle(context.Background(), "trusted-scope", string(handle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := p.repository.Checkpoints().Get(context.Background(), "trusted-scope", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func TestCloudExecutionRuntimeCacheReplayKeepsOriginProvenance(t *testing.T) {
+	p := pinnedCloud(t)
+	p.request.Cache = &llm.CachePolicyV1{}
+	first := p.finish(t)
+	if first.Generate.Cache.Disposition != "miss_populated" {
+		t.Fatalf("origin disposition %q", first.Generate.Cache.Disposition)
+	}
+	p.now = p.now.Add(time.Second)
+	p.request.OperationKey = "replayed"
+	hit := p.finish(t)
+	if hit.Generate.Cache.Disposition != "hit" || p.submits.Load() != 1 {
+		t.Fatalf("disposition %q after %d submits, want a cache hit", hit.Generate.Cache.Disposition, p.submits.Load())
+	}
+	// The replay records the attempt that produced the reasoning state, not
+	// family-only state.
+	replay := p.checkpoint(t, hit)
+	if replay.Kind != state.CheckpointCacheReplay || fmt.Sprint(replay.ProviderStateProvenance) != fmt.Sprint(pinnedProvenance(1, "endpoint")) {
+		t.Fatalf("replay %s provenance = %+v", replay.Kind, replay.ProviderStateProvenance)
+	}
+	// So the next turn is pinned to that endpoint even with route-b first.
+	p.reorder(t)
+	p.child(hit, "after-replay")
+	next := p.finish(t)
+	if len(p.served) != 2 || p.served[1] != "endpoint" || compiledProviderState(p.lastCompiled(t, "endpoint")) != 1 || len(next.Generate.Diagnostics) != 0 {
+		t.Fatalf("served %v diagnostics %+v", p.served, next.Generate.Diagnostics)
+	}
+}
+
+func TestCloudExecutionRuntimeCacheReplayOfLegacyOriginKeepsFamilyPinning(t *testing.T) {
+	p := pinnedCloud(t)
+	p.request.Cache = &llm.CachePolicyV1{}
+	p.finish(t)
+	// The origin reads as if it had been published before provenance existed.
+	p.cap.Checkpoints.Repository = legacyProvenanceRepository{p.cap.Checkpoints.Repository}
+	p.restart(t)
+	p.now = p.now.Add(time.Second)
+	p.request.OperationKey = "legacy-replay"
+	hit := p.finish(t)
+	if hit.Generate.Cache.Disposition != "hit" || p.checkpoint(t, hit).ProviderStateProvenance != nil {
+		t.Fatalf("disposition %q provenance %+v", hit.Generate.Cache.Disposition, p.checkpoint(t, hit).ProviderStateProvenance)
+	}
+	// Nothing is pinned: route order decides and the state is replayed under
+	// the adapter's family check alone, as before.
+	p.reorder(t)
+	p.child(hit, "after-legacy-replay")
+	next := p.finish(t)
+	if p.served[len(p.served)-1] != "endpoint-b" || compiledProviderState(p.lastCompiled(t, "endpoint-b")) != 1 || len(next.Generate.Diagnostics) != 0 {
+		t.Fatalf("served %v diagnostics %+v", p.served, next.Generate.Diagnostics)
+	}
+}
+
+// The compaction summarizer receives the summarized prefix rendered as plain
+// text, never provider state, so it is not pinned. The retained exchange
+// keeps its pin at its new position and the next turn honours it.
+func TestCloudExecutionRuntimeCompactionSummarizerIsNotPinned(t *testing.T) {
+	p := pinnedCloud(t)
+	policy := json.RawMessage(`{"recent_turns":1}`)
+	p.request.SettingsPatch.CompactionPolicy.Set = &policy
+	first := p.finish(t)
+	p.child(first, "second-turn")
+	second := p.finish(t)
+	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint")) {
+		t.Fatalf("second provenance = %+v", got)
+	}
+	p.reorder(t)
+	p.child(second, "after-compaction")
+	p.plain = true
+	compacted := p.compact(t, "compaction")
+	p.plain = false
+	if len(p.served) != 3 || p.served[2] != "endpoint-b" {
+		t.Fatalf("served %v, want the summarizer on the first-ordered route", p.served)
+	}
+	summarizer := p.lastCompiled(t, "endpoint-b")
+	if compiledProviderState(summarizer) != 0 || len(summarizer.Input) != 1 {
+		t.Fatalf("summarizer input = %+v", summarizer.Input)
+	}
+	// One retained turn is the model's state and answer, so the compacted
+	// transcript is [summary, state, answer] and the pin moved to ordinal 1.
+	if got := p.row(t, compacted).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(1, "endpoint")) {
+		t.Fatalf("compacted provenance = %+v", got)
+	}
+	next := p.finish(t)
+	if len(p.served) != 4 || p.served[3] != "endpoint" || compiledProviderState(p.lastCompiled(t, "endpoint")) != 1 || len(next.Generate.Diagnostics) != 0 {
+		t.Fatalf("served %v diagnostics %+v", p.served, next.Generate.Diagnostics)
 	}
 }
 

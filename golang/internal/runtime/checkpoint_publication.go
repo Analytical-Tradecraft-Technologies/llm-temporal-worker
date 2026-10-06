@@ -31,6 +31,14 @@ type CheckpointPublicationIdentity struct {
 	// of the response's provider state and uses it to report state that the
 	// route compiled without.
 	ProviderRoute *state.Pinning
+	// OriginProvenance is, for a Generate cache replay, the provider-state
+	// provenance recorded on the origin checkpoint that first published the
+	// replayed response. The origin's transcript is this request's input
+	// followed by the same output, so its entries at or after the input length
+	// pin the replayed output to the attempt that produced it. It is nil when
+	// the origin recorded none (published before provenance existed); that
+	// output keeps the adapters' family-only check.
+	OriginProvenance []state.ProviderStateProvenance
 }
 
 type CheckpointPublication struct {
@@ -98,6 +106,12 @@ func (p *CheckpointPublication) Generate(ctx context.Context, identity Checkpoin
 			response.Diagnostics = append(append([]llm.Diagnostic(nil), response.Diagnostics...), droppedStateDiagnostic())
 		}
 		provenance = responseProvenance(result.Output, len(prepared.Request.Input), route)
+	}
+	if origin != nil {
+		var ok bool
+		if provenance, ok = replayedProvenance(identity.OriginProvenance, prepared.Request.Input, result.Output); !ok {
+			return zero, llm.GenerateResponseV1{}, checkpointPublicationError(provider.CodeStateCorrupt)
+		}
 	}
 	if err := validatePublicationCache(origin, disposition, cache.OperationGenerate, identity, prepared.SampleIndex); err != nil {
 		return zero, llm.GenerateResponseV1{}, err

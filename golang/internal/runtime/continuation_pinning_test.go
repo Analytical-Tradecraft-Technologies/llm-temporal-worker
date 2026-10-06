@@ -123,3 +123,29 @@ func TestCompactedProvenanceFollowsRetainedItems(t *testing.T) {
 		t.Fatalf("no-work compaction changed provenance: %+v %v", same, err)
 	}
 }
+
+func TestReplayedProvenanceKeepsOnlyTheOriginOutput(t *testing.T) {
+	input := []llm.Item{preparationMessage("q"), pinningState("a"), preparationMessage("next")}
+	output := []llm.Item{pinningState("b"), preparationMessage("answer")}
+	// A snapshot origin repeats its inherited entry (ordinal 1); only the
+	// entry inside the output belongs to the replayed response.
+	origin := []state.ProviderStateProvenance{pinningProvenance(1, "a"), pinningProvenance(3, "b")}
+	got, ok := replayedProvenance(origin, input, output)
+	if !ok || !reflect.DeepEqual(got, origin[1:]) {
+		t.Fatalf("replayed provenance = %+v ok=%v", got, ok)
+	}
+	// An origin without provenance replays family-only.
+	if got, ok := replayedProvenance(nil, input, output); !ok || got != nil {
+		t.Fatalf("legacy origin = %+v ok=%v", got, ok)
+	}
+	for name, corrupt := range map[string][]state.ProviderStateProvenance{
+		"past the output":   {pinningProvenance(5, "b")},
+		"not state":         {pinningProvenance(4, "b")},
+		"invalid ordinals":  {pinningProvenance(3, "b"), pinningProvenance(3, "b")},
+		"incomplete record": {{Ordinal: 3, Provider: "openai"}},
+	} {
+		if _, ok := replayedProvenance(corrupt, input, output); ok {
+			t.Fatalf("%s: corrupt origin provenance accepted", name)
+		}
+	}
+}
