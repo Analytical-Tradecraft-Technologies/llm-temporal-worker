@@ -70,7 +70,7 @@ func (resolver *DefaultResolver) Resolve(ctx context.Context, ref config.SecretR
 		var text string
 		text, ok = resolver.lookupEnv(ref.Name)
 		if !ok || text == "" {
-			return nil, fmt.Errorf("environment secret %q is not set", ref.Name)
+			return nil, fmt.Errorf("environment secret %q %w", ref.Name, ErrUnset)
 		}
 		value = []byte(text)
 	case config.SecretFile:
@@ -97,6 +97,11 @@ func (resolver *DefaultResolver) Resolve(ctx context.Context, ref config.SecretR
 	}
 	return append([]byte(nil), value...), nil
 }
+
+// ErrUnset marks an environment secret that is not set (or is empty), as
+// opposed to one that failed to resolve. Its text completes the message
+// "environment secret NAME is not set".
+var ErrUnset = errors.New("is not set")
 
 // ErrReference marks a configuration secret reference that could not be
 // resolved, so callers can classify the failure without reading its message.

@@ -89,6 +89,9 @@ type Config struct {
 	Budgets       BudgetsConfig             `yaml:"budgets" json:"budgets"`
 	Continuation  ContinuationConfig        `yaml:"continuation" json:"continuation"`
 	Telemetry     TelemetryConfig           `yaml:"telemetry" json:"telemetry"`
+	// ModelSync is omitted from canonical JSON when unset, so enabling the
+	// feature is the only change that moves an existing configuration digest.
+	ModelSync *ModelSyncConfig `yaml:"model_sync,omitempty" json:"model_sync,omitempty"`
 }
 
 type ServerConfig struct {
@@ -226,6 +229,10 @@ type EndpointConfig struct {
 	PriceCatalog      string                          `yaml:"price_catalog" json:"price_catalog"`
 	ProviderStorage   ProviderStorageConfig           `yaml:"provider_storage" json:"provider_storage"`
 	Extensions        map[string]map[string]any       `yaml:"extensions" json:"extensions"`
+	// Optional disables the endpoint, instead of failing the snapshot, when
+	// its environment credential is not set. Only model_sync may reference an
+	// optional endpoint, so no configured route can silently lose a target.
+	Optional bool `yaml:"optional,omitempty" json:"optional,omitempty"`
 }
 
 type TierConfig struct {
@@ -255,6 +262,58 @@ type RouteConfig struct {
 	Endpoint string             `yaml:"endpoint" json:"endpoint"`
 	Model    string             `yaml:"model" json:"model"`
 	Classes  []llm.ServiceClass `yaml:"classes" json:"classes"`
+}
+
+// ModelSyncConfig makes every model OpenRouter lists routable under its
+// OpenRouter model ID (for example openai/gpt-5.4), priced from OpenRouter's
+// published endpoint prices. The OpenRouter list is fetched at runtime and
+// shared through state storage; direct provider routes are derived from it
+// with the model-sync rules.
+type ModelSyncConfig struct {
+	OpenRouter ModelSyncOpenRouterConfig `yaml:"openrouter" json:"openrouter"`
+	// Direct endpoints are tried before OpenRouter for the models the rules
+	// map to them, in the order listed.
+	Direct []ModelSyncDirectConfig `yaml:"direct,omitempty" json:"direct,omitempty"`
+	// Rules are layered over the built-in rules in order; a later file
+	// overrides an earlier one.
+	Rules              []CatalogRef `yaml:"rules,omitempty" json:"rules,omitempty"`
+	RefreshIntervalMin Duration     `yaml:"refresh_interval_min" json:"refresh_interval_min"`
+	RefreshIntervalMax Duration     `yaml:"refresh_interval_max" json:"refresh_interval_max"`
+}
+
+type ModelSyncOpenRouterConfig struct {
+	// Endpoint is an openai_chat endpoint with the openrouter extension. Its
+	// outbound policy governs the catalog fetch, and it serves the synced
+	// models when its credential is available.
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
+}
+
+type ModelSyncDirectConfig struct {
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
+	// Provider names the rules provider (for example openai, anthropic, exa)
+	// whose models this endpoint serves.
+	Provider string `yaml:"provider" json:"provider"`
+}
+
+const (
+	DefaultModelSyncRefreshMin = 55 * time.Minute
+	DefaultModelSyncRefreshMax = 65 * time.Minute
+)
+
+// ModelSyncEndpoint reports whether model_sync references endpointID.
+func (config Config) ModelSyncEndpoint(endpointID string) bool {
+	if config.ModelSync == nil {
+		return false
+	}
+	if config.ModelSync.OpenRouter.Endpoint == endpointID {
+		return true
+	}
+	for _, direct := range config.ModelSync.Direct {
+		if direct.Endpoint == endpointID {
+			return true
+		}
+	}
+	return false
 }
 
 type CapabilityConfig struct {

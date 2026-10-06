@@ -993,9 +993,165 @@ entries:
 ```
 
 Prices in examples are illustrative. Production catalogs require provenance and
-review; they never refresh silently from an untrusted endpoint.
+review; they never refresh silently from an untrusted endpoint. The one opt-in
+exception is [model sync](#model-sync), which prices synced routes from
+OpenRouter's published endpoint prices.
 Every decimal property is defined as USD by its field name and catalog
 contract; no generic currency discriminator is accepted or reported.
+
+## Model sync
+
+`model_sync` makes every model OpenRouter lists routable under its OpenRouter
+ID, for example `openai/gpt-5.4` or `anthropic/claude-sonnet-4.5`, priced from
+OpenRouter's published endpoint prices. See
+[ADR 0016](../decisions/0016-openrouter-model-sync.md) for the design.
+
+```yaml
+endpoints:
+  openrouter:
+    family: openai_chat
+    base_url: https://openrouter.ai/api/v1
+    outbound_hosts: [openrouter.ai]
+    auth: {kind: bearer_env, name: OPENROUTER_API_KEY}
+    account_region: global
+    timeout: 115s
+    optional: true
+    service_classes:
+      standard: {provider_value: default}
+    capability_profile: openrouter-chat-v1
+    # No price_catalog: model sync prices this endpoint.
+    extensions:
+      openrouter: {}          # no provider_order: OpenRouter selects the upstream
+  openai-direct:
+    family: openai_responses
+    base_url: https://api.openai.com/v1
+    outbound_hosts: [api.openai.com]
+    auth: {kind: bearer_env, name: OPENAI_API_KEY}
+    account_region: global
+    timeout: 115s
+    optional: true
+    service_classes:
+      economy: {provider_value: flex}
+      standard: {provider_value: default}
+      priority: {provider_value: priority}
+    capability_profile: openai-responses-v1
+
+model_sync:
+  openrouter:
+    endpoint: openrouter
+  direct:                     # tried before OpenRouter, in this order
+    - endpoint: openai-direct
+      provider: openai        # a provider in the model-sync rules
+  rules:                      # optional, layered over the built-in rules
+    - file: /etc/llmtw/model-sync-rules.yaml
+      sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  refresh_interval_min: 55m   # default
+  refresh_interval_max: 65m   # default
+```
+
+- **Refresh.** Each worker refreshes after a random interval between
+  `refresh_interval_min` and `refresh_interval_max` (1m to 24h). One worker at
+  a time, holding a Redis lease, fetches OpenRouter's lists and publishes them
+  to Redis; every worker installs the published catalog within a minute. With
+  `state.kind: memory` each process fetches its own. A failed fetch keeps the
+  last published catalog.
+- **Credentials.** `optional: true` disables an endpoint whose environment
+  credential is unset instead of failing startup, so a deployment can supply
+  only the keys it wants. Only an endpoint that model sync uses and no
+  `models` route references may be optional. OpenRouter's model lists are
+  public, so prices still sync when only direct endpoints have keys.
+- **Endpoints.** `model_sync.openrouter.endpoint` must be an `openai_chat`
+  endpoint with the `openrouter` extension and no `provider_order`. A model
+  sync endpoint that no `models` route references may omit `price_catalog`,
+  and with model sync configured `models` and `pricing.catalogs` may be empty.
+  Every model sync endpoint still names a capability profile; its `model`
+  field is not used for synced routes.
+- **Text models only.** Models whose output is not text-only (image, audio and
+  music generators) are never synced; models that only accept media as input
+  are. OpenRouter alias (`~…`), variant (`…:batch`) and variable-priced router
+  IDs are skipped.
+- **Precedence.** A configured `models` entry of the same name always wins,
+  as does a configured price entry with the same identity.
+
+### Model-sync rules
+
+Direct models and their prices are hard-coded in the built-in rules file
+`golang/internal/modelsync/rules/default.yaml`, which is compiled into the
+worker binary and so ships in every image. Direct routes never use a fetched
+price. Regenerate the OpenAI and Anthropic sections from the first-party
+prices OpenRouter publishes with `go run ./tools/modelsyncdefaults` (from
+`golang/`) and review the diff; the Exa section is maintained by hand.
+
+Files in `model_sync.rules` are layered over the built-in rules at runtime.
+Model fields override field by field, prices merge per tier, and exclusions
+accumulate, so an override only states what it changes:
+
+```yaml
+version: model-sync-rules/v1
+exclude: ["openai/gpt-4*"]            # no route at all (path.Match patterns)
+providers:
+  anthropic:
+    models:
+      anthropic/claude-sonnet-4.5:    # negotiated price for one tier
+        prices:
+          standard_only:
+            input_per_million: "2.7"
+            output_per_million: "13.5"
+            cache_read_per_million: "0.27"
+            cache_write_per_million: "3.375"
+            per_request: "0"
+      anthropic/claude-opus-4.5: {exclude: true}   # OpenRouter route only
+      anthropic/claude-internal:                   # a model OpenRouter omits
+        model: claude-internal-20261001
+        context_tokens: 200000
+        output_tokens: 64000
+        prices:
+          standard_only: {input_per_million: "3", output_per_million: "15", cache_read_per_million: "0.3", cache_write_per_million: "3.75", per_request: "0"}
+```
+
+Prices are keyed by the endpoint's `service_classes` `provider_value`; the
+built-in rules price OpenAI `flex`, `default` and `priority`, Anthropic
+`standard_only` and `auto`, and Exa `standard`. A model's optional `family`
+restricts it to endpoints of that family.
+
+The built-in Exa models are:
+
+| Synced name | Exa model | Endpoint | Price |
+|---|---|---|---|
+| `exa/answer` | `exa` (Answer API) | `openai_chat` with the `exa` extension | $0.005 per request |
+| `exa/agent` | `exa-agent` (Agent API) | `openai_responses` with the `exa` extension | at most $0.10 per request |
+
+An Exa Agent request always carries a fixed effort: the caller's `minimal`,
+`low` or `medium`, or `medium` when unset. Exa's default effort, `auto`, is
+metered, and Exa rejects `high` and above on a synchronous request, so the
+worker rejects them too. Exa reports each call's actual cost, which settles
+it.
+
+```yaml
+endpoints:
+  exa-agent:
+    family: openai_responses
+    base_url: https://api.exa.ai
+    outbound_hosts: [api.exa.ai]
+    auth: {kind: header_env, name: EXA_API_KEY}
+    account_region: global
+    timeout: 115s
+    optional: true
+    service_classes:
+      standard: {provider_value: standard}   # never sent; names the price tier
+    capability_profile: exa-agent-v1
+    extensions:
+      exa: {}
+model_sync:
+  direct:
+    - {endpoint: exa-answer, provider: exa}
+    - {endpoint: exa-agent, provider: exa}
+``` A class whose tier has no
+price is not offered on the direct route. Every price component is required.
+A model without `model` derives its provider ID from the OpenRouter ID
+(`model_id: verbatim`, or `dots_to_dashes` for `claude-sonnet-4.5` →
+`claude-sonnet-4-5`). Built-in context limits are capped below any
+long-prompt price threshold so the listed price always applies.
 
 ## Validation
 

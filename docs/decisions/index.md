@@ -22,3 +22,4 @@ than silent divergence or knowingly faithful implementation of a defect.
 13. [Durable Compact phase runner](0013-durable-compact-phase-runner.md)
 14. [Reference budget materializer](0014-reference-budget-materializer.md)
 15. [Bounded budget bucket retention fence](0015-budget-bucket-retention-fence.md)
+16. [OpenRouter model sync](0016-openrouter-model-sync.md)

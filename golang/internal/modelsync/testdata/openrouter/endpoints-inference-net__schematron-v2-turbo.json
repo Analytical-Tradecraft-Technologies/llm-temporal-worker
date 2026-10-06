@@ -1,0 +1,64 @@
+{
+ "data": {
+  "architecture": {
+   "input_modalities": [
+    "text"
+   ],
+   "instruct_type": null,
+   "modality": "text->text",
+   "output_modalities": [
+    "text"
+   ],
+   "tokenizer": "Other"
+  },
+  "created": 1789176949,
+  "endpoints": [
+   {
+    "context_length": 128000,
+    "max_completion_tokens": 8192,
+    "max_prompt_tokens": null,
+    "model_id": "inference-net/schematron-v2-turbo",
+    "model_name": "Inference.net: Schematron V2 Turbo",
+    "name": "InferenceNet | inference-net/schematron-v2-turbo-20260902",
+    "native_tools": {},
+    "pricing": {
+     "completion": "0.00000015",
+     "discount": 0,
+     "input_cache_read": "0.00000003",
+     "prompt": "0.00000003"
+    },
+    "provider_name": "InferenceNet",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "max_tokens",
+     "temperature",
+     "top_p",
+     "stop",
+     "frequency_penalty",
+     "presence_penalty",
+     "seed",
+     "top_k",
+     "min_p",
+     "logit_bias",
+     "response_format",
+     "structured_outputs",
+     "repetition_penalty"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": false,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "inference-net"
+   }
+  ],
+  "id": "inference-net/schematron-v2-turbo",
+  "name": "Inference.net: Schematron V2 Turbo"
+ }
+}

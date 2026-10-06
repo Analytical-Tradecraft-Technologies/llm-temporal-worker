@@ -191,6 +191,11 @@ func verifyEndpointReferences(cfg config.Config, bundle Bundle) error {
 		if endpointFamily(endpoint.Family) != profile.Family {
 			return fmt.Errorf("endpoint %q family %q does not match capability profile %q family %q", endpointID, endpoint.Family, endpoint.CapabilityProfile, profile.Family)
 		}
+		if endpoint.PriceCatalog == "" && cfg.ModelSyncEndpoint(endpointID) {
+			// Config validation allows only a model_sync endpoint no route
+			// references to omit its price catalog; model sync prices it.
+			continue
+		}
 		catalog, ok := bundle.Pricing[endpoint.PriceCatalog]
 		if !ok {
 			return fmt.Errorf("endpoint %q references missing price catalog %q", endpointID, endpoint.PriceCatalog)
@@ -222,6 +227,13 @@ func sortedEndpointIDs(endpoints map[string]config.EndpointConfig) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// ReadVerified reads one configured catalog-style file with the same bounds
+// and SHA-256 authentication as the capability and price catalogs.
+func ReadVerified(ref config.CatalogRef, options Options) ([]byte, error) {
+	data, _, err := readVerified(ref, options)
+	return data, err
 }
 
 func readVerified(ref config.CatalogRef, options Options) ([]byte, [32]byte, error) {

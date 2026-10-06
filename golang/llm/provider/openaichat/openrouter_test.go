@@ -94,3 +94,35 @@ func TestOpenRouterRejectsCallerProviderOverride(t *testing.T) {
 		t.Fatalf("provider override error = %v", err)
 	}
 }
+
+func TestOpenRouterUpstreamSelectionSendsOnlyRequireParameters(t *testing.T) {
+	tiers := map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: ""}
+	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: tiers, SelectUpstream: true, RequireParameters: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := lowerRequest(llm.Request{Model: "openai/gpt-5.4"}, profile, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	providerBody, ok := wire["provider"].(map[string]any)
+	if !ok || len(providerBody) != 1 || providerBody["require_parameters"] != true {
+		t.Fatalf("provider routing body = %#v, want only require_parameters", wire["provider"])
+	}
+	// Callers cannot steer the upstream: model sync reserves at the most
+	// expensive one, but an explicit order would bypass require_parameters.
+	if _, err := lowerRequest(llm.Request{Model: "openai/gpt-5.4", Extensions: map[string]json.RawMessage{"openrouter": json.RawMessage(`{"provider_order":["Caller"]}`)}}, profile, "default"); err == nil {
+		t.Fatal("upstream selection accepted a caller provider order")
+	}
+	if _, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: tiers, SelectUpstream: true, ProviderOrder: []string{"ProviderA"}, RequireParameters: true}); err == nil {
+		t.Fatal("upstream selection accepted a pinned provider order")
+	}
+}

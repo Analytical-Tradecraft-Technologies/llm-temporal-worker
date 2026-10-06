@@ -24,14 +24,15 @@
     },
     "models": {
       "type": "object",
-      "minProperties": 1,
+      "description": "Configured logical models. May be empty only when model_sync is configured.",
       "additionalProperties": { "$ref": "#/$defs/model" }
     },
     "capabilities": { "$ref": "#/$defs/capabilities" },
     "pricing": { "$ref": "#/$defs/pricing" },
     "budgets": { "$ref": "#/$defs/budgets" },
     "continuation": { "$ref": "#/$defs/continuation" },
-    "telemetry": { "$ref": "#/$defs/telemetry" }
+    "telemetry": { "$ref": "#/$defs/telemetry" },
+    "model_sync": { "$ref": "#/$defs/model_sync" }
   },
   "allOf": [
     {
@@ -385,7 +386,8 @@
           "propertyNames": { "enum": ["economy", "standard", "priority"] },
           "additionalProperties": { "$ref": "#/$defs/tier" }
         },
-        "capability_profile": { "type": "string", "minLength": 1 }, "price_catalog": { "type": "string", "minLength": 1 },
+        "capability_profile": { "type": "string", "minLength": 1 }, "price_catalog": { "type": "string", "description": "Required unless model_sync is the endpoint's only user." },
+        "optional": { "type": "boolean", "description": "Disable the endpoint instead of failing when its environment credential is not set. Only valid for an endpoint that only model_sync uses." },
         "provider_storage": { "type": "object", "additionalProperties": false, "required": ["permitted"], "properties": { "permitted": { "type": "boolean" } } },
         "extensions": { "type": ["object", "null"], "additionalProperties": { "type": "object" } }
       },
@@ -433,6 +435,27 @@
         "routes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/route" } }
       }
     },
+    "model_sync": {
+      "type": "object", "additionalProperties": false,
+      "required": ["openrouter", "refresh_interval_min", "refresh_interval_max"],
+      "description": "Route every model OpenRouter lists under its OpenRouter ID, priced from OpenRouter's published endpoint prices. The list is fetched at runtime and shared through state storage.",
+      "properties": {
+        "openrouter": {
+          "type": "object", "additionalProperties": false, "required": ["endpoint"],
+          "properties": { "endpoint": { "type": "string", "minLength": 1 } }
+        },
+        "direct": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["endpoint", "provider"],
+            "properties": { "endpoint": { "type": "string", "minLength": 1 }, "provider": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "rules": { "type": "array", "items": { "$ref": "#/$defs/catalog" } },
+        "refresh_interval_min": { "$ref": "#/$defs/duration" },
+        "refresh_interval_max": { "$ref": "#/$defs/duration" }
+      }
+    },
     "catalog": {
       "type": "object", "additionalProperties": false, "required": ["file", "sha256"],
       "properties": { "file": { "type": "string", "minLength": 1 }, "sha256": { "type": "string", "minLength": 64, "maxLength": 64 } }
@@ -443,7 +466,7 @@
     },
     "pricing": {
       "type": "object", "additionalProperties": false, "required": ["catalogs", "require_price_when_budgeted"],
-      "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "require_price_when_budgeted": { "type": "boolean" } }
+      "properties": { "catalogs": { "type": ["array", "null"], "items": { "$ref": "#/$defs/catalog" }, "description": "Must not be empty unless model_sync is configured." }, "require_price_when_budgeted": { "type": "boolean" } }
     },
     "budget_window": {
       "type": "object", "additionalProperties": false, "required": ["duration", "bucket"],

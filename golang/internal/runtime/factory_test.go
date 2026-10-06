@@ -325,7 +325,7 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 		Limits:       config.LimitsConfig{RequestBytes: 1024, ContinuationDepth: 4, RouteAttempts: 1, TokenEstimateSafetyRatio: "1", MaxOutputTokens: 16, MaxBudgetBucketsPerWindow: 100},
 		Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{ID: "key-2026-07", Primary: true, Secret: config.SecretRef{Kind: config.SecretEnv, Name: "CONTINUATION_KEY"}}}},
 	}
-	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.Snapshot{}, nil, nil, [32]byte{})
+	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.StaticSnapshot{}, nil, nil, [32]byte{})
 	if err != nil {
 		t.Fatalf("buildMemory() error = %v", err)
 	}
@@ -420,7 +420,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "openai", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
 	}}}
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai")
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai", nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}
@@ -436,7 +436,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 		endpoint.ProviderStorage.Permitted = test.endpoint
 		value.Endpoints["openai"] = endpoint
 		value.Continuation.AllowProviderHostedState = test.global
-		adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai")
+		adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -484,7 +484,7 @@ func TestProductionFactoryBuildsAnthropicAWSGatewayAdapterWithoutSecretResolutio
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "anthropic-aws", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
 	}}}
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws")
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws", nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}
@@ -510,7 +510,7 @@ func TestProductionFactoryRejectsSecretAuthForAnthropicAWSGateway(t *testing.T) 
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "anthropic-aws", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
 	}}}
-	_, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws")
+	_, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws", nil)
 	if !errors.Is(err, ErrUnsupportedProviderAuth) {
 		t.Fatalf("buildAdapter() error = %v, want ErrUnsupportedProviderAuth", err)
 	}
@@ -524,7 +524,7 @@ func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "unknown", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
 	}}}
-	_, err := factory.buildAdapter(context.Background(), value, snapshot, "unknown")
+	_, err := factory.buildAdapter(context.Background(), value, snapshot, "unknown", nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider family") {
 		t.Fatalf("error = %v, want unsupported provider family", err)
 	}
@@ -533,7 +533,7 @@ func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
 func TestChatProfileRequiresSpecializedDialect(t *testing.T) {
 	factory := &ProductionEngineFactory{}
 	endpoint := config.EndpointConfig{Family: "openai_chat", BaseURL: "https://openrouter.ai/api/v1"}
-	_, err := factory.chatProfile("openrouter", endpoint, provider.CapabilitySet{Version: "cap-v1"}, EndpointProfile{})
+	_, err := factory.chatProfile("openrouter", endpoint, provider.CapabilitySet{Version: "cap-v1"}, EndpointProfile{}, false)
 	if err == nil || !strings.Contains(err.Error(), "specialized chat dialect must be explicit") {
 		t.Fatalf("error = %v, want explicit dialect failure", err)
 	}
@@ -575,7 +575,7 @@ func TestProductionFactoryBuildsAzureOpenAIChatAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	value := azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"})
-	adapter, err := factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat")
+	adapter, err := factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +626,7 @@ func TestProductionFactoryAzureOpenAIChatFailsClosedBeforeSecretResolution(t *te
 			endpoint := value.Endpoints["azure-chat"]
 			test.mutate(&endpoint)
 			value.Endpoints["azure-chat"] = endpoint
-			_, err = factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat")
+			_, err = factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat", nil)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("buildAdapter() error = %v, want %q", err, test.want)
 			}

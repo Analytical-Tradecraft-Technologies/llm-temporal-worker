@@ -27,6 +27,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
+	"github.com/mfow/llm-temporal-worker/golang/internal/modelsync"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
@@ -154,6 +155,8 @@ type ProductionFactoryOptions struct {
 	// built-in complete V1RuntimeBuilder requires this factory; a custom explicit
 	// V1RuntimeBuilder remains responsible for an equivalent fail-closed guard.
 	DurableCompositionFactory DurableCompositionFactory
+	// ModelSyncObserver, when set, receives every model-sync refresher step.
+	ModelSyncObserver func(modelsync.Event)
 }
 
 // ProductionEngineFactory composes the full provider-neutral engine from one
@@ -338,22 +341,45 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err != nil {
 		return nil, nil, err
 	}
-	engineSnapshot, err := factory.options.SnapshotLoader.Load(ctx, snapshot)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load engine snapshot: %w", err)
-	}
-	adapters, err := factory.buildAdapters(ctx, value, engineSnapshot)
+	engineSnapshot, syncRuntime, err := factory.loadSnapshot(ctx, snapshot, value)
 	if err != nil {
 		return nil, nil, err
 	}
+	adapters, err := factory.buildAdapters(ctx, value, engineSnapshot, syncRuntime)
+	if err != nil {
+		return nil, nil, err
+	}
+	var snapshotSource engine.SnapshotSource = engine.StaticSnapshot{Value: engineSnapshot}
+	if syncRuntime != nil {
+		if err := syncRuntime.enable(adapters); err != nil {
+			return nil, nil, fmt.Errorf("model_sync: %w", err)
+		}
+		snapshotSource = syncRuntime
+	}
 	if value.State.Kind == config.StateKindMemory {
-		engineValue, clients, err := factory.buildMemory(ctx, value, engineSnapshot, adapters, precomposed, snapshot.Digest())
+		engineValue, clients, err := factory.buildMemory(ctx, value, snapshotSource, adapters, precomposed, snapshot.Digest())
 		if err != nil {
 			return nil, nil, err
 		}
 		set, ok := clients.(*productionClientSet)
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: memory factory returned an unsupported client set", ErrProductionFactoryInvalid)
+		}
+		if syncRuntime != nil {
+			if err := factory.startModelSync(ctx, value, syncRuntime, modelsync.NewMemoryStore(factory.options.Clock), adapters); err != nil {
+				return nil, nil, err
+			}
+			closeClients := set.close
+			set.close = func(closeContext context.Context) error {
+				if closeContext == nil {
+					closeContext = context.Background()
+				}
+				syncRuntime.stop(closeContext)
+				if closeClients == nil {
+					return nil
+				}
+				return closeClients(closeContext)
+			}
 		}
 		set.v1Capabilities.composition = precomposed
 		return factory.attachV1Runtime(ctx, snapshot, engineValue, set)
@@ -503,7 +529,6 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if planner == nil {
 		planner = routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
 	}
-	snapshotSource := engine.StaticSnapshot{Value: engineSnapshot}
 	adapterRegistry := engine.AdapterMap(adapters)
 	capabilityAdapterRegistry := newSnapshotAdapterRegistry(adapters)
 	engineValue, err := engine.New(engine.Dependencies{
@@ -554,6 +579,25 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err != nil {
 		closeAll()
 		return nil, nil, fmt.Errorf("construct Redis budgets: %w", err)
+	}
+	if syncRuntime != nil {
+		catalogStore, storeErr := redisstore.NewModelCatalogStore(redisClient, keyOptions)
+		if storeErr != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("construct Redis model catalog store: %w", storeErr)
+		}
+		if err := factory.startModelSync(ctx, value, syncRuntime, catalogStore, adapters); err != nil {
+			closeAll()
+			return nil, nil, err
+		}
+		stopSync := closeAll
+		closeAll = func() {
+			// Stop the refresher before its Redis client closes.
+			stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			syncRuntime.stop(stopContext)
+			cancel()
+			stopSync()
+		}
 	}
 	clients := &productionClientSet{
 		probes:             probes,
@@ -733,7 +777,7 @@ func composeBudgetStatusReader(ctx context.Context, snapshot *config.Snapshot, c
 // blob store; all state is held by the process-local implementations and is
 // lost on restart. Provider adapters are still built normally because memory
 // mode changes state durability, not the provider contract.
-func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, engineSnapshot engine.Snapshot, adapters map[string]provider.Adapter, precomposed *durablestore.Composition, configDigest [32]byte) (llm.Engine, app.ClientSet, error) {
+func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value config.Config, snapshotSource engine.SnapshotSource, adapters map[string]provider.Adapter, precomposed *durablestore.Composition, configDigest [32]byte) (llm.Engine, app.ClientSet, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -773,7 +817,6 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	if planner == nil {
 		planner = routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
 	}
-	snapshotSource := engine.StaticSnapshot{Value: engineSnapshot}
 	adapterRegistry := engine.AdapterMap(adapters)
 	capabilityAdapterRegistry := newSnapshotAdapterRegistry(adapters)
 	engineValue, err := engine.New(engine.Dependencies{
@@ -894,7 +937,59 @@ func (factory *ProductionEngineFactory) buildBlob(ctx context.Context, value con
 	return store, closer, nil
 }
 
-func (factory *ProductionEngineFactory) buildAdapters(ctx context.Context, value config.Config, snapshot engine.Snapshot) (map[string]provider.Adapter, error) {
+// loadSnapshot loads the engine snapshot and, when model_sync is
+// configured, the runtime that layers synced routes and prices over it.
+func (factory *ProductionEngineFactory) loadSnapshot(ctx context.Context, snapshot *config.Snapshot, value config.Config) (engine.Snapshot, *modelSyncRuntime, error) {
+	if value.ModelSync == nil {
+		engineSnapshot, err := factory.options.SnapshotLoader.Load(ctx, snapshot)
+		if err != nil {
+			return engine.Snapshot{}, nil, fmt.Errorf("load engine snapshot: %w", err)
+		}
+		return engineSnapshot, nil, nil
+	}
+	loader, ok := factory.options.SnapshotLoader.(CatalogSnapshotLoader)
+	if !ok {
+		return engine.Snapshot{}, nil, fmt.Errorf("%w: model_sync requires the catalog snapshot loader", ErrProductionFactoryInvalid)
+	}
+	loaded, err := loader.load(ctx, snapshot)
+	if err != nil {
+		return engine.Snapshot{}, nil, fmt.Errorf("load engine snapshot: %w", err)
+	}
+	syncRuntime, err := newModelSyncRuntime(value, loaded, loader.CatalogOptions)
+	if err != nil {
+		return engine.Snapshot{}, nil, err
+	}
+	return loaded.snapshot, syncRuntime, nil
+}
+
+// startModelSync starts the refresher. The OpenRouter fetch uses the
+// OpenRouter endpoint's egress policy, and its credential when the endpoint
+// is enabled; OpenRouter's model lists are public, so prices still sync when
+// only direct endpoints are enabled.
+func (factory *ProductionEngineFactory) startModelSync(ctx context.Context, value config.Config, syncRuntime *modelSyncRuntime, store modelsync.Store, adapters map[string]provider.Adapter) error {
+	endpointID := value.ModelSync.OpenRouter.Endpoint
+	endpoint := value.Endpoints[endpointID]
+	providerResponseBytes := value.Limits.ProviderResponseBytes
+	if providerResponseBytes == 0 {
+		providerResponseBytes = config.DefaultProviderResponseBytes
+	}
+	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, providerResponseBytes)
+	if err != nil {
+		return fmt.Errorf("model_sync endpoint %q: provider egress policy: %w", endpointID, err)
+	}
+	apiKey := ""
+	if _, enabled := adapters[endpointID]; enabled {
+		key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
+		if err != nil {
+			return err
+		}
+		apiKey = string(key)
+	}
+	syncRuntime.start(ctx, value, store, client, apiKey, factory.options.ModelSyncObserver)
+	return nil
+}
+
+func (factory *ProductionEngineFactory) buildAdapters(ctx context.Context, value config.Config, snapshot engine.Snapshot, syncRuntime *modelSyncRuntime) (map[string]provider.Adapter, error) {
 	ids := make([]string, 0, len(value.Endpoints))
 	for id := range value.Endpoints {
 		ids = append(ids, id)
@@ -902,7 +997,15 @@ func (factory *ProductionEngineFactory) buildAdapters(ctx context.Context, value
 	sort.Strings(ids)
 	adapters := make(map[string]provider.Adapter, len(ids))
 	for _, endpointID := range ids {
-		adapter, err := factory.buildAdapter(ctx, value, snapshot, endpointID)
+		endpoint := value.Endpoints[endpointID]
+		if endpoint.Optional {
+			// An optional endpoint without its credential is disabled: model
+			// sync never routes to an endpoint that has no adapter.
+			if _, err := factory.providerSecret(ctx, endpoint.Auth, endpointID); errors.Is(err, secrets.ErrUnset) {
+				continue
+			}
+		}
+		adapter, err := factory.buildAdapter(ctx, value, snapshot, endpointID, syncRuntime)
 		if err != nil {
 			return nil, err
 		}
@@ -911,9 +1014,16 @@ func (factory *ProductionEngineFactory) buildAdapters(ctx context.Context, value
 	return adapters, nil
 }
 
-func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value config.Config, snapshot engine.Snapshot, endpointID string) (provider.Adapter, error) {
+func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value config.Config, snapshot engine.Snapshot, endpointID string, syncRuntime *modelSyncRuntime) (provider.Adapter, error) {
 	endpoint := value.Endpoints[endpointID]
 	capabilities, err := endpointCapabilities(snapshot, endpointID)
+	if err != nil && syncRuntime != nil && !value.RoutedEndpoint(endpointID) {
+		// A sync endpoint no configured route references takes its adapter
+		// capabilities from its capability profile directly.
+		if synced, ok := syncRuntime.capabilities(endpointID); ok {
+			capabilities, err = synced, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -931,6 +1041,15 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 		if err != nil {
 			return nil, err
+		}
+		// The exa marker selects Exa's Agent API explicitly; the runtime never
+		// infers provider behavior from the hostname.
+		if _, exa := endpoint.Extensions["exa"]; exa {
+			exaClient, err := openairesponses.NewExaClient(openairesponses.ExaClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
+			if err != nil {
+				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			}
+			return openairesponses.New(exaClient, endpointID, capabilities.Version, openairesponses.WithExaAgent())
 		}
 		openaiClient, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: endpoint.BaseURL, APIKey: string(key), HTTPClient: client})
 		if err != nil {
@@ -993,7 +1112,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		}
 		return adapter, nil
 	case "openai_chat":
-		chatProfile, err := factory.chatProfile(endpointID, endpoint, capabilities, profile)
+		chatProfile, err := factory.chatProfile(endpointID, endpoint, capabilities, profile, value.ModelSync != nil && value.ModelSync.OpenRouter.Endpoint == endpointID)
 		if err != nil {
 			return nil, err
 		}
@@ -1205,7 +1324,7 @@ func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
 
 var allProviderFeatures = []provider.Feature{provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall, provider.FeatureStructuredOutput, provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage}
 
-func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile) (*openaichat.Profile, error) {
+func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile, selectUpstream bool) (*openaichat.Profile, error) {
 	if supplied.Chat != nil {
 		copy := *supplied.Chat
 		if supplied.ChatDialect == "" || supplied.ChatDialect == ChatDialectGeneric {
@@ -1226,11 +1345,16 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 	}
 	switch dialect {
 	case ChatDialectOpenRouter:
-		order, err := stringSlice(extensionValue(endpoint, "openrouter", "provider_order"))
-		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+		var order []string
+		if !selectUpstream {
+			order, err = stringSlice(extensionValue(endpoint, "openrouter", "provider_order"))
+			if err != nil {
+				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+			}
 		}
-		value, err := openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ProviderOrder: order, AllowFallbacks: false, RequireParameters: true})
+		// The model_sync OpenRouter endpoint lets OpenRouter select the
+		// upstream; model sync reserves at the most expensive upstream price.
+		value, err := openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ProviderOrder: order, SelectUpstream: selectUpstream, AllowFallbacks: false, RequireParameters: true})
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}

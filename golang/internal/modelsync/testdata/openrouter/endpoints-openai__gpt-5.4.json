@@ -1,0 +1,404 @@
+{
+ "data": {
+  "architecture": {
+   "input_modalities": [
+    "text",
+    "image",
+    "file"
+   ],
+   "instruct_type": null,
+   "modality": "text+image+file->text",
+   "output_modalities": [
+    "text"
+   ],
+   "tokenizer": "GPT"
+  },
+  "created": 1772734352,
+  "endpoints": [
+   {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000,
+    "max_prompt_tokens": 922000,
+    "model_id": "openai/gpt-5.4",
+    "model_name": "OpenAI: GPT-5.4",
+    "name": "OpenAI | openai/gpt-5.4-20260305",
+    "native_tools": {
+     "openrouter:apply_patch": {
+      "type": "apply_patch"
+     },
+     "openrouter:web_search": {
+      "type": "web_search"
+     }
+    },
+    "pricing": {
+     "completion": "0.0000075",
+     "discount": 0,
+     "input_cache_read": "0.000000125",
+     "overrides": [
+      {
+       "completion": "0.00001125",
+       "input_cache_read": "0.00000025",
+       "min_prompt_tokens": 272000,
+       "prompt": "0.0000025"
+      }
+     ],
+     "prompt": "0.00000125",
+     "web_search": "0.01"
+    },
+    "provider_name": "OpenAI",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "reasoning",
+     "include_reasoning",
+     "seed",
+     "max_tokens",
+     "response_format",
+     "structured_outputs",
+     "tools",
+     "tool_choice",
+     "verbosity",
+     "reasoning_effort"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": false,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "openai/flex"
+   },
+   {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000,
+    "max_prompt_tokens": 922000,
+    "model_id": "openai/gpt-5.4",
+    "model_name": "OpenAI: GPT-5.4",
+    "name": "Azure | openai/gpt-5.4-20260305",
+    "native_tools": {
+     "openrouter:apply_patch": {
+      "type": "apply_patch"
+     }
+    },
+    "pricing": {
+     "completion": "0.000015",
+     "discount": 0,
+     "input_cache_read": "0.00000025",
+     "overrides": [
+      {
+       "completion": "0.0000225",
+       "input_cache_read": "0.0000005",
+       "min_prompt_tokens": 272000,
+       "prompt": "0.000005"
+      }
+     ],
+     "prompt": "0.0000025",
+     "web_search": "0.01"
+    },
+    "provider_name": "Azure",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "reasoning",
+     "include_reasoning",
+     "max_completion_tokens",
+     "tools",
+     "tool_choice",
+     "seed",
+     "response_format",
+     "structured_outputs",
+     "verbosity",
+     "reasoning_effort"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": false,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "azure"
+   },
+   {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000,
+    "max_prompt_tokens": 922000,
+    "model_id": "openai/gpt-5.4",
+    "model_name": "OpenAI: GPT-5.4",
+    "name": "OpenAI | openai/gpt-5.4-20260305",
+    "native_tools": {
+     "openrouter:apply_patch": {
+      "type": "apply_patch"
+     },
+     "openrouter:web_search": {
+      "type": "web_search"
+     }
+    },
+    "pricing": {
+     "completion": "0.000015",
+     "discount": 0,
+     "input_cache_read": "0.00000025",
+     "overrides": [
+      {
+       "completion": "0.0000225",
+       "input_cache_read": "0.0000005",
+       "min_prompt_tokens": 272000,
+       "prompt": "0.000005"
+      }
+     ],
+     "prompt": "0.0000025",
+     "web_search": "0.01"
+    },
+    "provider_name": "OpenAI",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "reasoning",
+     "include_reasoning",
+     "seed",
+     "max_tokens",
+     "response_format",
+     "structured_outputs",
+     "tools",
+     "tool_choice",
+     "verbosity",
+     "reasoning_effort"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": false,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "openai"
+   },
+   {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000,
+    "max_prompt_tokens": null,
+    "model_id": "openai/gpt-5.4",
+    "model_name": "OpenAI: GPT-5.4",
+    "name": "Azure | openai/gpt-5.4-20260305",
+    "native_tools": {
+     "openrouter:apply_patch": {
+      "type": "apply_patch"
+     }
+    },
+    "pricing": {
+     "completion": "0.0000165",
+     "discount": 0,
+     "input_cache_read": "0.000000275",
+     "overrides": [
+      {
+       "completion": "0.00002475",
+       "input_cache_read": "0.00000055",
+       "min_prompt_tokens": 272000,
+       "prompt": "0.0000055"
+      }
+     ],
+     "prompt": "0.00000275",
+     "web_search": "0.01"
+    },
+    "provider_name": "Azure",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "reasoning",
+     "include_reasoning",
+     "max_completion_tokens",
+     "tools",
+     "tool_choice",
+     "seed",
+     "response_format",
+     "structured_outputs",
+     "verbosity",
+     "reasoning_effort"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": false,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "azure/us"
+   },
+   {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000,
+    "max_prompt_tokens": null,
+    "model_id": "openai/gpt-5.4",
+    "model_name": "OpenAI: GPT-5.4",
+    "name": "Azure | openai/gpt-5.4-20260305",
+    "native_tools": {
+     "openrouter:apply_patch": {
+      "type": "apply_patch"
+     }
+    },
+    "pricing": {
+     "completion": "0.0000165",
+     "discount": 0,
+     "input_cache_read": "0.000000275",
+     "overrides": [
+      {
+       "completion": "0.00002475",
+       "input_cache_read": "0.00000055",
+       "min_prompt_tokens": 272000,
+       "prompt": "0.0000055"
+      }
+     ],
+     "prompt": "0.00000275",
+     "web_search": "0.01"
+    },
+    "provider_name": "Azure",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "reasoning",
+     "include_reasoning",
+     "max_completion_tokens",
+     "tools",
+     "tool_choice",
+     "seed",
+     "response_format",
+     "structured_outputs",
+     "verbosity",
+     "reasoning_effort"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": false,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "azure/eu"
+   },
+   {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000,
+    "max_prompt_tokens": 922000,
+    "model_id": "openai/gpt-5.4",
+    "model_name": "OpenAI: GPT-5.4",
+    "name": "Amazon Bedrock | openai/gpt-5.4-20260305",
+    "native_tools": {},
+    "pricing": {
+     "completion": "0.0000165",
+     "discount": 0,
+     "input_cache_read": "0.000000275",
+     "overrides": [
+      {
+       "completion": "0.00002475",
+       "input_cache_read": "0.00000055",
+       "min_prompt_tokens": 272000,
+       "prompt": "0.0000055"
+      }
+     ],
+     "prompt": "0.00000275",
+     "web_search": "0.01"
+    },
+    "provider_name": "Amazon Bedrock",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "reasoning",
+     "include_reasoning",
+     "max_tokens",
+     "tools",
+     "tool_choice",
+     "response_format",
+     "structured_outputs",
+     "verbosity",
+     "reasoning_effort"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": true,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "amazon-bedrock/us-east-1"
+   },
+   {
+    "context_length": 1050000,
+    "max_completion_tokens": 128000,
+    "max_prompt_tokens": 922000,
+    "model_id": "openai/gpt-5.4",
+    "model_name": "OpenAI: GPT-5.4",
+    "name": "OpenAI | openai/gpt-5.4-20260305",
+    "native_tools": {
+     "openrouter:apply_patch": {
+      "type": "apply_patch"
+     },
+     "openrouter:web_search": {
+      "type": "web_search"
+     }
+    },
+    "pricing": {
+     "completion": "0.00003",
+     "discount": 0,
+     "input_cache_read": "0.0000005",
+     "overrides": [
+      {
+       "completion": "0.000045",
+       "input_cache_read": "0.000001",
+       "min_prompt_tokens": 272000,
+       "prompt": "0.00001"
+      }
+     ],
+     "prompt": "0.000005",
+     "web_search": "0.01"
+    },
+    "provider_name": "OpenAI",
+    "quantization": "unknown",
+    "status": 0,
+    "supported_parameters": [
+     "reasoning",
+     "include_reasoning",
+     "seed",
+     "max_tokens",
+     "response_format",
+     "structured_outputs",
+     "tools",
+     "tool_choice",
+     "verbosity",
+     "reasoning_effort"
+    ],
+    "supports_image_reference": false,
+    "supports_implicit_caching": false,
+    "supports_multiple_audio_references": false,
+    "supports_tool_choice": {
+     "auto": true,
+     "function": true,
+     "none": true,
+     "required": true
+    },
+    "supports_voice_cloning": false,
+    "tag": "openai/fast"
+   }
+  ],
+  "id": "openai/gpt-5.4",
+  "name": "OpenAI: GPT-5.4"
+ }
+}

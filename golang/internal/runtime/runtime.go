@@ -729,9 +729,11 @@ func (runtime *Runtime) runWatchedFile(ctx context.Context, path string, watcher
 func newProductionRuntime(ctx context.Context, data []byte) (*Runtime, error) {
 	secretResolver := secrets.New(secrets.Options{})
 	references := newCLIReferenceResolver(secretResolver)
+	syncLog := &modelSyncLogger{}
 	factory, err := newCLIEngineFactory(ProductionFactoryOptions{
-		Resolver:       secretResolver,
-		SnapshotLoader: CatalogSnapshotLoader{},
+		Resolver:          secretResolver,
+		SnapshotLoader:    CatalogSnapshotLoader{},
+		ModelSyncObserver: syncLog.observe,
 	})
 	if err != nil {
 		return nil, err
@@ -744,6 +746,7 @@ func newProductionRuntime(ctx context.Context, data []byte) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	syncLog.logger.Store(runtime.Logger)
 	return runtime, nil
 }
 
