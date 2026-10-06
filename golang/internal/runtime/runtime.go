@@ -980,22 +980,44 @@ func (runtime *Runtime) stopDependencyMonitor(ctx context.Context) {
 	if cancel == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// Signal cancellation before waiting on readinessMu. A dependency client
 	// that ignores its context must not prevent the monitor from observing the
 	// shutdown request. The lock handoff then serializes any already in-flight
 	// final Pause/Resume transition before shutdown waits for the monitor.
 	cancel()
-	runtime.readinessMu.Lock()
-	runtime.readinessMu.Unlock()
-	if done == nil {
+	if !runtime.awaitReadinessTransition(ctx) {
+		// A Resume blocked in a slow controller Start still holds the lock.
+		// Shutdown goes on within its deadline: once the worker is stopping,
+		// a Start that returns later stops its controller instead of running.
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if done == nil {
+		return
 	}
 	select {
 	case <-done:
 	case <-ctx.Done():
+	}
+}
+
+// awaitReadinessTransition waits for an in-flight Pause/Resume transition to
+// release readinessMu, giving up when ctx ends. It reports whether the
+// transition finished.
+func (runtime *Runtime) awaitReadinessTransition(ctx context.Context) bool {
+	released := make(chan struct{})
+	go func() {
+		runtime.readinessMu.Lock()
+		runtime.readinessMu.Unlock()
+		close(released)
+	}()
+	select {
+	case <-released:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
