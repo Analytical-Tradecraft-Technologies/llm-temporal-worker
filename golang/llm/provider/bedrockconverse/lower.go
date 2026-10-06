@@ -77,6 +77,9 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		if request.Sampling != nil {
 			inference.StopSequences = append([]string(nil), request.Sampling.StopSequences...)
 			if request.Sampling.Temperature != nil {
+				if *request.Sampling.Temperature < 0 || *request.Sampling.Temperature > 1 {
+					return bedrockruntime.ConverseInput{}, fmt.Errorf("temperature %v is outside the Bedrock Converse range 0 to 1", *request.Sampling.Temperature)
+				}
 				value := float32(*request.Sampling.Temperature)
 				inference.Temperature = &value
 			}

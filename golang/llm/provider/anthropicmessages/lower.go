@@ -434,6 +434,9 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 		return fmt.Errorf("sampling field is not supported by Anthropic Messages")
 	}
 	if sampling.Temperature != nil {
+		if *sampling.Temperature < 0 || *sampling.Temperature > 1 {
+			return fmt.Errorf("temperature %v is outside the Anthropic Messages range 0 to 1", *sampling.Temperature)
+		}
 		target["temperature"] = *sampling.Temperature
 	}
 	if sampling.TopP != nil {
