@@ -95,23 +95,24 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 	normalizeSpan.End()
 	ctx = normalizeCtx
 	planCtx, planSpan := engine.startTrace(ctx, "llmtw.planning", requestTraceAttrs(normalized)...)
-	snapshot, err := engine.dependencies.Snapshots.Current(planCtx)
-	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
-		return llm.Response{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
-	}
 	now := engine.dependencies.Clock()
 	// A completed operation replays its stored result without the gates a
-	// new dispatch needs: its route, price or continuation may have changed
-	// or expired since. Only an identical request may replay it; a digest
-	// mismatch is left to admission, which reports the conflict.
+	// new dispatch needs: the configuration snapshot, its route, price or
+	// continuation may have changed, expired or be unavailable since. Only
+	// an identical, unexpired request may replay it; a digest mismatch is
+	// left to admission, which reports the conflict.
 	if response, ok, err := engine.replayCompleted(planCtx, normalized, digest, now); err != nil || ok {
 		planSpan.End()
 		if err != nil {
 			return llm.Response{}, err
 		}
 		return response, nil
+	}
+	snapshot, err := engine.dependencies.Snapshots.Current(planCtx)
+	if err != nil {
+		engine.recordTraceError(planCtx, planSpan, err)
+		planSpan.End()
+		return llm.Response{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
 	}
 	stateCtx, stateSpan := engine.startTrace(planCtx, "llmtw.state.load", requestTraceAttrs(normalized)...)
 	providerRequest, constraints, parent, err := engine.loadContinuation(stateCtx, normalized, now)
@@ -526,6 +527,11 @@ func (engine *Engine) replayCompleted(ctx context.Context, request llm.Request, 
 	operationID, _ := operationIdentity(request, digest)
 	operation, err := engine.dependencies.Admission.Get(ctx, operationID)
 	if err != nil || operation.State != admission.StateCompleted || operation.RequestDigest != digest {
+		return llm.Response{}, false, nil
+	}
+	// Some stores keep terminal records past their retention until the next
+	// Begin; an expired operation goes through admission like a new one.
+	if !operation.ExpiresAt.IsZero() && !now.Before(operation.ExpiresAt) {
 		return llm.Response{}, false, nil
 	}
 	response, _, err := engine.resolveExisting(ctx, operation, now)
