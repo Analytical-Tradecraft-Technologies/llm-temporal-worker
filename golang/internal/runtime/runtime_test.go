@@ -1321,3 +1321,65 @@ func TestRuntimeDependencyPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(
 		t.Fatal("in-flight Activity did not complete under a live context")
 	}
 }
+
+// gatedFailingProbe passes the startup check, then blocks until released and
+// reports its dependency as unavailable, as a probe of clients that a reload
+// closed mid-probe would.
+type gatedFailingProbe struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (probe *gatedFailingProbe) Probe(context.Context) ProbeResult {
+	if probe.calls.Add(1) == 1 {
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	}
+	close(probe.entered)
+	<-probe.release
+	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusUnavailable, Reason: ProbeReasonUnavailable}
+}
+
+func TestDependencyReadinessDiscardsAProbeOfASupersededSnapshot(t *testing.T) {
+	stale := &gatedFailingProbe{entered: make(chan struct{}), release: make(chan struct{})}
+	healthy := &mutableRuntimeProbe{}
+	healthy.healthy.Store(true)
+	var builds atomic.Int32
+	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
+	options.V1Runtime = nil
+	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+		return &monitoringWorker{}, &testRegistry{}, nil
+	}
+	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
+		if builds.Add(1) == 1 {
+			return testEngine{}, &testDependencyProbeClientSet{probes: []DependencyProbe{stale}}, nil
+		}
+		return testEngine{}, &testDependencyProbeClientSet{probes: []DependencyProbe{healthy}}, nil
+	})
+	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", -1))
+	runtime, err := New(context.Background(), configuration, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := runtime.App.Current()
+
+	synced := make(chan error, 1)
+	go func() { synced <- runtime.syncDependencyReadiness(context.Background()) }()
+	waitForRuntimeEvent(t, stale.entered, "stale probe start")
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- runtime.App.Reload(context.Background(), configuration) }()
+	waitForRuntime(t, func() bool { return runtime.App.Current() != initial })
+	close(stale.release)
+	if err := <-synced; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-reloaded; err != nil {
+		t.Fatal(err)
+	}
+	runtime.readinessMu.Lock()
+	failures := runtime.probeFailures
+	runtime.readinessMu.Unlock()
+	if failures != 0 {
+		t.Fatalf("probe failures = %d after a failure of superseded clients, want 0", failures)
+	}
+}

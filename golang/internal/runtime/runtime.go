@@ -832,19 +832,22 @@ func verifySnapshotDependencies(ctx context.Context, snapshot *config.Snapshot, 
 	return CheckDependencyProbes(ctx, source.DependencyProbes(), time.Duration(snapshot.Config().Server.ReadinessProbeTimeout))
 }
 
-func (runtime *Runtime) dependencyProbes() []DependencyProbe {
+// leasedDependencyProbes returns the current snapshot's dependency probes
+// with a lease that keeps that snapshot's clients open until released. With
+// no App there is no lease and nothing to probe.
+func (runtime *Runtime) leasedDependencyProbes() (*app.Lease, []DependencyProbe, error) {
 	if runtime == nil || runtime.App == nil {
-		return nil
+		return nil, nil, nil
 	}
-	current := runtime.App.Current()
-	if current == nil {
-		return nil
+	lease, err := runtime.App.Acquire()
+	if err != nil {
+		return nil, nil, err
 	}
-	source, ok := current.Clients.(dependencyProbeSource)
+	source, ok := lease.Snapshot().Clients.(dependencyProbeSource)
 	if !ok {
-		return nil
+		return lease, nil, nil
 	}
-	return source.DependencyProbes()
+	return lease, source.DependencyProbes(), nil
 }
 
 // currentV1RuntimeConfigured resolves the durable capability from the active
@@ -899,13 +902,27 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 		runtime.Worker.Pause()
 		return nil
 	}
-	probes := runtime.dependencyProbes()
+	// Probe under a snapshot lease so a reload cannot close these clients
+	// mid-probe, and drop the result if a reload has since replaced the
+	// snapshot: a failure of the old clients says nothing about the new ones.
+	lease, probes, err := runtime.leasedDependencyProbes()
+	if err != nil {
+		// No snapshot can be leased (shutdown or a closing snapshot): make
+		// no readiness decision on this pass.
+		return nil
+	}
+	if lease != nil {
+		defer lease.Release()
+	}
 	var probeErr error
 	if len(probes) > 0 {
 		probeErr = CheckDependencyProbes(ctx, probes, runtime.readinessProbeTimeout)
 	}
 	runtime.readinessMu.Lock()
 	defer runtime.readinessMu.Unlock()
+	if lease != nil && runtime.App.Current() != lease.Snapshot() {
+		return nil
+	}
 	if ctx.Err() == nil && probeErr != nil {
 		// Pausing is a full worker stop whose drain blocks Resume until every
 		// in-flight provider call completes, so a single slow probe must not
