@@ -114,13 +114,16 @@ of Temporal history; automatic orphan cleanup is deferred.
 
 ## Heartbeats
 
-> **Legacy engine.** The keepalive, phase and ledger behaviour in this section
-> and in [Cancellation](#cancellation) describe the legacy engine Activity
-> (`llm.generate.legacy.v1`), which only memory mode registers. On the durable
-> v1 path each internal Activity step (prepare, acquire, generate, poll,
-> complete) is short and bounded. It persists its progress in the cloud request
-> record rather than in heartbeat details, and recovery is driven by the
-> internal workflows; see [internal workflows](../reference/internal-workflows.md)
+> **Scope.** The heartbeat details and periodic `provider_wait` keepalive below
+> apply to every Activity, including the durable v1 execution steps, which run
+> through the same `runV1` wrapper; keep
+> `temporal.worker.heartbeat_keepalive_interval` configured for them. The
+> engine-specific phases (`planning` through `continuation_write`), the
+> `Engine.Generate` lifecycle and the ledger behaviour in this section and in
+> [Cancellation](#cancellation) describe the legacy engine Activity
+> (`llm.generate.legacy.v1`), which only memory mode registers. The durable v1
+> steps persist their progress in the cloud request record and are recovered by
+> the internal workflows; see [internal workflows](../reference/internal-workflows.md)
 > and [cloud provider execution](../reference/cloud-provider-execution.md).
 
 The one-shot v1 Activities invoke their runtime exactly once and return a final

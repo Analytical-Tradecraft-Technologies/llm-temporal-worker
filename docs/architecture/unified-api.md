@@ -7,8 +7,8 @@
 > memory mode alone registers, accepts and returns them. The production
 > worker's public contract is the v1 workflows (`llm.generate.workflow.v1` and
 > `llm.compact.workflow.v1`) with `GenerateRequestV1`/`GenerateResponseV1`: a
-> parent checkpoint handle, an `append`, a `settings_patch` and an exact USD
-> `cost`, defined in
+> parent checkpoint handle, an `append`, a `settings_patch` and an exact-or-unknown USD
+> `cost` state, defined in
 > [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md).
 > Several fields shown here are not part of that public contract: the v1
 > workflows reject caller `context.tags`, take model, sampling, reasoning and
