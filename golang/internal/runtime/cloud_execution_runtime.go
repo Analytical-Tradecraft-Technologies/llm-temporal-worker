@@ -157,6 +157,7 @@ func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.Prepa
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
+	r.captureLangfuseOperation(ctx, prepared)
 	return r.advance(ctx, prepared, step)
 }
 func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.ExecutionReferenceV1, step cloudStep) (llm.ExecutionResultV1, error) {
@@ -353,6 +354,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	if err != nil {
 		return r.resumeAdmissionWinner(ctx, p, attempt, step, err)
 	}
+	r.execution.captureLangfuse(ctx, call, cloudstate.SavedProviderExecution{Plan: call.plan})
 	lease, err := r.cacheLease(ctx, p, attempt, call.plan)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err

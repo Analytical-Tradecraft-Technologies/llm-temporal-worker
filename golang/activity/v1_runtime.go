@@ -308,6 +308,7 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	registry.RegisterActivityWithOptions(activities.pollV1Temporal, sdkactivity.RegisterOptions{Name: PollActivityName})
 	registry.RegisterActivityWithOptions(activities.completeV1Temporal, sdkactivity.RegisterOptions{Name: CompleteActivityName})
 	registry.RegisterActivityWithOptions(activities.planGenerationV1Temporal, sdkactivity.RegisterOptions{Name: PlanGenerationActivityName})
+	registry.RegisterActivityWithOptions(activities.exportLangfuseTemporal, sdkactivity.RegisterOptions{Name: ExportLangfuseActivityName})
 }
 
 func (activities *Activities) payloadLimits() PayloadLimits {

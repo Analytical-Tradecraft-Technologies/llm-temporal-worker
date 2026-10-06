@@ -34,6 +34,7 @@ type CloudProviderExecutionStore interface {
 // never sleeps, selects a replacement route, or retries paid submission. Scope
 // is supplied by the authorized runtime; provider IDs never leave this layer.
 type CloudProviderExecution struct {
+	capabilities   V1RuntimeCapabilities
 	statusRecorder engine.ProviderStatusRecorder
 	store          CloudProviderExecutionStore
 	admission      *CloudBudgetAdmission
@@ -76,7 +77,7 @@ func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.
 	if clock == nil {
 		clock = time.Now
 	}
-	return &CloudProviderExecution{statusRecorder: capabilities.ProviderStatusRecorder, store: store, admission: admission, clock: clock, saveBackoff: executionSaveBackoff}, nil
+	return &CloudProviderExecution{capabilities: capabilities, statusRecorder: capabilities.ProviderStatusRecorder, store: store, admission: admission, clock: clock, saveBackoff: executionSaveBackoff}, nil
 }
 
 // Submit accepts only a prepared local call and its accepted reservation. The
@@ -132,6 +133,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		return executor.save(ctx, call.scope, call.id, saved, next)
 	}
+	executor.captureLangfuse(ctx, call, saved)
 	observer := &executionObserver{executor: executor, scope: call.scope, id: call.id, saved: saved, claim: claim}
 	// Bound an individual HTTP call independently of workflow waiting. Saving
 	// its outcome has a separate bounded context if this context expires.

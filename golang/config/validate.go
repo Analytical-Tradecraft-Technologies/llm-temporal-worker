@@ -33,6 +33,11 @@ const maxAdmissionFieldBytes = 256
 // Validate checks references, closed enums, safety bounds, and retention
 // inequalities. It never resolves secret values or performs network I/O.
 func (config Config) Validate() error {
+	if config.Langfuse != nil {
+		if err := config.Langfuse.validate(); err != nil {
+			return err
+		}
+	}
 	if config.Version != APIVersion {
 		return fmt.Errorf("version must be %q", APIVersion)
 	}

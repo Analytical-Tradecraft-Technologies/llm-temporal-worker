@@ -10,8 +10,10 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/cache"
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/engine"
+	"github.com/mfow/llm-temporal-worker/golang/langfuse"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
@@ -135,6 +137,8 @@ type DurableCompositionFactory func(context.Context, V1RuntimeCapabilities) (dur
 // clock is an unconfigured capability; callers must not fall back to a legacy
 // engine or a process-global dependency.
 type V1RuntimeCapabilities struct {
+	Langfuse          *langfuse.Client
+	LangfuseEndpoints map[string]config.EndpointConfig
 	// Requests is the configured cloud operation repository, when enabled.
 	Requests CloudRequestRepository
 	// Finalizer saves typed checkpoint/cache/budget handoffs for outer replay.

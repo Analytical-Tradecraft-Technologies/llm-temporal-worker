@@ -1267,3 +1267,60 @@ and replayed on later turns. A checkpointed reasoning item that has no
 encrypted content is omitted from later requests to a storage-denied endpoint
 rather than sent as an ID the provider cannot resolve; the rest of the
 transcript is unaffected.
+
+
+## Optional Langfuse content export
+
+Cloud-backed v1 Generate and Compact workflows can export semantic request and
+response content to a separate Langfuse project. Leave `langfuse` absent to disable
+this sink globally. A configured sink requires both project keys and an HTTPS
+base URL; resolve keys through the existing secret references:
+
+```yaml
+langfuse:
+  base_url: https://cloud.langfuse.com
+  public_key:
+    kind: env
+    name: LANGFUSE_PUBLIC_KEY
+  secret_key:
+    kind: env
+    name: LANGFUSE_SECRET_KEY
+```
+
+Each existing endpoint can contain `langfuse: {enabled: false}`. Omission defaults
+to enabled, except endpoints with the `openrouter` extension, which default to
+disabled to avoid duplicating gateway telemetry. Use `langfuse: {enabled: true}`
+to explicitly enable those endpoints. Eligibility is captured when planning an
+attempt; export also honors current endpoint disabling. Enabling later does not
+backfill disabled attempts. Langfuse availability is not a readiness dependency.
+
+Each operation gets a trace, with child generations only for actual provider
+attempts. Cache hits and no-work compaction have no paid generation. Compaction
+has its own trace; checkpoint parent edges and shared sessions connect compaction
+and branches to later generations. Tenant, project and actor are filterable
+metadata, and actor is the Langfuse user ID. They are caller-provided labels,
+not transport authentication. The v1 request contract has no dedicated client ID
+and currently rejects nonempty context tags.
+
+Generation metadata identifies provider, endpoint, API family, region, logical
+and resolved model, service class, usage breakdown, captured unit prices and
+catalog provenance. Known actual costs are emitted numerically; unknown costs
+are omitted and their accounting status retained. Model names are qualified by
+provider, so direct OpenAI and OpenRouter are distinguishable. Langfuse's own
+model pricing configuration is separate from the worker's authoritative ledger.
+
+Export uses the dedicated final `llm.ExportLangfuse.v1` activity: 10-second
+start-to-close, 30-second schedule-to-close, at most three attempts. Rejection
+errors are nonretryable; outages retry within those bounds. Failed export logs a
+safe warning and increments `langfuse_export_failures`, preserving the operation's
+original result or error. Capture failures also log a safe warning; missing paid
+captures prevent acknowledgement of an incomplete trace. Content stays in the
+existing encrypted blob store before export. No credentials or opaque provider
+continuation state are exported, and caller-owned tools are represented in I/O
+rather than invented execution spans.
+
+Acknowledgement suppresses ordinary replay exports. If a server accepts a batch
+but its response or the durable acknowledgement is lost, retry may produce a
+duplicate in Langfuse v4; this is best-effort telemetry, not exactly-once delivery.
+The existing operational telemetry sink retains its content-free policy. Legacy
+activity-only and in-memory development runtimes do not export operation traces.
