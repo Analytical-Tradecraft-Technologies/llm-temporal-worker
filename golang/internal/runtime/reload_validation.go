@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"sync"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
@@ -107,6 +108,8 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 		{name: "state.requests.provider.type", changed: beforeRequests.Provider.Type != afterRequests.Provider.Type},
 		{name: "state.requests.provider.aws.region", changed: beforeRequests.Provider.AWS.Region != afterRequests.Provider.AWS.Region},
 		{name: "state.requests.provider.aws.profile", changed: beforeRequests.Provider.AWS.Profile != afterRequests.Provider.AWS.Profile},
+		{name: "state.requests.provider.aws.failover", changed: !reflect.DeepEqual(beforeRequests.Provider.AWS.Failover, afterRequests.Provider.AWS.Failover)},
+		{name: "state.requests.provider.aws.allow_mrsc", changed: beforeRequests.Provider.AWS.AllowMRSC != afterRequests.Provider.AWS.AllowMRSC},
 		{name: "state.requests.provider.aws.temp_directory", changed: beforeRequests.Provider.AWS.TempDirectory != afterRequests.Provider.AWS.TempDirectory},
 		{name: "state.requests.provider.key_value_stores", changed: !maps.Equal(beforeRequests.Provider.KeyValueStores, afterRequests.Provider.KeyValueStores)},
 		{name: "state.requests.provider.blob_stores", changed: !maps.Equal(beforeRequests.Provider.BlobStores, afterRequests.Provider.BlobStores)},
@@ -118,6 +121,7 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 		{name: "blob_store.file.root", changed: before.BlobStore.File.Root != after.BlobStore.File.Root},
 		{name: "blob_store.s3.bucket", changed: before.BlobStore.S3.Bucket != after.BlobStore.S3.Bucket},
 		{name: "blob_store.s3.region", changed: before.BlobStore.S3.Region != after.BlobStore.S3.Region},
+		{name: "blob_store.s3.failover", changed: !reflect.DeepEqual(before.BlobStore.S3.Failover, after.BlobStore.S3.Failover)},
 		{name: "blob_store.s3.prefix", changed: before.BlobStore.S3.Prefix != after.BlobStore.S3.Prefix},
 		{name: "endpoints.*.outbound_hosts", changed: !sameEndpointOutboundHosts(before.Endpoints, after.Endpoints)},
 	} {

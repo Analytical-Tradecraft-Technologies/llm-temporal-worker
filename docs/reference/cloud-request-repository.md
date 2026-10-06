@@ -1,7 +1,7 @@
 # Cloud request repository
 
 `golang/storage/cloudstate` is the durable-request foundation for the migration
-away from SQL. It uses the released `cloud-storage` v0.1.0 generic KV, blob, and
+away from SQL. It uses the `cloud-storage` generic KV, blob, and
 event sourcing modules. The provider factory currently supports AWS IAM,
 DynamoDB, and S3. The repository itself uses only the generic store contracts.
 
@@ -53,6 +53,102 @@ binary or driver dependencies remain. Readiness requires Redis, the result
 blob store and cloud request storage. Missing capabilities or a failed cloud
 open reject the snapshot and drain its clients. There is no SQL fallback or
 SQL data migration.
+
+### Optional multi-region storage
+
+The AWS provider is pinned to cloud-storage commit
+`a61f746a491e0575835034b7a7eddd3f485de63e`, which adds optional DynamoDB
+multi-Region strong consistency (MRSC). `allow_mrsc` defaults to false and
+preserves existing single-region behavior. Enabling it permits global tables
+only when DynamoDB reports `STRONG` consistency; local tables remain allowed.
+
+To also handle regional outages, configure worker-owned `failover` settings.
+This fragment illustrates configurable DynamoDB replicas and S3 fallback
+buckets. Region identifiers and resource names are placeholders; replace them
+with your deployment's supported AWS regions and provisioned resources:
+
+```yaml
+state:
+  requests:
+    provider:
+      type: aws
+      aws:
+        region: region-primary
+        allow_mrsc: true
+        failover:
+          dynamodb_regions: [region-fallback-a, region-fallback-b]
+          payload_replicas:
+            - region: region-fallback-a
+              bucket: payloads-replica
+          attempt_timeout: 5s
+      key_value_stores:
+        requests: llm-requests
+      blob_stores:
+        payloads: payloads-primary
+blob_store:
+  kind: s3
+  s3:
+    region: region-primary
+    bucket: results-primary
+    prefix: results
+    auth:
+      kind: aws_default_chain
+    failover:
+      replicas:
+        - region: region-fallback-a
+          bucket: results-replica
+      attempt_timeout: 5s
+```
+
+Retain the request table/payload aliases, namespace, encryption secret and other
+required settings from the complete configuration. Deployments supply all
+region identifiers and bucket/table names; the worker has no built-in region
+selection.
+Use the same physical DynamoDB table name in every region. Fallback region and
+bucket lists exclude the primary. Each must be distinct. `attempt_timeout`
+is required, positive and at most 30 seconds. A shorter caller deadline is
+split between remaining endpoints, so the failed primary cannot consume all
+available time. A successful endpoint is preferred on subsequent calls.
+
+DynamoDB failover requires `allow_mrsc: true` and validates that each endpoint
+belongs to a `STRONG` global table containing every configured replica region.
+Handles open lazily, allowing startup and readiness with the primary down.
+DynamoDB provides consensus and conditional writes; the worker does not vote.
+Read failures can move to another endpoint. Ambiguous mutations retain their
+unknown-outcome error and advance the preferred endpoint for subsequent
+repository reconciliation; they are never blindly replayed. Definitively
+rejected, unavailable mutations can be attempted at another replica.
+Authorization, validation, corruption and conditional failures are not bypassed.
+Pagination tokens remain bound to their original region: if that region fails,
+restart enumeration from its first page and deduplicate recovered records.
+
+Cloud payloads and result blobs have independent S3 fallback settings. Both
+try alternate buckets on unavailable reads or missing objects and preserve
+payload decryption, digest and tenant checks. A missing replica plus an
+unavailable source remains an availability failure, rather than a definitive
+missing object. Readiness needs one reachable, authorized bucket.
+Writes require one available bucket. Result writes can safely retry their
+immutable content-addressed object; uncertain
+cloud payload creates return their original error for repository reconciliation.
+The worker does not synchronously mirror payloads to every bucket.
+
+**Replication risk:** S3 replication is asynchronous. Provision bidirectional
+replication, versioning and appropriate IAM for both payload and result stores
+so objects written during either region's outage can reach the other bucket
+when it recovers. A payload acknowledged in one region can be unavailable or
+lost if that region fails before replication completes. A visible DynamoDB
+event does not prove that its payload reached the surviving bucket. Missing
+committed payloads fail closed; they do not authorize duplicate provider work.
+This optional mode cannot guarantee zero data loss for S3.
+
+Both failover configurations and MRSC opt-in are process-lifetime settings;
+changing regions, buckets, mappings or timeouts requires a worker restart.
+The cloud provider digest includes these settings. Storage failover does not
+provide Redis, Temporal or Kubernetes failover. Keep one shared Redis admission
+authority: independent regional Redis clusters cannot coordinate existing
+budget reservations and dispatch claims. If that authority or Temporal is
+unavailable, the worker must remain unavailable rather than dispatch paid work
+without the existing coordination guarantees.
 
 Cloud composition uses `durable.StateIdentity.Cloud` instead of a fabricated
 PostgreSQL namespace. Its comparable identity contains the provider type,

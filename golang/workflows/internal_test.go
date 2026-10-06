@@ -338,3 +338,22 @@ func TestBudgetWorkflowRejectsNegativeWaits(t *testing.T) {
 		t.Fatalf("negative waits backoff = %v", got)
 	}
 }
+
+// A failed request reaches the workflow caller with the provider failure's
+// stable code and dispatch as error details, not a bare provider_error (#1001).
+func TestExecuteRequestFailureCarriesProviderDetails(t *testing.T) {
+	failed := step(activity.PollActivityName, llm.ExecutionFailed)
+	failed.alter = func(v *llm.ExecutionResultV1) {
+		v.FailureCode, v.ErrorCode, v.Dispatch = "provider_rejected", "rate_limited", "rejected"
+	}
+	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionPending), failed)
+	f.env.ExecuteWorkflow(RequestWorkflowName, f.input)
+	var application *temporal.ApplicationError
+	if !errors.As(f.env.GetWorkflowError(), &application) || application.Type() != "provider_rejected" || !application.HasDetails() {
+		t.Fatalf("workflow error = %v, want provider_rejected with details", f.env.GetWorkflowError())
+	}
+	var details ExecutionFailureDetails
+	if err := application.Details(&details); err != nil || details.ErrorCode != "rate_limited" || details.Dispatch != "rejected" {
+		t.Fatalf("details = %+v, %v", details, err)
+	}
+}

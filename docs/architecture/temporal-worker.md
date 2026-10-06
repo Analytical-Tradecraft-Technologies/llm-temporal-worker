@@ -115,6 +115,18 @@ of Temporal history; automatic orphan cleanup is deferred.
 
 ## Heartbeats
 
+> **Scope.** The heartbeat details and periodic `provider_wait` keepalive below
+> apply to every Activity, including the durable v1 execution steps, which run
+> through the same `runV1` wrapper; keep
+> `temporal.worker.heartbeat_keepalive_interval` configured for them. The
+> engine-specific phases (`planning` through `continuation_write`), the
+> `Engine.Generate` lifecycle and the ledger behaviour in this section and in
+> [Cancellation](#cancellation) describe the legacy engine Activity
+> (`llm.generate.legacy.v1`), which only memory mode registers. The durable v1
+> steps persist their progress in the cloud request record and are recovered by
+> the internal workflows; see [internal workflows](../reference/internal-workflows.md)
+> and [cloud provider execution](../reference/cloud-provider-execution.md).
+
 The one-shot v1 Activities invoke their runtime exactly once and return a final
 normalized or control-plane response. No streaming or token-event API is
 supported in v1, including for reusable library callers. Text/JSON deltas,
@@ -173,6 +185,14 @@ background context is allowed only for the short, bounded ambiguity/finalization
 record and must retain tracing identifiers without prompt data.
 
 ## Resumable provider operations
+
+> **Legacy engine.** This section describes the legacy engine's ledger. On the
+> durable v1 path a resumable job's provider ID and poll schedule are saved in
+> the cloud provider execution record. Polling and `RecoverByIdempotencyKey`
+> recovery run from the poll and acquire steps, as described in
+> [cloud provider execution](../reference/cloud-provider-execution.md) and
+> [cloud provider recovery](../reference/cloud-provider-recovery.md); the
+> no-resubmission guarantee is the same.
 
 Adapters that implement the optional `ResumableAdapter` port submit once and
 return a provider-owned operation identifier. The worker envelope-encrypts that

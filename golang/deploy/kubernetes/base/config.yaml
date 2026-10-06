@@ -42,6 +42,9 @@ authorization:
 
 state:
   kind: durable
+  # operation_terminal_retention and reservation_lease apply only to memory
+  # mode's legacy engine, and ambiguous_retention is currently unused; durable
+  # workers use continuation_retention and a fixed 15m budget start lease.
   operation_terminal_retention: 45d
   ambiguous_retention: 90d
   continuation_retention: 30d

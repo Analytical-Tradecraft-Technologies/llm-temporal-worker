@@ -117,7 +117,7 @@ let result = Generate.invoke
 
 For a multi-turn workflow, `Llm_temporal.Conversation` keeps the v1 checkpoint
 branch head as an immutable value. `fork` is a cheap persistent branch
-operation: it does not schedule an Activity or mutate the parent. A successful
+operation: it does not schedule a workflow or mutate the parent. A successful
 `respond` returns the v1 provider response together with a child conversation
 carrying the returned checkpoint. Callers therefore choose explicitly which
 child to retain.
@@ -272,7 +272,17 @@ while still-unknown fields remain inherited by the worker.
 
 ## Typed query facade
 
-`Llm_temporal.Query` adds a closed GADT over the five query Activities. Each
+`Query.execute`, `Query.start`, `invoke_query_v1` and `start_query_v1` require
+`~task_queue` and `~id`: the `llm.query.workflow.v1` child workflow is
+registered on the Go worker's task queue, so the calling workflow's own queue
+cannot serve it. Use a deterministic child ID unique within the namespace. The production worker does
+not compose a query service yet, so every query kind currently fails with an
+unsupported-query error there (tracked in
+[#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
+The persisted query handler also rejects a positive
+`refresh_if_older_than_seconds`; leave it unset.
+
+`Llm_temporal.Query` adds a closed GADT over the five query kinds. Each
 constructor carries its filter and fixes the result type, so pagination and
 result handling remain associated at the call site:
 
@@ -300,8 +310,7 @@ dimensions.  The raw filter records remain available for protocol fixtures.
 ```ocaml
 let* provider_filter =
   Llm_temporal.Query.Filter.provider_status
-    ~include_healthy:false ~page_size:100
-    ~refresh_if_older_than_seconds:300L ()
+    ~include_healthy:false ~page_size:100 ()
 in
 Llm_temporal.Query.execute ~task_queue ~id ~operation_key ~context
   (Llm_temporal.Query.Provider_status provider_filter)

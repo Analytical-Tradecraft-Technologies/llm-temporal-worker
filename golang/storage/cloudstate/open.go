@@ -2,6 +2,7 @@ package cloudstate
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/provider"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers"
@@ -29,6 +30,17 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 	}
 	if !namespacePattern.MatchString(config.Namespace) || !safeText(config.RequestTable, 256) || !safeText(config.PayloadStore, 256) || len(secret) != 32 {
 		return nil, ErrInvalid
+	}
+	if aws, ok := config.Provider["aws"].(map[string]any); ok && aws["failover"] != nil {
+		data, err := json.Marshal(aws["failover"])
+		if err != nil {
+			return nil, ErrInvalid
+		}
+		var f regionalOptions
+		if err = json.Unmarshal(data, &f); err != nil {
+			return nil, ErrInvalid
+		}
+		return openRegional(ctx, config, secret, initialize, f)
 	}
 	backend, err := initialize(ctx, config.Provider)
 	if err != nil {

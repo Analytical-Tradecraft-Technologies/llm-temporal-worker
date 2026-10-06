@@ -77,3 +77,34 @@ func TestDurableConfigRequiresCloudAndRejectsRemovedSQL(t *testing.T) {
 		}
 	}
 }
+
+func TestCloudRequestMRSCOptIn(t *testing.T) {
+	data := string(exampleYAML(t))
+	base, err := config.Compile(context.Background(), []byte(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Config().State.Requests.Provider.AWS.AllowMRSC {
+		t.Fatal("MRSC enabled by default")
+	}
+	for _, value := range []string{"false", "true"} {
+		fixture := strings.Replace(data, "region: ap-southeast-2", "region: ap-southeast-2\n        allow_mrsc: "+value, 1)
+		snapshot, err := config.Compile(context.Background(), []byte(fixture), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := value == "true"
+		if snapshot.Config().State.Requests.Provider.AWS.AllowMRSC != want {
+			t.Fatal("lost MRSC setting")
+		}
+		if (snapshot.Digest() != base.Digest()) != want {
+			t.Fatal("MRSC setting has incorrect snapshot identity")
+		}
+	}
+	for _, value := range []string{"\"true\"", "1", "[]"} {
+		fixture := strings.Replace(data, "region: ap-southeast-2", "region: ap-southeast-2\n        allow_mrsc: "+value, 1)
+		if _, err := config.Load([]byte(fixture)); err == nil {
+			t.Fatalf("accepted allow_mrsc: %s", value)
+		}
+	}
+}

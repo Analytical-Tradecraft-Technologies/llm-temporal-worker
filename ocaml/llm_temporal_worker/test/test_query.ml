@@ -84,7 +84,7 @@ let response_for = function
 
 let dispatch ?task_queue:_ activity envelope =
   if Temporal.Workflow.name activity <> "llm.query.workflow.v1" then
-    failwith "Query used the wrong Activity descriptor";
+    failwith "Query used the wrong workflow descriptor";
   Ok (response_for envelope.query)
 
 let run query = ok (Query.execute_with ~dispatch ~operation_key ~context query)
@@ -132,7 +132,7 @@ let expect_start_validation_error :
           (Temporal.Error.message error)
     | Some (Ok (Ok _)) -> failwith (label ^ " start accepted an invalid direct filter")
     | Some (Error error) ->
-        failf "%s start scheduled an Activity: %s" label (Temporal.Error.message error)
+        failf "%s start scheduled a workflow: %s" label (Temporal.Error.message error)
     | None -> failwith (label ^ " start did not return a ready validation error"));
     if !dispatch_called then failwith (label ^ " called its injected async dispatcher")
 
@@ -158,7 +158,7 @@ let expect_response_error :
     with
     | Some (Ok result) -> check_error "start_with" result
     | Some (Error error) ->
-        failf "%s start_with returned an Activity error: %s" label
+        failf "%s start_with returned an workflow error: %s" label
           (Temporal.Error.message error)
     | None -> failwith (label ^ " start_with did not return a ready response")
 
@@ -318,7 +318,7 @@ let () =
   let async_dispatch ?task_queue:_ activity envelope =
     async_dispatch_called := true;
     if Temporal.Workflow.name activity <> "llm.query.workflow.v1" then
-      failwith "Query.start_with used the wrong Activity descriptor";
+      failwith "Query.start_with used the wrong workflow descriptor";
     Temporal.Future.map
       (fun _ -> response_for envelope.query)
       (Temporal.Future.all [])
@@ -585,8 +585,8 @@ let () =
    | Error error -> failf "unexpected non-paginated cursor error: %s" (Temporal.Error.message error)
    | Ok _ -> failwith "non-paginated response cursor was accepted");
 
-  (* [start] performs the same cursor validation before scheduling an
-     Activity.  Its error is kept in the successful result channel, matching
+  (* [start] performs the same cursor validation before scheduling a
+     workflow.  Its error is kept in the successful result channel, matching
      the existing Temporal.Future contract for protocol mismatches. *)
   let invalid_start = Query.start ~task_queue:(Temporal_task_queue.of_string "llm-worker") ~id:"invalid-query" ~operation_key ~context wrong_kind in
   (match Temporal.Future.peek invalid_start with
@@ -601,8 +601,8 @@ let () =
   let failing_dispatch ?task_queue:_ _activity _envelope = Error activity_error in
   (match Query.execute_with ~dispatch:failing_dispatch ~operation_key ~context provider with
    | Error error when String.equal (Temporal.Error.message error) "query failed" -> ()
-   | Error error -> failf "unexpected Activity error: %s" (Temporal.Error.message error)
-   | Ok _ -> failwith "Activity error was swallowed");
+   | Error error -> failf "unexpected workflow error: %s" (Temporal.Error.message error)
+   | Ok _ -> failwith "workflow error was swallowed");
 
   (* Natural builders validate query invariants before callers wrap the
      filter in a GADT constructor.  Tagged cursors from another query kind

@@ -100,10 +100,15 @@ const (
 // the existing Generate/Compact v1 records; intermediate results carry no paid
 // response, provider job identifier, reservation, or raw diagnostic message.
 type ExecutionResultV1 struct {
-	RequestID         string              `json:"request_id"`
-	Kind              string              `json:"kind"`
-	State             ExecutionStateV1    `json:"state"`
-	FailureCode       string              `json:"failure_code,omitempty"`
+	RequestID   string           `json:"request_id"`
+	Kind        string           `json:"kind"`
+	State       ExecutionStateV1 `json:"state"`
+	FailureCode string           `json:"failure_code,omitempty"`
+	// ErrorCode and Dispatch carry the provider failure's stable error code
+	// (for example invalid_argument or rate_limited) and dispatch certainty,
+	// so callers can tell failures apart without the provider's message.
+	ErrorCode         string              `json:"error_code,omitempty"`
+	Dispatch          string              `json:"dispatch,omitempty"`
 	Retryable         bool                `json:"retryable,omitempty"`
 	RetryAfterSeconds int32               `json:"retry_after_seconds,omitempty"`
 	Generate          *GenerateResponseV1 `json:"generate,omitempty"`
@@ -120,7 +125,20 @@ func (result ExecutionResultV1) Validate() error {
 		default:
 			return fmt.Errorf("execution failure code is invalid")
 		}
-	} else if result.FailureCode != "" || result.Retryable {
+		if result.ErrorCode != "" && !safeExecutionToken(result.ErrorCode) {
+			return fmt.Errorf("execution error code is invalid")
+		}
+		switch result.Dispatch {
+		case "", "not_dispatched", "rejected", "accepted", "ambiguous":
+		default:
+			return fmt.Errorf("execution dispatch is invalid")
+		}
+		// provider_rejected means the provider definitely did not accept the
+		// request, so it is only valid with a definite dispatch.
+		if result.FailureCode == "provider_rejected" && result.Dispatch != "not_dispatched" && result.Dispatch != "rejected" {
+			return fmt.Errorf("provider_rejected requires a definite dispatch")
+		}
+	} else if result.FailureCode != "" || result.ErrorCode != "" || result.Dispatch != "" || result.Retryable {
 		return fmt.Errorf("execution state cannot contain failure details")
 	}
 	wait := false
@@ -165,7 +183,7 @@ func (result ExecutionResultV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire(result))
 }
 func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "retryable", "generate", "compact"); err != nil {
+	if err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "error_code", "dispatch", "retryable", "generate", "compact"); err != nil {
 		return err
 	}
 	type wire ExecutionResultV1
@@ -183,7 +201,7 @@ func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
 		forbidden = append(forbidden, "retry_after_seconds")
 	}
 	if candidate.State != ExecutionFailed {
-		forbidden = append(forbidden, "failure_code", "retryable")
+		forbidden = append(forbidden, "failure_code", "error_code", "dispatch", "retryable")
 	}
 	for _, name := range forbidden {
 		if _, present := fields[name]; present {
@@ -195,6 +213,20 @@ func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
 	}
 	*result = candidate
 	return nil
+}
+
+// safeExecutionToken accepts a bounded lowercase identifier such as a
+// provider error code.
+func safeExecutionToken(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && r != '_' && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func validExecutionRequestID(id string) bool {

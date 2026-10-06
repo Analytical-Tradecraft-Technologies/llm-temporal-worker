@@ -550,8 +550,32 @@ resolved credentials.
 **state.requests**. Redis owns budget reservations, claims, settlement,
 throttles and provider operational state. Cloud key-value/blob storage holds
 requests, attempts, pending records, response caches and continuation data.
+Optional `state.requests.provider.aws.allow_mrsc: true` permits strongly
+consistent DynamoDB global tables. It defaults to false and requires a restart
+to change. Optional AWS `failover` settings add regional endpoint routing;
+configure `blob_store.s3.failover` separately for result blobs. S3 replication
+is asynchronous, and surviving-region writes accept a replication risk.
+See [multi-region storage](cloud-request-repository.md#optional-multi-region-storage)
+for replica configuration and regional failover constraints.
+
 See [cloud request storage](cloud-request-repository.md#worker-integration)
 for IAM configuration, table/bucket aliases and the encryption secret.
+
+On the durable v1 path, `state.continuation_retention` sets the checkpoint
+lifetime. The other `state` timing settings are validated and defaulted, but
+the durable path does not read them:
+
+- `state.reservation_lease` and `state.operation_terminal_retention` apply only
+  to the legacy engine Activity that memory mode runs. The durable path uses a
+  fixed 15-minute budget start lease (`durable.BudgetStartLease`) for
+  reservations, provider-start claims and recovery windows, and does not
+  expire cloud request records yet; retention is tracked in
+  [#818](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/818).
+- `state.ambiguous_retention` is currently unused in every mode: memory mode
+  expires ambiguous operations on `operation_terminal_retention` too.
+
+Changing them has no effect on a durable worker. They remain accepted so one
+configuration can serve both modes.
 
 Durable readiness requires Redis, cloud request storage and the result blob
 store. Production startup requires a ready cloud initialization receipt;
@@ -597,8 +621,13 @@ means the v1 contract. Its input is the `activity.GenerateRequest` envelope
 envelope `{"api_version": "llm.temporal/v1", "response": <llm.Response>, "metadata": {...}}`. Trying
 the v1 API locally requires `state.kind: durable` with cloud storage and Redis.
 
-Operations, checkpoints, budget/throttle state, and blobs are process local;
-restart loses everything and provider-pending jobs cannot be recovered after
+Operations, checkpoints, budget/throttle state, and blobs are process local.
+A configuration reload keeps them: the admission, result and continuation
+stores belong to the process, not to a snapshot, so completed operations still
+replay after a reload. A continuation key rotation or `limits.continuation_depth`
+change rebuilds only the continuation store, and the memory blob store keeps
+the first snapshot's `blob_store.inline_bytes` until restart. A restart loses
+everything and provider-pending jobs cannot be recovered after
 process loss. The mode must not be used for durable continuation/recovery
 guarantees, multi-replica admission, backups, or production readiness. Redis
 addresses and credentials are ignored by the memory factory and

@@ -429,6 +429,20 @@ func (r *CloudExecutionRuntime) finishProviderStep(ctx context.Context, p Prepar
 }
 
 func (r *CloudExecutionRuntime) now() time.Time { return r.capabilities.Clock().UTC() }
+
+// providerFailureResult reports a failed provider attempt with its stable
+// error code and dispatch certainty. A definite rejection (the provider never
+// accepted the request) is provider_rejected; anything that may have reached
+// the provider stays provider_error.
+func providerFailureResult(p PreparedCloudRequest, failure cloudstate.ExecutionFailure) llm.ExecutionResultV1 {
+	result := cloudStatus(p, llm.ExecutionFailed, 0)
+	result.FailureCode = "provider_error"
+	if failure.Dispatch == provider.DispatchRejected || failure.Dispatch == provider.DispatchNotDispatched {
+		result.FailureCode = "provider_rejected"
+	}
+	result.ErrorCode, result.Dispatch, result.Retryable = string(failure.Code), string(failure.Dispatch), failure.Retryable
+	return result
+}
 func cloudStatus(p PreparedCloudRequest, status llm.ExecutionStateV1, wait time.Duration) llm.ExecutionResultV1 {
 	result := llm.ExecutionResultV1{RequestID: string(p.Record.Request.ID), Kind: p.Record.Request.Kind, State: status}
 	if status == llm.ExecutionBudgetWait || status == llm.ExecutionCacheWait || status == llm.ExecutionPending {
@@ -441,10 +455,7 @@ func (r *CloudExecutionRuntime) providerResult(p PreparedCloudRequest, result Pr
 	case cloudstate.ExecutionSucceeded:
 		return cloudStatus(p, llm.ExecutionProviderCompleted, 0)
 	case cloudstate.ExecutionFailed:
-		failure := cloudStatus(p, llm.ExecutionFailed, 0)
-		failure.FailureCode = "provider_error"
-		failure.Retryable = result.Saved.Execution.Failure.Retryable
-		return failure
+		return providerFailureResult(p, *result.Saved.Execution.Failure)
 	case cloudstate.ExecutionUnknown:
 		if r.now().Before(result.Saved.Execution.RecoverAfter) {
 			return cloudStatus(p, llm.ExecutionPending, result.Saved.Execution.RecoverAfter.Sub(r.now()))

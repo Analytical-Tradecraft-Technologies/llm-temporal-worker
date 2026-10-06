@@ -102,6 +102,10 @@ val execute_with :
   context:request_context ->
   'a t -> ('a response, Temporal.Error.t) result
 
+(** [execute] and [start] dispatch the [llm.query.workflow.v1] child
+    workflow on [task_queue], which must be the Go worker's task queue.
+    The Go workflow calls the internal query activity on that queue. Supply
+    a deterministic [id] unique within the namespace for each query child. *)
 val execute :
   task_queue:Temporal_task_queue.t -> id:string ->
   operation_key:Operation_key.t ->

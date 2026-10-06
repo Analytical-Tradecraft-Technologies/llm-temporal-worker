@@ -242,8 +242,9 @@ func TestCloudPermanentFailureReplaysWithoutParentOrProvider(t *testing.T) {
 	} {
 		result, err := run()
 		boundedState(t, result, err, llm.ExecutionFailed)
-		if result.Retryable || result.FailureCode != "provider_error" {
-			t.Fatal("failure changed")
+		// A definite rejection reports its stable code and dispatch (#1001).
+		if result.Retryable || result.FailureCode != "provider_rejected" || result.ErrorCode != string(provider.CodePermissionDenied) || result.Dispatch != string(provider.DispatchRejected) {
+			t.Fatalf("failure changed: %+v", result)
 		}
 	}
 	if f.submits.Load() != 1 {

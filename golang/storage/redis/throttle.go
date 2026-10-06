@@ -18,10 +18,9 @@ import (
 type ThrottleKind string
 
 const (
-	ThrottleRequests        ThrottleKind = "requests"
-	ThrottleTokens          ThrottleKind = "tokens"
-	ThrottleConcurrency     ThrottleKind = "concurrency"
-	ThrottleFunctionVersion              = "throttle_v1"
+	ThrottleRequests    ThrottleKind = "requests"
+	ThrottleTokens      ThrottleKind = "tokens"
+	ThrottleConcurrency ThrottleKind = "concurrency"
 )
 
 var (

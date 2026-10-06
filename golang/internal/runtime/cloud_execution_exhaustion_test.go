@@ -101,9 +101,18 @@ func TestCloudExecutionExhaustionAfterRetryableRejection(t *testing.T) {
 	if result.Retryable {
 		t.Fatal("limit ignored")
 	}
+	// The terminal failure keeps the last attempt's facts (#1001).
+	wantDetails := func(result llm.ExecutionResultV1) {
+		t.Helper()
+		if result.FailureCode != "provider_rejected" || result.ErrorCode != string(provider.CodeProviderUnavailable) || result.Dispatch != string(provider.DispatchRejected) {
+			t.Fatalf("exhausted failure = %+v, want the last attempt's code and dispatch", result)
+		}
+	}
+	wantDetails(result)
 	f.restart(t)
 	result, err = f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, result, err, llm.ExecutionFailed)
+	wantDetails(result)
 	if f.submits.Load() != 1 {
 		t.Fatal("terminal request submitted again")
 	}
