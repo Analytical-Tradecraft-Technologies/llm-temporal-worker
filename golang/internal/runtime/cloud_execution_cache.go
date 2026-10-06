@@ -32,14 +32,14 @@ func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudR
 	}
 	var request llm.Request
 	var policyVersion, promptVersion string
-	var temperature *llm.DecimalV1
+	var temperature, topP *llm.DecimalV1
 	if p.Generate != nil {
 		input, err := PrepareGenerateInput(ctx, *p.Generate, p.GenerateReplay)
 		if err != nil {
 			return nil, err
 		}
 		request = input.Request
-		temperature = input.Settings.TemperatureDecimal
+		temperature, topP = input.Settings.TemperatureDecimal, input.Settings.TopP
 	} else {
 		input, err := PrepareCompactInput(ctx, *p.Compact, p.CompactReplay)
 		if err != nil {
@@ -54,6 +54,8 @@ func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudR
 	// Hash the complete normalized semantic payload at the request bound, then
 	// put that digest in the small keyed cache manifest. Large transcripts do
 	// not hit the manifest's 256 KiB audit bound. The exact v1 temperature also participates before provider projection.
+	// The exact top_p does too; it is omitted when unset so existing cache keys
+	// are unchanged.
 	request.OperationKey = "cache-semantic-input"
 	request.Context = llm.RequestContext{}
 	request.ServiceClass, request.ServiceClassFallbacks = llm.ServiceClassStandard, nil
@@ -65,9 +67,10 @@ func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudR
 	encoded, err := json.Marshal(struct {
 		Request       llm.Request
 		Temperature   *llm.DecimalV1
+		TopP          *llm.DecimalV1 `json:",omitempty"`
 		PolicyVersion string
 		PromptVersion string
-	}{request, temperature, policyVersion, promptVersion})
+	}{request, temperature, topP, policyVersion, promptVersion})
 	if err != nil {
 		return nil, err
 	}

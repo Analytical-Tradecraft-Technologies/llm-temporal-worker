@@ -23,6 +23,11 @@ module Settings : sig
     ?code_execution:bool ->
     ?compaction_policy:compaction_policy ->
     ?temperature:Usd_decimal.t ->
+    ?top_p:Usd_decimal.t ->
+    ?stop_sequences:string list ->
+    ?seed:int64 ->
+    ?reasoning_mode:reasoning_mode ->
+    ?reasoning_token_budget:int ->
     ?reasoning_effort:reasoning_effort ->
     ?reasoning_summary:reasoning_summary ->
     ?extensions:(string * Yojson.Safe.t) list ->
@@ -60,6 +65,20 @@ module Settings : sig
     val clear_output : t -> t
     val set_temperature : Usd_decimal.t -> t -> t
     val clear_temperature : t -> t
+
+    (** Sampling and reasoning controls. Bounds are checked when the request
+        is encoded; a route that cannot honour a control rejects the request
+        rather than dropping it. *)
+    val set_top_p : Usd_decimal.t -> t -> t
+    val clear_top_p : t -> t
+    val set_stop_sequences : string list -> t -> t
+    val clear_stop_sequences : t -> t
+    val set_seed : int64 -> t -> t
+    val clear_seed : t -> t
+    val set_reasoning_mode : reasoning_mode -> t -> t
+    val clear_reasoning_mode : t -> t
+    val set_reasoning_token_budget : int -> t -> t
+    val clear_reasoning_token_budget : t -> t
     val set_reasoning_effort : reasoning_effort -> t -> t
     val clear_reasoning_effort : t -> t
     val set_reasoning_summary : reasoning_summary -> t -> t

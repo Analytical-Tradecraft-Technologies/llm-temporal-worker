@@ -191,6 +191,11 @@ type settings_patch = {
   tool_policy : tool_policy patch;
   output : output_spec patch;
   temperature : Usd_decimal.t patch;
+  top_p : Usd_decimal.t patch;  (** In (0, 1]; the v1 codec rejects other values. *)
+  stop_sequences : string list patch;  (** 1 to 16 distinct, non-empty values of at most 256 characters. *)
+  seed : int64 patch;  (** Between 0 and 2{^53} - 1. *)
+  reasoning_mode : reasoning_mode patch;
+  reasoning_token_budget : int patch;  (** Between 1 and 2147483647. *)
   reasoning_effort : reasoning_effort patch;
   reasoning_summary : reasoning_summary patch;
   compaction_policy : Yojson.Safe.t patch;

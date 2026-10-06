@@ -206,17 +206,41 @@ func prepareSemanticRequest(caller llm.RequestContext, operationKey string, sett
 		Instructions: settings.Instructions, Input: items, Tools: settings.Tools,
 		WebFetch: settings.WebFetch, CodeExecution: settings.CodeExecution, WebSearch: settings.WebSearch, ToolPolicy: settings.ToolPolicy, Output: settings.Output, Extensions: settings.Extensions,
 	}
+	// Sampling and Reasoning stay nil unless a leaf is set, so a state that uses
+	// none of them compiles to exactly the request it did before they existed.
+	sampling := llm.SamplingSpec{}
 	if settings.TemperatureDecimal != nil {
 		value, err := settings.TemperatureDecimal.Float64()
 		if err != nil {
 			return llm.Request{}, err
 		}
-		request.Sampling = &llm.SamplingSpec{Temperature: &value}
+		sampling.Temperature = &value
 	} else if settings.Temperature != nil {
-		request.Sampling = &llm.SamplingSpec{Temperature: settings.Temperature}
+		sampling.Temperature = settings.Temperature
 	}
-	if settings.ReasoningEffort != "" || settings.ReasoningSummary != "" {
-		request.Reasoning = &llm.ReasoningSpec{Effort: settings.ReasoningEffort, Summary: settings.ReasoningSummary}
+	if settings.TopP != nil {
+		value, err := settings.TopP.Float64()
+		if err != nil {
+			return llm.Request{}, err
+		}
+		sampling.TopP = &value
+	}
+	if settings.Seed != nil {
+		value := *settings.Seed
+		sampling.Seed = &value
+	}
+	if settings.StopSequences != nil {
+		sampling.StopSequences = append([]string(nil), settings.StopSequences...)
+	}
+	if sampling.Temperature != nil || sampling.TopP != nil || sampling.Seed != nil || sampling.StopSequences != nil {
+		request.Sampling = &sampling
+	}
+	if settings.ReasoningMode != "" || settings.ReasoningTokenBudget != nil || settings.ReasoningEffort != "" || settings.ReasoningSummary != "" {
+		request.Reasoning = &llm.ReasoningSpec{Mode: settings.ReasoningMode, Effort: settings.ReasoningEffort, Summary: settings.ReasoningSummary}
+		if settings.ReasoningTokenBudget != nil {
+			value := *settings.ReasoningTokenBudget
+			request.Reasoning.TokenBudget = &value
+		}
 	}
 	return llm.NormalizeRequest(request)
 }

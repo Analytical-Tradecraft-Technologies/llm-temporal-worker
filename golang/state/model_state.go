@@ -30,10 +30,18 @@ type ModelState struct {
 	// as the provider-facing projection, but durable checkpoint materialization
 	// must not use it as the source of truth for decimal re-encoding.
 	TemperatureDecimal *llm.DecimalV1
-	ReasoningEffort    llm.ReasoningEffort
-	ReasoningSummary   llm.ReasoningSummary
-	CompactionPolicy   json.RawMessage
-	Extensions         map[string]json.RawMessage
+	// The leaves below were added after v1 checkpoints were first written.
+	// omitempty keeps the snapshot digest of a state that does not use them
+	// byte-identical to the digest computed before they existed.
+	TopP                 *llm.DecimalV1    `json:",omitempty"`
+	StopSequences        []string          `json:",omitempty"`
+	Seed                 *int64            `json:",omitempty"`
+	ReasoningMode        llm.ReasoningMode `json:",omitempty"`
+	ReasoningTokenBudget *int              `json:",omitempty"`
+	ReasoningEffort      llm.ReasoningEffort
+	ReasoningSummary     llm.ReasoningSummary
+	CompactionPolicy     json.RawMessage
+	Extensions           map[string]json.RawMessage
 }
 
 // RootModelState applies only public, deterministic defaults. Provider
@@ -55,6 +63,13 @@ func ApplySettingsPatchV1(base ModelState, wire llm.SettingsPatchV1) (ModelState
 			return ModelState{}, err
 		}
 		wire.Temperature.Set = &canonical
+	}
+	if wire.TopP.Set != nil {
+		canonical, err := llm.NewDecimalV1(wire.TopP.Set.String())
+		if err != nil {
+			return ModelState{}, err
+		}
+		wire.TopP.Set = &canonical
 	}
 	patch, err := settingsPatchFromWire(wire)
 	if err != nil {
@@ -90,6 +105,29 @@ func (state ModelState) Validate() error {
 		}
 		if _, err := canonical.Float64(); err != nil {
 			return fmt.Errorf("temperature decimal cannot be represented by provider state: %w", err)
+		}
+	}
+	if state.TopP != nil {
+		if err := llm.ValidateTopPV1(*state.TopP); err != nil {
+			return err
+		}
+	}
+	if state.StopSequences != nil {
+		if err := llm.ValidateStopSequencesV1(state.StopSequences); err != nil {
+			return err
+		}
+	}
+	if state.Seed != nil {
+		if err := llm.ValidateSeedV1(*state.Seed); err != nil {
+			return err
+		}
+	}
+	if state.ReasoningMode != "" && !llm.ValidReasoningModeV1(state.ReasoningMode) {
+		return fmt.Errorf("reasoning mode %q is invalid", state.ReasoningMode)
+	}
+	if state.ReasoningTokenBudget != nil {
+		if err := llm.ValidateReasoningTokenBudgetV1(*state.ReasoningTokenBudget); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -162,6 +200,34 @@ func ApplySettingsPatch(base ModelState, patch SettingsPatch) (ModelState, error
 		result.Temperature = nil
 		result.TemperatureDecimal = nil
 	}
+	if patch.TopP.Set != nil {
+		value := *patch.TopP.Set
+		result.TopP = &value
+	} else if patch.TopP.Clear {
+		result.TopP = nil
+	}
+	if patch.StopSequences.Set != nil {
+		result.StopSequences = append([]string(nil), (*patch.StopSequences.Set)...)
+	} else if patch.StopSequences.Clear {
+		result.StopSequences = nil
+	}
+	if patch.Seed.Set != nil {
+		value := *patch.Seed.Set
+		result.Seed = &value
+	} else if patch.Seed.Clear {
+		result.Seed = nil
+	}
+	if patch.ReasoningMode.Set != nil {
+		result.ReasoningMode = *patch.ReasoningMode.Set
+	} else if patch.ReasoningMode.Clear {
+		result.ReasoningMode = ""
+	}
+	if patch.ReasoningTokenBudget.Set != nil {
+		value := *patch.ReasoningTokenBudget.Set
+		result.ReasoningTokenBudget = &value
+	} else if patch.ReasoningTokenBudget.Clear {
+		result.ReasoningTokenBudget = nil
+	}
 	if patch.ReasoningEffort.Set != nil {
 		result.ReasoningEffort = *patch.ReasoningEffort.Set
 	} else if patch.ReasoningEffort.Clear {
@@ -222,6 +288,19 @@ func (state ModelState) Clone() ModelState {
 	if state.TemperatureDecimal != nil {
 		value := *state.TemperatureDecimal
 		result.TemperatureDecimal = &value
+	}
+	if state.TopP != nil {
+		value := *state.TopP
+		result.TopP = &value
+	}
+	result.StopSequences = append([]string(nil), state.StopSequences...)
+	if state.Seed != nil {
+		value := *state.Seed
+		result.Seed = &value
+	}
+	if state.ReasoningTokenBudget != nil {
+		value := *state.ReasoningTokenBudget
+		result.ReasoningTokenBudget = &value
 	}
 	result.CompactionPolicy = append(json.RawMessage(nil), state.CompactionPolicy...)
 	result.Extensions = cloneRawMap(state.Extensions)

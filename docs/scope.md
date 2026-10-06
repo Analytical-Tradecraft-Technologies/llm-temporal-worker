@@ -65,9 +65,14 @@ controller:
   rejects them with `unsupported_capability` before routing.
 - First-class tool definitions, tool calls, and tool results.
 - JSON Schema Draft 2020-12 structured output.
-- Temperature, output limits, and reasoning effort and summary where supported.
-  These are the sampling and reasoning controls the v1 settings patch can
-  express.
+- Temperature, top-p, stop sequences, a sampling seed, output limits, and
+  reasoning mode, token budget, effort and summary where supported. These are
+  the sampling and reasoning controls the v1 settings patch can express. A
+  route whose API cannot honour one of them (for example a seed on Anthropic
+  Messages, or stop sequences on OpenAI Responses) rejects the request when it
+  compiles instead of dropping the control. One exception: Bedrock Converse
+  rejects `reasoning_mode` and `reasoning_token_budget` only under strict
+  portability; with `best_effort` it drops them silently.
 - Provider-state parts that remain opaque and byte-for-byte stable.
 - Strict and best-effort portability. Strict mode rejects content a route
   cannot represent; the durable v1 path does not yet emit portability
@@ -116,14 +121,6 @@ controller:
   error, checkpoint cache affinity, and portability diagnostics on the durable
   v1 path. The planner receives no continuation constraints there, so a lineage
   can move between two routes of the same API family.
-- First-class, provider-neutral settings for top-p, stop sequences, a sampling
-  seed, or an explicit reasoning mode or token budget. `SettingsPatchV1` has no
-  leaves for them, although the provider adapters implement the controls
-  internally. Where an endpoint's configured `extensions` allow-list names a
-  provider field (for example `top_p` on an `openai_chat` endpoint), callers can
-  set it through `SettingsPatchV1.Extensions`, unvalidated and per provider.
-  Adding first-class leaves is a contract, checkpoint-settings and client change
-  planned after v1.
 
 ## Behavioral invariants
 

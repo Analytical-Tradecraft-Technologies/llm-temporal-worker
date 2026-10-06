@@ -50,10 +50,17 @@ type SettingsPatch struct {
 	// float64 provider projection. It is populated by the wire decoder and
 	// takes precedence when the patch is encoded again.
 	TemperatureDecimal Patch[llm.DecimalV1]
-	ReasoningEffort    Patch[llm.ReasoningEffort]
-	ReasoningSummary   Patch[llm.ReasoningSummary]
-	CompactionPolicy   Patch[json.RawMessage]
-	Extensions         Patch[map[string]json.RawMessage]
+	// TopP is kept only as the exact v1 decimal; request preparation projects
+	// it to float64 for provider adapters.
+	TopP                 Patch[llm.DecimalV1]
+	StopSequences        Patch[[]string]
+	Seed                 Patch[int64]
+	ReasoningMode        Patch[llm.ReasoningMode]
+	ReasoningTokenBudget Patch[int]
+	ReasoningEffort      Patch[llm.ReasoningEffort]
+	ReasoningSummary     Patch[llm.ReasoningSummary]
+	CompactionPolicy     Patch[json.RawMessage]
+	Extensions           Patch[map[string]json.RawMessage]
 }
 
 func (patch SettingsPatch) Validate() error {
@@ -66,6 +73,8 @@ func (patch SettingsPatch) Validate() error {
 		{"instructions", patch.Instructions}, {"tools", patch.Tools}, {"tool_policy", patch.ToolPolicy},
 		{"output", patch.Output}, {"temperature", patch.Temperature},
 		{"temperature_decimal", patch.TemperatureDecimal},
+		{"top_p", patch.TopP}, {"stop_sequences", patch.StopSequences}, {"seed", patch.Seed},
+		{"reasoning_mode", patch.ReasoningMode}, {"reasoning_token_budget", patch.ReasoningTokenBudget},
 		{"reasoning_effort", patch.ReasoningEffort}, {"reasoning_summary", patch.ReasoningSummary},
 		{"compaction_policy", patch.CompactionPolicy}, {"extensions", patch.Extensions},
 	}
@@ -109,6 +118,29 @@ func (patch SettingsPatch) Validate() error {
 	}
 	if patch.ReasoningSummary.Set != nil && !validReasoningSummary(*patch.ReasoningSummary.Set) {
 		return fmt.Errorf("reasoning summary %q is invalid", *patch.ReasoningSummary.Set)
+	}
+	if patch.ReasoningMode.Set != nil && !llm.ValidReasoningModeV1(*patch.ReasoningMode.Set) {
+		return fmt.Errorf("reasoning mode %q is invalid", *patch.ReasoningMode.Set)
+	}
+	if patch.ReasoningTokenBudget.Set != nil {
+		if err := llm.ValidateReasoningTokenBudgetV1(*patch.ReasoningTokenBudget.Set); err != nil {
+			return err
+		}
+	}
+	if patch.TopP.Set != nil {
+		if err := llm.ValidateTopPV1(*patch.TopP.Set); err != nil {
+			return err
+		}
+	}
+	if patch.StopSequences.Set != nil {
+		if err := llm.ValidateStopSequencesV1(*patch.StopSequences.Set); err != nil {
+			return err
+		}
+	}
+	if patch.Seed.Set != nil {
+		if err := llm.ValidateSeedV1(*patch.Seed.Set); err != nil {
+			return err
+		}
 	}
 	if err := validateJSONLeaf("tool_policy", patch.ToolPolicy.Set); err != nil {
 		return err
