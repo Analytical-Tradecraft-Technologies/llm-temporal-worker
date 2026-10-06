@@ -16,6 +16,7 @@ including typed OCaml callers and explicit trusted-Temporal CLI authorization.
 Deployment and real AWS/restore evidence remain separate release gates. [Scope](scope.md#staged-delivery-and-document-authority)
 separates those gates from implemented behavior.
 
+- [Optional Langfuse export](reference/configuration.md#optional-langfuse-content-export)
 - [Cloud request repository and workflow integration](reference/cloud-request-repository.md)
 - [Redis budget leases](reference/redis-budget-leases.md)
 - [Conversation checkpoints, cache affinity, and compaction](architecture/conversation-checkpoints-and-compaction.md)

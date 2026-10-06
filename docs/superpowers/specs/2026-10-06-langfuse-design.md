@@ -1,7 +1,7 @@
 # Langfuse operation tracing
 
 Date: 2026-10-06
-Status: Design for user review; implementation has not started.
+Status: Implemented in PR #1232; live Langfuse validation remains a deployment check.
 Repository baseline: master 630f7b085fceff38317276b6d511772cdd8225ee.
 
 ## Intent and agreed decisions
@@ -74,12 +74,23 @@ not copy ancestor observations into either branch. Session grouping does not
 promise a native graph view in Langfuse; explicit metadata retains graph edges.
 
 Automatic compaction has a distinct trace in the same session. Record the
-triggering Generate relationship and the source/result checkpoint identities.
-The subsequent Generate references the resulting compacted checkpoint. Export
+automatic-compaction flag and source/result checkpoint identities.
+The subsequent Generate references the resulting compacted checkpoint and its
+compaction trace through the parent edge. The current public contract has no
+separate triggering-operation field. Export
 the summarizer input and summary, policy version, usage and costs. Prior
 observations retain the original content and are never rewritten by compaction.
 
 ## Captured request, response and provider identity
+
+Export caller attribution from the existing Temporal request context as filterable
+`tenant`, `project`, and `actor` metadata. Map `actor` to Langfuse's user ID.
+There is no dedicated client-ID field in the current contract; callers can
+identify their application through actor and project. The generic semantic
+context supports tags, which the exporter can preserve, but the v1 Temporal
+contract currently rejects nonempty tags. These are caller-supplied
+labels, not authenticated Temporal transport identities. Apply the same mapping
+to Generate, Compact and each eligible provider generation.
 
 Capture the effective semantic input and settings after parent materialization,
 compaction and route-specific preparation, plus normalized response items. This
@@ -141,7 +152,7 @@ Telemetry capture failures are reported safely and do not buy another model call
 or alter model/accounting success. Missing capture is an export failure, not a
 fabricated generation.
 
-Add `llm.langfuse.export.v1`, accepting a scoped internal execution reference.
+Add `llm.ExportLangfuse.v1`, accepting a scoped internal execution reference.
 Authorize before loading artifacts. It loads finalized capture, applies enablement,
 assembles completed spans and sends OTLP/HTTP to Langfuse. Use the supported
 `/api/public/otel/v1/traces` endpoint, project-key Basic authentication and

@@ -94,3 +94,12 @@ func (runtime *snapshotV1Runtime) PlanGenerationV1(ctx context.Context, request 
 	})
 	return result, err
 }
+
+func (runtime *snapshotV1Runtime) ExportLangfuseV1(ctx context.Context, ref llm.ExecutionReferenceV1) error {
+	return runtime.with(ctx, func(current activity.V1Runtime) error {
+		if exporter, ok := current.(activity.LangfuseRuntime); ok {
+			return exporter.ExportLangfuseV1(ctx, ref)
+		}
+		return nil
+	})
+}

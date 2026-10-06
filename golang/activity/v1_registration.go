@@ -35,7 +35,7 @@ const (
 	planV1OutputType      = "llm.GenerationPlanV1"
 )
 
-// V1ActivityDescriptors returns the eight bounded Activities exposed
+// V1ActivityDescriptors returns the nine bounded Activities exposed
 // by a production v1 worker. The returned slice is newly allocated and can be
 // safely retained by a registry/introspection endpoint.
 func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
@@ -54,6 +54,7 @@ func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
 		{TaskQueue: taskQueue, Name: PollActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
 		{TaskQueue: taskQueue, Name: CompleteActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
 		{TaskQueue: taskQueue, Name: PlanGenerationActivityName, InputType: generateV1InputType, OutputType: planV1OutputType},
+		{TaskQueue: taskQueue, Name: ExportLangfuseActivityName, InputType: referenceV1InputType, OutputType: "none"},
 	}
 	for _, descriptor := range descriptors {
 		if err := descriptor.Validate(); err != nil {
@@ -70,6 +71,10 @@ func (descriptor V1ActivityDescriptor) Validate() error {
 		return fmt.Errorf("v1 Activity descriptor has an invalid task queue")
 	}
 	switch descriptor.Name {
+	case ExportLangfuseActivityName:
+		if descriptor.InputType != referenceV1InputType || descriptor.OutputType != "none" {
+			return fmt.Errorf("Langfuse export Activity descriptor types are invalid")
+		}
 	case GenerateActivityName:
 		if descriptor.InputType != generateV1InputType || descriptor.OutputType != generateV1OutputType {
 			return fmt.Errorf("Generate v1 Activity descriptor types are invalid")

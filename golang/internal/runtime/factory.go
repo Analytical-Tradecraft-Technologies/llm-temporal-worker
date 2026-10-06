@@ -31,6 +31,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/modelsync"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
+	"github.com/mfow/llm-temporal-worker/golang/langfuse"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -619,6 +620,28 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			stopSync()
 		}
 	}
+	var langfuseClient *langfuse.Client
+	if value.Langfuse != nil {
+		public, err := factory.resolveSecret(ctx, value.Langfuse.PublicKey)
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("resolve Langfuse public key: %w", err)
+		}
+		secret, err := factory.resolveSecret(ctx, value.Langfuse.SecretKey)
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("resolve Langfuse secret key: %w", err)
+		}
+		langfuseClient, err = langfuse.NewClient(value.Langfuse.BaseURL, strings.TrimSpace(string(public)), strings.TrimSpace(string(secret)), nil)
+		if err != nil {
+			closeAll()
+			return nil, nil, err
+		}
+	}
+	if langfuseClient != nil {
+		closeBefore := closeAll
+		closeAll = func() { langfuseClient.Close(); closeBefore() }
+	}
 	clients := &productionClientSet{
 		probes:             probes,
 		providerControl:    providerControl,
@@ -629,6 +652,8 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		budgets:            budgets,
 		v1Capabilities: V1RuntimeCapabilities{
 			Requests:                  repository,
+			Langfuse:                  langfuseClient,
+			LangfuseEndpoints:         value.Endpoints,
 			ConfigDigest:              snapshot.Digest(),
 			Snapshot:                  snapshotSource,
 			Planner:                   planner,

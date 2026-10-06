@@ -127,7 +127,7 @@ func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResu
 // operate on one durable request; outcome_unknown explicitly returns to budget
 // acquisition, which creates an independent paid attempt. No provider ID or
 // reservation is carried in workflow history.
-func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
+func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returned llm.ExecutionResultV1, returnedErr error) {
 	if _, err := input.MarshalJSON(); err != nil {
 		return llm.ExecutionResultV1{}, invalidInput()
 	}
@@ -146,6 +146,15 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (llm.Exe
 		return llm.ExecutionResultV1{}, err
 	}
 	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: caller}
+	defer func() {
+		if !workflow.IsContinueAsNewError(returnedErr) && workflow.GetVersion(ctx, "langfuse-export-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+			exportCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}})
+			if err := workflow.ExecuteActivity(exportCtx, activity.ExportLangfuseActivityName, ref).Get(exportCtx, nil); err != nil {
+				workflow.GetLogger(ctx).Warn("Langfuse export failed", "request_id", ref.RequestID)
+				workflow.GetMetricsHandler(ctx).Counter("langfuse_export_failures").Inc(1)
+			}
+		}
+	}()
 	for steps := 0; ; steps++ {
 		switch result.State {
 		case llm.ExecutionCompleted:
