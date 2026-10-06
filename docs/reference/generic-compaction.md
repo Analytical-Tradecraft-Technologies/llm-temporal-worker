@@ -63,8 +63,20 @@ provider item count, provider lineage depth, materialized bytes, and expired
 continuation. The first crossed limit is recorded as `TriggerReason` for
 durable observability.
 
+The policy trigger compares `trigger_tokens` with the whole projected request,
+but compaction can only remove the selected prefix. `TriggerInput.RetainedTokens`
+is the part of that count a summary leaves in place: instructions, tool
+schemas, the retained recent window and the turn being appended. When it
+already reaches `trigger_tokens`, the policy trigger is skipped, because the
+compacted request would still be over the trigger and every following turn
+would buy another summarizer call that re-summarizes the previous summary. The
+remaining limits are still evaluated for such a request. A caller whose fixed
+prompt and tools exceed the default trigger therefore needs a higher
+`trigger_tokens`; the provider context limit still compacts the transcript
+when a route's window is reached.
+
 When compaction is required, the decision returns the policy's lower
-`target_tokens` hysteresis target. The prefix selector should materialize a
+`target_tokens` hysteresis target. The prefix selector materializes a
 checkpoint at or below that target; a checkpoint already below the target does
 not retrigger by itself. Deadline and clock interpretation remain engine
 responsibilities, so the trigger API accepts the durable
@@ -78,6 +90,18 @@ An unresolved final tool frontier is retained in full even when the requested
 window is zero, so a summary can never split a tool exchange. Provider-state
 items are also retained as whole semantic items. An empty prefix means there is
 no safe work to compact yet and must not be passed to `PrepareRequest`.
+
+`compaction.SelectRequestPrefix` applies the policy to a whole request and is
+the selection the runtime uses for planning and compaction alike. It retains
+`recent_turns` when the request that remains after compaction (instructions,
+tools and the retained window) fits `target_tokens`, and otherwise the longest
+shorter window that fits, never fewer than one turn; a window the policy sets
+to zero stays empty. The size is the serialized request's UTF-8 bytes divided
+by four, the same provider-independent baseline as budget reservation's
+fallback estimate, so the boundary does not depend on which route later serves
+the summarizer. An oversized turn, such as an inline image or a large tool
+result, thus leaves the window instead of being carried into every later
+checkpoint and compacted again on each Generate.
 
 The trigger contract is covered by property-style tests: every projected
 counter boundary is checked, zero provider limits remain disabled, and raising

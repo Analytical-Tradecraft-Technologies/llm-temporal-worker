@@ -100,8 +100,9 @@ type PreparedCompactInput struct {
 }
 
 // PrepareCompactInput applies the inherited policy and the compact request's
-// target/style overrides, selects whole tool exchanges, and uses the existing
-// versioned plain-text summarizer contract. It grants no provider authority.
+// target/style overrides, selects whole tool exchanges within the target, and
+// uses the existing versioned plain-text summarizer contract. It grants no
+// provider authority.
 func PrepareCompactInput(ctx context.Context, request llm.CompactRequestV1, replay durable.CompactReplay) (PreparedCompactInput, error) {
 	if err := validatePreparationContext(ctx, replay.Completed != nil || replay.ReconciliationPending != nil); err != nil {
 		return PreparedCompactInput{}, err
@@ -146,7 +147,7 @@ func PrepareCompactInput(ctx context.Context, request llm.CompactRequestV1, repl
 	}
 	var selection compaction.PrefixSelection
 	if len(source.Input) != 0 {
-		selection, err = compaction.SelectPrefix(source.Input, policy.RecentTurns)
+		selection, err = compaction.SelectRequestPrefix(source, policy)
 		if err != nil {
 			return PreparedCompactInput{}, preparationError(provider.CodeInvalidArgument)
 		}

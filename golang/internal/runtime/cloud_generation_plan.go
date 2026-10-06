@@ -74,7 +74,21 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 	if err != nil || tokens > int64(^uint(0)>>1) {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 	}
-	decision, err := compact.Policy.EvaluateTrigger(compaction.TriggerInput{ProjectedTokens: int(tokens), ProjectedBytes: int64(len(encoded)), ProjectedItems: len(input.Request.Input)})
+	// Count the request compaction leaves behind as well: the selection's
+	// retained window plus the items this Generate appends after the parent,
+	// under the same instructions and tools. The summarizer cannot remove any
+	// of it, so a policy trigger it already reaches is not worth a paid call.
+	retained := resolved
+	parentItems := len(compact.Selection.Prefix) + len(compact.Selection.Retained)
+	if parentItems > len(input.Request.Input) {
+		return llm.GenerationPlanV1{}, executionError(provider.CodeStateCorrupt)
+	}
+	retained.Input = append(append([]llm.Item(nil), compact.Selection.Retained...), input.Request.Input[parentItems:]...)
+	retainedTokens, err := r.capabilities.BudgetEstimator.CountInputTokens(retained, candidate)
+	if err != nil || retainedTokens > int64(^uint(0)>>1) {
+		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
+	}
+	decision, err := compact.Policy.EvaluateTrigger(compaction.TriggerInput{ProjectedTokens: int(tokens), RetainedTokens: int(retainedTokens), ProjectedBytes: int64(len(encoded)), ProjectedItems: len(input.Request.Input)})
 	if err != nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 	}
