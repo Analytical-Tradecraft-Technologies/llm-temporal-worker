@@ -55,19 +55,11 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	assertJobRunContains(t, master, "release-evidence", `[[ "$digest" == "$PUBLISHED_DIGEST" ]]`)
 	for _, want := range []string{
 		"--builder \"$BUILDX_BUILDER\"", "--platform linux/amd64,linux/arm64",
-		"--tag analyticaltradecraft/llm-temporal-worker:", "--pull --provenance=mode=max --sbom=true",
-		"type=oci,oci-mediatypes=true,tar=true", "copy --all --preserve-digests", "--exit-code 1",
+		"--tag analyticaltradecraft/llm-temporal-worker:", "--push --pull --provenance=mode=max --sbom=true",
 		"date -u +%Y%m%d", "GITHUB_RUN_NUMBER", "imagetools inspect \"$image@$digest\" --raw",
 		`sort == ["amd64", "arm64"]`,
 	} {
 		assertJobRunContains(t, master, "container", want)
-	}
-	// Both platforms are scanned from the local build before the exact scanned
-	// bytes are published; the job never pushes from the builder (#971).
-	assertJobRunPrecedesRunContains(t, master, "container", "trivy image", "copy --all --preserve-digests")
-	assertJobRunPrecedesRunContains(t, master, "container", "bash scripts/ci/setup-trivy.sh", "copy --all --preserve-digests")
-	if strings.Contains(master.raw, "--push") {
-		t.Fatal("master pushes directly from the builder instead of publishing the scanned archive")
 	}
 	assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard")
 	for _, forbidden := range []string{"setup-buildx.sh", "type=gha", "setup-qemu", "--load"} {

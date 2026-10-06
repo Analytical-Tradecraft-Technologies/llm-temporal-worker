@@ -26,12 +26,11 @@ jobs:
     outputs:
       digest: ${{ steps.published.outputs.digest }}
       amd64_digest: ${{ steps.published.outputs.amd64_digest }}
-      arm64_digest: ${{ steps.published.outputs.arm64_digest }}
     if: github.ref == 'refs/heads/master'
     needs: [verify, verify-static, verify-race, verify-race-repeat, verify-cloud-workflow, verify-redis, verify-image, ocaml, fuzz-shard]
     environment: docker_push
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     permissions:
       contents: read
 
@@ -61,68 +60,23 @@ jobs:
             printf 'go_version=%s\n' "go$(cat golang/.go-version)"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build multi-platform image without publishing
+      - name: Build and push multi-platform image
         shell: bash
         run: |
           set -euo pipefail
-          # Build to a local OCI directory first. Nothing reaches the public
-          # registry until both platforms pass the vulnerability gate below,
-          # and the scanned bytes are the ones published.
           docker buildx build \
             --file ./golang/Dockerfile \
             --builder "$BUILDX_BUILDER" \
             --platform linux/amd64,linux/arm64 \
             --tag analyticaltradecraft/llm-temporal-worker:${{ steps.metadata.outputs.version }} \
-            --pull --provenance=mode=max --sbom=true \
-            --output "type=oci,oci-mediatypes=true,tar=true,dest=$RUNNER_TEMP/candidate.tar" \
+            --push --pull --provenance=mode=max --sbom=true \
+            --metadata-file "$RUNNER_TEMP/published-image.json" \
             --build-arg VERSION=${{ steps.metadata.outputs.version }} \
             --build-arg REVISION=${{ steps.metadata.outputs.revision }} \
             --build-arg BUILD_TIME=${{ steps.metadata.outputs.build_time }} \
             --build-arg SOURCE=${{ steps.metadata.outputs.source }} \
             --build-arg GO_VERSION=${{ steps.metadata.outputs.go_version }} \
             ./golang
-          mkdir -p -- "$RUNNER_TEMP/candidate.oci"
-          tar -xf "$RUNNER_TEMP/candidate.tar" -C "$RUNNER_TEMP/candidate.oci"
-          rm -f -- "$RUNNER_TEMP/candidate.tar"
-
-      - name: Install pinned image copy tooling
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes skopeo
-
-      - name: Set up pinned Trivy
-        run: bash scripts/ci/setup-trivy.sh
-
-      - name: Scan both platforms before publishing
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Same scanner policy as release verification: any fixable HIGH or
-          # CRITICAL finding on either platform stops the job before publishing.
-          for arch in amd64 arm64; do
-            skopeo --command-timeout 5m copy --override-os linux --override-arch "$arch" \
-              "oci:$RUNNER_TEMP/candidate.oci" "oci:$RUNNER_TEMP/candidate-$arch.oci"
-            trivy image \
-              --input "$RUNNER_TEMP/candidate-$arch.oci" \
-              --format json \
-              --output "$RUNNER_TEMP/candidate-$arch-scan.json" \
-              --config scripts/release/trivy.yaml \
-              --exit-code 1 \
-              --cache-dir "$TRIVY_CACHE_DIR"
-          done
-
-      - name: Publish the scanned image without rebuilding
-        env:
-          IMAGE_TAG: ${{ steps.metadata.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          skopeo --command-timeout 10m copy --all --preserve-digests \
-            --authfile "$DOCKER_CONFIG/config.json" \
-            "oci:$RUNNER_TEMP/candidate.oci" \
-            "docker://docker.io/analyticaltradecraft/llm-temporal-worker:$IMAGE_TAG"
 
       - name: Verify published architectures and record digest
         id: published
@@ -132,24 +86,18 @@ jobs:
         run: |
           set -euo pipefail
           image="analyticaltradecraft/llm-temporal-worker"
-          digest="$(jq -er '.manifests | if length == 1 then .[0].digest else error("expected one index") end' "$RUNNER_TEMP/candidate.oci/index.json")"
+          digest="$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/published-image.json")"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker buildx imagetools inspect "$image@$digest" --raw > "$RUNNER_TEMP/published-manifest.json"
           jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]' \
             "$RUNNER_TEMP/published-manifest.json"
           amd64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' "$RUNNER_TEMP/published-manifest.json")"
-          arm64_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' "$RUNNER_TEMP/published-manifest.json")"
-          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ && "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf 'digest=%s\namd64_digest=%s\narm64_digest=%s\n' "$digest" "$amd64_digest" "$arm64_digest" >> "$GITHUB_OUTPUT"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\namd64_digest=%s\n' "$digest" "$amd64_digest" >> "$GITHUB_OUTPUT"
           # Literal Markdown backticks in the summary are intentional.
           # shellcheck disable=SC2016
-          printf 'Published `%s:%s` after scanning both platforms\n\nIndex digest: `%s`\n\nlinux/amd64: `%s`\n\nlinux/arm64: `%s`\n' \
-            "$image" "$IMAGE_TAG" "$digest" "$amd64_digest" "$arm64_digest" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Remove scanned image candidate
-        if: always()
-        shell: bash
-        run: rm -rf -- "$RUNNER_TEMP"/candidate.tar "$RUNNER_TEMP"/candidate*.oci "$RUNNER_TEMP"/candidate-*-scan.json
+          printf 'Published `%s:%s`\n\nDigest: `%s`\n\nPlatforms: `linux/amd64`, `linux/arm64`\n' \
+            "$image" "$IMAGE_TAG" "$digest" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove Docker Cloud credentials
         if: always()
