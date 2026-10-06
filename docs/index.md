@@ -84,6 +84,7 @@ worker database; the service has no deployed SQL data. See the
 - [v1 Activity runtime boundary](reference/activity-runtime.md)
 - [Query audit logging](reference/query-audit-ledger.md)
 - [Cloud request repository foundation](reference/cloud-request-repository.md)
+- [Durable-storage key management (proposed design)](architecture/durable-storage-key-management.md)
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)

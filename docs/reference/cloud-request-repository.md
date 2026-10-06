@@ -363,7 +363,9 @@ Call `cloudstate.Open(ctx, config, secret)` with a stable, independently
 provisioned 32-byte encryption secret from the service's secret resolver. The
 secret is separate from JSON, IAM credentials, and Redis credentials. Retain it
 with backups; losing or replacing it makes existing data unreadable. Rotation
-and re-encryption are not implemented in this first adapter.
+and re-encryption are not implemented in this first adapter; the proposed
+managed-secret and rotation design is in
+[durable-storage key management](../architecture/durable-storage-key-management.md).
 
 `Open` resolves application aliases and validates existing stores; it never
 provisions infrastructure or lists account-wide resources. The AWS backend
