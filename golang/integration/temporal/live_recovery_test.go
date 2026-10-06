@@ -318,7 +318,7 @@ func liveRecoveryWorkflow(ctx workflow.Context, payload activity.GenerateRequest
 			NonRetryableErrorTypes: []string{activity.ErrorTypeAmbiguous, activity.ErrorTypeOperationConflict},
 		},
 	}
-	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, options), activity.GenerateActivityName, payload).Get(ctx, nil)
+	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, options), activity.LegacyGenerateActivityName, payload).Get(ctx, nil)
 }
 
 func newLiveRecoveryWorker(t *testing.T, workflowClient client.Client, queue, identity string, value *engine.Engine) worker.Worker {
