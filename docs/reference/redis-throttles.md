@@ -26,8 +26,10 @@ again. Release is idempotent and never blindly retries a failed mutation.
 
 Reservation and counter keys use the configured `state.redis.key_prefix` and
 `admission_hash_tag`; scopes and reservation IDs are HMAC-derived and are not
-written as Redis key components. The throttle Function is versioned as
-`llmtw_throttle_v1/throttle_v1`, with an explicit SHA-256 source digest. Deploy
+written as Redis key components. The throttle Function's library and function
+names carry the first 64 bits of its Lua source's SHA-256
+(`llmtw_throttle_<tag>/throttle_<tag>`), so a release that changes the Lua loads
+a new library beside the old one; it also has an explicit SHA-256 source digest. Deploy
 the immutable Function (or its explicitly configured preloaded Lua fallback)
 before enabling workers. Function loading/replacement is deliberately outside
 the request path.

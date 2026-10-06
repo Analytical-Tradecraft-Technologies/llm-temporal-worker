@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -145,5 +146,22 @@ func TestThrottleAcquireIsAtomicIdempotentAndReleases(t *testing.T) {
 	}
 	if _, err := store.Lookup(context.Background(), "reservation-1"); !errors.Is(err, ErrThrottleNotFound) {
 		t.Fatalf("released lookup = %v", err)
+	}
+}
+
+// The throttle names carry the Lua source digest, and the compose fixture
+// loads this release's library, so an upgraded stack never keeps calling an
+// older body under an unchanged name (#976).
+func TestThrottleFunctionNamesCarryTheLuaSourceDigestAndAreProvisioned(t *testing.T) {
+	tag := throttleSourceTag()
+	if ThrottleFunctionLibrary != "llmtw_throttle_"+tag || ThrottleFunctionVersion != "throttle_"+tag {
+		t.Fatalf("names = %q/%q, want the %s source tag", ThrottleFunctionLibrary, ThrottleFunctionVersion, tag)
+	}
+	compose, err := os.ReadFile("../../compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "load_function " + ThrottleFunctionLibrary + " " + ThrottleFunctionVersion + " "; !strings.Contains(string(compose), want) {
+		t.Fatalf("compose.yaml does not provision %q", want)
 	}
 }

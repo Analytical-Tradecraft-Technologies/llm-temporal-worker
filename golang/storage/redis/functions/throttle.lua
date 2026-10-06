@@ -1,4 +1,4 @@
--- llmtw_throttle_v1 / throttle-v1
+-- llmtw throttle Function body. The library and function names carry this source's digest.
 -- Counters are fixed windows that start at the first acquire.
 -- Atomic operational request/token/concurrency reservations. Monetary budget
 -- accounting remains in admission.lua; this Function has no financial fields.

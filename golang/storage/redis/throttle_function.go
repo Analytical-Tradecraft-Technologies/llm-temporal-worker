@@ -10,7 +10,19 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 )
 
-const ThrottleFunctionLibrary = "llmtw_throttle_v1"
+// The throttle library and function names carry a digest of the Lua source,
+// like the admission Function's, so a release that changes the Lua loads a
+// new library beside the old one and each worker calls its own.
+var (
+	ThrottleFunctionLibrary = "llmtw_throttle_" + throttleSourceTag()
+	ThrottleFunctionVersion = "throttle_" + throttleSourceTag()
+)
+
+// throttleSourceTag is the first 64 bits of the Lua source's SHA-256.
+func throttleSourceTag() string {
+	digest := sha256.Sum256([]byte(throttleFunctionSource))
+	return hex.EncodeToString(digest[:8])
+}
 
 type ThrottleFunctionMetadata struct {
 	Library string
