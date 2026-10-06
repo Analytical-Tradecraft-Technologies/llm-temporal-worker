@@ -32,14 +32,29 @@ type BoundCursorClaims struct {
 	ExpiresAt    time.Time
 }
 
+// boundCursorEnvelope is the signed token payload. The scope and filter
+// digests are not carried: both are recomputed from the request on decode and
+// bound through the signature (cursorSignature), which keeps an ordinary
+// pagination position inside the 512-byte token limit.
 type boundCursorEnvelope struct {
-	Kind         llm.QueryKind `json:"kind"`
-	ScopeDigest  string        `json:"scope_digest"`
-	FilterDigest string        `json:"filter_digest"`
-	Position     string        `json:"position"`
-	Horizon      int64         `json:"horizon"`
-	IssuedAt     int64         `json:"issued_at"`
-	ExpiresAt    int64         `json:"expires_at"`
+	Kind      llm.QueryKind `json:"kind"`
+	Position  string        `json:"position"`
+	Horizon   int64         `json:"horizon"`
+	IssuedAt  int64         `json:"issued_at"`
+	ExpiresAt int64         `json:"expires_at"`
+}
+
+// cursorSignature MACs the payload together with the request's scope and
+// filter digests, so a token only verifies for the request it was issued for.
+func cursorSignature(key, payload []byte, scopeDigest, filterDigest string) []byte {
+	signature := hmac.New(sha256.New, key)
+	_, _ = signature.Write([]byte("llmtw-query-cursor/v2\x00"))
+	_, _ = signature.Write([]byte(scopeDigest))
+	_, _ = signature.Write([]byte{0})
+	_, _ = signature.Write([]byte(filterDigest))
+	_, _ = signature.Write([]byte{0})
+	_, _ = signature.Write(payload)
+	return signature.Sum(nil)
 }
 
 func (codec *CursorCodec) Sign(request QueryRequest, position string, horizon, issuedAt time.Time) (QueryCursor, error) {
@@ -72,15 +87,13 @@ func (codec *CursorCodec) Sign(request QueryRequest, position string, horizon, i
 	if err != nil {
 		return "", ErrQueryCursor
 	}
-	envelope := boundCursorEnvelope{Kind: request.Kind, ScopeDigest: scopeDigest, FilterDigest: filterDigest, Position: position, Horizon: horizon.Unix(), IssuedAt: issuedAt.Unix(), ExpiresAt: issuedAt.Add(ttl).Unix()}
+	envelope := boundCursorEnvelope{Kind: request.Kind, Position: position, Horizon: horizon.Unix(), IssuedAt: issuedAt.Unix(), ExpiresAt: issuedAt.Add(ttl).Unix()}
 	payload, err := json.Marshal(envelope)
 	if err != nil {
 		return "", ErrQueryCursor
 	}
-	signature := hmac.New(sha256.New, codec.Key)
-	_, _ = signature.Write(payload)
 	encode := base64.RawURLEncoding
-	token := encode.EncodeToString(payload) + "." + encode.EncodeToString(signature.Sum(nil))
+	token := encode.EncodeToString(payload) + "." + encode.EncodeToString(cursorSignature(codec.Key, payload, scopeDigest, filterDigest))
 	if len(token) > 512 {
 		return "", ErrQueryCursor
 	}
@@ -114,9 +127,8 @@ func (codec *CursorCodec) Decode(request QueryRequest, token QueryCursor, now ti
 	if err != nil {
 		return claims, ErrQueryCursor
 	}
-	signature := hmac.New(sha256.New, codec.Key)
-	_, _ = signature.Write(payload)
-	if !hmac.Equal(provided, signature.Sum(nil)) {
+	scopeDigest, filterDigest, err := cursorDigests(request)
+	if err != nil || !hmac.Equal(provided, cursorSignature(codec.Key, payload, scopeDigest, filterDigest)) {
 		return claims, ErrQueryCursor
 	}
 	var envelope boundCursorEnvelope
@@ -130,15 +142,11 @@ func (codec *CursorCodec) Decode(request QueryRequest, token QueryCursor, now ti
 	if len(envelope.Position) > max {
 		return claims, ErrQueryCursor
 	}
-	scopeDigest, filterDigest, err := cursorDigests(request)
-	if err != nil || envelope.ScopeDigest != scopeDigest || envelope.FilterDigest != filterDigest {
-		return claims, ErrQueryCursor
-	}
 	now = now.UTC()
 	if now.IsZero() || envelope.IssuedAt <= 0 || envelope.ExpiresAt <= envelope.IssuedAt || envelope.Horizon <= 0 || envelope.IssuedAt > now.Add(2*time.Minute).Unix() || envelope.ExpiresAt <= now.Unix() {
 		return claims, ErrQueryCursor
 	}
-	return BoundCursorClaims{Kind: envelope.Kind, ScopeDigest: envelope.ScopeDigest, FilterDigest: envelope.FilterDigest, Position: envelope.Position, Horizon: time.Unix(envelope.Horizon, 0).UTC(), IssuedAt: time.Unix(envelope.IssuedAt, 0).UTC(), ExpiresAt: time.Unix(envelope.ExpiresAt, 0).UTC()}, nil
+	return BoundCursorClaims{Kind: envelope.Kind, ScopeDigest: scopeDigest, FilterDigest: filterDigest, Position: envelope.Position, Horizon: time.Unix(envelope.Horizon, 0).UTC(), IssuedAt: time.Unix(envelope.IssuedAt, 0).UTC(), ExpiresAt: time.Unix(envelope.ExpiresAt, 0).UTC()}, nil
 }
 
 func cursorDigests(request QueryRequest) (string, string, error) {

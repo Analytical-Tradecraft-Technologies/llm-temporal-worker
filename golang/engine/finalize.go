@@ -148,7 +148,10 @@ func (engine *Engine) persistContinuation(ctx context.Context, request llm.Reque
 		if value.Provider == "" || value.EndpointFamily == "" || value.MediaType == "" || len(value.Opaque) == 0 {
 			return nil, engineError(provider.CodeProviderInvalidResponse, provider.PhaseContinuationWrite, provider.DispatchAccepted, provider.RetryNever, "provider continuation state is incomplete", nil)
 		}
-		providerStates = append(providerStates, state.OpaqueStateRef{Provider: value.Provider, EndpointID: candidate.EndpointID, AccountRegion: candidate.Pinning.AccountRegion, Family: value.EndpointFamily, ModelLineage: candidate.ModelLineage, Media: value.MediaType, Data: append([]byte(nil), value.Opaque...), Required: true})
+		if !adapterStateMatchesRoute(candidate.Family, value.Provider, value.EndpointFamily) {
+			return nil, engineError(provider.CodeProviderInvalidResponse, provider.PhaseContinuationWrite, provider.DispatchAccepted, provider.RetryNever, "provider continuation state does not belong to the route family", nil)
+		}
+		providerStates = append(providerStates, state.OpaqueStateRef{Provider: candidate.Provider, EndpointID: candidate.EndpointID, AccountRegion: candidate.Pinning.AccountRegion, Family: candidate.Family, ModelLineage: candidate.ModelLineage, Media: value.MediaType, Data: append([]byte(nil), value.Opaque...), Required: true})
 	}
 	child := state.Continuation{Tenant: request.Context.Tenant, ParentID: "", Transcript: transcript, TranscriptDigest: digest, TranscriptComplete: true, ProviderState: providerStates, Affinities: carryProviderCacheAffinity(parent, candidate, response.Usage, now), Pinning: candidate.Pinning, LastOperationID: operationID, CapabilityVersion: candidate.CapabilityVersion, PriceVersion: candidate.PriceVersion, CreatedAt: now, ExpiresAt: now.Add(ttl), Depth: 0}
 	var handle state.Handle
