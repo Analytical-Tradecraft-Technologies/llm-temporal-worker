@@ -22,7 +22,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	if strict && hasMixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Anthropic Messages in strict portability mode")
 	}
-	messages := make([]any, 0, len(request.Input)+1)
+	messages := make([]any, 0, len(request.Input))
 	var containerID string
 	if request.Continuation != nil {
 		for _, state := range request.Continuation.ProviderStates {

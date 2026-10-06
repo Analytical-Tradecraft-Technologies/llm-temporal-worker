@@ -30,7 +30,7 @@ func providerTier(class llm.ServiceClass) string {
 // storage-denied endpoint is used statelessly, so a reasoning item is only
 // replayable when it carries its encrypted content.
 func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (map[string]any, loweredToolPolicy, error) {
-	input := make([]any, 0, len(request.Instructions)+len(request.Input))
+	input := make([]any, 0, len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
 		if err != nil {
