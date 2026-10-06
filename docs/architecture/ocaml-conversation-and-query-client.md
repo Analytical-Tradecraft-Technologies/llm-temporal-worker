@@ -257,7 +257,7 @@ type generate_response = {
   cache : cache_disposition;
   route : route option;
   usage : usage;
-  cost : cost;
+  cost : settled_cost;
   diagnostics : diagnostic list;
 }
 ~~~
@@ -1074,12 +1074,10 @@ selected by stable input order. Choosing from recorded model output is also
 deterministic, but application policy should make that choice explicit and test
 replay.
 
-The positive-variant branches set temperature in the same request, so the
-client can validate them locally. If the patch kept an inherited temperature,
-the Go worker would still validate the materialized value. A zero-temperature
-request with variant 1 or 2 is a typed validation failure and must not reach a
-provider. Omitting **cache** entirely disables both exact-cache reads and
-population for that operation.
+Each positive variant selects its own cache slot; the variant is independent
+of temperature, so zero temperature with variant 1 or 2 is valid and simply
+names separate cached samples. Omitting **cache** entirely disables both
+exact-cache reads and population for that operation.
 
 ### Low-level protocol access
 
@@ -1087,17 +1085,20 @@ The ergonomic modules are thin wrappers over the exported descriptors.
 Advanced callers and codec tests may schedule exact wire records directly:
 
 ~~~ocaml
-let invoke_generate ~task_queue request =
-  Temporal.Activity.execute
-    ~task_queue:(Temporal_task_queue.to_string task_queue)
-    ~retry_policy:activity_retry_policy
-    generate_v1_activity request
+(* Generate and Compact start child workflows with a deterministic ID and
+   abandon them on parent close, as the exported helpers do. *)
+let start_child ~task_queue ~id definition request =
+  Temporal.Child_workflow.start
+    ~task_queue:(Temporal_task_queue.to_string task_queue) ~id
+    ~parent_close_policy:Temporal.Child_workflow.Parent_close_policy.Abandon
+    ~cancellation_type:Temporal.Child_workflow.Abandon
+    definition request
 
-let invoke_compact_v1 ~task_queue request =
-  Temporal.Activity.execute
-    ~task_queue:(Temporal_task_queue.to_string task_queue)
-    ~retry_policy:activity_retry_policy
-    compact_v1_activity request
+let invoke_generate ~task_queue ~id request =
+  Temporal.Future.await (start_child ~task_queue ~id generate_v1_workflow request)
+
+let invoke_compact_v1 ~task_queue ~id request =
+  Temporal.Future.await (start_child ~task_queue ~id compact_v1_workflow request)
 
 let invoke_query_v1 ~task_queue envelope =
   Temporal.Activity.execute
@@ -1175,8 +1176,8 @@ fingerprint, or database value.
 - Go and OCaml golden JSON is byte-equivalent after canonicalization for every
   request/result kind and error.
 - Omitted/Set/Clear survive round trips as three distinct values.
-- Inherited temperature zero plus positive variant is rejected by the server;
-  locally known zero is rejected by the builder.
+- The cache variant is independent of temperature: zero temperature with a
+  positive variant is accepted by both the builder and the server.
 - No float or currency field exists in public money types.
 - Decimal values with 18 fractional digits round-trip exactly.
 - The same immutable parent can produce three distinct child conversations.
