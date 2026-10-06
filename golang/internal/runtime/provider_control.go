@@ -28,6 +28,9 @@ type QueryRepositories struct {
 	SpendSummary   control.SpendSummaryReader
 	ScopeResolver  QueryScopeResolver
 	BudgetStatus   BudgetStatusReader
+	// Refresh serves model inventory refresh requests from the snapshot's
+	// model-list adapters. Nil keeps refresh requests unsupported.
+	Refresh *ProviderRefresher
 }
 
 // QueryRepositoriesSource exposes the same snapshot-owned readers to builders.

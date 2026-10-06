@@ -298,8 +298,12 @@ is published. Otherwise `budget_status` returns an unsupported-query error. A
 `spend_summary` always returns an unsupported-query error there until a cloud
 spend reader exists (tracked in
 [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
-The persisted query handler also rejects a positive
-`refresh_if_older_than_seconds`; leave it unset.
+A positive `refresh_if_older_than_seconds` refreshes `model_inventory` only
+for endpoints with a provider model-list fetcher (currently direct OpenAI).
+Other endpoints, and every `provider_status` and `credit_status` refresh,
+return an unsupported-query error. A failed or timed-out refresh returns the
+last persisted listing marked `stale`. See
+[provider management refresh](../../docs/reference/persisted-query-service.md#provider-management-refresh).
 
 `Llm_temporal.Query` adds a closed GADT over the five query kinds. Each
 constructor carries its filter and fixes the result type, so pagination and
