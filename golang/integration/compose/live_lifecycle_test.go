@@ -32,12 +32,19 @@ const (
 	composeContainerHealthPollInterval   = 100 * time.Millisecond
 	composeContainerHealthInspectTimeout = time.Second
 	composeMetricsBodyLimit              = 256 * 1024
-	// This idle Compose recovery test exercises the Temporal SDK v1.43.0
-	// AggregatedWorker's two remote-poller stop phases: workflow then activity.
-	// Each may consume WorkerStopTimeout, which this application maps from
-	// GracefulStopTimeout. Active local work has a separate drain path and is
-	// intentionally outside this readiness-recovery contract.
+	// Temporal Go SDK v1.49.0 AggregatedWorker.Stop (go.mod pins it) marks
+	// pollers not to re-poll, sends one ShutdownWorker RPC so the server
+	// completes their outstanding long polls, then stops the workflow worker
+	// and the activity worker in turn. Each of those two phases waits for its
+	// pollers and tasks for at most WorkerStopTimeout, which this application
+	// maps from GracefulStopTimeout. On this idle worker the RPC normally ends
+	// the polls at once, but the bound includes the RPC's default timeout.
+	// Active local work has a separate drain path and is intentionally outside
+	// this readiness-recovery contract. Re-check this when the SDK changes.
 	composeTemporalRemotePollerStopPhaseCount = 2
+	// composeTemporalShutdownWorkerRPCTimeout is the SDK's defaultRPCTimeout,
+	// which bounds the ShutdownWorker RPC sent before the stop phases.
+	composeTemporalShutdownWorkerRPCTimeout = 10 * time.Second
 	// The Compose worker factory installs Redis and blob-store probes. Runtime
 	// checks required probes serially with an independent timeout for each.
 	composeRequiredDependencyProbeCount = 2
@@ -301,7 +308,7 @@ func TestComposeReadinessTransitionTimeoutUsesWorkerAndProbeConfiguration(t *tes
 		},
 	}
 
-	if got, want := composeReadinessTransitionTimeoutForConfig(configuration), 70*time.Second+100*time.Millisecond; got != want {
+	if got, want := composeReadinessTransitionTimeoutForConfig(configuration), 80*time.Second+100*time.Millisecond; got != want {
 		t.Fatalf("compose readiness transition timeout = %s, want %s", got, want)
 	}
 }
@@ -475,15 +482,15 @@ func composeContainerHealthTransitionTimeout(healthcheck composeHealthcheckTimin
 }
 
 // composeReadinessTransitionTimeoutForConfig covers the longest worker
-// recovery path: each synchronous remote-poller graceful-stop phase exercised
-// by this idle Compose test, one readiness monitor interval, and every
-// required dependency probe. The phase and probe counts are explicit because
-// the Temporal SDK and
-// CheckDependencyProbes execute them serially. The final terms bound this
-// test's own HTTP request and status polling rather than adding arbitrary
-// headroom.
+// recovery path: the SDK's ShutdownWorker RPC, each synchronous graceful-stop
+// phase that follows it, one readiness monitor interval, and every required
+// dependency probe. The phase and probe counts are explicit because the
+// Temporal SDK and CheckDependencyProbes execute them serially. The final
+// terms bound this test's own HTTP request and status polling rather than
+// adding arbitrary headroom.
 func composeReadinessTransitionTimeoutForConfig(configuration config.Config) time.Duration {
-	return time.Duration(composeTemporalRemotePollerStopPhaseCount)*time.Duration(configuration.Temporal.Worker.GracefulStopTimeout) +
+	return composeTemporalShutdownWorkerRPCTimeout +
+		time.Duration(composeTemporalRemotePollerStopPhaseCount)*time.Duration(configuration.Temporal.Worker.GracefulStopTimeout) +
 		time.Duration(configuration.Server.ReadinessProbeInterval) +
 		time.Duration(composeRequiredDependencyProbeCount)*time.Duration(configuration.Server.ReadinessProbeTimeout) +
 		composeStatusRequestTimeout + composeStatusPollInterval
