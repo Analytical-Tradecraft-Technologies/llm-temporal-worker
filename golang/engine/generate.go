@@ -360,7 +360,30 @@ func (engine *Engine) resolveExisting(ctx context.Context, operation admission.O
 			}
 			finalCtx, cancel := engine.finalizationContext(ctx)
 			defer cancel()
-			if completeErr := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual, Attempt: operation.Attempt}); completeErr != nil {
+			// Complete with what normal finalization records. The result store
+			// is content-addressed, so writing the stored response again
+			// returns its immutable reference without changing it.
+			resultRef, refErr := engine.dependencies.Results.Put(finalCtx, operation.ID, response)
+			if refErr != nil {
+				return nil, false, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "stored result reference is unavailable", refErr)
+			}
+			var ref *state.BlobRef
+			if resultRef.Valid() {
+				ref = &resultRef
+			}
+			exact := pricing.MustUSD("0")
+			if response.Cost.ActualCostUSD != nil {
+				exact = *response.Cost.ActualCostUSD
+			}
+			attempt := operation.Attempt
+			attempt.Dispatch = admission.Accepted
+			if attempt.ProviderRequestID == "" {
+				attempt.ProviderRequestID = response.Provider.RequestID
+			}
+			if response.Route.ResolvedModel != "" {
+				attempt.ResolvedModel = response.Route.ResolvedModel
+			}
+			if completeErr := engine.dependencies.Admission.Complete(finalCtx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: actual, ActualCostUSD: exact, ResultRef: ref, Attempt: attempt, CostStatus: string(response.Cost.Status), CostMethod: response.Cost.Method}); completeErr != nil {
 				return nil, false, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "operation finalization failed", completeErr)
 			}
 			recordCompletion(ctx, response)
