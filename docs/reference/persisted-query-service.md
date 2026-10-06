@@ -18,6 +18,20 @@ for omission. The v1 decoder rejects `null` before authorization or storage
 access so a malformed request cannot silently become a broader unfiltered
 query.
 
+## Production CLI composition
+
+The production CLI installs this service for every durable snapshot. It
+authorizes a query exactly when the caller's tenant/project pair is listed in
+`authorization.allowed_scopes`, the same trusted-Temporal policy that gates
+Generate and Compact, and it checks before any storage read. Query cursors are
+signed with an HMAC key derived from the primary `continuation.handle_keys`
+secret under the domain `llmtw:query-cursor:v1`. Rotating that key therefore
+invalidates outstanding cursors, which are short-lived; no extra secret is
+needed. Provider status, model inventory and credit status read the snapshot's
+Redis provider state. Budget status needs the separately provisioned
+`budget_status` Redis Function, and spend summary needs a cloud spend reader;
+until a deployment supplies them, both return a typed unsupported-query error.
+
 The low-level `NewPersistedQueryService` constructor requires
 `control.AuthorizeFunc` for tenant/project/actor authorization and a keyed
 `control.CursorCodec` for scope/filter/horizon-bound cursors. Its optional

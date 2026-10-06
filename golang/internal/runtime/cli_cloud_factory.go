@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +10,9 @@ import (
 	"math"
 	"time"
 
+	"github.com/mfow/llm-temporal-worker/golang/activity"
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/control"
 	"github.com/mfow/llm-temporal-worker/golang/internal/app"
 	"github.com/mfow/llm-temporal-worker/golang/internal/secrets"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -69,8 +72,69 @@ func newCLIEngineFactory(options ProductionFactoryOptions) (EngineFactory, error
 		next := *factory
 		next.options.V1RuntimeBuilder = builder
 		next.automaticV1RuntimeBuilder = false
+		// Control queries use the same trusted-Temporal allowlist as
+		// generation and a cursor key derived from the primary continuation
+		// signing key, so production exposes them without extra secrets.
+		if next.options.QueryServiceBuilder == nil {
+			next.options.QueryServiceBuilder = trustedTemporalQueryBuilder(&next, value)
+		}
 		return next.Build(ctx, snapshot)
 	}), nil
+}
+
+// queryCursorKeyDomain separates the query-cursor HMAC key from every other
+// use of the continuation signing key.
+const queryCursorKeyDomain = "llmtw:query-cursor:v1"
+
+// trustedTemporalQueryBuilder exposes the persisted control queries under the
+// trusted-Temporal policy: a caller may query exactly the tenant/project pairs
+// it may generate for. Cursors are signed with a key derived from the primary
+// continuation handle key. Query families without a configured reader stay
+// explicitly unsupported.
+func trustedTemporalQueryBuilder(factory *ProductionEngineFactory, value config.Config) QueryServiceBuilder {
+	allowed := make(map[config.AuthorizedScope]struct{})
+	if value.Authorization != nil {
+		for _, scope := range value.Authorization.AllowedScopes {
+			allowed[scope] = struct{}{}
+		}
+	}
+	return func(ctx context.Context, snapshot *config.Snapshot, repositories QueryRepositories) (activity.QueryService, error) {
+		keys, err := factory.continuationKeys(ctx, snapshot.Config())
+		if err != nil {
+			return nil, err
+		}
+		var primary []byte
+		for _, key := range keys {
+			if key.Primary {
+				primary = key.Secret
+			}
+		}
+		if len(primary) == 0 {
+			return nil, fmt.Errorf("%w: query cursors need a primary continuation handle key", ErrDurableV1Composition)
+		}
+		mac := hmac.New(sha256.New, primary)
+		mac.Write([]byte(queryCursorKeyDomain))
+		builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
+			Authorize: func(ctx context.Context, request control.Authorization) error {
+				if ctx == nil {
+					return control.ErrQueryAuthorization
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if _, ok := allowed[config.AuthorizedScope{Tenant: request.Tenant, Project: request.Project}]; !ok {
+					return control.ErrQueryAuthorization
+				}
+				return nil
+			},
+			Cursor: &control.CursorCodec{Key: mac.Sum(nil)},
+			Clock:  factory.options.Clock,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return builder(ctx, snapshot, repositories)
+	}
 }
 
 func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, error) {

@@ -273,9 +273,11 @@ while still-unknown fields remain inherited by the worker.
 
 `Query.execute`, `Query.start`, `invoke_query_v1` and `start_query_v1` require
 `~task_queue`: `llm.query.v1` is registered only on the Go worker's task queue,
-so the calling workflow's own queue cannot serve it. The production worker does
-not compose a query service yet, so every query kind currently fails with an
-unsupported-query error there (tracked in
+so the calling workflow's own queue cannot serve it. The production worker
+answers `provider_status`, `model_inventory` and `credit_status` from its Redis
+provider state for the tenant/project pairs in its `authorization.allowed_scopes`.
+`budget_status` and `spend_summary` currently return an unsupported-query error
+there (tracked in
 [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
 The persisted query handler also rejects a positive
 `refresh_if_older_than_seconds`; leave it unset.
