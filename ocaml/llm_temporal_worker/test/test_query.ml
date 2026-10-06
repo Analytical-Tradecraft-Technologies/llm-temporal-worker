@@ -588,7 +588,10 @@ let () =
   (* [start] performs the same cursor validation before scheduling an
      Activity.  Its error is kept in the successful result channel, matching
      the existing Temporal.Future contract for protocol mismatches. *)
-  let invalid_start = Query.start ~operation_key ~context wrong_kind in
+  let invalid_start =
+    Query.start ~task_queue:(Temporal_task_queue.of_string "llm-worker")
+      ~operation_key ~context wrong_kind
+  in
   (match Temporal.Future.peek invalid_start with
    | Some (Ok (Error error)) when String.equal (Temporal.Error.message error)
                                       "query cursor kind mismatch: expected model_inventory, got provider_status" -> ()

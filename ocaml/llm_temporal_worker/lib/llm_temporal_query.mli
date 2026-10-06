@@ -102,8 +102,12 @@ val execute_with :
   context:request_context ->
   'a t -> ('a response, Temporal.Error.t) result
 
+(** [execute] and [start] dispatch [llm.query.v1] as an Activity on
+    [task_queue], which must be the Go worker's task queue: the Activity is
+    registered only there, so the calling workflow's own queue cannot serve
+    it. *)
 val execute :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t ->
   operation_key:Operation_key.t ->
   context:request_context ->
   'a t -> ('a response, Temporal.Error.t) result
@@ -124,7 +128,7 @@ val start_with :
   (('a response, Temporal.Error.t) result, Temporal.Error.t) Temporal.Future.t
 
 val start :
-  ?task_queue:Temporal_task_queue.t ->
+  task_queue:Temporal_task_queue.t ->
   operation_key:Operation_key.t ->
   context:request_context ->
   'a t ->

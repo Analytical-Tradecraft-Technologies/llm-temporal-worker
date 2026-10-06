@@ -85,7 +85,7 @@ let claim_workflow ~input_codec ~output_codec ~task_queue =
     (fun input ->
       let* credit_filter =
         filter_result (Query.Filter.credit_status ~include_ok:false
-          ~refresh_if_older_than_seconds:300L ~page_size:100 ())
+          ~page_size:100 ())
       in
       let* credit =
         Query.execute ~task_queue
