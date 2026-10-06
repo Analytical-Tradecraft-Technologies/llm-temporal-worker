@@ -68,17 +68,26 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	if response.Diagnostics == nil {
 		response.Diagnostics = []llm.Diagnostic{}
 	}
-	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "finalization", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+	// A paid, valid result exists from here on. Caller cancellation must not
+	// stop the heartbeats or writes that persist it, or the result is lost and
+	// a retry finds the operation still dispatching; each write phase is
+	// bounded by FinalizationTimeout instead.
+	shielded := context.WithoutCancel(ctx)
+	if err := engine.beat(shielded, Progress{OperationID: operation.ID, Phase: "finalization", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
 		return llm.Response{}, err
 	}
 	if response.Continuation != nil {
-		if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "continuation_write", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+		if err := engine.beat(shielded, Progress{OperationID: operation.ID, Phase: "continuation_write", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
 			return llm.Response{}, err
 		}
-		secure, continuationErr := engine.persistContinuation(ctx, request, response, candidate.candidate, operation.ID, parent, snapshot)
+		continuationCtx, cancelContinuation := engine.finalizationContext(ctx)
+		secure, continuationErr := engine.persistContinuation(continuationCtx, request, response, candidate.candidate, operation.ID, parent, snapshot)
 		if continuationErr != nil {
-			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, continuationErr, actual.MicroUSD)
+			err := engine.finishFailed(continuationCtx, operation, candidate.candidate, continuationErr, actual.MicroUSD)
+			cancelContinuation()
+			return llm.Response{}, err
 		}
+		cancelContinuation()
 		response.Continuation = secure
 	}
 	finalCtx, cancel := engine.finalizationContext(ctx)
