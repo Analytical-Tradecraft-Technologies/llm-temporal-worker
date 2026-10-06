@@ -179,7 +179,7 @@ results are separate item kinds, so they cannot be confused with actors.
 | Part kind | Fields | Notes |
 | --- | --- | --- |
 | `text` | `text` | UTF-8; empty text is retained when provider semantics distinguish it |
-| `image` | exactly one of `url`, `bytes`, `blob`; `media_type`, optional `detail` | Size and scheme validated before admission |
+| `image` | exactly one of `url`, `bytes`, `blob`; `media_type`, optional `detail` | Size and scheme validated before admission; `blob` decodes but Generate rejects it with `unsupported_capability` in v1 |
 | `document` | exactly one source plus `media_type`, optional title | Compiled only for endpoint/model combinations that support it |
 | `json` | `value` | Canonical JSON value, not a JSON-encoded string |
 | `refusal` | `text`, optional provider code | Model refusal remains typed |

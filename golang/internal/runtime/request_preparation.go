@@ -74,6 +74,9 @@ func PrepareGenerateInput(ctx context.Context, request llm.GenerateRequestV1, re
 	if err := llm.ValidateMediaURLs(semantic.Instructions, semantic.Input); err != nil {
 		return PreparedGenerateInput{}, preparationError(provider.CodeInvalidArgument)
 	}
+	if err := llm.RejectBlobMedia(semantic.Instructions, semantic.Input); err != nil {
+		return PreparedGenerateInput{}, preparationError(provider.CodeUnsupportedCapability)
+	}
 	if err := ctx.Err(); err != nil {
 		return PreparedGenerateInput{}, err
 	}
