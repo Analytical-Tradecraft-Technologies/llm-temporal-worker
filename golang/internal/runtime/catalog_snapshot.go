@@ -186,7 +186,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				OutputTokens:        profile.OutputTokens,
 				PriceVersion:        priceVersion,
 				PriceAvailable:      priceAvailable,
-				PricedWindows:       routePricedWindows(bundle.Pricing[endpoint.PriceCatalog].Catalog.Entries, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes),
+				PricedWindows:       routePricedWindows(bundle.Pricing[endpoint.PriceCatalog].Catalog.Entries, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, providerName, routeRegion),
 				ExtensionNames:      extensions,
 				ContextTokens:       profile.ContextTokens,
 			})
@@ -407,9 +407,12 @@ func adapterCapabilities(value provider.CapabilitySet) map[string]routing.Capabi
 
 // routePricedWindows returns the intervals in which every class of the route
 // has an active price entry, so route planning can tell whether the route is
-// priced at request time rather than only at snapshot load. The result is
-// non-nil; an empty slice means the route is never fully priced.
-func routePricedWindows(entries []pricing.Entry, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass) []routing.PriceWindow {
+// priced at request time rather than only at snapshot load. Only entries for
+// the route's resolved provider and region count: the snapshot binds the
+// route to that identity, so a scheduled transition to another provider or
+// region cannot price it. The result is non-nil; an empty slice means the
+// route is never fully priced.
+func routePricedWindows(entries []pricing.Entry, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, providerName, routeRegion string) []routing.PriceWindow {
 	family := endpointFamily(endpoint.Family)
 	matching := make(map[llm.ServiceClass][]pricing.Entry, len(classes))
 	boundaries := make([]time.Time, 0)
@@ -419,7 +422,7 @@ func routePricedWindows(entries []pricing.Entry, endpointID string, endpoint con
 			if entry.EndpointID != endpointID || entry.Family != string(family) || entry.Model != model || entry.ProviderTier != tier {
 				continue
 			}
-			if endpoint.Region != "" && entry.Region != endpoint.Region {
+			if entry.Provider != providerName || entry.Region != routeRegion {
 				continue
 			}
 			matching[class] = append(matching[class], entry)
