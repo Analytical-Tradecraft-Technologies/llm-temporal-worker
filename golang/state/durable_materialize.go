@@ -164,6 +164,14 @@ func (materializer *DurableCheckpointMaterializer) Materialize(ctx context.Conte
 	if err != nil {
 		return MaterializedState{}, err
 	}
+	// Each row records the provenance of its own response; the base row (a
+	// snapshot or the root) also carries what it inherited. Generation
+	// transcripts only append, so every recorded ordinal is still the index
+	// of the same item in the requested checkpoint's transcript. Consumers
+	// validate the combined list against Items before relying on it.
+	for index := len(path) - 1; index >= 0; index-- {
+		result.ProviderStateProvenance = append(result.ProviderStateProvenance, path[index].row.ProviderStateProvenance...)
+	}
 	return result, nil
 }
 

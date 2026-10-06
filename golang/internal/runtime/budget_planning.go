@@ -115,17 +115,17 @@ func copyBudgetEstimator(estimator budget.Estimator) budget.Estimator {
 }
 
 func (planning *BudgetPlanning) Generate(ctx context.Context, prepared PreparedGenerateInput, attempt BudgetAttempt) (PlannedBudgetCall, error) {
-	return planning.plan(ctx, prepared.Request, attempt)
+	return planning.plan(ctx, prepared.Request, prepared.pins, attempt)
 }
 
 func (planning *BudgetPlanning) Compact(ctx context.Context, prepared PreparedCompactInput, attempt BudgetAttempt) (PlannedBudgetCall, error) {
 	if prepared.Request == nil {
 		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeInvalidArgument)
 	}
-	return planning.plan(ctx, *prepared.Request, attempt)
+	return planning.plan(ctx, *prepared.Request, providerStatePins{}, attempt)
 }
 
-func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, attempt BudgetAttempt) (PlannedBudgetCall, error) {
+func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, pins providerStatePins, attempt BudgetAttempt) (PlannedBudgetCall, error) {
 	if ctx == nil || planning == nil || planning.providers == nil {
 		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeConfiguration)
 	}
@@ -142,8 +142,8 @@ func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, a
 	}
 	var result PlannedBudgetCall
 	oversized := false
-	_, err = planning.providers.selectCall(ctx, semantic, func(call PlannedProviderCall) (bool, error) {
-		quoted, usable, err := planning.quote(ctx, semantic, call, attempt, &oversized)
+	_, err = planning.providers.selectCall(ctx, semantic, pins, func(call PlannedProviderCall) (bool, error) {
+		quoted, usable, err := planning.quote(ctx, semantic, pins, call, attempt, &oversized)
 		if err == nil && usable {
 			result = quoted
 		}
@@ -164,7 +164,7 @@ func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, a
 	return result, nil
 }
 
-func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request, call PlannedProviderCall, attempt BudgetAttempt, oversized *bool) (PlannedBudgetCall, bool, error) {
+func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request, pins providerStatePins, call PlannedProviderCall, attempt BudgetAttempt, oversized *bool) (PlannedBudgetCall, bool, error) {
 	snapshot, candidate := planning.providers.budgetSnapshot, call.Candidate
 	route, err := call.Route(attempt.OperationID, attempt.GenerationID)
 	if err != nil {
@@ -203,7 +203,7 @@ func (planning *BudgetPlanning) quote(ctx context.Context, semantic llm.Request,
 	result.Route.PriceVersion = entry.Version
 	result.ClassEntries = planning.classEntries(semantic, candidate, query)
 	// Estimate the provider model, attempted tier and exact compiled input.
-	resolved := resolveCandidateRequest(semantic, candidate, call.Adapter)
+	resolved := resolveCandidateRequest(semantic, pins, candidate, call.Adapter)
 	digest, err := llm.RequestDigest(resolved)
 	if err != nil || digest != call.Call.Metadata.SchemaDigest {
 		return PlannedBudgetCall{}, false, budgetPlanningError(provider.CodeConfiguration)

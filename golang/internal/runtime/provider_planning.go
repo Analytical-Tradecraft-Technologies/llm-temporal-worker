@@ -114,7 +114,7 @@ func (capabilities V1RuntimeCapabilities) captureProviderPlanning(ctx context.Co
 }
 
 func (planning *ProviderPlanning) Generate(ctx context.Context, prepared PreparedGenerateInput) (PlannedProviderCall, error) {
-	return planning.plan(ctx, prepared.Request)
+	return planning.plan(ctx, prepared.Request, prepared.pins)
 }
 
 func (planning *ProviderPlanning) Compact(ctx context.Context, prepared PreparedCompactInput) (PlannedProviderCall, error) {
@@ -122,16 +122,16 @@ func (planning *ProviderPlanning) Compact(ctx context.Context, prepared Prepared
 		// An empty/safely retained prefix must not reach route or budget work.
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
 	}
-	return planning.plan(ctx, *prepared.Request)
+	return planning.plan(ctx, *prepared.Request, providerStatePins{})
 }
 
-func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request) (PlannedProviderCall, error) {
-	return planning.selectCall(ctx, request, nil)
+func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request, pins providerStatePins) (PlannedProviderCall, error) {
+	return planning.selectCall(ctx, request, pins, nil)
 }
 
 // selectCall permits the budget planner to reject a compiled candidate before
 // it wins selection. Neither callback nor compilation may perform paid work.
-func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, accept func(PlannedProviderCall) (bool, error), priorCandidates ...string) (PlannedProviderCall, error) {
+func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, pins providerStatePins, accept func(PlannedProviderCall) (bool, error), priorCandidates ...string) (PlannedProviderCall, error) {
 	if ctx == nil || planning == nil || isNilCapability(planning.planner) || isNilCapability(planning.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
@@ -170,6 +170,13 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 		if !planning.containsCandidate(semantic, candidate) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
+		// Recorded provider state pins the lineage. This runs before the
+		// health check so another lineage's route never reads as a blocked
+		// one; the pinned route's own health still decides retryability.
+		if !pins.admits(semantic.Portability, candidate) {
+			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectContinuation})
+			continue
+		}
 		if !planning.catalog.Models[semantic.Model].Routes[candidate.RouteIndex].SupportsOutputLimit(semantic) {
 			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectCapability})
 			continue
@@ -190,7 +197,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectHealth})
 			continue
 		}
-		planned, rejection, err := planning.compileCandidate(ctx, semantic, candidate)
+		planned, rejection, err := planning.compileCandidate(ctx, semantic, pins, candidate)
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}
@@ -219,7 +226,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 
 // compileCandidate is shared by new selection and exact-route recovery.
 // An ordinary local failure returns a rejection; possible dispatch is always fatal.
-func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic llm.Request, candidate routing.Candidate) (PlannedProviderCall, *planningRejection, error) {
+func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic llm.Request, pins providerStatePins, candidate routing.Candidate) (PlannedProviderCall, *planningRejection, error) {
 	adapter, err := planning.adapters.Adapter(ctx, candidate)
 	if ctx.Err() != nil {
 		return PlannedProviderCall{}, nil, ctx.Err()
@@ -241,7 +248,7 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	if capability.Version != candidate.CapabilityVersion {
 		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 	}
-	resolved := resolveCandidateRequest(semantic, candidate, adapter)
+	resolved := resolveCandidateRequest(semantic, pins, candidate, adapter)
 	digest, err := llm.RequestDigest(resolved)
 	if err != nil {
 		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.RetryNever)
@@ -445,6 +452,7 @@ func selectionError(ctx context.Context, rejections []planningRejection, healthB
 	// Lead with the rejections that explain an unsupported request.
 	sort.SliceStable(rejections, func(i, j int) bool { return rejections[i].capability() && !rejections[j].capability() })
 	failure.SafeDetails = map[string]string{"rejected_routes": strconv.Itoa(len(rejections))}
+	continuationPinnedFailure(failure, rejections)
 	logger := observability.LoggerFromContext(ctx)
 	for index, rejection := range rejections {
 		cause := rejection.Reason
@@ -509,8 +517,8 @@ func (planning *ProviderPlanning) normalizeRequest(request llm.Request) (llm.Req
 // the request a candidate compiles, prices and binds. Selection, budget quoting
 // and exact-route recovery must all derive their digest from it; a second
 // derivation that skips a step makes the bound digest unreproducible.
-func resolveCandidateRequest(semantic llm.Request, candidate routing.Candidate, adapter provider.Adapter) llm.Request {
-	resolved := candidateRequest(semantic, candidate)
+func resolveCandidateRequest(semantic llm.Request, pins providerStatePins, candidate routing.Candidate, adapter provider.Adapter) llm.Request {
+	resolved := candidateRequest(semantic, pins, candidate)
 	if !preservesInstructionHierarchy(provider.Family(candidate.Family), adapter) {
 		// Only a worker-built summarizer request changes; any other request
 		// is returned as is and keeps the adapter's strict rejection.
@@ -519,20 +527,23 @@ func resolveCandidateRequest(semantic llm.Request, candidate routing.Candidate, 
 	return resolved
 }
 
-func candidateRequest(semantic llm.Request, candidate routing.Candidate) llm.Request {
+func candidateRequest(semantic llm.Request, pins providerStatePins, candidate routing.Candidate) llm.Request {
 	resolved, _ := llm.NormalizeRequest(semantic)
 	// The adapter needs the provider model and attempted class, not the
 	// logical alias or the originally requested fallback class.
 	resolved.Model, resolved.ServiceClass = candidate.Model, candidate.AttemptedClass
 	resolved.ServiceClassFallbacks = nil
+	// Provider state recorded for another lineage is never replayed to this
+	// candidate. Selection admitted the candidate only if that is permitted.
+	resolved.Input, _ = pins.strip(resolved.Input, candidatePinning(candidate))
 	return resolved
 }
 
 // plausibleCandidateDigest reports whether digest is one resolveCandidateRequest
 // could produce for this input and candidate, without resolving the adapter.
 // Recovery uses it to reject changed input early; it is not the final check.
-func plausibleCandidateDigest(semantic llm.Request, candidate routing.Candidate, digest [32]byte) bool {
-	resolved := candidateRequest(semantic, candidate)
+func plausibleCandidateDigest(semantic llm.Request, pins providerStatePins, candidate routing.Candidate, digest [32]byte) bool {
+	resolved := candidateRequest(semantic, pins, candidate)
 	for _, request := range []llm.Request{resolved, compaction.FlattenSummarizerInstructions(resolved)} {
 		if got, err := llm.RequestDigest(request); err == nil && got == digest {
 			return true

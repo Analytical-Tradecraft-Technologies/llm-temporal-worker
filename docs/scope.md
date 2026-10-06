@@ -70,15 +70,22 @@ controller:
   express.
 - Provider-state parts that remain opaque and byte-for-byte stable.
 - Strict and best-effort portability. Strict mode rejects content a route
-  cannot represent; the durable v1 path does not yet emit portability
-  diagnostics.
+  cannot represent. On the durable v1 path, best-effort mode may drop provider
+  state pinned to another route and reports it with a
+  `provider_state_dropped` diagnostic in the v1 response.
 - Generation and compaction workflows that return final normalized responses.
   No live streaming or token-event API is supported in v1.
 - Exactly three request service classes: `economy`, `standard`, and `priority`.
 - Explicit ordered service-class fallback, disabled by default.
-- Durable continuation. On the durable v1 path, opaque provider state is
-  pinned only by provider API family: an adapter replays only state of its own
-  family, and other routes skip it at compile time.
+- Durable continuation and endpoint pinning. On the durable v1 path, each
+  checkpoint records which route (provider, endpoint, API family and provider
+  model) produced the provider state in its transcript. Later turns are pinned
+  to that route: in strict mode another route is rejected with
+  `continuation_pinned` (reported as a safe detail; the error code stays
+  `no_route`), and in best-effort mode it may serve the turn without that
+  state. Provider state from checkpoints written before this provenance
+  existed keeps family-only pinning. See
+  [routing and continuation](architecture/routing-and-continuation.md#pinning-on-the-durable-v1-path).
 - Configurable deterministic routing, bounded failover, and circuit breaking.
 - Versioned price catalogs and provider-reported cost reconciliation.
 - Multiple overlapping, conservatively enforced sliding-window budgets.
@@ -112,10 +119,10 @@ controller:
   idempotency contract.
 - Persisting secrets, raw credentials, or bearer tokens in Temporal payloads.
 - Live streaming, token-event delivery, and interactive response transports.
-- Endpoint- and account-level continuation pinning, the `continuation_pinned`
-  error, checkpoint cache affinity, and portability diagnostics on the durable
-  v1 path. The planner receives no continuation constraints there, so a lineage
-  can move between two routes of the same API family.
+- On the durable v1 path: checkpoint provider prompt-cache affinity, a
+  dedicated public `continuation_pinned` error code (the closed error-code set
+  is unchanged), pinning of compaction summarizer requests, and pin provenance
+  for output replayed from the worker response cache.
 - First-class, provider-neutral settings for top-p, stop sequences, a sampling
   seed, or an explicit reasoning mode or token budget. `SettingsPatchV1` has no
   leaves for them, although the provider adapters implement the controls

@@ -19,6 +19,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
@@ -763,5 +764,225 @@ func TestCloudExecutionRuntimeRejectedDispatchStaysPermanent(t *testing.T) {
 	boundedState(t, v, err, llm.ExecutionFailed)
 	if v.Retryable {
 		t.Fatal("cancellation without pre-dispatch evidence became retryable")
+	}
+}
+
+// pinnedCloudFixture is a boundedCloud with two OpenAI Responses routes for
+// one model on different endpoints (accounts). Every response carries an
+// encrypted reasoning item ahead of its answer.
+type pinnedCloudFixture struct {
+	*boundedCloudFixture
+	source *planningSource
+	served []string
+}
+
+func pinnedCloud(t *testing.T) *pinnedCloudFixture {
+	t.Helper()
+	p := &pinnedCloudFixture{}
+	p.boundedCloudFixture = boundedCloud(t, false, func(b *budgetPlanningFixture) {
+		p.source = b.source
+		model := b.source.value.Routes.Models["alias"]
+		other := model.Routes[0]
+		other.ID, other.EndpointID, other.EndpointAccountHMAC = "route-b", "endpoint-b", [32]byte{9}
+		model.Routes = append(append([]routing.Route(nil), model.Routes...), other)
+		b.source.value.Routes.Models["alias"] = model
+		b.source.value.BudgetPolicies[0].Match.EndpointID = ""
+		second := b.entry
+		second.EndpointID = "endpoint-b"
+		b.prices(t, []pricing.Entry{b.entry, second})
+	})
+	adapter := p.adapter.executionSyncAdapter
+	adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		p.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.Result{}, err
+		}
+		p.served = append(p.served, call.EndpointID)
+		result := executionResponse(call).Result
+		result.Response.Output = []llm.Item{
+			llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json",
+				Opaque: []byte(`{"type":"reasoning","encrypted_content":"` + call.EndpointID + `"}`)},
+			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}},
+		}
+		return result, nil
+	}
+	p.cap.Adapters = engine.AdapterMap{"endpoint": adapter, "endpoint-b": adapter}
+	p.restart(t)
+	return p
+}
+
+// reorder puts route-b ahead of the route that served the first turn.
+func (p *pinnedCloudFixture) reorder(t *testing.T) {
+	t.Helper()
+	model := p.source.value.Routes.Models["alias"]
+	model.Routes = []routing.Route{model.Routes[1], model.Routes[0]}
+	p.source.value.Routes.Models["alias"] = model
+	p.restart(t)
+}
+
+func (p *pinnedCloudFixture) child(parent llm.ExecutionResultV1, key string) {
+	handle := parent.Generate.Checkpoint.Handle
+	p.request = llm.GenerateRequestV1{OperationKey: key, Context: p.request.Context, Parent: &handle,
+		Append: []llm.Item{preparationMessage("next question")}}
+}
+
+// lastCompiled returns the request most recently compiled for an endpoint.
+func (p *pinnedCloudFixture) lastCompiled(t *testing.T, endpoint string) llm.Request {
+	t.Helper()
+	inputs := p.adapter.planningAdapter.inputs
+	for index := len(inputs) - 1; index >= 0; index-- {
+		if inputs[index].Query.EndpointID == endpoint {
+			return inputs[index].Request
+		}
+	}
+	t.Fatalf("nothing compiled for %s", endpoint)
+	return llm.Request{}
+}
+
+func compiledProviderState(request llm.Request) int {
+	count := 0
+	for _, item := range request.Input {
+		if itemHasProviderState(item) {
+			count++
+		}
+	}
+	return count
+}
+
+func (p *pinnedCloudFixture) checkpoint(t *testing.T, result llm.ExecutionResultV1) state.DurableCheckpoint {
+	t.Helper()
+	id, err := p.options.Keyring.VerifyCheckpointHandle(context.Background(), "trusted-scope", string(result.Generate.Checkpoint.Handle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := p.repository.Checkpoints().Get(context.Background(), "trusted-scope", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func pinnedProvenance(ordinal int, endpoint string) []state.ProviderStateProvenance {
+	return []state.ProviderStateProvenance{{Ordinal: ordinal, Provider: "openai", EndpointID: endpoint,
+		EndpointFamily: string(provider.FamilyOpenAIResponses), ModelLineage: "provider-model"}}
+}
+
+func TestCloudExecutionRuntimePinnedContinuationRoutesToItsEndpoint(t *testing.T) {
+	p := pinnedCloud(t)
+	first := p.finish(t)
+	if got := p.checkpoint(t, first).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(1, "endpoint")) {
+		t.Fatalf("root provenance = %+v", got)
+	}
+	// With route-b now ordered first, the pin still selects the endpoint
+	// that produced the reasoning state, and that state is replayed there.
+	p.reorder(t)
+	p.child(first, "pinned-turn")
+	second := p.finish(t)
+	if len(p.served) != 2 || p.served[1] != "endpoint" {
+		t.Fatalf("served %v, want the pinned endpoint", p.served)
+	}
+	if compiledProviderState(p.lastCompiled(t, "endpoint")) != 1 || len(second.Generate.Diagnostics) != 0 {
+		t.Fatalf("pinned route lost its state or reported a drop: %+v", second.Generate.Diagnostics)
+	}
+	// The child records only its own response, at its transcript offset.
+	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint")) {
+		t.Fatalf("child provenance = %+v", got)
+	}
+}
+
+func TestCloudExecutionRuntimeContinuationPinnedWhenPinnedRouteIneligible(t *testing.T) {
+	p := pinnedCloud(t)
+	first := p.finish(t)
+	p.source.value.Health.Routes = map[string]routing.RouteHealth{"route": {Enabled: false}}
+	p.restart(t)
+	p.child(first, "pinned-unavailable")
+	ctx := context.Background()
+	v, err := p.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &p.request})
+	if err == nil && v.State == llm.ExecutionBudgetRequired {
+		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context})
+	}
+	var failure *provider.Error
+	if !errors.As(err, &failure) {
+		t.Fatalf("state=%+v error=%v, want a planning failure", v, err)
+	}
+	if failure.Code != provider.CodeNoRoute || failure.Dispatch != provider.DispatchNotDispatched || failure.SafeDetails["continuation"] != "continuation_pinned" {
+		t.Fatalf("failure = %#v", failure)
+	}
+	pinned := false
+	for key, value := range failure.SafeDetails {
+		pinned = pinned || (strings.HasPrefix(key, "reason_") && value == "continuation_pinned")
+	}
+	if !pinned || len(p.served) != 1 {
+		t.Fatalf("route-b was not rejected as pinned, or was dispatched: %#v served=%v", failure.SafeDetails, p.served)
+	}
+}
+
+func TestCloudExecutionRuntimeBestEffortDropsPinnedState(t *testing.T) {
+	p := pinnedCloud(t)
+	first := p.finish(t)
+	p.source.value.Health.Routes = map[string]routing.RouteHealth{"route": {Enabled: false}}
+	p.restart(t)
+	p.child(first, "best-effort-turn")
+	mode := llm.PortabilityBestEffort
+	p.request.SettingsPatch.Portability.Set = &mode
+	second := p.finish(t)
+	if len(p.served) != 2 || p.served[1] != "endpoint-b" {
+		t.Fatalf("served %v, want the portable route", p.served)
+	}
+	compiled := p.lastCompiled(t, "endpoint-b")
+	if compiledProviderState(compiled) != 0 || len(compiled.Input) != 3 {
+		t.Fatalf("another account received pinned state: %+v", compiled.Input)
+	}
+	diagnostics := second.Generate.Diagnostics
+	if len(diagnostics) != 1 || diagnostics[0].Code != "provider_state_dropped" || diagnostics[0].Severity != llm.DiagnosticWarning {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+	// The transcript stays complete; only the new state is pinned to route-b.
+	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint-b")) {
+		t.Fatalf("child provenance = %+v", got)
+	}
+	// A retry returns the same publication, diagnostic included.
+	again := p.finish(t)
+	if again.Generate.Checkpoint.Handle != second.Generate.Checkpoint.Handle || len(again.Generate.Diagnostics) != 1 || p.submits.Load() != 2 {
+		t.Fatal("retry changed the published diagnostic")
+	}
+	// The next turn is pinned to route-b. The first account's older state is
+	// dropped there too, while route-b's own state is replayed.
+	p.child(second, "after-move")
+	third := p.finish(t)
+	compiled = p.lastCompiled(t, "endpoint-b")
+	if p.served[2] != "endpoint-b" || compiledProviderState(compiled) != 1 || len(third.Generate.Diagnostics) != 1 {
+		t.Fatalf("served %v state=%d diagnostics=%+v", p.served, compiledProviderState(compiled), third.Generate.Diagnostics)
+	}
+}
+
+// legacyProvenanceRepository reads checkpoints as if they were written before
+// provider-state provenance existed.
+type legacyProvenanceRepository struct {
+	state.CheckpointRepository
+}
+
+func (repository legacyProvenanceRepository) Get(ctx context.Context, scope string, id state.CheckpointID) (state.DurableCheckpoint, error) {
+	row, err := repository.CheckpointRepository.Get(ctx, scope, id)
+	row.ProviderStateProvenance = nil
+	return row, err
+}
+
+func TestCloudExecutionRuntimeCheckpointWithoutProvenanceKeepsFamilyPinning(t *testing.T) {
+	p := pinnedCloud(t)
+	first := p.finish(t)
+	materializer := *p.cap.Checkpoints.Materializer.(*state.DurableCheckpointMaterializer)
+	materializer.Repository = legacyProvenanceRepository{materializer.Repository}
+	p.cap.Checkpoints.Materializer = &materializer
+	p.reorder(t)
+	p.child(first, "legacy-parent")
+	second := p.finish(t)
+	// Without provenance nothing is pinned: route order decides, as before,
+	// and the state is replayed under the adapter's family check alone.
+	if p.served[1] != "endpoint-b" || compiledProviderState(p.lastCompiled(t, "endpoint-b")) != 1 || len(second.Generate.Diagnostics) != 0 {
+		t.Fatalf("served %v diagnostics %+v", p.served, second.Generate.Diagnostics)
+	}
+	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint-b")) {
+		t.Fatalf("child provenance = %+v", got)
 	}
 }

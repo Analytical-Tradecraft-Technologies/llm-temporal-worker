@@ -22,6 +22,10 @@ type PreparedGenerateInput struct {
 	Request     llm.Request
 	Settings    state.ModelState
 	SampleIndex int64
+	// pins carries the parent's recorded provider-state provenance by index of
+	// Request.Input. It is derived from the materialized parent, so planning,
+	// recovery and publication all see the same value.
+	pins providerStatePins
 }
 
 // PrepareGenerateInput requires an already authorized, materialized replay.
@@ -80,7 +84,13 @@ func PrepareGenerateInput(ctx context.Context, request llm.GenerateRequestV1, re
 	if err := ctx.Err(); err != nil {
 		return PreparedGenerateInput{}, err
 	}
-	result := PreparedGenerateInput{Request: semantic, Settings: settings}
+	// Parent items keep their indices in the semantic input: Append and the
+	// response only ever follow them.
+	pins, ok := newProviderStatePins(replay.State.Items, replay.State.ProviderStateProvenance)
+	if !ok || (pins.present() && len(semantic.Input) != len(items)) {
+		return PreparedGenerateInput{}, preparationError(provider.CodeStateCorrupt)
+	}
+	result := PreparedGenerateInput{Request: semantic, Settings: settings, pins: pins}
 	if request.Cache != nil {
 		result.SampleIndex = int64(request.Cache.Variant)
 	}

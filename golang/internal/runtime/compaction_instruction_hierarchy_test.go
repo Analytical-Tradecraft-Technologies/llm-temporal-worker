@@ -169,7 +169,7 @@ func TestCompactionWithApplicationInstructionsSurvivesBudgetPlanningAndRecovery(
 				t.Fatal(err)
 			}
 			other := binding
-			other.RequestDigest, err = llm.RequestDigest(candidateRequest(semantic, planned.Provider.Candidate))
+			other.RequestDigest, err = llm.RequestDigest(candidateRequest(semantic, providerStatePins{}, planned.Provider.Candidate))
 			if err != nil || other.RequestDigest == binding.RequestDigest {
 				t.Fatal("summarizer request was not flattened", err)
 			}
