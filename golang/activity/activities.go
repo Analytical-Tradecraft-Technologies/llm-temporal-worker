@@ -292,5 +292,5 @@ func (activities *Activities) Register(registry worker.ActivityRegistry) {
 		activities.RegisterV1(registry)
 		return
 	}
-	registry.RegisterActivityWithOptions(activities.generateTemporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
+	registry.RegisterActivityWithOptions(activities.generateTemporal, sdkactivity.RegisterOptions{Name: LegacyGenerateActivityName})
 }

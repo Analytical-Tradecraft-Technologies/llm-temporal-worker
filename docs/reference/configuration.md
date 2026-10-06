@@ -573,6 +573,16 @@ content-addressed process-local blob map. Provider adapters are still built
 normally, so provider credentials and egress remain subject to the same
 validation and authorization rules as durable mode.
 
+Memory mode composes no v1 runtime, so it cannot run the public v1 API: the
+worker registers none of the v1 workflows (`llm.generate.workflow.v1` and the
+others) and none of the v1 Activities. It registers only the legacy engine
+Activity, under its own name `llm.generate.legacy.v1`; `llm.generate.v1` always
+means the v1 contract. Its input is the `activity.GenerateRequest` envelope
+`{"api_version": "llm.temporal/v1", "request": <llm.Request>}` (a bare
+`llm.Request` is rejected), and it returns the `activity.GenerateResponse`
+envelope `{"api_version": "llm.temporal/v1", "response": <llm.Response>, "metadata": {...}}`. Trying
+the v1 API locally requires `state.kind: durable` with cloud storage and Redis.
+
 Operations, checkpoints, budget/throttle state, and blobs are process local;
 restart loses everything and provider-pending jobs cannot be recovered after
 process loss. The mode must not be used for durable continuation/recovery

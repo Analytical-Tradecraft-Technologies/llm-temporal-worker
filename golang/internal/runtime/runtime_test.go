@@ -363,8 +363,10 @@ func TestDevelopmentRuntimeOmitsV1ActivitiesWithoutRuntime(t *testing.T) {
 	}
 	registry := &testRegistry{}
 	activities.Register(registry)
-	if len(registry.names) != 1 || registry.names[0] != appactivity.GenerateActivityName {
-		t.Fatalf("development fixture registered activities = %v, want only %q", registry.names, appactivity.GenerateActivityName)
+	// The legacy engine Activity has its own name: llm.generate.v1 is only
+	// ever the v1 contract (#1102).
+	if len(registry.names) != 1 || registry.names[0] != appactivity.LegacyGenerateActivityName {
+		t.Fatalf("development fixture registered activities = %v, want only %q", registry.names, appactivity.LegacyGenerateActivityName)
 	}
 }
 
