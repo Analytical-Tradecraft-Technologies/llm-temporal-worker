@@ -939,13 +939,17 @@ func (factory *ProductionEngineFactory) buildRedis(ctx context.Context, value co
 	if factory.options.RedisFactory == nil {
 		return nil, false, fmt.Errorf("%w: Redis factory is unavailable", ErrDependencyUnavailable)
 	}
-	username, err := factory.resolveAuthSecret(ctx, config.AuthConfig{Kind: "bearer_env", Name: ""}, value.State.Redis.Username)
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve Redis username: %w", err)
-	}
-	password, err := factory.resolveAuthSecret(ctx, config.AuthConfig{Kind: "bearer_env", Name: ""}, value.State.Redis.Password)
-	if err != nil {
-		return nil, false, fmt.Errorf("resolve Redis password: %w", err)
+	var username, password []byte
+	var err error
+	if !value.State.Redis.ServiceMesh {
+		username, err = factory.resolveAuthSecret(ctx, config.AuthConfig{Kind: "bearer_env", Name: ""}, value.State.Redis.Username)
+		if err != nil {
+			return nil, false, fmt.Errorf("resolve Redis username: %w", err)
+		}
+		password, err = factory.resolveAuthSecret(ctx, config.AuthConfig{Kind: "bearer_env", Name: ""}, value.State.Redis.Password)
+		if err != nil {
+			return nil, false, fmt.Errorf("resolve Redis password: %w", err)
+		}
 	}
 	client, err := factory.options.RedisFactory(ctx, value.State.Redis, string(username), string(password))
 	if err != nil {

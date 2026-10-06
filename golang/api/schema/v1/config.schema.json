@@ -80,12 +80,10 @@
           "state": {
             "properties": {
               "redis": {
-                "properties": {
-                  "tls": {
-                    "properties": { "enabled": { "const": true } },
-                    "required": ["enabled"]
-                  }
-                }
+                "anyOf": [
+                  { "properties": { "tls": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["tls"] },
+                  { "properties": { "service_mesh": { "const": true } }, "required": ["service_mesh"] }
+                ]
               }
             }
           }
@@ -94,6 +92,10 @@
     }
   ],
   "$defs": {
+    "empty_secret": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "kind": { "const": "" }, "name": { "const": "" }, "path": { "const": "" }, "audience": { "const": "" } }
+    },
     "authorization": {
       "type": "object", "additionalProperties": false,
       "required": ["mode", "allowed_scopes"],
@@ -253,11 +255,12 @@
     },
     "redis": {
       "type": "object", "additionalProperties": false,
-      "required": ["addresses", "key_prefix", "username", "password", "key_secret", "tls", "admission_hash_tag", "admission_mode", "function_library", "admission_version", "admission_digest", "max_connections", "dial_timeout", "operation_timeout", "required_persistence"],
+      "required": ["addresses", "key_prefix", "key_secret", "tls", "admission_hash_tag", "admission_mode", "function_library", "admission_version", "admission_digest", "max_connections", "dial_timeout", "operation_timeout", "required_persistence"],
       "properties": {
         "addresses": { "type": "array", "minItems": 1, "items": { "type": "string" } },
         "key_prefix": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
-        "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" },
+        "service_mesh": { "type": "boolean" },
+        "username": {}, "password": {},
         "key_secret": { "$ref": "#/$defs/secret" },
         "tls": { "$ref": "#/$defs/tls" }, "admission_hash_tag": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^{} \\t\\r\\n]+$" },
         "admission_mode": { "enum": ["function", "lua"] }, "function_library": { "type": "string" },
@@ -268,7 +271,21 @@
         "required_persistence": { "enum": ["aof_and_rdb", "aof", "rdb"] },
         "coordination_stream_enabled": { "type": "boolean" },
         "stream_trim_safety": { "$ref": "#/$defs/duration" }
-      }
+      },
+      "allOf": [{
+        "if": { "properties": { "service_mesh": { "const": true } }, "required": ["service_mesh"] },
+        "then": { "properties": {
+          "username": { "$ref": "#/$defs/empty_secret" },
+          "password": { "$ref": "#/$defs/empty_secret" },
+          "tls": { "properties": {
+            "enabled": { "const": false }, "server_name": { "const": "" }, "ca_file": { "const": "" },
+            "cert_file": { "const": "" }, "key_file": { "const": "" }
+          } }
+        } },
+        "else": { "required": ["username", "password"], "properties": {
+          "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" }
+        } }
+      }]
     },
     "cloud_requests": {
       "type": "object",

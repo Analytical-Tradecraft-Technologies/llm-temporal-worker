@@ -93,3 +93,18 @@ func TestConfigResolverDiscardsResolvedValues(t *testing.T) {
 		t.Fatalf("resolved %d references, want 3", len(seen))
 	}
 }
+
+func TestConfigResolverServiceMeshSkipsRedisCredentials(t *testing.T) {
+	var seen []config.SecretRef
+	resolver := ConfigResolver{Resolver: ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+		seen = append(seen, ref)
+		return []byte("fixture"), nil
+	})}
+	value := &config.Config{State: config.StateConfig{Kind: config.StateKindDurable, Redis: config.RedisConfig{ServiceMesh: true}}, Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{Secret: config.SecretRef{Kind: config.SecretEnv, Name: "HANDLE"}}}}}
+	if err := resolver.Resolve(context.Background(), value); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0].Name != "HANDLE" {
+		t.Fatalf("resolved references = %v", seen)
+	}
+}

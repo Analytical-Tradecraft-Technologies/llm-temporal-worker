@@ -361,8 +361,8 @@ func (redis RedisConfig) validate(environment string) error {
 	if redis.TLS.CertFile != "" || redis.TLS.KeyFile != "" {
 		return fmt.Errorf("state.redis.tls.cert_file and key_file are not supported")
 	}
-	if IsProductionEnvironment(environment) && !redis.TLS.Enabled {
-		return fmt.Errorf("state.redis.tls.enabled must be true in production")
+	if IsProductionEnvironment(environment) && !redis.TLS.Enabled && !redis.ServiceMesh {
+		return fmt.Errorf("state.redis.tls.enabled must be true in production unless service_mesh is enabled")
 	}
 	if len(redis.Addresses) == 0 {
 		return fmt.Errorf("state.redis.addresses must not be empty")
@@ -372,11 +372,17 @@ func (redis RedisConfig) validate(environment string) error {
 			return err
 		}
 	}
-	if err := redis.Username.Validate("state.redis.username"); err != nil {
-		return err
-	}
-	if err := redis.Password.Validate("state.redis.password"); err != nil {
-		return err
+	if redis.ServiceMesh {
+		if redis.TLS != (TLSConfig{}) || redis.Username != (SecretRef{}) || redis.Password != (SecretRef{}) {
+			return fmt.Errorf("state.redis.service_mesh requires disabled application TLS and no username/password references")
+		}
+	} else {
+		if err := redis.Username.Validate("state.redis.username"); err != nil {
+			return err
+		}
+		if err := redis.Password.Validate("state.redis.password"); err != nil {
+			return err
+		}
 	}
 	if err := redis.KeySecret.Validate("state.redis.key_secret"); err != nil {
 		return err
