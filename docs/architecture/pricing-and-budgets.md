@@ -336,6 +336,13 @@ cannot create a negative current bucket or move spend across time. Expired
 buckets may be deleted after the longest window plus the maximum operation-
 finalization delay.
 
+A durable v1 quote is persisted and reused while the workflow waits for
+capacity, so its bucket can be older than the moment Redis accepts it. The
+bucket stays the reservation's identity, but the spend's window expiry is
+computed from Redis `TIME` at acceptance (the end of the acceptance bucket plus
+the window duration) whenever that is later than the quote-time expiry. Spend
+that waited therefore counts for the full window from acceptance.
+
 Redis server time is authoritative for shared admission. The memory backend uses
 an injected clock. Clock rollback in memory fails closed until time catches up;
 Redis `TIME` avoids worker clock disagreement.

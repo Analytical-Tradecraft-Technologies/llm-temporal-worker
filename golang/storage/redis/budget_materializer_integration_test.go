@@ -267,3 +267,57 @@ func TestLiveRedisBudgetMaterializerHandlesSingleReservationAboveHundredThousand
 		t.Fatalf("second reservation = %#v, want denial at the accounted total", denied)
 	}
 }
+
+// TestLiveRedisBudgetMaterializerWaitedSpendCountsFromAcceptance reproduces
+// issue #963 against the provisioned Function: a quote booked into a bucket
+// twelve minutes old (still inside its start lease) is accepted, claimed and
+// finalized exactly under a ten-minute window, and a second reservation
+// seconds later must be denied because the spend counts from acceptance.
+func TestLiveRedisBudgetMaterializerWaitedSpendCountsFromAcceptance(t *testing.T) {
+	client := openLiveRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	keys := liveKeyOptions("durable-waited")
+	cleanupLivePrefix(t, client, keys.Prefix)
+	now := time.Now().UTC().Truncate(time.Second)
+	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
+		Client: client, Mode: AdmissionModeFunction, Keys: keys,
+		GenerationID: durable.GenerationID("generation-waited"), IncarnationID: durable.IncarnationID("incarnation-waited"),
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoted := now.Add(-12 * time.Minute)
+	reservation := admission.WindowReservation{
+		PolicyID: "waited-policy", WindowID: "ten-minutes", Bucket: quoted.UnixNano() / int64(time.Minute),
+		AmountUSD: pricing.MustUSD("0.90"), LimitUSD: pricing.MustUSD("1"),
+		BucketNanos: int64(time.Minute), DurationNanos: int64(10 * time.Minute),
+	}
+	request := durable.ReserveRequest{OperationID: "waited-operation", GenerationID: "generation-waited", ExpiresAt: now.Add(3 * time.Minute), Reservations: []admission.WindowReservation{reservation}}
+	accepted, err := materializer.Accept(ctx, request)
+	if err != nil || !accepted.Accepted || len(accepted.Events) != 1 {
+		t.Fatalf("waited reservation = %#v, %v; want accepted", accepted, err)
+	}
+	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
+		t.Fatalf("claim = %v", err)
+	}
+	base := accepted.Events[0]
+	completion := budget.CompletionEvent{
+		EventID: "waited-completion", GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
+		BucketStart: base.BucketStart, ReservationRevision: base.ReservationRevision + 1, Kind: budget.JournalFinalizeExact,
+		ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now,
+	}
+	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-waited", Events: []budget.CompletionEvent{completion}}); err != nil {
+		t.Fatalf("exact finalization = %v", err)
+	}
+	second := reservation
+	second.Bucket = now.UnixNano() / int64(time.Minute)
+	denied, err := materializer.Accept(ctx, durable.ReserveRequest{OperationID: "waited-second", GenerationID: "generation-waited", ExpiresAt: now.Add(3 * time.Minute), Reservations: []admission.WindowReservation{second}})
+	if err != nil {
+		t.Fatalf("second reservation = %v, want a denial", err)
+	}
+	if denied.Accepted || denied.Denial == nil || denied.Denial.ActiveUSD.Cmp(pricing.MustUSD("0.90")) != 0 {
+		t.Fatalf("second reservation = %#v, want denial at the waited spend", denied)
+	}
+}

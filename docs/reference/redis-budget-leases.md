@@ -82,6 +82,11 @@ and Compact require a successful claim before provider dispatch.
    bound for an ambiguous outcome. It validates the whole supplied batch before
    applying any settlement. Confirmed cost counts through the budget window
    and its final bucket; the start deadline is unrelated to cost retention.
+   The window is measured from Redis `TIME` at acceptance, not from the
+   persisted quote: a quote that waited for capacity keeps its quote-time
+   bucket identity, but Redis raises the cost's window expiry to the end of the
+   acceptance bucket plus the window duration, so waited spend cannot leave the
+   window early.
 
 Amounts use exact decimal USD at the Go boundary and conservative integer
 nano-USD in Redis. Charges round up and limits round down. All authorization

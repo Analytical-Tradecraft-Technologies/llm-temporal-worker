@@ -371,15 +371,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: e7bcf1ce68509895586301dd6db9b4906ca505b2d933ece78163b68581c09717",
-		"admission_digest: E7BCF1CE68509895586301DD6DB9B4906CA505B2D933ECE78163B68581C09717",
+		"admission_digest: 35162335a99613fb14dfd12d40a8b50ba75932c742bebafff0e0ef0899ec4243",
+		"admission_digest: 35162335A99613FB14DFD12D40A8B50BA75932C742BEBAFFF0E0EF0899EC4243",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "e7bcf1ce68509895586301dd6db9b4906ca505b2d933ece78163b68581c09717"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "35162335a99613fb14dfd12d40a8b50ba75932c742bebafff0e0ef0899ec4243"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -526,7 +526,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: e7bcf1ce68509895586301dd6db9b4906ca505b2d933ece78163b68581c09717", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 35162335a99613fb14dfd12d40a8b50ba75932c742bebafff0e0ef0899ec4243", "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
@@ -663,5 +663,17 @@ func TestLoadRejectsContinuationAndCapabilitySettingsTheRuntimeDoesNotImplement(
 	}
 	if loaded.Continuation.RetainCanonicalTranscript == nil || !*loaded.Continuation.RetainCanonicalTranscript {
 		t.Fatalf("omitted retain_canonical_transcript = %v, want default true", loaded.Continuation.RetainCanonicalTranscript)
+	}
+}
+
+// Redis computes budget window expiry in whole milliseconds, so a window
+// with fractional-millisecond geometry is rejected rather than rounded.
+func TestLoadRejectsFractionalMillisecondBudgetWindows(t *testing.T) {
+	data := strings.Replace(string(exampleYAML(t)), "bucket: 1m", "bucket: 1500us", 1)
+	if data == string(exampleYAML(t)) {
+		t.Skip("example has no one-minute bucket to rewrite")
+	}
+	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "whole milliseconds") {
+		t.Fatalf("Load() error = %v, want a whole-millisecond rejection", err)
 	}
 }

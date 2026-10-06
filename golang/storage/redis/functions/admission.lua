@@ -720,6 +720,19 @@ local function durable_int(value)
     return parsed
 end
 
+-- Window geometry arrives as nanoseconds, which can exceed MAX_SAFE for long
+-- windows, so expiry arithmetic uses whole milliseconds. Configuration only
+-- admits whole-millisecond geometry; anything else is rejected here rather
+-- than rounded, because rounding the bucket width would shift the grid and
+-- could expire waited spend early. The digits are checked as a string so the
+-- test is exact beyond 2^53.
+local function durable_millis(nanos)
+    if type(nanos) ~= 'string' or not string.match(nanos, '^[1-9][0-9]*000000$') then return nil end
+    local value = tonumber(string.sub(nanos, 1, -7))
+    if value == nil or value <= 0 or value > 4611686018427 then return nil end
+    return value
+end
+
 local function durable_bucket_field(bucket)
     return 'sum:' .. bucket
 end
@@ -828,11 +841,13 @@ if ACTION == 'durable_reserve' then
     local now_millis = now_seconds * 1000 + math.floor(now_micros / 1000)
     local seen = {}
     local windows = {}
+    local window_expiry = {}
     local start_by = now_millis + 15 * 60 * 1000
     for index, reservation in ipairs(reservations) do
         if type(reservation) ~= 'table' or not bounded_string(reservation.policy_id, 128, true) or
             not bounded_string(reservation.window_id, 128, true) or not bounded_string(reservation.bucket, 64, true) or
             not bounded_string(reservation.amount_nano, 64, true) or not bounded_string(reservation.limit_nano, 64, true) or
+            not bounded_string(reservation.bucket_nanos, 64, true) or not bounded_string(reservation.duration_nanos, 64, true) or
             not bounded_string(reservation.bucket_start_nanos, 64, true) or not bounded_string(reservation.event_id, 128, true) then
             return {'invalid_request', ''}
         end
@@ -845,6 +860,14 @@ if ACTION == 'durable_reserve' then
         if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or limit <= 0 or expires <= now_millis then
             return {'invalid_request', ''}
         end
+        -- The quote may have waited for capacity in an earlier bucket. Spend
+        -- counts through the window from Redis acceptance time, never from the
+        -- quote: raise the caller's bucket-derived expiry to the end of the
+        -- current bucket plus the window duration when that is later.
+        local bucket_millis = durable_millis(reservation.bucket_nanos)
+        local duration_millis = durable_millis(reservation.duration_nanos)
+        if not bucket_millis or not duration_millis or duration_millis < bucket_millis then return {'invalid_request', ''} end
+        window_expiry[index] = math.max(window_expires, (math.floor(now_millis / bucket_millis) + 1) * bucket_millis + duration_millis)
         start_by = math.min(start_by, expires)
         local identity = reservation.policy_id .. '\0' .. reservation.window_id .. '\0' .. reservation.bucket
         if seen[identity] then return {'invalid_request', ''} end
@@ -901,6 +924,7 @@ if ACTION == 'durable_reserve' then
         redis.call('HSET', bucket_key, durable_limit_field(bucket), reservation.limit_nano)
         redis.call('HINCRBY', bucket_key, durable_bucket_field(bucket), decimal(amount))
         redis.call('ZADD', expiry_key, decimal(expires), durable_expiry_member(fingerprint, bucket, decimal(amount)))
+        reservation.window_expires_millis = window_expiry[index]
         reservation.reserved_nano = reservation.amount_nano
         reservation.accounted_nano = '0'
         reservation.reservation_revision = 1
