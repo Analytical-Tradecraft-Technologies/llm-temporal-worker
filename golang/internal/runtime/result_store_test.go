@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -144,5 +145,104 @@ func TestContentAddressedFileBlobResolverUsesTenantRelativeLocator(t *testing.T)
 	}
 	if ref.Store != "file" || ref.Locator != prefix+"/"+value.DigestHex() {
 		t.Fatalf("file ref = %#v", ref)
+	}
+}
+
+type resultOperationsFake struct {
+	admission.AdmissionStore
+	mu         sync.Mutex
+	operations map[string]admission.Operation
+}
+
+func (fake *resultOperationsFake) Get(_ context.Context, id string) (admission.Operation, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	operation, ok := fake.operations[id]
+	if !ok {
+		return admission.Operation{}, admission.ErrOperationNotFound
+	}
+	return operation, nil
+}
+
+func (fake *resultOperationsFake) put(id string, expiresAt time.Time) {
+	fake.mu.Lock()
+	fake.operations[id] = admission.Operation{ID: id, ScopeKey: "tenant-a\x00" + id, ExpiresAt: expiresAt}
+	fake.mu.Unlock()
+}
+
+func (fake *resultOperationsFake) clear() {
+	fake.mu.Lock()
+	fake.operations = make(map[string]admission.Operation)
+	fake.mu.Unlock()
+}
+
+func cachedResultRefCount(store *BlobResultStore) int {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return len(store.refs)
+}
+
+func TestBlobResultStoreReferenceCacheDropsExpiredAndMissingOperations(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	operations := &resultOperationsFake{operations: make(map[string]admission.Operation)}
+	store, err := NewBlobResultStore(newTestBlobStore(), operations, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	putAll := func(prefix string, count int) {
+		t.Helper()
+		for i := 0; i < count; i++ {
+			id := fmt.Sprintf("%s-%d", prefix, i)
+			operations.put(id, now.Add(time.Hour))
+			if _, err := store.Put(ctx, id, llm.Response{OperationKey: id, Status: llm.ResponseStatusCompleted}); err != nil {
+				t.Fatalf("Put(%s) error = %v", id, err)
+			}
+		}
+	}
+
+	putAll("missing", 100)
+	if got := cachedResultRefCount(store); got != 100 {
+		t.Fatalf("cached refs = %d, want 100", got)
+	}
+	operations.clear()
+	for i := 0; i < 100; i++ {
+		if _, err := store.Get(ctx, fmt.Sprintf("missing-%d", i)); !errors.Is(err, engine.ErrResultNotFound) {
+			t.Fatalf("Get(missing) error = %v, want ErrResultNotFound", err)
+		}
+	}
+	if got := cachedResultRefCount(store); got != 0 {
+		t.Fatalf("cached refs after missing-operation reads = %d, want 0", got)
+	}
+
+	putAll("expired", 100)
+	now = now.Add(2 * time.Hour)
+	putAll("fresh", 1)
+	if got := cachedResultRefCount(store); got != 1 {
+		t.Fatalf("cached refs after expiry and one new result = %d, want 1", got)
+	}
+}
+
+func TestBlobResultStoreReferenceCacheIsCappedWhenResolvable(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	operations := &resultOperationsFake{operations: make(map[string]admission.Operation)}
+	resolver, err := NewContentAddressedBlobRefResolver("memory", "results")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewBlobResultStore(newTestBlobStore(), operations, resolver, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxCachedResultRefs+10; i++ {
+		id := fmt.Sprintf("operation-%d", i)
+		operations.put(id, now.Add(time.Hour))
+		if _, err := store.Put(ctx, id, llm.Response{OperationKey: id, Status: llm.ResponseStatusCompleted}); err != nil {
+			t.Fatalf("Put(%s) error = %v", id, err)
+		}
+	}
+	if got := cachedResultRefCount(store); got != maxCachedResultRefs {
+		t.Fatalf("cached refs = %d, want cap %d", got, maxCachedResultRefs)
 	}
 }

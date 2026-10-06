@@ -28,15 +28,35 @@ type BlobRefResolver func(context.Context, string, state.BlobRef, time.Time) (bl
 // blob store and keeps only the small digest/size/media tuple in the shared
 // admission ledger. The in-memory map is an optimization for the process that
 // wrote a result; RefResolver is required for restart-safe reads.
+//
+// The map holds only live operations: entries leave it when their operation
+// expires or is no longer found, and expired entries are swept on Put. With a
+// resolver the map is also capped, because an uncached reference can be
+// reconstructed; without one (development memory mode) it is the only way back
+// to a result, so it is bounded by operation retention alone.
 type BlobResultStore struct {
 	store      blob.Store
 	admission  admission.AdmissionStore
 	resolveRef BlobRefResolver
 	clock      func() time.Time
 
-	mu   sync.RWMutex
-	refs map[string]blob.Ref
+	mu        sync.RWMutex
+	refs      map[string]cachedResultRef
+	nextSweep time.Time
 }
+
+type cachedResultRef struct {
+	ref       blob.Ref
+	expiresAt time.Time
+}
+
+const (
+	// maxCachedResultRefs caps the reference cache when a resolver can
+	// rebuild evicted references.
+	maxCachedResultRefs = 4096
+	// resultRefSweepInterval spaces the expired-entry sweeps done by Put.
+	resultRefSweepInterval = time.Minute
+)
 
 // NewBlobResultStore validates the durable result-store composition. A nil
 // resolver is allowed only for tests that never read after the process loses
@@ -51,7 +71,7 @@ func NewBlobResultStore(store blob.Store, admissions admission.AdmissionStore, r
 	if clock == nil {
 		clock = time.Now
 	}
-	return &BlobResultStore{store: store, admission: admissions, resolveRef: resolver, clock: clock, refs: make(map[string]blob.Ref)}, nil
+	return &BlobResultStore{store: store, admission: admissions, resolveRef: resolver, clock: clock, refs: make(map[string]cachedResultRef)}, nil
 }
 
 var _ engine.ResultStore = (*BlobResultStore)(nil)
@@ -93,10 +113,46 @@ func (results *BlobResultStore) Put(ctx context.Context, operationID string, res
 	if err != nil {
 		return state.BlobRef{}, err
 	}
-	results.mu.Lock()
-	results.refs[operationID] = ref
-	results.mu.Unlock()
+	results.remember(operationID, ref, operation.ExpiresAt)
 	return stateRef, nil
+}
+
+func (results *BlobResultStore) remember(operationID string, ref blob.Ref, expiresAt time.Time) {
+	now := results.clock()
+	results.mu.Lock()
+	defer results.mu.Unlock()
+	if !now.Before(results.nextSweep) {
+		for id, cached := range results.refs {
+			if !now.Before(cached.expiresAt) {
+				delete(results.refs, id)
+			}
+		}
+		results.nextSweep = now.Add(resultRefSweepInterval)
+	}
+	if _, cached := results.refs[operationID]; !cached && results.resolveRef != nil && len(results.refs) >= maxCachedResultRefs {
+		return
+	}
+	results.refs[operationID] = cachedResultRef{ref: ref, expiresAt: expiresAt}
+}
+
+func (results *BlobResultStore) cached(operationID string) (blob.Ref, bool) {
+	results.mu.RLock()
+	cached, ok := results.refs[operationID]
+	results.mu.RUnlock()
+	if !ok {
+		return blob.Ref{}, false
+	}
+	if !results.clock().Before(cached.expiresAt) {
+		results.forget(operationID)
+		return blob.Ref{}, false
+	}
+	return cached.ref, true
+}
+
+func (results *BlobResultStore) forget(operationID string) {
+	results.mu.Lock()
+	delete(results.refs, operationID)
+	results.mu.Unlock()
 }
 
 func (results *BlobResultStore) Get(ctx context.Context, operationID string) (llm.Response, error) {
@@ -112,6 +168,7 @@ func (results *BlobResultStore) Get(ctx context.Context, operationID string) (ll
 	operation, err := results.admission.Get(ctx, operationID)
 	if err != nil {
 		if errors.Is(err, admission.ErrOperationNotFound) {
+			results.forget(operationID)
 			return llm.Response{}, engine.ErrResultNotFound
 		}
 		return llm.Response{}, fmt.Errorf("load result operation: %w", err)
@@ -123,9 +180,7 @@ func (results *BlobResultStore) Get(ctx context.Context, operationID string) (ll
 	if err != nil {
 		return llm.Response{}, err
 	}
-	results.mu.RLock()
-	ref, ok := results.refs[operationID]
-	results.mu.RUnlock()
+	ref, ok := results.cached(operationID)
 	if !ok {
 		if results.resolveRef == nil {
 			return llm.Response{}, engine.ErrResultNotFound
@@ -138,6 +193,7 @@ func (results *BlobResultStore) Get(ctx context.Context, operationID string) (ll
 	data, err := results.store.Get(ctx, tenant, ref)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) || errors.Is(err, blob.ErrExpired) {
+			results.forget(operationID)
 			return llm.Response{}, engine.ErrResultNotFound
 		}
 		return llm.Response{}, fmt.Errorf("load result blob: %w", err)
