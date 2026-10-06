@@ -32,8 +32,14 @@ the immutable Function (or its explicitly configured preloaded Lua fallback)
 before enabling workers. Function loading/replacement is deliberately outside
 the request path.
 
-Counters and leases have a TTL equal to the largest configured window in the
-acquire. Redis `noeviction` and the configured persistence policy remain
+Counters are fixed windows. A counter's TTL, equal to the largest configured
+window in the acquire, is set once, when the first acquire creates it; later
+acquires do not extend it, so the counter resets at the end of each window. A
+lease records the end of the window each counter was charged in. Release
+returns capacity only while that window is still current: once it ends, the
+counter has already reset, so the capacity is free and a newer window is not
+decremented. A lease whose record expired returns its capacity at the end of
+its window the same way. Leases have the same TTL. Redis `noeviction` and the configured persistence policy remain
 startup/readiness requirements. Missing, malformed, over-limit, or ambiguous
 state fails closed; Redis does not fall back to PostgreSQL for a normal throttle
 decision. These operational leases do not imply a financial journal entry.
