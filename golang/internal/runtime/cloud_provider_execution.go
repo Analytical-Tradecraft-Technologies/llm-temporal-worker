@@ -188,7 +188,7 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		return ProviderExecutionResult{}, cloudRuntimeError(err, false)
 	}
 	stage := saved.Execution.Stage
-	if stage == cloudstate.ExecutionSucceeded || stage == cloudstate.ExecutionFailed {
+	if stage == cloudstate.ExecutionSucceeded || stage == cloudstate.ExecutionFailed || (stage == cloudstate.ExecutionUnknown && saved.Execution.Settlement != nil) {
 		return executor.settle(ctx, scope, id, saved)
 	}
 	if stage == cloudstate.ExecutionPending && executor.clock().Before(saved.Execution.PollAfter) {
@@ -221,7 +221,7 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		}
 	} else {
 		if stage == cloudstate.ExecutionUnknown {
-			return executor.result(saved), nil
+			return executor.settleUnknown(ctx, scope, id, saved)
 		}
 		next := saved.Execution
 		next.Stage = cloudstate.ExecutionUnknown
@@ -229,6 +229,28 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 		return executor.save(ctx, scope, id, saved, next)
 	}
 	return executor.completeCall(ctx, scope, id, saved, planned.Call, transcript, outcome, nil, true)
+}
+
+// settleUnknown charges an unresolved paid attempt at its full reservation
+// once its recovery window has passed and nothing can recover it. The
+// finalize_unknown events count the conservative charge through each budget
+// window like confirmed cost, after which it ages out; without them the claim
+// would hold its reservation forever. An exact cost learned later is an
+// authorized correction (resolve_unknown_exact), not a second settlement.
+// An attempt without a recorded claim is left as it is: nothing proves Redis
+// moved its reservation out of the expiry index.
+func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {
+	if saved.Execution.Claim == nil || !saved.Plan.RequiresReservation() || executor.clock().Before(saved.Execution.RecoverAfter) {
+		return executor.result(saved), nil
+	}
+	next := saved.Execution
+	next.UpdatedAt = executor.clock().UTC()
+	next.Settlement = executionSettlement(next)
+	result, err := executor.save(ctx, scope, id, saved, next)
+	if err != nil {
+		return result, err
+	}
+	return executor.settle(ctx, scope, id, result.Saved)
 }
 
 func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, plan cloudstate.BudgetPlan, generate durable.GenerateReplay, compact durable.CompactReplay) (PlannedProviderCall, []llm.Item, error) {

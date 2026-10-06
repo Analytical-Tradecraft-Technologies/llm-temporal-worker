@@ -107,7 +107,13 @@ released; a claimed authorization cannot use that release path. A later exact
 cost correction has its own event ID and revision.
 
 Operation records and deduplication tombstones currently have no TTL. Claimed
-and ambiguous reservations also remain until settlement. Automatic cleanup of
+and ambiguous reservations also remain until settlement. A claimed provider
+attempt whose outcome stays unknown after its recovery window (the 15-minute
+start lease) is settled with `finalize_unknown` events at its full reservation
+by the next poll or budget acquisition that observes it, so the conservative
+charge counts through each budget window like confirmed cost and then ages out
+instead of being held forever. A later exact cost is a `resolve_unknown_exact`
+correction, never a second settlement. Automatic cleanup of
 these records is a future task: Redis memory capacity must include their growth.
 This prevents old activity retries from reacquiring or refunding a paid attempt.
 There is no SQL journal from which to rebuild lost budget state. Redis

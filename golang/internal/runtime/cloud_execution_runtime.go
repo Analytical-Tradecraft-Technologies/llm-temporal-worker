@@ -200,6 +200,11 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		// Only explicit acquisition can replace an unresolved paid attempt.
 		// The old child remains charged and discoverable independently.
 		if step == cloudAcquire && saved.Execution.Stage == cloudstate.ExecutionUnknown && !r.now().Before(saved.Execution.RecoverAfter) {
+			// Charge the old attempt at its reservation before replacing it,
+			// so its claim ages out of each window instead of being held.
+			if _, err := r.execution.Resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay); err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
 			if err := r.finishUnknownFill(ctx, p, attempt, saved); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
