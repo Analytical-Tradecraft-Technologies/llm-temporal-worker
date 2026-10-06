@@ -903,6 +903,11 @@ func validateMediaSource(rawURL string, data []byte, blob *BlobRef, mediaType, k
 	if sources != 1 {
 		return fmt.Errorf("%s must specify exactly one of url, bytes, or blob", kind)
 	}
+	// Empty inline bytes are not meaningful media, and they would marshal as
+	// a missing source that the decoder and schema reject.
+	if data != nil && len(data) == 0 {
+		return fmt.Errorf("%s bytes must not be empty", kind)
+	}
 	if mediaType == "" || strings.ContainsAny(mediaType, "\r\n") {
 		return fmt.Errorf("%s media_type must be a non-empty MIME value", kind)
 	}

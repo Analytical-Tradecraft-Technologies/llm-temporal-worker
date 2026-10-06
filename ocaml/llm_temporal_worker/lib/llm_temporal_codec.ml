@@ -331,7 +331,8 @@ let media_source_of_fields fields =
   | Some value, None, None -> Result.map (fun value -> Url value) (string "media url" value)
   | None, Some value, None ->
       let* value = string "media bytes" value in
-      Result.map (fun value -> Bytes value) (base64_decode "media bytes" value)
+      let* value = base64_decode "media bytes" value in
+      if value = "" then Error (codec_error "media bytes must not be empty") else Ok (Bytes value)
   | None, None, Some value ->
       (match closed_fields "media blob" [ "locator"; "digest"; "byte_length"; "media_type" ] value with
        | Error _ as error -> error
