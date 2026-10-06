@@ -1,10 +1,13 @@
 package config_test
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/config"
+	"github.com/mfow/llm-temporal-worker/golang/llm/schema"
 )
 
 // Production needs an encrypted, client-authenticated Temporal connection
@@ -45,6 +48,51 @@ func TestLoadRequiresAuthenticatedTemporalTransportInProduction(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Fatalf("%s: Load() = %v, want %q", name, err, test.want)
+		}
+	}
+}
+
+// The public schema mirrors the Temporal credential rules so tooling that
+// validates against it rejects what startup would reject.
+func TestConfigSchemaMirrorsTemporalCredentialRules(t *testing.T) {
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		mutate func(*config.Config)
+		valid  bool
+	}{
+		"mtls": {mutate: func(*config.Config) {}, valid: true},
+		"api key": {mutate: func(c *config.Config) {
+			c.Temporal.TLS.CertFile, c.Temporal.TLS.KeyFile, c.Temporal.APIKeyFile = "", "", "/key"
+		}, valid: true},
+		"mesh": {mutate: func(c *config.Config) {
+			c.Temporal.TLS.Enabled, c.Temporal.TLS.CertFile, c.Temporal.TLS.KeyFile, c.Temporal.MeshTransport = false, "", "", true
+		}, valid: true},
+		"no credentials":   {mutate: func(c *config.Config) { c.Temporal.TLS.CertFile, c.Temporal.TLS.KeyFile = "", "" }},
+		"plaintext":        {mutate: func(c *config.Config) { c.Temporal.TLS.Enabled = false }},
+		"certificate only": {mutate: func(c *config.Config) { c.Temporal.TLS.KeyFile = "" }},
+		"key only":         {mutate: func(c *config.Config) { c.Temporal.TLS.CertFile = "" }},
+		"api key without tls": {mutate: func(c *config.Config) {
+			c.Temporal.TLS.Enabled, c.Temporal.MeshTransport, c.Temporal.APIKeyFile = false, true, "/key"
+		}},
+	} {
+		loaded, err := config.Load(exampleYAML(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		test.mutate(&loaded)
+		encoded, err := json.Marshal(loaded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := compiled.Validate(encoded); (err == nil) != test.valid {
+			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
 		}
 	}
 }
