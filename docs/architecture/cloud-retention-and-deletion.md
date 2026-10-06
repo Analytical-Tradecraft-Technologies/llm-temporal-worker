@@ -216,7 +216,7 @@ None of the following may be retired or deleted, whatever their age:
 | Origin checkpoints of retained cache entries | an edge of kind `cache_origin` from the entry to `OriginCheckpointID` |
 | Active cache fills | fill head in `held`/`started`, or a terminal fill whose receipt (`fill-receipt`) has not been sealed |
 | Active cache uses | a use edge from an operation whose request is not terminal |
-| The current cache success head | the entry the `cache/success` row points at is never eligible; superseded entries may become eligible |
+| The current cache success head | a live `cache_head` edge. `responseCache.Publish` creates this edge and passes the entry's fence check (veto) before it creates or replaces the head. Superseded entries may become eligible once that edge is released. |
 | Referenced blobs | any unreleased blob edge, and any ledger item not in `deleted` state for a different generation (see blob protocol) |
 | Unknown-cost receipts and their attempts | a #819 resolution receipt without its applied marker; and every receipt for the configured audit horizon |
 | Budget initialization receipt | never eligible |
@@ -234,7 +234,7 @@ is tested, it stays out of scope.
 | Root request | status `completed` or `failed`; every attempt in its chain eligible; operation-key late-retry horizon configured |
 | Attempt request | status `completed`/`failed`; execution `Settled`; if it carried `finalize_unknown`, see #819 |
 | Checkpoint | `ExpiresAt` older than the checkpoint cutoff **and** zero unreleased child, `compacted_through` and `cache_origin` edges |
-| Cache entry | not the current success head; zero unreleased use edges; older than the cache cutoff |
+| Cache entry | zero unreleased `cache_head` and `cache_use` edges; older than the cache cutoff |
 | Cache use | consuming operation terminal; older than the cache cutoff |
 | Fill revision blob | head is terminal and sealed, and the blob is not the sealed receipt's blob |
 | Orphan blob | catalog row older than the orphan grace and no edges (blob protocol) |
@@ -262,7 +262,9 @@ under retries. Edge kinds:
   checkpoint;
 - `cache_origin`: referrer is a cache entry; referent is its origin
   checkpoint;
-- `cache_use`: referrer is a consuming operation; referent is a cache entry.
+- `cache_use`: referrer is a consuming operation; referent is a cache entry;
+- `cache_head`: referrer is a `cache/success` head row; referent is the cache
+  entry that the head points at, or is about to point at.
 
 The sweeper releases an edge (`Replace` to `released`, then `Delete` at that
 version) only after its referrer has been retired. A crashed writer that
@@ -281,7 +283,23 @@ sort key:  <item tag>
 
 A catalog row is created before the item's first write. Blobs get one before
 `writeBlob` calls `BlobStore.Create`, so interrupted publications leave a
-discoverable orphan. Requests reuse the existing pending index, because its
+discoverable orphan.
+
+Blob keys are content-addressed, so the first write after the epoch can
+produce bytes identical to a blob written before it. `BlobStore.Create` then
+reports `ErrAlreadyExists`, and the existing object may still be referenced by
+data from before the epoch that has no edge rows. A blob catalog row therefore
+starts as `unconfirmed`. The writer replaces it with `created` (conditional
+`Replace`) only after its own `BlobStore.Create` returned success. Only a
+`created` row whose creation time is after the reference-index epoch makes a
+blob a deletion candidate. Rows for deduplicated blobs (`ErrAlreadyExists`)
+and rows whose `Create` outcome was unknown stay `unconfirmed`. They are
+ineligible, even when a later retry or another writer observes the object,
+because nothing proves that this key had no earlier, unindexed referrers. A
+crash between a successful `Create` and the confirmation also leaves the row
+`unconfirmed`. That case leaks storage but loses no data. Such blobs are
+retained until a separately approved backfill indexes all earlier references
+to them. Requests reuse the existing pending index, because its
 eight partitions already enumerate every request, with terminal rows kept.
 The day bucket bounds each sweep to partitions whose items are old enough.
 The shard bounds partition size.
@@ -378,11 +396,25 @@ skipped and counted, and never blocks the rest of the page.
 
 ### Cache artifacts
 
-- A superseded cache entry (one that is not the current `cache/success`
-  head), with no live `cache_use` edges, older than the cache cutoff, is
-  fenced and retired like a checkpoint. Its `cache_origin` and `blob` edges
-  are then released. The current head is never a candidate. Replacing the
-  head is the only way an entry becomes superseded.
+- **Head publication takes part in the entry fence.** Before
+  `responseCache.Publish` creates or replaces the `cache/success` head so it
+  points at entry E, it does two things. First, it creates a `cache_head`
+  edge in E's edge partition (W1). Second, it reads E's fence and vetoes a
+  `fenced` state (W2). Only then does it write the head (W3). A delayed
+  `Publish` retry for an aged entry is therefore covered by the same
+  linearizability argument as blobs. Either the sweeper sees the edge, or
+  the writer vetoes the fence, or the writer sees `retiring`/`retired` and
+  aborts without moving the head.
+- The `cache_head` edge for E is released only after a later committed head
+  replacement points at a different entry. The writer that replaced the head
+  releases it, or the sweeper does after re-reading the head and confirming
+  this. `Publish` never moves the head to an entry with an older
+  `CompletedAt` (or an equal `CompletedAt` with a lower ID), so a released
+  head edge cannot become necessary again unless a new `Publish` first
+  recreates it.
+- A superseded cache entry with no live `cache_head` or `cache_use` edges,
+  older than the cache cutoff, is fenced and retired like a checkpoint. Its
+  `cache_origin` and `blob` edges are then released.
 - Cache use rows are retired when the consuming operation's request is
   retired. Retiring a use releases its `cache_use` edge.
 - Fill heads in `held`/`started` are never touched. For a terminal fill head,

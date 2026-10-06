@@ -87,8 +87,11 @@ All claims in this section describe current code.
 - `durable.UnknownCostBoundary.Resolve` and `UnknownCostResolution.Validate`
   in [`unknown_cost.go`](../../golang/storage/durable/unknown_cost.go) check
   that a batch has only `resolve_unknown_exact` events, with one exact amount
-  and unique IDs, and forward it to `Reconcile`. On failure they return
-  `ErrReconcilePending`. **There is no production caller and no durable
+  and unique IDs, and forward it to `Reconcile`. On failure, `Resolve`
+  returns `fmt.Errorf("%w: %v", ErrReconcilePending, err)`. The `%v` discards
+  the typed Redis cause, so a caller cannot tell `not_found`, `conflict`,
+  `finalized`, a generation/incarnation mismatch and a transport error apart
+  without matching strings. **There is no production caller and no durable
   receipt.**
 
 The missing pieces are evidence, authorization, the durable receipt written
@@ -183,7 +186,24 @@ The applied marker records `{outcome, applied_at}` and is only an
 acknowledgement: losing it causes a harmless replay.
 
 The open index row is written by the request path (phase 1) before `settle`
-calls Redis, whenever the settlement contains `finalize_unknown`. It makes
+calls Redis, whenever the settlement contains `finalize_unknown`.
+
+**Authoritative window expiry.** Redis sets each reservation's
+`window_expires_millis` from Redis `TIME` at acceptance (`admission.lua`). The
+worker's clock, including `ProviderExecution.StartedAt`, is not a valid bound
+on that value, because the two clocks can straddle a bucket boundary. On a
+successful `durable_reconcile`, the Function already returns the encoded
+operation record, but `RedisBudgetMaterializer.Reconcile` discards it. Phase 1
+changes that. The materializer returns each reservation's
+`window_expires_millis` from the `finalize_unknown` settlement result, and the
+request path stores those values in the open index row. They are later
+copied into the receipt. A `window_expired` classification requires every
+stored value to be earlier than Redis `TIME`, read through the same
+authority-checked connection. If the values were never captured (settled
+before phase 1, or the reply was lost and the retry returned only a
+deduplicated `ok`), they are read from the Redis operation record while it
+still exists. If neither is available, `not_found` is treated as authority
+loss: the receipt stays RECEIPTED and an operator investigates. It makes
 both lost-submission and succeeded-without-cost attempts discoverable. Lost
 submissions are also in `ListPending` as `outcome_unknown`. Succeeded attempts
 are terminal and filtered from that list. The row is retired once the applied
@@ -228,7 +248,15 @@ Steps, all replayable:
    read confirms the receipt.
 4. **Apply in Redis.** Call `UnknownCostBoundary.Resolve` with the stored
    batch, under the same bounded detached timeout as `settle`
-   (`finalizationTimeout`).
+   (`finalizationTimeout`). Phase 2 first changes `Resolve` to keep the
+   typed cause. It wraps both `ErrReconcilePending` and the materializer
+   error with `%w` (or returns the cause in a typed result field). Callers
+   then classify with `errors.Is` against `ErrRedisBudgetConflict`,
+   `ErrRedisBudgetReservationFinalized`, `ErrRedisBudgetReservationNotFound`,
+   `ErrRedisBudgetGenerationMismatch`, `ErrRedisBudgetIncarnationMismatch`
+   and `ErrBudgetAuthorityUnavailable`. The reconciler never matches error
+   text. An error that matches none of these counts as a transport or unknown
+   result.
 5. **Acknowledge.** `Create` the applied marker, then retire the open index
    row.
 
@@ -237,7 +265,7 @@ Redis results in step 4:
 | Result | Meaning | Action |
 | --- | --- | --- |
 | `ok` (including a deduplicated replay) | applied | step 5, outcome `applied` |
-| `ErrRedisBudgetReservationNotFound`, and the saved plan proves that every window's expiry has passed. For each `plan.Reservation.Reservations` entry the bound is the end of the bucket (`BucketNanos`) containing `ProviderExecution.StartedAt` plus `DurationNanos`. `StartedAt` is an upper bound on Redis acceptance time, and Redis extends the expiry to the acceptance bucket plus the window. | the conservative charge already aged out of every window; nothing to lower | step 5, outcome `window_expired`. The receipt still records the exact cost for audit. |
+| `ErrRedisBudgetReservationNotFound`, and the **Redis-authoritative** expiry captured at settlement has passed for every window, measured by Redis `TIME` (see below) | the conservative charge already aged out of every window; nothing to lower | step 5, outcome `window_expired`. The receipt still records the exact cost for audit. |
 | `ErrRedisBudgetReservationNotFound` otherwise | the operation record is missing: possible Redis data loss | stay RECEIPTED, fail closed, alert. See authority loss. |
 | `ErrRedisBudgetConflict` | status is not `ambiguous` (for example, a restored snapshot predates `finalize_unknown`) or the event fingerprint differs | stay RECEIPTED, alert, no hot retry |
 | `ErrRedisBudgetReservationFinalized` | a different batch already resolved it | stay RECEIPTED, alert. Possible double-resolution attempt. |
@@ -383,8 +411,8 @@ All metrics use the `llmtw_` prefix and carry no tenant labels.
 | Phase | Exit | Default |
 | --- | --- | --- |
 | 0 | This design | n/a |
-| 1 | Request path writes the open index when a settlement contains `finalize_unknown`; read-only `unknown-cost-reconcile` report; metrics | report only |
-| 2 | Receipt store in `cloudstate`; state machine; `UnknownCostBoundary` wired; `operator_attestation` evidence with signatures and the two-person rule; IAM/ACL identities | off |
+| 1 | Request path writes the open index when a settlement contains `finalize_unknown`, including the Redis-authoritative `window_expires_millis` returned by the materializer; read-only `unknown-cost-reconcile` report; metrics | report only |
+| 2 | Receipt store in `cloudstate`; state machine; `UnknownCostBoundary.Resolve` changed to keep typed Redis causes, then wired; `operator_attestation` evidence with signatures and the two-person rule; IAM/ACL identities | off |
 | 3 | Provider evidence adapters, one family at a time. Each is enabled only after [source contracts](../reference/source-contracts.md) verify that the provider exposes authoritative per-request cost or usage bound to our idempotency key or job ID. Otherwise that family stays `evidence_unsupported`. | off |
 | 4 | Scheduled passes; integration with #856 recovery and #818 retention protections | off |
 
@@ -405,7 +433,9 @@ integration-test Function) and the generic KV/blob fixtures. Rows marked
 | 7 | Cross-scope attempt ID or mismatched endpoint/account/subject | denied before any write |
 | 8 | Unsupported or aggregated evidence; provider "not found" | stays unknown; never zero |
 | 9 | Unsettled unknown, before `RecoverAfter`, or no `Claim` | ineligible |
-| 10 | Window already expired | `window_expired`; no Redis mutation |
+| 10 | Window already expired per stored Redis `window_expires_millis` and Redis `TIME` | `window_expired`; no Redis mutation |
+| 10a | `not_found` with the worker clock past the bucket but Redis expiry not proven | stays RECEIPTED; treated as authority loss |
+| 10b | Each typed Redis error through `UnknownCostBoundary.Resolve` | classified by `errors.Is`, never by message text |
 | 11 | Incarnation mismatch or missing authority marker | fail closed; RECEIPTED retained |
 | 12 | Redis snapshot restored to before `finalize_unknown` | `conflict`; no change; alert |
 | 13 | Exact cost above the reservation | applied as an increase; `exceeds_reservation` audited |
