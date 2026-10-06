@@ -114,6 +114,9 @@ The first release is complete only when all of these statements are true:
 ## v1 traceability status
 
 The [partial v1 traceability catalog](release/v1-requirements.json) records
-source-backed implementation and verification references. Its recorded states
-are not release evidence: they do not claim a candidate, provider invocation,
+source-backed implementation and verification references. It records no
+offline evidence yet; an entry can be recorded only while its implementation
+paths are unchanged since the evidence revision (see the
+[release runbook](release/runbook.md#offline-traceability-evidence)). Recorded
+states are not release evidence: they do not claim a candidate, provider invocation,
 signing, publication, tag, or release result.

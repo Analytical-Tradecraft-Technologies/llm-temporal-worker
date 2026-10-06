@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -54,19 +56,17 @@ var evidenceStatusForMode = map[string]string{
 	"external_authorization_required": "authorization_required",
 }
 
-// The release-evidence artifact recorded below was produced by this exact
-// protected master revision. Keep this candidate pin explicit so a later
-// catalog refresh cannot accidentally retain evidence from an older run.
-const expectedV1EvidenceRevision = "1aae4ff2095a5adaf3fee13aa696d78d73616ddd"
-const expectedV1EvidenceWorkflowRunID int64 = 30795754773
-const expectedV1EvidenceArtifactName = "release-evidence"
-const expectedV1EvidenceArtifactID = "8849743942"
+// Offline evidence may be recorded only while it is still fresh: its revision
+// must be in this checkout's history and none of the requirement's
+// implementation paths may have changed since. There is no hand-maintained
+// pin; a catalog that outlives its evidence fails until it is rebound to a new
+// run or marked unrecorded.
+var (
+	evidenceRevisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	evidenceDigestPattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
 
-// GitHub exposes the artifact digest as sha256:<hex>; the catalog stores the
-// normalized lowercase hex payload so it remains comparable across evidence
-// sources that use the same digest algorithm.
-const expectedV1EvidenceArtifactDigest = "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
-const expectedV1EvidenceImageDigest = "bd95d9d7bbd81582ed3f7ec18131a5e31106dee9152de9373f7676dbc3806f27"
+const v1EvidenceArtifactName = "release-evidence"
 
 type v1TraceabilityCatalog struct {
 	SchemaVersion int                         `json:"schema_version"`
@@ -107,38 +107,10 @@ type v1TraceabilityEvidence struct {
 	ArtifactDigest string `json:"artifact_digest,omitempty"`
 }
 
-func recordedV1Evidence() v1TraceabilityEvidence {
-	return v1TraceabilityEvidence{
-		Mode:           "offline",
-		Status:         "recorded",
-		Revision:       expectedV1EvidenceRevision,
-		WorkflowRunID:  expectedV1EvidenceWorkflowRunID,
-		ArtifactName:   expectedV1EvidenceArtifactName,
-		ArtifactDigest: expectedV1EvidenceArtifactDigest,
-	}
-}
-
 func TestV1TraceabilityCatalog(t *testing.T) {
 	root := repositoryRoot(t)
 	if err := validateV1TraceabilityCatalog(root, readV1TraceabilityCatalog(t, root)); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestV1TraceabilityRunbookPinsRecordedEvidence(t *testing.T) {
-	root := repositoryRoot(t)
-	runbook := readRepositoryFile(t, root, "docs", "release", "runbook.md")
-	wants := []string{
-		fmt.Sprintf("workflow run `%d`](https://github.com/mfow/llm-temporal-worker/actions/runs/%d)", expectedV1EvidenceWorkflowRunID, expectedV1EvidenceWorkflowRunID),
-		"`" + expectedV1EvidenceRevision + "`",
-		"`release-evidence` (artifact `" + expectedV1EvidenceArtifactID + "`)",
-		"`sha256:" + expectedV1EvidenceArtifactDigest + "`",
-		"`sha256:" + expectedV1EvidenceImageDigest + "`",
-	}
-	for _, want := range wants {
-		if !strings.Contains(runbook, want) {
-			t.Errorf("release runbook does not pin current evidence %q", want)
-		}
 	}
 }
 
@@ -273,7 +245,7 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 					{Path: ".github/workflows/master.yml", Job: "verify"},
 				},
 			},
-			Evidence: recordedV1Evidence(),
+			Evidence: v1TraceabilityEvidence{Mode: "offline", Status: "unrecorded"},
 		},
 		{
 			ID: "v1.slo.worker-caused-error-rate",
@@ -397,8 +369,8 @@ func TestV1TraceabilityCatalogRejectsDuplicateJSONKeys(t *testing.T) {
 		},
 		{
 			name:   "nested evidence status where final value is valid",
-			before: "\"mode\": \"offline\",\n        \"status\": \"recorded\"",
-			after:  "\"mode\": \"offline\",\n        \"status\": \"authorization_required\",\n        \"status\": \"recorded\"",
+			before: "\"mode\": \"offline\",\n        \"status\": \"unrecorded\"",
+			after:  "\"mode\": \"offline\",\n        \"status\": \"authorization_required\",\n        \"status\": \"unrecorded\"",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -552,13 +524,42 @@ func TestV1TraceabilityCatalogRejectsBrokenStaticRecords(t *testing.T) {
 func TestV1TraceabilityRejectsStaleOfflineEvidenceRevision(t *testing.T) {
 	root := repositoryRoot(t)
 	raw := readV1TraceabilityCatalog(t, root)
-	mutated := mutateV1TraceabilityCatalog(t, raw, func(t *testing.T, document map[string]any) {
-		evidence := catalogEvidence(t, requirementAt(t, document, 0))
-		evidence["revision"] = "2456e83a8f4e6f9f6b54b7b6e06ccf54886f9f3b"
-	})
-	if err := validateV1TraceabilityCatalog(root, mutated); err == nil {
-		t.Fatal("catalog validator accepted offline evidence from a stale revision")
+	record := func(revision string) []byte {
+		return mutateV1TraceabilityCatalog(t, raw, func(t *testing.T, document map[string]any) {
+			requirement := requirementAt(t, document, 0)
+			requirement["evidence"] = map[string]any{"mode": "offline", "status": "recorded", "revision": revision,
+				"workflow_run_id": 1, "artifact_name": v1EvidenceArtifactName, "artifact_digest": strings.Repeat("a", 64)}
+		})
 	}
+	// The revision of the last hand-maintained pin is 294+ commits behind and
+	// its implementation paths have changed since, so it is stale wherever it
+	// is still in history; a revision outside history is rejected too.
+	for _, revision := range []string{"1aae4ff2095a5adaf3fee13aa696d78d73616ddd", strings.Repeat("0", 40)} {
+		if err := validateV1TraceabilityCatalog(root, record(revision)); err == nil {
+			t.Fatalf("catalog validator accepted offline evidence from stale revision %s", revision)
+		}
+	}
+	// Evidence for the current revision, whose paths are unchanged, is fresh.
+	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Skipf("git history is unavailable: %v", err)
+	}
+	if err := validateV1TraceabilityCatalog(root, record(strings.TrimSpace(string(head)))); err != nil {
+		t.Fatalf("catalog validator rejected evidence recorded at HEAD: %v", err)
+	}
+}
+
+// validateEvidenceFreshness requires the evidence revision to be an ancestor
+// of HEAD with no change to the requirement's implementation paths since.
+func validateEvidenceFreshness(root, revision string, paths []string) error {
+	if err := exec.Command("git", "-C", root, "merge-base", "--is-ancestor", revision, "HEAD").Run(); err != nil {
+		return fmt.Errorf("recorded evidence revision %s is not in this checkout's history; rebind it to a current run or mark it unrecorded", revision)
+	}
+	args := append([]string{"-C", root, "diff", "--quiet", revision, "HEAD", "--"}, paths...)
+	if err := exec.Command("git", args...).Run(); err != nil {
+		return fmt.Errorf("implementation paths changed since recorded evidence revision %s; rebind it to a current run or mark it unrecorded", revision)
+	}
+	return nil
 }
 
 func readV1TraceabilityCatalog(t *testing.T, root string) []byte {
@@ -749,17 +750,12 @@ func validateV1TraceabilityRequirement(root string, makeTargets map[string]struc
 	if requirement.Evidence.Mode == "offline" {
 		switch requirement.Evidence.Status {
 		case "recorded":
-			if requirement.Evidence.Revision != expectedV1EvidenceRevision {
-				return fmt.Errorf("offline evidence revision = %q, want %q", requirement.Evidence.Revision, expectedV1EvidenceRevision)
+			evidence := requirement.Evidence
+			if !evidenceRevisionPattern.MatchString(evidence.Revision) || evidence.WorkflowRunID <= 0 || evidence.ArtifactName != v1EvidenceArtifactName || !evidenceDigestPattern.MatchString(evidence.ArtifactDigest) {
+				return fmt.Errorf("recorded offline evidence needs a full revision, a workflow run, the %s artifact and its SHA-256", v1EvidenceArtifactName)
 			}
-			if requirement.Evidence.WorkflowRunID != expectedV1EvidenceWorkflowRunID {
-				return fmt.Errorf("offline evidence workflow_run_id = %d, want %d", requirement.Evidence.WorkflowRunID, expectedV1EvidenceWorkflowRunID)
-			}
-			if requirement.Evidence.ArtifactName != expectedV1EvidenceArtifactName {
-				return fmt.Errorf("offline evidence artifact_name = %q, want %q", requirement.Evidence.ArtifactName, expectedV1EvidenceArtifactName)
-			}
-			if requirement.Evidence.ArtifactDigest != expectedV1EvidenceArtifactDigest {
-				return fmt.Errorf("offline evidence artifact_digest = %q, want %q", requirement.Evidence.ArtifactDigest, expectedV1EvidenceArtifactDigest)
+			if err := validateEvidenceFreshness(root, evidence.Revision, requirement.ImplementationPaths); err != nil {
+				return err
 			}
 		case "unrecorded":
 			if requirement.Evidence.Revision != "" || requirement.Evidence.WorkflowRunID != 0 || requirement.Evidence.ArtifactName != "" || requirement.Evidence.ArtifactDigest != "" {

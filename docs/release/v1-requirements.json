@@ -31,11 +31,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -66,11 +62,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -102,11 +94,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -137,11 +125,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -511,11 +495,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -543,11 +523,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -574,11 +550,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -610,11 +582,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -731,11 +699,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -806,11 +770,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -876,11 +836,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     },
     {
@@ -910,11 +866,7 @@
       },
       "evidence": {
         "mode": "offline",
-        "status": "recorded",
-        "revision": "1aae4ff2095a5adaf3fee13aa696d78d73616ddd",
-        "workflow_run_id": 30795754773,
-        "artifact_name": "release-evidence",
-        "artifact_digest": "2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a"
+        "status": "unrecorded"
       }
     }
   ]

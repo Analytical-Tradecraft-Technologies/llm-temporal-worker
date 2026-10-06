@@ -199,29 +199,27 @@ used only to load and extract the image, then deleted.
 `release-artifacts/` is ignored by Git and excluded from the Docker build
 context.
 
-## Catalog-bound offline traceability record
+## Offline traceability evidence
 
-The v1 catalog is intentionally pinned to this retained `release-evidence`
-artifact: [workflow run `30795754773`](https://github.com/mfow/llm-temporal-worker/actions/runs/30795754773) at revision
-`1aae4ff2095a5adaf3fee13aa696d78d73616ddd`. The artifact is named
-`release-evidence` (artifact `8849743942`) and has SHA-256 digest
-`sha256:2bf49d063dbc09b2e8f183e6f792086c4fd0f4157a46a05ccdde68a472331a0a`.
-The retained bundle binds the immutable image descriptor
-`sha256:bd95d9d7bbd81582ed3f7ec18131a5e31106dee9152de9373f7676dbc3806f27`.
-The catalog refresh binds the thirteen already-recorded offline requirements
-to this successful master run. Pending protected-provider and publication
-requirements, plus the two unrecorded SLO measurements, remain unchanged.
-The v1 catalog binds offline implementation and conformance records to this
-run and digest. This is not production SLO
-evidence: the admission/compilation p99 and worker-error-rate requirements
-remain explicitly unrecorded, protected live-provider runs remain pending, and
-publication remains authorization-gated.
+The v1 catalog currently records no offline evidence: every offline
+requirement is `unrecorded`. The previous pin (workflow run `30795754773` at
+revision `1aae4ff2095a5adaf3fee13aa696d78d73616ddd`) was hundreds of commits
+behind master, its artifact had expired, and its image was never published, so
+it was withdrawn.
 
-## Recent merged validation
+An offline requirement may be marked `recorded` only with a full revision, the
+workflow run, the `release-evidence` artifact name and the artifact's SHA-256.
+`make traceability-verify` then requires that revision to be in the checkout's
+history, with none of the requirement's `implementation_paths` changed since. A
+later change to those paths makes the entry stale until it is rebound to a new
+run or marked `unrecorded` again. There is no hand-maintained pin in the tests.
+Recording evidence therefore needs a checkout with full history.
 
-The latest candidate includes these independently green pull-request runs. The
-pull-request runs prove the changed slice; the protected master run above is
-the only run bound to the retained release-evidence artifact.
+## Historical merged validation
+
+These independently green pull-request runs were listed for the withdrawn
+candidate at `1aae4ff2095a5adaf3fee13aa696d78d73616ddd`. They are historical
+and are not bound to any current release evidence.
 
 | Change | Merge commit | Pull-request run |
 | --- | --- | --- |
