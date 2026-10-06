@@ -185,7 +185,10 @@ not replace the v2 Function in place. During a rolling upgrade, preload both
 the v2 and v3 libraries and keep the v2 reader on old workers until they have
 drained; the distinct library/function identities let both versions coexist.
 The Function drains at most the configured expiry bound, performs fixed-field
-`HMGET` for every member, and captures `XINFO STREAM`'s high-water mark. The
+`HMGET` for every member, and captures `XINFO STREAM`'s high-water mark. If
+expired reservations remain after the bounded drain, it returns
+`state_unavailable` instead of a snapshot that still counts them; the entries
+it did drain stay drained, so a retry continues where it stopped. The
 adapter has the method shape of
 `internal/runtime.BudgetStatusReader`, so deployments can pass it directly as
 the snapshot-owned `PersistedQueryOptions.BudgetStatus` seam.
