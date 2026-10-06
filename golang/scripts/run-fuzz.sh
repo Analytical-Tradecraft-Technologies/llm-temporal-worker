@@ -24,6 +24,7 @@ targets=(
   "./budget FuzzSlidingWindowBoundaries"
   "./llm FuzzCanonicalJSONIdempotent"
   "./llm FuzzFastJSONDecodingMatchesReference"
+  "./llm FuzzMarshaledRawJSON"
   "./llm FuzzRequestCanonicalizesClosedServiceClasses"
   "./llm/provider FuzzAssemblerEventSequences"
   "./llm/provider/anthropicmessages FuzzDecodeStream"

@@ -70,7 +70,7 @@ func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootI
 		if err != nil {
 			return RequestAttempt{}, err
 		}
-		progress, preparation, err := requestPreparationProgress(root)
+		progress, preparation, _, err := requestPreparationProgress(root)
 		if err != nil {
 			return RequestAttempt{}, err
 		}

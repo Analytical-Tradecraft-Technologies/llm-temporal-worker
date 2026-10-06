@@ -70,12 +70,12 @@ func (f *CloudFinalizer) loadAttemptResult(ctx context.Context, scope cloudstate
 	if err != nil {
 		return zero, "", err
 	}
-	preparation, err := store.LoadRequestPreparation(ctx, scope, rootID)
+	preparation, _, validated, err := loadRequestPreparation(ctx, store, scope, rootID)
 	if err != nil {
 		return zero, "", err
 	}
 	plan, execution := saved.Plan, saved.Execution
-	if preparation.Validate() != nil || preparation.ConfigDigest != plan.ConfigDigest {
+	if (!validated && preparation.Validate() != nil) || preparation.ConfigDigest != plan.ConfigDigest {
 		return zero, "", cloudstate.ErrCorrupt
 	}
 	if execution.Validate(plan) != nil || plan.Kind != root.Request.Kind || plan.Route.OperationID != durable.OperationID(attempt.ID) ||

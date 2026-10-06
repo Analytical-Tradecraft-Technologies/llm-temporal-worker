@@ -126,7 +126,7 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 
 func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, initial *cloudstate.RequestPreparation) (PreparedCloudRequest, error) {
 	scope := record.Request.Scope
-	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
+	preparation, parentSnapshot, validated, err := loadRequestPreparation(ctx, p.store, scope, record.Request.ID)
 	if errors.Is(err, cloudstate.ErrRequestPreparationMissing) {
 		// Reuse the input validated before BeginOperation. BeginOperation has
 		// verified the immutable manifest binding, so a record created by a
@@ -152,12 +152,35 @@ func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record clou
 			return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 		}
 		// A competing initializer may have won. Only the durable winner is used.
-		preparation, err = p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
+		preparation, parentSnapshot, validated, err = loadRequestPreparation(ctx, p.store, scope, record.Request.ID)
 	}
 	if err != nil {
 		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 	}
-	return p.restore(ctx, record, preparation, checkpointScope)
+	return p.restoreLoaded(ctx, record, preparation, parentSnapshot, validated, checkpointScope)
+}
+
+// cloudPreparationParentLoader is implemented by cloudstate.Repository, which
+// validates a preparation, decoding its parent snapshot, while loading it.
+type cloudPreparationParentLoader interface {
+	LoadRequestPreparationParent(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestPreparation, *state.CheckpointSnapshot, error)
+}
+
+// loadRequestPreparation loads a preparation. validated reports that the store
+// already validated it exactly as RequestPreparation.Validate does, and then
+// parent is the snapshot that validation decoded (nil without a parent), owned
+// by the caller. Restoring the parent from it instead of validating and
+// decoding the same bytes twice more is the per-step saving of #1112. Other
+// stores leave validation to the caller.
+func loadRequestPreparation(ctx context.Context, store interface {
+	LoadRequestPreparation(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.RequestPreparation, error)
+}, scope cloudstate.Scope, id cloudstate.RequestID) (preparation cloudstate.RequestPreparation, parent *state.CheckpointSnapshot, validated bool, err error) {
+	if loader, ok := store.(cloudPreparationParentLoader); ok {
+		preparation, parent, err = loader.LoadRequestPreparationParent(ctx, scope, id)
+		return preparation, parent, err == nil, err
+	}
+	preparation, err = store.LoadRequestPreparation(ctx, scope, id)
+	return preparation, nil, false, err
 }
 
 // materialize reads the authorized parent and validates the input against it
@@ -246,11 +269,11 @@ func (p *CloudRequestPreparation) Load(ctx context.Context, reference llm.Execut
 	if record.Status == cloudstate.StatusCompleted || record.Status == cloudstate.StatusFailed {
 		return p.restore(ctx, record, cloudstate.RequestPreparation{}, checkpointScope)
 	}
-	preparation, err := p.store.LoadRequestPreparation(ctx, scope, record.Request.ID)
+	preparation, parentSnapshot, validated, err := loadRequestPreparation(ctx, p.store, scope, record.Request.ID)
 	if err != nil {
 		return p.completedAfterError(ctx, record, checkpointScope, cloudRuntimeError(err, false))
 	}
-	prepared, err := p.restore(ctx, record, preparation, checkpointScope)
+	prepared, err := p.restoreLoaded(ctx, record, preparation, parentSnapshot, validated, checkpointScope)
 	if err != nil {
 		return p.completedAfterError(ctx, record, checkpointScope, err)
 	}
@@ -280,6 +303,14 @@ func (p *CloudRequestPreparation) authorize(ctx context.Context, caller llm.Requ
 }
 
 func (p *CloudRequestPreparation) restore(ctx context.Context, record cloudstate.Record, preparation cloudstate.RequestPreparation, checkpointScope string) (PreparedCloudRequest, error) {
+	return p.restoreLoaded(ctx, record, preparation, nil, false, checkpointScope)
+}
+
+// restoreLoaded is restore for a preparation that loadRequestPreparation may
+// already have validated (validated), with the parent snapshot that
+// validation decoded. Otherwise it validates the preparation here, decoding
+// the parent once for both validation and restoration.
+func (p *CloudRequestPreparation) restoreLoaded(ctx context.Context, record cloudstate.Record, preparation cloudstate.RequestPreparation, parentSnapshot *state.CheckpointSnapshot, validated bool, checkpointScope string) (PreparedCloudRequest, error) {
 	result := PreparedCloudRequest{Record: record, Preparation: preparation}
 	var caller llm.RequestContext
 	var parent string
@@ -316,17 +347,21 @@ func (p *CloudRequestPreparation) restore(ctx context.Context, record cloudstate
 	if record.Status != cloudstate.StatusRunning && record.Status != cloudstate.StatusProviderPending && record.Status != cloudstate.StatusOutcomeUnknown {
 		return PreparedCloudRequest{}, cloudRuntimeError(contracts.ErrConflict, false)
 	}
-	if preparation.Validate() != nil || preparation.CheckpointScope != checkpointScope || preparation.PreparedAt.Before(record.Request.CreatedAt) ||
+	var invalid error
+	if !validated {
+		parentSnapshot, invalid = preparation.ValidateParent()
+	}
+	if invalid != nil || preparation.CheckpointScope != checkpointScope || preparation.PreparedAt.Before(record.Request.CreatedAt) ||
 		(parent == "") != (len(preparation.ParentSnapshot) == 0) {
 		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
 	var materialized state.MaterializedState
 	if parent != "" {
-		codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxPreparedParentBytes}
-		snapshot, err := codec.DecodeSnapshot(preparation.ParentSnapshot)
-		if err != nil || len(snapshot.Lineage) == 0 {
+		// Validation decoded the parent with the same codec and limit.
+		if parentSnapshot == nil || len(parentSnapshot.Lineage) == 0 {
 			return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 		}
+		snapshot := *parentSnapshot
 		pending, err := state.ValidateTranscript(snapshot.Items)
 		if err != nil {
 			return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)

@@ -32,7 +32,7 @@ type budgetPlanningFixture struct {
 	attempt   BudgetAttempt
 }
 
-func newBudgetPlanningFixture(t *testing.T) *budgetPlanningFixture {
+func newBudgetPlanningFixture(t testing.TB) *budgetPlanningFixture {
 	t.Helper()
 	f := &budgetPlanningFixture{}
 	var replay durable.CompactReplay
@@ -75,7 +75,7 @@ func newBudgetPlanningFixture(t *testing.T) *budgetPlanningFixture {
 	return f
 }
 
-func (f *budgetPlanningFixture) prices(t *testing.T, entries []pricing.Entry) {
+func (f *budgetPlanningFixture) prices(t testing.TB, entries []pricing.Entry) {
 	t.Helper()
 	catalog, err := pricing.CompileUSD("prices/v1", entries)
 	if err != nil {
