@@ -304,9 +304,11 @@ type BudgetWindow struct {
 }
 
 type ContinuationConfig struct {
-	HandleKeys                []HandleKey `yaml:"handle_keys" json:"handle_keys"`
-	RetainCanonicalTranscript bool        `yaml:"retain_canonical_transcript" json:"retain_canonical_transcript"`
-	AllowProviderHostedState  bool        `yaml:"allow_provider_hosted_state" json:"allow_provider_hosted_state"`
+	HandleKeys []HandleKey `yaml:"handle_keys" json:"handle_keys"`
+	// RetainCanonicalTranscript must be true: v1 checkpoints always retain
+	// the canonical transcript. It defaults to true when omitted.
+	RetainCanonicalTranscript *bool `yaml:"retain_canonical_transcript" json:"retain_canonical_transcript"`
+	AllowProviderHostedState  bool  `yaml:"allow_provider_hosted_state" json:"allow_provider_hosted_state"`
 }
 
 type HandleKey struct {

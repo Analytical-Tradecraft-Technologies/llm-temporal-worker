@@ -59,6 +59,7 @@ func NewCloudV1RuntimeBuilder(options CloudV1RuntimeOptions) (V1RuntimeBuilder, 
 		execution, err := capabilities.NewCloudExecutionRuntime(ctx, CloudExecutionOptions{
 			ResolveScope: options.ResolveScope, Limits: limits, CheckpointTTL: options.CheckpointTTL,
 			Keyring: capabilities.CheckpointKeyring, BudgetGeneration: redisBudgetGeneration, MaxAttempts: value.Limits.RouteAttempts,
+			RequestLimits: cloudRequestLimitsFromConfig(value.Limits), FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("%w: construct cloud execution: %w", ErrDurableV1Composition, err)

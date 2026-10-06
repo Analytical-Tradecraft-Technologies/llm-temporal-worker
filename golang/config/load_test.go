@@ -640,3 +640,28 @@ func TestWorkloadIdentityPathsListsEveryReference(t *testing.T) {
 		t.Fatalf("workload identity paths = %v", got)
 	}
 }
+
+// Settings that only accept the value the runtime implements reject any
+// other value instead of being silently ignored (#950).
+func TestLoadRejectsContinuationAndCapabilitySettingsTheRuntimeDoesNotImplement(t *testing.T) {
+	for _, test := range []struct{ from, to, want string }{
+		{from: "retain_canonical_transcript: true", to: "retain_canonical_transcript: false", want: "continuation.retain_canonical_transcript must be true"},
+		{from: "unknown_in_strict_mode: reject", to: "unknown_in_strict_mode: allow", want: "capabilities.unknown_in_strict_mode must be reject"},
+	} {
+		data := strings.Replace(string(exampleYAML(t)), test.from, test.to, 1)
+		if data == string(exampleYAML(t)) {
+			t.Fatalf("example does not contain %q", test.from)
+		}
+		if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("Load(%s) error = %v, want %q", test.to, err, test.want)
+		}
+	}
+	omitted := strings.Replace(string(exampleYAML(t)), "  retain_canonical_transcript: true\n", "", 1)
+	loaded, err := config.Load([]byte(omitted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Continuation.RetainCanonicalTranscript == nil || !*loaded.Continuation.RetainCanonicalTranscript {
+		t.Fatalf("omitted retain_canonical_transcript = %v, want default true", loaded.Continuation.RetainCanonicalTranscript)
+	}
+}

@@ -26,10 +26,11 @@ type CloudRequestPreparationStore interface {
 // materialized input before any budget or provider effect. A restart reads that
 // input instead of reopening a parent whose retention deadline may have passed.
 type CloudRequestPreparation struct {
-	store  CloudRequestPreparationStore
-	replay *CheckpointReplay
-	digest [32]byte
-	clock  func() time.Time
+	store         CloudRequestPreparationStore
+	replay        *CheckpointReplay
+	digest        [32]byte
+	clock         func() time.Time
+	requestLimits CloudRequestLimits
 }
 
 // PreparedCloudRequest is invocation-local, not a Temporal result or authority
@@ -92,6 +93,11 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	// it replays its saved result or preparation without reopening the parent.
 	var initial *cloudstate.RequestPreparation
 	if _, err := p.store.LookupOperation(ctx, operation); errors.Is(err, contracts.ErrNotFound) {
+		// The configured request limits bound new input only. An operation
+		// admitted under an earlier snapshot keeps replaying its saved result.
+		if err := p.requestLimits.validate(input); err != nil {
+			return PreparedCloudRequest{}, err
+		}
 		candidate := cloudstate.Record{Status: cloudstate.StatusRunning, Request: cloudstate.CreateRequest{Scope: scope, Kind: kind, RequestIndex: index, Manifest: manifest, CreatedAt: operation.Now}}
 		preparation, err := p.materialize(ctx, candidate, caller, parent, checkpointScope, operation.Now.UTC())
 		if err != nil {

@@ -428,10 +428,14 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 		t.Fatalf("adapter = %#v, want openai.responses adapter", adapter)
 	}
 
-	for _, permitted := range []bool{false, true} {
+	// Provider storage needs both the endpoint permission and the global
+	// continuation.allow_provider_hosted_state switch.
+	for _, test := range []struct{ endpoint, global bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		permitted := test.endpoint && test.global
 		endpoint := value.Endpoints["openai"]
-		endpoint.ProviderStorage.Permitted = permitted
+		endpoint.ProviderStorage.Permitted = test.endpoint
 		value.Endpoints["openai"] = endpoint
+		value.Continuation.AllowProviderHostedState = test.global
 		adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai")
 		if err != nil {
 			t.Fatal(err)
@@ -444,7 +448,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 			t.Fatalf("permitted storage rejected: %v", err)
 		}
 		if !permitted && err == nil {
-			t.Fatal("factory ignored endpoint storage policy")
+			t.Fatalf("factory ignored storage policy (endpoint=%t global=%t)", test.endpoint, test.global)
 		}
 	}
 }
