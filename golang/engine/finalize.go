@@ -70,14 +70,13 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	}
 	// A paid, valid result exists from here on. Caller cancellation must not
 	// stop the heartbeats or writes that persist it, or the result is lost and
-	// a retry finds the operation still dispatching; each write phase is
-	// bounded by FinalizationTimeout instead.
-	shielded := context.WithoutCancel(ctx)
-	if err := engine.beat(shielded, Progress{OperationID: operation.ID, Phase: "finalization", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+	// a retry finds the operation still dispatching; each heartbeat and write
+	// phase is bounded by FinalizationTimeout instead.
+	if err := engine.shieldedBeat(ctx, Progress{OperationID: operation.ID, Phase: "finalization", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
 		return llm.Response{}, err
 	}
 	if response.Continuation != nil {
-		if err := engine.beat(shielded, Progress{OperationID: operation.ID, Phase: "continuation_write", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+		if err := engine.shieldedBeat(ctx, Progress{OperationID: operation.ID, Phase: "continuation_write", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
 			return llm.Response{}, err
 		}
 		continuationCtx, cancelContinuation := engine.finalizationContext(ctx)
@@ -219,6 +218,14 @@ func carryProviderCacheAffinity(parent *state.Continuation, candidate routing.Ca
 func (engine *Engine) finalizationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	base := context.WithoutCancel(parent)
 	return context.WithTimeout(base, engine.dependencies.FinalizationTimeout)
+}
+
+// shieldedBeat heartbeats on a context detached from caller cancellation and
+// bounded by FinalizationTimeout, for progress after a provider response.
+func (engine *Engine) shieldedBeat(ctx context.Context, progress Progress) error {
+	beatCtx, cancel := engine.finalizationContext(ctx)
+	defer cancel()
+	return engine.beat(beatCtx, progress)
 }
 
 func (engine *Engine) beat(ctx context.Context, progress Progress) error {

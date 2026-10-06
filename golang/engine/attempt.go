@@ -56,11 +56,13 @@ func (observer *dispatchObserver) BeforePossibleWrite(ctx context.Context) error
 	return nil
 }
 
+// AfterResponseHeaders runs once the provider has answered. A cancellation
+// landing now must not discard a paid response, so the heartbeat is shielded
+// from it and bounded by FinalizationTimeout instead.
 func (observer *dispatchObserver) AfterResponseHeaders(ctx context.Context, metadata provider.ResponseMetadata) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "response_received", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
+	beatCtx, cancel := observer.engine.finalizationContext(ctx)
+	defer cancel()
+	return observer.engine.beat(beatCtx, Progress{OperationID: observer.operation.ID, Phase: "response_received", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
 }
 
 func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provider.Progress) {
@@ -77,7 +79,12 @@ func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provi
 		}
 		phase = "streaming"
 	}
-	if err := observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: phase, RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, OutputItems: progress.OutputItems, At: observer.engine.dependencies.Clock()}); err != nil {
+	// Progress is reported while or after a response arrives; like
+	// AfterResponseHeaders, its heartbeat must not let a cancellation discard
+	// that response.
+	beatCtx, cancel := observer.engine.finalizationContext(ctx)
+	defer cancel()
+	if err := observer.engine.beat(beatCtx, Progress{OperationID: observer.operation.ID, Phase: phase, RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, OutputItems: progress.OutputItems, At: observer.engine.dependencies.Clock()}); err != nil {
 		observer.heartbeatErr = err
 	}
 }
