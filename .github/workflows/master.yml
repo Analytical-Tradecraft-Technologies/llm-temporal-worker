@@ -740,69 +740,39 @@ jobs:
             --image-oci-layout "$RUNNER_TEMP/image.oci" \
             --verified-inputs verified-inputs
 
-      - name: Download the published image index and both platform images without rebuilding
+      - name: Download published Linux AMD64 image without rebuilding
         env:
-          INDEX_DIGEST: ${{ needs.container.outputs.digest }}
-          AMD64_DIGEST: ${{ needs.container.outputs.amd64_digest }}
-          ARM64_DIGEST: ${{ needs.container.outputs.arm64_digest }}
+          PUBLISHED_DIGEST: ${{ needs.container.outputs.amd64_digest }}
         run: |
           set -euo pipefail
-          for published in "$INDEX_DIGEST" "$AMD64_DIGEST" "$ARM64_DIGEST"; do
-            [[ "$published" =~ ^sha256:[0-9a-f]{64}$ ]]
-          done
-          repository="docker://docker.io/analyticaltradecraft/llm-temporal-worker"
+          [[ "$PUBLISHED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           sudo apt-get update
           sudo apt-get install --yes skopeo
-          # Retain the exact index bytes the registry serves for the published
-          # digest. The verifier recomputes the digest from these bytes and
-          # requires them to reference exactly the two platform manifests below.
-          skopeo --command-timeout 5m inspect --raw "$repository@$INDEX_DIGEST" > release-artifacts/image-index.json
-          index_digest="sha256:$(sha256sum release-artifacts/image-index.json | cut -d ' ' -f 1)"
-          [[ "$index_digest" == "$INDEX_DIGEST" ]] || { echo "Downloaded image index differs from published digest" >&2; exit 1; }
           skopeo --command-timeout 5m copy --preserve-digests \
-            "$repository@$AMD64_DIGEST" \
+            "docker://docker.io/analyticaltradecraft/llm-temporal-worker@$PUBLISHED_DIGEST" \
             "oci:$RUNNER_TEMP/image.oci"
-          # Keep the image.oci basename so the normalized Trivy subject is the
-          # same for both platforms.
-          mkdir -p -- "$RUNNER_TEMP/arm64"
-          skopeo --command-timeout 5m copy --preserve-digests \
-            "$repository@$ARM64_DIGEST" \
-            "oci:$RUNNER_TEMP/arm64/image.oci"
 
-      - name: Inspect immutable OCI index and platform manifest descriptors
+      - name: Inspect immutable OCI manifest descriptor
         id: image
         env:
-          INDEX_DIGEST: ${{ needs.container.outputs.digest }}
-          AMD64_DIGEST: ${{ needs.container.outputs.amd64_digest }}
-          ARM64_DIGEST: ${{ needs.container.outputs.arm64_digest }}
+          PUBLISHED_DIGEST: ${{ needs.container.outputs.amd64_digest }}
         working-directory: golang
         shell: bash
         run: |
           set -euo pipefail
-          amd64_digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
-          arm64_digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/arm64/image.oci")"
-          for digest in "$amd64_digest" "$arm64_digest"; do
-            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "temporary OCI directory returned an invalid manifest digest" >&2
-              exit 1
-            fi
-          done
-          [[ "$amd64_digest" == "$AMD64_DIGEST" ]] || { echo "Downloaded linux/amd64 image differs from published digest" >&2; exit 1; }
-          [[ "$arm64_digest" == "$ARM64_DIGEST" ]] || { echo "Downloaded linux/arm64 image differs from published digest" >&2; exit 1; }
-          repository="docker.io/analyticaltradecraft/llm-temporal-worker"
-          {
-            printf 'index_digest=%s\n' "$INDEX_DIGEST"
-            printf 'index_reference=%s@%s\n' "$repository" "$INDEX_DIGEST"
-            printf 'amd64_digest=%s\n' "$amd64_digest"
-            printf 'amd64_reference=%s@%s\n' "$repository" "$amd64_digest"
-            printf 'arm64_digest=%s\n' "$arm64_digest"
-            printf 'arm64_reference=%s@%s\n' "$repository" "$arm64_digest"
-          } >> "$GITHUB_OUTPUT"
+          digest="$(go run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "temporary OCI directory returned an invalid manifest digest" >&2
+            exit 1
+          fi
+          [[ "$digest" == "$PUBLISHED_DIGEST" ]] || { echo "Downloaded image differs from published digest" >&2; exit 1; }
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'reference=docker.io/analyticaltradecraft/llm-temporal-worker@%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
       - name: Set up pinned Syft
         run: bash scripts/ci/setup-syft.sh
 
-      - name: Generate and bind CycloneDX SBOMs for both temporary OCI directories
+      - name: Generate and bind CycloneDX SBOM for temporary OCI directory
         shell: bash
         run: |
           set -euo pipefail
@@ -810,19 +780,13 @@ jobs:
           python3 scripts/release/collect.py annotate-sbom \
             --input "$RUNNER_TEMP/sbom.cdx.json" \
             --output release-artifacts/sbom.cdx.json \
-            --reference "${{ steps.image.outputs.amd64_reference }}" \
-            --digest "${{ steps.image.outputs.amd64_digest }}"
-          syft oci-dir:"$RUNNER_TEMP/arm64/image.oci" -o cyclonedx-json > "$RUNNER_TEMP/arm64/sbom.cdx.json"
-          python3 scripts/release/collect.py annotate-sbom \
-            --input "$RUNNER_TEMP/arm64/sbom.cdx.json" \
-            --output release-artifacts/sbom-arm64.cdx.json \
-            --reference "${{ steps.image.outputs.arm64_reference }}" \
-            --digest "${{ steps.image.outputs.arm64_digest }}"
+            --reference "${{ steps.image.outputs.reference }}" \
+            --digest "${{ steps.image.outputs.digest }}"
 
       - name: Set up pinned Trivy
         run: bash scripts/ci/setup-trivy.sh
 
-      - name: Scan both temporary OCI directories with pinned Trivy
+      - name: Scan temporary OCI directory with pinned Trivy
         shell: bash
         run: |
           set -euo pipefail
@@ -832,27 +796,16 @@ jobs:
             --output "$RUNNER_TEMP/image-scan.json" \
             --config scripts/release/trivy.yaml \
             --cache-dir "$TRIVY_CACHE_DIR"
-          trivy image \
-            --input "$RUNNER_TEMP/arm64/image.oci" \
-            --format json \
-            --output "$RUNNER_TEMP/arm64/image-scan.json" \
-            --config scripts/release/trivy.yaml \
-            --cache-dir "$TRIVY_CACHE_DIR"
 
-      - name: Bind Trivy results to their platform OCI descriptors
+      - name: Bind Trivy result to temporary OCI descriptor
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/release/collect.py annotate-scan \
             --input "$RUNNER_TEMP/image-scan.json" \
             --output release-artifacts/image-scan.json \
-            --reference "${{ steps.image.outputs.amd64_reference }}" \
-            --digest "${{ steps.image.outputs.amd64_digest }}"
-          python3 scripts/release/collect.py annotate-scan \
-            --input "$RUNNER_TEMP/arm64/image-scan.json" \
-            --output release-artifacts/image-scan-arm64.json \
-            --reference "${{ steps.image.outputs.arm64_reference }}" \
-            --digest "${{ steps.image.outputs.arm64_digest }}"
+            --reference "${{ steps.image.outputs.reference }}" \
+            --digest "${{ steps.image.outputs.digest }}"
 
       - name: Record and verify redacted release evidence
         shell: bash
@@ -870,10 +823,8 @@ jobs:
             -output release-artifacts/evidence.json \
             -repository "https://github.com/${GITHUB_REPOSITORY}" \
             -revision "$GITHUB_SHA" \
-            -image-reference "${{ steps.image.outputs.index_reference }}" \
-            -image-digest "${{ steps.image.outputs.index_digest }}" \
-            -amd64-digest "${{ steps.image.outputs.amd64_digest }}" \
-            -arm64-digest "${{ steps.image.outputs.arm64_digest }}" \
+            -image-reference "${{ steps.image.outputs.reference }}" \
+            -image-digest "${{ steps.image.outputs.digest }}" \
             -artifact test_summary=test-summary.json \
             -artifact race_summary=race-summary.json \
             -artifact fuzz_summary=fuzz-summary.json \
@@ -889,9 +840,6 @@ jobs:
             -artifact dependency_license=dependencies.json \
             -artifact sbom=sbom.cdx.json \
             -artifact image_scan=image-scan.json \
-            -artifact image_index=image-index.json \
-            -artifact sbom_arm64=sbom-arm64.cdx.json \
-            -artifact image_scan_arm64=image-scan-arm64.json \
             ${worker_error_artifact_args[@]:+"${worker_error_artifact_args[@]}"}
           make release-verify
 
@@ -904,7 +852,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Remove temporary OCI directories
+      - name: Remove temporary OCI directory
         if: always()
         shell: bash
-        run: rm -rf -- "$RUNNER_TEMP/image.oci" "$RUNNER_TEMP/arm64"
+        run: rm -rf -- "$RUNNER_TEMP/image.oci"

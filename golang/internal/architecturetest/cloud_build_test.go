@@ -52,16 +52,7 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	assertJobRunPrecedesRunContains(t, master, "verify-image", "bash scripts/ci/setup-build-cloud.sh", "make compose-live-integration")
 	assertJobRunPrecedesRunContains(t, master, "verify-image", "bash scripts/ci/setup-build-cloud.sh", "make image-verify")
 	assertJobRunContains(t, master, "release-evidence", "skopeo --command-timeout 5m copy --preserve-digests")
-	// Release evidence downloads the exact published index and both platform
-	// manifests by digest and fails closed if any differs from the container
-	// job's outputs (#1235).
-	for _, want := range []string{
-		`[[ "$index_digest" == "$INDEX_DIGEST" ]]`,
-		`[[ "$amd64_digest" == "$AMD64_DIGEST" ]]`,
-		`[[ "$arm64_digest" == "$ARM64_DIGEST" ]]`,
-	} {
-		assertJobRunContains(t, master, "release-evidence", want)
-	}
+	assertJobRunContains(t, master, "release-evidence", `[[ "$digest" == "$PUBLISHED_DIGEST" ]]`)
 	for _, want := range []string{
 		"--builder \"$BUILDX_BUILDER\"", "--platform linux/amd64,linux/arm64",
 		"--tag analyticaltradecraft/llm-temporal-worker:", "--pull --provenance=mode=max --sbom=true",

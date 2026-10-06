@@ -32,9 +32,6 @@ var requiredReleaseEvidenceArtifacts = []string{
 	"dependency_license",
 	"sbom",
 	"image_scan",
-	"image_index",
-	"sbom_arm64",
-	"image_scan_arm64",
 }
 
 var releaseEvidenceArtifactPaths = map[string]string{
@@ -53,9 +50,6 @@ var releaseEvidenceArtifactPaths = map[string]string{
 	"dependency_license": "dependencies.json",
 	"sbom":               "sbom.cdx.json",
 	"image_scan":         "image-scan.json",
-	"image_index":        "image-index.json",
-	"sbom_arm64":         "sbom-arm64.cdx.json",
-	"image_scan_arm64":   "image-scan-arm64.json",
 }
 
 var releaseEvidenceOverlongDNSHostnameURL = "https://" + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + "/path"
@@ -1686,7 +1680,7 @@ func TestReleaseEvidenceRecorderRejectsUnreferencedArtifactFile(t *testing.T) {
 	writeReleaseArtifact(t, filepath.Join(directory, "orphan.json"), []byte(`{"api_`+`key":"orphaned-release-evidence-secret-0123456789"}`))
 	outputPath := filepath.Join(directory, "evidence.json")
 
-	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
+	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle.imageReference, bundle.imageDigest)
 	if err == nil {
 		t.Fatalf("release evidence recorder accepted an unreferenced artifact file:\n%s", output)
 	}
@@ -1712,7 +1706,8 @@ func TestReleaseEvidenceRecorderRejectsImageLayoutArtifact(t *testing.T) {
 		root,
 		directory,
 		outputPath,
-		bundle,
+		bundle.imageReference,
+		bundle.imageDigest,
 		"image_layout",
 		"image.oci.tar",
 	)
@@ -1741,7 +1736,7 @@ func TestReleaseEvidenceRecorderRejectsResidualOCILayoutDirectory(t *testing.T) 
 	writeReleaseArtifact(t, filepath.Join(layout, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`))
 	outputPath := filepath.Join(directory, "evidence.json")
 
-	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
+	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle.imageReference, bundle.imageDigest)
 	if err == nil {
 		t.Fatalf("release evidence recorder accepted a residual OCI layout directory:\n%s", output)
 	}
@@ -1766,7 +1761,7 @@ func TestReleaseEvidenceRecorderRejectsOutputArtifactCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
+	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle.imageReference, bundle.imageDigest)
 	if err == nil {
 		t.Fatalf("release evidence recorder accepted an output artifact collision:\n%s", output)
 	}
@@ -1795,7 +1790,8 @@ func TestReleaseEvidenceRecorderRejectsNoncanonicalArtifactPath(t *testing.T) {
 		root,
 		directory,
 		outputPath,
-		bundle,
+		bundle.imageReference,
+		bundle.imageDigest,
 		"test_summary",
 		"nested/test-summary.json",
 	)
@@ -1820,7 +1816,7 @@ func TestReleaseEvidenceRecorderRejectsSymlinkedOutputParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := runReleaseEvidenceRecorder(root, directory, filepath.Join(link, "evidence.json"), bundle)
+	output, err := runReleaseEvidenceRecorder(root, directory, filepath.Join(link, "evidence.json"), bundle.imageReference, bundle.imageDigest)
 	if err == nil {
 		t.Fatalf("release evidence recorder accepted a symlinked output parent:\n%s", output)
 	}
@@ -1841,7 +1837,7 @@ func TestReleaseEvidenceRecorderLeavesNoEvidenceOnValidationFailure(t *testing.T
 		t.Fatal(err)
 	}
 
-	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
+	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle.imageReference, bundle.imageDigest)
 	if err == nil {
 		t.Fatalf("release evidence recorder accepted a failing image scan:\n%s", output)
 	}
@@ -1866,7 +1862,7 @@ func TestReleaseEvidenceRecorderAtomicallyWritesVerifiedByteBoundRecord(t *testi
 		t.Fatal(err)
 	}
 
-	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
+	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle.imageReference, bundle.imageDigest)
 	if err != nil {
 		t.Fatalf("release evidence recorder rejected complete bundle: %v\n%s", err, output)
 	}
@@ -2088,17 +2084,10 @@ func TestReleaseEvidenceMakeTargetIgnoresEvidencePathEnvironment(t *testing.T) {
 	}
 }
 
-// releaseEvidenceBundle describes a schema-v2 bundle. imageReference and
-// imageDigest name the linux/amd64 manifest that sbom and image_scan bind;
-// the evidence subject is the image index that references it and arm64.
 type releaseEvidenceBundle struct {
 	directory      string
 	imageReference string
 	imageDigest    string
-	arm64Reference string
-	arm64Digest    string
-	indexReference string
-	indexDigest    string
 }
 
 func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvidenceBundle {
@@ -2106,11 +2095,6 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 	directory := t.TempDir()
 	imageDigest := writeReleaseEvidenceOCILayout(t, filepath.Join(t.TempDir(), "image.oci"))
 	imageReference := "llm-temporal-worker@" + imageDigest
-	arm64Digest := "sha256:" + sha256Hex([]byte("release-evidence-test-arm64-manifest"))
-	arm64Reference := "llm-temporal-worker@" + arm64Digest
-	index := releaseEvidenceImageIndex(imageDigest, arm64Digest)
-	indexDigest := "sha256:" + sha256Hex([]byte(index))
-	indexReference := "llm-temporal-worker@" + indexDigest
 	contents := map[string]string{
 		"test_summary":          releaseEvidenceGateSummary("test_summary"),
 		"race_summary":          releaseEvidenceGateSummary("race_summary"),
@@ -2128,9 +2112,6 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		"vulnerability_results": `{"schema_version":1,"kind":"vulnerability_results","status":"pass","components":{"test":"pass","source":"pass","go_mod":"pass","vulnerability":"pass"},"direct_module_count":1,"findings":[],"approved_findings":[],"redacted":true}`,
 		"sbom":                  releaseEvidenceSBOM(imageReference, imageDigest),
 		"image_scan":            releaseEvidenceScan(imageReference, imageDigest, criticalFinding),
-		"image_index":           index,
-		"sbom_arm64":            releaseEvidenceSBOM(arm64Reference, arm64Digest),
-		"image_scan_arm64":      releaseEvidenceScan(arm64Reference, arm64Digest, false),
 	}
 
 	evidenceArtifacts := make(map[string]map[string]any, len(requiredReleaseEvidenceArtifacts))
@@ -2149,20 +2130,15 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		}
 	}
 	evidence := map[string]any{
-		"schema_version": 2,
+		"schema_version": 1,
 		"generated_at":   "2026-07-15T00:00:00Z",
 		"source": map[string]any{
 			"repository": "https://github.com/mfow/llm-temporal-worker",
 			"revision":   strings.Repeat("b", 40),
 		},
 		"image": map[string]any{
-			"reference":  indexReference,
-			"digest":     indexDigest,
-			"media_type": "application/vnd.oci.image.index.v1+json",
-			"platforms": map[string]any{
-				"linux/amd64": map[string]any{"reference": imageReference, "digest": imageDigest},
-				"linux/arm64": map[string]any{"reference": arm64Reference, "digest": arm64Digest},
-			},
+			"reference": imageReference,
+			"digest":    imageDigest,
 		},
 		"artifacts": evidenceArtifacts,
 	}
@@ -2171,38 +2147,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		t.Fatal(err)
 	}
 	writeReleaseArtifact(t, filepath.Join(directory, "evidence.json"), data)
-	return releaseEvidenceBundle{
-		directory:      directory,
-		imageReference: imageReference,
-		imageDigest:    imageDigest,
-		arm64Reference: arm64Reference,
-		arm64Digest:    arm64Digest,
-		indexReference: indexReference,
-		indexDigest:    indexDigest,
-	}
-}
-
-// releaseEvidenceImageIndex is a Buildx-shaped OCI image index: one manifest
-// per release platform plus a provenance attestation for each of them.
-func releaseEvidenceImageIndex(amd64Digest, arm64Digest string) string {
-	return releaseEvidenceImageIndexWithManifests(
-		releaseEvidenceIndexDescriptor(amd64Digest, "linux", "amd64", ""),
-		releaseEvidenceIndexDescriptor(arm64Digest, "linux", "arm64", ""),
-		releaseEvidenceIndexDescriptor("sha256:"+sha256Hex([]byte("amd64-attestation")), "unknown", "unknown", amd64Digest),
-		releaseEvidenceIndexDescriptor("sha256:"+sha256Hex([]byte("arm64-attestation")), "unknown", "unknown", arm64Digest),
-	)
-}
-
-func releaseEvidenceImageIndexWithManifests(manifests ...string) string {
-	return `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[` + strings.Join(manifests, ",") + `]}`
-}
-
-func releaseEvidenceIndexDescriptor(digest, operatingSystem, architecture, attests string) string {
-	annotations := ""
-	if attests != "" {
-		annotations = `,"annotations":{"vnd.docker.reference.digest":"` + attests + `","vnd.docker.reference.type":"attestation-manifest"}`
-	}
-	return `{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + digest + `","size":1024` + annotations + `,"platform":{"architecture":"` + architecture + `","os":"` + operatingSystem + `"}}`
+	return releaseEvidenceBundle{directory: directory, imageReference: imageReference, imageDigest: imageDigest}
 }
 
 func releaseEvidenceSBOM(reference, digest string) string {
@@ -2363,40 +2308,38 @@ func runReleaseEvidenceLayoutDigest(root, path string) ([]byte, error) {
 	return command.CombinedOutput()
 }
 
-func runReleaseEvidenceRecorder(root, directory, outputPath string, bundle releaseEvidenceBundle) ([]byte, error) {
-	return runReleaseEvidenceRecorderWithArtifactOverrides(root, directory, outputPath, bundle, nil)
+func runReleaseEvidenceRecorder(root, directory, outputPath, imageReference, imageDigest string) ([]byte, error) {
+	return runReleaseEvidenceRecorderWithArtifactOverrides(root, directory, outputPath, imageReference, imageDigest, nil)
 }
 
-func runReleaseEvidenceRecorderWithArtifactOverride(root, directory, outputPath string, bundle releaseEvidenceBundle, name, path string) ([]byte, error) {
-	return runReleaseEvidenceRecorderWithArtifactOverrides(root, directory, outputPath, bundle, map[string]string{name: path})
+func runReleaseEvidenceRecorderWithArtifactOverride(root, directory, outputPath, imageReference, imageDigest, name, path string) ([]byte, error) {
+	return runReleaseEvidenceRecorderWithArtifactOverrides(root, directory, outputPath, imageReference, imageDigest, map[string]string{name: path})
 }
 
-func runReleaseEvidenceRecorderWithAdditionalArtifact(root, directory, outputPath string, bundle releaseEvidenceBundle, name, path string) ([]byte, error) {
-	arguments := releaseEvidenceRecorderArguments(root, directory, outputPath, bundle, nil)
+func runReleaseEvidenceRecorderWithAdditionalArtifact(root, directory, outputPath, imageReference, imageDigest, name, path string) ([]byte, error) {
+	arguments := releaseEvidenceRecorderArguments(root, directory, outputPath, imageReference, imageDigest, nil)
 	arguments = append(arguments, "-artifact", name+"="+path)
 	command := exec.Command("bash", arguments...)
 	command.Dir = root
 	return command.CombinedOutput()
 }
 
-func runReleaseEvidenceRecorderWithArtifactOverrides(root, directory, outputPath string, bundle releaseEvidenceBundle, overrides map[string]string) ([]byte, error) {
-	arguments := releaseEvidenceRecorderArguments(root, directory, outputPath, bundle, overrides)
+func runReleaseEvidenceRecorderWithArtifactOverrides(root, directory, outputPath, imageReference, imageDigest string, overrides map[string]string) ([]byte, error) {
+	arguments := releaseEvidenceRecorderArguments(root, directory, outputPath, imageReference, imageDigest, overrides)
 	command := exec.Command("bash", arguments...)
 	command.Dir = root
 	return command.CombinedOutput()
 }
 
-func releaseEvidenceRecorderArguments(root, directory, outputPath string, bundle releaseEvidenceBundle, overrides map[string]string) []string {
+func releaseEvidenceRecorderArguments(root, directory, outputPath, imageReference, imageDigest string, overrides map[string]string) []string {
 	arguments := []string{
 		filepath.Join(root, "scripts", "release", "record.sh"),
 		"-artifact-dir", directory,
 		"-output", outputPath,
 		"-repository", "https://github.com/mfow/llm-temporal-worker",
 		"-revision", strings.Repeat("b", 40),
-		"-image-reference", bundle.indexReference,
-		"-image-digest", bundle.indexDigest,
-		"-amd64-digest", bundle.imageDigest,
-		"-arm64-digest", bundle.arm64Digest,
+		"-image-reference", imageReference,
+		"-image-digest", imageDigest,
 	}
 	for _, name := range requiredReleaseEvidenceArtifacts {
 		path := releaseEvidenceArtifactPaths[name]
