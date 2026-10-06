@@ -159,7 +159,8 @@ The public **cache.variant** is the non-negative int32 request index, normally
 zero. It participates in internal request/cache identity and separates samples;
 it is not provider input or a seed and does not guarantee different output.
 It is independent of temperature, including omitted or zero temperature.
-Compaction uses its compatible content/policy identity and variant zero.
+Compaction uses its compatible content/policy identity and, like Generate,
+accepts any non-negative variant as a separate cache slot.
 
 Unavailable or corrupt opted-in cache state is an error, not a miss that silently
 creates another paid request. Truncated or incomplete output is not cached as a
@@ -395,8 +396,8 @@ delete audit lineage or make a lossy summary equal to the original transcript.
 - one parent checkpoint;
 - optional compaction-policy patch;
 - optional summarizer logical model/service class; and
-- optional exact-cache acceptance age using the same cache policy, with variant
-  fixed to zero; and
+- optional exact-cache acceptance age and variant using the same cache policy;
+  and
 - output reserve and retention controls.
 
 It returns a child checkpoint of kind **compaction**, a compacted context
@@ -408,9 +409,10 @@ Compaction is an LLM call and therefore participates in opt-in exact-response
 caching. Its fingerprint is domain-separated from Generate and includes parent
 semantic state, retained-turn boundary, prompt/policy/summarizer equivalence,
 compiler/capability versions, and every other summary-affecting control.
-Compaction sampling is fixed to the compaction contract, so a positive cache
-variant is invalid; zero remains a named cache slot even if the underlying
-provider is not perfectly deterministic. On a hit the worker creates a new
+Compaction sampling is fixed to the compaction contract. A cache variant is
+accepted as for Generate: it only selects a separate cache slot, and zero
+remains a named slot even if the underlying provider is not perfectly
+deterministic. On a hit the worker creates a new
 compaction child with cache provenance and exact zero cost. It never returns the
 origin checkpoint as the current operation's child.
 
@@ -572,7 +574,7 @@ Implementation is incomplete until tests prove:
 - omitted settings encode no inherited values in the Activity payload;
 - set, clear, and omitted remain distinct through Go and OCaml round trips;
 - cache freshness uses completion time while cleanup uses last use;
-- temperature zero plus variant greater than zero is rejected after inheritance;
+- the cache variant stays independent of temperature, including zero;
 - cache hits create new child checkpoints, charge zero, and increment usage once
   despite Activity retries;
 - prompt-cache affinity wins only among otherwise eligible routes;
