@@ -34,6 +34,9 @@ func TestCloudRequestLimitsRejectRequestsOverEachConfiguredBound(t *testing.T) {
 		"schema bytes": generate(func(r *llm.GenerateRequestV1) {
 			r.SettingsPatch.Tools.Set = tools(llm.Tool{Name: "a", InputSchema: json.RawMessage(`{"description":"` + strings.Repeat("x", 80) + `"}`)})
 		}),
+		"reference metadata depth": generate(func(r *llm.GenerateRequestV1) {
+			r.Append = []llm.Item{llm.Reference{URI: "https://example.com/a", Metadata: map[string]json.RawMessage{"m": json.RawMessage(`{"a":{"b":{"c":{"d":1}}}}`)}}}
+		}),
 		"json depth": generate(func(r *llm.GenerateRequestV1) {
 			r.Append = []llm.Item{message(llm.JSONPart{Value: json.RawMessage(`{"a":{"b":{"c":{"d":1}}}}`)})}
 		}),

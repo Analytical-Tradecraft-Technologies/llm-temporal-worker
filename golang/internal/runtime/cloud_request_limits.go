@@ -92,6 +92,13 @@ func (limits CloudRequestLimits) itemWithin(item llm.Item) bool {
 		return !limits.exceeds(limits.PartsPerItem, len(item.Content)) && limits.partsWithin(item.Content)
 	case llm.ToolCall:
 		return limits.depthWithin(item.Arguments)
+	case llm.Reference:
+		for _, value := range item.Metadata {
+			if !limits.depthWithin(value) {
+				return false
+			}
+		}
+		return true
 	default:
 		return true
 	}

@@ -420,12 +420,19 @@ func (executor *CloudProviderExecution) refusedDispatch(ctx context.Context, sco
 // the same content: it cannot dispatch, and it treats an earlier attempt whose
 // acknowledgement was lost as success.
 func (executor *CloudProviderExecution) save(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution) (ProviderExecutionResult, error) {
+	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), executionSaveBudget)
+	defer cancel()
+	return executor.saveWithin(finalCtx, scope, id, saved, next)
+}
+
+// saveWithin is save under a caller-supplied detached context, whose deadline
+// bounds every attempt and backoff; settlement passes its finalization context
+// so server.finalization_timeout bounds the whole settlement path.
+func (executor *CloudProviderExecution) saveWithin(finalCtx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution) (ProviderExecutionResult, error) {
 	next.Revision = saved.Execution.Revision + 1
 	if now := executor.clock().UTC(); now.After(next.UpdatedAt) {
 		next.UpdatedAt = now
 	}
-	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), executionSaveBudget)
-	defer cancel()
 	err := executor.saveOnce(finalCtx, scope, id, saved.Execution.Revision, next, false)
 	for _, delay := range executor.saveBackoff {
 		if err == nil || !retryableExecutionSave(err) {
@@ -522,7 +529,7 @@ func (executor *CloudProviderExecution) settle(ctx context.Context, scope clouds
 	}
 	next := saved.Execution
 	next.Settled = true
-	return executor.save(finalCtx, scope, id, saved, next)
+	return executor.saveWithin(finalCtx, scope, id, saved, next)
 }
 
 func (executor *CloudProviderExecution) result(saved cloudstate.SavedProviderExecution) ProviderExecutionResult {
