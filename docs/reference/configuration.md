@@ -553,6 +553,20 @@ requests, attempts, pending records, response caches and continuation data.
 See [cloud request storage](cloud-request-repository.md#worker-integration)
 for IAM configuration, table/bucket aliases and the encryption secret.
 
+On the durable v1 path, `state.continuation_retention` sets the checkpoint
+lifetime. The other `state` timing settings are validated and defaulted but
+apply only to the legacy engine Activity that memory mode runs:
+
+- `state.reservation_lease`: the durable path uses a fixed 15-minute budget
+  start lease (`durable.BudgetStartLease`) for reservations, provider-start
+  claims and recovery windows.
+- `state.operation_terminal_retention` and `state.ambiguous_retention`: the
+  durable path does not expire cloud request records yet; retention is tracked
+  in [#818](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/818).
+
+Changing them has no effect on a durable worker. They remain accepted so one
+configuration can serve both modes.
+
 Durable readiness requires Redis, cloud request storage and the result blob
 store. Production startup requires a ready cloud initialization receipt;
 readiness checks its matching persistent budget authority marker in Redis,
