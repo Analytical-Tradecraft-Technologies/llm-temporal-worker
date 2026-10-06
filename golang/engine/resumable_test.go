@@ -498,3 +498,59 @@ func TestGenerateFinalizesDefinitePollFailure(t *testing.T) {
 		t.Fatal("definite poll failure left the operation provider_pending")
 	}
 }
+
+// classRecordingResumableAdapter rejects the first Submit before dispatch,
+// accepts the second as pending, and records the service class of every
+// Submit and Poll so recovery can be checked against the accepted attempt.
+type classRecordingResumableAdapter struct {
+	resumableEngineAdapter
+	submitClasses []llm.ServiceClass
+	pollClasses   []llm.ServiceClass
+}
+
+func (adapter *classRecordingResumableAdapter) Submit(ctx context.Context, call provider.Call, observer provider.Observer) (provider.ResumableResult, error) {
+	adapter.mu.Lock()
+	adapter.submitClasses = append(adapter.submitClasses, call.ServiceClass)
+	first := len(adapter.submitClasses) == 1
+	adapter.mu.Unlock()
+	if first {
+		return provider.ResumableResult{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "economy rejected")
+	}
+	return adapter.resumableEngineAdapter.Submit(ctx, call, observer)
+}
+
+func (adapter *classRecordingResumableAdapter) Poll(ctx context.Context, call provider.Call, id string, observer provider.Observer) (provider.ResumableResult, error) {
+	adapter.mu.Lock()
+	adapter.pollClasses = append(adapter.pollClasses, call.ServiceClass)
+	adapter.mu.Unlock()
+	return adapter.resumableEngineAdapter.Poll(ctx, call, id, observer)
+}
+
+func TestGenerateResumesTheAcceptedServiceClassOnASharedEndpoint(t *testing.T) {
+	adapter := &classRecordingResumableAdapter{}
+	harness := newHarness(t, adapter)
+	request := baseRequest("resumable-retry")
+	request.ServiceClass = llm.ServiceClassEconomy
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
+		t.Fatal("first attempt unexpectedly completed")
+	}
+	response, err := harness.engine.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	adapter.mu.Lock()
+	submits, polls := append([]llm.ServiceClass(nil), adapter.submitClasses...), append([]llm.ServiceClass(nil), adapter.pollClasses...)
+	adapter.mu.Unlock()
+	if len(submits) != 2 || submits[0] != llm.ServiceClassEconomy || submits[1] != llm.ServiceClassStandard {
+		t.Fatalf("submits = %v, want [economy standard]", submits)
+	}
+	for _, class := range polls {
+		if class != llm.ServiceClassStandard {
+			t.Fatalf("polls = %v, want every poll on the accepted standard attempt", polls)
+		}
+	}
+	if response.Service.Attempted != llm.ServiceClassStandard {
+		t.Fatalf("response attempted = %q, want standard", response.Service.Attempted)
+	}
+}
