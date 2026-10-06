@@ -31,6 +31,10 @@ prices.
   worker polls its digest each minute and installs a new document. Memory state
   uses an in-process store. Only OpenRouter API data is stored; rules and
   endpoint configuration are applied by each worker on install.
+- **Text models only.** A model whose output is not text-only (image, audio
+  and music generators) is never routable, on OpenRouter or directly; models
+  that merely accept media input stay. OpenRouter alias (`~`), variant (`:`)
+  and variable-priced router IDs are skipped too.
 - **A failed fetch never shrinks the catalog.** A fetch with more than 10% of
   endpoint lookups failing is rejected and the previous document stays
   published. The document has no TTL.

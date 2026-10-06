@@ -38,9 +38,10 @@ type Fetcher struct {
 	Clock       func() time.Time
 }
 
-// Fetch returns a complete, normalized Document. Models that OpenRouter lists
-// without a usable price (for example its own variable-priced routers) and
-// alias or variant IDs (prefixed with "~" or containing ":") are skipped.
+// Fetch returns a complete, normalized Document. Models whose output is not
+// text-only (image and audio generators), models OpenRouter lists without a
+// usable price (for example its own variable-priced routers) and alias or
+// variant IDs (prefixed with "~" or containing ":") are skipped.
 func (fetcher Fetcher) Fetch(ctx context.Context) (Document, error) {
 	if fetcher.Client == nil {
 		return Document{}, fmt.Errorf("OpenRouter fetch requires an HTTP client")
@@ -119,7 +120,8 @@ type wireModel struct {
 	ID            string `json:"id"`
 	ContextLength int64  `json:"context_length"`
 	Architecture  struct {
-		InputModalities []string `json:"input_modalities"`
+		InputModalities  []string `json:"input_modalities"`
+		OutputModalities []string `json:"output_modalities"`
 	} `json:"architecture"`
 	TopProvider struct {
 		MaxCompletionTokens int64 `json:"max_completion_tokens"`
@@ -138,7 +140,7 @@ func (fetcher Fetcher) listModels(ctx context.Context) ([]Model, error) {
 	models := make([]Model, 0, len(body.Data))
 	seen := make(map[string]struct{}, len(body.Data))
 	for _, wire := range body.Data {
-		if !syncableModelID(wire.ID) {
+		if !syncableModelID(wire.ID) || !textOutputOnly(wire.Architecture.OutputModalities) {
 			continue
 		}
 		if _, duplicate := seen[wire.ID]; duplicate {
@@ -214,6 +216,14 @@ func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]End
 		}
 	}
 	return endpoints, nil
+}
+
+// textOutputOnly keeps models whose only output is text. Image, audio and
+// other media generators are never routable: the unified response carries
+// text, and their media pricing has no catalog component. A model that only
+// accepts media as input is an ordinary chat model and stays.
+func textOutputOnly(modalities []string) bool {
+	return len(modalities) == 1 && modalities[0] == "text"
 }
 
 // syncableModelID excludes OpenRouter alias ("~vendor/...") and variant

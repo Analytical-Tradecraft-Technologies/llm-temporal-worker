@@ -72,12 +72,14 @@ func mergedRules(t *testing.T, layers ...string) Rules {
 	return rules
 }
 
-func TestFetchSkipsUnpricedAliasAndVariantModels(t *testing.T) {
+func TestFetchSkipsMediaUnpricedAliasAndVariantModels(t *testing.T) {
 	document := fetchFixture(t)
 	var ids []string
 	for _, model := range document.Models {
 		ids = append(ids, model.ID)
 	}
+	// The fixture also lists openai/gpt-5-image and openai/gpt-audio, whose
+	// image and audio output is never routable.
 	want := "anthropic/claude-sonnet-4.5,inference-net/schematron-v2-turbo,openai/gpt-5.4"
 	if got := strings.Join(ids, ","); got != want {
 		t.Fatalf("models = %s, want %s", got, want)

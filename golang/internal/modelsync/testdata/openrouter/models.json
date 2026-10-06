@@ -419,6 +419,131 @@
     "is_moderated": true,
     "max_completion_tokens": 64000
    }
+  },
+  {
+   "architecture": {
+    "input_modalities": [
+     "image",
+     "text",
+     "file"
+    ],
+    "instruct_type": null,
+    "modality": "text+image+file->text+image",
+    "output_modalities": [
+     "image",
+     "text"
+    ],
+    "tokenizer": "GPT"
+   },
+   "canonical_slug": "openai/gpt-5-image",
+   "context_length": 400000,
+   "created": 1760447986,
+   "default_parameters": {
+    "frequency_penalty": null,
+    "temperature": null,
+    "top_p": null
+   },
+   "expiration_date": null,
+   "hugging_face_id": "",
+   "id": "openai/gpt-5-image",
+   "knowledge_cutoff": null,
+   "links": {
+    "details": "/api/v1/models/openai/gpt-5-image/endpoints"
+   },
+   "name": "OpenAI: GPT-5 Image",
+   "per_request_limits": null,
+   "pricing": {
+    "completion": "0.00001",
+    "image_output": "0.00004",
+    "input_cache_read": "0.00000125",
+    "prompt": "0.00001",
+    "web_search": "0.01"
+   },
+   "reasoning": {
+    "mandatory": true
+   },
+   "supported_parameters": [
+    "include_reasoning",
+    "logprobs",
+    "max_tokens",
+    "reasoning",
+    "response_format",
+    "seed",
+    "structured_outputs",
+    "temperature",
+    "top_logprobs",
+    "top_p",
+    "verbosity"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": 400000,
+    "is_moderated": true,
+    "max_completion_tokens": 128000
+   }
+  },
+  {
+   "architecture": {
+    "input_modalities": [
+     "text",
+     "audio"
+    ],
+    "instruct_type": null,
+    "modality": "text+audio->text+audio",
+    "output_modalities": [
+     "text",
+     "audio"
+    ],
+    "tokenizer": "GPT"
+   },
+   "canonical_slug": "openai/gpt-audio",
+   "context_length": 128000,
+   "created": 1768862569,
+   "default_parameters": {
+    "frequency_penalty": null,
+    "presence_penalty": null,
+    "repetition_penalty": null,
+    "temperature": null,
+    "top_k": null,
+    "top_p": null
+   },
+   "expiration_date": null,
+   "hugging_face_id": "",
+   "id": "openai/gpt-audio",
+   "knowledge_cutoff": null,
+   "links": {
+    "details": "/api/v1/models/openai/gpt-audio/endpoints"
+   },
+   "name": "OpenAI: GPT Audio",
+   "per_request_limits": null,
+   "pricing": {
+    "audio": "0.000032",
+    "audio_output": "0.000064",
+    "completion": "0.00001",
+    "prompt": "0.0000025"
+   },
+   "supported_parameters": [
+    "frequency_penalty",
+    "logit_bias",
+    "logprobs",
+    "max_tokens",
+    "presence_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "structured_outputs",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_logprobs",
+    "top_p"
+   ],
+   "supported_voices": null,
+   "top_provider": {
+    "context_length": 128000,
+    "is_moderated": true,
+    "max_completion_tokens": 16384
+   }
   }
  ]
 }

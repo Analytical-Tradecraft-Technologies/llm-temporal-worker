@@ -1043,6 +1043,10 @@ model_sync:
   and with model sync configured `models` and `pricing.catalogs` may be empty.
   Every model sync endpoint still names a capability profile; its `model`
   field is not used for synced routes.
+- **Text models only.** Models whose output is not text-only (image, audio and
+  music generators) are never synced; models that only accept media as input
+  are. OpenRouter alias (`~…`), variant (`…:batch`) and variable-priced router
+  IDs are skipped.
 - **Precedence.** A configured `models` entry of the same name always wins,
   as does a configured price entry with the same identity.
 
