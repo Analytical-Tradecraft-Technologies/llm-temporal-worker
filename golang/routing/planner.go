@@ -58,6 +58,7 @@ func (planner DeterministicPlanner) Plan(ctx context.Context, input Input) (Plan
 				}
 				continue
 			}
+			candidate.PriceAvailable = route.PriceAvailableAt(input.Now)
 			plan.Candidates = append(plan.Candidates, candidate)
 		}
 	}
@@ -267,6 +268,9 @@ func CompileCatalog(version string, models map[string]Model) (Catalog, error) {
 			route.AllowedTenants = append([]string(nil), route.AllowedTenants...)
 			route.AllowedRegions = append([]string(nil), route.AllowedRegions...)
 			route.ExtensionNames = append([]string(nil), route.ExtensionNames...)
+			if route.PricedWindows != nil {
+				route.PricedWindows = append([]PriceWindow{}, route.PricedWindows...)
+			}
 			route.ProviderFeatures = cloneCapabilityMap(route.ProviderFeatures)
 		}
 		copyModels[name] = model
