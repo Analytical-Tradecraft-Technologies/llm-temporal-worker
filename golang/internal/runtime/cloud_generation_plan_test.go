@@ -37,7 +37,14 @@ func TestCloudGenerationPlan(t *testing.T) {
 				f.now = f.now.Add(time.Second)
 			}
 			if mode == "tokens" || mode == "no-prefix" {
-				f.cap.BudgetEstimator.Tokenizer = func(llm.Request, routing.Candidate) (int64, error) { return 50000, nil }
+				// The parent's history is what crosses the trigger; the request
+				// that compaction leaves behind stays below it.
+				f.cap.BudgetEstimator.Tokenizer = func(request llm.Request, _ routing.Candidate) (int64, error) {
+					if len(request.Input) > 1 {
+						return 50000, nil
+					}
+					return 5, nil
+				}
 			}
 			f.restart(t)
 			if mode == "provider-limit" || mode == "provider-token-limit" {
@@ -82,11 +89,13 @@ func TestCloudGenerationPlanLargeInputAndTokenizerFailure(t *testing.T) {
 	f := boundedCloud(t, false)
 	policy := json.RawMessage(`{"recent_turns":0}`)
 	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	// The large turn is history: the next turn can compact it away.
+	f.request.Append = []llm.Item{preparationMessage(strings.Repeat("x", 300<<10))}
 	parent := f.finish(t)
 	handle := parent.Generate.Checkpoint.Handle
 	f.request.Parent = &handle
 	f.request.OperationKey = "large-next"
-	f.request.Append = []llm.Item{preparationMessage(strings.Repeat("x", 300<<10))}
+	f.request.Append = []llm.Item{preparationMessage("next")}
 	f.cap.BudgetEstimator.Tokenizer = nil
 	f.restart(t)
 	decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request)

@@ -84,10 +84,14 @@ func (p *CheckpointPublication) Generate(ctx context.Context, identity Checkpoin
 		return zero, response, err
 	}
 	response = llm.GenerateResponseV1{APIVersion: llm.APIVersion, OperationKey: request.OperationKey, OperationID: string(identity.OperationID), Status: result.Status,
-		Output: result.Output, Checkpoint: metadata, Cache: disposition, Route: &result.Route, Usage: &result.Usage, Cost: publicationCost(result.Cost), Diagnostics: result.Diagnostics}
+		Output: result.Output, Checkpoint: metadata, Cache: disposition, Route: &result.Route, Service: &result.Service, Usage: &result.Usage, Cost: publicationCost(result.Cost), Diagnostics: result.Diagnostics}
 	if origin != nil {
+		// A replay ran no provider call: it has no usage and no attempted or
+		// provider-observed class of its own, and the fingerprint ignores the
+		// origin's class, so the origin's facts would misreport this request.
 		response.Cost = zeroPublicationCost()
 		response.Usage = nil
+		response.Service = nil
 	}
 	if err := validatePublicationCache(origin, disposition, cache.OperationGenerate, identity, prepared.SampleIndex); err != nil {
 		return zero, llm.GenerateResponseV1{}, err

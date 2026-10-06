@@ -76,7 +76,8 @@ controller:
 - Versioned price catalogs and provider-reported cost reconciliation.
 - Multiple overlapping, conservatively enforced sliding-window budgets.
 - Generic cloud KV/blob persistence and shared Redis budgeting/provider state;
-  in-memory implementations for development and tests.
+  in-memory implementations for tests. Development memory mode runs only the
+  legacy engine Activity: the public v1 workflows need durable cloud state.
 
 ### Runtime and delivery
 

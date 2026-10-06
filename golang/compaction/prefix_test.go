@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mfow/llm-temporal-worker/golang/llm"
@@ -318,5 +319,90 @@ func TestSelectPrefixCarriesEveryReferencePastTheSummary(t *testing.T) {
 	}
 	if selection.RetainedTurns != 1 {
 		t.Fatalf("retained turns = %d, want 1", selection.RetainedTurns)
+	}
+}
+
+// SelectRequestPrefix keeps the policy's window when the retained request
+// fits target_tokens and otherwise shortens it, oldest turn first, down to one
+// turn. The window is measured with the instructions and tools that stay in
+// every request, not the items alone.
+func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
+	items := []llm.Item{
+		textMessage(llm.ActorHuman, "one"),
+		textMessage(llm.ActorModel, strings.Repeat("x", 4000)),
+		textMessage(llm.ActorHuman, "three"),
+		textMessage(llm.ActorModel, "four"),
+	}
+	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items, Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Text: strings.Repeat("p", 400)}}}
+	policy := DefaultPolicy()
+	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens = 3, 2000, 600
+	selection, err := SelectRequestPrefix(source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := selection.Retained, items[2:]; !reflect.DeepEqual(got, want) || selection.RetainedTurns != 2 {
+		t.Fatalf("retained = %#v (%d turns), want the two turns that fit", got, selection.RetainedTurns)
+	}
+	if got, want := selection.Prefix, items[:2]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prefix = %#v, want %#v", got, want)
+	}
+
+	// A window that fits is kept in full.
+	policy.TargetTokens = 1900
+	selection, err = SelectRequestPrefix(source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := selection.Retained, items[1:]; !reflect.DeepEqual(got, want) || selection.RetainedTurns != 3 {
+		t.Fatalf("retained = %#v (%d turns), want the whole window", got, selection.RetainedTurns)
+	}
+
+	// Instructions count: the same items no longer fit once the prompt grows.
+	source.Instructions[0].Text = strings.Repeat("p", 4000)
+	selection, err = SelectRequestPrefix(source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.RetainedTurns != 2 {
+		t.Fatalf("retained turns = %d, want 2 after the prompt grew", selection.RetainedTurns)
+	}
+
+	// The last turn stays even when it alone exceeds the target, and a zero
+	// window stays empty.
+	policy.TargetTokens = 1
+	selection, err = SelectRequestPrefix(source, policy)
+	if err != nil || selection.RetainedTurns != 1 || !reflect.DeepEqual(selection.Retained, items[3:]) {
+		t.Fatalf("selection = %#v, err = %v, want the last turn alone", selection, err)
+	}
+	policy.RecentTurns = 0
+	selection, err = SelectRequestPrefix(source, policy)
+	if err != nil || selection.RetainedTurns != 0 || len(selection.Retained) != 0 {
+		t.Fatalf("selection = %#v, err = %v, want an empty window", selection, err)
+	}
+}
+
+func TestSelectRequestPrefixRejectsInvalidPolicy(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.TargetTokens = policy.TriggerTokens
+	if _, err := SelectRequestPrefix(llm.Request{OperationKey: "compact-1", Model: "alias", Input: []llm.Item{textMessage(llm.ActorHuman, "x")}}, policy); err == nil {
+		t.Fatal("invalid policy accepted")
+	}
+}
+
+// Inline media bytes are not text: a recent image that a provider bills on its
+// pixels stays in the window instead of being moved into the lossy summary
+// because its base64 is large.
+func TestSelectRequestPrefixDoesNotCountInlineMediaBytesAsText(t *testing.T) {
+	image := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look"}, llm.ImagePart{Bytes: make([]byte, 64<<10), MediaType: "image/png"}}}
+	items := []llm.Item{textMessage(llm.ActorHuman, "one"), textMessage(llm.ActorModel, "two"), image, textMessage(llm.ActorModel, "four")}
+	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items}
+	policy := DefaultPolicy()
+	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens = 2, 2000, 600
+	selection, err := SelectRequestPrefix(source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.RetainedTurns != 2 || !reflect.DeepEqual(selection.Retained, items[2:]) {
+		t.Fatalf("retained = %#v (%d turns), want the image turn kept", selection.Retained, selection.RetainedTurns)
 	}
 }

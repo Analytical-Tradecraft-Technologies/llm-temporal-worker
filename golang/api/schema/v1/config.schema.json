@@ -462,7 +462,7 @@
     },
     "capabilities": {
       "type": "object", "additionalProperties": false, "required": ["catalogs", "unknown_in_strict_mode"],
-      "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "unknown_in_strict_mode": { "enum": ["reject", "allow"] } }
+      "properties": { "catalogs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/catalog" } }, "unknown_in_strict_mode": { "const": "reject" } }
     },
     "pricing": {
       "type": "object", "additionalProperties": false, "required": ["catalogs", "require_price_when_budgeted"],
@@ -500,7 +500,7 @@
       "type": "object", "additionalProperties": false, "required": ["handle_keys", "retain_canonical_transcript", "allow_provider_hosted_state"],
       "properties": {
         "handle_keys": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "primary", "secret"], "properties": { "id": { "type": "string" }, "primary": { "type": "boolean" }, "secret": { "$ref": "#/$defs/secret" } } } },
-        "retain_canonical_transcript": { "type": "boolean" }, "allow_provider_hosted_state": { "type": "boolean" }
+        "retain_canonical_transcript": { "const": true }, "allow_provider_hosted_state": { "type": "boolean" }
       }
     },
     "telemetry": {

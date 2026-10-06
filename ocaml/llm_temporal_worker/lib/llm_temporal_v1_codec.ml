@@ -59,16 +59,45 @@ let nonnegative context value = if value < 0L then Error (errorf "%s must not be
 let option_field name encode = function None -> [] | Some value -> [name, encode value]
 let list context = function `List values -> Ok values | _ -> Error (errorf "%s must be an array" context)
 
+(* Linear-time duplicate-member check over a whole document: one hash set per
+   object, so a large open value cannot make the boundary check quadratic. *)
+let rec unique_json context = function
+  | `Assoc fields ->
+      let seen = Hashtbl.create (List.length fields) in
+      let rec check = function
+        | [] -> Ok ()
+        | (name, _) :: _ when Hashtbl.mem seen name -> Error (errorf "%s contains duplicate field %S" context name)
+        | (name, value) :: rest ->
+            Hashtbl.add seen name ();
+            (match unique_json context value with Error _ as error -> error | Ok () -> check rest)
+      in
+      check fields
+  | `List values ->
+      let rec check = function
+        | [] -> Ok ()
+        | value :: rest -> (match unique_json context value with Error _ as error -> error | Ok () -> check rest)
+      in
+      check values
+  | _ -> Ok ()
+
+(* Go rejects a duplicate member anywhere in a payload, including open JSON
+   content, arguments, schemas and extensions, so the v1 boundary checks the
+   whole document in both directions. *)
 let parse_json decoder bytes =
   try
     let value = Yojson.Safe.from_string (Bytes.to_string bytes) in
-    decoder value
+    match unique_json "payload" value with
+    | Error _ as error -> error
+    | Ok () -> decoder value
   with
   | Yojson.Json_error message -> Error (errorf "invalid JSON: %s" message)
   | Failure message -> Error (errorf "invalid JSON: %s" message)
   | Invalid_argument message -> Error (errorf "invalid JSON value: %s" message)
 
 let to_bytes value =
+  match unique_json "payload" value with
+  | Error _ as error -> error
+  | Ok () ->
   try Ok (Bytes.of_string (Yojson.Safe.to_string value)) with
   | Yojson.Json_error message -> Error (errorf "failed to encode JSON: %s" message)
 
@@ -333,11 +362,11 @@ let generate_request_of_json value =
 let generate_response_to_json (value : generate_response) =
   let* () = Llm_temporal_response_validation.validate_generate_response value in
   let fields = ["api_version", `String generate_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "operation_id", `String (Operation_id.to_string value.operation_id); "status", response_status_to_json value.status; "output", `List (List.map item_to_json value.output); "checkpoint", checkpoint_to_json value.checkpoint; "cache", cache_disposition_to_json value.cache; "cost", settled_cost_to_json value.cost] in
-  let fields = fields @ option_field "route" route_to_v1_json value.route @ option_field "usage" usage_to_json value.usage in
+  let fields = fields @ option_field "route" route_to_v1_json value.route @ option_field "service" Llm_temporal_codec.service_to_json value.service @ option_field "usage" usage_to_json value.usage in
   Ok (`Assoc (fields @ ["diagnostics", `List (List.map diagnostic_to_json value.diagnostics)]))
 
 let generate_response_of_json value =
-  let* fields = closed "generate response" ["api_version"; "operation_key"; "operation_id"; "status"; "output"; "checkpoint"; "cache"; "route"; "usage"; "cost"; "diagnostics"] value in
+  let* fields = closed "generate response" ["api_version"; "operation_key"; "operation_id"; "status"; "output"; "checkpoint"; "cache"; "route"; "service"; "usage"; "cost"; "diagnostics"] value in
   let* version = required "generate response" "api_version" fields >>= string "generate response.api_version" in
   let* () = if version = generate_api_version then Ok () else Error (errorf "unsupported generate api_version %S" version) in
   let* operation_key = required "generate response" "operation_key" fields >>= string "generate response.operation_key" >>= fun value -> nonempty "generate response.operation_key" value in
@@ -347,10 +376,11 @@ let generate_response_of_json value =
   let* checkpoint = required "generate response" "checkpoint" fields >>= checkpoint_of_json "generate response.checkpoint" in
   let* cache = required "generate response" "cache" fields >>= cache_disposition_of_json "generate response.cache" in
   let* route = match optional "route" fields with None | Some `Null -> Ok None | Some value -> let* value = route_of_v1_json "generate response.route" value in Ok (Some value) in
+  let* service = match optional "service" fields with None | Some `Null -> Ok None | Some value -> let* value = Llm_temporal_codec.service_of_json value in Ok (Some value) in
   let* usage = match optional "usage" fields with None | Some `Null -> Ok None | Some value -> let* value = usage_of_json "generate response.usage" value in Ok (Some value) in
   let* cost = required "generate response" "cost" fields >>= settled_cost_of_json "generate response.cost" in
   let* diagnostics = match optional "diagnostics" fields with None -> Ok [] | Some value -> list "generate response.diagnostics" value >>= map_result (diagnostic_of_json "generate response.diagnostic") in
-  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; usage; cost; diagnostics } in
+  let response = { api_version = version; operation_key = Operation_key.of_string operation_key; operation_id = Operation_id.of_string operation_id; status; output; checkpoint; cache; route; service; usage; cost; diagnostics } in
   let* () = Llm_temporal_response_validation.validate_generate_response response in
   Ok response
 

@@ -33,12 +33,17 @@ type cloudExecutionStore interface {
 // CloudExecutionOptions supplies deployment-owned authorization and signing.
 // No default resolver trusts the tenant/project fields of an incoming payload.
 type CloudExecutionOptions struct {
-	ResolveScope     CheckpointScopeResolver
-	Keyring          *state.Keyring
-	Limits           state.MaterializeLimits
-	CheckpointTTL    time.Duration
-	BudgetGeneration durable.GenerationID
-	MaxAttempts      int
+	ResolveScope  CheckpointScopeResolver
+	Keyring       *state.Keyring
+	Limits        state.MaterializeLimits
+	RequestLimits CloudRequestLimits
+	// FinalizationTimeout bounds each detached write that records a result
+	// after the caller may have gone (server.finalization_timeout). Zero
+	// means 10 seconds.
+	FinalizationTimeout time.Duration
+	CheckpointTTL       time.Duration
+	BudgetGeneration    durable.GenerationID
+	MaxAttempts         int
 }
 
 // CloudExecutionRuntime implements the bounded activity state machine. All
@@ -57,11 +62,17 @@ type CloudExecutionRuntime struct {
 var _ activity.ExecutionRuntime = (*CloudExecutionRuntime)(nil)
 
 func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, options CloudExecutionOptions) (*CloudExecutionRuntime, error) {
-	if options.MaxAttempts < 0 {
+	if options.MaxAttempts < 0 || !options.RequestLimits.valid() {
 		return nil, executionError(provider.CodeConfiguration)
 	}
 	if options.MaxAttempts == 0 {
 		options.MaxAttempts = 6
+	}
+	if options.FinalizationTimeout < 0 {
+		return nil, executionError(provider.CodeConfiguration)
+	}
+	if options.FinalizationTimeout == 0 {
+		options.FinalizationTimeout = defaultCloudFinalizationTimeout
 	}
 	store, ok := c.Requests.(cloudExecutionStore)
 	if !ok || isNilCapability(store) || c.Finalizer == nil || isNilCapability(c.Responses) || isNilCapability(c.ResponseFills) || options.CheckpointTTL <= 0 || options.BudgetGeneration.Validate() != nil {
@@ -71,10 +82,12 @@ func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, opt
 	if err != nil {
 		return nil, err
 	}
+	preparation.requestLimits = options.RequestLimits
 	execution, err := c.NewCloudProviderExecution(ctx)
 	if err != nil {
 		return nil, err
 	}
+	execution.finalizationTimeout = options.FinalizationTimeout
 	publication, err := c.NewCheckpointPublication(options.Keyring, options.Limits)
 	if err != nil {
 		return nil, err
@@ -477,7 +490,7 @@ func (r *CloudExecutionRuntime) storeResult(ctx context.Context, p PreparedCloud
 	if err != nil {
 		return llm.ExecutionResultV1{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
-	final, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	final, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.options.FinalizationTimeout)
 	defer cancel()
 	_, err = r.store.CompleteOperation(final, p.Record.Request.Scope, p.Record.Request.ID, progress, r.now())
 	if err != nil {

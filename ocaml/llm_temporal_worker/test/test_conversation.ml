@@ -23,7 +23,7 @@ let require_codec_rejection label = function
 let response (request : generate_request) ~kind ~handle =
   let parent = request.parent in
   let depth = match parent with None -> 0l | Some _ -> 1l in
-  { api_version = V1_codec.generate_api_version;
+  { api_version = V1_codec.generate_api_version; service = None;
     operation_key = request.operation_key;
     operation_id = Operation_id.of_string (Operation_key.to_string request.operation_key ^ "-operation");
     status = Completed;

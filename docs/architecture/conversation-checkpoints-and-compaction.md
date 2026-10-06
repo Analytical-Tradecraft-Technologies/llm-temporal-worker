@@ -428,7 +428,11 @@ limit is crossed:
 Temporal payload size is not the compaction trigger because the delta payload is
 already a delta. Token estimates are conservative and model/version specific.
 The policy has hysteresis: compact to a lower target than the trigger so each
-new turn does not compact again.
+new turn does not compact again. The policy token trigger is skipped when the
+content compaction cannot remove (instructions, tool schemas, the retained
+window and the new turn) already reaches it, and the retained window is
+shortened to fit the target, so a summary is never bought for a request it
+cannot bring below the trigger.
 
 The generation workflow's automatic compaction uses unrestricted-age summary
 caching with sample index zero. Explicit Compact requests can choose another

@@ -149,8 +149,8 @@ func TestRegisteredTemporalGeneratePreservesAmbiguousApplicationError(t *testing
 	activities := Activities{Engine: &fakeEngine{err: err}}
 	registry := &temporalActivityCaptureRegistry{}
 	activities.Register(registry)
-	if registry.name != GenerateActivityName {
-		t.Fatalf("registered Activity = %q, want %q", registry.name, GenerateActivityName)
+	if registry.name != LegacyGenerateActivityName {
+		t.Fatalf("registered Activity = %q, want %q", registry.name, LegacyGenerateActivityName)
 	}
 	generate, ok := registry.function.(func(context.Context, GenerateRequest) (*GenerateResponse, error))
 	if !ok {

@@ -1055,7 +1055,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		return openairesponses.NewOpenAIAdapter(openaiClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
+		return openairesponses.NewOpenAIAdapter(openaiClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)))
 	case "azure_openai_responses":
 		apiVersion := factory.azureAPIVersion(endpointID, endpoint)
 		if apiVersion == "" {
@@ -1071,7 +1071,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)))
 		case "bearer_env", "header_env":
 			key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 			if err != nil {
@@ -1081,7 +1081,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(endpoint.ProviderStorage.Permitted))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)))
 		default:
 			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
 		}
@@ -1650,4 +1650,13 @@ func loadRedisTLS(value config.TLSConfig) (*tls.Config, error) {
 		return nil, fmt.Errorf("Redis TLS CA certificate is invalid")
 	}
 	return &tls.Config{MinVersion: tls.VersionTLS12, ServerName: value.ServerName, RootCAs: pool}, nil
+}
+
+// providerStoragePermitted reports whether a Responses endpoint may keep
+// provider-side state (store, background, previous_response_id). Both the
+// endpoint's provider_storage.permitted and the global
+// continuation.allow_provider_hosted_state must allow it, so the global
+// privacy switch cannot be bypassed by one endpoint.
+func providerStoragePermitted(value config.Config, endpoint config.EndpointConfig) bool {
+	return endpoint.ProviderStorage.Permitted && value.Continuation.AllowProviderHostedState
 }

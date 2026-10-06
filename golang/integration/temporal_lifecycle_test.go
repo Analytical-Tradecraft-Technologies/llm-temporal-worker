@@ -300,8 +300,8 @@ func TestTemporalWorkerLifecycleRegistrationReplayAndReadiness(t *testing.T) {
 	controller := newTemporalController(false)
 	registry := &captureRegistry{}
 	worker := newWorker(t, activities, health, metrics, controller, registry)
-	if registry.name != activity.GenerateActivityName {
-		t.Fatalf("registered Activity = %q, want %q", registry.name, activity.GenerateActivityName)
+	if registry.name != activity.LegacyGenerateActivityName {
+		t.Fatalf("registered Activity = %q, want %q", registry.name, activity.LegacyGenerateActivityName)
 	}
 	generate, ok := registry.function.(func(context.Context, activity.GenerateRequest) (*activity.GenerateResponse, error))
 	if !ok {

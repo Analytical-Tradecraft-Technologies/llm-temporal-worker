@@ -56,14 +56,44 @@ func TestPolicyEvaluateTriggerPreservesHysteresisAndReasonPrecedence(t *testing.
 	}
 }
 
+// The policy trigger is skipped when the tokens compaction cannot remove
+// already reach it: a summary would leave the request over the trigger, and
+// every following turn would buy another summarizer call. Other limits still
+// apply to such a request.
+func TestPolicyEvaluateTriggerSkipsTokensCompactionCannotRemove(t *testing.T) {
+	policy := DefaultPolicy()
+	decision, err := policy.EvaluateTrigger(TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: policy.TriggerTokens})
+	if err != nil {
+		t.Fatalf("evaluate trigger: %v", err)
+	}
+	if decision.ShouldCompact {
+		t.Fatalf("compaction requested although the retained request reaches the trigger: %+v", decision)
+	}
+	decision, err = policy.EvaluateTrigger(TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: policy.TriggerTokens - 1})
+	if err != nil {
+		t.Fatalf("evaluate trigger: %v", err)
+	}
+	if !decision.ShouldCompact || decision.Reason != TriggerReasonTokens {
+		t.Fatalf("removable tokens above the trigger did not compact: %+v", decision)
+	}
+	decision, err = policy.EvaluateTrigger(TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: 2 * policy.TriggerTokens, ContinuationExpired: true})
+	if err != nil {
+		t.Fatalf("evaluate trigger: %v", err)
+	}
+	if !decision.ShouldCompact || decision.Reason != TriggerReasonContinuation {
+		t.Fatalf("skipped token trigger hid a later limit: %+v", decision)
+	}
+}
+
 func TestPolicyEvaluateTriggerValidatesInput(t *testing.T) {
 	policy := DefaultPolicy()
 	for name, input := range map[string]TriggerInput{
-		"negative tokens":  {ProjectedTokens: -1},
-		"negative bytes":   {ProjectedBytes: -1},
-		"negative items":   {ProjectedItems: -1},
-		"negative depth":   {ProjectedLineageDepth: -1},
-		"negative reserve": {ReservedReasoningTokens: -1},
+		"negative tokens":   {ProjectedTokens: -1},
+		"negative retained": {RetainedTokens: -1},
+		"negative bytes":    {ProjectedBytes: -1},
+		"negative items":    {ProjectedItems: -1},
+		"negative depth":    {ProjectedLineageDepth: -1},
+		"negative reserve":  {ReservedReasoningTokens: -1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := policy.EvaluateTrigger(input); err == nil {

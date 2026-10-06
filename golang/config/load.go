@@ -170,6 +170,10 @@ func applyDefaults(config *Config) {
 	if config.Limits.TokenEstimateSafetyRatio == "" {
 		config.Limits.TokenEstimateSafetyRatio = "1.35"
 	}
+	if config.Continuation.RetainCanonicalTranscript == nil {
+		retain := true
+		config.Continuation.RetainCanonicalTranscript = &retain
+	}
 	if config.Capabilities.UnknownInStrictMode == "" {
 		config.Capabilities.UnknownInStrictMode = "reject"
 	}

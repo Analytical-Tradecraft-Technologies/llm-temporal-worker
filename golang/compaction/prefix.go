@@ -3,7 +3,9 @@ package compaction
 import (
 	"fmt"
 
+	"github.com/mfow/llm-temporal-worker/golang/budget"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 	"github.com/mfow/llm-temporal-worker/golang/state"
 )
 
@@ -82,6 +84,56 @@ func SelectPrefix(items []llm.Item, recentTurns int) (PrefixSelection, error) {
 	}
 	selection.Retained = append(selection.Retained, items[boundary:]...)
 	return selection, nil
+}
+
+// SelectRequestPrefix applies the policy to a whole request: it retains
+// Policy.RecentTurns of source.Input when the request that remains after
+// compaction (instructions, tools and the retained window) fits
+// Policy.TargetTokens, and otherwise the longest shorter window that fits,
+// never fewer than one turn. A window the policy already sets to zero stays
+// empty. The size is the serialized request's UTF-8 bytes divided by four, the
+// provider-independent baseline of budget reservation, so plan and compaction
+// select the same boundary whichever route later serves the summarizer.
+func SelectRequestPrefix(source llm.Request, policy Policy) (PrefixSelection, error) {
+	if err := policy.Validate(); err != nil {
+		return PrefixSelection{}, err
+	}
+	selection, err := SelectPrefix(source.Input, policy.RecentTurns)
+	if err != nil {
+		return PrefixSelection{}, err
+	}
+	for selection.RetainedTurns > 1 {
+		size, err := retainedRequestTokens(source, selection.Retained)
+		if err != nil {
+			return PrefixSelection{}, err
+		}
+		if size <= policy.TargetTokens {
+			break
+		}
+		selection, err = SelectPrefix(source.Input, selection.RetainedTurns-1)
+		if err != nil {
+			return PrefixSelection{}, err
+		}
+	}
+	return selection, nil
+}
+
+// retainedRequestTokens sizes the request left after compaction with the
+// budget estimator's provider-independent fallback, which excludes inline
+// media bytes: providers bill images and PDFs on their content, not on the
+// base64 this worker serializes, so a recent attachment that fits the
+// provider's budget is not pushed into the lossy summary.
+func retainedRequestTokens(source llm.Request, retained []llm.Item) (int, error) {
+	probe := source
+	probe.Input = retained
+	tokens, err := budget.Estimator{}.CountInputTokens(probe, routing.Candidate{})
+	if err != nil {
+		return 0, fmt.Errorf("compaction retained request: %w", err)
+	}
+	if tokens > int64(^uint(0)>>1) {
+		return 0, fmt.Errorf("compaction retained request is too large")
+	}
+	return int(tokens), nil
 }
 
 type turnRange struct {

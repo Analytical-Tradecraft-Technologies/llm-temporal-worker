@@ -471,6 +471,19 @@ telemetry:
   content_logging: disabled
 ```
 
+`continuation.allow_provider_hosted_state` is the global switch for provider-held
+conversation state. A Responses endpoint may store responses, run in the
+background or continue from `previous_response_id` only when both this switch
+and the endpoint's `provider_storage.permitted` are true; otherwise it runs
+statelessly. `continuation.retain_canonical_transcript` must be `true` (the
+default when omitted): v1 checkpoints always retain the canonical transcript.
+`capabilities.unknown_in_strict_mode` must be `reject`, the only implemented
+strict-mode behaviour. `limits.items`, `limits.parts_per_item`, `limits.tools`,
+`limits.schema_bytes` and `limits.json_depth` bound each new v1 Generate request
+before it creates any durable record; an operation admitted earlier keeps
+replaying its saved result. `server.finalization_timeout` bounds each detached
+write that records a provider result.
+
 `temporal.worker.max_concurrent_activities` bounds in-flight Activities and
 therefore the worker's memory. One Activity on a large-context turn holds about
 20–28 times the materialized transcript in live heap, roughly 96 MiB at the
@@ -559,6 +572,16 @@ in-process admission and continuation implementations plus a bounded,
 content-addressed process-local blob map. Provider adapters are still built
 normally, so provider credentials and egress remain subject to the same
 validation and authorization rules as durable mode.
+
+Memory mode composes no v1 runtime, so it cannot run the public v1 API: the
+worker registers none of the v1 workflows (`llm.generate.workflow.v1` and the
+others) and none of the v1 Activities. It registers only the legacy engine
+Activity, under its own name `llm.generate.legacy.v1`; `llm.generate.v1` always
+means the v1 contract. Its input is the `activity.GenerateRequest` envelope
+`{"api_version": "llm.temporal/v1", "request": <llm.Request>}` (a bare
+`llm.Request` is rejected), and it returns the `activity.GenerateResponse`
+envelope `{"api_version": "llm.temporal/v1", "response": <llm.Response>, "metadata": {...}}`. Trying
+the v1 API locally requires `state.kind: durable` with cloud storage and Redis.
 
 Operations, checkpoints, budget/throttle state, and blobs are process local;
 restart loses everything and provider-pending jobs cannot be recovered after

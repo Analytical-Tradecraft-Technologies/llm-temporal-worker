@@ -11,7 +11,7 @@ let cache = match Cache_policy.any_age ~variant:1l () with Ok value -> value | E
 let request = Generate.make ~operation_key:(Operation_key.of_string "generate-1")
     ~context ~model:(Model_selector.of_string "test") ~cache ~input:[] ()
 let response : generate_response = {
-  api_version = V1_codec.generate_api_version; operation_key = request.operation_key;
+  api_version = V1_codec.generate_api_version; service = None; operation_key = request.operation_key;
   operation_id = Operation_id.of_string "internal-id"; status = Completed; output = [];
   checkpoint = { handle = checkpoint "cp-result"; parent = None; kind = Generation_checkpoint; depth = 0l };
   cache = { disposition = Cache_miss_populated; variant = 1l; entry_age_seconds = None };

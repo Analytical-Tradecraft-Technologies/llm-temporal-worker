@@ -24,7 +24,7 @@ let message text = Message { actor = Human; content = [ Text text ] }
 let checkpoint suffix = Checkpoint.of_string_exn ("consumer-smoke-checkpoint-" ^ suffix)
 
 let generation_response (request : generate_request) =
-  { api_version = V1_codec.generate_api_version;
+  { api_version = V1_codec.generate_api_version; service = None;
     operation_key = request.operation_key;
     operation_id = Operation_id.of_string (Operation_key.to_string request.operation_key ^ "-id");
     status = Completed;

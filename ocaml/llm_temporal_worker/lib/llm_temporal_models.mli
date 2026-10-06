@@ -211,6 +211,7 @@ type generate_response = {
   checkpoint : checkpoint_metadata;
   cache : cache_disposition;
   route : route option;
+  service : service option;
   usage : usage option;
   cost : settled_cost;
   diagnostics : diagnostic list;

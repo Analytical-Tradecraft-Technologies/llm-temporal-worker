@@ -59,7 +59,7 @@ func TestWorkerRegisteredWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testi
 		env := suite.NewTestWorkflowEnvironment()
 		_, err := app.NewWorker(app.WorkerOptions{
 			TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1, GracefulStopTimeout: time.Second,
-			Activities: &domainactivity.Activities{PayloadLimits: limits},
+			Activities: &domainactivity.Activities{PayloadLimits: limits, V1Runtime: registrationRuntime{}},
 			Factory: func(client.Client, string, worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
 				return &fakeWorker{}, &workflowEnvironmentRegistry{env: env}, nil
 			},
