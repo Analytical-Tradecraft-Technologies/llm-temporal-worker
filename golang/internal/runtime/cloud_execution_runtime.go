@@ -44,7 +44,15 @@ type CloudExecutionOptions struct {
 	CheckpointTTL       time.Duration
 	BudgetGeneration    durable.GenerationID
 	MaxAttempts         int
+	// ReloadGrace bounds how long unpaid work prepared under another
+	// configuration waits for a compatible worker after this runtime starts.
+	// Zero means 15 minutes.
+	ReloadGrace time.Duration
 }
+
+// defaultCloudReloadGrace covers a rolling deployment: until it elapses a
+// worker on the previous configuration may still serve the request.
+const defaultCloudReloadGrace = 15 * time.Minute
 
 // CloudExecutionRuntime implements the bounded activity state machine. All
 // durable access follows authorization, including terminal result replay. A
@@ -57,6 +65,8 @@ type CloudExecutionRuntime struct {
 	execution    *CloudProviderExecution
 	publication  *CheckpointPublication
 	options      CloudExecutionOptions
+	// startedAt is when this runtime's configuration began serving.
+	startedAt time.Time
 }
 
 var _ activity.ExecutionRuntime = (*CloudExecutionRuntime)(nil)
@@ -73,6 +83,12 @@ func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, opt
 	}
 	if options.FinalizationTimeout == 0 {
 		options.FinalizationTimeout = defaultCloudFinalizationTimeout
+	}
+	if options.ReloadGrace < 0 {
+		return nil, executionError(provider.CodeConfiguration)
+	}
+	if options.ReloadGrace == 0 {
+		options.ReloadGrace = defaultCloudReloadGrace
 	}
 	store, ok := c.Requests.(cloudExecutionStore)
 	if !ok || isNilCapability(store) || c.Finalizer == nil || isNilCapability(c.Responses) || isNilCapability(c.ResponseFills) || options.CheckpointTTL <= 0 || options.BudgetGeneration.Validate() != nil {
@@ -92,7 +108,7 @@ func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, opt
 	if err != nil {
 		return nil, err
 	}
-	return &CloudExecutionRuntime{capabilities: c, store: store, preparation: preparation, execution: execution, publication: publication, options: options}, nil
+	return &CloudExecutionRuntime{capabilities: c, store: store, preparation: preparation, execution: execution, publication: publication, options: options, startedAt: c.Clock().UTC()}, nil
 }
 
 type cloudStep int
@@ -169,6 +185,14 @@ func (r *CloudExecutionRuntime) advance(ctx context.Context, p PreparedCloudRequ
 
 var errCloudAttemptAdvanced = errors.New("cloud request attempt advanced")
 
+// cloudConfigurationRetired reports unpaid work prepared under a
+// configuration that no worker serves any more. Retrying the same operation key
+// cannot help; the caller submits the request again under a new key.
+func cloudConfigurationRetired() error {
+	return provider.NewError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever,
+		"request was prepared under a configuration this worker no longer serves; submit it again with a new operation key")
+}
+
 func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCloudRequest, step cloudStep) (llm.ExecutionResultV1, error) {
 	if done, found, err := r.replay(ctx, p); found || err != nil {
 		return done, err
@@ -194,8 +218,20 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		if err == nil {
 			saved, loadErr := r.store.LoadProviderExecution(ctx, root.Scope, attempt.ID)
 			replaces := step == cloudAcquire && loadErr == nil && saved.Execution.Stage == cloudstate.ExecutionUnknown && !r.now().Before(saved.Execution.RecoverAfter)
-			if loadErr == nil && !replaces {
+			// A retryable failure asks acquisition for a new attempt, which
+			// needs a compatible worker. Returning the saved failure again
+			// would loop the workflow on it (#1162).
+			retries := step == cloudAcquire && loadErr == nil && saved.Execution.Stage == cloudstate.ExecutionFailed && saved.Execution.Failure.Retryable
+			if loadErr == nil && !replaces && !retries {
 				return r.resumeAttempt(ctx, p, attempt, saved, step)
+			}
+			if retries {
+				// Settle the failure and release its cache ownership; that is
+				// accounting only. The attempt limit belongs to the request's
+				// own configuration, so exhaustion waits for a compatible worker.
+				if _, err := r.resumeAttempt(ctx, p, attempt, saved, step); err != nil {
+					return llm.ExecutionResultV1{}, err
+				}
 			}
 			if loadErr == nil && saved.Execution.Stage == cloudstate.ExecutionUnknown {
 				// Settling an expired unknown attempt is accounting only: it
@@ -211,6 +247,15 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			}
 		} else if !errors.Is(err, cloudstate.ErrRequestAttemptMissing) {
 			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+		}
+		// Nothing unfinished is paid. A request prepared before this worker's
+		// configuration began serving belongs to an older configuration: wait
+		// while a worker on it may still exist, then fail fast instead of
+		// waiting forever (#1161). A request prepared later may belong to a
+		// newer configuration rolling out, so an older worker always waits.
+		// The request is not changed, so restoring its configuration resumes it.
+		if p.Preparation.PreparedAt.Before(r.startedAt) && r.now().Sub(r.startedAt) >= r.options.ReloadGrace {
+			return llm.ExecutionResultV1{}, cloudConfigurationRetired()
 		}
 		return llm.ExecutionResultV1{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
 	}
