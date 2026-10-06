@@ -420,9 +420,7 @@ func TestWorkerPauseStopsPollingAndResumeBuildsFreshController(t *testing.T) {
 	if health.Ready() || !controllers[0].stopped.Load() || temporalWorker.Started() {
 		t.Fatal("pause did not turn readiness off and stop polling")
 	}
-	if err := temporalWorker.Resume(); err != nil {
-		t.Fatal(err)
-	}
+	resumeWorkerAfterDrain(t, temporalWorker, "paused controller drain")
 	if len(controllers) != 2 || !controllers[1].started.Load() || !health.Ready() || !temporalWorker.Started() {
 		t.Fatalf("resume controllers=%d started=%v ready=%v", len(controllers), len(controllers) == 2 && controllers[1].started.Load(), health.Ready())
 	}
