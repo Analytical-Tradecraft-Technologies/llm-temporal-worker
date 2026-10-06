@@ -1,5 +1,20 @@
 # Unified API
 
+> **Scope of this chapter.** The request and response shapes below are the
+> worker's normalized semantic model (`llm.Request` and `llm.Response`). Inside
+> the worker they are what routing, admission and the provider adapters see.
+> On the wire, only the legacy engine Activity (`llm.generate.legacy.v1`), which
+> memory mode alone registers, accepts and returns them. The production
+> worker's public contract is the v1 workflows (`llm.generate.workflow.v1` and
+> `llm.compact.workflow.v1`) with `GenerateRequestV1`/`GenerateResponseV1`: a
+> parent checkpoint handle, an `append`, a `settings_patch` and an exact USD
+> `cost`, defined in
+> [conversation checkpoints and compaction](conversation-checkpoints-and-compaction.md).
+> Several fields shown here are not part of that public contract: the v1
+> workflows reject caller `context.tags`, take model, sampling, reasoning and
+> output settings through `settings_patch`, and never emit `reserved_cost_usd`
+> or a continuation `pinned` flag.
+
 ## Contract goals
 
 The public contract represents meaning, not one provider's JSON. It preserves
@@ -342,14 +357,21 @@ Status is one of `completed`, `tool_calls`, `refused`, `length`, or
 
 ## One-shot Generate boundary
 
-`llm.Engine.Generate` is the v1 public inference boundary. It accepts one
-normalized request and returns one final normalized response after admission,
-dispatch certainty, continuation handling, and ledger finalization.
+The production worker's public inference boundary is the v1 Generate workflow
+(`llm.generate.workflow.v1`). It runs the internal prepare, acquire, generate,
+poll and complete Activities and returns one final `GenerateResponseV1`. See
+[internal workflows](../reference/internal-workflows.md) and
+[the Activity runtime](../reference/activity-runtime.md).
 
-No streaming or token-event API is supported in v1. The Temporal Activity
-depends only on `llm.Engine`, invokes `Generate` once, and returns the final
-normalized response. Raw deltas, tool arguments, and opaque provider state
-never enter workflow history as heartbeat details.
+`llm.Engine.Generate` is the legacy one-shot boundary. Only memory mode
+registers it, as the `llm.generate.legacy.v1` Activity. It accepts one
+normalized request and returns one final normalized response after admission,
+dispatch certainty, continuation handling, and ledger finalization. It lacks
+several cloud-path behaviours and is not a production path.
+
+No streaming or token-event API is supported in v1. Raw deltas, tool
+arguments, and opaque provider state never enter workflow history as heartbeat
+details.
 
 Some packages retain decoder code for fragmented provider payloads. That code
 is legacy parser-regression coverage, not a supported v1 dispatch path; it must
