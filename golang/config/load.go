@@ -45,7 +45,9 @@ func Load(data []byte) (Config, error) {
 		config.BudgetsJSON = "" // The effective parsed policies participate in snapshot hashing.
 	}
 	applyDefaults(&config)
-	applyEnvironmentOverrides(&config)
+	if err := applyEnvironmentOverrides(&config); err != nil {
+		return Config{}, err
+	}
 	canonicalize(&config)
 	if err := config.Validate(); err != nil {
 		return Config{}, err
@@ -198,13 +200,28 @@ func applyDefaults(config *Config) {
 // validation and canonical effective-config rendering. A present-but-empty
 // override is intentionally retained so validation rejects it instead of
 // silently falling back to the default namespace.
-func applyEnvironmentOverrides(config *Config) {
+func applyEnvironmentOverrides(config *Config) error {
 	if config == nil {
-		return
+		return nil
 	}
 	if value, ok := os.LookupEnv("LLMTW_REDIS_KEY_PREFIX"); ok {
 		config.State.Redis.KeyPrefix = value
 	}
+	if value, ok := os.LookupEnv("TEMPORAL_ADDRESS"); ok {
+		config.Temporal.Target = value
+	}
+	if value, ok := os.LookupEnv("TEMPORAL_NAMESPACE"); ok {
+		config.Temporal.Namespace = value
+	}
+	name, hasName := os.LookupEnv("TEMPORAL_DEPLOYMENT_NAME")
+	build, hasBuild := os.LookupEnv("TEMPORAL_WORKER_BUILD_ID")
+	if hasName != hasBuild {
+		return fmt.Errorf("TEMPORAL_DEPLOYMENT_NAME and TEMPORAL_WORKER_BUILD_ID must be supplied together")
+	}
+	if hasName {
+		config.Temporal.Worker.Versioning = WorkerVersioningConfig{Enabled: true, DeploymentName: name, BuildID: build}
+	}
+	return nil
 }
 
 // DecodeYAML is useful to callers that need to inspect the decoded value

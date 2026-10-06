@@ -94,6 +94,7 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 		{name: "temporal.worker.max_concurrent_activity_task_polls", changed: before.Temporal.Worker.MaxConcurrentActivityTaskPolls != after.Temporal.Worker.MaxConcurrentActivityTaskPolls},
 		{name: "temporal.worker.graceful_stop_timeout", changed: before.Temporal.Worker.GracefulStopTimeout != after.Temporal.Worker.GracefulStopTimeout},
 		{name: "temporal.worker.heartbeat_keepalive_interval", changed: before.Temporal.Worker.HeartbeatKeepaliveInterval != after.Temporal.Worker.HeartbeatKeepaliveInterval},
+		{name: "temporal.worker.versioning", changed: before.Temporal.Worker.Versioning != after.Temporal.Worker.Versioning},
 		{name: "telemetry.logs.format", changed: before.Telemetry.Logs.Format != after.Telemetry.Logs.Format},
 		{name: "telemetry.logs.level", changed: before.Telemetry.Logs.Level != after.Telemetry.Logs.Level},
 		{name: "telemetry.metrics.enabled", changed: before.Telemetry.Metrics.Enabled != after.Telemetry.Metrics.Enabled},

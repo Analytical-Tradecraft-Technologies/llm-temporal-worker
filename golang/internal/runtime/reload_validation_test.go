@@ -45,6 +45,9 @@ func TestRuntimeReplacementValidatorRejectsProcessLifetimeChanges(t *testing.T) 
 		}},
 		{name: "Temporal TLS server name", field: "temporal.tls.server_name", mutate: func(value *config.Config) { value.Temporal.TLS.ServerName = "temporal-2.example.internal" }},
 		{name: "Temporal TLS CA file", field: "temporal.tls.ca_file", mutate: func(value *config.Config) { value.Temporal.TLS.CAFile = "/var/run/ca/temporal-2.pem" }},
+		{name: "Temporal versioning", field: "temporal.worker.versioning", mutate: func(value *config.Config) {
+			value.Temporal.Worker.Versioning = config.WorkerVersioningConfig{Enabled: true, DeploymentName: "worker", BuildID: "v2"}
+		}},
 		{name: "Temporal activity concurrency", field: "temporal.worker.max_concurrent_activities", mutate: func(value *config.Config) { value.Temporal.Worker.MaxConcurrentActivities++ }},
 		{name: "Temporal poll concurrency", field: "temporal.worker.max_concurrent_activity_task_polls", mutate: func(value *config.Config) { value.Temporal.Worker.MaxConcurrentActivityTaskPolls++ }},
 		{name: "Temporal graceful stop", field: "temporal.worker.graceful_stop_timeout", mutate: func(value *config.Config) { value.Temporal.Worker.GracefulStopTimeout += config.Duration(time.Second) }},

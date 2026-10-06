@@ -199,6 +199,9 @@ func (server ServerConfig) validate() error {
 }
 
 func (temporal TemporalConfig) validate(environment string) error {
+	if err := temporal.Worker.Versioning.Validate(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(temporal.Target) == "" || strings.ContainsAny(temporal.Target, "\r\n") {
 		return fmt.Errorf("temporal.target must be non-empty")
 	}
@@ -907,6 +910,26 @@ func validateAddress(value, path string) error {
 	}
 	if number, err := strconv.Atoi(port); err != nil || number < 0 || number > 65535 {
 		return fmt.Errorf("%s port must be between 0 and 65535", path)
+	}
+	return nil
+}
+
+// Validate rejects incomplete version identities rather than silently polling
+// the unversioned queue when a deployment controller is misconfigured.
+func (versioning WorkerVersioningConfig) Validate() error {
+	if !versioning.Enabled {
+		if versioning.DeploymentName != "" || versioning.BuildID != "" {
+			return fmt.Errorf("temporal.worker.versioning identities require enabled: true")
+		}
+		return nil
+	}
+	for name, value := range map[string]string{"deployment_name": versioning.DeploymentName, "build_id": versioning.BuildID} {
+		if err := validateIdentifier(value, "temporal.worker.versioning."+name); err != nil {
+			return err
+		}
+		if strings.ContainsAny(value, "\x00") {
+			return fmt.Errorf("temporal.worker.versioning.%s contains a control character", name)
+		}
 	}
 	return nil
 }
