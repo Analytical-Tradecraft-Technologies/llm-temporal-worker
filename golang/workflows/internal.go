@@ -155,7 +155,7 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (llm.Exe
 			return result, nil
 		case llm.ExecutionFailed:
 			if !result.Retryable {
-				return llm.ExecutionResultV1{}, temporal.NewNonRetryableApplicationError("model request failed", result.FailureCode, nil)
+				return llm.ExecutionResultV1{}, failedExecutionError(result)
 			}
 			// Known retryable failures, like uncertain paid outcomes, require explicit
 			// acquisition. Never let an activity retry silently buy a replacement.
@@ -264,4 +264,19 @@ func invalidInput() error {
 }
 func invalidState() error {
 	return temporal.NewNonRetryableApplicationError("invalid request execution state", activity.ErrorTypeStateCorrupt, nil)
+}
+
+// ExecutionFailureDetails is the detail payload of a failed public workflow:
+// the provider failure's stable error code and dispatch certainty, never the
+// provider's message. Results saved before these fields existed carry none.
+type ExecutionFailureDetails struct {
+	ErrorCode string `json:"error_code,omitempty"`
+	Dispatch  string `json:"dispatch,omitempty"`
+}
+
+func failedExecutionError(result llm.ExecutionResultV1) error {
+	if result.ErrorCode == "" && result.Dispatch == "" {
+		return temporal.NewNonRetryableApplicationError("model request failed", result.FailureCode, nil)
+	}
+	return temporal.NewNonRetryableApplicationError("model request failed", result.FailureCode, nil, ExecutionFailureDetails{ErrorCode: result.ErrorCode, Dispatch: result.Dispatch})
 }
