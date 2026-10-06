@@ -103,7 +103,7 @@ func TestWorkflowMasterSplitVerificationJobsGatePublication(t *testing.T) {
 		{job: "verify-static", command: "make live-contract-verify"},
 		{job: "verify-static", command: "make redis-benchmark-compile"},
 		{job: "verify-static", command: "go build ./..."},
-		{job: "verify-race", command: "go test -race ./... -timeout 20m"},
+		{job: "verify-race", command: "go test -race ./... -timeout 30m"},
 		{job: "verify-race-repeat", command: "go test -race -count=5 -timeout 30m "},
 		{job: "verify-cloud-workflow", command: "make cloud-workflow-integration"},
 		{job: "verify-redis", command: "make redis-integration"},
