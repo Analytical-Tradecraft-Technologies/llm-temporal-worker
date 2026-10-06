@@ -200,7 +200,18 @@
         "max_concurrent_activities": { "type": "integer", "minimum": 1 },
         "max_concurrent_activity_task_polls": { "type": "integer", "minimum": 1 },
         "graceful_stop_timeout": { "$ref": "#/$defs/duration" },
-        "heartbeat_keepalive_interval": { "$ref": "#/$defs/duration" }
+        "heartbeat_keepalive_interval": { "$ref": "#/$defs/duration" },
+        "versioning": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "deployment_name": {"type": "string", "minLength": 1},
+            "build_id": {"type": "string", "minLength": 1}
+          },
+          "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+          "then": {"required": ["deployment_name", "build_id"]},
+          "else": {"not": {"anyOf": [{"required": ["deployment_name"]}, {"required": ["build_id"]}]}}
+        }
       }
     },
     "state": {

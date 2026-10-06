@@ -131,11 +131,20 @@ type TLSConfig struct {
 	KeyFile  string `yaml:"key_file" json:"key_file,omitempty"`
 }
 
+// WorkerVersioningConfig opts into deployment-based routing. With no versioning,
+// workers retain their existing unversioned behavior.
+type WorkerVersioningConfig struct {
+	Enabled        bool   `yaml:"enabled" json:"enabled"`
+	DeploymentName string `yaml:"deployment_name" json:"deployment_name,omitempty"`
+	BuildID        string `yaml:"build_id" json:"build_id,omitempty"`
+}
+
 type TemporalWorkerConfig struct {
-	MaxConcurrentActivities        int      `yaml:"max_concurrent_activities" json:"max_concurrent_activities"`
-	MaxConcurrentActivityTaskPolls int      `yaml:"max_concurrent_activity_task_polls" json:"max_concurrent_activity_task_polls"`
-	GracefulStopTimeout            Duration `yaml:"graceful_stop_timeout" json:"graceful_stop_timeout"`
-	HeartbeatKeepaliveInterval     Duration `yaml:"heartbeat_keepalive_interval" json:"heartbeat_keepalive_interval"`
+	Versioning                     WorkerVersioningConfig `yaml:"versioning" json:"versioning"`
+	MaxConcurrentActivities        int                    `yaml:"max_concurrent_activities" json:"max_concurrent_activities"`
+	MaxConcurrentActivityTaskPolls int                    `yaml:"max_concurrent_activity_task_polls" json:"max_concurrent_activity_task_polls"`
+	GracefulStopTimeout            Duration               `yaml:"graceful_stop_timeout" json:"graceful_stop_timeout"`
+	HeartbeatKeepaliveInterval     Duration               `yaml:"heartbeat_keepalive_interval" json:"heartbeat_keepalive_interval"`
 }
 
 type StateConfig struct {

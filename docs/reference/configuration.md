@@ -1324,3 +1324,27 @@ but its response or the durable acknowledgement is lost, retry may produce a
 duplicate in Langfuse v4; this is best-effort telemetry, not exactly-once delivery.
 The existing operational telemetry sink retains its content-free policy. Legacy
 activity-only and in-memory development runtimes do not export operation traces.
+
+## Optional Temporal worker versioning
+
+Unversioned polling remains the default. To use deployment-based worker versioning,
+set `temporal.worker.versioning.enabled: true`, `deployment_name`, and `build_id`.
+The worker uses the Go SDK's `Pinned` default for all registered public and
+internal workflows. Existing executions stay on their original version; new
+executions use the version selected by Temporal's routing configuration. Provision
+routing with Temporal's worker deployment APIs or the Temporal Worker Controller.
+Changing the version identity requires restarting the process; hot reload rejects it.
+
+With a `temporal.io/v1alpha1` `WorkerDeployment`, the controller supplies
+`TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_DEPLOYMENT_NAME`, and
+`TEMPORAL_WORKER_BUILD_ID` at runtime. Address and namespace override YAML. Both
+version identity variables must be present together and non-empty; they enable
+versioning and override YAML identity. An incomplete pair fails startup instead
+of falling back to unversioned polling. Do not bake these controller-owned values
+into the Docker image: the controller derives the version from the pod template,
+including the image and configuration. CI image tags/digests identify the code.
+
+Versioning does not change the configured graceful shutdown deadline. Keep old
+worker versions available until Temporal reports them drained, then stop them
+within that deadline. Drain existing unversioned workflows before retiring an
+unversioned worker; enabling versioning does not migrate those executions.

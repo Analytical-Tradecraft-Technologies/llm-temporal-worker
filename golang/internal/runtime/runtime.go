@@ -293,6 +293,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	activities := composeRuntimeActivities(configuration, dynamic, metrics, tracer, workerV1Runtime, &snapshotQueryService{application: application, fallback: workerV1Runtime})
 	activities.Logger = logger
 	worker, err := app.NewWorker(app.WorkerOptions{
+		Versioning:                     configuration.Temporal.Worker.Versioning,
 		Client:                         temporalClient,
 		TaskQueue:                      configuration.Temporal.TaskQueue,
 		Identity:                       identity,

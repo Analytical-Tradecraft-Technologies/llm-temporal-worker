@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/activity"
+	"github.com/mfow/llm-temporal-worker/golang/config"
 	"github.com/mfow/llm-temporal-worker/golang/internal/httpserver"
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/workflows"
 	"go.temporal.io/sdk/client"
 	sdkworker "go.temporal.io/sdk/worker"
+	sdkworkflow "go.temporal.io/sdk/workflow"
 )
 
 var (
@@ -38,6 +40,7 @@ type WorkerRegistry interface {
 type WorkerFactory func(client.Client, string, sdkworker.Options) (WorkerController, WorkerRegistry, error)
 
 type WorkerOptions struct {
+	Versioning                     config.WorkerVersioningConfig
 	Client                         client.Client
 	TaskQueue                      string
 	Identity                       string
@@ -121,6 +124,9 @@ type TemporalWorker struct {
 }
 
 func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
+	if err := options.Versioning.Validate(); err != nil {
+		return nil, err
+	}
 	if options.TaskQueue == "" {
 		return nil, fmt.Errorf("Temporal task queue is required")
 	}
@@ -148,10 +154,19 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 	if options.Factory == nil {
 		options.Factory = defaultWorkerFactory
 	}
+	var deployment sdkworker.DeploymentOptions
+	if options.Versioning.Enabled {
+		deployment = sdkworker.DeploymentOptions{
+			UseVersioning:             true,
+			Version:                   sdkworker.WorkerDeploymentVersion{DeploymentName: options.Versioning.DeploymentName, BuildID: options.Versioning.BuildID},
+			DefaultVersioningBehavior: sdkworkflow.VersioningBehaviorPinned,
+		}
+	}
 	build := func() (*boundController, error) {
 		activityContext, cancelActivities := context.WithCancelCause(context.Background())
 		controller, registry, err := options.Factory(options.Client, options.TaskQueue, sdkworker.Options{
 			Identity:                           options.Identity,
+			DeploymentOptions:                  deployment,
 			MaxConcurrentActivityExecutionSize: options.MaxConcurrentActivities,
 			MaxConcurrentActivityTaskPollers:   options.MaxConcurrentActivityTaskPolls,
 			WorkerStopTimeout:                  options.PauseDrainTimeout,
