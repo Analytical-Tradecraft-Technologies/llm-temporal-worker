@@ -57,6 +57,26 @@ func TestOpenUsesParsedProviderConfigAndStoreAliases(t *testing.T) {
 	}
 }
 
+func TestOpenParentSnapshotStorage(t *testing.T) {
+	_, table, blobs, _ := fixture(t)
+	for storage, want := range map[string]bool{"": false, "inline": false, "blob": true} {
+		config := Config{Provider: map[string]any{"type": "aws"}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1", ParentSnapshotStorage: storage}
+		r, err := open(context.Background(), config, bytes.Repeat([]byte{7}, 32), func(context.Context, map[string]any) (provider.StorageProvider, error) {
+			return &namedProvider{table: table, blobs: blobs}, nil
+		})
+		if err != nil || r.parentSnapshotBlob != want {
+			t.Fatalf("%q: blob=%v err=%v", storage, r != nil && r.parentSnapshotBlob, err)
+		}
+	}
+	config := Config{Provider: map[string]any{"type": "aws"}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1", ParentSnapshotStorage: "sideways"}
+	if _, err := open(context.Background(), config, bytes.Repeat([]byte{7}, 32), func(context.Context, map[string]any) (provider.StorageProvider, error) {
+		t.Fatal("opened a provider for an invalid setting")
+		return nil, nil
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid setting: %v", err)
+	}
+}
+
 func TestOpenAndConstructorRejectInvalidInputs(t *testing.T) {
 	_, table, blobs, _ := fixture(t)
 	base := Options{Table: table, Blobs: blobs, Namespace: "requests-v1", Secret: bytes.Repeat([]byte{7}, 32)}

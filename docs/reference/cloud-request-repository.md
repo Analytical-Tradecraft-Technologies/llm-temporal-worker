@@ -54,6 +54,15 @@ blob store and cloud request storage. Missing capabilities or a failed cloud
 open reject the snapshot and drain its clients. There is no SQL fallback or
 SQL data migration.
 
+`parent_snapshot_storage` is optional: `inline` (the default) or `blob`. It
+selects whether new request preparations embed the parent snapshot in the
+request record or store it as a separate referenced blob. Every current build
+reads both forms. Enable `blob` only after every worker runs such a build, and
+do not roll back to an older build once any reference has been written. See
+[durable preparation](cloud-request-preparation.md#durable-preparation-and-recovery).
+The default is omitted from the configuration digest, so setting `inline`
+explicitly does not change `config_version`. The setting may change on reload.
+
 ### Optional multi-region storage
 
 The AWS provider is pinned to cloud-storage commit

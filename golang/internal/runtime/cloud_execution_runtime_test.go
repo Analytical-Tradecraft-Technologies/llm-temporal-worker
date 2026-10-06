@@ -57,7 +57,7 @@ func boundedCloud(t testing.TB, async bool, configure ...func(*budgetPlanningFix
 	blobs := &executionMemoryBlobs{values: map[blob.BlobKey][]byte{}}
 	f.table, f.blobs = table, blobs
 	var err error
-	f.repository, err = cloudstate.NewRepository(cloudstate.Options{Table: table, Blobs: blobs, Namespace: "runtime-test", Secret: bytes.Repeat([]byte{7}, 32)})
+	f.repository, err = cloudstate.NewRepository(cloudstate.Options{Table: table, Blobs: blobs, Namespace: "runtime-test", Secret: bytes.Repeat([]byte{7}, 32), ParentSnapshotBlob: b.parentSnapshotBlob})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1098,7 +1098,7 @@ func TestEndpointAccountDigestIgnoresNonAccountSettings(t *testing.T) {
 // preparation from the parent snapshot its load already validated (#1112)
 // gives exactly what validating and decoding it again gives.
 func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
-	f := boundedCloud(t, false)
+	f := boundedCloud(t, false, withParentSnapshotBlob)
 	parent := f.finish(t)
 	handle := parent.Generate.Checkpoint.Handle
 	child := llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
@@ -1141,62 +1141,111 @@ func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
 	}
 }
 
+// TestCloudExecutionRuntimeTurnParentSnapshotStorage runs a whole child turn
+// with each parent-snapshot storage setting (#1112): the default stores the
+// parent inline, blob stores a reference, and both complete.
+func TestCloudExecutionRuntimeTurnParentSnapshotStorage(t *testing.T) {
+	for _, blobStorage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("blob=%t", blobStorage), func(t *testing.T) {
+			var options []func(*budgetPlanningFixture)
+			if blobStorage {
+				options = append(options, withParentSnapshotBlob)
+			}
+			f := boundedCloud(t, false, options...)
+			parent := f.finish(t)
+			handle := parent.Generate.Checkpoint.Handle
+			child := llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+			ctx := context.Background()
+			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
+			boundedState(t, v, err, llm.ExecutionBudgetRequired)
+			record, err := f.repository.Read(ctx, cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			inline, referenced := bytes.Contains(record.Progress, []byte(`"parent_snapshot"`)), bytes.Contains(record.Progress, []byte(`"parent_snapshot_ref"`))
+			if inline == blobStorage || referenced != blobStorage {
+				t.Fatalf("inline=%t referenced=%t with blob storage %t", inline, referenced, blobStorage)
+			}
+			f.now = f.now.Add(time.Second)
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
+			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			boundedState(t, v, err, llm.ExecutionAcquired)
+			v, err = f.runtime.GenerateStepV1(ctx, child)
+			boundedState(t, v, err, llm.ExecutionProviderCompleted)
+			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+			boundedState(t, v, err, llm.ExecutionCompleted)
+		})
+	}
+}
+
 // BenchmarkCloudExecutionRuntimeTurnLargeParent measures each Activity step of
 // one Generate turn that appends a 64-byte message to a parent transcript of
 // about 1 MB (issue #1112). Only the named step is timed; the other steps run
 // untimed so every iteration is a complete, fresh turn on the same parent.
+// Each step runs with the default inline parent snapshot and with the
+// referenced blob form (state.requests.parent_snapshot_storage: blob).
 func BenchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B) {
-	for _, step := range []string{"prepare", "acquire", "generate", "complete"} {
-		b.Run(step, func(b *testing.B) {
-			f := boundedCloud(b, false)
-			f.request.Append = nil
-			for i := 0; i < 10; i++ {
-				f.request.Append = append(f.request.Append, preparationMessage(strings.Repeat(fmt.Sprintf("parent %d ", i), 100<<10/9)))
-			}
-			parent := f.finish(b)
-			if parent.Generate == nil {
-				b.Fatal("missing parent")
-			}
-			handle := parent.Generate.Checkpoint.Handle
-			child := llm.GenerateRequestV1{Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage(strings.Repeat("x", 64))}}
-			ctx := context.Background()
-			timed := func(name string, run func() (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
-				if name != step {
-					return run()
-				}
-				b.StartTimer()
-				defer b.StopTimer()
+	for _, storage := range []string{"inline", "blob"} {
+		for _, step := range []string{"prepare", "acquire", "generate", "complete"} {
+			benchmarkCloudExecutionRuntimeTurnLargeParent(b, storage, step)
+		}
+	}
+}
+
+func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step string) {
+	b.Run(storage+"-"+step, func(b *testing.B) {
+		var options []func(*budgetPlanningFixture)
+		if storage == "blob" {
+			options = append(options, withParentSnapshotBlob)
+		}
+		f := boundedCloud(b, false, options...)
+		f.request.Append = nil
+		for i := 0; i < 10; i++ {
+			f.request.Append = append(f.request.Append, preparationMessage(strings.Repeat(fmt.Sprintf("parent %d ", i), 100<<10/9)))
+		}
+		parent := f.finish(b)
+		if parent.Generate == nil {
+			b.Fatal("missing parent")
+		}
+		handle := parent.Generate.Checkpoint.Handle
+		child := llm.GenerateRequestV1{Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage(strings.Repeat("x", 64))}}
+		ctx := context.Background()
+		timed := func(name string, run func() (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
+			if name != step {
 				return run()
 			}
-			b.ReportAllocs()
-			b.StopTimer()
-			b.ResetTimer()
-			start := readExecutionStorageCounts(f.table, f.blobs)
-			for i := 0; i < b.N; i++ {
-				f.now = f.now.Add(time.Minute)
-				child.OperationKey = fmt.Sprintf("bench-%d", i)
-				v, err := timed("prepare", func() (llm.ExecutionResultV1, error) {
-					return f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
-				})
-				boundedState(b, v, err, llm.ExecutionBudgetRequired)
-				ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
-				v, err = timed("acquire", func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) })
-				boundedState(b, v, err, llm.ExecutionAcquired)
-				v, err = timed("generate", func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, child) })
-				boundedState(b, v, err, llm.ExecutionProviderCompleted)
-				v, err = timed("complete", func() (llm.ExecutionResultV1, error) { return f.runtime.CompleteExecutionV1(ctx, ref) })
-				boundedState(b, v, err, llm.ExecutionCompleted)
-			}
-			// Storage traffic of a whole turn (all four steps), not only the
-			// timed step: the same in every sub-benchmark.
-			used, n := readExecutionStorageCounts(f.table, f.blobs).minus(start), float64(b.N)
-			b.ReportMetric(float64(used.gets)/n, "kv-get/turn")
-			b.ReportMetric(float64(used.queries)/n, "kv-query/turn")
-			b.ReportMetric(float64(used.writes)/n, "kv-write/turn")
-			b.ReportMetric(float64(used.opens)/n, "blob-get/turn")
-			b.ReportMetric(float64(used.openBytes)/n, "blob-get-B/turn")
-			b.ReportMetric(float64(used.creates)/n, "blob-put/turn")
-			b.ReportMetric(float64(used.createBytes)/n, "blob-put-B/turn")
-		})
-	}
+			b.StartTimer()
+			defer b.StopTimer()
+			return run()
+		}
+		b.ReportAllocs()
+		b.StopTimer()
+		b.ResetTimer()
+		start := readExecutionStorageCounts(f.table, f.blobs)
+		for i := 0; i < b.N; i++ {
+			f.now = f.now.Add(time.Minute)
+			child.OperationKey = fmt.Sprintf("bench-%d", i)
+			v, err := timed("prepare", func() (llm.ExecutionResultV1, error) {
+				return f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
+			})
+			boundedState(b, v, err, llm.ExecutionBudgetRequired)
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
+			v, err = timed("acquire", func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) })
+			boundedState(b, v, err, llm.ExecutionAcquired)
+			v, err = timed("generate", func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, child) })
+			boundedState(b, v, err, llm.ExecutionProviderCompleted)
+			v, err = timed("complete", func() (llm.ExecutionResultV1, error) { return f.runtime.CompleteExecutionV1(ctx, ref) })
+			boundedState(b, v, err, llm.ExecutionCompleted)
+		}
+		// Storage traffic of a whole turn (all four steps), not only the
+		// timed step: the same in every sub-benchmark.
+		used, n := readExecutionStorageCounts(f.table, f.blobs).minus(start), float64(b.N)
+		b.ReportMetric(float64(used.gets)/n, "kv-get/turn")
+		b.ReportMetric(float64(used.queries)/n, "kv-query/turn")
+		b.ReportMetric(float64(used.writes)/n, "kv-write/turn")
+		b.ReportMetric(float64(used.opens)/n, "blob-get/turn")
+		b.ReportMetric(float64(used.openBytes)/n, "blob-get-B/turn")
+		b.ReportMetric(float64(used.creates)/n, "blob-put/turn")
+		b.ReportMetric(float64(used.createBytes)/n, "blob-put-B/turn")
+	})
 }

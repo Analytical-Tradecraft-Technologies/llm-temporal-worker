@@ -63,6 +63,11 @@ func canonicalize(config *Config) {
 		return
 	}
 	config.State.Redis.AdmissionDigest = strings.ToLower(config.State.Redis.AdmissionDigest)
+	// The default parent-snapshot storage is spelled as omitted, so writing it
+	// explicitly leaves the configuration digest unchanged.
+	if config.State.Requests != nil && config.State.Requests.ParentSnapshotStorage == ParentSnapshotStorageInline {
+		config.State.Requests.ParentSnapshotStorage = ""
+	}
 	for name, endpoint := range config.Endpoints {
 		for index, rawHost := range endpoint.OutboundHosts {
 			if host, err := NormalizeOutboundHost(rawHost); err == nil {

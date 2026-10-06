@@ -32,10 +32,11 @@ const MaxExtendableParentBytes = MaxPreparedParentBytes - MaxPreparedParentBytes
 // interface-valued Go structs. All fields are encrypted by the request store.
 //
 // ParentSnapshot is the in-memory form: callers pass and receive the snapshot
-// bytes. The repository stores the snapshot once, as its own immutable
-// encrypted blob, and keeps only a reference to it in the request record, so
-// rewriting progress does not rewrite the transcript (#1112). Preparations
-// saved before that keep the snapshot inline and still load.
+// bytes. By default the repository stores it inline in the request record.
+// With Options.ParentSnapshotBlob it stores the snapshot once, as its own
+// immutable encrypted blob, and keeps only a reference to it in the record,
+// so rewriting progress does not rewrite the transcript (#1112). Loading
+// accepts both forms whatever the option says.
 type RequestPreparation struct {
 	Version         int             `json:"version"`
 	ConfigDigest    [32]byte        `json:"config_digest"`
@@ -158,10 +159,12 @@ func (r *Repository) resolve(ctx context.Context, scope Scope, stored storedRequ
 // It must precede budget planning/acceptance and provider submission. An identical
 // retry after an uncertain write repairs discovery without rematerializing input.
 //
-// A parent snapshot is written to its own encrypted, content-addressed blob,
-// then read back and compared, before the record that references it. The
-// stored reference depends only on the snapshot bytes and scope, so concurrent
-// initializers of one preparation store identical values.
+// With Options.ParentSnapshotBlob, a parent snapshot is written to its own
+// encrypted, content-addressed blob, then read back and compared, before the
+// record that references it. The stored reference depends only on the
+// snapshot bytes and scope, so concurrent initializers of one preparation
+// store identical values. An existing winner in either form that holds the
+// same preparation counts as this one.
 func (r *Repository) SaveRequestPreparation(ctx context.Context, scope Scope, id RequestID, preparation RequestPreparation) error {
 	if err := validContext(ctx); err != nil {
 		return err
@@ -171,14 +174,26 @@ func (r *Repository) SaveRequestPreparation(ctx context.Context, scope Scope, id
 	}
 	preparation.PreparedAt = preparation.PreparedAt.UTC()
 	stored := storedRequestPreparation{RequestPreparation: preparation}
-	snapshot := preparation.ParentSnapshot
-	if len(snapshot) != 0 {
+	var snapshot []byte
+	if r.parentSnapshotBlob && len(preparation.ParentSnapshot) != 0 {
+		snapshot = preparation.ParentSnapshot
 		ref := r.newParentSnapshotRef(scope, snapshot)
 		stored.ParentSnapshot, stored.ParentSnapshotRef = nil, &ref
 	}
 	encoded, err := encodePreparation(stored)
 	if err != nil {
 		return err
+	}
+	// Each form also accepts an identical winner saved in the other form, so
+	// workers with different parent-snapshot storage settings converge.
+	var alternate json.RawMessage
+	if len(preparation.ParentSnapshot) != 0 {
+		other := storedRequestPreparation{RequestPreparation: preparation}
+		if len(snapshot) == 0 {
+			ref := r.newParentSnapshotRef(scope, preparation.ParentSnapshot)
+			other.ParentSnapshot, other.ParentSnapshotRef = nil, &ref
+		}
+		alternate, _ = encodePreparation(other)
 	}
 	written := len(snapshot) == 0
 	for attempt := 0; attempt < 16; attempt++ {
@@ -192,14 +207,7 @@ func (r *Repository) SaveRequestPreparation(ctx context.Context, scope Scope, id
 		}
 		if existing != nil {
 			previous, _ := encodePreparation(*existing)
-			same := bytes.Equal(previous, encoded)
-			if !same && existing.ParentSnapshotRef == nil && len(snapshot) != 0 {
-				// A preparation saved inline before #1112 is the same logical
-				// preparation in its legacy form.
-				legacy, _ := encodePreparation(storedRequestPreparation{RequestPreparation: preparation})
-				same = bytes.Equal(previous, legacy)
-			}
-			if !same {
+			if !bytes.Equal(previous, encoded) && (alternate == nil || !bytes.Equal(previous, alternate)) {
 				return contracts.ErrConflict
 			}
 			return r.repairBudgetPlanIndex(ctx, record)

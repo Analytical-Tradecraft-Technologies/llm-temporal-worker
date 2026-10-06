@@ -16,7 +16,19 @@ type CloudRequestConfig struct {
 	Namespace    string                     `yaml:"namespace" json:"namespace"`
 	// Secret resolves to standard base64 encoding of an independent 32-byte key.
 	Secret SecretRef `yaml:"secret" json:"secret"`
+	// ParentSnapshotStorage selects how new request preparations store their
+	// parent snapshot: inline in the request record (the default) or as a
+	// separate referenced blob (#1112). Every build that has this field reads
+	// both forms. Enable blob only after every worker runs such a build; a
+	// build without it cannot read a referenced preparation. The default is
+	// normalized to empty, so it does not change the configuration digest.
+	ParentSnapshotStorage string `yaml:"parent_snapshot_storage,omitempty" json:"parent_snapshot_storage,omitempty"`
 }
+
+const (
+	ParentSnapshotStorageInline = "inline"
+	ParentSnapshotStorageBlob   = "blob"
+)
 
 // CloudStorageProviderConfig mirrors the portable provider factory's JSON
 // shape, plus worker-owned regional failover settings. Typed fields keep
@@ -62,6 +74,11 @@ func (c CloudRequestConfig) validate() error {
 	}
 	if c.Provider.BlobStores[c.PayloadStore] == "" {
 		return fmt.Errorf("state.requests.payload_store must name a configured blob_stores alias")
+	}
+	switch c.ParentSnapshotStorage {
+	case "", ParentSnapshotStorageInline, ParentSnapshotStorageBlob:
+	default:
+		return fmt.Errorf("state.requests.parent_snapshot_storage must be inline or blob")
 	}
 	if c.Secret.Kind == SecretWorkloadIdentity {
 		return fmt.Errorf("state.requests.secret must be a stable file or environment secret")

@@ -369,7 +369,11 @@ func openRegional(ctx context.Context, c Config, secret []byte, initialize func(
 	if err := blobs.probe(ctx); err != nil {
 		return nil, err
 	}
-	repository, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: c.Namespace, Secret: secret})
+	parentSnapshotBlob, err := c.parentSnapshotBlob()
+	if err != nil {
+		return nil, err
+	}
+	repository, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: c.Namespace, Secret: secret, ParentSnapshotBlob: parentSnapshotBlob})
 	if err != nil {
 		return nil, err
 	}

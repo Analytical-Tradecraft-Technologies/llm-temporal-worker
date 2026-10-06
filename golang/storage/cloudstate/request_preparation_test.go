@@ -249,6 +249,7 @@ func rewritePreparation(t *testing.T, r *Repository, record Record, raw any) Rec
 // encrypted parent blob untouched, and loading resolves it exactly.
 func TestRequestPreparationStoresParentOnceByReference(t *testing.T) {
 	r, table, blobs, record, preparation := preparationFixture(t)
+	r.parentSnapshotBlob = true
 	ctx := context.Background()
 	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
 		t.Fatal(err)
@@ -330,6 +331,7 @@ func TestRequestPreparationLegacyInlineStillLoads(t *testing.T) {
 // references the root's parent blob instead of copying the transcript.
 func TestRequestPreparationAttemptSharesParentReference(t *testing.T) {
 	r, _, _, record, preparation := preparationFixture(t)
+	r.parentSnapshotBlob = true
 	ctx := context.Background()
 	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
 		t.Fatal(err)
@@ -405,6 +407,7 @@ func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
 	for name, corrupt := range cases {
 		t.Run(name, func(t *testing.T) {
 			r, table, blobs, record, preparation := preparationFixture(t)
+			r.parentSnapshotBlob = true
 			ctx := context.Background()
 			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
 				t.Fatal(err)
@@ -421,8 +424,51 @@ func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
 	}
 }
 
+// TestRequestPreparationStorageSettingWritesAndReads: the default writes the
+// parent inline, blob writes a reference, and either repository reads both.
+func TestRequestPreparationStorageSettingWritesAndReads(t *testing.T) {
+	for _, writerBlob := range []bool{false, true} {
+		t.Run(fmt.Sprintf("writer-blob=%t", writerBlob), func(t *testing.T) {
+			r, table, blobs, record, preparation := preparationFixture(t)
+			if r.parentSnapshotBlob {
+				t.Fatal("parent-snapshot blob storage is on by default")
+			}
+			r.parentSnapshotBlob = writerBlob
+			ctx := context.Background()
+			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+				t.Fatal(err)
+			}
+			current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := storedPreparationOf(t, current)
+			if (stored.ParentSnapshotRef != nil) != writerBlob || (len(stored.ParentSnapshot) != 0) == writerBlob {
+				t.Fatalf("stored form: reference=%t inline=%t", stored.ParentSnapshotRef != nil, len(stored.ParentSnapshot) != 0)
+			}
+			for _, readerBlob := range []bool{false, true} {
+				reader := reopen(t, table, blobs)
+				reader.parentSnapshotBlob = readerBlob
+				got, err := reader.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)
+				if err != nil || !bytes.Equal(got.ParentSnapshot, preparation.ParentSnapshot) || !equalExecutionJSON(got, preparation) {
+					t.Fatalf("reader blob=%t: %v", readerBlob, err)
+				}
+				// An identical save under the other setting accepts the winner
+				// and writes nothing.
+				table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("identical save wrote a row"); return nil, nil }
+				blobs.hook = func(blob.BlobKey) (error, error) { t.Error("identical save wrote a blob"); return nil, nil }
+				if err := reader.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+					t.Fatalf("identical save, blob=%t: %v", readerBlob, err)
+				}
+				table.hook, blobs.hook = nil, nil
+			}
+		})
+	}
+}
+
 // TestRequestPreparationIdenticalInitializersConverge: concurrent workers
-// saving the same preparation all succeed, with one event and one parent blob.
+// saving the same preparation, some with each storage setting, all succeed
+// with one event.
 func TestRequestPreparationIdenticalInitializersConverge(t *testing.T) {
 	r, table, blobs, record, preparation := preparationFixture(t)
 	ctx := context.Background()
@@ -430,6 +476,7 @@ func TestRequestPreparationIdenticalInitializersConverge(t *testing.T) {
 	var group sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		client := reopen(t, table, blobs)
+		client.parentSnapshotBlob = i%2 == 0
 		group.Add(1)
 		go func() {
 			defer group.Done()
@@ -443,9 +490,11 @@ func TestRequestPreparationIdenticalInitializersConverge(t *testing.T) {
 	if err != nil || current.Revision != record.Revision+1 {
 		t.Fatalf("revision %d: %v", current.Revision, err)
 	}
-	// One parent blob and one record blob.
-	if len(blobs.values) != before+2 {
-		t.Fatalf("stored %d blobs", len(blobs.values)-before)
+	// A losing writer may leave its unpublished record blob, as any competing
+	// writer can, but no more than one parent blob exists: it is content
+	// addressed. Writers of each form leave at most one record blob each.
+	if n := len(blobs.values) - before; n < 1 || n > 3 {
+		t.Fatalf("stored %d blobs", n)
 	}
 	if got, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); err != nil || !equalExecutionJSON(got, preparation) {
 		t.Fatalf("converged preparation: %v", err)
