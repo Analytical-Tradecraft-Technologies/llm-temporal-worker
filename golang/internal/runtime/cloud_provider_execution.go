@@ -176,11 +176,13 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 		copy.Retry = provider.RetryNever
 		err = &copy
 	}
-	elapsed := time.Since(started)
-	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider, call.transcript, outcome, err, false)
 	if observer.marked {
-		recordCloudProviderAttempt(ctx, call.provider.Call, result.Saved.Execution.Stage, elapsed)
+		// Classify the provider's answer itself: a store outage while saving
+		// it must not count as a provider failure.
+		accepted := err == nil && (outcome.State == provider.ResumableCompleted || outcome.State == provider.ResumablePending)
+		recordCloudProviderAttempt(ctx, call.provider.Call, accepted, time.Since(started))
 	}
+	result, err := executor.completeCall(ctx, call.scope, call.id, saved, call.provider, call.transcript, outcome, err, false)
 	if err != nil && observer.saveErr != nil {
 		return ProviderExecutionResult{}, cloudRuntimeError(observer.saveErr, true)
 	}
@@ -424,7 +426,6 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 	if err != nil {
 		return result, err
 	}
-	recordCloudExecutionOutcome(ctx, planned.Call, saved.Execution.Stage, result.Saved.Execution)
 	return executor.settle(ctx, scope, id, result.Saved)
 }
 
@@ -451,7 +452,13 @@ func (executor *CloudProviderExecution) refusedDispatch(ctx context.Context, sco
 func (executor *CloudProviderExecution) save(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution) (ProviderExecutionResult, error) {
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), executionSaveBudget)
 	defer cancel()
-	return executor.saveWithin(finalCtx, scope, id, saved, next)
+	result, err := executor.saveWithin(finalCtx, scope, id, saved, next)
+	if err == nil {
+		// Every stage transition is saved here, including recovery-only ones,
+		// so this is where outcomes are counted.
+		recordCloudExecutionOutcome(ctx, saved.Plan, saved.Execution.Stage, result.Saved.Execution)
+	}
+	return result, err
 }
 
 // saveWithin is save under a caller-supplied detached context, whose deadline

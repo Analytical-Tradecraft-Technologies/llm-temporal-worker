@@ -36,25 +36,26 @@ func recordCloudBudgetAdmission(ctx context.Context, request durable.ReserveRequ
 }
 
 // recordCloudProviderAttempt counts one provider submission and its latency.
-func recordCloudProviderAttempt(ctx context.Context, call provider.Call, stage cloudstate.ExecutionStage, duration time.Duration) {
+func recordCloudProviderAttempt(ctx context.Context, call provider.Call, accepted bool, duration time.Duration) {
 	outcome := "failure"
-	if stage == cloudstate.ExecutionSucceeded || stage == cloudstate.ExecutionPending {
+	if accepted {
 		outcome = "success"
 	}
 	observability.MetricsFromContext(ctx).RecordProviderAttempt(call.EndpointID, call.Model, string(call.ServiceClass), outcome, duration)
 }
 
-// recordCloudExecutionOutcome counts the transition a provider outcome made:
-// an unresolved (ambiguous) attempt, or a completed response's service class
-// and cost status.
-func recordCloudExecutionOutcome(ctx context.Context, call provider.Call, before cloudstate.ExecutionStage, next cloudstate.ProviderExecution) {
+// recordCloudExecutionOutcome counts the transition a saved provider
+// execution made: an unresolved (ambiguous) attempt, or a completed
+// response's service class and cost status.
+func recordCloudExecutionOutcome(ctx context.Context, plan cloudstate.BudgetPlan, before cloudstate.ExecutionStage, next cloudstate.ProviderExecution) {
 	metrics := observability.MetricsFromContext(ctx)
 	if metrics == nil || next.Stage == before {
 		return
 	}
+	endpoint, model := plan.Route.EndpointID, plan.Route.Model
 	switch next.Stage {
 	case cloudstate.ExecutionUnknown:
-		metrics.RecordAmbiguous(call.EndpointID)
+		metrics.RecordAmbiguous(endpoint)
 	case cloudstate.ExecutionSucceeded:
 		if next.Response == nil {
 			return
@@ -67,15 +68,15 @@ func recordCloudExecutionOutcome(ctx context.Context, call provider.Call, before
 			actualLabel = string(actual)
 		}
 		if actual == "" {
-			actual = call.ServiceClass
+			actual = plan.AttemptedClass
 		}
-		metrics.RecordServiceClass(string(response.Service.Requested), actualLabel, call.EndpointID)
+		metrics.RecordServiceClass(string(response.Service.Requested), actualLabel, endpoint)
 		switch {
 		case response.Cost.Status == llm.CostStatusKnown && response.Cost.ActualCostUSD != nil:
-			metrics.RecordCostStatus(call.EndpointID, call.Model, string(actual), "exact", response.Cost.Method)
-			metrics.RecordExactCost(call.EndpointID, call.Model, string(actual), response.Cost.Method)
+			metrics.RecordCostStatus(endpoint, model, string(actual), "exact", response.Cost.Method)
+			metrics.RecordExactCost(endpoint, model, string(actual), response.Cost.Method)
 		case response.Cost.Status == llm.CostStatusUnknown:
-			metrics.RecordCostStatus(call.EndpointID, call.Model, string(actual), "unknown", "")
+			metrics.RecordCostStatus(endpoint, model, string(actual), "unknown", "")
 		}
 	}
 }

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mfow/llm-temporal-worker/golang/internal/observability"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/llm/provider"
+	"github.com/mfow/llm-temporal-worker/golang/storage/cloudstate"
+	"github.com/mfow/llm-temporal-worker/golang/storage/durable"
 )
 
 func cloudMetricTotal(t *testing.T, metrics *observability.Metrics, name string) float64 {
@@ -65,5 +68,41 @@ func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
 	boundedState(t, v, err, llm.ExecutionPending)
 	if cloudMetricTotal(t, metrics, "llmtw_ambiguous_total") != 1 {
 		t.Fatal("ambiguous dispatch was not recorded")
+	}
+}
+
+// Outcomes are counted on the saved transition, whichever path saved it, so a
+// recovery-only move to unknown counts as ambiguous and a re-save of the same
+// stage counts nothing. A provider attempt is classified by the provider's
+// answer, not by whether saving it succeeded.
+func TestCloudMetricsCountTransitionsAndProviderAnswers(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithMetrics(context.Background(), metrics)
+	plan := cloudstate.BudgetPlan{AttemptedClass: llm.ServiceClassStandard, Route: durable.RoutePlan{EndpointID: "endpoint", Model: "model"}}
+	recordCloudExecutionOutcome(ctx, plan, cloudstate.ExecutionSubmitting, cloudstate.ProviderExecution{Stage: cloudstate.ExecutionUnknown})
+	recordCloudExecutionOutcome(ctx, plan, cloudstate.ExecutionUnknown, cloudstate.ProviderExecution{Stage: cloudstate.ExecutionUnknown})
+	if got := cloudMetricTotal(t, metrics, "llmtw_ambiguous_total"); got != 1 {
+		t.Fatalf("ambiguous = %v, want one count for the recovery transition", got)
+	}
+	call := provider.Call{EndpointID: "endpoint", Model: "model", ServiceClass: llm.ServiceClassStandard}
+	recordCloudProviderAttempt(ctx, call, true, time.Millisecond)
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "llmtw_provider_attempt_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "outcome" && label.GetValue() != "success" {
+					t.Fatalf("accepted provider answer recorded as %q", label.GetValue())
+				}
+			}
+		}
 	}
 }
