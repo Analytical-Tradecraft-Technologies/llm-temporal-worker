@@ -60,3 +60,20 @@ func TestCarryProviderCacheAffinityKeepsAnExpiredObservationUnchanged(t *testing
 		t.Fatalf("carried affinity is invalid: %v", err)
 	}
 }
+
+func TestCarryProviderCacheAffinityDropsAnExpiredHardPin(t *testing.T) {
+	now := time.Unix(200, 0).UTC()
+	expired := now.Add(-time.Second)
+	active := now.Add(time.Hour)
+	pin := state.ProviderCacheAffinity{Rank: 0, Provider: "openai", RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", EndpointFamily: "responses", ModelLineage: "lineage", RouteModelRevision: "revision", CacheEpoch: "epoch", HardPinned: true, LastSuccessAt: now.Add(-time.Hour), ExpiresAt: &expired}
+	soft := pin
+	soft.Rank, soft.HardPinned, soft.RouteID, soft.EndpointID, soft.ExpiresAt = 1, false, "route-b", "endpoint-b", &active
+	parent := &state.Continuation{Affinities: state.ProviderCacheAffinitySet{pin, soft}}
+	candidate := routing.Candidate{Provider: "openai", RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", Family: "responses", ModelLineage: "lineage", ModelRevision: "revision"}
+	for _, usage := range []llm.Usage{{}, {CacheReadTokens: 5}} {
+		result := carryProviderCacheAffinity(parent, candidate, usage, now)
+		if len(result) != 1 || result[0].HardPinned || result[0].RouteID != "route-b" {
+			t.Fatalf("carried affinities = %#v, want only the active soft observation", result)
+		}
+	}
+}

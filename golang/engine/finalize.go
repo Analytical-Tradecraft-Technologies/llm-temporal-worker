@@ -200,7 +200,19 @@ func carryProviderCacheAffinity(parent *state.Continuation, candidate routing.Ca
 	if parent == nil || len(parent.Affinities) == 0 {
 		return nil
 	}
-	result := parent.Affinities.Clone()
+	result := make(state.ProviderCacheAffinitySet, 0, len(parent.Affinities))
+	for _, affinity := range parent.Affinities.Clone() {
+		// A hard pin that is no longer active cannot be kept: routing rejects
+		// an expired hard pin rather than ignoring it, so carrying it would
+		// make the child continuation unusable.
+		if affinity.HardPinned && !affinity.Active(now) {
+			continue
+		}
+		result = append(result, affinity)
+	}
+	if len(result) == 0 {
+		return nil
+	}
 	if usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
 		return result
 	}
