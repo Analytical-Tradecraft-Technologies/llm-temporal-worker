@@ -221,9 +221,11 @@ operation ID.
 > both receive a lineage's opaque state. `continuation_pinned`,
 > `provider_state_dropped`, and other portability diagnostics are not produced
 > there; the only diagnostic a v1 response carries is
-> `service_class_provider_downgrade`. Keep one route per API
-> family in a model when lineages carry opaque state that another account
-> would reject.
+> `service_class_provider_downgrade`. A lineage can also switch model alias
+> through `settings_patch.model` and keep its transcript, so when lineages carry
+> opaque state that another account would reject, use a single account per API
+> family across every model alias a lineage can reach, or do not change models
+> on such lineages.
 
 Canonical text/tool history is portable if a new candidate can compile it
 without loss. Provider continuation IDs, encrypted reasoning, signatures,
