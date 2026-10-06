@@ -69,7 +69,7 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	if strings.Contains(master.raw, "--push") {
 		t.Fatal("master pushes directly from the builder instead of publishing the scanned archive")
 	}
-		assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard")
+	assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard")
 	for _, forbidden := range []string{"setup-buildx.sh", "type=gha", "setup-qemu", "--load"} {
 		if strings.Contains(master.raw, forbidden) {
 			t.Fatalf("master retains local/copying build configuration %q", forbidden)
