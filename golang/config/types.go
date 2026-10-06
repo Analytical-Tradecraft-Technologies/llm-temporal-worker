@@ -102,11 +102,11 @@ type ServerConfig struct {
 }
 
 type TemporalConfig struct {
-	Target         string               `yaml:"target" json:"target"`
-	Namespace      string               `yaml:"namespace" json:"namespace"`
-	TaskQueue      string               `yaml:"task_queue" json:"task_queue"`
-	IdentityPrefix string               `yaml:"identity_prefix" json:"identity_prefix"`
-	TLS            TLSConfig            `yaml:"tls" json:"tls"`
+	Target         string    `yaml:"target" json:"target"`
+	Namespace      string    `yaml:"namespace" json:"namespace"`
+	TaskQueue      string    `yaml:"task_queue" json:"task_queue"`
+	IdentityPrefix string    `yaml:"identity_prefix" json:"identity_prefix"`
+	TLS            TLSConfig `yaml:"tls" json:"tls"`
 	// APIKeyFile names a file holding a Temporal API key the client presents
 	// on every call. It requires TLS.
 	APIKeyFile string `yaml:"api_key_file" json:"api_key_file,omitempty"`
