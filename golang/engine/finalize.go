@@ -211,6 +211,12 @@ func carryProviderCacheAffinity(parent *state.Continuation, candidate routing.Ca
 			affinity.EndpointFamily != candidate.Family || affinity.ModelLineage != candidate.ModelLineage || affinity.RouteModelRevision != candidate.ModelRevision {
 			continue
 		}
+		// An expired observation is kept as unchanged history. Refreshing its
+		// last success past its expiry would make the child continuation
+		// invalid, and no authoritative lifetime is available to renew it.
+		if !affinity.Active(now) {
+			continue
+		}
 		affinity.ObservedCacheReadTokens = usage.CacheReadTokens
 		affinity.ObservedCacheWriteTokens = usage.CacheWriteTokens
 		affinity.LastSuccessAt = now

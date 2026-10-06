@@ -42,3 +42,21 @@ func TestCarryProviderCacheAffinityDoesNotInventIdentity(t *testing.T) {
 		t.Fatalf("empty parent affinity = %#v, want nil", got)
 	}
 }
+
+func TestCarryProviderCacheAffinityKeepsAnExpiredObservationUnchanged(t *testing.T) {
+	now := time.Unix(200, 0).UTC()
+	expired := now.Add(-time.Minute)
+	affinity := state.ProviderCacheAffinity{Rank: 0, Provider: "openai", RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", EndpointFamily: "responses", ModelLineage: "lineage", RouteModelRevision: "revision", CacheEpoch: "epoch", ObservedCacheReadTokens: 1, ObservedCacheWriteTokens: 2, LastSuccessAt: now.Add(-time.Hour), ExpiresAt: &expired}
+	if err := affinity.Validate(now); err != nil {
+		t.Fatalf("expired parent affinity must be valid history: %v", err)
+	}
+	parent := &state.Continuation{Affinities: state.ProviderCacheAffinitySet{affinity}}
+	candidate := routing.Candidate{Provider: "openai", RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", Family: "responses", ModelLineage: "lineage", ModelRevision: "revision"}
+	result := carryProviderCacheAffinity(parent, candidate, llm.Usage{CacheReadTokens: 13}, now)
+	if len(result) != 1 || !result[0].LastSuccessAt.Equal(affinity.LastSuccessAt) || result[0].ObservedCacheReadTokens != 1 {
+		t.Fatalf("expired affinity = %#v, want it unchanged", result)
+	}
+	if err := result[0].Validate(now); err != nil {
+		t.Fatalf("carried affinity is invalid: %v", err)
+	}
+}
