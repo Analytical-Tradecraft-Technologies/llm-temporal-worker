@@ -200,7 +200,19 @@ func carryProviderCacheAffinity(parent *state.Continuation, candidate routing.Ca
 	if parent == nil || len(parent.Affinities) == 0 {
 		return nil
 	}
-	result := parent.Affinities.Clone()
+	result := make(state.ProviderCacheAffinitySet, 0, len(parent.Affinities))
+	for _, affinity := range parent.Affinities.Clone() {
+		// A hard pin that is no longer active cannot be kept: routing rejects
+		// an expired hard pin rather than ignoring it, so carrying it would
+		// make the child continuation unusable.
+		if affinity.HardPinned && !affinity.Active(now) {
+			continue
+		}
+		result = append(result, affinity)
+	}
+	if len(result) == 0 {
+		return nil
+	}
 	if usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
 		return result
 	}
@@ -209,6 +221,12 @@ func carryProviderCacheAffinity(parent *state.Continuation, candidate routing.Ca
 		if affinity.Provider != candidate.Provider || affinity.RouteID != candidate.RouteID || affinity.EndpointID != candidate.EndpointID ||
 			affinity.EndpointAccountHMAC != candidate.EndpointAccountHMAC || affinity.Region != candidate.Region ||
 			affinity.EndpointFamily != candidate.Family || affinity.ModelLineage != candidate.ModelLineage || affinity.RouteModelRevision != candidate.ModelRevision {
+			continue
+		}
+		// An expired observation is kept as unchanged history. Refreshing its
+		// last success past its expiry would make the child continuation
+		// invalid, and no authoritative lifetime is available to renew it.
+		if !affinity.Active(now) {
 			continue
 		}
 		affinity.ObservedCacheReadTokens = usage.CacheReadTokens
