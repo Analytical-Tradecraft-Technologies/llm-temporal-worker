@@ -76,6 +76,12 @@ type Route struct {
 	// engine still resolves each selected candidate and applies its budgeted
 	// unpriced policy before admission or dispatch.
 	PriceAvailable bool
+	// PricedWindows, when non-nil, are the intervals in which every
+	// advertised class has an active price. The planner then evaluates
+	// price availability at the plan's Now instead of using the load-time
+	// PriceAvailable, so a price interval that starts after the snapshot
+	// was compiled counts once it is effective.
+	PricedWindows  []PriceWindow
 	ExtensionNames []string
 	ContextBytes   int
 	// OutputTokens is the model-specific output ceiling; zero means unspecified.
@@ -271,4 +277,31 @@ func (route Route) SupportsOutputLimit(request llm.Request) bool {
 		return true
 	}
 	return route.OutputTokens > 0 && request.Output != nil && request.Output.MaxTokens != nil && *request.Output.MaxTokens > 0 && int64(*request.Output.MaxTokens) <= route.OutputTokens
+}
+
+// PriceWindow is a half-open interval [From, Until). A zero bound is
+// unbounded on that side.
+type PriceWindow struct {
+	From  time.Time
+	Until time.Time
+}
+
+// Contains reports whether now falls inside the window.
+func (window PriceWindow) Contains(now time.Time) bool {
+	return (window.From.IsZero() || !now.Before(window.From)) && (window.Until.IsZero() || now.Before(window.Until))
+}
+
+// PriceAvailableAt reports whether every advertised class of the route has an
+// active price at now. Without PricedWindows, or without a time, it is the
+// load-time PriceAvailable.
+func (route Route) PriceAvailableAt(now time.Time) bool {
+	if route.PricedWindows == nil || now.IsZero() {
+		return route.PriceAvailable
+	}
+	for _, window := range route.PricedWindows {
+		if window.Contains(now) {
+			return true
+		}
+	}
+	return false
 }

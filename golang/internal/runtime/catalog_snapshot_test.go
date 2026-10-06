@@ -9,6 +9,7 @@ import (
 	"github.com/mfow/llm-temporal-worker/golang/internal/catalog"
 	"github.com/mfow/llm-temporal-worker/golang/llm"
 	"github.com/mfow/llm-temporal-worker/golang/pricing"
+	"github.com/mfow/llm-temporal-worker/golang/routing"
 )
 
 func TestRoutePriceIdentityUsesEndpointIdentity(t *testing.T) {
@@ -83,5 +84,55 @@ func TestRoutePriceIdentityUsesVerifiedIdentityWithoutCurrentQuote(t *testing.T)
 	}
 	if providerName != "verified-provider" || region != "australiaeast" || version != "" || available {
 		t.Fatalf("identity = (%q, %q, %q, %t), want verified unpriced endpoint identity", providerName, region, version, available)
+	}
+}
+
+func TestRoutePricedWindowsCoverEveryClassAcrossIntervalBoundaries(t *testing.T) {
+	loaded := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	start := loaded.Add(time.Hour)
+	end := loaded.Add(48 * time.Hour)
+	endpoint := config.EndpointConfig{Family: "openai_responses", Region: "australiaeast", PriceCatalog: "prices", ServiceClasses: map[llm.ServiceClass]config.TierConfig{
+		llm.ServiceClassStandard: {ProviderValue: "default"},
+		llm.ServiceClassPriority: {ProviderValue: "priority"},
+	}}
+	entry := func(tier string, from, until time.Time) pricing.Entry {
+		return pricing.Entry{Provider: "verified-provider", Family: "openai_responses", EndpointID: "target", Region: "australiaeast", Model: "model", ProviderTier: tier, Version: "v1", EffectiveFrom: from, EffectiveUntil: until}
+	}
+	classes := []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassPriority}
+	// Standard is priced from load onward; priority only from start to end.
+	entries := []pricing.Entry{entry("default", time.Time{}, time.Time{}), entry("priority", start, end)}
+	windows := routePricedWindows(entries, "target", endpoint, "model", classes, "verified-provider", "australiaeast")
+	if len(windows) != 1 || !windows[0].From.Equal(start) || !windows[0].Until.Equal(end) {
+		t.Fatalf("windows = %+v, want [%s, %s)", windows, start, end)
+	}
+	route := routing.Route{PriceAvailable: false, PricedWindows: windows}
+	for at, want := range map[time.Time]bool{loaded: false, start: true, end.Add(-time.Second): true, end: false} {
+		if got := route.PriceAvailableAt(at); got != want {
+			t.Fatalf("PriceAvailableAt(%s) = %t, want %t", at, got, want)
+		}
+	}
+	// Back-to-back intervals merge into one window; an always-priced route
+	// gets one unbounded window.
+	entries = []pricing.Entry{entry("default", time.Time{}, time.Time{}), entry("priority", time.Time{}, start), entry("priority", start, time.Time{})}
+	if windows := routePricedWindows(entries, "target", endpoint, "model", classes, "verified-provider", "australiaeast"); len(windows) != 1 || !windows[0].From.IsZero() || !windows[0].Until.IsZero() {
+		t.Fatalf("contiguous windows = %+v, want one unbounded window", windows)
+	}
+	if windows := routePricedWindows(entries[:1], "target", endpoint, "model", classes, "verified-provider", "australiaeast"); windows == nil || len(windows) != 0 {
+		t.Fatalf("never fully priced windows = %+v, want empty and non-nil", windows)
+	}
+}
+
+func TestRoutePricedWindowsIgnoreEntriesForAnotherProviderOrRegion(t *testing.T) {
+	transition := time.Date(2026, time.July, 15, 0, 0, 0, 0, time.UTC)
+	endpoint := config.EndpointConfig{Family: "openai_responses", PriceCatalog: "prices", ServiceClasses: map[llm.ServiceClass]config.TierConfig{llm.ServiceClassStandard: {ProviderValue: "default"}}}
+	entry := func(providerName, region string, from, until time.Time) pricing.Entry {
+		return pricing.Entry{Provider: providerName, Family: "openai_responses", EndpointID: "target", Region: region, Model: "model", ProviderTier: "default", Version: "v1", EffectiveFrom: from, EffectiveUntil: until}
+	}
+	// The endpoint moves from provider A in one region to provider B in
+	// another; a route bound to A is priced only until the transition.
+	entries := []pricing.Entry{entry("provider-a", "region-a", time.Time{}, transition), entry("provider-b", "region-b", transition, time.Time{})}
+	windows := routePricedWindows(entries, "target", endpoint, "model", []llm.ServiceClass{llm.ServiceClassStandard}, "provider-a", "region-a")
+	if len(windows) != 1 || !windows[0].From.IsZero() || !windows[0].Until.Equal(transition) {
+		t.Fatalf("windows = %+v, want only provider A's interval ending at %s", windows, transition)
 	}
 }

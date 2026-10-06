@@ -186,6 +186,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				OutputTokens:        profile.OutputTokens,
 				PriceVersion:        priceVersion,
 				PriceAvailable:      priceAvailable,
+				PricedWindows:       routePricedWindows(bundle.Pricing[endpoint.PriceCatalog].Catalog.Entries, routeValue.Endpoint, endpoint, routeValue.Model, routeValue.Classes, providerName, routeRegion),
 				ExtensionNames:      extensions,
 				ContextTokens:       profile.ContextTokens,
 			})
@@ -402,4 +403,82 @@ func adapterCapabilities(value provider.CapabilitySet) map[string]routing.Capabi
 		result[string(feature)] = routing.Capability{State: routing.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
 	}
 	return result
+}
+
+// routePricedWindows returns the intervals in which every class of the route
+// has an active price entry, so route planning can tell whether the route is
+// priced at request time rather than only at snapshot load. Only entries for
+// the route's resolved provider and region count: the snapshot binds the
+// route to that identity, so a scheduled transition to another provider or
+// region cannot price it. The result is non-nil; an empty slice means the
+// route is never fully priced.
+func routePricedWindows(entries []pricing.Entry, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, providerName, routeRegion string) []routing.PriceWindow {
+	family := endpointFamily(endpoint.Family)
+	matching := make(map[llm.ServiceClass][]pricing.Entry, len(classes))
+	boundaries := make([]time.Time, 0)
+	for _, class := range classes {
+		tier := endpoint.ServiceClasses[class].ProviderValue
+		for _, entry := range entries {
+			if entry.EndpointID != endpointID || entry.Family != string(family) || entry.Model != model || entry.ProviderTier != tier {
+				continue
+			}
+			if entry.Provider != providerName || entry.Region != routeRegion {
+				continue
+			}
+			matching[class] = append(matching[class], entry)
+			for _, boundary := range []time.Time{entry.EffectiveFrom, entry.EffectiveUntil} {
+				if !boundary.IsZero() {
+					boundaries = append(boundaries, boundary)
+				}
+			}
+		}
+	}
+	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i].Before(boundaries[j]) })
+	starts := []time.Time{{}}
+	for _, boundary := range boundaries {
+		if !boundary.Equal(starts[len(starts)-1]) {
+			starts = append(starts, boundary)
+		}
+	}
+	priced := func(at time.Time) bool {
+		for _, class := range classes {
+			active := false
+			for _, entry := range matching[class] {
+				if entry.Active(at) {
+					active = true
+					break
+				}
+			}
+			if !active {
+				return false
+			}
+		}
+		return len(classes) > 0
+	}
+	// Availability changes only at entry boundaries, so each segment
+	// [starts[i], starts[i+1]) is checked once. The first segment is unbounded
+	// below and is probed just before the earliest boundary.
+	windows := make([]routing.PriceWindow, 0)
+	for index, start := range starts {
+		probe := start
+		if index == 0 {
+			probe = time.Unix(0, 0)
+			if len(starts) > 1 {
+				probe = starts[1].Add(-time.Nanosecond)
+			}
+		}
+		if !priced(probe) {
+			continue
+		}
+		var until time.Time
+		if index+1 < len(starts) {
+			until = starts[index+1]
+		}
+		if count := len(windows); count > 0 && index > 0 && windows[count-1].Until.Equal(start) {
+			windows[count-1].Until = until
+			continue
+		}
+		windows = append(windows, routing.PriceWindow{From: start, Until: until})
+	}
+	return windows
 }
