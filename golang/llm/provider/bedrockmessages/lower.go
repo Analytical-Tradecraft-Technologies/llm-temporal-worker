@@ -379,7 +379,7 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 // effort or summary preference alone never turns thinking on.
 func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
 	if reasoning.Effort == llm.ReasoningEffortExtraHigh {
-		return nil, fmt.Errorf("xhigh reasoning effort is not supported by bedrockmessages")
+		return nil, unsupportedError(provider.FeatureReasoning, "xhigh reasoning effort is not supported by bedrockmessages")
 	}
 	mode := reasoning.Mode
 	if mode == "" {
