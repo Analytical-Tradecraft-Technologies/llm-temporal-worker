@@ -111,20 +111,26 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		return Estimate{}, err
 	}
 	// Server tools add inputs that cannot be tokenized before dispatch.
-	// Reserve context for their loop rather than just the original prompt.
+	// Estimate their bounded research loop rather than reserving full contexts.
 	if request.WebSearch || request.WebFetch || request.CodeExecution {
 		if candidate.ContextTokens <= 0 {
 			return Estimate{}, fmt.Errorf("%w: hosted tools require a known context ceiling", ErrUnusablePrice)
 		}
-		rounds := int64(4)
-		if candidate.Family == "anthropic_messages" {
-			rounds = 20
+		if request.CodeExecution {
+			// Code execution has no per-request call bound yet. Retain its
+			// conservative allowance until that provider loop is bounded.
+			rounds := int64(4)
+			if candidate.Family == "anthropic_messages" {
+				rounds = 20
+			}
+			if candidate.ContextTokens > math.MaxInt64/rounds || outputTokens > math.MaxInt64/rounds {
+				return Estimate{}, fmt.Errorf("hosted tool token allowance overflows")
+			}
+			inputTokens = candidate.ContextTokens * rounds
+			outputTokens *= rounds
+		} else {
+			inputTokens = hostedResearchInput(request, candidate, inputTokens, outputTokens)
 		}
-		if candidate.ContextTokens > math.MaxInt64/rounds || outputTokens > math.MaxInt64/rounds {
-			return Estimate{}, fmt.Errorf("hosted tool token allowance overflows")
-		}
-		inputTokens = candidate.ContextTokens * rounds
-		outputTokens *= rounds
 	}
 	cacheWrite := inputTokens
 	components := []struct {
@@ -195,6 +201,36 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		}
 	}
 	return Estimate{CandidateID: candidate.ID, InputTokens: inputTokens, OutputTokens: outputTokens, ReasoningTokens: reasoningTokens, CacheWriteTokens: cacheWrite, CostUSD: totalUSD, MicroUSD: legacyTotal, CatalogVersion: entry.Version}, nil
+}
+
+// hostedResearchInput includes the prompt in each possible tool continuation,
+// accumulated results, and an allowance for intermediate assistant output.
+// Search result size is an estimate, not a provider-enforced token ceiling;
+// safety margins and settlement against actual usage still apply. Fetch content
+// has a 10,000-token cap in the Anthropic lowering layer.
+func hostedResearchInput(request llm.Request, candidate routing.Candidate, input, output int64) int64 {
+	calls, resultTokens := int64(0), int64(0)
+	if request.WebSearch {
+		calls += llm.MaxWebSearchCalls
+		resultTokens = 8192
+	}
+	if request.WebFetch {
+		calls += llm.MaxWebSearchCalls
+		resultTokens = 10000
+	}
+	if candidate.Family != "anthropic_messages" {
+		// Responses and OpenRouter share a max_tool_calls limit.
+		calls = min(calls, llm.MaxWebSearchCalls)
+	}
+	total := input
+	for step := int64(1); step <= calls; step++ {
+		continuation := saturatingAdd(input, saturatingAdd(step*resultTokens, output))
+		continuation = min(continuation, candidate.ContextTokens-output)
+		total = saturatingAdd(total, continuation)
+	}
+	// max_tokens caps the output for this generation; do not charge the
+	// entire output cap again for every possible research tool call.
+	return total
 }
 
 func (estimator Estimator) EstimatePlan(request llm.Request, plan routing.Plan, entries map[string]pricing.Entry) (Estimate, error) {
