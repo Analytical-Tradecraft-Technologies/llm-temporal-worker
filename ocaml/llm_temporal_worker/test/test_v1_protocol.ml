@@ -212,6 +212,12 @@ let () =
   assert_shared_fixture "generate-request-all-kinds.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
   assert_shared_fixture "generate-fork-patch-sampling.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
   assert_shared_fixture "generate-response-all-kinds.json" V1_codec.decode_generate_response V1_codec.encode_generate_response;
+  assert_shared_fixture "generate-response-cache-origin-cost.json" V1_codec.decode_generate_response V1_codec.encode_generate_response;
+  let cached = ok (V1_codec.decode_generate_response (Bytes.of_string (fixture_in "v1" "generate-response-cache-origin-cost.json"))) in
+  (match cached.cost, cached.diagnostics with
+   | Exact_cost { actual_cost_usd; _ }, [diagnostic] when Usd_decimal.to_string actual_cost_usd = "0" && Diagnostic_code.to_string diagnostic.code = "cache_origin_cost" ->
+       (match diagnostic.details with Some fields when List.assoc_opt "actual_cost_usd" fields = Some "0.0000123" -> () | _ -> failwith "original cache cost missing")
+   | _ -> failwith "cache charge and origin provenance changed");
   assert_shared_fixture "compact-response-priced.json" V1_codec.decode_compaction_response V1_codec.encode_compaction_response;
   let usage : usage = { input_tokens = 6L; output_tokens = 7L; reasoning_tokens = 2L; cache_read_tokens = 3L; cache_write_tokens = 1L; provider_raw = Some ["total_tokens", `Int 17; "details", `Assoc ["audio_tokens", `Int 0]] } in
   let diagnostic : diagnostic = { code = Diagnostic_code.of_string "route_unavailable"; message = "Route unavailable"; severity = Warning; path = Some "/append/0"; details = Some ["route_id", "route-primary"] } in

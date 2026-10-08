@@ -98,6 +98,21 @@ operation complete. These methods neither acquire/refund Redis budget nor
 authorize a provider call. Concurrent cache misses require the companion
 durable fill coordinator plus separate paid-attempt authorization.
 
+## Original cost on cache hits
+
+Generate and Compact cache hits keep `cost.actual_cost_usd` at zero: no provider
+call or budget charge occurs for the replay. A `cache_origin_cost` information
+diagnostic at path `cache` carries the immutable original receipt in its string
+`details`: `origin_operation_id`, `cost_status`, and, for an exact cost,
+`actual_cost_usd`, `method` and optional `catalog_version`. An unknown original
+cost carries `unknown_reason` and no invented amount. This existing v1 extension
+is readable by the current Go and OCaml codecs without a wire-version change.
+
+Use the original amount for a total including cached responses and the replay's
+zero actual cost for a total excluding them. Do not add both as actual spend.
+Different replay operation IDs identify different uses of the same response;
+`origin_operation_id` identifies the single original paid operation.
+
 ## Retention and verification
 
 There is no automatic TTL, deletion or garbage collection. Losing publications
