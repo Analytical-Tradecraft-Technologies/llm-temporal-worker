@@ -51,7 +51,7 @@ type instruction_level = Application | Policy
 type response_status = Paused | Completed | Tool_calls | Refused | Length | Content_filtered
 type output_kind = Output_text | Output_json | Output_json_schema
 type reasoning_mode = Provider_default | Reasoning_disabled | Adaptive | Reasoning_enabled
-type reasoning_effort = Effort_default | Minimal | Low | Medium | High | Maximum
+type reasoning_effort = Effort_default | Minimal | Low | Medium | High | Extra_high | Maximum
 type reasoning_summary = Summary_default | Summary_none | Summary_auto | Concise | Detailed
 type cost_status = Cost_known | Cost_unknown
 

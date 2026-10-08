@@ -124,3 +124,14 @@ func portabilityName(strict bool) string {
 	}
 	return "/best effort"
 }
+
+func TestExtraHighIsRejectedRatherThanDropped(t *testing.T) {
+	for _, mode := range []llm.ReasoningMode{llm.ReasoningModeProviderDefault, llm.ReasoningModeAdaptive} {
+		for _, strict := range []bool{false, true} {
+			_, err := lowerReasoning(llm.ReasoningSpec{Mode: mode, Effort: llm.ReasoningEffortExtraHigh}, strict)
+			if err == nil {
+				t.Fatal("xhigh was silently dropped")
+			}
+		}
+	}
+}

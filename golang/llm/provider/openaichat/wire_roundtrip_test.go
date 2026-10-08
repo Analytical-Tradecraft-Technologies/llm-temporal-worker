@@ -359,7 +359,7 @@ func wireAuditCases() []wireAuditCase {
 			Extensions: map[string]json.RawMessage{"audit": json.RawMessage(`{"end_user":"pinned","transforms":["middle-out"]}`)},
 		}},
 	}
-	for _, effort := range []llm.ReasoningEffort{llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortMaximum} {
+	for _, effort := range []llm.ReasoningEffort{llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortExtraHigh, llm.ReasoningEffortMaximum} {
 		cases = append(cases, wireAuditCase{name: "reasoning " + string(effort), request: llm.Request{Input: wireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, Effort: effort}}})
 	}
 	return cases

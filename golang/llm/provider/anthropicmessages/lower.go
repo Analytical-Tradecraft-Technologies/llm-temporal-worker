@@ -489,6 +489,9 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 // output_config.effort, which the API accepts independently of thinking, so an
 // effort or summary preference alone never turns thinking on.
 func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
+	if reasoning.Effort == llm.ReasoningEffortExtraHigh {
+		return nil, fmt.Errorf("xhigh reasoning effort is not supported by anthropicmessages")
+	}
 	mode := reasoning.Mode
 	if mode == "" {
 		mode = llm.ReasoningModeProviderDefault

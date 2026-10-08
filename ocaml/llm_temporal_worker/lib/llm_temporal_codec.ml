@@ -604,7 +604,7 @@ let sampling_to_json (sampling : sampling) =
 
 let reasoning_to_json (reasoning : reasoning) =
   let mode = match reasoning.mode with Provider_default -> "provider_default" | Reasoning_disabled -> "disabled" | Adaptive -> "adaptive" | Reasoning_enabled -> "enabled" in
-  let effort = match reasoning.effort with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Maximum -> "maximum" in
+  let effort = match reasoning.effort with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Extra_high -> "xhigh" | Maximum -> "maximum" in
   let summary = match reasoning.summary with Summary_default -> "provider_default" | Summary_none -> "none" | Summary_auto -> "auto" | Concise -> "concise" | Detailed -> "detailed" in
   `Assoc ([ ("mode", `String mode); ("effort", `String effort); ("summary", `String summary) ] @ option_field "token_budget" (fun value -> `Int value) reasoning.token_budget)
 
@@ -829,7 +829,7 @@ let reasoning_of_json value =
   let* mode = optional_value "reasoning" "mode" string fields in
   let* mode = match mode with None -> Ok Provider_default | Some "provider_default" -> Ok Provider_default | Some "disabled" -> Ok Reasoning_disabled | Some "adaptive" -> Ok Adaptive | Some "enabled" -> Ok Reasoning_enabled | Some value -> Error (codec_error "invalid reasoning mode %S" value) in
   let* effort = optional_value "reasoning" "effort" string fields in
-  let* effort = match effort with None -> Ok Effort_default | Some "provider_default" -> Ok Effort_default | Some "minimal" -> Ok Minimal | Some "low" -> Ok Low | Some "medium" -> Ok Medium | Some "high" -> Ok High | Some "maximum" -> Ok Maximum | Some value -> Error (codec_error "invalid reasoning effort %S" value) in
+  let* effort = match effort with None -> Ok Effort_default | Some "provider_default" -> Ok Effort_default | Some "minimal" -> Ok Minimal | Some "low" -> Ok Low | Some "medium" -> Ok Medium | Some "high" -> Ok High | Some "xhigh" -> Ok Extra_high | Some "maximum" -> Ok Maximum | Some value -> Error (codec_error "invalid reasoning effort %S" value) in
   let* token_budget = optional_value "reasoning" "token_budget" int fields in
   let* summary = optional_value "reasoning" "summary" string fields in
   let* summary = match summary with None -> Ok Summary_default | Some "provider_default" -> Ok Summary_default | Some "none" -> Ok Summary_none | Some "auto" -> Ok Summary_auto | Some "concise" -> Ok Concise | Some "detailed" -> Ok Detailed | Some value -> Error (codec_error "invalid reasoning summary %S" value) in

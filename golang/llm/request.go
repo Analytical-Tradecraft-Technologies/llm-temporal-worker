@@ -506,6 +506,7 @@ const (
 	ReasoningEffortLow             ReasoningEffort = "low"
 	ReasoningEffortMedium          ReasoningEffort = "medium"
 	ReasoningEffortHigh            ReasoningEffort = "high"
+	ReasoningEffortExtraHigh       ReasoningEffort = "xhigh"
 	ReasoningEffortMaximum         ReasoningEffort = "maximum"
 )
 
@@ -981,7 +982,7 @@ func validateReasoning(reasoning ReasoningSpec) error {
 	if reasoning.Mode != "" && reasoning.Mode != ReasoningModeProviderDefault && reasoning.Mode != ReasoningModeDisabled && reasoning.Mode != ReasoningModeAdaptive && reasoning.Mode != ReasoningModeEnabled {
 		return fmt.Errorf("reasoning mode %q is invalid", reasoning.Mode)
 	}
-	if reasoning.Effort != "" && reasoning.Effort != ReasoningEffortProviderDefault && reasoning.Effort != ReasoningEffortMinimal && reasoning.Effort != ReasoningEffortLow && reasoning.Effort != ReasoningEffortMedium && reasoning.Effort != ReasoningEffortHigh && reasoning.Effort != ReasoningEffortMaximum {
+	if reasoning.Effort != "" && reasoning.Effort != ReasoningEffortProviderDefault && reasoning.Effort != ReasoningEffortMinimal && reasoning.Effort != ReasoningEffortLow && reasoning.Effort != ReasoningEffortMedium && reasoning.Effort != ReasoningEffortHigh && reasoning.Effort != ReasoningEffortExtraHigh && reasoning.Effort != ReasoningEffortMaximum {
 		return fmt.Errorf("reasoning effort %q is invalid", reasoning.Effort)
 	}
 	if reasoning.Summary != "" && reasoning.Summary != ReasoningSummaryProviderDefault && reasoning.Summary != ReasoningSummaryNone && reasoning.Summary != ReasoningSummaryAuto && reasoning.Summary != ReasoningSummaryConcise && reasoning.Summary != ReasoningSummaryDetailed {

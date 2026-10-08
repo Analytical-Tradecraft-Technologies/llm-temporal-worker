@@ -560,7 +560,7 @@ func lowerReasoning(reasoning llm.ReasoningSpec, target map[string]any) error {
 	}
 	switch effort {
 	case "", llm.ReasoningEffortProviderDefault:
-	case llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh:
+	case llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortExtraHigh:
 		target["reasoning_effort"] = string(effort)
 	case llm.ReasoningEffortMaximum:
 		target["reasoning_effort"] = "max"
