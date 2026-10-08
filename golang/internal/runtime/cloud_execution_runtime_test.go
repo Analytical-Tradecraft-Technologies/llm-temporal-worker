@@ -184,6 +184,15 @@ func TestCloudExecutionRuntimeGeneration(t *testing.T) {
 					if hit.Generate.Cache.Disposition != "hit" || hit.RequestID == result.RequestID || hit.Generate.Checkpoint.Handle == result.Generate.Checkpoint.Handle || f.submits.Load() != 1 {
 						t.Fatal("cache hit reused caller identity or dispatched")
 					}
+					assertOriginCost(t, hit.Generate.Diagnostics, result.Generate.OperationID, *result.Generate.Cost.ActualCostUSD)
+					if *hit.Generate.Cost.ActualCostUSD != "0" {
+						t.Fatal("cache replay charged")
+					}
+					retried := f.finish(t)
+					assertOriginCost(t, retried.Generate.Diagnostics, result.Generate.OperationID, *result.Generate.Cost.ActualCostUSD)
+					if f.submits.Load() != 1 {
+						t.Fatal("cache retry dispatched")
+					}
 					for shard := range cloudstate.PendingShards {
 						page, err := f.repository.ListPending(context.Background(), shard, 100, "")
 						if err != nil || len(page.Requests) != 0 {
@@ -251,6 +260,12 @@ func TestCloudExecutionRuntimeCompaction(t *testing.T) {
 					}
 					if work && hit.Compact.Cache.Disposition != "hit" {
 						t.Fatal("summary artifact not reused")
+					}
+					if work {
+						assertOriginCost(t, hit.Compact.Diagnostics, first.Compact.OperationID, *first.Compact.Cost.ActualCostUSD)
+						if *hit.Compact.Cost.ActualCostUSD != "0" {
+							t.Fatal("cached compaction charged")
+						}
 					}
 					request.OperationKey = "different-sample"
 					request.Cache.Variant = (index + 1) % 2

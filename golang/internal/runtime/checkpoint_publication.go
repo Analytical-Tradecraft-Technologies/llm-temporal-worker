@@ -95,6 +95,10 @@ func (p *CheckpointPublication) Generate(ctx context.Context, identity Checkpoin
 		response.Cost = zeroPublicationCost()
 		response.Usage = nil
 		response.Service = nil
+		response.Diagnostics, err = withCacheOriginCost(response.Diagnostics, *origin)
+		if err != nil {
+			return zero, llm.GenerateResponseV1{}, err
+		}
 	}
 	var provenance []state.ProviderStateProvenance
 	if origin == nil && identity.ProviderRoute != nil {
@@ -183,6 +187,10 @@ func (p *CheckpointPublication) Compact(ctx context.Context, identity Checkpoint
 			source = "worker_cache"
 			response.Cost = zeroPublicationCost()
 			response.Usage = nil
+			response.Diagnostics, err = withCacheOriginCost(response.Diagnostics, *origin)
+			if err != nil {
+				return zero, llm.CompactResponseV1{}, err
+			}
 		}
 	}
 	response.Provenance, _ = json.Marshal(struct {
