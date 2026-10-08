@@ -44,7 +44,7 @@ func withCacheOriginCost(diagnostics []llm.Diagnostic, origin cache.ResponseEntr
 		return nil, err
 	}
 	// Only the authenticated cache origin supplies this reserved provenance.
-	result := make([]llm.Diagnostic, 0, len(diagnostics)+1)
+	var result []llm.Diagnostic
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Code != "cache_origin_cost" {
 			result = append(result, diagnostic)
