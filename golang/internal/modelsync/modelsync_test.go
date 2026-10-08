@@ -495,3 +495,27 @@ func TestRefreshIntervalStaysWithinBounds(t *testing.T) {
 		}
 	}
 }
+
+// Direct routing must work without an OpenRouter inference endpoint, including
+// before its public catalog contains the newly released model.
+func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
+	source := testSource("anthropic", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only"})
+	compiled, err := Compile(Input{Rules: mergedRules(t), Direct: []Source{source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, ok := compiled.Models["anthropic/claude-haiku-5.5"]
+	if !ok || len(model.Routes) != 1 {
+		t.Fatalf("missing direct Haiku route: %+v", model)
+	}
+	route := model.Routes[0]
+	if route.Provider != "anthropic" || route.Model != "claude-haiku-5-5" || route.ContextTokens != 100000 || route.OutputTokens != 128000 {
+		t.Fatalf("wrong direct route or pricing boundary: %+v", route)
+	}
+	for _, f := range []routing.Feature{routing.FeatureReasoning, routing.FeatureStructuredOutput} {
+		if route.Capabilities.Features[f].State != routing.CapabilityNative {
+			t.Fatalf("feature %s unavailable", f)
+		}
+	}
+	assertPrices(t, priceFor(t, compiled.Prices, "anthropic", "claude-haiku-5-5", "standard_only"), "0.1", "0.5", "0.01", "0.125")
+}
