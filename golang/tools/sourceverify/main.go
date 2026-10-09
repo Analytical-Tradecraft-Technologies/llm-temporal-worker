@@ -22,7 +22,9 @@ import (
 
 const (
 	maxSourceFileBytes = 1 << 20
-	maxTestOutputBytes = 8 << 20
+	// The full Go JSON suite exceeds 8 MiB; retain a finite bound with
+	// headroom while scanning the complete stream, including its tail.
+	maxTestOutputBytes = 16 << 20
 	maxDecodeDepth     = 3
 	maxCandidates      = 1024
 )

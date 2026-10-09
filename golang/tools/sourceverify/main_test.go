@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	sourceVerifierTestSourceLimit = 1 << 20
-	sourceVerifierTestOutputLimit = 8 << 20
+	sourceVerifierTestSourceLimit     = 1 << 20
+	sourceVerifierTestOutputLimit     = 16 << 20
+	sourceVerifierPreviousOutputLimit = 8 << 20
 )
 
 func TestScanContentDetectsRawAndDecodedCredentialFields(t *testing.T) {
@@ -521,9 +522,9 @@ func TestVerifyFailsClosedWhenTestOutputExceedsItsBound(t *testing.T) {
 
 func safeTestOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte {
 	t.Helper()
-	output := []byte(strings.Repeat("safe test output\n", sourceVerifierTestSourceLimit/len("safe test output\n")+1) + tail)
-	if len(output) <= sourceVerifierTestSourceLimit || len(output) > sourceVerifierTestOutputLimit {
-		t.Fatalf("test output length = %d, want (%d, %d]", len(output), sourceVerifierTestSourceLimit, sourceVerifierTestOutputLimit)
+	output := []byte(strings.Repeat("safe test output\n", sourceVerifierPreviousOutputLimit/len("safe test output\n")+1) + tail)
+	if len(output) <= sourceVerifierPreviousOutputLimit || len(output) > sourceVerifierTestOutputLimit {
+		t.Fatalf("test output length = %d, want (%d, %d]", len(output), sourceVerifierPreviousOutputLimit, sourceVerifierTestOutputLimit)
 	}
 	return output
 }
@@ -531,7 +532,7 @@ func safeTestOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte {
 func goTestJSONOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte {
 	t.Helper()
 	var output strings.Builder
-	for record := 0; output.Len() <= sourceVerifierTestSourceLimit; record++ {
+	for record := 0; output.Len() <= sourceVerifierPreviousOutputLimit; record++ {
 		output.WriteString(`{"Time":"2026-07-15T00:00:00Z","Action":"output","Package":"example.test","Test":"TestSafe`)
 		output.WriteString(strconv.Itoa(record))
 		output.WriteString(`","Output":"safe test output\\n"}` + "\n")
@@ -540,8 +541,8 @@ func goTestJSONOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte 
 	output.WriteString(strconv.Quote(tail))
 	output.WriteString("}\n")
 	bytes := []byte(output.String())
-	if len(bytes) <= sourceVerifierTestSourceLimit || len(bytes) > sourceVerifierTestOutputLimit {
-		t.Fatalf("Go JSON test output length = %d, want (%d, %d]", len(bytes), sourceVerifierTestSourceLimit, sourceVerifierTestOutputLimit)
+	if len(bytes) <= sourceVerifierPreviousOutputLimit || len(bytes) > sourceVerifierTestOutputLimit {
+		t.Fatalf("Go JSON test output length = %d, want (%d, %d]", len(bytes), sourceVerifierPreviousOutputLimit, sourceVerifierTestOutputLimit)
 	}
 	return bytes
 }

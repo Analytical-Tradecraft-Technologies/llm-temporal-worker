@@ -235,7 +235,7 @@ printf '{"Metadata":{"ImageID":"%s","ImageConfig":{"architecture":"%s"}}}' "$ima
 				"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + dir, "RUNNER_TEMP=" + runnerTemp,
 				"TRIVY_CACHE_DIR=" + filepath.Join(dir, "trivy-cache"), "BUILDX_BUILDER=cloud-builder",
 				"IMAGE_VERSION=20261007.1", "IMAGE_REVISION=abc", "IMAGE_BUILD_TIME=2026-10-07T00:00:00Z",
-				"IMAGE_SOURCE=https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker", "IMAGE_GO_VERSION=go1.26.7",
+				"IMAGE_SOURCE=https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker", "IMAGE_GO_VERSION=go1.26.9",
 				"CALL_LOG=" + log, "SCENARIO=" + scenario, "CONFIG_DIGEST=" + configDigest, "INDEX_DIGEST=" + indexDigest,
 			}
 			var stdout strings.Builder

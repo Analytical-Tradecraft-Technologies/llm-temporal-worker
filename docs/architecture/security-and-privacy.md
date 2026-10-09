@@ -209,7 +209,7 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
 - Pull-request CI uses GitHub dependency review plus `make
   security-pr-verify`. Direct modules must fall under reviewed ATT-owned or
   well-known module roots. `govulncheck` scans both base and head with the same
-  pinned v1.7.0 tool on the reviewed 1.26.7 toolchain and blocks only new
+  pinned v1.7.0 tool on the reviewed 1.26.9 toolchain and blocks only new
   findings or new reachable traces.
 - A dedicated scheduled workflow runs `make security-verify` against current
   `master`, including transitive dependencies, and enforces the complete

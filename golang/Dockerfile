@@ -3,14 +3,16 @@
 # Use the same reviewed patch release as CI and the security verifier. The
 # version tag remains mutable (rather than a digest) so image maintenance can
 # update it in one reviewed dependency change.
-ARG GO_IMAGE=docker.io/library/golang:1.26.7
+ARG GO_IMAGE=docker.io/library/golang:1.26.9
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
 ARG SOURCE=https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker
 ARG GO_VERSION=unknown
 
-FROM ${GO_IMAGE} AS build
+# Compile on the builder's native platform. TARGETARCH still selects the
+# runtime binary, avoiding an emulated Go compiler in the merge queue.
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 
 ARG TARGETARCH
 
