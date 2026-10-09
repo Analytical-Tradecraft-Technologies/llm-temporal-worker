@@ -57,6 +57,19 @@ require release verification.
 
 ## Storage and execution boundaries
 
+Each cloud execution Activity starts a fresh, bounded store of validated request
+records. Repeated reads still resolve the authoritative event stream and check
+scope; only an exactly matching record pointer can reuse decrypted bytes.
+New revisions, another repository, and the next Activity require fresh blob
+reads. Publication acknowledgements do not populate this store. Returned
+manifest and progress bytes are copied, and retained payloads are limited to
+eight records and 16 MiB per invocation. This reduces repeated blob downloads
+without changing authoritative KV reads or conflict checks.
+
+An immutable blob lost after a successful read may be reused for the remainder
+of that invocation. A later Activity detects the loss normally. This is a local
+read optimization, not storage recovery or a replacement for restore evidence.
+
 The worker has no SQL persistence backend. Generic cloud table/blob contracts
 store durable requests, attempts, provider recovery context, results,
 checkpoints and response-cache artifacts; the initial provider is DynamoDB/S3.

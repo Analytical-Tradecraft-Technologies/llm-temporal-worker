@@ -153,6 +153,7 @@ func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.Prepa
 	if r == nil {
 		return llm.ExecutionResultV1{}, executionError(provider.CodeConfiguration)
 	}
+	ctx = cloudstate.WithRecordReuse(ctx)
 	prepared, err := r.preparation.Prepare(ctx, input)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
@@ -164,6 +165,7 @@ func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.Execu
 	if r == nil {
 		return llm.ExecutionResultV1{}, executionError(provider.CodeConfiguration)
 	}
+	ctx = cloudstate.WithRecordReuse(ctx)
 	prepared, err := r.preparation.Load(ctx, ref)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
