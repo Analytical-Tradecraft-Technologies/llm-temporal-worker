@@ -392,6 +392,11 @@ func lowerToolResultContent(parts []llm.Part) ([]any, error) {
 func lowerTools(tools []llm.Tool) ([]any, error) {
 	result := make([]any, 0, len(tools))
 	for index, tool := range tools {
+		if len(tool.OutputSchema) > 0 {
+			// This API has no function-tool output schema slot. Reject in both
+			// portability modes rather than silently dropping the contract.
+			return nil, provider.NewStrictPortabilityError("function tool output schema is not representable by Anthropic Messages")
+		}
 		if tool.Kind != "" && tool.Kind != llm.ToolKindFunction {
 			return nil, fmt.Errorf("tool %d kind %q is not supported by Anthropic Messages", index, tool.Kind)
 		}
