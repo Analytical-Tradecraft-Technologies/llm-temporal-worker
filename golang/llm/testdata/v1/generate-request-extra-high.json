@@ -1,0 +1,26 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "extra-high",
+  "context": {
+    "tenant": "tenant",
+    "project": "project",
+    "actor": "actor"
+  },
+  "append": [
+    {
+      "kind": "message",
+      "actor": "human",
+      "content": [
+        {
+          "kind": "text",
+          "text": "hello"
+        }
+      ]
+    }
+  ],
+  "settings_patch": {
+    "reasoning_effort": {
+      "set": "xhigh"
+    }
+  }
+}

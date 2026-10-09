@@ -524,3 +524,7 @@ for a larger available budget than ordinary generation.
 Generate request using your configured model selector. Its
 `~include_source_text:false` option and `Exa.sources` helper cover the exposed
 Answer feature; Exa Search/Crawl APIs are not workflows in this worker.
+
+`Extra_high` serializes as `xhigh` for OpenAI models that support it.
+`Maximum` continues to serialize as `maximum`, which OpenAI adapters send as `max`.
+Extra High is rejected by the Anthropic adapters instead of silently lowering it.

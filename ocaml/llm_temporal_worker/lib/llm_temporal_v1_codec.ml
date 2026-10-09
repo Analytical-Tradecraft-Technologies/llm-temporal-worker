@@ -325,7 +325,7 @@ let settings_patch_to_json (value : settings_patch) =
   let fields = add "seed" (fun value -> `Intlit (Int64.to_string value)) value.seed fields in
   let fields = add "reasoning_mode" reasoning_mode_to_json value.reasoning_mode fields in
   let fields = add "reasoning_token_budget" (fun value -> `Int value) value.reasoning_token_budget fields in
-  let fields = add "reasoning_effort" (fun value -> `String (match value with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Maximum -> "maximum")) value.reasoning_effort fields in
+  let fields = add "reasoning_effort" (fun value -> `String (match value with Effort_default -> "provider_default" | Minimal -> "minimal" | Low -> "low" | Medium -> "medium" | High -> "high" | Extra_high -> "xhigh" | Maximum -> "maximum")) value.reasoning_effort fields in
   let fields = add "reasoning_summary" (fun value -> `String (match value with Summary_default -> "provider_default" | Summary_none -> "none" | Summary_auto -> "auto" | Concise -> "concise" | Detailed -> "detailed")) value.reasoning_summary fields in
   let fields = add "web_fetch" (fun b -> `Bool b) value.web_fetch fields in
   let fields = add "code_execution" (fun b -> `Bool b) value.code_execution fields in
@@ -355,7 +355,7 @@ let settings_patch_of_json value =
     if value < 1L || value > Int64.of_int max_reasoning_token_budget then
       Error (errorf "%s must be between 1 and %d" context max_reasoning_token_budget)
     else Ok (Int64.to_int value)) in
-  let effort context = function `String "provider_default" -> Ok Effort_default | `String "minimal" -> Ok Minimal | `String "low" -> Ok Low | `String "medium" -> Ok Medium | `String "high" -> Ok High | `String "maximum" -> Ok Maximum | _ -> Error (errorf "%s has an invalid reasoning effort" context) in
+  let effort context = function `String "provider_default" -> Ok Effort_default | `String "minimal" -> Ok Minimal | `String "low" -> Ok Low | `String "medium" -> Ok Medium | `String "high" -> Ok High | `String "xhigh" -> Ok Extra_high | `String "maximum" -> Ok Maximum | _ -> Error (errorf "%s has an invalid reasoning effort" context) in
   let summary context = function `String "provider_default" -> Ok Summary_default | `String "none" -> Ok Summary_none | `String "auto" -> Ok Summary_auto | `String "concise" -> Ok Concise | `String "detailed" -> Ok Detailed | _ -> Error (errorf "%s has an invalid reasoning summary" context) in
   let* reasoning_effort = get "reasoning_effort" effort in
   let* reasoning_summary = get "reasoning_summary" summary in

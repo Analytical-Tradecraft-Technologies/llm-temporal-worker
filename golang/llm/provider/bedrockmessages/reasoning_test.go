@@ -125,3 +125,18 @@ func portabilityName(strict bool) string {
 	}
 	return "/best effort"
 }
+
+func TestCompileExtraHighReturnsUnsupportedCapability(t *testing.T) {
+	budget := 2048
+	for _, mode := range []llm.ReasoningMode{"", llm.ReasoningModeProviderDefault, llm.ReasoningModeAdaptive, llm.ReasoningModeEnabled, llm.ReasoningModeDisabled} {
+		for _, strict := range []bool{false, true} {
+			t.Run(string(mode)+portabilityName(strict), func(t *testing.T) {
+				_, err := compileReasoning(t, llm.ReasoningSpec{Mode: mode, Effort: llm.ReasoningEffortExtraHigh, TokenBudget: &budget}, strict)
+				var mapped *provider.Error
+				if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever || !strings.Contains(mapped.SafeMessage, "xhigh") {
+					t.Fatalf("Compile() = %v, want non-retryable unsupported capability before dispatch", err)
+				}
+			})
+		}
+	}
+}

@@ -321,3 +321,17 @@ func TestCompileStrictRejectsSuccessfulToolResultWithReservedPrefix(t *testing.T
 		}
 	}
 }
+
+func TestExtraHighAndMaximumRemainDistinct(t *testing.T) {
+	for _, tc := range []struct {
+		effort llm.ReasoningEffort
+		want   string
+	}{
+		{llm.ReasoningEffortExtraHigh, "xhigh"}, {llm.ReasoningEffortMaximum, "max"},
+	} {
+		wire, err := lowerReasoning(llm.ReasoningSpec{Effort: tc.effort})
+		if err != nil || wire["effort"] != tc.want {
+			t.Fatalf("%s: %v, %v", tc.effort, wire, err)
+		}
+	}
+}

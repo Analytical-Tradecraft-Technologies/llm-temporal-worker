@@ -280,7 +280,7 @@ func wireAuditCases() []wireAuditCase {
 			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content"],"store":true}`)},
 		}},
 	}
-	for _, effort := range []llm.ReasoningEffort{llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortMaximum} {
+	for _, effort := range []llm.ReasoningEffort{llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortExtraHigh, llm.ReasoningEffortMaximum} {
 		cases = append(cases, wireAuditCase{name: "reasoning effort " + string(effort), request: llm.Request{Input: wireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Effort: effort}}})
 	}
 	for _, summary := range []llm.ReasoningSummary{llm.ReasoningSummaryAuto, llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed} {

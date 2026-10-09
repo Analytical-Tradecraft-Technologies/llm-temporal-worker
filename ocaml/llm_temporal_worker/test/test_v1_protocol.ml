@@ -57,6 +57,7 @@ let omit_checkpoint_parent = function
   | value -> value
 
 let () =
+  assert_shared_fixture "generate-request-extra-high.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
   let () = match Usd_decimal.of_string "000.0100" with Ok _ -> failwith "leading zero accepted" | Error _ -> () in
   let decimal = match Usd_decimal.of_string "1.2300" with Ok value -> value | Error message -> failwith message in
   if Usd_decimal.to_string decimal <> "1.23" then failwith "decimal was not canonicalized";
