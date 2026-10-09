@@ -524,7 +524,15 @@ with the production cloud repository and encryption over in-memory generic KV
 and blob stores. It covers synchronous and polling generation, restart between
 submission and completion, exact operation replay, cache reuse, independent
 samples, compaction, denied scope access, exhausted budget followed by timer
-resumption, and terminal pending-index cleanup. The LLM adapter is deterministic
+resumption, and terminal pending-index cleanup. For both Generate and Compact,
+the cache-concurrency gate holds one provider operation pending until 99 distinct
+identical misses have returned cache-wait instructions. The owner and waiters
+use separate task queues and reconstructed workers sharing the same stores,
+ensuring both workers participate. It verifies one paid submission for the
+100 callers, distinct zero-cost hit operations/checkpoints, separate origin-cost
+receipts, cross-worker idempotent replays, settled Redis leases and no remaining
+pending requests. Compaction first creates its source through a public Generate
+workflow; that source has its own paid lease. The LLM adapter is deterministic
 and never contacts a paid provider. These results are not AWS integration or
 production authorization evidence.
 
@@ -547,8 +555,9 @@ public child-workflow helpers. The test verifies actual child queue routing,
 counts and settled Redis leases. The OCaml CI job runs this gate on PRs,
 merge-queue builds and master; ordinary Go tests do not require an OCaml compiler.
 
-`make cloud-workflow-aws-integration` runs the polling lifecycle against existing
-disposable DynamoDB and S3 resources. It requires explicit operator configuration:
+`make cloud-workflow-aws-integration` runs the polling lifecycle and both 100-way
+cache-concurrency cases against existing disposable DynamoDB and S3 resources.
+It requires explicit operator configuration:
 
 - `LLMTW_CLOUD_TEST_AWS=1` enables AWS writes.
 - `LLMTW_CLOUD_TEST_CONFIG` contains the JSON adapter configuration shown above,

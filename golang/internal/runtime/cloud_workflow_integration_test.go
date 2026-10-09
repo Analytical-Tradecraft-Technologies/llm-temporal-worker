@@ -35,21 +35,36 @@ import (
 // workflows and Redis accounting are the production implementations. The AWS
 // gate below opens explicitly configured disposable resources instead.
 type liveCloudWorkflow struct {
-	fixture       *boundedCloudFixture
-	ctx           context.Context
-	client        client.Client
-	redis         *redisclient.Client
-	queue, prefix string
-	pending       chan struct{}
-	budgetWait    chan struct{}
-	waitObserved  sync.Once
-	observed      sync.Once
-	complete      atomic.Bool
+	fixture           *boundedCloudFixture
+	ctx               context.Context
+	client            client.Client
+	redis             *redisclient.Client
+	queue, prefix     string
+	pending           chan struct{}
+	budgetWait        chan struct{}
+	waitObserved      sync.Once
+	observed          sync.Once
+	complete          atomic.Bool
+	cacheWaitObserver func(string)
 }
 
 type observedCloudRuntime struct {
 	*cloudV1Runtime
 	harness *liveCloudWorkflow
+}
+
+func (r *observedCloudRuntime) PrepareExecutionV1(ctx context.Context, request llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
+	result, err := r.CloudExecutionRuntime.PrepareExecutionV1(ctx, request)
+	if err == nil {
+		r.observeCacheWait(result)
+	}
+	return result, err
+}
+
+func (r *observedCloudRuntime) observeCacheWait(result llm.ExecutionResultV1) {
+	if result.State == llm.ExecutionCacheWait && r.harness.cacheWaitObserver != nil {
+		r.harness.cacheWaitObserver(result.RequestID)
+	}
 }
 
 func (r *observedCloudRuntime) GenerateStepV1(ctx context.Context, request llm.GenerateRequestV1) (llm.ExecutionResultV1, error) {
@@ -60,8 +75,19 @@ func (r *observedCloudRuntime) GenerateStepV1(ctx context.Context, request llm.G
 	return result, err
 }
 
+func (r *observedCloudRuntime) CompactStepV1(ctx context.Context, request llm.CompactRequestV1) (llm.ExecutionResultV1, error) {
+	result, err := r.CloudExecutionRuntime.CompactStepV1(ctx, request)
+	if err == nil && result.State == llm.ExecutionPending {
+		r.harness.observed.Do(func() { close(r.harness.pending) })
+	}
+	return result, err
+}
+
 func (r *observedCloudRuntime) AcquireBudgetV1(ctx context.Context, ref llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
 	result, err := r.CloudExecutionRuntime.AcquireBudgetV1(ctx, ref)
+	if err == nil {
+		r.observeCacheWait(result)
+	}
 	if err == nil && result.State == llm.ExecutionBudgetWait {
 		r.harness.waitObserved.Do(func() { close(r.harness.budgetWait) })
 	}
@@ -157,16 +183,20 @@ func newLiveCloudWorkflow(t *testing.T, async, aws bool) *liveCloudWorkflow {
 }
 
 func (h *liveCloudWorkflow) startWorker(t *testing.T) func() {
+	return h.startWorkerOnQueue(t, h.queue)
+}
+
+func (h *liveCloudWorkflow) startWorkerOnQueue(t *testing.T, queue string) func() {
 	t.Helper()
 	// Reconstruct all invocation-local execution state from the retained stores.
 	runtime, err := h.fixture.cap.NewCloudExecutionRuntime(h.ctx, h.fixture.options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := worker.New(h.client, h.queue, worker.Options{WorkerStopTimeout: time.Second, MaxConcurrentWorkflowTaskExecutionSize: 4})
+	w := worker.New(h.client, queue, worker.Options{WorkerStopTimeout: time.Second, MaxConcurrentWorkflowTaskExecutionSize: 4})
 	workflows.Register(w, activity.PayloadLimits{})
 	a := &activity.Activities{V1Runtime: &observedCloudRuntime{cloudV1Runtime: &cloudV1Runtime{CloudExecutionRuntime: runtime}, harness: h}}
-	if err := a.RegisterForTaskQueue(w, h.queue); err != nil {
+	if err := a.RegisterForTaskQueue(w, queue); err != nil {
 		t.Fatal(err)
 	}
 	if err := w.Start(); err != nil {
@@ -177,8 +207,12 @@ func (h *liveCloudWorkflow) startWorker(t *testing.T) func() {
 	return stop
 }
 func (h *liveCloudWorkflow) start(t *testing.T, name string, input any) client.WorkflowRun {
+	return h.startOnQueue(t, h.queue, name, input)
+}
+
+func (h *liveCloudWorkflow) startOnQueue(t *testing.T, queue, name string, input any) client.WorkflowRun {
 	t.Helper()
-	run, err := h.client.ExecuteWorkflow(h.ctx, client.StartWorkflowOptions{ID: h.queue + "-" + uuid.NewString(), TaskQueue: h.queue, WorkflowExecutionTimeout: 2 * time.Minute}, name, input)
+	run, err := h.client.ExecuteWorkflow(h.ctx, client.StartWorkflowOptions{ID: h.queue + "-" + uuid.NewString(), TaskQueue: queue, WorkflowExecutionTimeout: 2 * time.Minute}, name, input)
 	if err != nil {
 		t.Fatal(err)
 	}
