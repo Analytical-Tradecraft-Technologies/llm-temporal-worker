@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -89,10 +90,10 @@ func (fake *budgetWorkerHashFake) Eval(_ context.Context, _ string, _ []string, 
 	}
 	expected, _ := args[1].(string)
 	current, exists := fake.values[field]
-	if !exists {
+	if !exists && (expected != "" || len(args) != 5) {
 		return redisclient.NewCmdResult(int64(-1), nil)
 	}
-	if current != expected {
+	if (expected == "" && exists) || current != expected {
 		return redisclient.NewCmdResult(int64(-2), nil)
 	}
 	if len(args) == 5 {
@@ -114,6 +115,112 @@ func testBudgetWorkerKeys(t *testing.T) BudgetKeySpace {
 		t.Fatal(err)
 	}
 	return keys
+}
+
+// Capture the read result before another caller changes Redis, then deliver
+// that stale result to Register. The same schedule runs against the command
+// fake and real Redis; no timing or simulated script outcome is needed.
+type budgetWorkerReadInterleaving struct {
+	BudgetWorkerLeaseRedisClient
+	field     string
+	afterRead func()
+}
+
+func (client *budgetWorkerReadInterleaving) HGet(ctx context.Context, key, field string) *redisclient.StringCmd {
+	result := client.BudgetWorkerLeaseRedisClient.HGet(ctx, key, field)
+	if field == client.field && client.afterRead != nil {
+		afterRead := client.afterRead
+		client.afterRead = nil
+		afterRead()
+	}
+	return result
+}
+
+func runBudgetWorkerRegistrationInterleavings(t *testing.T, makeClient func(*testing.T) (BudgetWorkerLeaseRedisClient, BudgetKeySpace)) {
+	t.Helper()
+	for _, scenario := range []struct {
+		name    string
+		initial bool
+		action  string
+		want    error
+	}{
+		{name: "renewed lease", initial: true, action: "renew", want: ErrBudgetWorkerLeaseConflict},
+		{name: "concurrent first registration", action: "register", want: ErrBudgetWorkerLeaseConflict},
+		{name: "released lease", initial: true, action: "release", want: ErrBudgetWorkerLeaseMissing},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			base, keys := makeClient(t)
+			client := &budgetWorkerReadInterleaving{BudgetWorkerLeaseRedisClient: base}
+			now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+			store, err := NewBudgetWorkerLeaseStore(client, keys, BudgetWorkerLeaseOptions{SessionID: "register-interleaving", Clock: func() time.Time { return now }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if scenario.initial {
+				if _, err := store.Register(ctx, "generation-a", "1-0", time.Minute); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client.field = store.leaseField()
+			var winner map[string]string
+			client.afterRead = func() {
+				now = now.Add(time.Second)
+				var err error
+				switch scenario.action {
+				case "renew":
+					_, err = store.Renew(ctx, "generation-a", "1-1", 2*time.Minute)
+				case "register":
+					_, err = store.Register(ctx, "generation-a", "1-1", 2*time.Minute)
+				case "release":
+					err = store.Release(ctx)
+				}
+				if err != nil {
+					t.Fatalf("intervening %s: %v", scenario.action, err)
+				}
+				winner, err = base.HGetAll(ctx, keys.WorkersKey()).Result()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := store.Register(ctx, "generation-a", "", time.Minute); !errors.Is(err, scenario.want) {
+				t.Errorf("stale Register = %v, want %v", err, scenario.want)
+			}
+			actual, err := base.HGetAll(ctx, keys.WorkersKey()).Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(actual, winner) {
+				t.Fatal("stale registration changed the winning lease or roster")
+			}
+			if scenario.action != "release" {
+				priorRoster, err := decodeBudgetWorkerRoster(winner[store.rosterField()])
+				if err != nil {
+					t.Fatal(err)
+				}
+				now = now.Add(time.Second)
+				lease, err := store.Register(ctx, "generation-a", "", 3*time.Minute)
+				if err != nil || lease.Cursor != "1-1" || !lease.LeaseExpiresAt.Equal(now.Add(3*time.Minute)) {
+					t.Fatalf("fresh registration retry = %#v, %v", lease, err)
+				}
+				rosterRaw, err := base.HGet(ctx, keys.WorkersKey(), store.rosterField()).Result()
+				if err != nil {
+					t.Fatal(err)
+				}
+				roster, err := decodeBudgetWorkerRoster(rosterRaw)
+				if err != nil || !roster.RegisteredAt.Equal(priorRoster.RegisteredAt) {
+					t.Fatalf("registration retry changed original roster timestamp: %#v, %v", roster, err)
+				}
+			}
+		})
+	}
+}
+
+func TestBudgetWorkerRegistrationRejectsInterveningWrites(t *testing.T) {
+	runBudgetWorkerRegistrationInterleavings(t, func(t *testing.T) (BudgetWorkerLeaseRedisClient, BudgetKeySpace) {
+		return &budgetWorkerHashFake{values: make(map[string]string)}, testBudgetWorkerKeys(t)
+	})
 }
 
 func TestBudgetWorkerLeaseKeepsSessionAcrossRenewAndPersistsRoster(t *testing.T) {

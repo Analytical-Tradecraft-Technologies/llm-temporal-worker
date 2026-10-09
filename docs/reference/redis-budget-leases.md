@@ -176,6 +176,16 @@ runtime; wiring adoption and wake-ups remains separate work. The Stream never
 authorizes provider dispatch. No automatic trimming is enabled, so retention
 must account for Stream growth until cursor-aware maintenance is implemented.
 
+The worker lease store atomically publishes a session's liveness and persistent
+roster. First registration succeeds only while its lease is still absent;
+registration of an existing session and renewal compare the exact lease read
+before writing. An intervening registration or renewal returns an ownership
+conflict, and removal of an observed lease returns a missing-lease error. These
+failures leave the winning lease and roster unchanged, so a stale reconnect
+cannot move its Stream cursor backwards. A fresh registration retry preserves
+the current cursor and original roster registration time. This store contract
+does not itself enable production tailer wiring or Stream retention.
+
 See [durable runtime composition](durable-v1-runtime.md) for workflow wiring.
 
 ## Verification
