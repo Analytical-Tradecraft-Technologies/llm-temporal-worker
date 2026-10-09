@@ -1,6 +1,10 @@
 package provider
 
-import "context"
+import (
+	"context"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+)
 
 type Family string
 
@@ -28,6 +32,14 @@ type Adapter interface {
 	Capabilities(context.Context, CapabilityQuery) (CapabilitySet, error)
 	Compile(context.Context, CompileInput) (Call, error)
 	Invoke(context.Context, Call, Observer) (Result, error)
+}
+
+// RequestValidator is an optional, side-effect-free validation boundary for
+// profile-dependent request controls that must be rejected before admission.
+// It must not perform provider I/O or change the request. Compile must enforce
+// the same restrictions when used independently of an engine.
+type RequestValidator interface {
+	ValidateRequest(context.Context, llm.Request) error
 }
 
 // InstructionHierarchyReporter is implemented by adapters whose ability to

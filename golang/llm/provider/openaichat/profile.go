@@ -63,6 +63,7 @@ type Profile struct {
 	// ExpectedModel optionally pins a profile to one exact model/deployment.
 	ExpectedModel string
 	// WireDefaults are trusted, profile-owned root fields for compatible APIs.
+	// Controls owned by the typed request cannot be defaulted here.
 	// Unknown fields are preserved on the official SDK parameter object instead
 	// of being silently discarded during JSON union conversion.
 	WireDefaults map[string]json.RawMessage
@@ -197,9 +198,9 @@ func (profile Profile) validate() error {
 				return fmt.Errorf("openai chat profile %q extension %q contains an empty field", profile.ID, namespace)
 			}
 			if wire == "" {
-				continue
+				wire = field
 			}
-			if wire == "model" || wire == "messages" || wire == "service_tier" {
+			if requestOwnedWireField(wire) {
 				return fmt.Errorf("openai chat profile %q extension %q cannot override %q", profile.ID, namespace, wire)
 			}
 		}
@@ -208,11 +209,14 @@ func (profile Profile) validate() error {
 		if wire == "" {
 			return fmt.Errorf("openai chat profile %q contains an empty wire default", profile.ID)
 		}
-		if wire == "model" || wire == "messages" || wire == "service_tier" {
+		if requestOwnedWireField(wire) {
 			return fmt.Errorf("openai chat profile %q cannot default %q", profile.ID, wire)
 		}
 		if !json.Valid(raw) {
 			return fmt.Errorf("openai chat profile %q wire default %q is invalid JSON", profile.ID, wire)
+		}
+		if err := validateChoiceCount(wire, raw); err != nil {
+			return fmt.Errorf("openai chat profile %q wire default %q: %w", profile.ID, wire, err)
 		}
 	}
 	for wire := range profile.ReservedWireFields {
@@ -222,6 +226,36 @@ func (profile Profile) validate() error {
 		if wire == "model" || wire == "messages" || wire == "service_tier" {
 			return fmt.Errorf("openai chat profile %q cannot reserve %q", profile.ID, wire)
 		}
+	}
+	return nil
+}
+
+// These controls belong to the normalized request used for capability checks,
+// estimation and admission. Neither profile defaults nor caller extensions may
+// introduce a second effective value after those checks, including the legacy
+// output-limit spelling used by compatible Chat APIs.
+func requestOwnedWireField(wire string) bool {
+	switch wire {
+	case "model", "messages", "service_tier", "max_tokens", "max_completion_tokens",
+		"response_format", "tools", "tool_choice", "parallel_tool_calls",
+		"max_tool_calls", "container", "temperature", "top_p", "seed",
+		"presence_penalty", "frequency_penalty", "stop", "reasoning_effort", "stream":
+		return true
+	default:
+		return false
+	}
+}
+
+// The lift supports exactly one choice and estimation reserves one output.
+// Validate the raw JSON before lowering instead of discovering an unsupported
+// response shape after the provider has performed paid work.
+func validateChoiceCount(wire string, raw json.RawMessage) error {
+	if wire != "n" {
+		return nil
+	}
+	var count int
+	if err := json.Unmarshal(raw, &count); err != nil || count != 1 {
+		return fmt.Errorf("only n=1 is supported")
 	}
 	return nil
 }
