@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -15,12 +16,16 @@ import (
 )
 
 func (r *CloudExecutionRuntime) publicGenerationOperation(request llm.GenerateRequestV1) cloudstate.Operation {
+	return publicGenerationOperation(request, r.now())
+}
+
+func publicGenerationOperation(request llm.GenerateRequestV1, now time.Time) cloudstate.Operation {
 	manifest, _ := request.MarshalJSON()
 	var index int64
 	if request.Cache != nil {
 		index = int64(request.Cache.Variant)
 	}
-	return cloudstate.Operation{Scope: cloudstate.Scope{Tenant: request.Context.Tenant, Project: request.Context.Project}, Kind: "generate", Key: request.OperationKey, RequestIndex: index, Manifest: manifest, Now: r.now()}
+	return cloudstate.Operation{Scope: cloudstate.Scope{Tenant: request.Context.Tenant, Project: request.Context.Project}, Kind: "generate", Key: request.OperationKey, RequestIndex: index, Manifest: manifest, Now: now}
 }
 
 func samePublicGeneration(original, effective llm.GenerateRequestV1) bool {

@@ -109,6 +109,40 @@ func (r *Repository) LookupOperation(ctx context.Context, operation Operation) (
 	return r.Read(ctx, operation.Scope, r.operationID(operation.Scope, operation.Kind, operation.Key))
 }
 
+// VerifyOperation verifies the immutable input and discovery binding of an
+// existing operation without creating, advancing, or repairing any record.
+// Recovery callers must use this instead of BeginOperation when restoring
+// metadata must not start an otherwise pending request.
+func (r *Repository) VerifyOperation(ctx context.Context, operation Operation) (Record, error) {
+	record, err := r.LookupOperation(ctx, operation)
+	if err != nil {
+		return Record{}, err
+	}
+	expected, err := normalizeRequest(CreateRequest{
+		ID: record.Request.ID, Scope: operation.Scope, Kind: operation.Kind,
+		RequestIndex: operation.RequestIndex, Manifest: operation.Manifest,
+		CreatedAt: record.Request.CreatedAt,
+	})
+	if err != nil {
+		return Record{}, err
+	}
+	if r.binding(expected) != r.binding(record.Request) {
+		return Record{}, contracts.ErrConflict
+	}
+	row, err := r.table.Get(ctx, r.indexKey(record.Request.ID))
+	if err != nil {
+		return Record{}, err
+	}
+	index, err := r.decodeIndex(row)
+	if err != nil {
+		return Record{}, err
+	}
+	if index.ScopeTag != r.scopeTag(expected.Scope) || index.Binding != r.binding(expected) {
+		return Record{}, contracts.ErrConflict
+	}
+	return record, nil
+}
+
 func (r *Repository) operationID(scope Scope, kind, key string) RequestID {
 	identity, _ := json.Marshal(struct {
 		Namespace string
