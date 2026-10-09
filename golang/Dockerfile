@@ -10,7 +10,9 @@ ARG BUILD_TIME=unknown
 ARG SOURCE=https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker
 ARG GO_VERSION=unknown
 
-FROM ${GO_IMAGE} AS build
+# Compile on the builder's native platform. TARGETARCH still selects the
+# runtime binary, avoiding an emulated Go compiler in the merge queue.
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
 
 ARG TARGETARCH
 
