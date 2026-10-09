@@ -230,8 +230,8 @@ func lowerTools(tools []llm.Tool) ([]types.Tool, error) {
 		if tool.Name == "" || !json.Valid(tool.InputSchema) {
 			return nil, fmt.Errorf("tool %d requires a name and valid JSON input schema", index)
 		}
-		var schema any
-		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+		schema, err := decodeDocument(tool.InputSchema)
+		if err != nil {
 			return nil, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
 		}
 		var description *string

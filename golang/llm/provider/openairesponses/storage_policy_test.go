@@ -3,12 +3,16 @@ package openairesponses
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -86,5 +90,72 @@ func TestStoragePolicyRejectsBypassingCompile(t *testing.T) {
 				t.Fatal("continuation advertised")
 			}
 		})
+	}
+}
+
+func TestStoragePolicyReconfigurationPreservesExactSchemas(t *testing.T) {
+	const schema = `{"type":"object","properties":{"id":{"type":"integer","enum":[9007199254740993]}},"required":["id"],"additionalProperties":false}`
+	for _, slot := range []string{"tool", "output", "both"} {
+		t.Run(slot, func(t *testing.T) {
+			var wire []byte
+			client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				wire, _ = io.ReadAll(request.Body)
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
+			})}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			permitted, err := New(client, "openai-prod", "cap-test", WithProviderStoragePermitted(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			denied, err := New(client, "openai-prod", "cap-test", WithProviderStoragePermitted(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := llm.Request{OperationKey: "policy-change", Model: "gpt-contract"}
+			if slot != "output" {
+				request.Tools = []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(schema)}}
+			}
+			if slot != "tool" {
+				request.Output = &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}
+			}
+			call, err := permitted.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: request.Model}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = denied.Invoke(context.Background(), call, nil)
+			var body map[string]json.RawMessage
+			if err := json.Unmarshal(wire, &body); err != nil {
+				t.Fatal(err)
+			}
+			if string(body["store"]) != "false" {
+				t.Fatalf("storage denial missing from actual transport: %s", wire)
+			}
+			count := 1
+			if slot == "both" {
+				count = 2
+			}
+			if strings.Count(string(wire), `"enum":[9007199254740993]`) != count {
+				t.Fatalf("schema changed under storage denial: %s", wire)
+			}
+		})
+	}
+}
+
+func TestStoragePolicyRejectsForbiddenRawOverrides(t *testing.T) {
+	for _, raw := range []string{`{"store":true}`, `{"background":true}`, `{"previous_response_id":"resp-stored"}`} {
+		calls := 0
+		fixture := newFixtureAdapterWithTransport(t, []byte(`{}`), func() { calls++ })
+		adapter, err := New(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		params := responses.ResponseNewParams{}
+		param.SetJSON([]byte(raw), &params)
+		_, err = adapter.Invoke(context.Background(), provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, SDKParams: params}, nil)
+		if err == nil || calls != 0 {
+			t.Fatalf("forbidden raw body dispatched: error=%v calls=%d", err, calls)
+		}
 	}
 }

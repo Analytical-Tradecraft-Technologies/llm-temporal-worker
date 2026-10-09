@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
+
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -155,7 +157,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	if len(extras) > 0 {
 		params.SetExtraFields(extras)
 	}
-	if _, hosted := requestMap["max_tool_calls"]; hosted {
+	if _, hosted := requestMap["max_tool_calls"]; hosted || len(request.Tools) > 0 || (request.Output != nil && request.Output.Format.Kind == llm.OutputKindJSONSchema) {
 		param.SetJSON(encoded, &params)
 	}
 	return params, nil
@@ -417,7 +419,7 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 			return nil, fmt.Errorf("tool %d kind %q is not supported by Chat Completions", index, tool.Kind)
 		}
 		var schema map[string]any
-		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+		if err := schemaorder.Decode(tool.InputSchema, &schema); err != nil {
 			return nil, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
 		}
 		if len(tool.OutputSchema) > 0 {
@@ -493,7 +495,7 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 			return fmt.Errorf("output schema: %w", err)
 		}
 		var schema map[string]any
-		if err := json.Unmarshal(output.Format.Schema, &schema); err != nil {
+		if err := schemaorder.Decode(output.Format.Schema, &schema); err != nil {
 			return fmt.Errorf("output schema: %w", err)
 		}
 		// The provider requires a name; v1 leaves it optional.

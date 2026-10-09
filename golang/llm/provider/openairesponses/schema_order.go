@@ -1,8 +1,6 @@
 package openairesponses
 
 import (
-	"fmt"
-
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 
@@ -15,23 +13,13 @@ import (
 // structured output in schema order, so a reasoning-first schema needs the
 // caller's intended order (#1096).
 func schemaOrderOptions(params responses.ResponseNewParams) ([]option.RequestOption, error) {
-	var options []option.RequestOption
-	if format := params.Text.Format.OfJSONSchema; format != nil && format.Schema != nil {
-		ordered, err := schemaorder.Ordered(format.Schema)
-		if err != nil {
-			return nil, err
-		}
-		options = append(options, option.WithJSONSet("text.format.schema", ordered))
+	overrides, err := schemaorder.OpenAIOverrides(params, true)
+	if err != nil {
+		return nil, err
 	}
-	for index, tool := range params.Tools {
-		if tool.OfFunction == nil || tool.OfFunction.Parameters == nil {
-			continue
-		}
-		ordered, err := schemaorder.Ordered(tool.OfFunction.Parameters)
-		if err != nil {
-			return nil, err
-		}
-		options = append(options, option.WithJSONSet(fmt.Sprintf("tools.%d.parameters", index), ordered))
+	options := make([]option.RequestOption, 0, len(overrides))
+	for _, override := range overrides {
+		options = append(options, option.WithJSONSet(override.Path, override.Value))
 	}
 	return options, nil
 }

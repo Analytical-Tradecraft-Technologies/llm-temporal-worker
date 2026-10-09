@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -291,7 +292,7 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 			return nil, fmt.Errorf("tool %d kind %q is not supported by Bedrock Messages", index, tool.Kind)
 		}
 		var schema map[string]any
-		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil || schema == nil {
+		if err := schemaorder.Decode(tool.InputSchema, &schema); err != nil || schema == nil {
 			return nil, fmt.Errorf("tool %q input schema must be an object", tool.Name)
 		}
 		// Strict tool use only accepts a closed schema subset the worker does
