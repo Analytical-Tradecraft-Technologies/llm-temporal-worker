@@ -86,17 +86,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		}
 	}
 	if call.Metadata.WebSearch {
-		usage.ProviderRaw["web_search_calls"] = json.RawMessage("null")
-		var envelope struct {
-			Usage struct {
-				ServerToolUse *struct {
-					WebSearchRequests *int64 `json:"web_search_requests"`
-				} `json:"server_tool_use"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal([]byte(response.RawJSON()), &envelope) == nil && envelope.Usage.ServerToolUse != nil && envelope.Usage.ServerToolUse.WebSearchRequests != nil {
-			usage.ProviderRaw["web_search_calls"], _ = json.Marshal(*envelope.Usage.ServerToolUse.WebSearchRequests)
-		}
+		usage.ProviderRaw["web_search_calls"] = webSearchCallCount(response)
 	}
 	output = append(output, llm.WebSearchReferences([]byte(response.RawJSON()))...)
 	service := llm.ServiceFacts{
@@ -126,6 +116,40 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		result.Cost.Status = llm.CostStatusUnknown
 	}
 	return result, nil
+}
+
+func webSearchCallCount(response *anthropic.Message) json.RawMessage {
+	unknown := json.RawMessage("null")
+	var usage map[string]json.RawMessage
+	if json.Unmarshal([]byte(response.Usage.RawJSON()), &usage) != nil || usage == nil {
+		return unknown
+	}
+	if raw, present := usage["server_tool_use"]; present {
+		var server map[string]json.RawMessage
+		if json.Unmarshal(raw, &server) != nil || server == nil {
+			return unknown
+		}
+		if raw, present := server["web_search_requests"]; present {
+			var count *int64
+			if json.Unmarshal(raw, &count) != nil || count == nil || *count < 0 {
+				return unknown
+			}
+			encoded, _ := json.Marshal(*count)
+			return encoded
+		}
+	}
+	// Anthropic can omit search usage when the available tool was not used.
+	// Search blocks without a counter are incomplete billing evidence, so
+	// keep their charge unknown instead of counting attempts as billed uses.
+	if !response.JSON.Content.Valid() {
+		return unknown
+	}
+	for _, block := range response.Content {
+		if block.Type == "web_search_tool_result" || (block.Type == "server_tool_use" && block.Name == "web_search") {
+			return unknown
+		}
+	}
+	return json.RawMessage("0")
 }
 
 // validateFinalJSON enforces the caller's json_schema output locally. The
