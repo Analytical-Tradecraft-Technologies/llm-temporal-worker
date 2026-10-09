@@ -1,11 +1,13 @@
 # This scanner configuration is intentionally nonpublishing. The trusted CI
 # job writes the JSON report locally, then releaseverify evaluates the report.
 format: json
-scanners:
-  - vuln
+scan:
+  scanners:
+    - vuln
 severity:
   - HIGH
   - CRITICAL
-ignore-unfixed: true
+vulnerability:
+  ignore-unfixed: true
 exit-code: 0
 timeout: 10m

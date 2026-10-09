@@ -64,13 +64,20 @@ done
 # anything is assembled or published.
 for arch in "${architectures[@]}"; do
   config_digest="$("$work/ocimerge" config-digest -layout "$work/$arch.oci" -platform "linux/$arch")"
-  trivy image \
+  if trivy image \
     --input "$work/$arch.oci" \
     --format json \
     --output "$work/$arch-scan.json" \
     --config "$repository_root/scripts/release/trivy.yaml" \
     --exit-code 1 \
-    --cache-dir "$TRIVY_CACHE_DIR" >&2
+    --cache-dir "$TRIVY_CACHE_DIR" >&2; then
+    :
+  else
+    scan_status=$?
+    echo "linux/$arch image scan failed; sanitized finding summary follows" >&2
+    python3 "$repository_root/scripts/ci/summarize-image-scan.py" "$work/$arch-scan.json" >&2 || true
+    exit "$scan_status"
+  fi
   # Bind the scan to this platform's image: Trivy must report the image
   # config of the platform manifest that will be published.
   if ! jq -e --arg id "$config_digest" --arg arch "$arch" \
