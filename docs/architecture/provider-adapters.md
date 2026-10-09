@@ -57,6 +57,12 @@ It never crosses the adapter package boundary or enters Temporal history.
 `OutputSchema` is the caller's `json_schema` output schema, set when the
 adapter sent the provider a lowered form of it; the lift validates the final
 JSON against it and it stays in the worker process like `SDKParams`.
+This final-response contract is distinct from `Tool.OutputSchema`. Anthropic
+Messages, Bedrock Messages, and Bedrock Converse reject nonempty function-tool
+output schemas during compilation in both strict and best-effort portability
+modes: their tool definitions cannot represent that contract, and the adapters
+do not validate tool results against it. Input-only tool definitions remain
+supported. Rejection occurs before budget admission or provider dispatch.
 `CallMetadata` contains the redacted facts needed to validate the compiled call,
 including schema digests, estimated bytes, capability version, provider tier
 value, and whether opaque state is required in the response.

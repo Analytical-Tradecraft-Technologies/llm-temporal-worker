@@ -227,6 +227,11 @@ func lowerToolResultParts(parts []llm.Part) ([]types.ToolResultContentBlock, err
 func lowerTools(tools []llm.Tool) ([]types.Tool, error) {
 	result := make([]types.Tool, 0, len(tools))
 	for index, tool := range tools {
+		if len(tool.OutputSchema) > 0 {
+			// This API has no function-tool output schema slot. Reject in both
+			// portability modes rather than silently dropping the contract.
+			return nil, provider.NewStrictPortabilityError("function tool output schema is not representable by Bedrock Converse")
+		}
 		if tool.Name == "" || !json.Valid(tool.InputSchema) {
 			return nil, fmt.Errorf("tool %d requires a name and valid JSON input schema", index)
 		}
