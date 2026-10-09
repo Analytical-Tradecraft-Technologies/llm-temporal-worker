@@ -42,6 +42,65 @@
     "redacted": {
       "const": true
     },
+    "oci_image_index": {
+      "$comment": "Exact bytes of the published OCI image index, retained as image-index.json. It is not a summary and is not part of the root oneOf; the verifier compiles this definition directly, recomputes the index digest from the retained bytes, and requires exactly one linux/amd64 and one linux/arm64 manifest plus only build attestations for those manifests.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "mediaType", "manifests"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "mediaType": { "const": "application/vnd.oci.image.index.v1+json" },
+        "manifests": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/oci_image_index_descriptor" }
+        },
+        "annotations": { "$ref": "#/$defs/oci_annotations" }
+      }
+    },
+    "oci_image_index_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mediaType", "digest", "size", "platform"],
+      "properties": {
+        "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "platform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["os", "architecture"],
+          "properties": {
+            "os": { "enum": ["linux", "unknown"] },
+            "architecture": { "enum": ["amd64", "arm64", "unknown"] },
+            "variant": {
+              "type": "string",
+              "pattern": "^v[0-9]{1,2}$"
+            }
+          }
+        },
+        "annotations": { "$ref": "#/$defs/oci_annotations" }
+      }
+    },
+    "oci_annotations": {
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 512
+      }
+    },
     "gate_summary": {
       "type": "object",
       "additionalProperties": false,
