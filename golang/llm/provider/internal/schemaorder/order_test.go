@@ -33,3 +33,22 @@ func TestOrderedFollowsRequiredOrderRecursively(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDecodeRetainsNumbersAndRejectsTrailingValues(t *testing.T) {
+	for _, input := range []string{`{"value":9007199254740993}`, `{"value":0.100000000000000000001}`, `{"value":1.234567890123456789e+20}`} {
+		var value any
+		if err := Decode([]byte(input), &value); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil || string(encoded) != input {
+			t.Fatalf("Decode changed numeric literal: %s, %v", encoded, err)
+		}
+	}
+	for _, input := range []string{`{} {}`, `{} true`, `{} garbage`, `{"value":`, ``, `{"value":NaN}`} {
+		var value any
+		if err := Decode([]byte(input), &value); err == nil {
+			t.Fatalf("accepted invalid JSON %q", input)
+		}
+	}
+}

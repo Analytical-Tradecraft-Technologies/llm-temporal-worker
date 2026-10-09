@@ -14,8 +14,26 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 )
+
+// Decode retains exact JSON numeric literals and rejects trailing values.
+func Decode(data []byte, destination any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
 
 // Ordered returns schema re-encoded with properties ordered by "required".
 func Ordered(schema any) (json.RawMessage, error) {
@@ -153,7 +171,7 @@ func MessagesOverrides(params any) ([]Override, error) {
 			InputSchema map[string]any `json:"input_schema"`
 		} `json:"tools"`
 	}
-	if err := json.Unmarshal(data, &body); err != nil {
+	if err := Decode(data, &body); err != nil {
 		return nil, err
 	}
 	var overrides []Override
@@ -175,4 +193,85 @@ func MessagesOverrides(params any) ([]Override, error) {
 		overrides = append(overrides, Override{Path: fmt.Sprintf("tools.%d.input_schema", index), Value: ordered})
 	}
 	return overrides, nil
+}
+
+// OpenAIOverrides orders schemas from the actual serialized SDK request. Its
+// validated wire override can retain numbers that the SDK's typed maps round.
+func OpenAIOverrides(params any, responses bool) ([]Override, error) {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	var body struct {
+		ResponseFormat json.RawMessage `json:"response_format"`
+		Text           json.RawMessage `json:"text"`
+		Tools          []struct {
+			Function *struct {
+				Parameters map[string]any `json:"parameters"`
+			} `json:"function"`
+			Parameters   map[string]any `json:"parameters"`
+			OutputSchema map[string]any `json:"output_schema"`
+		} `json:"tools"`
+	}
+	if err := Decode(data, &body); err != nil {
+		return nil, err
+	}
+	var result []Override
+	appendSchema := func(path string, schema map[string]any) error {
+		if schema == nil {
+			return nil
+		}
+		ordered, err := Ordered(schema)
+		if err != nil {
+			return err
+		}
+		result = append(result, Override{Path: path, Value: ordered})
+		return nil
+	}
+	if responses {
+		if raw := bytes.TrimSpace(body.Text); len(raw) > 0 && raw[0] == '{' {
+			var text struct {
+				Format *struct {
+					Schema map[string]any `json:"schema"`
+				} `json:"format"`
+			}
+			if err := Decode(raw, &text); err != nil {
+				return nil, err
+			}
+			if text.Format != nil {
+				if err := appendSchema("text.format.schema", text.Format.Schema); err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else if raw := bytes.TrimSpace(body.ResponseFormat); len(raw) > 0 && raw[0] == '{' {
+		var format struct {
+			JSONSchema *struct {
+				Schema map[string]any `json:"schema"`
+			} `json:"json_schema"`
+		}
+		if err := Decode(raw, &format); err != nil {
+			return nil, err
+		}
+		if format.JSONSchema != nil {
+			if err := appendSchema("response_format.json_schema.schema", format.JSONSchema.Schema); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for index, tool := range body.Tools {
+		if responses {
+			if err := appendSchema(fmt.Sprintf("tools.%d.parameters", index), tool.Parameters); err != nil {
+				return nil, err
+			}
+			if err := appendSchema(fmt.Sprintf("tools.%d.output_schema", index), tool.OutputSchema); err != nil {
+				return nil, err
+			}
+		} else if tool.Function != nil {
+			if err := appendSchema(fmt.Sprintf("tools.%d.function.parameters", index), tool.Function.Parameters); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return result, nil
 }
