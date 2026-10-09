@@ -145,13 +145,14 @@ func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.
 		// Changed input is rejected before any adapter lookup. Which form of a
 		// summarizer request was bound is an endpoint fact, so this accepts
 		// either and the compiled call settles it below.
-		if !plausibleCandidateDigest(semantic, pins, candidate, binding.RequestDigest) {
+		resolution := newCandidateResolution(semantic, pins, candidate)
+		if !resolution.plausible(binding.RequestDigest) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 		}
 		if health, present := planning.health.Routes[candidate.RouteID]; present && (!health.Enabled || health.Open || health.AuthOpen) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeNoRoute, provider.PhasePlan, provider.RetrySameOperation)
 		}
-		planned, rejection, err := planning.compileCandidate(ctx, semantic, pins, candidate)
+		planned, rejection, err := planning.compileCandidate(ctx, semantic, pins, candidate, resolution)
 		if err != nil {
 			return PlannedProviderCall{}, err
 		}

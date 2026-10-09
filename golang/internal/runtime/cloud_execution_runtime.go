@@ -209,7 +209,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		return done, err
 	}
 	if p.Compact != nil {
-		input, err := PrepareCompactInput(ctx, *p.Compact, p.CompactReplay)
+		input, err := p.compactInput(ctx)
 		if err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
@@ -284,7 +284,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		if step == cloudAcquire && saved.Execution.Stage == cloudstate.ExecutionUnknown && !r.now().Before(saved.Execution.RecoverAfter) {
 			// Charge the old attempt at its reservation before replacing it,
 			// so its claim ages out of each window instead of being held.
-			recovered, err := r.execution.Resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay)
+			recovered, err := r.execution.resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay, p.input)
 			if err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
@@ -309,7 +309,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 				return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 			}
 		} else if step == cloudAcquire && saved.Execution.Stage == cloudstate.ExecutionFailed && saved.Execution.Failure.Retryable {
-			result, err := r.execution.Resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay)
+			result, err := r.execution.resume(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay, p.input)
 			if err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
@@ -347,9 +347,9 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	budgetAttempt := BudgetAttempt{PriorCandidates: append([]string(nil), attempt.PriorCandidates...), OperationID: durable.OperationID(attempt.ID), GenerationID: r.options.BudgetGeneration, QuotedAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}
 	var call *CloudBudgetCall
 	if p.Generate != nil {
-		call, err = r.execution.admission.PrepareGenerate(ctx, root.Scope, attempt.ID, p.GenerateReplay, budgetAttempt)
+		call, err = r.execution.admission.prepareGenerate(ctx, root.Scope, attempt.ID, p.GenerateReplay, p.input, budgetAttempt)
 	} else {
-		call, err = r.execution.admission.PrepareCompact(ctx, root.Scope, attempt.ID, p.CompactReplay, budgetAttempt)
+		call, err = r.execution.admission.prepareCompact(ctx, root.Scope, attempt.ID, p.CompactReplay, p.input, budgetAttempt)
 	}
 	if err != nil {
 		return r.resumeAdmissionWinner(ctx, p, attempt, step, err)
@@ -425,7 +425,7 @@ func (r *CloudExecutionRuntime) resumeAttempt(ctx context.Context, p PreparedClo
 	result := r.execution.result(saved)
 	if step == cloudPoll || step == cloudSubmit || saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed {
 		var err error
-		result, err = r.execution.Resume(ctx, p.Record.Request.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay)
+		result, err = r.execution.resume(ctx, p.Record.Request.Scope, attempt.ID, p.GenerateReplay, p.CompactReplay, p.input)
 		if err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
@@ -455,7 +455,7 @@ func (r *CloudExecutionRuntime) finishProviderStep(ctx context.Context, p Prepar
 		outcome = cache.FillNotCacheable
 	}
 	if p.Generate != nil && result.Saved.Execution.Stage == cloudstate.ExecutionSucceeded {
-		prepared, err := PrepareGenerateInput(ctx, *p.Generate, p.GenerateReplay)
+		prepared, err := p.generateInput(ctx)
 		if err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
@@ -547,7 +547,7 @@ func (r *CloudExecutionRuntime) replay(ctx context.Context, p PreparedCloudReque
 	} else {
 		var found bool
 		key := cloudPublicKey(p)
-		data, found, err = r.capabilities.Finalizer.replay(ctx, p.Record.Request.Scope, p.Record, p.Record.Request.Kind, key, p.Record.Request.RequestIndex)
+		data, found, err = r.capabilities.Finalizer.replay(ctx, p.Record.Request.Scope, p.Record, p.Record.Request.Kind, key, p.Record.Request.RequestIndex, p.validatedPreparation())
 		if err != nil || !found {
 			return llm.ExecutionResultV1{}, found, err
 		}

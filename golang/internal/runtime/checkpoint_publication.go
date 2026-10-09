@@ -66,12 +66,18 @@ func (capabilities V1RuntimeCapabilities) NewCheckpointPublication(keyring *stat
 // Generate builds a distinct child even for cache hits. The origin checkpoint
 // is provenance only and is never used as the new child's parent.
 func (p *CheckpointPublication) Generate(ctx context.Context, identity CheckpointPublicationIdentity, request llm.GenerateRequestV1, replay durable.GenerateReplay, result llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry) (state.DurableCheckpoint, llm.GenerateResponseV1, error) {
-	var zero state.DurableCheckpoint
-	var response llm.GenerateResponseV1
 	prepared, err := PrepareGenerateInput(ctx, request, replay)
 	if err != nil {
-		return zero, response, err
+		return state.DurableCheckpoint{}, llm.GenerateResponseV1{}, err
 	}
+	return p.generate(ctx, identity, request, replay, prepared, result, disposition, origin)
+}
+
+// generate is Generate given prepared, what PrepareGenerateInput returns for
+// request and replay, which the caller already prepared in this step.
+func (p *CheckpointPublication) generate(ctx context.Context, identity CheckpointPublicationIdentity, request llm.GenerateRequestV1, replay durable.GenerateReplay, prepared PreparedGenerateInput, result llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry) (state.DurableCheckpoint, llm.GenerateResponseV1, error) {
+	var zero state.DurableCheckpoint
+	var response llm.GenerateResponseV1
 	if result.OperationKey != request.OperationKey || (origin == nil && result.OperationID != string(identity.OperationID)) || disposition.Variant != int32(prepared.SampleIndex) {
 		return zero, response, checkpointPublicationError(provider.CodeStateCorrupt)
 	}
@@ -145,12 +151,17 @@ func (p *CheckpointPublication) Generate(ctx context.Context, identity Checkpoin
 // A cache hit supplies the summary result extracted from its origin artifact,
 // never the origin's suffix or application settings.
 func (p *CheckpointPublication) Compact(ctx context.Context, identity CheckpointPublicationIdentity, request llm.CompactRequestV1, replay durable.CompactReplay, result *llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry) (state.DurableCheckpoint, llm.CompactResponseV1, error) {
-	var zero state.DurableCheckpoint
-	var response llm.CompactResponseV1
 	prepared, err := PrepareCompactInput(ctx, request, replay)
 	if err != nil {
-		return zero, response, err
+		return state.DurableCheckpoint{}, llm.CompactResponseV1{}, err
 	}
+	return p.compact(ctx, identity, request, replay, prepared, result, disposition, origin)
+}
+
+// compact is generate for Compact.
+func (p *CheckpointPublication) compact(ctx context.Context, identity CheckpointPublicationIdentity, request llm.CompactRequestV1, replay durable.CompactReplay, prepared PreparedCompactInput, result *llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry) (state.DurableCheckpoint, llm.CompactResponseV1, error) {
+	var zero state.DurableCheckpoint
+	var response llm.CompactResponseV1
 	if (prepared.Request == nil) != (result == nil) || (result == nil && (origin != nil || disposition.Disposition != "disabled")) {
 		return zero, response, checkpointPublicationError(provider.CodeStateCorrupt)
 	}

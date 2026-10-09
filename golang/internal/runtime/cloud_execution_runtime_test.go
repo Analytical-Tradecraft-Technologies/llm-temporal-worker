@@ -1331,10 +1331,13 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 		handle := parent.Generate.Checkpoint.Handle
 		child := llm.GenerateRequestV1{Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage(strings.Repeat("x", 64))}}
 		ctx := context.Background()
+		var stepUsed executionStorageCounts
 		timed := func(name string, run func() (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
 			if name != step {
 				return run()
 			}
+			before := readExecutionStorageCounts(f.table, f.blobs)
+			defer func() { stepUsed = stepUsed.plus(readExecutionStorageCounts(f.table, f.blobs).minus(before)) }()
 			b.StartTimer()
 			defer b.StopTimer()
 			return run()
@@ -1368,5 +1371,13 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 		b.ReportMetric(float64(used.openBytes)/n, "blob-get-B/turn")
 		b.ReportMetric(float64(used.creates)/n, "blob-put/turn")
 		b.ReportMetric(float64(used.createBytes)/n, "blob-put-B/turn")
+		// Storage traffic of the timed step alone.
+		b.ReportMetric(float64(stepUsed.gets)/n, "kv-get/op")
+		b.ReportMetric(float64(stepUsed.queries)/n, "kv-query/op")
+		b.ReportMetric(float64(stepUsed.writes)/n, "kv-write/op")
+		b.ReportMetric(float64(stepUsed.opens)/n, "blob-get/op")
+		b.ReportMetric(float64(stepUsed.openBytes)/n, "blob-get-B/op")
+		b.ReportMetric(float64(stepUsed.creates)/n, "blob-put/op")
+		b.ReportMetric(float64(stepUsed.createBytes)/n, "blob-put-B/op")
 	})
 }
