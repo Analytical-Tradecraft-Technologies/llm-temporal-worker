@@ -26,6 +26,7 @@ targets=(
   "./llm FuzzFastJSONDecodingMatchesReference"
   "./llm FuzzMarshaledRawJSON"
   "./llm FuzzRequestCanonicalizesClosedServiceClasses"
+  "./llm FuzzRequestDigestLegacyCompatibility"
   "./llm/provider FuzzAssemblerEventSequences"
   "./llm/provider/anthropicmessages FuzzDecodeStream"
   "./llm/provider/bedrockmessages FuzzDecodeStream"

@@ -675,6 +675,17 @@ func decodeContinuation(data []byte) (*Continuation, error) {
 }
 
 func (request Request) MarshalJSON() ([]byte, error) {
+	fields, err := request.jsonFields()
+	if err != nil {
+		return nil, err
+	}
+	return marshalObject(fields)
+}
+
+// jsonFields is shared by the public wire encoder and request identity hashing.
+// Keep their defaults and validation identical without decoding an encoded
+// transcript merely to remove operation_key from the digest (#1112).
+func (request Request) jsonFields() (map[string]any, error) {
 	if request.APIVersion != "" && request.APIVersion != APIVersion {
 		return nil, fmt.Errorf("api_version %q is unsupported", request.APIVersion)
 	}
@@ -753,7 +764,7 @@ func (request Request) MarshalJSON() ([]byte, error) {
 	if request.Reasoning != nil {
 		fields["reasoning"] = request.Reasoning
 	}
-	return marshalObject(fields)
+	return fields, nil
 }
 
 func (request *Request) UnmarshalJSON(data []byte) error {
