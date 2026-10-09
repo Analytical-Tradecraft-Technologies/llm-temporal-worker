@@ -172,7 +172,7 @@ func validateJSONLeaf(name string, value any) error {
 
 func validReasoningEffort(value llm.ReasoningEffort) bool {
 	switch value {
-	case llm.ReasoningEffortProviderDefault, llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortMaximum:
+	case llm.ReasoningEffortProviderDefault, llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortExtraHigh, llm.ReasoningEffortMaximum:
 		return true
 	default:
 		return false

@@ -204,6 +204,13 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 // polls once if an ID exists, or uses documented idempotency recovery once
 // after the bounded submission interval. It never calls Submit/Invoke.
 func (executor *CloudProviderExecution) Resume(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, generate durable.GenerateReplay, compact durable.CompactReplay) (ProviderExecutionResult, error) {
+	return executor.resume(ctx, scope, id, generate, compact, nil)
+}
+
+// resume is Resume reusing input, the input this step already prepared with
+// the same replay, to reconstruct the call (#1112). With nil input it
+// prepares afresh.
+func (executor *CloudProviderExecution) resume(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, generate durable.GenerateReplay, compact durable.CompactReplay, input *cloudPreparedInput) (ProviderExecutionResult, error) {
 	if executor == nil || ctx == nil {
 		return ProviderExecutionResult{}, executionError(provider.CodeConfiguration)
 	}
@@ -221,7 +228,7 @@ func (executor *CloudProviderExecution) Resume(ctx context.Context, scope clouds
 	if (stage == cloudstate.ExecutionClaiming || stage == cloudstate.ExecutionSubmitting) && executor.clock().Before(saved.Execution.RecoverAfter) {
 		return executor.result(saved), nil
 	}
-	planned, transcript, err := executor.reconstruct(ctx, scope, id, saved.Plan, generate, compact)
+	planned, transcript, err := executor.reconstruct(ctx, scope, id, saved.Plan, generate, compact, input)
 	if err != nil {
 		return ProviderExecutionResult{}, err
 	}
@@ -294,7 +301,7 @@ func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope
 	return executor.settle(ctx, scope, id, result.Saved)
 }
 
-func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, plan cloudstate.BudgetPlan, generate durable.GenerateReplay, compact durable.CompactReplay) (PlannedProviderCall, []llm.Item, error) {
+func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, plan cloudstate.BudgetPlan, generate durable.GenerateReplay, compact durable.CompactReplay, input *cloudPreparedInput) (PlannedProviderCall, []llm.Item, error) {
 	record, err := executor.store.Read(ctx, scope, id)
 	if err != nil {
 		return PlannedProviderCall{}, nil, cloudRuntimeError(err, false)
@@ -316,7 +323,7 @@ func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope c
 		if json.Unmarshal(record.Request.Manifest, &request) != nil || request.Context.Tenant != scope.Tenant || request.Context.Project != scope.Project {
 			return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 		}
-		prepared, err := PrepareGenerateInput(ctx, request, generate)
+		prepared, err := input.generateInput(ctx, record.Request.Manifest, request, generate)
 		if err != nil {
 			return PlannedProviderCall{}, nil, err
 		}
@@ -333,7 +340,7 @@ func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope c
 	if json.Unmarshal(record.Request.Manifest, &request) != nil || request.Context.Tenant != scope.Tenant || request.Context.Project != scope.Project {
 		return PlannedProviderCall{}, nil, executionError(provider.CodeStateCorrupt)
 	}
-	prepared, err := PrepareCompactInput(ctx, request, compact)
+	prepared, err := input.compactInput(ctx, record.Request.Manifest, request, compact)
 	if err != nil {
 		return PlannedProviderCall{}, nil, err
 	}

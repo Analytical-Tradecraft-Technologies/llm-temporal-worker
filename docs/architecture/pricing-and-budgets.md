@@ -137,7 +137,7 @@ will map directly to the durable NULL/status fields.
 
 ## Estimation
 
-The estimate is an upper bound for one candidate:
+The estimate reserves a conservative allowance for one candidate:
 
 ```text
 estimated input tokens at a conservative tokenizer ratio
@@ -156,6 +156,17 @@ reasoning together. A requested reasoning `token_budget` is therefore not
 added to the window a second time. The reservation still prices the reasoning
 component separately at the catalog's reasoning rate, on top of the full
 output cap, so it stays an upper bound.
+
+Hosted web research uses the actual prompt estimate and bounded tool-call count,
+not repeated full model context windows. Each possible continuation includes the
+prompt, accumulated results (8,192 tokens per search, or 10,000 when fetching),
+and an intermediate assistant-output allowance, capped by available context.
+Anthropic search and fetch each allow three calls; Responses/OpenRouter share a
+three-call cap. The generation output cap is reserved once. Search result size
+is an estimate, not a provider-enforced upper bound. The configured safety ratio,
+search fees, cache-write allowance, and settlement against actual usage remain.
+Code execution retains the existing full-context allowance until its provider
+loop has a per-request call bound.
 
 The Go `budget.Estimator` accepts an optional candidate-aware exact tokenizer
 hook. A configured hook must be deterministic, return a non-negative count,

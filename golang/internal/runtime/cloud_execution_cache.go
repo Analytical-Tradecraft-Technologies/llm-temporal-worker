@@ -34,14 +34,14 @@ func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudR
 	var policyVersion, promptVersion string
 	var temperature, topP *llm.DecimalV1
 	if p.Generate != nil {
-		input, err := PrepareGenerateInput(ctx, *p.Generate, p.GenerateReplay)
+		input, err := p.generateInput(ctx)
 		if err != nil {
 			return nil, err
 		}
 		request = input.Request
 		temperature, topP = input.Settings.TemperatureDecimal, input.Settings.TopP
 	} else {
-		input, err := PrepareCompactInput(ctx, *p.Compact, p.CompactReplay)
+		input, err := p.compactInput(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +233,7 @@ func (r *CloudExecutionRuntime) finishNoWork(ctx context.Context, p PreparedClou
 	return r.publish(ctx, p, identity, nil, llm.CacheDispositionV1{Disposition: "disabled", Variant: int32(p.Record.Request.RequestIndex)}, nil, FinalizationEffects{NoWork: &NoWorkFinalizationEffects{}})
 }
 func (r *CloudExecutionRuntime) finishAttempt(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution) (llm.ExecutionResultV1, error) {
-	result, err := r.capabilities.Finalizer.LoadAttemptResult(ctx, p.Record.Request.Scope, p.Record.Request.ID)
+	result, err := r.capabilities.Finalizer.attemptResult(ctx, p.Record.Request.Scope, p.Record.Request.ID, p.validatedPreparation())
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
@@ -282,7 +282,11 @@ func (r *CloudExecutionRuntime) publish(ctx context.Context, p PreparedCloudRequ
 func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloudRequest, identity CheckpointPublicationIdentity, model *llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry, effects FinalizationEffects) (llm.ExecutionResultV1, error) {
 	var data []byte
 	if p.Generate != nil {
-		cp, response, err := r.publication.Generate(ctx, identity, *p.Generate, p.GenerateReplay, *model, disposition, origin)
+		prepared, err := p.generateInput(ctx)
+		if err != nil {
+			return llm.ExecutionResultV1{}, err
+		}
+		cp, response, err := r.publication.generate(ctx, identity, *p.Generate, p.GenerateReplay, prepared, *model, disposition, origin)
 		if err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
@@ -293,11 +297,15 @@ func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloud
 		if effects.Provider != nil && effects.Provider.Entry != nil {
 			effects.Provider.Entry.Response = data
 		}
-		if err := r.capabilities.Finalizer.CommitGenerate(ctx, *p.Generate, cp, response, effects); err != nil {
+		if err := r.capabilities.Finalizer.commitGenerate(ctx, *p.Generate, cp, response, effects, p.validatedPreparation()); err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
 	} else {
-		cp, response, err := r.publication.Compact(ctx, identity, *p.Compact, p.CompactReplay, model, disposition, origin)
+		prepared, err := p.compactInput(ctx)
+		if err != nil {
+			return llm.ExecutionResultV1{}, err
+		}
+		cp, response, err := r.publication.compact(ctx, identity, *p.Compact, p.CompactReplay, prepared, model, disposition, origin)
 		if err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
@@ -308,7 +316,7 @@ func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloud
 		if effects.Provider != nil && effects.Provider.Entry != nil {
 			effects.Provider.Entry.Response = data
 		}
-		if err := r.capabilities.Finalizer.CommitCompact(ctx, *p.Compact, cp, response, effects); err != nil {
+		if err := r.capabilities.Finalizer.commitCompact(ctx, *p.Compact, cp, response, effects, p.validatedPreparation()); err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
 	}

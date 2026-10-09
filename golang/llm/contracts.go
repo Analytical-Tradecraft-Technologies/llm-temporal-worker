@@ -639,7 +639,7 @@ func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 
 func validReasoningEffort(value ReasoningEffort) bool {
 	switch value {
-	case ReasoningEffortProviderDefault, ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortMaximum:
+	case ReasoningEffortProviderDefault, ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortExtraHigh, ReasoningEffortMaximum:
 		return true
 	default:
 		return false

@@ -119,8 +119,41 @@ func (r *Repository) newParentSnapshotRef(scope Scope, snapshot []byte) parentSn
 // referenced parent is checked only for a well-formed reference here; resolve
 // verifies and decodes it.
 func (r *Repository) validStored(stored storedRequestPreparation) (*state.CheckpointSnapshot, error) {
+	return r.validStoredKnown(stored, nil)
+}
+
+// KnownParent is a parent snapshot the caller already validated earlier in
+// the same Activity step (#1112). Given one, loading or saving a preparation
+// whose parent is byte for byte the same does not decode it again, and, when
+// Verified, does not read it again either. Every other check still runs. A
+// KnownParent must never come from another Activity, request or scope.
+type KnownParent struct {
+	// Snapshot is the parent snapshot that RequestPreparation.ValidateParent
+	// accepted.
+	Snapshot []byte
+	// Decoded is the snapshot that ValidateParent decoded from Snapshot, or
+	// nil. A load whose parent matches returns it in place of decoding, so
+	// the caller hands it over.
+	Decoded *state.CheckpointSnapshot
+	// Verified reports that Snapshot was loaded from this request's stored
+	// preparation in this step, a referenced blob checked against its
+	// reference. Then a matching reference is not read again.
+	Verified bool
+}
+
+func (known *KnownParent) matches(snapshot []byte) bool {
+	return known != nil && len(known.Snapshot) != 0 && bytes.Equal(snapshot, known.Snapshot)
+}
+
+// validStoredKnown is validStored that does not decode a legacy inline parent
+// matching known again: it returns known.Decoded. The other fields are still
+// checked. Any other parent is checked as validStored does.
+func (r *Repository) validStoredKnown(stored storedRequestPreparation, known *KnownParent) (*state.CheckpointSnapshot, error) {
 	ref := stored.ParentSnapshotRef
 	if ref == nil {
+		if known.matches(stored.ParentSnapshot) {
+			return known.Decoded, stored.validateFields(true)
+		}
 		return stored.ValidateParent()
 	}
 	if len(stored.ParentSnapshot) != 0 || !hexDigest(ref.Digest) || ref.ByteLength <= 0 || ref.ByteLength > MaxPreparedParentBytes || !r.validBlobKey(ref.Blob) {
@@ -135,9 +168,21 @@ func (r *Repository) validStored(stored storedRequestPreparation) (*state.Checkp
 // ErrCorrupt, never a cache miss. legacyParent is the snapshot that validStored
 // already decoded from an inline parent.
 func (r *Repository) resolve(ctx context.Context, scope Scope, stored storedRequestPreparation, legacyParent *state.CheckpointSnapshot) (RequestPreparation, *state.CheckpointSnapshot, error) {
+	return r.resolveKnown(ctx, scope, stored, legacyParent, nil)
+}
+
+// resolveKnown is resolve that reuses known for a referenced parent with the
+// same bytes: a verified known parent whose reference matches is not read
+// again, and a parent read from its blob that matches known is not decoded
+// again. Either way it returns known.Decoded.
+func (r *Repository) resolveKnown(ctx context.Context, scope Scope, stored storedRequestPreparation, legacyParent *state.CheckpointSnapshot, known *KnownParent) (RequestPreparation, *state.CheckpointSnapshot, error) {
 	preparation, ref := stored.RequestPreparation, stored.ParentSnapshotRef
 	if ref == nil {
 		return preparation, legacyParent, nil
+	}
+	if known != nil && known.Verified && len(known.Snapshot) != 0 && *ref == r.newParentSnapshotRef(scope, known.Snapshot) {
+		preparation.ParentSnapshot = bytes.Clone(known.Snapshot)
+		return preparation, known.Decoded, nil
 	}
 	data, err := r.readReferencedBlob(ctx, r.parentSnapshotStream(scope), ref.Blob)
 	if err != nil {
@@ -148,6 +193,9 @@ func (r *Repository) resolve(ctx context.Context, scope Scope, stored storedRequ
 		return RequestPreparation{}, nil, ErrCorrupt
 	}
 	preparation.ParentSnapshot = data
+	if known.matches(data) {
+		return preparation, known.Decoded, nil
+	}
 	parent, err := preparation.ValidateParent()
 	if err != nil {
 		return RequestPreparation{}, nil, ErrCorrupt
@@ -166,10 +214,22 @@ func (r *Repository) resolve(ctx context.Context, scope Scope, stored storedRequ
 // store identical values. An existing winner in either form that holds the
 // same preparation counts as this one.
 func (r *Repository) SaveRequestPreparation(ctx context.Context, scope Scope, id RequestID, preparation RequestPreparation) error {
+	return r.SaveRequestPreparationKnown(ctx, scope, id, preparation, nil)
+}
+
+// SaveRequestPreparationKnown is SaveRequestPreparation for a caller that
+// already validated a parent snapshot, known, earlier in the same Activity
+// step (#1112): a preparation whose parent is byte for byte known is
+// validated without decoding that parent again. Everything else is unchanged.
+func (r *Repository) SaveRequestPreparationKnown(ctx context.Context, scope Scope, id RequestID, preparation RequestPreparation, known *KnownParent) error {
 	if err := validContext(ctx); err != nil {
 		return err
 	}
-	if !scope.valid() || preparation.Validate() != nil {
+	invalid := preparation.Validate
+	if known.matches(preparation.ParentSnapshot) {
+		invalid = func() error { return preparation.validateFields(true) }
+	}
+	if !scope.valid() || invalid() != nil {
 		return ErrInvalid
 	}
 	preparation.PreparedAt = preparation.PreparedAt.UTC()
@@ -280,24 +340,47 @@ func (r *Repository) LoadRequestPreparation(ctx context.Context, scope Scope, id
 // has no parent), so a caller restoring the parent does not decode it again.
 // The snapshot is decoded for this call only and belongs to the caller.
 func (r *Repository) LoadRequestPreparationParent(ctx context.Context, scope Scope, id RequestID) (RequestPreparation, *state.CheckpointSnapshot, error) {
-	record, err := r.Read(ctx, scope, id)
+	return r.LoadRequestPreparationKnown(ctx, scope, id, nil)
+}
+
+// LoadRequestPreparationKnown is LoadRequestPreparationParent for a caller
+// that already validated a parent snapshot, known, earlier in the same
+// Activity step (#1112). The record is read and checked exactly as
+// LoadRequestPreparation does, and a parent that differs from known is read,
+// verified and decoded as before. A parent byte for byte equal to known is
+// not decoded again, and is not read again when known is Verified and the
+// stored reference is the one its bytes produce in this scope: both forms are
+// immutable and were checked when known was. The snapshot returned for such
+// a parent is known.Decoded. The preparation never shares known's bytes.
+func (r *Repository) LoadRequestPreparationKnown(ctx context.Context, scope Scope, id RequestID, known *KnownParent) (RequestPreparation, *state.CheckpointSnapshot, error) {
+	record, stored, legacyParent, err := r.loadStoredPreparation(ctx, scope, id, known)
 	if err != nil {
 		return RequestPreparation{}, nil, err
 	}
-	progress, stored, legacyParent, err := r.storedPreparationProgress(record)
+	return r.resolveKnown(ctx, record.Request.Scope, stored, legacyParent, known)
+}
+
+// loadStoredPreparation reads a request's stored preparation and checks it
+// without reading a referenced parent; known is as for validStoredKnown.
+func (r *Repository) loadStoredPreparation(ctx context.Context, scope Scope, id RequestID, known *KnownParent) (Record, storedRequestPreparation, *state.CheckpointSnapshot, error) {
+	record, err := r.Read(ctx, scope, id)
 	if err != nil {
-		return RequestPreparation{}, nil, err
+		return Record{}, storedRequestPreparation{}, nil, err
+	}
+	progress, stored, legacyParent, err := r.storedPreparationProgressKnown(record, known)
+	if err != nil {
+		return Record{}, storedRequestPreparation{}, nil, err
 	}
 	if stored == nil {
 		if record.Status != StatusRunning || preparationAlreadyStarted(progress) {
-			return RequestPreparation{}, nil, ErrCorrupt
+			return Record{}, storedRequestPreparation{}, nil, ErrCorrupt
 		}
-		return RequestPreparation{}, nil, ErrRequestPreparationMissing
+		return Record{}, storedRequestPreparation{}, nil, ErrRequestPreparationMissing
 	}
 	if err := r.repairBudgetPlanIndex(ctx, record); err != nil {
-		return RequestPreparation{}, nil, err
+		return Record{}, storedRequestPreparation{}, nil, err
 	}
-	return r.resolve(ctx, record.Request.Scope, *stored, legacyParent)
+	return record, *stored, legacyParent, nil
 }
 
 func preparationAlreadyStarted(progress map[string]json.RawMessage) bool {
@@ -313,6 +396,12 @@ func preparationAlreadyStarted(progress map[string]json.RawMessage) bool {
 // without reading a referenced parent blob. legacyParent is the inline parent
 // snapshot that validating a legacy preparation decoded (nil otherwise).
 func (r *Repository) storedPreparationProgress(record Record) (progress map[string]json.RawMessage, stored *storedRequestPreparation, legacyParent *state.CheckpointSnapshot, err error) {
+	return r.storedPreparationProgressKnown(record, nil)
+}
+
+// storedPreparationProgressKnown is storedPreparationProgress with known as
+// for validStoredKnown.
+func (r *Repository) storedPreparationProgressKnown(record Record, known *KnownParent) (progress map[string]json.RawMessage, stored *storedRequestPreparation, legacyParent *state.CheckpointSnapshot, err error) {
 	if json.Unmarshal(record.Progress, &progress) != nil || progress == nil || string(progress["version"]) != "1" {
 		return nil, nil, nil, ErrCorrupt
 	}
@@ -324,7 +413,7 @@ func (r *Repository) storedPreparationProgress(record Record) (progress map[stri
 	if json.Unmarshal(data, &value) != nil {
 		return nil, nil, nil, ErrCorrupt
 	}
-	legacyParent, err = r.validStored(value)
+	legacyParent, err = r.validStoredKnown(value, known)
 	if err != nil || value.PreparedAt.Before(record.Request.CreatedAt) {
 		return nil, nil, nil, ErrCorrupt
 	}

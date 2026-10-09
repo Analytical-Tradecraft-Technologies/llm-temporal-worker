@@ -190,10 +190,12 @@ const (
 )
 
 type RedisConfig struct {
-	Addresses []string  `yaml:"addresses" json:"addresses"`
-	KeyPrefix string    `yaml:"key_prefix" json:"key_prefix"`
-	Username  SecretRef `yaml:"username" json:"username"`
-	Password  SecretRef `yaml:"password" json:"password"`
+	// ServiceMesh delegates encryption and authentication to an externally enforced mTLS mesh.
+	ServiceMesh bool      `yaml:"service_mesh" json:"service_mesh"`
+	Addresses   []string  `yaml:"addresses" json:"addresses"`
+	KeyPrefix   string    `yaml:"key_prefix" json:"key_prefix"`
+	Username    SecretRef `yaml:"username" json:"username"`
+	Password    SecretRef `yaml:"password" json:"password"`
 	// KeySecret is stable namespace identity material, independent of Redis ACL credentials.
 	KeySecret           SecretRef `yaml:"key_secret" json:"key_secret"`
 	TLS                 TLSConfig `yaml:"tls" json:"tls"`

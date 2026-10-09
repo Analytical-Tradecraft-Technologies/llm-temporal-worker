@@ -236,6 +236,7 @@ func TestCheckpointPublicationCacheHitMakesDistinctZeroCostChild(t *testing.T) {
 	if child.ID == cp.ID || child.ParentID != nil || child.Kind != state.CheckpointCacheReplay || child.OriginCacheEntryID == nil || *child.OriginCacheEntryID != origin.ID || out.Cost.ActualCostUSD == nil || *out.Cost.ActualCostUSD != "0" || out.Usage != nil {
 		t.Fatal("cache hit reused origin identity or charge")
 	}
+	assertOriginCost(t, out.Diagnostics, originResponse.OperationID, *originResponse.Cost.ActualCostUSD)
 	store.rows[child.ID] = child
 	req.Parent = &out.Checkpoint.Handle
 	if _, err := replay.Generate(context.Background(), req); err != nil {
@@ -288,6 +289,7 @@ func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) 
 	if cp.ParentID == nil || *cp.ParentID != consumerCP.ID || cp.Kind != state.CheckpointCompaction || *cp.OriginCacheEntryID != origin.ID || response.Usage != nil || *response.Cost.ActualCostUSD != "0" {
 		t.Fatal("cached compaction reused origin lineage or charge")
 	}
+	assertOriginCost(t, response.Diagnostics, originResponse.OperationID, *originResponse.Cost.ActualCostUSD)
 	store.rows[cp.ID] = cp
 	request.Parent = &response.Checkpoint.Handle
 	next, err := replay.Generate(context.Background(), request)

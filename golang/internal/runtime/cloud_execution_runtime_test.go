@@ -184,6 +184,15 @@ func TestCloudExecutionRuntimeGeneration(t *testing.T) {
 					if hit.Generate.Cache.Disposition != "hit" || hit.RequestID == result.RequestID || hit.Generate.Checkpoint.Handle == result.Generate.Checkpoint.Handle || f.submits.Load() != 1 {
 						t.Fatal("cache hit reused caller identity or dispatched")
 					}
+					assertOriginCost(t, hit.Generate.Diagnostics, result.Generate.OperationID, *result.Generate.Cost.ActualCostUSD)
+					if *hit.Generate.Cost.ActualCostUSD != "0" {
+						t.Fatal("cache replay charged")
+					}
+					retried := f.finish(t)
+					assertOriginCost(t, retried.Generate.Diagnostics, result.Generate.OperationID, *result.Generate.Cost.ActualCostUSD)
+					if f.submits.Load() != 1 {
+						t.Fatal("cache retry dispatched")
+					}
 					for shard := range cloudstate.PendingShards {
 						page, err := f.repository.ListPending(context.Background(), shard, 100, "")
 						if err != nil || len(page.Requests) != 0 {
@@ -251,6 +260,12 @@ func TestCloudExecutionRuntimeCompaction(t *testing.T) {
 					}
 					if work && hit.Compact.Cache.Disposition != "hit" {
 						t.Fatal("summary artifact not reused")
+					}
+					if work {
+						assertOriginCost(t, hit.Compact.Diagnostics, first.Compact.OperationID, *first.Compact.Cost.ActualCostUSD)
+						if *hit.Compact.Cost.ActualCostUSD != "0" {
+							t.Fatal("cached compaction charged")
+						}
 					}
 					request.OperationKey = "different-sample"
 					request.Cache.Variant = (index + 1) % 2
@@ -1316,10 +1331,13 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 		handle := parent.Generate.Checkpoint.Handle
 		child := llm.GenerateRequestV1{Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage(strings.Repeat("x", 64))}}
 		ctx := context.Background()
+		var stepUsed executionStorageCounts
 		timed := func(name string, run func() (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
 			if name != step {
 				return run()
 			}
+			before := readExecutionStorageCounts(f.table, f.blobs)
+			defer func() { stepUsed = stepUsed.plus(readExecutionStorageCounts(f.table, f.blobs).minus(before)) }()
 			b.StartTimer()
 			defer b.StopTimer()
 			return run()
@@ -1353,5 +1371,13 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 		b.ReportMetric(float64(used.openBytes)/n, "blob-get-B/turn")
 		b.ReportMetric(float64(used.creates)/n, "blob-put/turn")
 		b.ReportMetric(float64(used.createBytes)/n, "blob-put-B/turn")
+		// Storage traffic of the timed step alone.
+		b.ReportMetric(float64(stepUsed.gets)/n, "kv-get/op")
+		b.ReportMetric(float64(stepUsed.queries)/n, "kv-query/op")
+		b.ReportMetric(float64(stepUsed.writes)/n, "kv-write/op")
+		b.ReportMetric(float64(stepUsed.opens)/n, "blob-get/op")
+		b.ReportMetric(float64(stepUsed.openBytes)/n, "blob-get-B/op")
+		b.ReportMetric(float64(stepUsed.creates)/n, "blob-put/op")
+		b.ReportMetric(float64(stepUsed.createBytes)/n, "blob-put-B/op")
 	})
 }

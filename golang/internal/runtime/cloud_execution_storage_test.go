@@ -242,6 +242,10 @@ func readExecutionStorageCounts(table *executionMemoryTable, blobs *executionMem
 	return counts
 }
 
+func (c executionStorageCounts) plus(o executionStorageCounts) executionStorageCounts {
+	return executionStorageCounts{c.gets + o.gets, c.queries + o.queries, c.writes + o.writes, c.opens + o.opens, c.openBytes + o.openBytes, c.creates + o.creates, c.createBytes + o.createBytes}
+}
+
 func (c executionStorageCounts) minus(o executionStorageCounts) executionStorageCounts {
 	return executionStorageCounts{c.gets - o.gets, c.queries - o.queries, c.writes - o.writes, c.opens - o.opens, c.openBytes - o.openBytes, c.creates - o.creates, c.createBytes - o.createBytes}
 }

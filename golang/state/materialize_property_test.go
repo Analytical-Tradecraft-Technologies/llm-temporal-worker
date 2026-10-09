@@ -230,6 +230,22 @@ func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
 	}
 }
 
+func TestExtraHighReasoningSurvivesSettingsInheritance(t *testing.T) {
+	base := RootModelState("openai/gpt-6-luna")
+	patched, err := ApplySettingsPatch(base, SettingsPatch{ReasoningEffort: SetPatch(llm.ReasoningEffortExtraHigh)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inherited, err := ApplySettingsPatch(patched, SettingsPatch{})
+	if err != nil || inherited.ReasoningEffort != llm.ReasoningEffortExtraHigh {
+		t.Fatalf("extra high was not preserved: %s, %v", inherited.ReasoningEffort, err)
+	}
+	cleared, err := ApplySettingsPatch(patched, SettingsPatch{ReasoningEffort: ClearPatch[llm.ReasoningEffort]()})
+	if err != nil || cleared.ReasoningEffort == llm.ReasoningEffortExtraHigh {
+		t.Fatalf("extra high was not cleared: %s, %v", cleared.ReasoningEffort, err)
+	}
+}
+
 func TestSettingsPatchOmittedSetAndClearRemainDistinct(t *testing.T) {
 	base := RootModelState("gpt-test")
 	base.Tools = []llm.Tool{{Name: "lookup", InputSchema: []byte(`{"type":"object"}`)}}
