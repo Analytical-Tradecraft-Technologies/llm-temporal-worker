@@ -282,6 +282,13 @@ func encodeRecord(record Record) ([]byte, error) {
 }
 
 func (r *Repository) loadRecord(ctx context.Context, pointer recordPointer) (Record, error) {
+	if err := validContext(ctx); err != nil {
+		return Record{}, err
+	}
+	reuse := recordReuseFrom(ctx)
+	if record, ok := reuse.get(r, pointer); ok {
+		return record, nil
+	}
 	data, err := r.readReferencedBlob(ctx, r.stream(pointer.ID), pointer.Blob)
 	if err != nil {
 		return Record{}, err
@@ -297,6 +304,9 @@ func (r *Repository) loadRecord(ctx context.Context, pointer recordPointer) (Rec
 	if _, err := objectJSON(record.Progress); err != nil {
 		return Record{}, ErrCorrupt
 	}
+	// Only a decrypted, fully validated storage read can enter reuse. A
+	// successful write is not proof that its referenced bytes remain readable.
+	reuse.remember(r, pointer, record)
 	return record, nil
 }
 
