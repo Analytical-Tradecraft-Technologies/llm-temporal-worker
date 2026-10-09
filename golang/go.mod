@@ -10,7 +10,7 @@ require (
 	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/eventsourcing v0.1.0
 	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts v0.1.0
 	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.1-0.20261006071928-a61f746a491e
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/aws/aws-sdk-go-v2 v1.47.1
@@ -35,11 +35,12 @@ require (
 	go.temporal.io/sdk v1.49.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	google.golang.org/grpc v1.84.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
 	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers/aws v0.1.1-0.20261006071928-a61f746a491e // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.20.1 // indirect
@@ -104,6 +105,5 @@ require (
 	golang.org/x/vuln v1.7.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
