@@ -122,6 +122,42 @@ operations that never recorded their original public binding fail closed: a
 caller-controlled compaction key alone cannot prove the original Generate
 intent. Retain the original Temporal execution history for those operations.
 
+Use the operator `generation-recover` command to restore that historical
+binding from the configured Temporal service. Supply the exact original
+workflow ID **and run ID**, the same durable storage configuration and trusted
+scope mapping, and all retained Temporal payload-codec keys. The command reads
+history through the configured client and codec; exported history files and
+caller-supplied effective parents are not accepted as proof.
+
+```sh
+llm-temporal-worker generation-recover --config worker.yaml \
+  --workflow-id ORIGINAL_WORKFLOW_ID --run-id ORIGINAL_RUN_ID
+```
+
+The default is a read-only dry run. `recovery_required` means the retained
+history and exact durable Generate manifest agree, but public metadata is
+missing. `ready` means the same binding already exists. To persist the proven
+decision and binding, repeat the identical command with `--apply`. Successful
+output contains only `status` and `applied`; it omits identifiers and payloads.
+Retry an interrupted or uncertain write with the same workflow and run IDs.
+Conditional immutable writes preserve an existing winner; conflicting or
+corrupt metadata fails rather than being replaced.
+
+Recovery requires the original completed planning decision, correlated Compact
+child completion, and started effective Generate child. The whole retained
+history is bounded to 20,000 events and 32 MiB, with a maximum two-minute command
+timeout. Missing history, missing decryption keys, missing durable operations,
+unsupported history shapes, failed planning, or conflicting bindings fail
+closed. Do not delete this history until its binding has been recovered.
+
+The command constructs only storage and Temporal clients. It does not start a
+worker, refresh a provider catalog, acquire budget, resubmit paid work, reopen
+expired checkpoints, or repair the operation's discovery index. After recovery,
+start a fresh public Generate with the exact original input and operation key.
+A completed operation returns its retained result without planning or dispatch.
+An unfinished prepared operation resumes through normal execution and still
+requires its compatible provider configuration to perform unpaid work.
+
 The encrypted preparation has one immutable CAS winner. A retry after a lost
 write acknowledgement reads that winner and repairs its discovery entry before
 returning; storage errors never become permission to materialize again. Exact

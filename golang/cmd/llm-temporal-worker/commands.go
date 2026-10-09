@@ -34,8 +34,9 @@ type CommandOptions struct {
 	// validated bytes so the production runtime can watch the same file for
 	// SIGHUP and atomic replacement reloads. RunWorker remains a compatibility
 	// seam for small embeddings that own their lifecycle trigger.
-	RunWorkerFile       func(context.Context, string, []byte, io.Writer) error
-	RunBudgetInitialize func(context.Context, []byte, bool, io.Writer) error
+	RunWorkerFile        func(context.Context, string, []byte, io.Writer) error
+	RunBudgetInitialize  func(context.Context, []byte, bool, io.Writer) error
+	RunGenerationRecover func(context.Context, []byte, string, string, bool, io.Writer) error
 }
 
 func Execute(ctx context.Context, args []string, options CommandOptions) int {
@@ -65,6 +66,8 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		return executeWorkerCommand(ctx, args[1:], options)
 	case "budget-initialize":
 		return executeBudgetInitializeCommand(ctx, args[1:], options)
+	case "generation-recover":
+		return executeGenerationRecoverCommand(ctx, args[1:], options)
 	case "healthcheck":
 		return executeHealthcheckCommand(ctx, args[1:], options)
 	case "help", "-h", "--help":
@@ -269,6 +272,38 @@ func executeBudgetInitializeCommand(ctx context.Context, args []string, options 
 	return 0
 }
 
+func executeGenerationRecoverCommand(ctx context.Context, args []string, options CommandOptions) int {
+	flags := flag.NewFlagSet("generation-recover", flag.ContinueOnError)
+	// Parser errors can echo supplied IDs. Keep this operator command's output
+	// content-free, including errors before runtime construction.
+	flags.SetOutput(io.Discard)
+	path := flags.String("config", defaultConfigPath, "worker configuration YAML path")
+	workflowID := flags.String("workflow-id", "", "original public Generate workflow ID")
+	runID := flags.String("run-id", "", "explicit original workflow run ID")
+	apply := flags.Bool("apply", false, "restore the verified original planning binding")
+	timeout := flags.Duration("timeout", 2*time.Minute, "overall timeout, at most 2m")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *workflowID == "" || *runID == "" || *timeout <= 0 || *timeout > 2*time.Minute {
+		writeCommandError(options.ErrOut, errors.New("generation-recover requires explicit workflow-id and run-id with valid flags"))
+		return 2
+	}
+	data, err := readConfig(*path)
+	if err != nil {
+		writeCommandError(options.ErrOut, errors.New("read generation recovery configuration failed"))
+		return 1
+	}
+	if options.RunGenerationRecover == nil {
+		writeCommandError(options.ErrOut, errWorkerRuntimeUnavailable)
+		return 1
+	}
+	bounded, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	if err := options.RunGenerationRecover(bounded, data, *workflowID, *runID, *apply, options.Out); err != nil {
+		writeCommandError(options.ErrOut, errors.New("generation recovery failed; inspect authorized recovery state before retrying"))
+		return 1
+	}
+	return 0
+}
+
 func readConfig(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("config path is required")
@@ -351,5 +386,5 @@ func unsupportedByWorkerBinary(snapshot *config.Snapshot) error {
 }
 
 func writeUsage(output io.Writer) {
-	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|budget-initialize|validate-config|print-effective-config|healthcheck>\n")
+	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|budget-initialize|generation-recover|validate-config|print-effective-config|healthcheck>\n")
 }
