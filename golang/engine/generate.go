@@ -245,6 +245,9 @@ func (engine *Engine) quotePlan(ctx context.Context, request llm.Request, plan r
 		}
 		if validator, ok := adapter.(provider.RequestValidator); ok {
 			if err := validator.ValidateRequest(ctx, candidateProviderRequest(request, candidate)); err != nil {
+				if contextErr := ctx.Err(); contextErr != nil {
+					return quotedPlan{}, engineError(provider.CodeCanceled, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "pricing canceled", contextErr)
+				}
 				skippedForRequest = true
 				continue
 			}

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -87,5 +88,35 @@ func TestChatChoiceCountRejectsBeforeAdmissionAndDispatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Cancel inside preflight to exercise the gap after quotePlan's initial check.
+type cancelingRequestValidator struct {
+	provider.Adapter
+	cancel      context.CancelFunc
+	validations int
+}
+
+func (adapter *cancelingRequestValidator) ValidateRequest(ctx context.Context, _ llm.Request) error {
+	adapter.validations++
+	adapter.cancel()
+	return ctx.Err()
+}
+
+func TestRequestPreflightCancellationPreservesCauseWithoutAdmission(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inner := &fakeAdapter{name: "endpoint-1", response: successfulResponse()}
+	adapter := &cancelingRequestValidator{Adapter: inner, cancel: cancel}
+	harness := newHarness(t, adapter)
+	recording := &recordingAdmission{AdmissionStore: harness.admission}
+	harness.engine.dependencies.Admission = recording
+	_, err := harness.engine.Generate(ctx, baseRequest("cancel-during-preflight"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Generate error = %v, want context.Canceled", err)
+	}
+	if adapter.validations != 1 || recording.begin.ID != "" || inner.compiles != 0 || inner.invokes != 0 {
+		t.Fatalf("validations=%d reservation=%q compiles=%d invokes=%d; want one validation and no reservation or dispatch", adapter.validations, recording.begin.ID, inner.compiles, inner.invokes)
 	}
 }
