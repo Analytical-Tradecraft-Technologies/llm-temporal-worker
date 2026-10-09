@@ -2,7 +2,7 @@ module github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang
 
 go 1.26.0
 
-toolchain go1.26.7
+toolchain go1.26.9
 
 tool golang.org/x/vuln/cmd/govulncheck
 

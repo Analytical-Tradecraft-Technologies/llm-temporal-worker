@@ -6,7 +6,7 @@ CLOUD_WORKFLOW_TEST_FILTER ?= ^TestCloudWorkflowLive
 # Keep the security scan on the reviewed Go patch release. A moving `go env
 # GOVERSION` default can select an older runner toolchain than the documented
 # baseline and reintroduce fixed standard-library vulnerabilities.
-SECURITY_GO_TOOLCHAIN ?= go1.26.7
+SECURITY_GO_TOOLCHAIN ?= go1.26.9
 SECURITY_BASE_DIR ?=
 COMPOSE ?= docker compose
 KUBECTL ?= kubectl
