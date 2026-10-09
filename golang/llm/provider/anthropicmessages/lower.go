@@ -19,6 +19,9 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ant
 }
 
 func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier string, strict bool) (anthropic.MessageNewParams, error) {
+	if err := validateHaiku55Request(request); err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
 	if strict && hasMixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Anthropic Messages in strict portability mode")
 	}
@@ -148,6 +151,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		return anthropic.MessageNewParams{}, fmt.Errorf("tool policy %q requires at least one tool", request.ToolPolicy.Mode)
 	}
 	if err := lowerExtensions(profile, request.Extensions, requestMap, request.WebSearch || request.WebFetch || request.CodeExecution || containerID != ""); err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
+	if err := validateHaiku55Wire(request.Model, requestMap); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
 
