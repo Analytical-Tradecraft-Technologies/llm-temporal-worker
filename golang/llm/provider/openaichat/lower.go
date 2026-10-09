@@ -40,6 +40,12 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 		"messages": messages,
 	}
 	for wire, raw := range profile.WireDefaults {
+		if requestOwnedWireField(wire) {
+			return nil, fmt.Errorf("wire default cannot override %q", wire)
+		}
+		if err := validateChoiceCount(wire, raw); err != nil {
+			return nil, err
+		}
 		var value any
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return nil, fmt.Errorf("wire default %q: %w", wire, err)
@@ -591,11 +597,14 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 			if wire == "" {
 				wire = field
 			}
-			if wire == "model" || wire == "messages" || wire == "service_tier" {
+			if requestOwnedWireField(wire) {
 				return fmt.Errorf("extension %q field %q cannot override %q", namespace, field, wire)
 			}
 			if _, reserved := profile.ReservedWireFields[wire]; reserved {
 				return fmt.Errorf("extension %q field %q cannot override reserved wire field %q", namespace, field, wire)
+			}
+			if err := validateChoiceCount(wire, value); err != nil {
+				return err
 			}
 			var decoded any
 			if err := json.Unmarshal(value, &decoded); err != nil {

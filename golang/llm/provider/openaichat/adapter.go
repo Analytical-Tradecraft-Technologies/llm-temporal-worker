@@ -94,6 +94,21 @@ func (adapter *Adapter) Capabilities(ctx context.Context, query provider.Capabil
 	return adapter.profile.capabilities(ctx, query, adapter.endpointID)
 }
 
+// ValidateRequest checks profile-owned extension controls before an engine
+// reserves budget. The compiler independently repeats these checks.
+func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if adapter == nil {
+		return compileError("adapter is nil")
+	}
+	if err := lowerExtensions(adapter.profile, request.Extensions, make(map[string]any)); err != nil {
+		return compileError(err.Error())
+	}
+	return nil
+}
+
 func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput) (provider.Call, error) {
 	if adapter == nil {
 		return provider.Call{}, compileError("adapter is nil")

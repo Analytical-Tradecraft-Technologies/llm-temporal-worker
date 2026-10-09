@@ -161,6 +161,14 @@ other.
 
 ### OpenAI-compatible Chat Completions
 
+- Custom profiles cannot default or allow extension aliases for controls owned
+  by the typed request, including either output-limit spelling (`max_tokens`
+  and `max_completion_tokens`), tool controls, sampling, reasoning and streaming.
+  The normalized request supplies the output cap used for estimation and dispatch.
+- Chat supports a single response choice. A profile default or extension may
+  set `n` only to the integer `1`; other values fail before admission or provider
+  dispatch. Standalone compilation enforces the same boundary.
+
 - Instructions lower to the role the endpoint profile declares: policy
   instructions use `system`; application instructions use `developer` for the
   direct OpenAI API and `system` for Azure, OpenRouter, Exa and generic
