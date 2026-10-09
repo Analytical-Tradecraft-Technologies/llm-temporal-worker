@@ -24,7 +24,6 @@ func TestFailedImageScanSummaryDoesNotExposePayloads(t *testing.T) {
 		t.Fatalf("summary exposed scan payload: %s", output)
 	}
 	var summary struct {
-		SecretCount     int `json:"secret_count"`
 		Vulnerabilities []struct {
 			ID       string `json:"id"`
 			Severity string `json:"severity"`
@@ -34,7 +33,7 @@ func TestFailedImageScanSummaryDoesNotExposePayloads(t *testing.T) {
 	if err := json.Unmarshal(output, &summary); err != nil {
 		t.Fatal(err)
 	}
-	if summary.SecretCount != 1 || len(summary.Vulnerabilities) != 2 || summary.Vulnerabilities[0].ID != "CVE-2026-12345" || !summary.Vulnerabilities[0].HasFix || summary.Vulnerabilities[1].ID != "unlisted" || summary.Vulnerabilities[1].Severity != "UNKNOWN" {
+	if len(summary.Vulnerabilities) != 2 || summary.Vulnerabilities[0].ID != "CVE-2026-12345" || !summary.Vulnerabilities[0].HasFix || summary.Vulnerabilities[1].ID != "unlisted" || summary.Vulnerabilities[1].Severity != "UNKNOWN" {
 		t.Fatalf("unexpected summary: %s", output)
 	}
 	if err := os.WriteFile(path, []byte(`{"private-malformed-data"`), 0600); err != nil {

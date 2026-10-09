@@ -8,9 +8,7 @@ import sys
 
 def summarize(document):
     vulnerabilities = []
-    secret_count = 0
     for result in document.get("Results", []):
-        secret_count += len(result.get("Secrets") or [])
         for finding in result.get("Vulnerabilities") or []:
             identifier = finding.get("VulnerabilityID", "")
             severity = finding.get("Severity", "")
@@ -19,7 +17,7 @@ def summarize(document):
                 "severity": severity if severity in {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"} else "UNKNOWN",
                 "has_fix": bool(finding.get("FixedVersion")),
             })
-    return {"vulnerabilities": vulnerabilities, "secret_count": secret_count}
+    return {"vulnerabilities": vulnerabilities}
 
 
 if __name__ == "__main__":
