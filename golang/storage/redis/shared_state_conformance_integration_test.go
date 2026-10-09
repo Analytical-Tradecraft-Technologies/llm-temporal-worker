@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -310,6 +311,21 @@ func TestLiveRedisFunctionAndLuaMismatchFailClosed(t *testing.T) {
 }
 
 func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
+	runLiveRedisConfiguredPersistence(t, AdmissionModeFunction, false)
+}
+
+// Kill the isolated daemon without a shutdown/snapshot opportunity. Both
+// adapters must recover the same persistent authority and paid accounting.
+func TestLiveRedisConfiguredPersistenceSurvivesCrash(t *testing.T) {
+	for _, mode := range []AdmissionMode{AdmissionModeFunction, AdmissionModeLua} {
+		t.Run(string(mode), func(t *testing.T) {
+			runLiveRedisConfiguredPersistence(t, mode, true)
+		})
+	}
+}
+
+func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash bool) {
+	t.Helper()
 	container := os.Getenv("LLMTW_REDIS_CONTAINER")
 	if container == "" {
 		t.Skip("make redis-integration supplies the isolated Redis container")
@@ -324,6 +340,11 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	client := openLiveRedis(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if mode == AdmissionModeLua {
+		if err := client.ScriptLoad(ctx, AdmissionLuaSource()).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	settings, err := client.ConfigGet(ctx, "appendonly").Result()
 	if err != nil || settings["appendonly"] != "yes" {
 		t.Fatalf("Redis appendonly configuration is not enabled")
@@ -339,9 +360,18 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 
 	now := time.Now().UTC()
 	keys := liveKeyOptions("restart")
+	initializer, err := NewRedisBudgetInitializer(client, keys, mode, AdmissionFunctionVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(), Epoch: "00000000-0000-4000-8000-000000000001", CreatedAt: now}
+	if err := initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: authority, Created: true}); err != nil {
+		t.Fatal(err)
+	}
+	authority.Ready = true
 	store, err := NewAdmissionStore(AdmissionOptions{
 		Client: client,
-		Mode:   AdmissionModeFunction,
+		Mode:   mode,
 		Keys:   keys,
 		Clock:  func() time.Time { return now },
 	})
@@ -354,7 +384,7 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	}
 
 	// The Redis-only budget authority must survive the same durable restart.
-	budgetOptions := RedisBudgetMaterializerOptions{Client: client, Mode: AdmissionModeFunction, Keys: keys, GenerationID: "restart-gen", IncarnationID: "restart-inc"}
+	budgetOptions := RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: keys, GenerationID: "restart-gen", IncarnationID: "restart-inc", Initialization: &authority, CoordinationStreamEnabled: true}
 	budgets, err := NewRedisBudgetMaterializer(budgetOptions)
 	if err != nil {
 		t.Fatal(err)
@@ -405,9 +435,44 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runLiveRedisDocker(t, "restart", container)
+	eventsBefore, err := client.XRange(ctx, initializer.keys.EventsKey(), "-", "+").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eventsBefore) != 6 { // initialization, reserve/claim/settle, reserve/claim
+		t.Fatalf("budget transitions before restart: %d", len(eventsBefore))
+	}
+	if crash {
+		runLiveRedisDocker(t, "kill", "--signal", "KILL", container)
+		runLiveRedisDocker(t, "start", container)
+	} else {
+		runLiveRedisDocker(t, "restart", container)
+	}
 	restartedClient := reopenLiveRedisAfterRestart(t, container)
 	cleanupLivePrefix(t, restartedClient, keys.Prefix)
+	recoveryContext, recoveryCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer recoveryCancel()
+	recoveredInitializer, err := NewRedisBudgetInitializer(restartedClient, keys, mode, AdmissionFunctionVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode == AdmissionModeLua {
+		// Redis does not persist EVALSHA's script cache. Missing code must
+		// remain unavailable until the operator provisions the pinned script.
+		if err := recoveredInitializer.Check(recoveryContext, authority); err == nil || !strings.HasPrefix(err.Error(), "NOSCRIPT") {
+			t.Fatalf("Lua cache loss did not fail closed: %v", err)
+		}
+		if err := restartedClient.ScriptLoad(recoveryContext, AdmissionLuaSource()).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}); err != nil {
+		t.Fatalf("adopt persisted ready authority: %v", err)
+	}
+	eventsAfter, err := restartedClient.XRange(recoveryContext, initializer.keys.EventsKey(), "-", "+").Result()
+	if err != nil || !reflect.DeepEqual(eventsAfter, eventsBefore) {
+		t.Fatalf("budget transitions did not survive restart unchanged: %v", err)
+	}
 
 	providerOptions.Client = restartedClient
 	providers, err = NewProviderStateStore(providerOptions)
@@ -444,6 +509,9 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	if err := recovered.Reconcile(context.Background(), completion); err != nil {
 		t.Fatal(err)
 	}
+	if n := restartedClient.XLen(recoveryContext, initializer.keys.EventsKey()).Val(); n != int64(len(eventsBefore)) {
+		t.Fatalf("authority adoption/paid replay duplicated budget hints: %d", n)
+	}
 	extra := budgetRequest
 	extra.OperationID = "blocked-after-restart"
 	denied, err := recovered.Accept(context.Background(), extra)
@@ -453,7 +521,7 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 
 	restartedStore, err := NewAdmissionStore(AdmissionOptions{
 		Client: restartedClient,
-		Mode:   AdmissionModeFunction,
+		Mode:   mode,
 		Keys:   keys,
 		Clock:  func() time.Time { return now },
 	})
@@ -466,6 +534,24 @@ func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {
 	}
 	if result, err := restartedStore.Begin(context.Background(), liveBeginRequest("restart-after", "restart-policy", 1, 10, now)); err != nil || result.Denied != nil {
 		t.Fatalf("Function after Redis restart = %#v, %v", result, err)
+	}
+	if err := restartedClient.Del(recoveryContext, initializer.keys.AuthorityKey()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
+		t.Fatalf("ready receipt recreated lost authority after restart: %v", err)
+	}
+	if _, err := recovered.Accept(recoveryContext, extra); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
+		t.Fatalf("admission reopened after authority loss: %v", err)
+	}
+	if _, err := recovered.Claim(recoveryContext, pendingClaim); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
+		t.Fatalf("claim allowed after authority loss: %v", err)
+	}
+	if err := recovered.Reconcile(recoveryContext, completion); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
+		t.Fatalf("settlement allowed after authority loss: %v", err)
+	}
+	if n := restartedClient.Exists(recoveryContext, initializer.keys.AuthorityKey()).Val(); n != 0 {
+		t.Fatal("lost authority was recreated")
 	}
 }
 

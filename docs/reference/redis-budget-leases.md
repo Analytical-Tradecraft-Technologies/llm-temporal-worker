@@ -189,7 +189,13 @@ and Lua, with the race detector enabled locally, covering:
 - server-enforced deadlines, unused expiry, retained paid work, and cost expiry;
 - atomic multi-window failures and malformed Redis keys;
 - configuration reloads, wait/retry behavior, and ambiguous paid retries;
-- AOF restart recovery of claimed work, settled cost, and deduplication records.
+- AOF restart and abrupt `SIGKILL` recovery of the production initialization
+  marker, claimed work, settled cost, deduplication records and coordination
+  events; ready receipt adoption and paid replays do not duplicate events. Both
+  Function and Lua adapters reject further reserve/claim/settlement if the
+  recovered marker is subsequently lost. Lua script-cache loss stays unavailable
+  until the pinned script is explicitly provisioned; no automatic `EVAL`
+  fallback is permitted.
 - atomic event publication, independent readers, and duplicate suppression after
   lost replies, including wrong-type, ACL-denied, and exhausted-ID Streams.
 - concurrent initialization, interrupted writes, immutable cloud receipts,
@@ -197,4 +203,7 @@ and Lua, with the race detector enabled locally, covering:
   the authority marker is missing, expiring, preparing, or mismatched.
 
 Run `make verify`, `make redis-integration`, and, for race-enabled integration,
-`GOFLAGS=-race make redis-integration` from `golang/`.
+`GOFLAGS=-race make redis-integration` from `golang/`. The persistence gate
+uses an isolated digest-pinned daemon with `appendfsync always`; it proves
+local acknowledged-write recovery, not deployed HA, a different fsync policy,
+or detection of partial key loss or rollback of an intact marker and dataset.
