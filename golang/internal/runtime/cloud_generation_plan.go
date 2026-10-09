@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
@@ -12,17 +13,64 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
-// PlanGenerationV1 authorizes and materializes before inspecting content or
-// routing. It has no write, admission, or provider I/O effects. The inherited
+// PlanGenerationV1 authorizes before loading the immutable public decision.
+// New decisions are persisted before compaction, without admission or provider
+// effects or creating a pending request. The inherited
 // parent's compaction policy governs this compaction; the Generate patch is
 // applied after compaction and governs later turns.
 func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
 	if r == nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeConfiguration)
 	}
+	manifest, err := request.MarshalJSON()
+	if err != nil {
+		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
+	}
+	if _, err := r.preparation.authorize(ctx, request.Context); err != nil {
+		return llm.GenerationPlanV1{}, err
+	}
+	var index int64
+	if request.Cache != nil {
+		index = int64(request.Cache.Variant)
+	}
+	op := cloudstate.Operation{Scope: cloudstate.Scope{Tenant: request.Context.Tenant, Project: request.Context.Project}, Kind: "generate", Key: request.OperationKey, RequestIndex: index, Manifest: manifest, Now: r.now()}
+	saved, err := r.store.LoadGenerationPlan(ctx, op)
+	if err == nil {
+		return r.publicGenerationPlan(ctx, op, request, saved)
+	}
+	if !errors.Is(err, contracts.ErrNotFound) || errors.Is(err, contracts.ErrOutcomeUnknown) {
+		return llm.GenerationPlanV1{}, cloudRuntimeError(err, false)
+	}
+	// Historical operations with an unchanged public input already have a
+	// durable manifest binding. Verify it before bypassing parent/routing reads.
+	// A historical compacted input differs and must fail closed until its
+	// original public binding can be proven; the child key alone is not proof.
+	_, err = r.store.LookupOperation(ctx, op)
+	var plan llm.GenerationPlanV1
+	if err == nil {
+		if _, err = r.store.BeginOperation(ctx, op); err != nil {
+			return plan, cloudRuntimeError(err, false)
+		}
+	} else if errors.Is(err, contracts.ErrNotFound) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+		plan, err = r.computeGenerationPlan(ctx, request)
+		if err != nil {
+			return plan, err
+		}
+	} else {
+		return plan, cloudRuntimeError(err, false)
+	}
+	saved, err = r.store.SaveGenerationPlan(ctx, op, cloudstate.GenerationPlan{CompactBeforeGenerate: plan.CompactBeforeGenerate})
+	if err != nil {
+		return llm.GenerationPlanV1{}, cloudRuntimeError(err, false)
+	}
+	return r.publicGenerationPlan(ctx, op, request, saved)
+}
+
+func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
 	replay, err := r.preparation.replay.Generate(ctx, request)
 	if err != nil {
 		return llm.GenerationPlanV1{}, err

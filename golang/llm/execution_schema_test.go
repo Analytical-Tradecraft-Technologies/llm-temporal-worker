@@ -40,6 +40,12 @@ func TestExecutionSchemaMatchesCodecs(t *testing.T) {
 		{"prepare-execution", func() any { return new(llm.PrepareExecutionV1) }, []string{
 			`{"generate":` + string(readV1Fixture(t, "generate-root.json")) + `}`, `{"compact":` + string(readV1Fixture(t, "compact-request.json")) + `}`,
 			`{"generate":` + string(readV1Fixture(t, "generate-root.json")) + `,"compact":` + string(readV1Fixture(t, "compact-request.json")) + `}`, `{}`, `{"compact":null}`,
+			`{"generate":` + string(readV1Fixture(t, "generate-root.json")) + `,"original_generate":{}}`,
+			`{"generate":` + string(readV1Fixture(t, "generate-root.json")) + `,"original_generate":{"parent":"ckp_v1.original"}}`,
+			`{"generate":` + string(readV1Fixture(t, "generate-root.json")) + `,"original_generate":{"parent":null}}`,
+			`{"generate":` + string(readV1Fixture(t, "generate-root.json")) + `,"original_generate":{"parent":""}}`,
+			`{"generate":` + string(readV1Fixture(t, "generate-root.json")) + `,"original_generate":{"append":[]}}`,
+			`{"compact":` + string(readV1Fixture(t, "compact-request.json")) + `,"original_generate":{}}`,
 		}},
 		{"execution-result", func() any { return new(llm.ExecutionResultV1) }, []string{
 			`{"request_id":"` + requestID + `","kind":"generate","state":"completed","generate":` + string(readV1Fixture(t, "generate-response.json")) + `}`,

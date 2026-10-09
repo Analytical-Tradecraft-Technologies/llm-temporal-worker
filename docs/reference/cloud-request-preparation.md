@@ -96,6 +96,32 @@ pre-check and replays its saved result or preparation without reopening the
 parent. The original typed request remains in the immutable request manifest.
 Root generation saves no parent snapshot.
 
+Public `Generate` planning also retains an encrypted, immutable decision bound
+to the full original request, scope, operation key and cache variant. It uses
+the existing KV/blob repositories with separate keys and does not create a
+pending request. Concurrent planners use the first committed decision, even
+when their routing snapshots differ. A retry authorizes before reading that
+decision and does not reopen the parent or evaluate current routes.
+
+When automatic compaction is required, the internal preparation envelope
+carries `original_generate.parent`, rather than a second transcript. Preparation
+reconstructs the original public request and checks its saved manifest. Before
+binding the effective parent, it verifies the exact automatic Compact request
+and its completed response. The encrypted effective-request binding survives
+request finalization; later public executions use that parent directly without
+rerunning the compaction child. A retained completed Generate therefore remains
+replayable after either parent checkpoint expires or current routes disappear.
+Missing referenced decision/binding blobs fail as corrupt state, and changed
+inputs or a substituted effective parent fail as an operation conflict.
+
+The `public-generation-binding-v1` workflow version preserves the old child
+sequence and preparation payload when replaying histories without this marker.
+Historical operations whose manifest equals their original public request can
+also recover without a previously saved decision. Historical compacted
+operations that never recorded their original public binding fail closed: a
+caller-controlled compaction key alone cannot prove the original Generate
+intent. Retain the original Temporal execution history for those operations.
+
 The encrypted preparation has one immutable CAS winner. A retry after a lost
 write acknowledgement reads that winner and repairs its discovery entry before
 returning; storage errors never become permission to materialize again. Exact

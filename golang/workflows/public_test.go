@@ -49,6 +49,9 @@ func TestPublicGenerateOptionalCompaction(t *testing.T) {
 				return &llm.ExecutionResultV1{RequestID: testRequestID, Kind: "compact", State: llm.ExecutionCompleted, Compact: &summary}, nil
 			}
 			generations++
+			if input.OriginalGenerate == nil || !reflect.DeepEqual(input.OriginalGenerate.Parent, request.Parent) {
+				t.Error("original public request was not retained")
+			}
 			expected := request
 			if compact {
 				next := summary.Checkpoint.Handle
@@ -79,6 +82,57 @@ func TestPublicGenerateOptionalCompaction(t *testing.T) {
 	}
 }
 
+func TestPublicGenerateBindingVersionMigration(t *testing.T) {
+	for _, version := range []workflow.Version{workflow.DefaultVersion, 1} {
+		var suite testsuite.WorkflowTestSuite
+		env := suite.NewTestWorkflowEnvironment()
+		var request llm.GenerateRequestV1
+		workflowJSON(t, "generate-root", &request)
+		parent := llm.CheckpointHandle("ckp_v1.original")
+		request.Parent = &parent
+		var summary llm.CompactResponseV1
+		workflowJSON(t, "compact-response", &summary)
+		summary.OperationKey = compactionKey(request)
+		var generated llm.GenerateResponseV1
+		workflowJSON(t, "generate-response", &generated)
+		generated.OperationKey = request.OperationKey
+		generated.OperationID = testRequestID
+		compactions := 0
+		env.RegisterWorkflowWithOptions(Generate, workflow.RegisterOptions{Name: GenerateWorkflowName})
+		env.RegisterActivityWithOptions(func(context.Context, llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
+			return llm.GenerationPlanV1{CompactBeforeGenerate: true, EffectiveParent: &summary.Checkpoint.Handle}, nil
+		}, sdkactivity.RegisterOptions{Name: activity.PlanGenerationActivityName})
+		env.RegisterWorkflowWithOptions(func(workflow.Context, llm.CompactRequestV1) (*llm.CompactResponseV1, error) {
+			compactions++
+			return &summary, nil
+		}, workflow.RegisterOptions{Name: CompactWorkflowName})
+		env.RegisterWorkflowWithOptions(func(_ workflow.Context, input llm.PrepareExecutionV1) (*llm.ExecutionResultV1, error) {
+			if input.Generate == nil || input.Generate.Parent == nil || *input.Generate.Parent != summary.Checkpoint.Handle {
+				t.Error("wrong effective parent")
+			}
+			if version == workflow.DefaultVersion && input.OriginalGenerate != nil {
+				t.Error("new payload changed old workflow history")
+			}
+			if version == 1 && (input.OriginalGenerate == nil || !reflect.DeepEqual(input.OriginalGenerate.Parent, request.Parent)) {
+				t.Error("missing original request binding")
+			}
+			return &llm.ExecutionResultV1{RequestID: testRequestID, Kind: "generate", State: llm.ExecutionCompleted, Generate: &generated}, nil
+		}, workflow.RegisterOptions{Name: RequestWorkflowName})
+		env.OnGetVersion("public-generation-binding-v1", workflow.DefaultVersion, workflow.Version(1)).Return(version)
+		env.ExecuteWorkflow(GenerateWorkflowName, request)
+		if err := env.GetWorkflowError(); err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if version == workflow.DefaultVersion {
+			want = 1
+		}
+		if compactions != want {
+			t.Fatalf("version %v compacted %d times, want %d", version, compactions, want)
+		}
+	}
+}
+
 func TestPublicWorkflowsUseActualInternalStateMachine(t *testing.T) {
 	for _, kind := range []string{"generate", "compact"} {
 		submit := activity.GenerateActivityName
@@ -86,6 +140,9 @@ func TestPublicWorkflowsUseActualInternalStateMachine(t *testing.T) {
 			submit = activity.CompactActivityName
 		}
 		f := workflowTest(t, kind, step(activity.PrepareActivityName, llm.ExecutionBudgetRequired), step(activity.AcquireBudgetActivityName, llm.ExecutionAcquired), step(submit, llm.ExecutionPending), step(activity.PollActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted))
+		if kind == "generate" {
+			f.input.OriginalGenerate = &llm.GenerationOriginV1{Parent: f.input.Generate.Parent}
+		}
 		// Registered as the worker registers them: all four workflows receive the
 		// raw payload, and the caller sends the unchanged v1 wire record.
 		f.env.RegisterWorkflowWithOptions(rawWorkflow(activity.PayloadLimits{}, Generate), workflow.RegisterOptions{Name: GenerateWorkflowName})

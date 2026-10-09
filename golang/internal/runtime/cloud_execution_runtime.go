@@ -28,6 +28,10 @@ type cloudExecutionStore interface {
 	FinishRequestFailure(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestID, llm.ExecutionResultV1, time.Time) error
 	FinishRequestExhausted(context.Context, cloudstate.Scope, cloudstate.RequestID, cloudstate.RequestID, int, time.Time) (llm.ExecutionResultV1, error)
 	CacheFingerprint(cache.Input) (cache.Fingerprint, error)
+	LoadGenerationPlan(context.Context, cloudstate.Operation) (cloudstate.GenerationPlan, error)
+	SaveGenerationPlan(context.Context, cloudstate.Operation, cloudstate.GenerationPlan) (cloudstate.GenerationPlan, error)
+	LoadGenerationBinding(context.Context, cloudstate.Operation) (json.RawMessage, error)
+	SaveGenerationBinding(context.Context, cloudstate.Operation, json.RawMessage) error
 }
 
 // CloudExecutionOptions supplies deployment-owned authorization and signing.
@@ -152,6 +156,11 @@ func (r *CloudExecutionRuntime) CompleteExecutionV1(ctx context.Context, ref llm
 func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.PrepareExecutionV1, step cloudStep) (llm.ExecutionResultV1, error) {
 	if r == nil {
 		return llm.ExecutionResultV1{}, executionError(provider.CodeConfiguration)
+	}
+	if input.OriginalGenerate != nil {
+		if err := r.bindPublicGeneration(ctx, input); err != nil {
+			return llm.ExecutionResultV1{}, err
+		}
 	}
 	ctx = cloudstate.WithRecordReuse(ctx)
 	prepared, err := r.preparation.Prepare(ctx, input)

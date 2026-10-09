@@ -11,19 +11,55 @@ import (
 // PrepareExecutionV1 selects exactly one public request. Provider jobs and Redis
 // receipts never cross this boundary; subsequent steps use the internal ID.
 type PrepareExecutionV1 struct {
-	Generate *GenerateRequestV1 `json:"generate,omitempty"`
-	Compact  *CompactRequestV1  `json:"compact,omitempty"`
+	Generate         *GenerateRequestV1  `json:"generate,omitempty"`
+	Compact          *CompactRequestV1   `json:"compact,omitempty"`
+	OriginalGenerate *GenerationOriginV1 `json:"original_generate,omitempty"`
+}
+
+// GenerationOriginV1 carries only the original parent, avoiding duplication of
+// the public transcript in Temporal payloads. Preparation reconstructs the
+// original request from the effective request and checks its saved manifest.
+type GenerationOriginV1 struct {
+	Parent *CheckpointHandle `json:"parent,omitempty"`
+}
+
+func (origin GenerationOriginV1) MarshalJSON() ([]byte, error) {
+	if origin.Parent != nil && *origin.Parent == "" {
+		return nil, fmt.Errorf("original parent is invalid")
+	}
+	type wire GenerationOriginV1
+	return json.Marshal(wire(origin))
+}
+
+func (origin *GenerationOriginV1) UnmarshalJSON(data []byte) error {
+	if err := executionFields(data, "parent"); err != nil {
+		return err
+	}
+	type wire GenerationOriginV1
+	var value wire
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	candidate := GenerationOriginV1(value)
+	if _, err := candidate.MarshalJSON(); err != nil {
+		return err
+	}
+	*origin = candidate
+	return nil
 }
 
 func (request PrepareExecutionV1) MarshalJSON() ([]byte, error) {
 	if (request.Generate == nil) == (request.Compact == nil) {
 		return nil, fmt.Errorf("exactly one execution request is required")
 	}
+	if request.OriginalGenerate != nil && request.Generate == nil {
+		return nil, fmt.Errorf("original Generate requires an effective Generate")
+	}
 	type wire PrepareExecutionV1
 	return json.Marshal(wire(request))
 }
 func (request *PrepareExecutionV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "generate", "compact"); err != nil {
+	if err := executionFields(data, "generate", "compact", "original_generate"); err != nil {
 		return err
 	}
 	type wire PrepareExecutionV1

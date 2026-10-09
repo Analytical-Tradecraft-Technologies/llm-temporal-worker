@@ -66,11 +66,15 @@ func Generate(ctx workflow.Context, input llm.GenerateRequestV1) (*llm.GenerateR
 		return nil, invalidInput()
 	}
 	ctx = executionContext(ctx)
+	original := input
+	version := workflow.GetVersion(ctx, "public-generation-binding-v1", workflow.DefaultVersion, 1)
 	var plan llm.GenerationPlanV1
 	if err := workflow.ExecuteActivity(ctx, activity.PlanGenerationActivityName, input).Get(ctx, &plan); err != nil {
 		return nil, err
 	}
-	if plan.CompactBeforeGenerate {
+	if version >= 1 && plan.EffectiveParent != nil {
+		input.Parent = plan.EffectiveParent
+	} else if plan.CompactBeforeGenerate {
 		if input.Parent == nil {
 			return nil, invalidState()
 		}
@@ -85,7 +89,11 @@ func Generate(ctx workflow.Context, input llm.GenerateRequestV1) (*llm.GenerateR
 		parent := result.Checkpoint.Handle
 		input.Parent = &parent
 	}
-	result, err := executeChild(ctx, llm.PrepareExecutionV1{Generate: &input})
+	prepared := llm.PrepareExecutionV1{Generate: &input}
+	if version >= 1 {
+		prepared.OriginalGenerate = &llm.GenerationOriginV1{Parent: original.Parent}
+	}
+	result, err := executeChild(ctx, prepared)
 	if err != nil {
 		return nil, err
 	}

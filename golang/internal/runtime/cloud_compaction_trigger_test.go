@@ -127,7 +127,7 @@ func TestCloudCompactionWindowHonoursTargetTokens(t *testing.T) {
 			t.Fatal("oversized turn survived in the retained window")
 		}
 	}
-	if f.plan(t, "turn-4", "fourth") {
+	if f.plan(t, "after-compaction", "fourth") {
 		t.Fatal("checkpoint within the target requested compaction again")
 	}
 }
@@ -145,7 +145,7 @@ func TestCloudGenerationPlanCompactsRemovablePrefixOnce(t *testing.T) {
 		t.Fatal("removable history above the trigger did not request compaction")
 	}
 	f.compact(t, "compaction-1")
-	if f.plan(t, "turn-4", "fourth") {
+	if f.plan(t, "after-compaction", "fourth") {
 		t.Fatal("compacted checkpoint requested compaction again")
 	}
 }
