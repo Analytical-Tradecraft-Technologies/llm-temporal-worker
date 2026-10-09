@@ -17,11 +17,7 @@ func RequestDigest(request Request) ([32]byte, error) {
 	if err != nil {
 		return zero, err
 	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return zero, err
-	}
-	fields, err := decodeObject(encoded)
+	fields, err := normalized.jsonFields()
 	if err != nil {
 		return zero, err
 	}
@@ -34,10 +30,12 @@ func RequestDigest(request Request) ([32]byte, error) {
 	if err != nil {
 		return zero, err
 	}
-	input := make([]byte, 0, len(requestDigestDomain)+len(canonical))
-	input = append(input, requestDigestDomain...)
-	input = append(input, canonical...)
-	return sha256.Sum256(input), nil
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(requestDigestDomain))
+	_, _ = hash.Write(canonical)
+	var digest [32]byte
+	hash.Sum(digest[:0])
+	return digest, nil
 }
 
 // RequestDigestHex is a stable lowercase representation for logs and
