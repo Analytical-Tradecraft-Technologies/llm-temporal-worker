@@ -499,7 +499,7 @@ func TestRefreshIntervalStaysWithinBounds(t *testing.T) {
 // Direct routing must work without an OpenRouter inference endpoint, including
 // before its public catalog contains the newly released model.
 func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
-	source := testSource("anthropic", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only"})
+	source := testSource("anthropic", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "auto"})
 	compiled, err := Compile(Input{Rules: mergedRules(t), Direct: []Source{source}})
 	if err != nil {
 		t.Fatal(err)
@@ -511,6 +511,14 @@ func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
 	route := model.Routes[0]
 	if route.Provider != "anthropic" || route.Model != "claude-haiku-5-5" || route.ContextTokens != 100000 || route.OutputTokens != 128000 {
 		t.Fatalf("wrong direct route or pricing boundary: %+v", route)
+	}
+	if len(route.Classes) != 1 || route.Classes[0] != llm.ServiceClassStandard || len(route.ProviderTiers) != 1 || route.ProviderTiers[llm.ServiceClassStandard] != "standard_only" {
+		t.Fatalf("Haiku 5.5 advertised unsupported service classes: %+v", route)
+	}
+	for _, entry := range compiled.Prices {
+		if entry.Model == "claude-haiku-5-5" && entry.ProviderTier != "standard_only" {
+			t.Fatalf("Haiku 5.5 advertised unsupported tier pricing: %+v", entry)
+		}
 	}
 	for _, f := range []routing.Feature{routing.FeatureReasoning, routing.FeatureStructuredOutput} {
 		if route.Capabilities.Features[f].State != routing.CapabilityNative {
