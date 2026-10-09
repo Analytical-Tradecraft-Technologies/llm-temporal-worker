@@ -95,8 +95,9 @@ gate.
 The race job captures Go test output before publishing it and runs the bounded
 test-output scanner against that file. It rejects project-specific provider
 payload leakage and credential-like values; raw output is shown only after the
-scan passes. Generic checked-in secret discovery is delegated to GitHub secret
-scanning, which GitHub enables for public repositories. The local scanner still
+scan passes. Captured output is bounded at 16 MiB and scanned through its tail;
+output above that bound fails closed. Generic checked-in secret discovery is
+delegated to GitHub secret scanning, which GitHub enables for public repositories. The local scanner still
 supports an explicit `-root` for focused manual investigation, but CI does not
 maintain a second generic-secret ruleset.
 
