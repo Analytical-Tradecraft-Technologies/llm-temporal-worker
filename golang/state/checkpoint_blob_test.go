@@ -3,7 +3,9 @@ package state
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -159,6 +161,64 @@ func FuzzCheckpointBlobCodecDecodeDeltaNeverPanics(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = codec.DecodeDelta(data)
 	})
+}
+
+// Every public decoder relies on the outer envelope pass to check the whole
+// payload. Removing a redundant payload pass must retain these protections.
+func TestCheckpointBlobDecodersCheckNestedPayloadLimits(t *testing.T) {
+	for _, kind := range []CheckpointBlobKind{CheckpointDeltaBlob, CheckpointResponseBlob, CheckpointSettingsBlob, CheckpointSnapshotBlob} {
+		t.Run(string(kind), func(t *testing.T) {
+			decode := func(codec CheckpointBlobCodec, data []byte) error {
+				switch kind {
+				case CheckpointDeltaBlob:
+					_, err := codec.DecodeDelta(data)
+					return err
+				case CheckpointResponseBlob:
+					_, err := codec.DecodeResponse(data)
+					return err
+				case CheckpointSettingsBlob:
+					_, err := codec.DecodeSettingsPatch(data)
+					return err
+				default:
+					_, err := codec.DecodeSnapshot(data)
+					return err
+				}
+			}
+			envelope := func(payload string) []byte {
+				return []byte(fmt.Sprintf(`{"version":"checkpoint-blob/v1","kind":%q,"payload":%s}`, kind, payload))
+			}
+			duplicate := envelope(`{"nested":{"x":1,"\u0078":2}}`)
+			if err := decode(CheckpointBlobCodec{}, duplicate); err == nil || !strings.Contains(err.Error(), "duplicate") {
+				t.Fatalf("nested duplicate: %v", err)
+			}
+			if err := decode(CheckpointBlobCodec{MaxDepth: 2}, envelope(`[[[]]]`)); !errors.Is(err, ErrLimitExceeded) {
+				t.Fatalf("nested depth limit: %v", err)
+			}
+			if err := decode(CheckpointBlobCodec{MaxBytes: len(duplicate) - 1}, duplicate); !errors.Is(err, ErrLimitExceeded) {
+				t.Fatalf("byte limit: %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckpointSnapshotDecodeStillValidatesToolFrontier(t *testing.T) {
+	items, err := json.Marshal([]llm.Item{llm.ToolResult{CallID: "missing-call", Content: []llm.Part{llm.TextPart{Text: "result"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(checkpointSnapshotPayload{
+		Items: items, Settings: settingsPatchToWire(SettingsPatch{Model: SetPatch("gpt-test")}), Depth: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(checkpointBlobEnvelope{Version: CheckpointBlobCodecVersion, Kind: CheckpointSnapshotBlob, Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (CheckpointBlobCodec{}).DecodeSnapshot(data); err == nil || !strings.Contains(err.Error(), "unmatched tool result") {
+		t.Fatalf("invalid tool frontier: %v", err)
+	}
 }
 
 func TestScopedBlobReaderBindsScopeAndReferenceMetadata(t *testing.T) {

@@ -9,11 +9,10 @@ import (
 )
 
 // snapshotDecodeAllocsPerItem bounds what the production snapshot codec may
-// allocate per small transcript item. About 310 are the envelope's
-// canonical-form check, one duplicate-key scan and typed decode of the items,
-// and the encoding check of each decoded item. Rescanning every nested value
-// of every item brought the same snapshot to about 900.
-const snapshotDecodeAllocsPerItem = 400
+// allocate per small transcript item. One envelope canonicalization, typed
+// decoding and snapshot validation cost about 192. Re-canonicalizing the
+// payload and checking item encoding before snapshot validation cost 311.
+const snapshotDecodeAllocsPerItem = 230
 
 // Every Activity step restores the parent transcript through DecodeSnapshot,
 // so its per-item cost is paid on each turn for the whole conversation.
@@ -50,6 +49,7 @@ func TestCheckpointSnapshotDecodeAllocationsAreBoundedPerItem(t *testing.T) {
 	if failure != nil {
 		t.Fatal(failure)
 	}
+	t.Logf("snapshot allocations: %.0f total, %.1f per item", allocations, allocations/items)
 	if limit := float64(items * snapshotDecodeAllocsPerItem); allocations > limit {
 		t.Fatalf("decoding a %d-item snapshot made %.0f allocations (%.0f per item), limit %d per item", items, allocations, allocations/items, snapshotDecodeAllocsPerItem)
 	}

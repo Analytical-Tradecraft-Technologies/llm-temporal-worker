@@ -103,9 +103,10 @@ func (codec CheckpointBlobCodec) decode(kind CheckpointBlobKind, data []byte, ta
 	if !ok || string(payload) == "null" {
 		return fmt.Errorf("decode %s checkpoint blob: payload is required", kind)
 	}
-	if _, err := llm.CanonicalJSONWithLimits(payload, codec.MaxBytes, codec.MaxDepth); err != nil {
-		return fmt.Errorf("decode %s checkpoint blob payload: %w", kind, typedCanonicalLimit(err))
-	}
+	// The enclosing canonicalization already checked every payload value for
+	// duplicate keys, syntax and depth, and bounded its canonical bytes. The
+	// payload is a subtree of that checked document; parsing and emitting it
+	// again adds a full transcript pass without enforcing a stricter limit.
 	if err := json.Unmarshal(payload, target); err != nil {
 		return fmt.Errorf("decode %s checkpoint blob payload: %w", kind, err)
 	}
@@ -231,9 +232,8 @@ func (codec CheckpointBlobCodec) DecodeSnapshot(data []byte) (CheckpointSnapshot
 	if err != nil {
 		return CheckpointSnapshot{}, fmt.Errorf("decode snapshot items: %w", err)
 	}
-	if err := validateItemEncoding(items); err != nil {
-		return CheckpointSnapshot{}, err
-	}
+	// snapshot.validate below checks item encoding together with the tool
+	// frontier. Do not marshal every decoded item a second time here.
 	patch, err := settingsPatchFromWire(payload.Settings)
 	if err != nil {
 		return CheckpointSnapshot{}, err
