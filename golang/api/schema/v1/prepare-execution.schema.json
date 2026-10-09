@@ -11,6 +11,16 @@
       "properties": {
         "generate": {
           "$ref": "https://llm-temporal-worker.dev/schema/llm.temporal/v1/generate-request.json"
+        },
+        "original_generate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "parent": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         }
       }
     },

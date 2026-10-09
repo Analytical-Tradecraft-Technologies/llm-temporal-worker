@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -103,6 +104,7 @@ func TestCloudGenerationPlanCountsToolResultErrorPrefix(t *testing.T) {
 	f.request.SettingsPatch = llm.SettingsPatchV1{}
 	f.now = f.now.Add(time.Second)
 	f.restart(t)
+	planningAttempt := 0
 	compacts := func(limit int, isError bool) bool {
 		t.Helper()
 		providers := f.runtime.execution.admission.planning.providers
@@ -110,6 +112,8 @@ func TestCloudGenerationPlanCountsToolResultErrorPrefix(t *testing.T) {
 		model.Routes[0].ContextBytes = limit
 		providers.catalog.Models["alias"] = model
 		request := f.request
+		planningAttempt++
+		request.OperationKey += "-" + strconv.Itoa(planningAttempt)
 		request.Append = []llm.Item{llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: isError}}
 		decision, err := f.runtime.PlanGenerationV1(context.Background(), request)
 		if err != nil {

@@ -104,6 +104,10 @@ func TestCloudGenerationPlanLargeInputAndTokenizerFailure(t *testing.T) {
 	}
 	f.cap.BudgetEstimator.Tokenizer = func(llm.Request, routing.Candidate) (int64, error) { return 0, errors.New("cannot count") }
 	f.restart(t)
+	if replay, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || replay != decision {
+		t.Fatalf("saved decision was replanned: %+v %v", replay, err)
+	}
+	f.request.OperationKey = "large-next-new-plan"
 	if _, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err == nil {
 		t.Fatal("tokenizer failure ignored")
 	}
@@ -203,10 +207,12 @@ func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
 	f.adapter.compile = func(provider.CompileInput) (provider.Call, error) {
 		return provider.Call{}, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNextRoute, "unsupported")
 	}
+	f.request.OperationKey = "uncompilable-turn"
 	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
 		t.Fatalf("uncompilable larger route still counted as usable: %+v %v", decision, err)
 	}
 	f.adapter.compile = nil
+	f.request.OperationKey = "usable-turn"
 	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || decision.CompactBeforeGenerate {
 		t.Fatalf("usable larger route no longer suppresses compaction: %+v %v", decision, err)
 	}
@@ -215,6 +221,7 @@ func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
 	model := providers.catalog.Models["alias"]
 	model.Routes[1].ContextTokens = 25
 	providers.catalog.Models["alias"] = model
+	f.request.OperationKey = "no-route-fits-turn"
 	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
 		t.Fatalf("no route fits but compaction was not requested: %+v %v", decision, err)
 	}
