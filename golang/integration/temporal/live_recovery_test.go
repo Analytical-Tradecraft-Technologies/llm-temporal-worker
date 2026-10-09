@@ -56,6 +56,9 @@ func TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum(t *testing.T) {
 	if got, want := options.MaxConcurrentWorkflowTaskExecutionSize, 2; got != want {
 		t.Fatalf("workflow task execution size = %d, want Temporal-supported bounded value %d", got, want)
 	}
+	if got, want := options.MaxHeartbeatThrottleInterval, liveHeartbeatKeepaliveInterval; got != want {
+		t.Fatalf("heartbeat throttle interval = %s, want keepalive cadence %s", got, want)
+	}
 
 	workflowClient, err := client.NewLazyClient(client.Options{HostPort: "127.0.0.1:1", Namespace: "default"})
 	if err != nil {
@@ -335,7 +338,13 @@ func liveRecoveryWorkerOptions(identity string) worker.Options {
 		MaxConcurrentActivityExecutionSize: 1,
 		// Temporal needs two slots to alternate sticky and regular queue polling.
 		MaxConcurrentWorkflowTaskExecutionSize: liveRecoveryWorkflowTaskExecutionSize,
-		WorkerStopTimeout:                      5 * time.Second,
+		// RecordHeartbeat is throttled by the SDK, independently of the Activity
+		// keepalive ticker. Its default is 80% of the heartbeat timeout, leaving
+		// only 400ms of scheduling/RPC margin under this fixture's 2s deadline.
+		// Bound the network cadence too, while retaining the short deadline and
+		// the provider call that runs longer than it.
+		MaxHeartbeatThrottleInterval: liveHeartbeatKeepaliveInterval,
+		WorkerStopTimeout:            5 * time.Second,
 	}
 }
 
