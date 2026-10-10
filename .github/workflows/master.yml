@@ -269,7 +269,7 @@ jobs:
 
       - name: Retain successful fuzz evidence
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-evidence-${{ matrix.shard }}
           path: ${{ runner.temp }}/fuzz-evidence/
@@ -456,7 +456,7 @@ jobs:
 
       - name: Retain successful race and test evidence
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-inputs-race
           path: ${{ runner.temp }}/verified-inputs/
@@ -645,7 +645,7 @@ jobs:
 
       - name: Retain successful Compose evidence
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-inputs-compose
           path: ${{ runner.temp }}/verified-inputs/
@@ -889,7 +889,7 @@ jobs:
 
       - name: Retain validated redacted release evidence
         if: success()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-evidence
           path: release-artifacts/
