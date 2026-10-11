@@ -336,6 +336,32 @@ func TestTrustedModuleRootsAreVersionIndependentAndBoundaryAware(t *testing.T) {
 	}
 }
 
+func TestRepositoryDirectModulesHaveReviewedTrustedRoots(t *testing.T) {
+	t.Parallel()
+
+	policyJSON, err := os.ReadFile(filepath.Join(moduleRoot(t), "tools", "supplychainverify", "baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy baseline
+	if err := json.Unmarshal(policyJSON, &policy); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("go", "mod", "edit", "-json")
+	command.Dir = moduleRoot(t)
+	inventoryJSON, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements, err := readGoMod(bytes.NewReader(inventoryJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateInventory(policy.TrustedModuleRoots, requirements); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 	t.Parallel()
 
