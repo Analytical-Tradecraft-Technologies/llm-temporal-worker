@@ -102,6 +102,11 @@
       "path": "google.golang.org/grpc",
       "license": "Apache-2.0",
       "source": "https://github.com/grpc/grpc-go"
+    },
+    {
+      "path": "google.golang.org/protobuf",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/protocolbuffers/protobuf-go"
     }
   ],
   "vulnerability_exceptions": [
