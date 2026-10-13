@@ -442,7 +442,7 @@ states, not a distributed transaction.
 | Redis-only legacy adapters | Direct-engine development and conformance fixtures | Not the production cloud workflow runtime |
 | Cloud KV/blob plus Redis | Durable workflow composition | Cloud request/artifact persistence and Redis accounting authority |
 
-Production Redis requires the configured persistence, `noeviction`, monitoring
+Production Redis requires the configured persistence and eviction policies, monitoring
 and authority-marker checks. Dataset loss cannot be repaired from cloud records
 or Stream hints automatically. A permanent initialization receipt prevents an
 absent authority marker from being treated as a fresh installation. Partial loss

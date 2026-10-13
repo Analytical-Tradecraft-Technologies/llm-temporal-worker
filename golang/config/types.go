@@ -208,6 +208,9 @@ type RedisConfig struct {
 	DialTimeout         Duration  `yaml:"dial_timeout" json:"dial_timeout"`
 	OperationTimeout    Duration  `yaml:"operation_timeout" json:"operation_timeout"`
 	RequiredPersistence string    `yaml:"required_persistence" json:"required_persistence"`
+	// MaxMemoryPolicy defaults to noeviction. volatile-lru is supported only
+	// with durable requests: the production accounting keys have no expiry.
+	MaxMemoryPolicy string `yaml:"maxmemory_policy,omitempty" json:"maxmemory_policy,omitempty"`
 	// CoordinationStreamEnabled controls the optional cross-replica wake-up
 	// stream. A nil value is normalized by config.Load: durable deployments
 	// default to enabled while memory/Redis fixtures remain unchanged.
@@ -216,6 +219,13 @@ type RedisConfig struct {
 	// have before readiness accepts the stream's retention state. It is only
 	// used when CoordinationStreamEnabled is true.
 	StreamTrimSafety Duration `yaml:"stream_trim_safety" json:"stream_trim_safety"`
+}
+
+func (redis RedisConfig) EffectiveMaxMemoryPolicy() string {
+	if redis.MaxMemoryPolicy == "" {
+		return "noeviction"
+	}
+	return redis.MaxMemoryPolicy
 }
 
 type BlobStoreConfig struct {

@@ -130,8 +130,8 @@ Provider endpoints are excluded from readiness because one route can be down
 while another is valid. A configuration with zero eligible routes is not ready.
 
 The runtime's required state checks are bounded by the configured readiness
-timeout. Redis must answer `PING`/`TIME`, enforce `noeviction`, meet the
-configured AOF/RDB policy, and expose the exact configured budget Function
+timeout. Redis must answer `PING`/`TIME`, enforce the configured eviction policy, meet the
+configured persistence policy, and expose the exact configured budget Function
 library/version/digest. Durable production workers additionally perform a
 bounded, read-only check of the budget authority marker against the ready cloud
 initialization receipt read during snapshot construction. The marker must have
