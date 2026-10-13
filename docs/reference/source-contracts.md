@@ -185,7 +185,7 @@ redacted, and large content stays outside Workflow history.
 - [Redis persistence](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
   explains RDB/AOF tradeoffs, including the every-second durability window.
 - [Eviction policies](https://redis.io/docs/latest/develop/reference/eviction/)
-  document `noeviction` behavior.
+  document configured eviction behavior (including protected budget keys).
 
 Design consequence: one atomic admission hash slot, integer arithmetic,
 server-time windows, fail-closed errors, and an explicit persistence profile.

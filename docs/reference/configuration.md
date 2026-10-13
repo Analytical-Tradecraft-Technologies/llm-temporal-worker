@@ -932,7 +932,7 @@ transient worker drain the monitor keeps checking dependencies, but it never
 starts a replacement poller until the previous poller has fully stopped.
 
 Readiness checks Redis with `PING`, `TIME`, the configured persistence and
-`noeviction` policy, and configured admission code identity. Durable deployments
+eviction policy, and configured admission code identity. Durable deployments
 also inspect the budget authority marker and enabled coordination Stream with
 bounded read-only checks; malformed or mismatched
 records keep readiness closed. Cloud storage and the configured S3 bucket use
@@ -964,7 +964,23 @@ already content-addressed by the script's SHA-1.
 
 `required_persistence` selects the deployment policy: `aof_and_rdb` requires
 both AOF and a non-empty RDB save policy, while `aof` and `rdb` require only
-their named mechanism. Any mismatch fails readiness closed.
+their named mechanism. `none` explicitly requires both AOF and RDB snapshots
+disabled (`appendonly no`, `save ""`). Any mismatch fails readiness closed.
+
+`maxmemory_policy` defaults to `noeviction`. Durable deployments can explicitly
+select `volatile-lru` to evict expiring operational keys while keeping budget
+hashes, operation/dispatch tombstones, logical-expiry indexes, authority markers
+and coordination Streams without TTLs. Redis-only legacy adapters use expiring
+budget keys and cannot select this policy. All `allkeys-*` policies are rejected.
+Expiring catalog and throttle records may disappear under memory pressure, so
+throttles remain operational backpressure rather than financial spend authority.
+If non-expiring data alone fills memory, writes fail instead of deleting balances.
+
+Disabling persistence makes replication the only live copy protection. Planned
+rollouts must retain synchronized copies, roll replicas first and quiesce writes
+before promoting a caught-up replica. A full restart loses accounting; the cloud
+initialization receipt continues to reject automatic reinitialization. Neither
+this setting nor response cache records provide recovery of lost budgets.
 
 `coordination_stream_enabled` defaults to `true` in durable deployments and
 `false` for memory or Redis-only fixtures. When enabled, durable budget

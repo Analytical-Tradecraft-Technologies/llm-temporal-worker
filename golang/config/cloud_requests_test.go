@@ -69,7 +69,7 @@ func TestDurableConfigRequiresCloudAndRejectsRemovedSQL(t *testing.T) {
 	}
 	for _, test := range []struct{ old, replacement string }{
 		{"request_table: requests", "request_table: missing"},
-		{"required_persistence: aof_and_rdb", "required_persistence: none"},
+		{"required_persistence: aof_and_rdb", "required_persistence: unsupported"},
 		{"enabled: true\n      server_name: redis.example.internal", "enabled: false\n      server_name: redis.example.internal"},
 	} {
 		if _, err := config.Load([]byte(strings.Replace(data, test.old, test.replacement, 1))); err == nil {

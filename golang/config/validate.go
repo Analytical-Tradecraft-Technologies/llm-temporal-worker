@@ -343,6 +343,9 @@ func (state StateConfig) validate(environment string) error {
 	if err := state.Redis.validate(environment); err != nil {
 		return err
 	}
+	if state.Redis.EffectiveMaxMemoryPolicy() != "noeviction" && state.Kind != StateKindDurable {
+		return fmt.Errorf("state.redis.maxmemory_policy volatile-lru requires durable state with non-expiring budget records")
+	}
 	// Durable mode requires cloud request storage. Redis-only remains a
 	// development fixture and must not create a substitute durable backend.
 	if state.Requests != nil {
@@ -414,7 +417,12 @@ func (redis RedisConfig) validate(environment string) error {
 		return err
 	}
 	switch redis.RequiredPersistence {
-	case "aof_and_rdb", "aof", "rdb":
+	case "aof_and_rdb", "aof", "rdb", "none":
+		switch redis.EffectiveMaxMemoryPolicy() {
+		case "noeviction", "volatile-lru":
+		default:
+			return fmt.Errorf("state.redis.maxmemory_policy %q is unsupported; accounting keys must not be evictable", redis.MaxMemoryPolicy)
+		}
 		// A disabled coordination stream is a supported Redis-only fixture
 		// mode. Enabled streams require a bounded trim-safety margin so the
 		// readiness probe can reject recent destructive trimming.

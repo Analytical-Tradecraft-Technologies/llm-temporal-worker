@@ -261,8 +261,11 @@ func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, 
 	if value.AdmissionMode != "function" && value.AdmissionMode != "lua" {
 		return nil, fmt.Errorf("Redis readiness admission mode is invalid")
 	}
-	if value.RequiredPersistence != "aof_and_rdb" && value.RequiredPersistence != "aof" && value.RequiredPersistence != "rdb" {
+	if value.RequiredPersistence != "aof_and_rdb" && value.RequiredPersistence != "aof" && value.RequiredPersistence != "rdb" && value.RequiredPersistence != "none" {
 		return nil, fmt.Errorf("Redis readiness persistence policy is invalid")
+	}
+	if value.EffectiveMaxMemoryPolicy() != "noeviction" && value.EffectiveMaxMemoryPolicy() != "volatile-lru" {
+		return nil, fmt.Errorf("Redis readiness eviction policy is invalid")
 	}
 	if coordinationStreamEnabled(value) {
 		if strings.TrimSpace(streamKey) == "" {
@@ -299,7 +302,7 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 	if err != nil {
 		return redisUnavailable(err)
 	}
-	if !strings.EqualFold(strings.TrimSpace(policy), "noeviction") {
+	if !strings.EqualFold(strings.TrimSpace(policy), probe.config.EffectiveMaxMemoryPolicy()) {
 		return redisPolicyMismatch()
 	}
 	appendOnly, err := redisSetting(ctx, probe.client, "appendonly")
@@ -314,6 +317,10 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 		return redisPolicyMismatch()
 	}
 	if requiresRDB(probe.config.RequiredPersistence) && strings.TrimSpace(save) == "" {
+		return redisPolicyMismatch()
+	}
+	if probe.config.RequiredPersistence == "none" &&
+		(!strings.EqualFold(strings.TrimSpace(appendOnly), "no") || strings.TrimSpace(save) != "") {
 		return redisPolicyMismatch()
 	}
 	var result ProbeResult

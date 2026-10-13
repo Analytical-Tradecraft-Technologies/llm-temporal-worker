@@ -11,7 +11,7 @@ Before the first production worker starts, deployment automation must provision
 the pinned admission Function or Lua script and then run
 [`budget-initialize --apply`](cli.md#budget-initialize). Keep workers stopped
 during this step, including older binaries that do not enforce the marker.
-The command checks Redis persistence, `noeviction`, time, and code identity,
+The command checks the configured Redis persistence/eviction policies, time, and code identity,
 then conditionally creates a small receipt through the generic cloud KV store.
 It scans the unused Redis namespace outside Lua and writes the ready marker
 and first `initialize` Stream event atomically. A final cloud conditional update

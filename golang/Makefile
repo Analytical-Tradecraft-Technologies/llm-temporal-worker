@@ -130,8 +130,9 @@ readiness-integration:
 # Runs the black-box StoreFactory contract against memory and one fresh,
 # digest-pinned Redis daemon. The target discovers an ephemeral loopback port
 # for its own uniquely named container, explicitly enables durable AOF/RDB
-# settings, and removes only that container. Redis output is shown only on
-# failure and always passes through the repository redactor.
+# settings, then exercises protected accounting under volatile eviction with
+# persistence disabled. It removes only that container. Redis output is shown
+# only on failure and always passes through the repository redactor.
 redis-integration:
 	@command -v docker >/dev/null 2>&1 || { \
 		echo "redis-integration requires Docker" >&2; \
@@ -160,6 +161,8 @@ redis-integration:
 		esac; \
 		$(GO) test -count=1 ./storage/conformance ./storage/memory ./storage/redis; \
 		LLMTW_REDIS_ADDR="127.0.0.1:$$port" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_CONTAINER_PREFIX="$(REDIS_INTEGRATION_CONTAINER_PREFIX)" LLMTW_REDIS_TEST_PROVISION=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedis'; \
+		docker exec "$$container" redis-cli CONFIG SET appendonly no save "" maxmemory-policy volatile-lru >/dev/null; \
+		LLMTW_REDIS_ADDR="127.0.0.1:$$port" LLMTW_REDIS_CONTAINER="$$container" LLMTW_REDIS_CONTAINER_PREFIX="$(REDIS_INTEGRATION_CONTAINER_PREFIX)" LLMTW_REDIS_TEST_PROVISION=1 LLMTW_REDIS_EVICTION_TEST=1 $(GO) test -count=1 -tags=integration ./storage/redis -run '^TestLiveRedisVolatileEvictionProtectsAccounting$$'; \
 		echo "redis-integration passed (isolated pinned Redis)"
 
 # Builds a fresh local image from the checked-out revision, then delegates all

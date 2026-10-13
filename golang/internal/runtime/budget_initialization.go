@@ -137,8 +137,8 @@ func RunBudgetInitialize(ctx context.Context, data []byte, apply bool, output io
 	if err != nil {
 		return err
 	}
-	// Check persistence, noeviction, time, and the pinned library before any
-	// write. The Stream is created by initialization, so it cannot gate this
+	// Check configured persistence/eviction policies, time, and the pinned
+	// library before any write. The Stream is created by initialization, so it cannot gate this
 	// first-install preflight. Normal worker readiness still requires it.
 	preflight := value.State.Redis
 	disabled := false
