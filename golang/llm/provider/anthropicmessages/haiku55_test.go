@@ -146,14 +146,26 @@ func TestHaiku55ConstraintsDoNotChangeOtherModels(t *testing.T) {
 	call, err := compileHaiku55(t, llm.Request{
 		Model:        "claude-contract",
 		ServiceClass: llm.ServiceClassPriority,
-		Reasoning:    &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &budget},
 		Sampling:     &llm.SamplingSpec{Temperature: &temperature, TopK: &topK},
 	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wire := marshalWire(t, call.SDKParams)
-	if wire["service_tier"] != "auto" || wire["temperature"] != temperature || wire["top_k"] != float64(topK) || wire["thinking"].(map[string]any)["type"] != "enabled" {
+	if wire["service_tier"] != "auto" || wire["temperature"] != temperature || wire["top_k"] != float64(topK) {
+		t.Fatal(wire)
+	}
+	// Manual thinking rejects modified sampling on every model, so the
+	// budget is checked on its own request.
+	call, err = compileHaiku55(t, llm.Request{
+		Model:     "claude-contract",
+		Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &budget},
+		Output:    &llm.OutputSpec{MaxTokens: intPtr(4096)},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire := marshalWire(t, call.SDKParams); wire["thinking"].(map[string]any)["type"] != "enabled" {
 		t.Fatal(wire)
 	}
 }

@@ -109,7 +109,7 @@ func compileReasoning(t *testing.T, reasoning llm.ReasoningSpec, strict bool) (m
 	t.Helper()
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "v1-reasoning", Model: "claude-contract", Reasoning: &reasoning},
+		Request: llm.Request{OperationKey: "v1-reasoning", Model: "claude-contract", Reasoning: &reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}},
 		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
 		Strict:  strict,
 	})

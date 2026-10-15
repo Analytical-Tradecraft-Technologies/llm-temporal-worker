@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
 )
 
 // lowerRequest builds the Anthropic body InvokeModel forwards to the model.
@@ -123,6 +124,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 		}
 	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto && request.ToolPolicy.Mode != llm.ToolChoiceNone {
 		return anthropic.MessageNewParams{}, fmt.Errorf("tool policy %q requires at least one tool", request.ToolPolicy.Mode)
+	}
+	if err := thinkingwire.Validate(target, "Bedrock Messages"); err != nil {
+		return anthropic.MessageNewParams{}, err
 	}
 	encoded, err := json.Marshal(target)
 	if err != nil {

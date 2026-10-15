@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
@@ -155,6 +156,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		return anthropic.MessageNewParams{}, err
 	}
 	if err := validateHaiku55Wire(request.Model, requestMap); err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
+	if err := thinkingwire.Validate(requestMap, "Anthropic Messages"); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
 
