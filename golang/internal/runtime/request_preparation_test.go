@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -266,6 +268,34 @@ func TestPrepareCompactInputRejectsInvalidStoredAndOverridePolicies(t *testing.T
 	request.Policy = json.RawMessage(`{"summary_style":"sensitive-invalid-style"}`)
 	_, err = PrepareCompactInput(context.Background(), request, durable.CompactReplay{State: replay.State})
 	assertPreparationError(t, err, provider.CodeInvalidArgument)
+}
+
+// The published schema's compaction fixture sets every policy field, so the
+// worker must accept exactly the policy that fixture publishes.
+func TestDecodeCompactionPolicyAcceptsPublishedFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "llm", "testdata", "v1", "generate-fork-patch-compaction.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request llm.GenerateRequestV1
+	if err := json.Unmarshal(data, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.SettingsPatch.CompactionPolicy.Set == nil {
+		t.Fatal("fixture omitted the compaction policy")
+	}
+	policy, err := decodeCompactionPolicy(*request.SettingsPatch.CompactionPolicy.Set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := compaction.Policy{
+		Version: compaction.PolicyVersion, PromptVersion: compaction.PromptVersion,
+		SummaryStyle: compaction.SummaryDetailed, TriggerTokens: 50000, TargetTokens: 40000,
+		RecentTurns: 1, OutputReserveTokens: 4000, MaterializationThresholdBytes: 1 << 20,
+	}
+	if policy != want {
+		t.Fatalf("policy = %+v, want %+v", policy, want)
+	}
 }
 
 func TestPrepareCompactInputRejectsMismatchedAndResolvedReplay(t *testing.T) {

@@ -1,0 +1,19 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fork-compaction",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "parent": "ckp_v1.parent",
+  "append": [],
+  "settings_patch": {
+    "compaction_policy": {"set": {
+      "version": "generic-2026-07-18",
+      "prompt_version": "v1",
+      "summary_style": "detailed",
+      "trigger_tokens": 50000,
+      "target_tokens": 40000,
+      "recent_turns": 1,
+      "output_reserve_tokens": 4000,
+      "materialization_threshold_bytes": 1048576
+    }}
+  }
+}
