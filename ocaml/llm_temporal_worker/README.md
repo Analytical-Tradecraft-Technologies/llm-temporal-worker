@@ -74,6 +74,24 @@ before starting. If the start response is lost, retry with the same values.
 is worker idempotency, and `cache.variant` selects an independent cache sample.
 These identifiers serve different purposes.
 
+### Temporal transport security
+
+`Client.create` has no TLS or authentication options, and the pinned
+`temporal-sdk` connects without TLS, a CA, a server name, a client certificate
+or an API key. An `https://` target fails with a `tls` connection error, and a
+TLS frontend rejects plaintext. OCaml workers that host workflows calling the
+Go children have the same limit. The Go worker's production configuration
+requires TLS plus mTLS or an API key unless `temporal.mesh_transport` is set,
+so in that topology an OCaml process must reach Temporal through a service
+mesh that supplies TLS and client identity, or through a local
+TLS-originating sidecar (for example in the same pod, listening only on
+loopback) that presents the mTLS certificate or API key. Point `~target_url`
+at the plaintext mesh or sidecar listener. Direct authenticated connections
+wait on
+[ocaml-temporal#496](https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal/issues/496)
+and are a v1 release gate
+([#1345](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1345)).
+
 `Client.start_query` and `resume_query` support the control-query workflow.
 `Client.start_compact` returns a typed compaction handle. `resume_generate` and
 `resume_compact` attach to a saved execution without starting a workflow. They
