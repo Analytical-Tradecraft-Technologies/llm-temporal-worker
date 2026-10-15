@@ -1372,13 +1372,23 @@ func GenerateCompaction(generate GenerateRequestV1, operationKey string) Compact
 	if generate.Parent != nil {
 		request.Parent = *generate.Parent
 	}
-	if generate.SettingsPatch.Model.Set != nil {
-		request.Model = *generate.SettingsPatch.Model.Set
+	// A patched model outside the override's bound cannot be a catalog name;
+	// leave it to the Generate's own routing to reject.
+	if model := generate.SettingsPatch.Model.Set; model != nil && validCompactModel(*model) {
+		request.Model = *model
 	}
 	if generate.SettingsPatch.ServiceClass.Set != nil {
 		request.ServiceClass = *generate.SettingsPatch.ServiceClass.Set
 	}
 	return request
+}
+
+// MaxCompactModelLengthV1 bounds a Compact request's summarizer model in
+// Unicode code points, as the schema does.
+const MaxCompactModelLengthV1 = 256
+
+func validCompactModel(model string) bool {
+	return model != "" && utf8.ValidString(model) && utf8.RuneCountInString(model) <= MaxCompactModelLengthV1
 }
 
 // ParentRoutedCompaction is request without its summarizer overrides: the
@@ -1403,6 +1413,9 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 		if err := validateCompactPolicy(request.Policy); err != nil {
 			return nil, err
 		}
+	}
+	if request.Model != "" && !validCompactModel(request.Model) {
+		return nil, fmt.Errorf("compact model must be at most %d code points", MaxCompactModelLengthV1)
 	}
 	if request.ServiceClass != "" && !request.ServiceClass.Valid() {
 		return nil, fmt.Errorf("compact service_class: invalid value %q", request.ServiceClass)
@@ -1475,8 +1488,8 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 	if model, ok, err := optionalString(fields, "model"); err != nil {
 		return err
 	} else if ok {
-		if model == "" {
-			return fmt.Errorf("compact model must not be empty")
+		if !validCompactModel(model) {
+			return fmt.Errorf("compact model must be 1 to %d code points", MaxCompactModelLengthV1)
 		}
 		result.Model = model
 	}

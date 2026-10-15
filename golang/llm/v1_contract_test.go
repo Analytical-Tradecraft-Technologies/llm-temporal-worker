@@ -193,7 +193,11 @@ func TestCompactV1SummarizerOverrides(t *testing.T) {
 	if err != nil || !strings.Contains(string(encoded), `"model":"alias2"`) || !strings.Contains(string(encoded), `"service_class":"priority"`) {
 		t.Fatalf("encoded = %s, %v", encoded, err)
 	}
-	for _, field := range []string{`"model":""`, `"model":1`, `"service_class":"turbo"`} {
+	long := strings.Repeat("é", llm.MaxCompactModelLengthV1)
+	if err := json.Unmarshal([]byte(prefix+`,"model":"`+long+`"}`), new(llm.CompactRequestV1)); err != nil {
+		t.Fatalf("a %d code point model was rejected: %v", llm.MaxCompactModelLengthV1, err)
+	}
+	for _, field := range []string{`"model":""`, `"model":1`, `"model":"` + long + `x"`, `"service_class":"turbo"`} {
 		if err := json.Unmarshal([]byte(prefix+","+field+"}"), new(llm.CompactRequestV1)); err == nil {
 			t.Fatalf("%s was accepted", field)
 		}
@@ -201,6 +205,10 @@ func TestCompactV1SummarizerOverrides(t *testing.T) {
 	request.ServiceClass = "turbo"
 	if _, err := request.MarshalJSON(); err == nil {
 		t.Fatal("invalid service class override was encoded")
+	}
+	request.ServiceClass, request.Model = "", long+"x"
+	if _, err := request.MarshalJSON(); err == nil {
+		t.Fatal("overlong model override was encoded")
 	}
 
 	parent := llm.CheckpointHandle("ckp_v1.parent")

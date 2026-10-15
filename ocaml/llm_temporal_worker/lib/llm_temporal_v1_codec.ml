@@ -477,24 +477,36 @@ let policy_of_json context value =
   let* summary_style = match optional "summary_style" fields with None | Some `Null -> Ok None | Some value -> let* value = summary_style_of_json (context ^ ".summary_style") value in Ok (Some value) in
   Ok { target_tokens; summary_style }
 
+(* The summarizer model override is bounded in code points, as the schema and
+   the Go contract are. *)
+let max_compact_model_length = 256
+let valid_compact_model value = value <> "" && String.is_valid_utf_8 value && utf8_length value <= max_compact_model_length
+
 let compact_request_to_json (value : compact_request) =
   let* () = validate_cache_policy "compact request.cache" value.cache in
   let* context = context_to_v1_json value.context in
   let fields = ["api_version", `String compact_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "context", context; "parent", `String (Checkpoint.to_string value.parent)] in
+  let* () = match value.summarizer_model with
+    | Some model when not (valid_compact_model (Model_selector.to_string model)) -> Error (errorf "compact request.model must be 1 to %d code points" max_compact_model_length)
+    | _ -> Ok () in
   let fields = fields @ option_field "policy" policy_to_json value.policy in
+  let fields = fields @ option_field "model" (fun value -> `String (Model_selector.to_string value)) value.summarizer_model in
+  let fields = fields @ option_field "service_class" service_class_to_json value.summarizer_service_class in
   Ok (`Assoc (fields @ option_field "cache" cache_policy_to_json value.cache))
 
 let compact_request_of_json value =
-  let* fields = closed "compact request" ["api_version"; "operation_key"; "context"; "parent"; "policy"; "cache"] value in
+  let* fields = closed "compact request" ["api_version"; "operation_key"; "context"; "parent"; "policy"; "model"; "service_class"; "cache"] value in
   let* version = required "compact request" "api_version" fields >>= string "compact request.api_version" in
   let* () = if version = compact_api_version then Ok () else Error (errorf "unsupported compact api_version %S" version) in
   let* operation_key = required "compact request" "operation_key" fields >>= string "compact request.operation_key" >>= fun value -> nonempty "compact request.operation_key" value in
   let* context = required "compact request" "context" fields >>= context_of_v1_json in
   let* parent = required "compact request" "parent" fields >>= string "compact request.parent" >>= fun value -> nonempty "compact request.parent" value in
   let* policy = match optional "policy" fields with None | Some `Null -> Ok None | Some value -> let* value = policy_of_json "compact request.policy" value in Ok (Some value) in
+  let* summarizer_model = match optional "model" fields with None | Some `Null -> Ok None | Some value -> let* value = string "compact request.model" value in if valid_compact_model value then Ok (Some (Model_selector.of_string value)) else Error (errorf "compact request.model must be 1 to %d code points" max_compact_model_length) in
+  let* summarizer_service_class = match optional "service_class" fields with None | Some `Null -> Ok None | Some value -> let* value = service_class_of_json "compact request.service_class" value in Ok (Some value) in
   let* cache = match optional "cache" fields with None | Some `Null -> Ok None | Some value -> let* value = cache_policy_of_json "compact request.cache" value in Ok (Some value) in
   let* parent = validated "compact request.parent" Checkpoint.of_string parent in
-  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; policy; cache }
+  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; policy; summarizer_model; summarizer_service_class; cache }
 
 let provenance_to_json (value : provenance) =
   `Assoc (["source", `String (match value.source with Provider_provenance -> "provider" | Worker_cache_provenance -> "worker_cache" | No_work_provenance -> "no_work")]

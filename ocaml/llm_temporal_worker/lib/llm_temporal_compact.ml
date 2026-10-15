@@ -3,13 +3,13 @@ let ( let* ) = Result.bind
 type request = compact_request
 type response = compaction_response
 let workflow = Llm_temporal_invocation.compact_v1_workflow
-let make ~operation_key ~context ~parent ?policy ?cache () =
+let make ~operation_key ~context ~parent ?policy ?summarizer_model ?summarizer_service_class ?cache () =
   (* Accept the checked [Cache_policy.t] so [Compact.make] matches [Generate.make]
      and [Conversation.compact]; the wire record is rebuilt from its accessors. *)
   let cache = Option.map (fun value ->
     { max_age_seconds = Llm_temporal_conversation.Cache_policy.max_age_seconds value;
       variant = Llm_temporal_conversation.Cache_policy.variant value }) cache in
-  let request = { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key; context; parent; policy; cache } in
+  let request = { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key; context; parent; policy; summarizer_model; summarizer_service_class; cache } in
   let* _ = Temporal.Codec.encode (Temporal.Workflow.input workflow) request in
   Ok request
 type dispatcher = ?task_queue:Temporal_task_queue.t -> (request, response) Temporal.Workflow.t -> request -> (response, Temporal.Error.t) result

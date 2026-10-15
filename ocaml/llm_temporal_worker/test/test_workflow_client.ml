@@ -19,7 +19,7 @@ let response : generate_response = {
 }
 let compact : compact_request = {
   api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1";
-  context; parent = checkpoint "cp-parent"; policy = None; cache = request.cache;
+  context; parent = checkpoint "cp-parent"; policy = None; summarizer_model = None; summarizer_service_class = None; cache = request.cache;
 }
 let compact_response : compaction_response = {
   api_version = V1_codec.compact_api_version; operation_key = compact.operation_key;
