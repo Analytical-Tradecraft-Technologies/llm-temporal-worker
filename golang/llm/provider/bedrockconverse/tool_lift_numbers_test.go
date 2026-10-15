@@ -45,10 +45,19 @@ func TestToolUseLiftPreservesJSONNumbers(t *testing.T) {
 	}
 }
 
-func TestToolUseLiftRejectsDuplicateKeysInResponseBody(t *testing.T) {
-	_, err := invokeCannedConverse(t, `{"output":{"message":{"role":"assistant","content":[{"toolUse":{"toolUseId":"tooluse_1","name":"lookup","input":{"q":"a","q":"b"}}}]}},"stopReason":"tool_use","usage":{"inputTokens":4,"outputTokens":3,"totalTokens":7}}`)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("duplicate-key tool input error = %#v", err)
+// Raw arguments are kept byte for byte, so input the normalized tool call
+// cannot carry is an accepted invalid response.
+func TestToolUseLiftRejectsInvalidRawInput(t *testing.T) {
+	for name, input := range map[string]string{
+		"duplicate key": `{"q":"a","q":"b"}`,
+		"invalid utf-8": "{\"q\":\"a\xffb\"}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := invokeCannedConverse(t, `{"output":{"message":{"role":"assistant","content":[{"toolUse":{"toolUseId":"tooluse_1","name":"lookup","input":`+input+`}}]}},"stopReason":"tool_use","usage":{"inputTokens":4,"outputTokens":3,"totalTokens":7}}`)
+			var mapped *provider.Error
+			if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
+				t.Fatalf("tool input error = %#v", err)
+			}
+		})
 	}
 }

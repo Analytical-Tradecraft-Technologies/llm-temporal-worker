@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -425,6 +426,11 @@ func toolUseArguments(block types.ToolUseBlock, rawToolUses []rawToolUse, positi
 	raw := rawToolUses[position]
 	if raw.ToolUseID == nil || *raw.ToolUseID != *block.ToolUseId || raw.Name == nil || *raw.Name != *block.Name || len(raw.Input) == 0 {
 		return nil, fmt.Errorf("tool use does not match the response body")
+	}
+	// encoding/json accepts invalid UTF-8 inside strings, which the SDK
+	// document encoding used to replace. Raw bytes are kept, so reject it.
+	if !utf8.Valid(raw.Input) {
+		return nil, fmt.Errorf("tool use input is not valid UTF-8")
 	}
 	return append(json.RawMessage(nil), raw.Input...), nil
 }
