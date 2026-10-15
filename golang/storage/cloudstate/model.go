@@ -6,6 +6,7 @@ package cloudstate
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,6 +25,9 @@ const (
 var (
 	ErrInvalid = errors.New("invalid durable request")
 	ErrCorrupt = errors.New("corrupt durable request")
+	// ErrRecordTooLarge is an ErrInvalid refused only because the encoded
+	// record exceeds its size limit; nothing was written.
+	ErrRecordTooLarge = fmt.Errorf("%w: record exceeds its size limit", ErrInvalid)
 	// ErrIndexPending means the event committed but its recovery-index update
 	// did not. Retry the SAME update, including token, revision and timestamp.
 	ErrIndexPending = errors.New("durable request committed; recovery index update pending")

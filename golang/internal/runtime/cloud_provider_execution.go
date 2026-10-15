@@ -463,11 +463,28 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		}
 	}
 	result, err := executor.save(ctx, scope, id, saved, next)
+	var tooLarge executionRecordTooLarge
+	if err != nil && next.Stage == cloudstate.ExecutionSucceeded && errors.As(err, &tooLarge) {
+		// The provider did the work but its response exceeds the durable
+		// record limit, and nothing was written. Close the attempt as a paid,
+		// terminal failure settled at the response's cost (the settlement was
+		// built from it above) instead of leaving it submitting with its claim
+		// held until recovery charges the full reservation.
+		next.Stage, next.Response = cloudstate.ExecutionFailed, nil
+		next.Failure = executionFailure(provider.CodeProviderInvalidResponse, provider.DispatchAccepted, nil, now)
+		result, err = executor.save(ctx, scope, id, saved, next)
+	}
 	if err != nil {
 		return result, err
 	}
 	return executor.settle(ctx, scope, id, result.Saved)
 }
+
+// executionRecordTooLarge marks a save the repository refused only because the
+// encoded record exceeds its size limit. It unwraps to the classified error.
+type executionRecordTooLarge struct{ error }
+
+func (err executionRecordTooLarge) Unwrap() error { return err.error }
 
 // refusedDispatch loads the durable state left by a failed pre-HTTP marker
 // save: either the untouched claiming record or this caller's own applied
@@ -531,6 +548,9 @@ func (executor *CloudProviderExecution) saveWithin(finalCtx context.Context, sco
 		// conflicting public request. The pre-HTTP write must still fail closed.
 		if errors.Is(err, contracts.ErrConflict) && next.Stage != cloudstate.ExecutionSubmitting {
 			return ProviderExecutionResult{}, executionError(provider.CodeStateUnavailable)
+		}
+		if errors.Is(err, cloudstate.ErrRecordTooLarge) {
+			return ProviderExecutionResult{}, executionRecordTooLarge{cloudRuntimeError(err, true)}
 		}
 		return ProviderExecutionResult{}, cloudRuntimeError(err, true)
 	}

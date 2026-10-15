@@ -311,8 +311,11 @@ func (r *Repository) writeExecution(ctx context.Context, record Record, progress
 	}
 	progress["provider_execution"] = encoded
 	data, err := json.Marshal(progress)
-	if err != nil || len(data) > maxPayloadBytes {
+	if err != nil {
 		return ErrInvalid
+	}
+	if len(data) > maxPayloadBytes {
+		return ErrRecordTooLarge
 	}
 	status := StatusProviderPending
 	if execution.Stage == ExecutionSucceeded || execution.Stage == ExecutionFailed {

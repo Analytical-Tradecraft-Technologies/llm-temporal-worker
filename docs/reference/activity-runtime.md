@@ -98,8 +98,12 @@ request kind, and one closed state:
 Only the three waiting states include `retry_after_seconds`, bounded to 1–86400.
 A failed result has `provider_error`, `provider_rejected`, or `incomplete_response`
 as its failure code. `incomplete_response` means the provider was paid but its
-response cannot be published: an invalid compaction summary, or Generate output
-that cannot extend the transcript.
+response cannot be published: an invalid compaction summary, Generate output
+that cannot extend the transcript, or a completed result larger than
+`server.inline_payload_bytes`, which is reported this way on every replay.
+A provider response too large for its durable record (8 MiB) is saved as a
+terminal `provider_error` with `error_code` `provider_invalid_response` and
+dispatch `accepted`, settled at the response's cost.
 `provider_rejected` means the provider definitely did not accept the request
 (dispatch `not_dispatched` or `rejected`); `provider_error` covers failures that
 may have reached the provider. A provider failure also carries `error_code`, the
