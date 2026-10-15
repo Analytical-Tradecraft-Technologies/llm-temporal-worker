@@ -40,7 +40,7 @@ The multi-stage Docker build:
 3. runs tests in CI, not as a hidden image-build side effect;
 4. builds a static Linux binary and records version/commit/build-time metadata
    on the OCI image;
-5. copies it into the Distroless `static-debian12:nonroot` runtime tag;
+5. copies it into the Distroless `static-debian13:nonroot` runtime tag;
 6. runs as a numeric non-root user with a read-only root filesystem;
 7. includes CA certificates and time-zone data;
 8. exposes no shell requirement and writes only to a mounted temp directory.
@@ -51,7 +51,10 @@ fixtures, or provider payloads are baked into it.
 
 The checked-in `golang/Dockerfile` references its Go and Distroless bases by
 mutable stable tags, not digests, so rebuilds pick up upstream base security
-fixes; `golang/deploy/verify.sh` rejects a base digest in the Dockerfile. The
+fixes; `golang/deploy/verify.sh` rejects a base digest in the Dockerfile. A
+mutable tag only receives fixes while upstream still maintains that variant, so
+the runtime base must move to the next Distroless Debian release when upstream
+deprecates the current one (as it did for `static-debian12`). The
 worker image itself is deployed by digest. The Dockerfile
 builds with `CGO_ENABLED=0`, and runs as uid `65532` with no shell. Kubernetes mounts
 `/tmp` as a bounded memory volume because the image is intended for a
