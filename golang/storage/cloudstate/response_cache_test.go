@@ -67,7 +67,9 @@ func TestCloudResponseCacheFreshnessIsolationAndRestart(t *testing.T) {
 		now time.Time
 		hit bool
 	}{
-		{entry.CompletedAt.Add(-time.Nanosecond), false}, {entry.CompletedAt, true},
+		// A success stamped by a publisher whose clock leads is eligible.
+		{entry.CompletedAt.Add(-cache.MaxCompletionSkew - time.Nanosecond), false},
+		{entry.CompletedAt.Add(-cache.MaxCompletionSkew), true}, {entry.CompletedAt, true},
 		{entry.CompletedAt.Add(age), true}, {entry.CompletedAt.Add(age + time.Nanosecond), false},
 	} {
 		got, err := r.Responses().Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: test.now, MaxAge: &age})

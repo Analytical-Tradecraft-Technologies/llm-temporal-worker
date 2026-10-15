@@ -151,3 +151,54 @@ func TestCloudCacheFinalizationUseRequiresCommittedConsumer(t *testing.T) {
 		t.Fatal("origin operation used its own cache entry")
 	}
 }
+
+// A worker whose clock lags the publisher's sees a success stamped slightly in
+// its future. Waiters and new requests must use it rather than taking over the
+// finished fill and paying again (#1361); entries far ahead stay ineligible.
+func TestCloudCacheLaggingClockUsesPublishedSuccess(t *testing.T) {
+	r, table, blobs, entry, _ := responseCacheFixture(t)
+	ctx, origin := context.Background(), fillLease(entry)
+	waiter := origin
+	waiter.OperationID, waiter.Attempt = "waiting-operation", "waiting-attempt"
+	mustAcquireFill(t, r.ResponseFills(), origin, cache.FillOwned)
+	mustAcquireFill(t, r.ResponseFills(), waiter, cache.FillWait)
+	mustStartFill(t, r.ResponseFills(), origin, origin.AcquiredAt)
+	completion := cache.FillCompletion{Outcome: cache.FillPublished, EntryID: entry.ID, CompletedAt: entry.CompletedAt}
+	finalizer, err := durable.NewResponseCache(r.Responses(), r.ResponseFills(), func() time.Time { return completion.CompletedAt })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := finalizer.CompleteAttempt(ctx, origin, completion, &entry, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	lag := 150 * time.Millisecond
+	fresh := origin
+	fresh.OperationID, fresh.Attempt = "new-operation", "new-attempt"
+	fresh.AcquiredAt = entry.CompletedAt.Add(-lag)
+	fresh.ExpiresAt = fresh.AcquiredAt.Add(time.Minute)
+	prepare := func(lease cache.FillLease, now time.Time) durable.CacheDisposition {
+		t.Helper()
+		opened := reopen(t, table, blobs)
+		c, err := durable.NewResponseCache(opened.Responses(), opened.ResponseFills(), func() time.Time { return now })
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision, err := c.PrepareGenerate(ctx, lease, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Disposition == durable.CacheHit && decision.Entry().ID != entry.ID {
+			t.Fatalf("hit on %q", decision.Entry().ID)
+		}
+		return decision.Disposition
+	}
+	if got := prepare(waiter, entry.CompletedAt.Add(-lag)); got != durable.CacheHit {
+		t.Fatalf("lagging waiter = %v; want hit", got)
+	}
+	if got := prepare(fresh, fresh.AcquiredAt); got != durable.CacheHit {
+		t.Fatalf("lagging new request = %v; want hit", got)
+	}
+	if got := lookupResponse(t, r, entry.Key, entry.CompletedAt.Add(-cache.MaxCompletionSkew-time.Nanosecond)); got != nil {
+		t.Fatal("served an entry beyond the skew tolerance")
+	}
+}

@@ -425,7 +425,7 @@ func TestResponseCacheLookupRejectsCorruptOrigins(t *testing.T) {
 				case "expired":
 					entry.CompletedAt = f.now.Add(-10 * time.Minute)
 				case "future":
-					entry.CompletedAt = f.now.Add(time.Second)
+					entry.CompletedAt = f.now.Add(cache.MaxCompletionSkew + time.Nanosecond)
 				case "malformed":
 					entry.Response = []byte(`{"sensitive":"invalid"}`)
 				case "origin":
