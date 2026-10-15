@@ -92,6 +92,11 @@ func classifyStatus(status int) (provider.Code, provider.RetryDisposition, provi
 		dispatch, safe = provider.DispatchAmbiguous, "provider request timed out"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
+	case status == http.StatusPaymentRequired:
+		// OpenRouter reports an account out of credit as 402. That is an
+		// operator-side account denial, not a caller error, so it counts
+		// toward the route circuit and lets planning move to other routes.
+		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider account has insufficient credit"
 	case status == http.StatusForbidden:
 		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider permission was denied"
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:

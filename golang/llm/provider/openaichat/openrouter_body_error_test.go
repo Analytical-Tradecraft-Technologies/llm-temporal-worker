@@ -55,6 +55,7 @@ func TestOpenRouterMapsBodyLevelErrorsThroughTheStatusTable(t *testing.T) {
 	}{
 		{name: "upstream unavailable", body: `{"id":"gen-1","model":"router-model","choices":[],"error":{"code":502,"message":"upstream failed"}}`, code: provider.CodeProviderUnavailable, dispatch: provider.DispatchRejected, retry: provider.RetrySameOperation},
 		{name: "rate limited as string code", body: `{"id":"gen-1","model":"router-model","choices":[],"error":{"code":"429","message":"slow down"}}`, code: provider.CodeProviderRateLimited, dispatch: provider.DispatchRejected, retry: provider.RetryAfter},
+		{name: "insufficient credit", body: `{"id":"gen-1","model":"router-model","choices":[],"error":{"code":402,"message":"insufficient credits"}}`, code: provider.CodePermissionDenied, dispatch: provider.DispatchRejected, retry: provider.RetryNever},
 		{name: "bad request", body: `{"id":"gen-1","model":"router-model","choices":[],"error":{"code":400,"message":"bad"}}`, code: provider.CodeInvalidArgument, dispatch: provider.DispatchRejected, retry: provider.RetryNever},
 		{name: "mid-generation failure", body: `{"id":"gen-1","model":"router-model","choices":[{"index":0,"finish_reason":"error","message":{"role":"assistant","content":"partial"},"error":{"code":502,"message":"upstream died"}}]}`, code: provider.CodeProviderUnavailable, dispatch: provider.DispatchAccepted, retry: provider.RetryNever},
 	} {
