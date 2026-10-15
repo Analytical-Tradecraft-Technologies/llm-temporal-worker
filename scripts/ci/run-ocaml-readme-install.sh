@@ -45,5 +45,8 @@ if [[ -d "${cargo_home}" ]] && [[ -n "$(ls -A -- "${cargo_home}")" ]]; then
   fail "${cargo_home} must be empty before the README install"
 fi
 
-printf '%s\n' "${commands}"
-bash -euo pipefail -c "${commands}"
+script="$(mktemp)"
+trap 'rm -f -- "${script}"' EXIT
+printf '%s\n' "${commands}" > "${script}"
+cat -- "${script}"
+bash -euo pipefail "${script}"
