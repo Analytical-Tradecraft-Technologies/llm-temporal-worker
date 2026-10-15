@@ -36,7 +36,7 @@ not cancel paid work. An administrator can still terminate executions; the
 pending-request index remains the recovery source in that case. Automated orphan
 cleanup is a separate feature.
 
-Activities have a five-minute start-to-close limit, 30-second heartbeat timeout,
+Activities have a ten-minute start-to-close limit, 30-second heartbeat timeout,
 and a 24-hour schedule-to-close retry horizon with exponential backoff capped at
 one minute. These are failure/recovery limits, not provider or budget wait loops.
 The provider timeout must leave time inside that activity window for accounting.

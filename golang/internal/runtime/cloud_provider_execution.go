@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -137,7 +138,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	observer := &executionObserver{executor: executor, scope: call.scope, id: call.id, saved: saved, claim: claim}
 	// Bound an individual HTTP call independently of workflow waiting. Saving
 	// its outcome has a separate bounded context if this context expires.
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	callCtx, cancel := context.WithTimeout(ctx, config.ActivityStartToClose)
 	defer cancel()
 	var outcome provider.ResumableResult
 	started := time.Now()
@@ -232,7 +233,7 @@ func (executor *CloudProviderExecution) resume(ctx context.Context, scope clouds
 	if err != nil {
 		return ProviderExecutionResult{}, err
 	}
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	callCtx, cancel := context.WithTimeout(ctx, config.ActivityStartToClose)
 	defer cancel()
 	var outcome provider.ResumableResult
 	if saved.Execution.ProviderOperationID != "" {

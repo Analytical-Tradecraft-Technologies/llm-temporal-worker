@@ -168,7 +168,7 @@ after three consecutive failed rounds (a success resets the count) does the
 monitor keep liveness `200`, set readiness `503`, and pause Temporal polling;
 periodic checks resume polling only after every dependency has recovered. A
 pause is not a process exit, so the detached poller lets in-flight Activities
-finish within the `5m` Activity start-to-close timeout rather than cancelling
+finish within the `10m` Activity start-to-close timeout rather than cancelling
 them after `graceful_stop_timeout`; that budget applies only to termination.
 The monitor keeps checking while a paused poller drains, but does not start
 its replacement until that prior poller has stopped, so recovery waits for the

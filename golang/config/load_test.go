@@ -578,7 +578,7 @@ func TestLoadRejectsUnquotedAzureExtensionScalars(t *testing.T) {
 
 func TestLoadRejectsActivityBoundsTheWorkflowCannotHonour(t *testing.T) {
 	for _, test := range []struct{ from, to, want string }{
-		{from: "provider_timeout: 120s", to: "provider_timeout: 5m", want: "limits.provider_timeout must be shorter than"},
+		{from: "provider_timeout: 120s", to: "provider_timeout: 10m", want: "limits.provider_timeout must be shorter than"},
 		{from: "heartbeat_keepalive_interval: 1s", to: "heartbeat_keepalive_interval: 11s", want: "heartbeat_keepalive_interval must be at most 10s"},
 		{from: "inline_payload_bytes: 524288", to: "inline_payload_bytes: 4194304", want: "server.inline_payload_bytes must be between 1 and 2097152"},
 	} {
@@ -591,7 +591,7 @@ func TestLoadRejectsActivityBoundsTheWorkflowCannotHonour(t *testing.T) {
 		}
 	}
 	for _, test := range []struct{ from, to string }{
-		{from: "provider_timeout: 120s", to: "provider_timeout: 4m59s"},
+		{from: "provider_timeout: 120s", to: "provider_timeout: 9m59s"},
 		{from: "heartbeat_keepalive_interval: 1s", to: "heartbeat_keepalive_interval: 10s"},
 		{from: "inline_payload_bytes: 524288", to: "inline_payload_bytes: 2097152"},
 	} {
