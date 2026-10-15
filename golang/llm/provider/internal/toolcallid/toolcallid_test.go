@@ -25,9 +25,6 @@ func TestPortableRemapsInvalidIDsDeterministically(t *testing.T) {
 		if again := Portable(id); again != got {
 			t.Fatalf("Portable(%q) is not deterministic: %q then %q", id, got, again)
 		}
-		if Portable(got) != got {
-			t.Fatalf("Portable(%q) = %q is not a fixed point", id, got)
-		}
 	}
 	if got := Portable("functions.lookup:0"); !strings.HasPrefix(got, "functions_lookup_0_") {
 		t.Fatalf("Portable kept no readable prefix: %q", got)
@@ -40,5 +37,17 @@ func TestPortableKeepsDistinctIDsDistinct(t *testing.T) {
 	}
 	if Portable("functions.lookup:0") == Portable("functions.lookup:1") {
 		t.Fatal("distinct IDs collided")
+	}
+}
+
+// A portable ID shaped like a remapped one is remapped as well, so it cannot
+// collide with the remapping of a different, non-portable ID.
+func TestPortableKeepsRemappedIDsDisjointFromPassThroughIDs(t *testing.T) {
+	remapped := Portable("functions.lookup:0")
+	if got := Portable(remapped); got == remapped {
+		t.Fatalf("portable ID %q shaped like a remapped ID passed through and collides with the remapping of functions.lookup:0", remapped)
+	}
+	if got := Portable("call_0123456789ABCDEF"); got != "call_0123456789ABCDEF" {
+		t.Fatalf("ID without a lowercase hex suffix was remapped to %q", got)
 	}
 }

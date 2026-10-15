@@ -22,10 +22,13 @@ const MaxLength = 64
 const hashLength = 16
 
 // Portable returns id unchanged when it already matches
-// ^[A-Za-z0-9_-]{1,64}$. Otherwise it replaces each disallowed byte with
-// '_', truncates the result, and appends '_' and a digest of the original.
+// ^[A-Za-z0-9_-]{1,64}$ and does not end like a remapped ID. Otherwise it
+// replaces each disallowed byte with '_', truncates the result, and appends
+// '_' and a digest of the original. Every remapped ID ends in '_' and 16
+// lowercase hex characters, and a portable ID with that suffix is remapped
+// too, so a remapped ID can never equal another ID passed through unchanged.
 func Portable(id string) string {
-	if valid(id) {
+	if valid(id) && !remappedShape(id) {
 		return id
 	}
 	var builder strings.Builder
@@ -50,6 +53,20 @@ func valid(id string) bool {
 	}
 	for index := 0; index < len(id); index++ {
 		if !allowed(id[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+// remappedShape reports whether id ends in '_' and hashLength lowercase hex
+// characters, the suffix Portable gives every remapped ID.
+func remappedShape(id string) bool {
+	if len(id) < hashLength+1 || id[len(id)-hashLength-1] != '_' {
+		return false
+	}
+	for index := len(id) - hashLength; index < len(id); index++ {
+		if !((id[index] >= '0' && id[index] <= '9') || (id[index] >= 'a' && id[index] <= 'f')) {
 			return false
 		}
 	}
