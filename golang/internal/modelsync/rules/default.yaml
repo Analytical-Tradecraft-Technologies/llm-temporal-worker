@@ -431,45 +431,61 @@ providers:
         context_tokens: 272000
         output_tokens: 128000
         prices:
+          # REVIEW: OpenRouter lists endpoint "openai/flex" at a 0.5 discount; these are its undiscounted
+          # prices. Confirm them against the provider's published list price.
           flex:
-            input_per_million: "1"
-            output_per_million: "5"
-            cache_read_per_million: "0.1"
-            cache_write_per_million: "1.25"
-            per_request: "0"
-          default:
             input_per_million: "2"
             output_per_million: "10"
             cache_read_per_million: "0.2"
             cache_write_per_million: "2.5"
             per_request: "0"
-          priority:
+          # REVIEW: OpenRouter lists endpoint "openai" at a 0.5 discount; these are its undiscounted
+          # prices. Confirm them against the provider's published list price.
+          # Matches OpenAI's published standard price (developers.openai.com/api/docs/pricing, 2026-10-12).
+          default:
             input_per_million: "4"
             output_per_million: "20"
             cache_read_per_million: "0.4"
             cache_write_per_million: "5"
+            per_request: "0"
+          # REVIEW: OpenRouter lists endpoint "openai/fast" at a 0.5 discount; these are its undiscounted
+          # prices. Confirm them against the provider's published list price.
+          # OpenAI's published Fast price is $30 output, not the undiscounted $40 (2026-10-12).
+          priority:
+            input_per_million: "8"
+            output_per_million: "30"
+            cache_read_per_million: "0.8"
+            cache_write_per_million: "10"
             per_request: "0"
       openai/gpt-5.6-sol-pro:
         context_tokens: 272000
         output_tokens: 128000
         prices:
+          # REVIEW: OpenRouter lists endpoint "openai/flex" at a 0.5 discount; these are its undiscounted
+          # prices. Confirm them against the provider's published list price.
           flex:
-            input_per_million: "1"
-            output_per_million: "5"
-            cache_read_per_million: "0.1"
-            cache_write_per_million: "1.25"
-            per_request: "0"
-          default:
             input_per_million: "2"
             output_per_million: "10"
             cache_read_per_million: "0.2"
             cache_write_per_million: "2.5"
             per_request: "0"
-          priority:
+          # REVIEW: OpenRouter lists endpoint "openai" at a 0.5 discount; these are its undiscounted
+          # prices. Confirm them against the provider's published list price.
+          # Matches OpenAI's published standard price (developers.openai.com/api/docs/pricing, 2026-10-12).
+          default:
             input_per_million: "4"
             output_per_million: "20"
             cache_read_per_million: "0.4"
             cache_write_per_million: "5"
+            per_request: "0"
+          # REVIEW: OpenRouter lists endpoint "openai/fast" at a 0.5 discount; these are its undiscounted
+          # prices. Confirm them against the provider's published list price.
+          # OpenAI's published Fast price is $30 output, not the undiscounted $40 (2026-10-12).
+          priority:
+            input_per_million: "8"
+            output_per_million: "30"
+            cache_read_per_million: "0.8"
+            cache_write_per_million: "10"
             per_request: "0"
       openai/gpt-5.6-terra:
         context_tokens: 272000

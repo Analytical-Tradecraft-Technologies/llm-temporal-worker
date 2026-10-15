@@ -268,6 +268,13 @@ func decodePricing(raw map[string]json.RawMessage) (Pricing, error) {
 			return Pricing{}, fmt.Errorf("price %s: %w", field.name, err)
 		}
 	}
+	discount, err := read("discount")
+	if err != nil {
+		return Pricing{}, fmt.Errorf("price discount: %w", err)
+	}
+	if scaled, err := perMillion(discount); err == nil && scaled.CanonicalString() != "0" {
+		prices.Discount = discount
+	}
 	if overrides, present := raw["overrides"]; present && string(overrides) != "null" {
 		var wire []map[string]json.RawMessage
 		if err := json.Unmarshal(overrides, &wire); err != nil {
