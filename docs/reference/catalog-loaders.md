@@ -159,7 +159,11 @@ partial catalogs cannot silently undercharge.
 
 Every reservation estimate charges `cache_write_per_million` (the whole input
 may be written to cache) and one `per_request` unit, and reasoning-enabled
-requests also charge `reasoning_per_million`. An entry that omits
+requests also charge `reasoning_per_million`. Every supported family reports
+reasoning inside its inclusive output count, so `reasoning_per_million` must be
+an explicit `"0"`; a nonzero value fails catalog load (see
+[Inclusive output usage](../architecture/pricing-and-budgets.md#inclusive-output-usage)).
+An entry that omits
 `cache_write_per_million` or `per_request` therefore loads but can never be
 selected: every request on that route is skipped as an unusable quote and fails
 with `no_route` when no other candidate remains. Write an explicit `"0"` for a

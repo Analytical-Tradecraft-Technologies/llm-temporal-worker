@@ -130,13 +130,14 @@ type Cost struct {
 }
 
 // ValidateUsagePricing rejects additive prices for overlapping usage counters.
-// Chat and Responses report reasoning inside their inclusive output total.
+// Chat, Responses, Messages and Converse all report reasoning inside their
+// inclusive output total, so the output price already pays for it.
 func (entry Entry) ValidateUsagePricing() error {
 	if entry.LongPrompt != nil && entry.LongPrompt.MinPromptTokens <= 0 {
 		return fmt.Errorf("long-prompt price threshold must be positive")
 	}
 	switch entry.Family {
-	case "openai_chat", "openai_responses":
+	case "openai_chat", "openai_responses", "anthropic_messages", "bedrock_messages", "bedrock_converse":
 		if entry.Prices.ReasoningPerMillion.numerator.Sign() != 0 || (entry.LongPrompt != nil && entry.LongPrompt.Prices.ReasoningPerMillion.numerator.Sign() != 0) {
 			return fmt.Errorf("%s reasoning price must be zero: reasoning tokens are included in output usage", entry.Family)
 		}
