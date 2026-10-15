@@ -105,10 +105,18 @@ verification job it aggregates succeed on a `push` to `master`.
 Pull-request, scheduled, and manual workflow executions do not collect or
 retain this bundle. The job has only `contents: read` permission.
 
-The job builds one Linux OCI layout directory at `$RUNNER_TEMP/image.oci`,
-outside `release-artifacts/`, runtime-tests the image loaded by the same Buildx
-solve, then obtains the immutable image subject from the layout's single OCI
-manifest descriptor:
+Trusted master CI does not runtime-test the published digest. Its
+`release-evidence` job passes `--verified-inputs`, so the collector skips its
+local image build; the job scans and inventories the published platform
+manifests downloaded by digest, as described above. The image runtime checks
+run in the separate `verify-image` job against its own local linux/amd64 build
+of the same commit, and the linux/arm64 image is never executed. The published
+bytes are bound by their digests, SBOMs, and scans, not by a runtime test.
+
+Local collection without `--verified-inputs` builds one Linux OCI layout
+directory at `$RUNNER_TEMP/image.oci`, outside `release-artifacts/`,
+runtime-tests the image loaded by the same Buildx solve, then obtains the
+immutable image subject from the layout's single OCI manifest descriptor:
 
 ```sh
 digest="$(go -C golang run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
@@ -442,6 +450,26 @@ requires its complete evidence bundle to bind the same revision and image
 digest. If the repository ever becomes private, this public lookup must remain
 fail-closed until a separately authorized design supplies an equivalent trust
 boundary without widening the token's scope.
+
+Retained evidence records scans from when the image was built, so the
+preflight bounds its age and rescans the release subject. The evidence run must
+have started, and the bundle's `generated_at` must fall, within the last 7 days.
+After the evidence checks, `scripts/release/preflight-scan.sh` runs two fresh
+scans without executing tag code:
+
+- `tag-source` adds a read-only Git worktree of the tag commit and runs
+  `govulncheck`, built from the trusted master module, on its `golang/` module
+  with the Go toolchain the tag pins in `golang/.go-version` (the version its
+  image was built with). Any reachable vulnerability fails the preflight.
+- `image` uses the pinned Trivy with an empty cache, and therefore a current
+  vulnerability database, to pull the linux/amd64 and linux/arm64 manifests of
+  the requested image index from the registry and rescan them with the
+  checked-in [Trivy configuration](../../scripts/release/trivy.yaml). A fixable
+  HIGH or CRITICAL finding on either platform fails the preflight.
+
+The other preflight gates (`security-verify`, `workflow-verify`,
+`deployment-policy-verify`, and `image-verify`) still check the protected
+master tree that runs the workflow, not the tag.
 
 The downstream job names the `release-publication` protected environment and
 is the only job with `id-token: write`. Repository administrators must create

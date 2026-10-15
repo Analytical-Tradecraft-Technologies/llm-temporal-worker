@@ -31,7 +31,7 @@ jobs:
     name: Validate guarded publication request
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     permissions:
       actions: read
       contents: read
@@ -163,6 +163,26 @@ jobs:
           bash scripts/release/guard.sh verify-evidence \
             --evidence release-artifacts/evidence.json \
             --tag-commit "$TAG_COMMIT" \
+            --image-reference "$IMAGE_REFERENCE"
+
+      - name: Set up pinned Trivy
+        run: bash scripts/ci/setup-trivy.sh
+
+      # The gates above check master's tree and the retained evidence, whose
+      # scans date from the evidence run. Re-evaluate the tag commit and the
+      # exact publication digest against current vulnerability data, without
+      # executing tag code, so a stale but retained bundle cannot pass.
+      - name: Rescan the tag commit and publication digest
+        shell: bash
+        env:
+          IMAGE_REFERENCE: ${{ inputs.image_reference }}
+          TAG_COMMIT: ${{ steps.request.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/preflight-scan.sh tag-source \
+            --tag-commit "$TAG_COMMIT" \
+            --worktree "$RUNNER_TEMP/release-tag"
+          bash scripts/release/preflight-scan.sh image \
             --image-reference "$IMAGE_REFERENCE"
 
   protected-signing-publication:

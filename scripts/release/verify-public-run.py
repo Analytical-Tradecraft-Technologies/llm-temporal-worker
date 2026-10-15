@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -19,6 +20,10 @@ PUBLIC_GITHUB_API = "https://api.github.com"
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 RUN_ID_PATTERN = re.compile(r"^[1-9][0-9]{0,19}$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+# An old run's retained scans predate current vulnerability data, so the
+# evidence run must have started recently (matching guard.sh verify-evidence).
+MAX_RUN_AGE = timedelta(days=7)
+MAX_CLOCK_SKEW = timedelta(minutes=5)
 
 
 def fail(message: str) -> None:
@@ -87,6 +92,15 @@ def validate_metadata(
         fail("evidence run revision does not match the release tag commit")
     if require_string(document, "path") != ".github/workflows/master.yml":
         fail("evidence run must use the protected master workflow")
+    try:
+        started = datetime.fromisoformat(require_string(document, "run_started_at").replace("Z", "+00:00"))
+    except ValueError:
+        fail("evidence run start time is not an ISO 8601 timestamp")
+    if started.tzinfo is None:
+        fail("evidence run start time has no time zone")
+    age = datetime.now(timezone.utc) - started
+    if age > MAX_RUN_AGE or age < -MAX_CLOCK_SKEW:
+        fail("evidence run started more than 7 days ago or in the future")
 
     run_repository = document.get("repository")
     if not isinstance(run_repository, dict):
