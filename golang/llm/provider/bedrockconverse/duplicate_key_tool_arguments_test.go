@@ -29,7 +29,7 @@ func TestDuplicateKeyToolInputIsAnAcceptedInvalidResponse(t *testing.T) {
 		output := &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{
 			&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: aws.String("call"), Name: aws.String("lookup"), Input: rawDocument{raw: raw}}},
 		}}}
-		_, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: output, StopReason: types.StopReasonToolUse, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id")
+		_, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: output, StopReason: types.StopReasonToolUse, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id", nil)
 		if valid {
 			if err != nil {
 				t.Fatalf("control tool input %s rejected: %v", raw, err)

@@ -17,7 +17,7 @@ func TestLiftOmitsReasoningContentWithoutFailingTheResponse(t *testing.T) {
 	items, hasTools, err := liftOutput(&types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: []types.ContentBlock{
 		&types.ContentBlockMemberReasoningContent{Value: &types.ReasoningContentBlockMemberReasoningText{Value: types.ReasoningTextBlock{Text: &text}}},
 		&types.ContentBlockMemberText{Value: "answer"},
-	}}})
+	}}}, nil)
 	if err != nil {
 		t.Fatalf("reasoning content failed the response: %v", err)
 	}
