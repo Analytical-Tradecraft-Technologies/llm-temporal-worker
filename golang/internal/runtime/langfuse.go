@@ -267,15 +267,19 @@ func (r *CloudExecutionRuntime) ExportLangfuseV1(ctx context.Context, ref llm.Ex
 		if !found || !endpoint.LangfuseEnabled() {
 			continue
 		}
-		eligible = true
 		if unused {
-			if cloudstate.RequestID(key) == lastAttempt {
-				eligibleCache = true
+			// Only the last attempt's unused plan (a cache hit) served the
+			// request; a superseded plan never ran and must not label or
+			// export a request another endpoint served (#1358).
+			if cloudstate.RequestID(key) != lastAttempt {
+				continue
 			}
+			eligible, eligibleCache = true, true
 			o.Metadata["provider"] = capture.Provider
 			o.Metadata["endpoint_id"] = saved.Plan.Route.EndpointID
 			continue
 		}
+		eligible = true
 		x := saved.Execution
 		if x.Stage == cloudstate.ExecutionSucceeded && cloudstate.RequestID(key) == lastAttempt {
 			eligibleCompletion = true
