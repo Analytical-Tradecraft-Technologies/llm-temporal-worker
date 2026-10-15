@@ -948,6 +948,16 @@ bounded read-only probes; readiness never writes a tenant object. Provider
 endpoints are excluded because one route can be unavailable while another is
 eligible. Resource creation and IAM permissions are deployment-owned.
 
+With more than one Redis address the worker uses a Redis Cluster client, and
+these server checks are keyless. Readiness and `budget-initialize` therefore
+run `PING`, `TIME` and the persistence and eviction checks on the primary that
+owns the `{<admission_hash_tag>}` slot, which holds every accounting key, and
+verify the admission Function library (or Lua script) on every primary so the
+check still holds after the slot moves. Every primary must carry the pinned
+admission code, and the slot owner must meet the persistence and eviction
+policy. Configure replicas and any primary that may take over the slot the
+same way; readiness does not inspect replicas.
+
 `state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned
 Function library and set `function_library`, `admission_version`, and
