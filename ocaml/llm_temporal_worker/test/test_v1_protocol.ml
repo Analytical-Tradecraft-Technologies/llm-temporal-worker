@@ -128,8 +128,12 @@ let () =
       { generate_response with
         checkpoint = { generate_response.checkpoint with kind = Cache_replay_checkpoint } }) in
   ignore (ok (V1_codec.decode_generate_response cache_replay_bytes));
-  let compact = { api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1"; context; parent = checkpoint "cp-1"; policy = Some { target_tokens = Some 100L; summary_style = Some Concise }; cache = None } in
-  ignore (ok (V1_codec.decode_compact_request (ok (V1_codec.encode_compact_request compact))));
+  let compact = { api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1"; context; parent = checkpoint "cp-1"; policy = Some { target_tokens = Some 100L; summary_style = Some Concise }; summarizer_model = Some (Model_selector.of_string "alias2"); summarizer_service_class = Some Priority; cache = None } in
+  let decoded = ok (V1_codec.decode_compact_request (ok (V1_codec.encode_compact_request compact))) in
+  (* Summarizer overrides round-trip and share the Go contract's bound (#1348). *)
+  if Option.map Model_selector.to_string decoded.summarizer_model <> Some "alias2" || decoded.summarizer_service_class <> Some Priority then failf "compact summarizer overrides changed on round trip";
+  error (V1_codec.encode_compact_request { compact with summarizer_model = Some (Model_selector.of_string (String.make 257 'm')) });
+  error (V1_codec.decode_compact_request (Bytes.of_string {|{"api_version":"llm.temporal/compact/v1","operation_key":"compact-1","context":{"tenant":"t","project":"p","actor":"a"},"parent":"cp-1","model":""}|}));
   error (V1_codec.encode_compact_request { compact with context = { context with tags = [("region", "au")] } });
   let compact_response = { api_version = V1_codec.compact_api_version; operation_key = Operation_key.of_string "compact-1"; operation_id = Operation_id.of_string "id-2"; checkpoint = { handle = checkpoint "cp-2"; parent = Some (checkpoint "cp-1"); kind = Compaction_checkpoint; depth = 1l }; cache = { disposition = Cache_miss_populated; variant = 0l; entry_age_seconds = None }; provenance = None; usage = None; cost = Unknown_cost { reason = State_unavailable }; diagnostics = [] } in
   List.iter (fun variant ->

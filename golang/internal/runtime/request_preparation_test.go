@@ -240,6 +240,28 @@ func TestPrepareCompactInputUsesVersionedBoundedSummarizerAndRetainsToolFrontier
 	}
 }
 
+// Issue #1348: the summarizer overrides route only the summary call, and a
+// service class override drops the parent's fallbacks with it.
+func TestPrepareCompactInputRoutesSummarizerOnRequestOverrides(t *testing.T) {
+	_, generation, request := preparationFixture()
+	parent := generation.State
+	parent.Items = []llm.Item{preparationMessage("old"), preparationMessage("older"), preparationMessage("recent")}
+	parent.Settings.ServiceClass = llm.ServiceClassStandard
+	parent.Settings.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassPriority}
+	request.Policy = json.RawMessage(`{"target_tokens":1000}`)
+	request.Model, request.ServiceClass = "alias2", llm.ServiceClassPriority
+	prepared, err := PrepareCompactInput(context.Background(), request, durable.CompactReplay{State: parent})
+	if err != nil || prepared.Request == nil {
+		t.Fatalf("prepared = %+v, %v", prepared, err)
+	}
+	if prepared.Request.Model != "alias2" || prepared.Request.ServiceClass != llm.ServiceClassPriority || len(prepared.Request.ServiceClassFallbacks) != 0 {
+		t.Fatalf("summarizer routing = %q/%q/%v", prepared.Request.Model, prepared.Request.ServiceClass, prepared.Request.ServiceClassFallbacks)
+	}
+	if prepared.Settings.Model != parent.Settings.Model || prepared.Settings.ServiceClass != llm.ServiceClassStandard || !reflect.DeepEqual(prepared.Settings.ServiceClassFallbacks, parent.Settings.ServiceClassFallbacks) {
+		t.Fatalf("checkpoint settings = %+v, want the parent's", prepared.Settings)
+	}
+}
+
 func TestPrepareCompactInputReportsNothingToCompactWithoutModelRequest(t *testing.T) {
 	for _, empty := range []bool{false, true} {
 		_, replay, request := preparationFixture()

@@ -32,7 +32,7 @@ let compact_request (request : generate_request) (response : generate_response) 
   { api_version = V1_codec.compact_api_version;
     operation_key = Operation_key.of_string (Operation_key.to_string request.operation_key ^ "-compact");
     context = request.context; parent = response.checkpoint.handle;
-    policy = None; cache = request.cache }
+    policy = None; summarizer_model = None; summarizer_service_class = None; cache = request.cache }
 
 let results generated compacted =
   `Assoc ["generate", encoded_json V1_codec.encode_generate_response generated;

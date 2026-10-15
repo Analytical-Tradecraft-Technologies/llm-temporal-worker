@@ -177,6 +177,59 @@ func TestCompactV1RequestContextRejectsMissingOrEmptyMembers(t *testing.T) {
 	}
 }
 
+// The summarizer model/service class overrides round-trip, reject empty or
+// unknown values, and are set by a Generate's automatic compaction only from
+// its settings_patch (#1348).
+func TestCompactV1SummarizerOverrides(t *testing.T) {
+	const prefix = `{"api_version":"llm.temporal/compact/v1","operation_key":"compact","context":{"tenant":"tenant","project":"project","actor":"actor"},"parent":"ckp_v1.parent"`
+	var request llm.CompactRequestV1
+	if err := json.Unmarshal([]byte(prefix+`,"model":"alias2","service_class":"priority"}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Model != "alias2" || request.ServiceClass != llm.ServiceClassPriority {
+		t.Fatalf("decoded overrides = %q/%q", request.Model, request.ServiceClass)
+	}
+	encoded, err := request.MarshalJSON()
+	if err != nil || !strings.Contains(string(encoded), `"model":"alias2"`) || !strings.Contains(string(encoded), `"service_class":"priority"`) {
+		t.Fatalf("encoded = %s, %v", encoded, err)
+	}
+	long := strings.Repeat("é", llm.MaxCompactModelLengthV1)
+	if err := json.Unmarshal([]byte(prefix+`,"model":"`+long+`"}`), new(llm.CompactRequestV1)); err != nil {
+		t.Fatalf("a %d code point model was rejected: %v", llm.MaxCompactModelLengthV1, err)
+	}
+	for _, field := range []string{`"model":""`, `"model":1`, `"model":"` + long + `x"`, `"service_class":"turbo"`} {
+		if err := json.Unmarshal([]byte(prefix+","+field+"}"), new(llm.CompactRequestV1)); err == nil {
+			t.Fatalf("%s was accepted", field)
+		}
+	}
+	request.ServiceClass = "turbo"
+	if _, err := request.MarshalJSON(); err == nil {
+		t.Fatal("invalid service class override was encoded")
+	}
+	request.ServiceClass, request.Model = "", long+"x"
+	if _, err := request.MarshalJSON(); err == nil {
+		t.Fatal("overlong model override was encoded")
+	}
+
+	parent := llm.CheckpointHandle("ckp_v1.parent")
+	generate := llm.GenerateRequestV1{OperationKey: "generate", Context: request.Context, Parent: &parent}
+	plain := llm.GenerateCompaction(generate, "compact")
+	if plain.Model != "" || plain.ServiceClass != "" || plain.Parent != parent || plain.Cache == nil {
+		t.Fatalf("unpatched compaction = %+v", plain)
+	}
+	model, class := "alias2", llm.ServiceClassEconomy
+	generate.SettingsPatch.Model.Set, generate.SettingsPatch.ServiceClass.Set = &model, &class
+	patched := llm.GenerateCompaction(generate, "compact")
+	if patched.Model != model || patched.ServiceClass != class {
+		t.Fatalf("patched compaction = %+v", patched)
+	}
+	legacy, _ := patched.ParentRoutedCompaction().MarshalJSON()
+	want, _ := plain.MarshalJSON()
+	if !bytes.Equal(legacy, want) {
+		t.Fatalf("parent-routed form = %s, want %s", legacy, want)
+	}
+}
+
 func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 	var request llm.GenerateRequestV1
 	if err := json.Unmarshal(readV1Fixture(t, "negative-unknown-field.json"), &request); err == nil {

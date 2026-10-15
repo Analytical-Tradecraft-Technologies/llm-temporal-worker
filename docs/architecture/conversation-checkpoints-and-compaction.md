@@ -395,7 +395,8 @@ delete audit lineage or make a lossy summary equal to the original transcript.
 - operation key and context;
 - one parent checkpoint;
 - optional compaction-policy patch;
-- optional summarizer logical model/service class; and
+- optional summarizer logical model/service class (`model`, `service_class`;
+  automatic compaction sets them from the Generate's `settings_patch`); and
 - optional exact-cache acceptance age and variant using the same cache policy;
   and
 - output reserve and retention controls.

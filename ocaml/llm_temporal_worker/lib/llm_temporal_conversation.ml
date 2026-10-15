@@ -340,7 +340,8 @@ let compact_request ?policy ?cache ~operation_key conversation =
   | None -> Error (Temporal.Error.codec ~message:"cannot compact a conversation without a checkpoint")
   | Some parent ->
       Ok { api_version = Llm_temporal_v1_codec.compact_api_version; operation_key;
-           context = conversation.context; parent; policy; cache }
+           context = conversation.context; parent; policy;
+           summarizer_model = None; summarizer_service_class = None; cache }
 
 
 let accept_compaction_response conversation (request : compact_request)

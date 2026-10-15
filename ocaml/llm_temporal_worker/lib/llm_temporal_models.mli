@@ -232,6 +232,8 @@ type compact_request = {
   context : request_context;
   parent : Checkpoint.t;
   policy : compaction_policy option;
+  summarizer_model : Model_selector.t option;
+  summarizer_service_class : service_class option;
   cache : cache_policy option;
 }
 type compaction_response = {

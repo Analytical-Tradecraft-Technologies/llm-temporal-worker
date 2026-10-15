@@ -36,11 +36,19 @@ any endpoint family.
 
 ### Settings the summarizer inherits
 
-The summarizer runs on the parent checkpoint's settings, filtered as follows:
+The summarizer runs on the parent checkpoint's settings, filtered as follows.
+A Compact request's optional `model` and `service_class` route the summarizer
+instead of the parent's model and service class; a `service_class` override is
+exact and drops the parent's fallback classes. Automatic compaction before a
+Generate sets them from the Generate's `settings_patch`, so it routes the
+summarizer on the model and service class the turn itself is planned on. A
+model retired from the catalog after the parent was written therefore does not
+strand the lineage once the caller patches a routable one. Neither override
+changes the settings the compaction child checkpoint inherits.
 
 | Setting | Summarizer | Reason |
 | --- | --- | --- |
-| `model`, `service_class`, fallback classes, `portability` | Inherited | Routing stays the application's choice. |
+| `model`, `service_class`, fallback classes, `portability` | Inherited unless the request overrides `model` or `service_class` | Routing stays the application's choice. |
 | Application instructions | Inherited, below the summarizer's policy instructions | They describe the domain being summarized. |
 | `temperature`, `top_p` (and the other distribution controls `top_k`, presence and frequency penalties) | Inherited | They shape how tokens are sampled, not where output ends. `top_p` follows `temperature`, which compaction has always inherited, so cache keys for parents that set it are unchanged. |
 | `stop_sequences` | Dropped | An application stop sequence could truncate the summary. |
