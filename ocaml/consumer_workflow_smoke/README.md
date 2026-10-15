@@ -12,7 +12,7 @@ public workflow orchestration shape:
 - explicit `Conversation.compact`; and
 - a post-compaction `Conversation.respond` that restores application settings;
 - generation and compaction child workflows with explicit durable IDs and queues;
-- the one-attempt `query_v1_activity` call.
+- `Query.execute` child workflows over the `llm.query.workflow.v1` contract.
 
 The executable is compile-only and does not contact Temporal or an LLM
 provider. Run it with:

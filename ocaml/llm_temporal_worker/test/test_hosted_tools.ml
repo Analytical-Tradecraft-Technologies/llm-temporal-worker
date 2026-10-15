@@ -17,6 +17,9 @@ let () =
   let policy = match Compaction_policy.make ~target_tokens:256L ~summary_style:Concise () with Ok v -> v | Error e -> failwith e in
   let compact = ok (Compact.make ~operation_key ~context ~parent:(Checkpoint.of_string_exn "ckp_v1.parent") ~policy ()) in
   if compact.policy <> Some { target_tokens = Some 256L; summary_style = Some Concise } then failwith "compaction policy lost";
+  let cache = match Cache_policy.accept_up_to ~max_age_seconds:60L ~variant:3l () with Ok v -> v | Error e -> failwith e in
+  let cached = ok (Compact.make ~operation_key ~context ~parent:(Checkpoint.of_string_exn "ckp_v1.parent") ~cache ()) in
+  if cached.cache <> Some { max_age_seconds = Some 60L; variant = 3l } then failwith "checked compact cache policy lost";
   let exa = ok (Exa.answer ~operation_key ~context ~model:(Model_selector.of_string "exa-answer") ~include_source_text:false ~question:"What happened?" ()) in
   if exa.settings_patch.extensions <> Set ["exa", `Assoc ["text", `Bool false]] then failwith "Exa source option lost";
   let paused = ok (V1_codec.decode_generate_response (Bytes.of_string {|{"api_version":"llm.temporal/v1","operation_key":"hosted-flags","operation_id":"operation","status":"paused","output":[{"kind":"provider_state","provider":"anthropic","endpoint_family":"messages","media_type":"application/vnd.anthropic.content-block+json","opaque":"eyJ0eXBlIjoic2VydmVyX3Rvb2xfdXNlIiwiaWQiOiJzcnYtMSIsIm5hbWUiOiJiYXNoX2NvZGVfZXhlY3V0aW9uIiwiaW5wdXQiOnsiY29tbWFuZCI6ImVjaG8gNCJ9fQ=="}],"checkpoint":{"handle":"ckp_v1.result","parent":null,"kind":"generation","depth":0},"cache":{"disposition":"disabled","variant":0},"cost":{"status":"unknown","actual_cost_usd":null,"unknown_reason":"provider_did_not_report_cost"},"diagnostics":[]}|})) in
