@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
 )
 
 // Adapter owns one official OpenAI Responses client and one configured
@@ -183,7 +185,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := adapter.lowerRequest(normalized, serviceClass, tier)
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, lowerError(err)
 	}
 	if err := adapter.enforceStoragePolicy(&params); err != nil {
 		return provider.Call{}, compileError(err.Error())
@@ -375,6 +377,16 @@ func canonicalRequestBytes(request llm.Request) ([]byte, error) {
 		return nil, err
 	}
 	return llm.CanonicalJSON(encoded)
+}
+
+// lowerError maps a lowering failure to the error contract. A request that
+// structured output cannot represent is unsupported, not malformed.
+func lowerError(err error) *provider.Error {
+	var unsupported *openaischema.UnsupportedError
+	if errors.As(err, &unsupported) {
+		return unsupportedError(provider.FeatureStructuredOutput, err.Error())
+	}
+	return compileError(err.Error())
 }
 
 func compileError(message string) *provider.Error {

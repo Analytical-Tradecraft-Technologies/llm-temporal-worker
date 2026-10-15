@@ -248,7 +248,10 @@ the canonical schema in step 5. The Anthropic and Bedrock Messages adapters
 use this to move keywords Claude structured output rejects (length, numeric
 and item-count constraints among them) into property descriptions and to
 close objects that leave `additionalProperties` unset; see
-[provider adapters](provider-adapters.md#anthropic-messages). A schema that
+[provider adapters](provider-adapters.md#anthropic-messages). The OpenAI
+Responses and Chat adapters lower `strict: true` schemas the same way and also
+list every property as required; see
+[provider adapters](provider-adapters.md#openai-responses). A schema that
 cannot be represented this way, such as a recursive schema or, in strict
 mode, an explicitly open object, fails before dispatch.
 

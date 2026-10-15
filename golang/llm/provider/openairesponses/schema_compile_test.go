@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -20,5 +21,52 @@ func TestCompileRejectsAnUnsupportedOutputSchemaBeforeDispatch(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "output schema") {
 		t.Fatalf("compile = %v, want an output schema rejection", err)
+	}
+}
+
+// A strict schema is closed and fully required on the wire, and requests
+// OpenAI documents as errors fail at compile time as unsupported (#1353).
+func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
+	request := llm.Request{Model: "gpt-contract", Input: wireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{
+		Kind: llm.OutputKindJSONSchema, Name: "invoice", Strict: true,
+		Schema: json.RawMessage(`{"type":"object","properties":{"total":{"type":"number"},"note":{"type":"string","minLength":1}},"required":["total"]}`),
+	}}}
+	requestMap, _, err := lowerRequestMap(request, llm.ServiceClassStandard, false, supportedExtensionFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(requestMap["text"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"format":{"name":"invoice","schema":{"additionalProperties":false,"properties":{"note":{"description":"{minLength: 1}","type":"string"},"total":{"type":"number"}},"required":["total","note"],"type":"object"},"strict":true,"type":"json_schema"}}`
+	if string(got) != want {
+		t.Fatalf("text format\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
+	for name, request := range map[string]llm.Request{
+		"strict allOf": {Input: wireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true,
+			Schema: json.RawMessage(`{"type":"object","properties":{"a":{"allOf":[{"type":"string"}]}}}`)}}},
+		"json mode without json": {Input: wireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request.OperationKey = "op-structured"
+			request.Model = "gpt-contract"
+			_, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
+				Request: request,
+				Query:   provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+			})
+			var mapped *provider.Error
+			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched {
+				t.Fatalf("compile = %#v, want an unsupported compile rejection", err)
+			}
+		})
+	}
+	// Any case of the word satisfies the provider's rule.
+	request := llm.Request{Model: "gpt-contract", Input: wireAuditUserText("answer as a Json object"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}}
+	if _, _, err := lowerRequestMap(request, llm.ServiceClassStandard, false, supportedExtensionFields); err != nil {
+		t.Fatalf("json mode mentioning json: %v", err)
 	}
 }

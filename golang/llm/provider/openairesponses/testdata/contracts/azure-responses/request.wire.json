@@ -13,7 +13,7 @@
   "reasoning": {"effort": "high", "mode": "standard", "summary": "detailed"},
   "store": false,
   "temperature": 0.3,
-  "text": {"format": {"description": "azure fixture answer", "name": "azure_answer", "schema": {"properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "strict": true, "type": "json_schema"}},
+  "text": {"format": {"description": "azure fixture answer", "name": "azure_answer", "schema": {"additionalProperties": false, "properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "strict": true, "type": "json_schema"}},
   "tool_choice": {"name": "lookup", "type": "function"},
   "tools": [{"description": "azure fixture lookup", "name": "lookup", "output_schema": {"type": "object"}, "parameters": {"properties": {"query": {"type": "string"}}, "required": ["query"], "type": "object"}, "strict": false, "type": "function"}],
   "top_p": 0.8,

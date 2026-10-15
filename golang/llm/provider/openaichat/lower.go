@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 
 	openai "github.com/openai/openai-go/v3"
@@ -101,6 +102,9 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 	}
 	if err := lowerExtensions(profile, request.Extensions, requestMap, request.WebSearch || request.WebFetch || request.CodeExecution); err != nil {
 		return nil, err
+	}
+	if request.Output != nil && request.Output.Format.Kind == llm.OutputKindJSON && !openaischema.MentionsJSON(requestMap["messages"]) {
+		return nil, openaischema.JSONModeContextError()
 	}
 	return requestMap, nil
 }
@@ -509,9 +513,9 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 		if _, err := llmschema.Parse(output.Format.Schema); err != nil {
 			return fmt.Errorf("output schema: %w", err)
 		}
-		var schema map[string]any
-		if err := schemaorder.Decode(output.Format.Schema, &schema); err != nil {
-			return fmt.Errorf("output schema: %w", err)
+		schema, err := lowerOutputSchema(output.Format)
+		if err != nil {
+			return err
 		}
 		// The provider requires a name; v1 leaves it optional.
 		name := output.Format.Name
@@ -531,6 +535,20 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 	default:
 		return fmt.Errorf("output format %q is not supported", output.Format.Kind)
 	}
+}
+
+// lowerOutputSchema returns the wire schema. A strict schema is lowered to
+// the subset strict structured output accepts, which the provider otherwise
+// rejects with a 400; the lift validates against the caller's original.
+func lowerOutputSchema(format llm.OutputFormat) (map[string]any, error) {
+	if format.Strict {
+		return openaischema.LowerStrict(format.Schema)
+	}
+	var schema map[string]any
+	if err := schemaorder.Decode(format.Schema, &schema); err != nil {
+		return nil, fmt.Errorf("output schema: %w", err)
+	}
+	return schema, nil
 }
 
 func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
