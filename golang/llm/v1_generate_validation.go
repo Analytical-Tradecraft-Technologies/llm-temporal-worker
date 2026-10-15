@@ -60,6 +60,77 @@ func validateGenerateRequestV1MediaURLs(request GenerateRequestV1) error {
 	return ValidateMediaURLs(instructions, request.Append)
 }
 
+// validateGenerateRequestV1Content rejects empty message content, empty
+// instructions, and empty text parts at request ingress. Every provider
+// family rejects them (Azure requires a non-empty content array and
+// Anthropic requires non-empty text blocks), so admitting them only defers an
+// invalid_argument failure to the provider. Like the media URL policy, this
+// is a request check rather than an item decode check, so stored transcripts
+// that contain empty model output stay decodable.
+func validateGenerateRequestV1Content(request GenerateRequestV1) error {
+	if request.SettingsPatch.Instructions.Set != nil {
+		for index, instruction := range *request.SettingsPatch.Instructions.Set {
+			if err := validateInstructionContent(instruction); err != nil {
+				return fmt.Errorf("settings_patch.instructions.set %d: %w", index, err)
+			}
+		}
+	}
+	for index, item := range request.Append {
+		var content []Part
+		switch item := item.(type) {
+		case Message:
+			content = item.Content
+		case *Message:
+			if item == nil {
+				continue
+			}
+			content = item.Content
+		default:
+			continue
+		}
+		if len(content) == 0 {
+			return fmt.Errorf("append %d: message content must not be empty", index)
+		}
+		if err := rejectEmptyTextParts(content); err != nil {
+			return fmt.Errorf("append %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateInstructionContent(instruction Instruction) error {
+	kind := instruction.Kind
+	if kind == "" && len(instruction.Content) == 0 {
+		kind = InstructionKindText
+	}
+	if kind == InstructionKindText && len(instruction.Content) == 0 {
+		if instruction.Text == "" {
+			return fmt.Errorf("instruction text must not be empty")
+		}
+		return nil
+	}
+	if len(instruction.Content) == 0 {
+		return fmt.Errorf("instruction content must not be empty")
+	}
+	return rejectEmptyTextParts(instruction.Content)
+}
+
+func rejectEmptyTextParts(parts []Part) error {
+	for index, part := range parts {
+		empty := false
+		switch part := part.(type) {
+		case TextPart:
+			empty = part.Text == ""
+		case *TextPart:
+			empty = part != nil && part.Text == ""
+		}
+		if empty {
+			return fmt.Errorf("part %d: text must not be empty", index)
+		}
+	}
+	return nil
+}
+
 func validateCodePointLength(name, value string, minimum, maximum int) error {
 	length := utf8.RuneCountInString(value)
 	if length < minimum || length > maximum {

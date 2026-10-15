@@ -12,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string, strict bool) (bedrockruntime.ConverseInput, error) {
@@ -171,7 +172,7 @@ func lowerItem(item llm.Item) (types.Message, error) {
 			return types.Message{}, err
 		}
 		return types.Message{Role: types.ConversationRoleAssistant, Content: []types.ContentBlock{
-			&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: stringPtr(value.ID), Name: stringPtr(value.Name), Input: document.NewLazyDocument(input)}},
+			&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: stringPtr(toolcallid.Portable(value.ID)), Name: stringPtr(value.Name), Input: document.NewLazyDocument(input)}},
 		}}, nil
 	case llm.ToolResult:
 		if value.CallID == "" {
@@ -186,7 +187,7 @@ func lowerItem(item llm.Item) (types.Message, error) {
 			status = types.ToolResultStatusError
 		}
 		return types.Message{Role: types.ConversationRoleUser, Content: []types.ContentBlock{
-			&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{ToolUseId: stringPtr(value.CallID), Content: content, Status: status}},
+			&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{ToolUseId: stringPtr(toolcallid.Portable(value.CallID)), Content: content, Status: status}},
 		}}, nil
 	case llm.ProviderState:
 		return types.Message{}, fmt.Errorf("provider state is not accepted by Bedrock Converse")
