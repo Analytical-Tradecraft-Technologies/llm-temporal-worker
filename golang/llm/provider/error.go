@@ -30,6 +30,12 @@ var ErrProviderPreDispatch = errors.New("provider request failed before dispatch
 // URL, header, or configured limit so it is safe to use for classification.
 var ErrProviderResponseTooLarge = errors.New("provider response exceeded configured byte limit")
 
+// ErrProviderCredentials marks a failure to resolve the credentials an SDK
+// needs to sign a request, such as an unreachable STS or IMDS endpoint or no
+// usable credential source. Signing happens before the request reaches the
+// transport, so the marker never describes a request the provider received.
+var ErrProviderCredentials = errors.New("provider credentials could not be resolved")
+
 type Code string
 
 const (
@@ -183,6 +189,16 @@ func IsGatewayTimeoutStatus(status int) bool {
 // ErrProviderPreDispatch evidence.
 func NewPreDispatchUnavailableError(cause error) *Error {
 	mapped := NewError(CodeProviderUnavailable, PhaseDispatch, DispatchNotDispatched, RetryNextRoute, "provider connection failed before dispatch")
+	mapped.Cause = withPreDispatchMarker(cause)
+	return mapped
+}
+
+// NewPreDispatchCredentialError classifies a credential-resolution failure
+// raised while the SDK signed the request, before it reached the transport.
+// Nothing was sent, so the result carries the pre-dispatch marker and may move
+// to another route, whose credentials may differ.
+func NewPreDispatchCredentialError(cause error) *Error {
+	mapped := NewError(CodeAuthentication, PhaseDispatch, DispatchNotDispatched, RetryNextRoute, "provider credentials could not be resolved before dispatch")
 	mapped.Cause = withPreDispatchMarker(cause)
 	return mapped
 }

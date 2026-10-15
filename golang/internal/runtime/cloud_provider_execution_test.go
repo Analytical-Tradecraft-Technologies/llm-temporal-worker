@@ -648,6 +648,7 @@ func TestCloudProviderExecutionCertifiedPreDispatchReleasesBudget(t *testing.T) 
 	for name, cause := range map[string]error{
 		"no writable connection": provider.NewPreDispatchUnavailableError(provider.ErrProviderPreDispatch),
 		"egress denied":          provider.NewEgressDeniedError(provider.ErrProviderEgressDenied),
+		"credential resolution":  provider.NewPreDispatchCredentialError(provider.ErrProviderCredentials),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newProviderExecutionFixture(t, "generate", false)

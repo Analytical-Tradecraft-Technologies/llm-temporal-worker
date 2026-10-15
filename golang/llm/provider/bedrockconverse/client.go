@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/awscredentials"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
 
@@ -45,6 +46,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 	awsConfig := config.AWSConfig
 	awsConfig.HTTPClient = config.HTTPClient
+	awsConfig.Credentials = awscredentials.Wrap(awsConfig.Credentials)
 	awsConfig.Retryer = func() aws.Retryer { return aws.NopRetryer{} }
 	if config.BaseURL != "" {
 		validated, err := clientconfig.BaseURL(config.BaseURL)
