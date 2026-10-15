@@ -95,6 +95,16 @@ func SelectPrefix(items []llm.Item, recentTurns int) (PrefixSelection, error) {
 // provider-independent baseline of budget reservation, so plan and compaction
 // select the same boundary whichever route later serves the summarizer.
 func SelectRequestPrefix(source llm.Request, policy Policy) (PrefixSelection, error) {
+	return SelectBoundedRequestPrefix(source, policy, nil)
+}
+
+// SelectBoundedRequestPrefix is SelectRequestPrefix with one more bound: it
+// keeps shrinking the retained window, never below one turn, until fits
+// accepts it. fits measures what the token estimate leaves out, such as the
+// inline media bytes a checkpoint stores, so a window of recent screenshots
+// that the provider bills cheaply is still summarized when the checkpoint it
+// leaves could not be extended. A nil fits accepts every window.
+func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(retained []llm.Item) (bool, error)) (PrefixSelection, error) {
 	if err := policy.Validate(); err != nil {
 		return PrefixSelection{}, err
 	}
@@ -115,7 +125,44 @@ func SelectRequestPrefix(source llm.Request, policy Policy) (PrefixSelection, er
 			return PrefixSelection{}, err
 		}
 	}
-	return selection, nil
+	if fits == nil || selection.RetainedTurns <= 1 {
+		return selection, nil
+	}
+	// A shorter window is never larger, so binary search for the longest one
+	// fits accepts: fits may encode the whole window, and probing every turn
+	// of a long window would encode it once per turn.
+	accepted := func(turns int) (bool, error) {
+		candidate, err := SelectPrefix(source.Input, turns)
+		if err != nil {
+			return false, err
+		}
+		ok, err := fits(candidate.Retained)
+		if err != nil {
+			return false, fmt.Errorf("compaction retained window: %w", err)
+		}
+		return ok, nil
+	}
+	ok, err := accepted(selection.RetainedTurns)
+	if err != nil {
+		return PrefixSelection{}, err
+	}
+	if ok {
+		return selection, nil
+	}
+	best, low, high := 1, 2, selection.RetainedTurns-1
+	for low <= high {
+		middle := low + (high-low)/2
+		ok, err := accepted(middle)
+		if err != nil {
+			return PrefixSelection{}, err
+		}
+		if ok {
+			best, low = middle, middle+1
+		} else {
+			high = middle - 1
+		}
+	}
+	return SelectPrefix(source.Input, best)
 }
 
 // retainedRequestTokens sizes the request left after compaction with the

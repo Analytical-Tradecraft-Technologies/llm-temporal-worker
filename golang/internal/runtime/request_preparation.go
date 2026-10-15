@@ -157,7 +157,7 @@ func PrepareCompactInput(ctx context.Context, request llm.CompactRequestV1, repl
 	}
 	var selection compaction.PrefixSelection
 	if len(source.Input) != 0 {
-		selection, err = compaction.SelectRequestPrefix(source, policy)
+		selection, err = compaction.SelectBoundedRequestPrefix(source, policy, retainedParentFits(replay.State))
 		if err != nil {
 			return PreparedCompactInput{}, preparationError(provider.CodeInvalidArgument)
 		}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -363,6 +364,32 @@ func extendedParentFits(parent state.MaterializedState, input PreparedGenerateIn
 		return false, checkpointReplayError(provider.CodeInvalidArgument)
 	}
 	return true, nil
+}
+
+// maxRetainedParentBytes bounds the snapshot of the window a compaction keeps
+// verbatim. It is half of MaxExtendableParentBytes, so the compacted parent
+// leaves the other half for its summary and the next turn's append: the token
+// estimate that sizes the window excludes inline media, and recent screenshots
+// alone could otherwise fill a parent that compaction was meant to make
+// extendable again.
+const maxRetainedParentBytes = cloudstate.MaxExtendableParentBytes / 2
+
+// retainedParentFits reports whether a compaction of parent that keeps a
+// window verbatim leaves a snapshot within maxRetainedParentBytes. The window
+// is measured after an empty summary, as the compacted checkpoint stores it.
+func retainedParentFits(parent state.MaterializedState) func([]llm.Item) (bool, error) {
+	return func(retained []llm.Item) (bool, error) {
+		compacted := parent
+		compacted.Items = append([]llm.Item{compaction.SummaryItem("")}, retained...)
+		codec := state.CheckpointBlobCodec{MaxBytes: maxRetainedParentBytes}
+		if _, err := codec.EncodeSnapshot(*state.NewCheckpointSnapshot(compacted)); err != nil {
+			if errors.Is(err, state.ErrLimitExceeded) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
 }
 
 // Load authenticates the current caller but uses the original immutable input.

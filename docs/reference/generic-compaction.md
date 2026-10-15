@@ -130,6 +130,18 @@ the summarizer. An oversized turn, such as an inline image or a large tool
 result, thus leaves the window instead of being carried into every later
 checkpoint and compacted again on each Generate.
 
+The token estimate excludes inline media, so the runtime selects with
+`compaction.SelectBoundedRequestPrefix`, which also shortens the window, never
+below one turn, until the compacted checkpoint (an empty summary plus the
+retained window) is at most half of the extendable-parent bound. The other half
+is left for the summary and the next turn's append, so a screenshot or
+computer-use loop keeps extending after compaction. Generation planning
+compacts when the next turn would pass the extendable-parent byte bound or the
+lineage item bound, and projects the compacted parent first (the summary
+counted at four bytes per `output_reserve_tokens`): a turn that would not fit
+even then fails with an unpaid `invalid_argument` instead of buying a summary
+that changes nothing.
+
 The trigger contract is covered by property-style tests: every projected
 counter boundary is checked, zero provider limits remain disabled, and raising
 tokens, items, lineage, bytes, reserved reasoning, or continuation age cannot
