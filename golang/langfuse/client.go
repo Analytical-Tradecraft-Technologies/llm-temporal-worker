@@ -175,15 +175,21 @@ func makeSpan(o Operation, id, parent, name, typ string, start, end time.Time, i
 	return s
 }
 func (c *Client) Export(ctx context.Context, o Operation) error {
+	// Encode before admission: a locally rejected payload says nothing about
+	// Langfuse's health, so it must neither hold a slot nor reset the breaker.
+	body, err := encode(o)
+	if err != nil {
+		return err
+	}
 	if !c.admit() {
 		return ErrUnavailable
 	}
-	err := c.send(ctx, o)
+	err = c.send(ctx, body)
 	c.release(err)
 	return err
 }
 
-func (c *Client) send(ctx context.Context, o Operation) error {
+func encode(o Operation) ([]byte, error) {
 	spans := []span{makeSpan(o, o.SpanID, "", o.Kind, "span", o.StartedAt, o.EndedAt, o.Input, o.Output, o.Metadata)}
 	for _, g := range o.Generations {
 		s := makeSpan(o, g.ID, o.SpanID, g.Provider+"/"+g.Model, "generation", g.StartedAt, g.EndedAt, g.Input, g.Output, g.Metadata)
@@ -199,8 +205,12 @@ func (c *Client) send(ctx context.Context, o Operation) error {
 	payload := map[string]any{"resourceSpans": []any{map[string]any{"resource": map[string]any{"attributes": []attribute{attr("service.name", "llm-temporal-worker")}}, "scopeSpans": []any{map[string]any{"scope": map[string]string{"name": "llmtw.langfuse"}, "spans": spans}}}}}
 	body, err := json.Marshal(payload)
 	if err != nil || len(body) > maxBody {
-		return ErrRejected
+		return nil, ErrRejected
 	}
+	return body, nil
+}
+
+func (c *Client) send(ctx context.Context, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return ErrExport

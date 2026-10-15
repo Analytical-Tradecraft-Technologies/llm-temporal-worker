@@ -116,6 +116,32 @@ func TestExportBreakerFailsFastThenProbes(t *testing.T) {
 	}
 }
 
+func TestExportLocalRejectionDoesNotResetBreaker(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(503)
+	}))
+	defer server.Close()
+	c, _ := NewClient(server.URL, "public", "secret", server.Client())
+	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	oversized := op
+	oversized.Input = strings.Repeat("x", maxBody)
+	for i := 0; i < breakerThreshold-1; i++ {
+		c.Export(context.Background(), op)
+	}
+	if err := c.Export(context.Background(), oversized); err != ErrRejected {
+		t.Fatalf("oversized payload must be rejected locally: %v", err)
+	}
+	c.Export(context.Background(), op)
+	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("local rejection reset the breaker: %v", err)
+	}
+	if calls.Load() != breakerThreshold {
+		t.Fatalf("Langfuse received %d calls, want %d", calls.Load(), breakerThreshold)
+	}
+}
+
 func TestExportLimitsRequestsWaitingOnLangfuse(t *testing.T) {
 	release := make(chan struct{})
 	var arrived sync.WaitGroup
