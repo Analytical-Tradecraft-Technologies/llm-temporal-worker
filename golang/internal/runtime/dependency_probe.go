@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
@@ -215,6 +216,50 @@ type redisDependencyProbe struct {
 	config     config.RedisConfig
 	generation redisstore.BudgetGenerationPort
 	streamKey  string
+	// budgetNode and admissionNodes route the keyless server checks. PING,
+	// TIME, CONFIG GET, FUNCTION LIST and SCRIPT EXISTS carry no key, so a
+	// cluster client would send each to the next master in rotation while all
+	// accounting keys live on the master that owns the admission hash-tag slot.
+	budgetNode     func(context.Context) (redisProbeClient, error)
+	admissionNodes func(context.Context, func(context.Context, redisProbeClient) error) error
+}
+
+// redisAdmissionSlotKey is a key in the slot every admission and budget key
+// shares; only the hash tag decides the slot. An empty tag uses the store's
+// default, matching storage/redis key derivation.
+func redisAdmissionSlotKey(value config.RedisConfig) string {
+	tag := value.AdmissionHashTag
+	if tag == "" {
+		tag = "admission"
+	}
+	return value.KeyPrefix + ":{" + tag + "}:"
+}
+
+// redisProbeNodes selects where the keyless checks run. On a cluster client the
+// persistence, eviction and time checks run on the master that owns the
+// admission slot, and the admission code check runs on every master so a pass
+// holds wherever the slot moves. Other clients serve every command from one
+// server and use the client itself.
+func redisProbeNodes(client redisProbeClient, value config.RedisConfig) (func(context.Context) (redisProbeClient, error), func(context.Context, func(context.Context, redisProbeClient) error) error) {
+	if cluster, ok := client.(*redisclient.ClusterClient); ok {
+		slotKey := redisAdmissionSlotKey(value)
+		budgetNode := func(ctx context.Context) (redisProbeClient, error) {
+			node, err := cluster.MasterForKey(ctx, slotKey)
+			if err != nil {
+				return nil, err
+			}
+			return node, nil
+		}
+		admissionNodes := func(ctx context.Context, fn func(context.Context, redisProbeClient) error) error {
+			return cluster.ForEachMaster(ctx, func(ctx context.Context, node *redisclient.Client) error { return fn(ctx, node) })
+		}
+		return budgetNode, admissionNodes
+	}
+	budgetNode := func(context.Context) (redisProbeClient, error) { return client, nil }
+	admissionNodes := func(ctx context.Context, fn func(context.Context, redisProbeClient) error) error {
+		return fn(ctx, client)
+	}
+	return budgetNode, admissionNodes
 }
 
 // NewRedisDependencyProbe constructs a read-only Redis readiness probe. It
@@ -275,7 +320,8 @@ func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, 
 			return nil, fmt.Errorf("Redis coordination stream trim safety must be at least 1s")
 		}
 	}
-	return &redisDependencyProbe{client: client, config: value, generation: generation, streamKey: streamKey}, nil
+	budgetNode, admissionNodes := redisProbeNodes(client, value)
+	return &redisDependencyProbe{client: client, config: value, generation: generation, streamKey: streamKey, budgetNode: budgetNode, admissionNodes: admissionNodes}, nil
 }
 
 func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
@@ -288,28 +334,35 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 	if err := ctx.Err(); err != nil {
 		return redisUnavailable(err)
 	}
-	if _, err := probe.client.Ping(ctx).Result(); err != nil {
+	node, err := probe.budgetNode(ctx)
+	if err != nil || node == nil {
+		if err == nil {
+			err = errors.New("Redis returned no budget slot owner")
+		}
 		return redisUnavailable(err)
 	}
-	serverTime, err := probe.client.Time(ctx).Result()
+	if _, err := node.Ping(ctx).Result(); err != nil {
+		return redisUnavailable(err)
+	}
+	serverTime, err := node.Time(ctx).Result()
 	if err != nil || serverTime.IsZero() {
 		if err == nil {
 			err = errors.New("Redis returned no server time")
 		}
 		return redisUnavailable(err)
 	}
-	policy, err := redisSetting(ctx, probe.client, "maxmemory-policy")
+	policy, err := redisSetting(ctx, node, "maxmemory-policy")
 	if err != nil {
 		return redisUnavailable(err)
 	}
 	if !strings.EqualFold(strings.TrimSpace(policy), probe.config.EffectiveMaxMemoryPolicy()) {
 		return redisPolicyMismatch()
 	}
-	appendOnly, err := redisSetting(ctx, probe.client, "appendonly")
+	appendOnly, err := redisSetting(ctx, node, "appendonly")
 	if err != nil {
 		return redisUnavailable(err)
 	}
-	save, err := redisSetting(ctx, probe.client, "save")
+	save, err := redisSetting(ctx, node, "save")
 	if err != nil {
 		return redisUnavailable(err)
 	}
@@ -323,15 +376,7 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 		(!strings.EqualFold(strings.TrimSpace(appendOnly), "no") || strings.TrimSpace(save) != "") {
 		return redisPolicyMismatch()
 	}
-	var result ProbeResult
-	switch probe.config.AdmissionMode {
-	case "function":
-		result = probe.verifyFunction(ctx)
-	case "lua":
-		result = probe.verifyLua(ctx)
-	default:
-		return redisPolicyMismatch()
-	}
+	result := probe.verifyAdmission(ctx)
 	if result.Status != ProbeStatusReady {
 		return result
 	}
@@ -488,11 +533,48 @@ func redisProbeFailure(ctx context.Context, err error) ProbeResult {
 	return redisUnavailable(err)
 }
 
-func (probe *redisDependencyProbe) verifyFunction(ctx context.Context) ProbeResult {
+// verifyAdmission checks the pinned admission code on every node that could
+// serve the admission FCALL or EVALSHA. Any node without it fails the probe,
+// preferring a policy mismatch over a transport failure so a misprovisioned
+// node is reported the same way whatever the fan-out order.
+func (probe *redisDependencyProbe) verifyAdmission(ctx context.Context) ProbeResult {
+	var (
+		mu      sync.Mutex
+		checked bool
+		result  = ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	)
+	err := probe.admissionNodes(ctx, func(ctx context.Context, node redisProbeClient) error {
+		var nodeResult ProbeResult
+		switch probe.config.AdmissionMode {
+		case "function":
+			nodeResult = probe.verifyFunction(ctx, node)
+		case "lua":
+			nodeResult = probe.verifyLua(ctx, node)
+		default:
+			nodeResult = redisPolicyMismatch()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		checked = true
+		if nodeResult.Status != ProbeStatusReady && result.Status != ProbeStatusPolicy {
+			result = nodeResult
+		}
+		return nil
+	})
+	if err != nil {
+		return redisUnavailable(err)
+	}
+	if !checked {
+		return redisUnavailable(errors.New("Redis returned no master to check"))
+	}
+	return result
+}
+
+func (probe *redisDependencyProbe) verifyFunction(ctx context.Context, node redisProbeClient) ProbeResult {
 	if probe.config.FunctionLibrary != redisstore.AdmissionFunctionLibrary || probe.config.AdmissionVersion != redisstore.AdmissionFunctionVersion || probe.config.AdmissionDigest != redisstore.AdmissionFunctionDigest() {
 		return redisPolicyMismatch()
 	}
-	libraries, err := probe.client.FunctionList(ctx, redisclient.FunctionListQuery{LibraryNamePattern: probe.config.FunctionLibrary, WithCode: true}).Result()
+	libraries, err := node.FunctionList(ctx, redisclient.FunctionListQuery{LibraryNamePattern: probe.config.FunctionLibrary, WithCode: true}).Result()
 	if err != nil {
 		return redisUnavailable(err)
 	}
@@ -514,11 +596,11 @@ func (probe *redisDependencyProbe) verifyFunction(ctx context.Context) ProbeResu
 	return redisPolicyMismatch()
 }
 
-func (probe *redisDependencyProbe) verifyLua(ctx context.Context) ProbeResult {
+func (probe *redisDependencyProbe) verifyLua(ctx context.Context, node redisProbeClient) ProbeResult {
 	if probe.config.AdmissionVersion != redisstore.AdmissionFunctionVersion || probe.config.AdmissionDigest != redisstore.AdmissionLuaDigest() {
 		return redisPolicyMismatch()
 	}
-	exists, err := probe.client.ScriptExists(ctx, redisstore.AdmissionLuaSHA1()).Result()
+	exists, err := node.ScriptExists(ctx, redisstore.AdmissionLuaSHA1()).Result()
 	if err != nil {
 		return redisUnavailable(err)
 	}

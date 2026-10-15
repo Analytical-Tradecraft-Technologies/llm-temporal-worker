@@ -636,6 +636,140 @@ func (client *fakeRedisProbeClient) ConfigSet(context.Context, string, string) *
 	return redisclient.NewStatusCmd(context.Background())
 }
 
+// withFakeRedisCluster routes a probe's keyless checks the way a cluster
+// client does: server settings on the admission slot owner, admission code on
+// every master. The shared client stands in for whichever master a keyless
+// command would otherwise reach in rotation.
+func withFakeRedisCluster(t *testing.T, probe DependencyProbe, owner *fakeRedisProbeClient, masters ...*fakeRedisProbeClient) {
+	t.Helper()
+	redisProbe, ok := probe.(*redisDependencyProbe)
+	if !ok {
+		t.Fatalf("probe type = %T", probe)
+	}
+	redisProbe.budgetNode = func(context.Context) (redisProbeClient, error) { return owner, nil }
+	redisProbe.admissionNodes = func(ctx context.Context, fn func(context.Context, redisProbeClient) error) error {
+		for _, master := range masters {
+			if err := fn(ctx, master); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func TestRedisDependencyProbeChecksClusterSlotOwnerAndEveryMaster(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		config func(*config.RedisConfig)
+		owner  func(*fakeRedisProbeClient)
+		other  func(*fakeRedisProbeClient)
+		want   ProbeStatus
+	}{
+		{name: "compliant", want: ProbeStatusReady},
+		{
+			name:  "slot owner evicts",
+			owner: func(client *fakeRedisProbeClient) { client.settings["maxmemory-policy"] = "allkeys-lru" },
+			want:  ProbeStatusPolicy,
+		},
+		{
+			name:  "slot owner without aof",
+			owner: func(client *fakeRedisProbeClient) { client.settings["appendonly"] = "no" },
+			want:  ProbeStatusPolicy,
+		},
+		{
+			name:  "slot owner without library",
+			owner: func(client *fakeRedisProbeClient) { client.libraries = nil },
+			want:  ProbeStatusPolicy,
+		},
+		{
+			name:  "other master without library",
+			other: func(client *fakeRedisProbeClient) { client.libraries = nil },
+			want:  ProbeStatusPolicy,
+		},
+		{
+			name: "other master without lua script",
+			config: func(value *config.RedisConfig) {
+				value.AdmissionMode = "lua"
+				value.AdmissionDigest = redisstore.AdmissionLuaDigest()
+			},
+			other: func(client *fakeRedisProbeClient) { client.scriptExists = []bool{false} },
+			want:  ProbeStatusPolicy,
+		},
+		{
+			name:  "policy mismatch outranks unreachable master",
+			owner: func(client *fakeRedisProbeClient) { client.libraries = nil },
+			other: func(client *fakeRedisProbeClient) { client.functionListErr = errors.New("connection refused") },
+			want:  ProbeStatusPolicy,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := testRedisProbeConfig()
+			value.KeyPrefix = "worker"
+			value.AdmissionHashTag = "budget"
+			if test.config != nil {
+				test.config(&value)
+			}
+			// The shared client is compliant, as the next master in rotation
+			// would be; only the routed nodes may decide the result.
+			shared := healthyRedisProbeClient()
+			owner, other := healthyRedisProbeClient(), healthyRedisProbeClient()
+			if test.owner != nil {
+				test.owner(owner)
+			}
+			if test.other != nil {
+				test.other(other)
+			}
+			probe, err := NewRedisDependencyProbe(shared, value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			withFakeRedisCluster(t, probe, owner, other, owner)
+			for attempt := 0; attempt < 5; attempt++ {
+				if result := probe.Probe(context.Background()); result.Status != test.want {
+					t.Fatalf("attempt %d result = %#v, want %s", attempt, result, test.want)
+				}
+			}
+			if shared.pingCalls+shared.timeCalls+shared.functionListCalls+shared.scriptExistsCalls+len(shared.configGetCalls) != 0 {
+				t.Fatalf("keyless checks reached the shared cluster client: %#v", shared)
+			}
+			if owner.pingCalls == 0 || owner.timeCalls == 0 || owner.configGetCalls["maxmemory-policy"] == 0 {
+				t.Fatalf("server checks skipped the slot owner: %#v", owner)
+			}
+		})
+	}
+}
+
+func TestRedisDependencyProbeRoutesByClientTopology(t *testing.T) {
+	value := testRedisProbeConfig()
+	value.KeyPrefix = "worker"
+	value.AdmissionHashTag = "budget"
+	if got := redisAdmissionSlotKey(value); got != "worker:{budget}:" {
+		t.Fatalf("slot key = %q", got)
+	}
+	single := healthyRedisProbeClient()
+	probe, err := NewRedisDependencyProbe(single, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := probe.(*redisDependencyProbe).budgetNode(context.Background())
+	if err != nil || node != redisProbeClient(single) {
+		t.Fatalf("single-server budget node = %v, %v", node, err)
+	}
+	// An unreachable cluster cannot resolve the slot owner, and the probe must
+	// fail closed rather than fall back to an arbitrary master.
+	cluster := redisclient.NewClusterClient(&redisclient.ClusterOptions{Addrs: []string{"127.0.0.1:0"}, MaxRedirects: -1})
+	t.Cleanup(func() { _ = cluster.Close() })
+	probe, err = NewRedisDependencyProbe(cluster, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if result := probe.Probe(ctx); result.Status == ProbeStatusReady {
+		t.Fatalf("unreachable cluster result = %#v", result)
+	}
+}
+
 func TestValidateRequiredDependencyProbeSetSelectsCloudBackendWithoutIO(t *testing.T) {
 	ready := func(id DependencyID) DependencyProbe {
 		return identifyDependencyProbe(id, DependencyProbeFunc(func(context.Context) ProbeResult { t.Fatal("validation performed readiness IO"); return ProbeResult{} }))
