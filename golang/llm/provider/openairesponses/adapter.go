@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
 )
 
 // Adapter owns one official OpenAI Responses client and one configured
@@ -123,6 +125,33 @@ func (adapter *Adapter) Capabilities(ctx context.Context, query provider.Capabil
 	return adapter.capabilities(ctx, query)
 }
 
+// ValidateRequest rejects structured output the provider documents as an
+// error before an engine reserves budget. Compile repeats the check, and any
+// other lowering failure is left for it to report.
+func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if adapter == nil {
+		return compileError("adapter is nil")
+	}
+	if request.Output == nil {
+		return nil
+	}
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		return nil
+	}
+	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+	if err != nil {
+		return nil
+	}
+	if _, _, err := adapter.lowerRequestMap(normalized, serviceClass, ""); errors.As(err, new(*openaischema.UnsupportedError)) {
+		return lowerError(err)
+	}
+	return nil
+}
+
 func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput) (provider.Call, error) {
 	if adapter == nil {
 		return provider.Call{}, compileError("adapter is nil")
@@ -183,7 +212,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := adapter.lowerRequest(normalized, serviceClass, tier)
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, lowerError(err)
 	}
 	if err := adapter.enforceStoragePolicy(&params); err != nil {
 		return provider.Call{}, compileError(err.Error())
@@ -214,6 +243,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		OperationKey: normalized.OperationKey,
 		ServiceClass: serviceClass,
 		SDKParams:    params,
+		OutputSchema: outputSchema(normalized),
 		Metadata:     metadata,
 	}, nil
 }
@@ -375,6 +405,16 @@ func canonicalRequestBytes(request llm.Request) ([]byte, error) {
 		return nil, err
 	}
 	return llm.CanonicalJSON(encoded)
+}
+
+// lowerError maps a lowering failure to the error contract. A request that
+// structured output cannot represent is unsupported, not malformed.
+func lowerError(err error) *provider.Error {
+	var unsupported *openaischema.UnsupportedError
+	if errors.As(err, &unsupported) {
+		return unsupportedError(provider.FeatureStructuredOutput, err.Error())
+	}
+	return compileError(err.Error())
 }
 
 func compileError(message string) *provider.Error {

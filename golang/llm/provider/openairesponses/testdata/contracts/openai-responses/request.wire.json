@@ -14,7 +14,7 @@
   "service_tier": "priority",
   "store": false,
   "temperature": 0.2,
-  "text": {"format": {"description": "fixture answer", "name": "answer", "schema": {"properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "strict": true, "type": "json_schema"}},
+  "text": {"format": {"description": "fixture answer", "name": "answer", "schema": {"additionalProperties": false, "properties": {"answer": {"type": "string"}}, "required": ["answer"], "type": "object"}, "strict": true, "type": "json_schema"}},
   "tool_choice": {"name": "lookup", "type": "function"},
   "tools": [{"description": "fixture lookup", "name": "lookup", "output_schema": {"type": "object"}, "parameters": {"properties": {"query": {"type": "string"}}, "required": ["query"], "type": "object"}, "strict": false, "type": "function"}],
   "top_p": 0.9,

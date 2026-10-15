@@ -149,6 +149,23 @@ other.
   subset validation. The provider requires `text.format.name`; when the
   caller omits `output.format.name` the adapter sends the constant `response`,
   so the wire body and its digests stay deterministic.
+- A `strict: true` schema is lowered to the subset OpenAI strict structured
+  output accepts, which otherwise returns a 400: every object is closed with
+  `additionalProperties: false` and lists every declared property in
+  `required` (the caller's required order first, then the rest sorted),
+  `oneOf` becomes `anyOf`, and other keywords outside the subset shared with
+  Azure OpenAI (such as `not`, `if`/`then`/`else`, `uniqueItems`, `pattern`,
+  `format`, numeric bounds and length and item-count constraints) move into
+  the description. A non-object root, an explicitly open object, `allOf`, a
+  `required` name that is not declared, or a reference other than `#` or
+  `#/$defs/<name>` fails before admission with `unsupported_capability`. The
+  answer is validated against the caller's schema, not the wire schema. Non-strict schemas
+  are sent as written. The same applies to Chat Completions.
+- JSON-object mode (`kind: json`) fails before admission with
+  `unsupported_capability` unless the instructions or input contain "json" in
+  any case, because OpenAI rejects it otherwise. A request continuing a stored
+  response is not checked, since the earlier context is not visible. The same
+  applies to Chat Completions.
 - The completed response is validated against the requested JSON object or
   JSON Schema format before it enters the normalized response. JSON-object mode
   requires a valid top-level object; a provider acknowledgement alone is not

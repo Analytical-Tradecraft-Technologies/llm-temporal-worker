@@ -159,6 +159,7 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
 	params, err := lowerRequest(llm.Request{
 		Model:  "gpt",
+		Input:  wireAuditUserText("reply in JSON"),
 		Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}},
 	}, llm.ServiceClassStandard)
 	if err != nil {
@@ -221,7 +222,7 @@ func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
 			format.Schema = json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
 		}
 
-		params, err := lowerRequest(llm.Request{Model: "gpt", Output: &llm.OutputSpec{Format: format}}, llm.ServiceClassStandard)
+		params, err := lowerRequest(llm.Request{Model: "gpt", Input: wireAuditUserText("reply in JSON"), Output: &llm.OutputSpec{Format: format}}, llm.ServiceClassStandard)
 		if err != nil {
 			t.Fatal(err)
 		}

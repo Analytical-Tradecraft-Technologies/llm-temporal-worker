@@ -149,7 +149,7 @@ func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
 			format.Schema = json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
 		}
 
-		params, err := lowerRequest(llm.Request{Model: "chat-model", Output: &llm.OutputSpec{Format: format}}, testProfile(), "default")
+		params, err := lowerRequest(llm.Request{Model: "chat-model", Input: wireAuditUserText("reply in JSON"), Output: &llm.OutputSpec{Format: format}}, testProfile(), "default")
 		if err != nil {
 			t.Fatal(err)
 		}

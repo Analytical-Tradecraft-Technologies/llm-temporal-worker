@@ -3,6 +3,7 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
 )
 
 // Adapter owns one official OpenAI SDK client and one immutable compatible
@@ -106,6 +108,15 @@ func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request
 	if err := lowerExtensions(adapter.profile, request.Extensions, make(map[string]any)); err != nil {
 		return compileError(err.Error())
 	}
+	// Structured output the provider documents as an error is rejected here
+	// too; any other lowering failure is left for Compile to report.
+	if request.Output != nil {
+		if normalized, err := llm.NormalizeRequest(request); err == nil {
+			if _, err := lowerRequestMap(normalized, adapter.profile, ""); errors.As(err, new(*openaischema.UnsupportedError)) {
+				return lowerError(err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -173,7 +184,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := lowerRequest(normalized, adapter.profile, providerTier)
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, lowerError(err)
 	}
 	digest := input.Metadata.SchemaDigest
 	if digest == ([32]byte{}) {
@@ -201,6 +212,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		OperationKey: normalized.OperationKey,
 		ServiceClass: serviceClass,
 		SDKParams:    params,
+		OutputSchema: outputSchema(normalized),
 		Metadata:     metadata,
 	}, nil
 }
@@ -356,6 +368,16 @@ func canonicalRequestBytes(request llm.Request) ([]byte, error) {
 		return nil, err
 	}
 	return llm.CanonicalJSON(encoded)
+}
+
+// lowerError maps a lowering failure to the error contract. A request that
+// structured output cannot represent is unsupported, not malformed.
+func lowerError(err error) *provider.Error {
+	var unsupported *openaischema.UnsupportedError
+	if errors.As(err, &unsupported) {
+		return unsupportedError(provider.FeatureStructuredOutput, err.Error())
+	}
+	return compileError(err.Error())
 }
 
 func compileError(message string) *provider.Error {

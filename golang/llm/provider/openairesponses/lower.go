@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 
 	"github.com/openai/openai-go/v3/packages/param"
@@ -130,6 +131,11 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 	}
 	if storageDenied && (reasoningState || reasoningRequested(request.Reasoning)) {
 		requestMap["include"] = includeEncryptedReasoning(requestMap["include"])
+	}
+	// A previous response's context is not visible here and may carry the
+	// word, so only a self-contained request is checked.
+	if request.Output != nil && request.Output.Format.Kind == llm.OutputKindJSON && continuation == "" && !openaischema.MentionsJSON(requestMap["input"]) {
+		return nil, loweredToolPolicy{}, openaischema.JSONModeContextError()
 	}
 	return requestMap, policy, nil
 }
@@ -578,9 +584,9 @@ func lowerOutput(output llm.OutputSpec) (map[string]any, error) {
 		if _, err := llmschema.Parse(output.Format.Schema); err != nil {
 			return nil, fmt.Errorf("output schema: %w", err)
 		}
-		var schema map[string]any
-		if err := schemaorder.Decode(output.Format.Schema, &schema); err != nil {
-			return nil, fmt.Errorf("output schema: %w", err)
+		schema, err := lowerOutputSchema(output.Format)
+		if err != nil {
+			return nil, err
 		}
 		// The provider requires a name; v1 leaves it optional.
 		name := output.Format.Name
@@ -596,6 +602,20 @@ func lowerOutput(output llm.OutputSpec) (map[string]any, error) {
 		return nil, fmt.Errorf("output format %q is not supported", output.Format.Kind)
 	}
 	return result, nil
+}
+
+// lowerOutputSchema returns the wire schema. A strict schema is lowered to
+// the subset strict structured output accepts, which the provider otherwise
+// rejects with a 400; the lift validates against the caller's original.
+func lowerOutputSchema(format llm.OutputFormat) (map[string]any, error) {
+	if format.Strict {
+		return openaischema.LowerStrict(format.Schema)
+	}
+	var schema map[string]any
+	if err := schemaorder.Decode(format.Schema, &schema); err != nil {
+		return nil, fmt.Errorf("output schema: %w", err)
+	}
+	return schema, nil
 }
 
 func lowerSampling(target map[string]any, sampling llm.SamplingSpec) error {

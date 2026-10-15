@@ -150,7 +150,7 @@ func validateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 			return fmt.Errorf("provider JSON response is invalid")
 		}
 	case "json_schema":
-		compiled, err := llmschema.Parse(format.JSONSchema.Schema)
+		compiled, err := llmschema.Parse(validationSchema(call, format.JSONSchema.Schema))
 		if err != nil {
 			return fmt.Errorf("response schema validation setup: %w", err)
 		}
@@ -161,6 +161,24 @@ func validateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 		return fmt.Errorf("provider returned unsupported response format %q", format.Type)
 	}
 	return nil
+}
+
+// validationSchema prefers the caller's schema over the wire schema, which a
+// strict request carries in a lowered, looser form.
+func validationSchema(call provider.Call, wire json.RawMessage) json.RawMessage {
+	if len(call.OutputSchema) > 0 {
+		return call.OutputSchema
+	}
+	return wire
+}
+
+// outputSchema is the caller's json_schema output schema, kept on the call so
+// the lift validates against it rather than the lowered wire schema.
+func outputSchema(request llm.Request) json.RawMessage {
+	if request.Output == nil || request.Output.Format.Kind != llm.OutputKindJSONSchema {
+		return nil
+	}
+	return append(json.RawMessage(nil), request.Output.Format.Schema...)
 }
 
 func firstModelText(output []llm.Item) (string, bool) {
