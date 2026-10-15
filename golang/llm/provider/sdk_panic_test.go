@@ -38,6 +38,9 @@ func TestDispatchProbeClassifiesAPanicByHowFarTheCallGot(t *testing.T) {
 		{name: "redirect", send: func(probe *DispatchProbe) { _, _ = probe.Middleware(request, respond(307)) }, code: CodeProviderUnavailable, dispatch: DispatchAmbiguous, retry: RetryNever},
 		{name: "rate limited", send: func(probe *DispatchProbe) { _, _ = probe.Middleware(request, respond(429)) }, code: CodeProviderRateLimited, dispatch: DispatchRejected, retry: RetryAfter},
 		{name: "server error", send: func(probe *DispatchProbe) { _, _ = probe.Middleware(request, respond(503)) }, code: CodeProviderUnavailable, dispatch: DispatchRejected, retry: RetrySameOperation},
+		{name: "gateway timeout", send: func(probe *DispatchProbe) { _, _ = probe.Middleware(request, respond(504)) }, code: CodeProviderUnavailable, dispatch: DispatchAmbiguous, retry: RetrySameOperation},
+		{name: "cloudflare timeout", send: func(probe *DispatchProbe) { _, _ = probe.Middleware(request, respond(524)) }, code: CodeProviderUnavailable, dispatch: DispatchAmbiguous, retry: RetrySameOperation},
+		{name: "bad gateway", send: func(probe *DispatchProbe) { _, _ = probe.Middleware(request, respond(502)) }, code: CodeProviderUnavailable, dispatch: DispatchRejected, retry: RetrySameOperation},
 		{name: "bad request", send: func(probe *DispatchProbe) { _, _ = probe.Middleware(request, respond(400)) }, code: CodeInvalidArgument, dispatch: DispatchRejected, retry: RetryNever},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -81,6 +81,9 @@ func mapHTTPError(status int, cause error, profileName string) *provider.Error {
 		// Bedrock reports model processing failures with these 4xx statuses.
 		// They do not prove rejection or zero usage: a new attempt needs budget.
 		dispatch, safe = provider.DispatchAmbiguous, "provider model processing failed"
+	case provider.IsGatewayTimeoutStatus(status):
+		// The gateway timed out; the request may have been billed.
+		dispatch, safe = provider.DispatchAmbiguous, "provider request timed out"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
 	case status == http.StatusForbidden:

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -162,6 +163,18 @@ func NewEgressDeniedError(cause error) *Error {
 	mapped := NewError(CodeProviderUnavailable, PhaseDispatch, DispatchNotDispatched, RetryNextRoute, "provider egress policy denied request")
 	mapped.Cause = cause
 	return mapped
+}
+
+// StatusCloudflareTimeout is Cloudflare's 524: the origin accepted the
+// connection but did not answer before Cloudflare stopped waiting.
+const StatusCloudflareTimeout = 524
+
+// IsGatewayTimeoutStatus reports whether an HTTP status is a gateway timeout
+// (504, or Cloudflare's 524). The gateway gave up, but the provider behind it
+// may have run, and billed, the whole request, so the status is not evidence
+// of rejection.
+func IsGatewayTimeoutStatus(status int) bool {
+	return status == http.StatusGatewayTimeout || status == StatusCloudflareTimeout
 }
 
 // NewPreDispatchUnavailableError converts a guarded transport failure that

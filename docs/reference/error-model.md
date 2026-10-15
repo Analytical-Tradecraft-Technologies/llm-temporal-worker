@@ -81,7 +81,9 @@ Transport instrumentation marks:
 - `ambiguous` when bytes may have been written and no proof resolves outcome.
 
 Connection establishment alone does not mean dispatched. A timeout after a write
-is ambiguous. A provider 429 is rejected/uncharged only when that provider
+is ambiguous, and so is a gateway timeout response (HTTP 504, Cloudflare 524,
+or an Anthropic `timeout_error`): the gateway gave up, but the provider may
+have run and billed the request. A provider 429 is rejected/uncharged only when that provider
 contract/profile verifies it; otherwise cost handling remains conservative.
 
 ## Retry disposition
