@@ -481,7 +481,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repetition: [1, 2, 3, 4, 5]
+        # Other events expand a single no-op placeholder instead of five.
+        repetition: ${{ github.event_name == 'schedule' && fromJSON('[1, 2, 3, 4, 5]') || fromJSON('[1]') }}
     steps:
       - name: Check out repository
         if: github.event_name == 'schedule'

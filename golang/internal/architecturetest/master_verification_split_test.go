@@ -142,9 +142,11 @@ func TestWorkflowMasterRaceRepetitionRunsOneIterationPerJob(t *testing.T) {
 	if failFast, ok := strategy["fail-fast"].(bool); !ok || failFast {
 		t.Fatalf("verify-race-repeat fail-fast = %#v, want false so every repetition reports", strategy["fail-fast"])
 	}
-	repetitions, ok := nestedMapping(t, master.name, strategy, "matrix")["repetition"].([]any)
-	if !ok || len(repetitions) != 5 {
-		t.Fatalf("verify-race-repeat matrix repetition = %#v, want five entries", repetitions)
+	// Only scheduled runs expand all five repetitions; other events get one
+	// placeholder whose steps are all skipped.
+	const wantRepetitions = "${{ github.event_name == 'schedule' && fromJSON('[1, 2, 3, 4, 5]') || fromJSON('[1]') }}"
+	if got := scalarString(t, master.name, nestedMapping(t, master.name, strategy, "matrix"), "repetition"); got != wantRepetitions {
+		t.Fatalf("verify-race-repeat matrix repetition = %q, want %q", got, wantRepetitions)
 	}
 	if strings.Contains(master.raw, "-count=5") {
 		t.Fatal("master.yml must not repeat packages within one go test process")
