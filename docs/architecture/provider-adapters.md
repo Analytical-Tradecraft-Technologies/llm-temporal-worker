@@ -118,6 +118,14 @@ order, `allow_fallbacks=false`, and `require_parameters=true`. This project owns
 fallback observability and budget admission; hidden upstream failover would
 break both.
 
+OpenRouter's `usage.cost` settles the call (`openrouter_reported`). It is the
+amount charged to the OpenRouter account, so when the account uses BYOK
+(`usage.is_byok: true`) it is only OpenRouter's fee: the lifter adds
+`cost_details.upstream_inference_cost`, which the upstream provider bills to
+the operator's key, and a BYOK response missing either amount settles as cost
+unknown. Non-BYOK responses settle at `usage.cost` alone (see
+[ADR 0016](../decisions/0016-openrouter-model-sync.md)).
+
 ## Lowering rules
 
 `reference` items are output annotations, such as the citations lifted from an

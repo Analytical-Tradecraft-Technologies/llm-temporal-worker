@@ -63,7 +63,14 @@ prices.
   `provider.require_parameters: true`; callers cannot steer the upstream. Its
   price is the componentwise maximum over every upstream endpoint and
   long-prompt override, so a reservation never undercounts. OpenRouter's
-  reported cost settles the call.
+  reported cost (`usage.cost`) settles the call. That is only the amount
+  charged to the OpenRouter account, so a BYOK response (`usage.is_byok:
+  true`), whose inference the upstream provider bills to the operator's own
+  key, settles at `usage.cost` plus `cost_details.upstream_inference_cost`.
+  A BYOK response missing either amount settles as cost unknown, so the
+  reservation is charged. Non-BYOK responses also report
+  `upstream_inference_cost`, already included in `usage.cost`, so only
+  `is_byok` selects the sum.
 - **Direct routes stay exact.** A direct route uses its tier's checked-in
   price. A tier with a long-prompt price (OpenAI's 2x input and 1.5x output
   from 272,000 prompt tokens) carries the threshold and its prices in the

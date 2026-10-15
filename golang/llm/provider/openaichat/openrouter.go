@@ -249,8 +249,41 @@ func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lift
 		addRawFact(lifted.Provider.Raw, "openrouter_cost_details", details)
 		addRawFact(lifted.Usage.ProviderRaw, "openrouter_cost_details", details)
 	}
+	addOpenRouterBYOKCost(lifted, usage)
 	_ = call
 	return nil
+}
+
+// addOpenRouterBYOKCost settles a BYOK call at OpenRouter's fee plus the
+// upstream inference cost. usage.cost is only what the OpenRouter account is
+// charged; with BYOK the upstream provider bills inference to the operator's
+// own key, and OpenRouter reports that amount as
+// cost_details.upstream_inference_cost. Only usage.is_byok selects this:
+// non-BYOK responses also carry upstream_inference_cost, already included in
+// usage.cost. A BYOK response without both amounts keeps the cost unknown, so
+// the reservation is charged rather than refunded.
+func addOpenRouterBYOKCost(lifted *llm.Response, usage map[string]json.RawMessage) {
+	var byok bool
+	if raw, ok := usage["is_byok"]; !ok || json.Unmarshal(raw, &byok) != nil || !byok {
+		return
+	}
+	var details struct {
+		UpstreamInferenceCost json.RawMessage `json:"upstream_inference_cost"`
+	}
+	if raw, ok := usage["cost_details"]; ok {
+		_ = json.Unmarshal(raw, &details)
+	}
+	upstream, err := parseDecimalUSD(details.UpstreamInferenceCost, "openrouter_upstream_inference_cost")
+	if err != nil || lifted.Cost.ActualCostUSD == nil {
+		lifted.Cost = llm.Cost{Status: llm.CostStatusUnknown}
+		return
+	}
+	total, err := lifted.Cost.ActualCostUSD.Add(upstream)
+	if err != nil {
+		lifted.Cost = llm.Cost{Status: llm.CostStatusUnknown}
+		return
+	}
+	lifted.Cost.ActualCostUSD = &total
 }
 
 // openRouterResponseError maps the failures OpenRouter reports with HTTP 200:
