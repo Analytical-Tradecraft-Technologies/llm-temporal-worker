@@ -327,9 +327,10 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			if _, err := r.finishProviderStep(ctx, p, attempt, result); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
-			if r.now().Before(saved.Execution.Failure.RetryNotBefore) {
-				return cloudStatus(p, llm.ExecutionBudgetWait, saved.Execution.Failure.RetryNotBefore.Sub(r.now())), nil
-			}
+			// Exhaustion is checked before the failure's Retry-After: a
+			// request with no attempts left fails now instead of waiting for
+			// nothing. The hint is applied after selection, and only when the
+			// replacement chooses the same route (#1334).
 			if len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
 				failure, err := r.store.FinishRequestExhausted(ctx, root.Scope, root.ID, attempt.ID, r.options.MaxAttempts, r.now())
 				if err != nil {
@@ -366,6 +367,13 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		return r.resumeAdmissionWinner(ctx, p, attempt, step, err)
 	}
 	r.execution.captureLangfuse(ctx, call, cloudstate.SavedProviderExecution{Plan: call.plan})
+	wait, err := r.retryHintWait(ctx, root.Scope, attempt, call.plan)
+	if err != nil {
+		return llm.ExecutionResultV1{}, err
+	}
+	if wait > 0 {
+		return cloudStatus(p, llm.ExecutionBudgetWait, wait), nil
+	}
 	lease, err := r.cacheLease(ctx, p, attempt, call.plan)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
@@ -413,6 +421,48 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		return llm.ExecutionResultV1{}, err
 	}
 	return r.finishProviderStep(ctx, p, attempt, result)
+}
+
+// retryHintWait is how long attempt must wait before dispatching plan. A
+// retryable failure's Retry-After binds only the route, endpoint and model
+// that returned it: a replacement selected onto another route fails over
+// immediately, while one back on the same route waits out the hint (#1334).
+// Every earlier attempt is checked, so a hint survives unused quote renewals
+// and a failover that later comes back to the hinted route. The walk stops
+// once every prior execution has been seen or attempts are older than any
+// hint can reach.
+func (r *CloudExecutionRuntime) retryHintWait(ctx context.Context, scope cloudstate.Scope, attempt cloudstate.RequestAttempt, plan cloudstate.BudgetPlan) (time.Duration, error) {
+	now, wait, executions := r.now(), time.Duration(0), 0
+	for id := attempt.PreviousID; id != "" && executions < len(attempt.PriorCandidates); {
+		record, err := r.store.Read(ctx, scope, id)
+		if err != nil {
+			return 0, cloudRuntimeError(err, false)
+		}
+		if record.UpdatedAt.Add(maxProviderRetryDelay).Before(now) {
+			break
+		}
+		link, err := cloudRequestAttempt(record)
+		if err != nil {
+			return 0, err
+		}
+		if link == nil {
+			return 0, cloudRuntimeError(cloudstate.ErrCorrupt, false)
+		}
+		saved, err := r.store.LoadProviderExecution(ctx, scope, id)
+		if err == nil {
+			executions++
+			failed, route := saved.Execution, saved.Plan.Route
+			if failed.Stage == cloudstate.ExecutionFailed && failed.Failure != nil && failed.Failure.Retryable &&
+				route.RouteID == plan.Route.RouteID && route.EndpointID == plan.Route.EndpointID && route.Model == plan.Route.Model &&
+				failed.Failure.RetryNotBefore.Sub(now) > wait {
+				wait = failed.Failure.RetryNotBefore.Sub(now)
+			}
+		} else if !errors.Is(err, cloudstate.ErrProviderExecutionMissing) && !errors.Is(err, cloudstate.ErrBudgetPlanMissing) {
+			return 0, cloudRuntimeError(err, false)
+		}
+		id = link.PreviousID
+	}
+	return wait, nil
 }
 
 // Admission is fenced as soon as another caller starts the same attempt. A

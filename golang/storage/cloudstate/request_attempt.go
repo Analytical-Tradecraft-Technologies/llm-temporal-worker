@@ -298,7 +298,9 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 		}
 		// Failed children are immutable. Settlement and retry classification must
 		// already have been saved before allocating a replacement reservation.
-		if execution != nil && execution.Stage == ExecutionFailed && execution.Settled && execution.Failure.Retryable && !now.Before(execution.Failure.RetryNotBefore) && record.Status == StatusFailed {
+		// Retry-After binds only the failed route, so the replacement may begin
+		// at once; the runtime holds it back if it selects that route again.
+		if execution != nil && execution.Stage == ExecutionFailed && execution.Settled && execution.Failure.Retryable && record.Status == StatusFailed {
 			return r.repairBudgetPlanIndex(ctx, record)
 		}
 		if executionFinalizing(progress) {
