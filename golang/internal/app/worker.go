@@ -162,8 +162,12 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 			DefaultVersioningBehavior: sdkworkflow.VersioningBehaviorPinned,
 		}
 	}
-	build := func() (*boundController, error) {
+	worker := &TemporalWorker{gracefulStop: options.GracefulStopTimeout, health: options.Health, metrics: options.Metrics}
+	worker.build = func() (*boundController, error) {
 		activityContext, cancelActivities := context.WithCancelCause(context.Background())
+		// bound is assigned before the controller can start, and the SDK only
+		// reports fatal errors from a started worker.
+		var bound *boundController
 		controller, registry, err := options.Factory(options.Client, options.TaskQueue, sdkworker.Options{
 			Identity:                           options.Identity,
 			DeploymentOptions:                  deployment,
@@ -171,6 +175,7 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 			MaxConcurrentActivityTaskPollers:   options.MaxConcurrentActivityTaskPolls,
 			WorkerStopTimeout:                  options.PauseDrainTimeout,
 			BackgroundActivityContext:          activityContext,
+			OnFatalError:                       func(error) { worker.handleFatalError(bound) },
 		})
 		if err != nil {
 			cancelActivities(nil)
@@ -190,13 +195,15 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 		if options.Activities.V1Runtime != nil {
 			workflows.Register(registry, options.Activities.PayloadLimits)
 		}
-		return &boundController{WorkerController: controller, cancelActivities: cancelActivities}, nil
+		bound = &boundController{WorkerController: controller, cancelActivities: cancelActivities}
+		return bound, nil
 	}
-	controller, err := build()
+	controller, err := worker.build()
 	if err != nil {
 		return nil, err
 	}
-	return &TemporalWorker{controller: controller, build: build, gracefulStop: options.GracefulStopTimeout, health: options.Health, metrics: options.Metrics}, nil
+	worker.controller = controller
+	return worker, nil
 }
 
 func defaultWorkerFactory(workflowClient client.Client, taskQueue string, options sdkworker.Options) (WorkerController, WorkerRegistry, error) {
@@ -418,16 +425,46 @@ func (worker *TemporalWorker) drainController(controller *boundController, done 
 	if controller == nil || done == nil {
 		return
 	}
-	go func() {
-		controller.drain()
-		worker.mu.Lock()
-		if worker.drainDone == done {
-			worker.drainDone = nil
-			worker.draining = nil
-		}
+	go worker.finishDrain(controller, done)
+}
+
+func (worker *TemporalWorker) finishDrain(controller *boundController, done chan struct{}) {
+	controller.drain()
+	worker.mu.Lock()
+	if worker.drainDone == done {
+		worker.drainDone = nil
+		worker.draining = nil
+	}
+	worker.mu.Unlock()
+	close(done)
+}
+
+// handleFatalError runs when the Temporal SDK stops a started controller
+// itself, for example after long polls keep failing with a non-retriable
+// error. The worker then reports not ready and not polling, and the controller
+// drains like a paused one so the dependency monitor's Resume rebuilds a fresh
+// controller once the drain completes. Callbacks from a controller that is no
+// longer the active, started one are ignored: Pause and Stop own its teardown.
+func (worker *TemporalWorker) handleFatalError(controller *boundController) {
+	if worker == nil || controller == nil {
+		return
+	}
+	worker.mu.Lock()
+	if worker.stopping || !worker.started || worker.controller != controller {
 		worker.mu.Unlock()
-		close(done)
-	}()
+		return
+	}
+	worker.controller = nil
+	worker.started = false
+	worker.setNotReadyLocked()
+	drainDone, draining := worker.beginDrainLocked(controller)
+	worker.mu.Unlock()
+	if draining {
+		// The SDK invokes this callback on its own goroutine just before it
+		// calls Stop unless Stop has already begun. Stopping synchronously
+		// here makes the SDK skip its own call, so the two can never race.
+		worker.finishDrain(controller, drainDone)
+	}
 }
 
 // Stop turns readiness off before stopping pollers. A permanent stop waits for
