@@ -104,7 +104,7 @@ func TestWorkflowMasterSplitVerificationJobsGatePublication(t *testing.T) {
 		{job: "verify-static", command: "make redis-benchmark-compile"},
 		{job: "verify-static", command: "go build ./..."},
 		{job: "verify-race", command: "go test -race ./... -timeout 30m"},
-		{job: "verify-race-repeat", command: "go test -race -count=5 -timeout 30m "},
+		{job: "verify-race-repeat", command: "go test -race -count=1 -timeout 30m "},
 		{job: "verify-cloud-workflow", command: "make cloud-workflow-integration"},
 		{job: "verify-redis", command: "make redis-integration"},
 		{job: "verify-redis", command: "make readiness-integration"},
@@ -129,4 +129,46 @@ func TestWorkflowMasterSplitVerificationJobsGatePublication(t *testing.T) {
 		}
 	}
 	assertJobActionInput(t, master, "release-evidence", downloadArtifactAction, "pattern", "verified-inputs-*")
+}
+
+// TestWorkflowMasterRaceRepetitionRunsOneIterationPerJob pins the scheduled
+// race repetition to independent single-iteration matrix jobs. One -count=5
+// process gave each package five iterations within one timeout, which the
+// growing suite outran (issue #1310).
+func TestWorkflowMasterRaceRepetitionRunsOneIterationPerJob(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	job := workflowJob(t, master, "verify-race-repeat")
+	strategy := nestedMapping(t, master.name, job, "strategy")
+	if failFast, ok := strategy["fail-fast"].(bool); !ok || failFast {
+		t.Fatalf("verify-race-repeat fail-fast = %#v, want false so every repetition reports", strategy["fail-fast"])
+	}
+	// Only scheduled runs expand all five repetitions; other events get one
+	// placeholder whose steps are all skipped.
+	const wantRepetitions = "${{ github.event_name == 'schedule' && fromJSON('[1, 2, 3, 4, 5]') || fromJSON('[1]') }}"
+	if got := scalarString(t, master.name, nestedMapping(t, master.name, strategy, "matrix"), "repetition"); got != wantRepetitions {
+		t.Fatalf("verify-race-repeat matrix repetition = %q, want %q", got, wantRepetitions)
+	}
+	if strings.Contains(master.raw, "-count=5") {
+		t.Fatal("master.yml must not repeat packages within one go test process")
+	}
+}
+
+// TestWorkflowMasterReportsScheduledFailures requires a failed scheduled run
+// to surface as an issue, because push and merge-queue runs skip the scheduled
+// repetition and would otherwise hide a red daily build.
+func TestWorkflowMasterReportsScheduledFailures(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	job := workflowJob(t, master, "report-scheduled-failure")
+	if got, want := scalarString(t, master.name, job, "if"), "failure() && github.event_name == 'schedule'"; got != want {
+		t.Fatalf("report-scheduled-failure if = %q, want %q", got, want)
+	}
+	if got, want := stringSequence(t, master.name, job, "needs"), []string{"verify", "ocaml", "fuzz-shard", "container"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("report-scheduled-failure needs = %v, want %v", got, want)
+	}
+	permissions := nestedMapping(t, master.name, job, "permissions")
+	if len(permissions) != 1 || scalarString(t, master.name, permissions, "issues") != "write" {
+		t.Fatalf("report-scheduled-failure permissions = %#v, want only issues: write", permissions)
+	}
+	assertJobRunContains(t, master, "report-scheduled-failure", "gh issue create")
+	assertJobRunContains(t, master, "report-scheduled-failure", "gh issue comment")
 }

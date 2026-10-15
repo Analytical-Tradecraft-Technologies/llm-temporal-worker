@@ -467,11 +467,22 @@ jobs:
   # This job always runs on master so publication can need it, but it only
   # does work on the daily schedule. A job-level schedule condition would mark
   # it skipped on pushes and thereby skip every job that needs it.
+  #
+  # The five repetitions run as independent matrix jobs rather than one
+  # repeated go test process, so each package's timeout budget covers a single
+  # iteration, exactly as in the primary race pass. A single process that
+  # repeated the slowest package five times outgrew any fixed timeout as tests
+  # were added.
   verify-race-repeat:
-    name: Verify scheduled race repetition
+    name: Verify scheduled race repetition ${{ matrix.repetition }}
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # Other events expand a single no-op placeholder instead of five.
+        repetition: ${{ github.event_name == 'schedule' && fromJSON('[1, 2, 3, 4, 5]') || fromJSON('[1]') }}
     steps:
       - name: Check out repository
         if: github.event_name == 'schedule'
@@ -505,13 +516,11 @@ jobs:
         if: github.event_name == 'schedule' && steps.go.outputs.present == 'true'
         working-directory: golang
         # The primary race pass in verify-race already exercises the
-        # production-shaped 10,000-turn lineage stress proof once. Repeating
-        # that test five times makes the scheduled suite exceed Go's default
-        # 10-minute package timeout, so repeat the remainder without weakening
-        # the primary gate. The cloud-runtime package alone takes about three
-        # minutes per race iteration, so the repetition needs an explicit
-        # package timeout.
-        run: go test -race -count=5 -timeout 30m -skip '^TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks$' ./...
+        # production-shaped 10,000-turn lineage stress proof once, so the
+        # repetitions skip it without weakening the primary gate. -count=1
+        # bypasses the test cache so every repetition really runs, and the
+        # package timeout matches the primary race pass.
+        run: go test -race -count=1 -timeout 30m -skip '^TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks$' ./...
 
   verify-cloud-workflow:
     name: Verify cloud workflow integration
@@ -675,6 +684,35 @@ jobs:
           set -euo pipefail
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
           jq -e 'length == 6 and all(.[]; .result == "success")' <<<"$NEEDS" >/dev/null
+
+  # Push and merge-queue runs never execute the scheduled repetition, so a
+  # failing daily run would otherwise stay red unnoticed. Any failed job in a
+  # scheduled run opens, or comments on, one tracking issue.
+  report-scheduled-failure:
+    name: Report scheduled failure
+    if: failure() && github.event_name == 'schedule'
+    needs: [verify, ocaml, fuzz-shard, container]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the scheduled failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Scheduled master build failed"
+          body="Scheduled master run $RUN_URL failed at commit $GITHUB_SHA."
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\"))[0].number // empty")"
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
 
   # This produces a retained, redacted evidence bundle only after the normal
   # master verification jobs. It is intentionally excluded from manual,
