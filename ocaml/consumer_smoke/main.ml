@@ -201,6 +201,20 @@ let () =
   in
   assert (Conversation.checkpoint final.conversation <> None);
 
+  let direct_compact = expect_ok (Compact.make
+      ~operation_key:(operation "direct-compact")
+      ~context
+      ~parent:(checkpoint "direct-parent")
+      ~policy:compaction_policy
+      ~cache:(expect_valid (Cache_policy.any_age ~variant:5l ()))
+      ())
+  in
+  let direct_compacted = expect_ok (Compact.invoke_with ~dispatch:compact_dispatch direct_compact) in
+  assert (direct_compacted.operation_key = operation "direct-compact");
+  (match direct_compact.cache with
+   | Some { max_age_seconds = None; variant = 5l } -> ()
+   | _ -> failwith "Compact.make lost the checked cache policy");
+
   let one_shot = Generate.make
       ~operation_key:(operation "one-shot")
       ~context
