@@ -60,6 +60,7 @@ func TestReleaseEvidenceGateFailurePrintsAllowlistedDiagnostics(t *testing.T) {
 				"    Failing input written to testdata/fuzz/FuzzDemo/f34630c44c11bb13",
 				"    go test -run=FuzzDemo/f34630c44c11bb13",
 				"FAIL\texample.com/demo\t0.36s",
+				"./bad.go:2:17: undefined: noSuchSymbol",
 			}
 			summary := filepath.Join(t.TempDir(), "fuzz-summary.json")
 			command := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts/release/run-gate.sh"), "fuzz_summary", summary, "bash", "-c", `printf '%s\n' "$GATE_LINES"; exit 1`)
@@ -86,10 +87,11 @@ func TestReleaseEvidenceGateFailurePrintsAllowlistedDiagnostics(t *testing.T) {
 				}
 			}
 			detail := strings.Contains(text, "demo_test.go:9: length 5 exceeds 4")
+			detail = detail && strings.Contains(text, "./bad.go:2:17: undefined: noSuchSymbol")
 			if scenario == "scanned" && !detail {
 				t.Fatalf("scanned failure message withheld: %s", text)
 			}
-			if scenario == "credential" && (strings.Contains(text, "demo_test.go:9:") || !strings.Contains(text, "free-text failure messages withheld")) {
+			if scenario == "credential" && (strings.Contains(text, "demo_test.go:9:") || strings.Contains(text, "bad.go") || !strings.Contains(text, "free-text failure messages withheld")) {
 				t.Fatalf("unscanned failure message printed: %s", text)
 			}
 		})

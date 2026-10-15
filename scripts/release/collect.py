@@ -77,7 +77,8 @@ DETAIL_DIAGNOSTICS = tuple(
     for pattern in (
         r"^panic: \S",
         r"^fatal error: \S",
-        r"^\s{0,32}[A-Za-z0-9_.-]{1,128}\.go:[0-9]+: \S",
+        # Test messages (file.go:12:) and compiler errors (./file.go:2:17:).
+        r"^\s{0,32}[A-Za-z0-9_./-]{1,256}\.go:[0-9]+(?::[0-9]+)?: \S",
     )
 )
 MAX_DIAGNOSTIC_LINES = 200
