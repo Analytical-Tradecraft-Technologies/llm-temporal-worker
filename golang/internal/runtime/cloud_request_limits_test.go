@@ -53,3 +53,24 @@ func TestCloudRequestLimitsRejectRequestsOverEachConfiguredBound(t *testing.T) {
 		t.Fatalf("zero limits must be unbounded: %v", err)
 	}
 }
+
+// A caller's tool call is held to the same depth as one an adapter accepts,
+// whatever json_depth allows, so it can always be saved once wrapped.
+func TestCloudRequestLimitsHoldToolCallArgumentsToTheToolArgumentDepth(t *testing.T) {
+	nested := func(depth int) json.RawMessage {
+		return json.RawMessage(strings.Repeat(`{"a":`, depth-1) + `{}` + strings.Repeat(`}`, depth-1))
+	}
+	generate := func(depth int) llm.PrepareExecutionV1 {
+		return llm.PrepareExecutionV1{Generate: &llm.GenerateRequestV1{OperationKey: "op", Append: []llm.Item{llm.ToolCall{ID: "call", Name: "lookup", Arguments: nested(depth)}}}}
+	}
+	for _, limits := range []CloudRequestLimits{{}, {JSONDepth: llm.DefaultCanonicalMaxDepth}} {
+		if err := limits.validate(generate(llm.MaxToolArgumentsDepth)); err != nil {
+			t.Fatalf("json_depth %d: tool call at the depth limit rejected: %v", limits.JSONDepth, err)
+		}
+		err := limits.validate(generate(llm.MaxToolArgumentsDepth + 1))
+		var mapped *provider.Error
+		if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Retry != provider.RetryNever {
+			t.Fatalf("json_depth %d: too-deep tool call error = %v", limits.JSONDepth, err)
+		}
+	}
+}

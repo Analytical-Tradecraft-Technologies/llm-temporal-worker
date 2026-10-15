@@ -26,7 +26,7 @@ var (
 	ErrInvalid = errors.New("invalid durable request")
 	ErrCorrupt = errors.New("corrupt durable request")
 	// ErrRecordTooLarge is an ErrInvalid refused only because the encoded
-	// record exceeds its size limit; nothing was written.
+	// record exceeds its size or nesting limit; nothing was written.
 	ErrRecordTooLarge = fmt.Errorf("%w: record exceeds its size limit", ErrInvalid)
 	// ErrIndexPending means the event committed but its recovery-index update
 	// did not. Retry the SAME update, including token, revision and timestamp.
@@ -145,6 +145,11 @@ func objectJSON(value json.RawMessage) (json.RawMessage, error) {
 		return nil, ErrInvalid
 	}
 	canonical, err := llm.CanonicalJSONWithLimits(value, maxPayloadBytes, llm.DefaultCanonicalMaxDepth)
+	if errors.Is(err, llm.ErrCanonicalJSONLimit) {
+		// Too deep is a deterministic resource limit like too many bytes, so
+		// a paid response that hits it is settled the same way.
+		return nil, ErrRecordTooLarge
+	}
 	if err != nil || len(canonical) == 0 || canonical[0] != '{' {
 		return nil, ErrInvalid
 	}

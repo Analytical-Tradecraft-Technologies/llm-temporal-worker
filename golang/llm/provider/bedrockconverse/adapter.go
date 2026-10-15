@@ -410,8 +410,10 @@ func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.It
 				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
 			}
 			// encoding/json accepts duplicate keys but a normalized tool call
-			// does not. Reject them here as a classified invalid response.
-			if _, err := llm.CanonicalJSON(arguments); err != nil {
+			// does not, and arguments nested deeper than
+			// llm.MaxToolArgumentsDepth could not be saved. Reject both here as
+			// a classified invalid response.
+			if _, err := llm.CanonicalToolArguments(arguments); err != nil {
 				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
 			}
 			hasToolCalls = true

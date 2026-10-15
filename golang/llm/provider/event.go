@@ -293,6 +293,11 @@ func (state *outputState) item() (llm.Item, error) {
 		if !json.Valid(arguments) {
 			return nil, fmt.Errorf("tool argument stream is incomplete JSON")
 		}
+		// Arguments nested deeper than llm.MaxToolArgumentsDepth could not be
+		// saved once wrapped in a durable record.
+		if _, err := llm.CanonicalToolArguments(arguments); err != nil {
+			return nil, fmt.Errorf("tool argument stream is invalid JSON")
+		}
 		if state.callID == "" || state.name == "" {
 			return nil, fmt.Errorf("tool argument stream is missing call ID or name")
 		}

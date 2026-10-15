@@ -228,8 +228,9 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 			arguments = "{}"
 		}
 		// encoding/json accepts duplicate keys but a normalized tool call does
-		// not, so arguments must also be canonicalizable.
-		if _, err := llm.CanonicalJSON([]byte(arguments)); err != nil {
+		// not, so arguments must also be canonicalizable, and within
+		// llm.MaxToolArgumentsDepth so the call can be saved.
+		if _, err := llm.CanonicalToolArguments([]byte(arguments)); err != nil {
 			// The output limit can cut a call off mid-arguments. Keep the paid
 			// response as a length truncation and drop only the incomplete call.
 			if choice.FinishReason == "length" {

@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -74,5 +75,22 @@ func TestCanonicalJSONWithLimits(t *testing.T) {
 	}
 	if _, err := llm.CanonicalJSONWithLimits([]byte(`{"a":1}`), 0, llm.DefaultCanonicalMaxDepth); err == nil {
 		t.Fatal("accepted zero byte limit")
+	}
+}
+
+func TestCanonicalToolArgumentsHoldsTheToolArgumentDepth(t *testing.T) {
+	nested := func(depth int) []byte {
+		return []byte(strings.Repeat(`{"a":`, depth-1) + `{}` + strings.Repeat(`}`, depth-1))
+	}
+	if _, err := llm.CanonicalToolArguments(nested(llm.MaxToolArgumentsDepth)); err != nil {
+		t.Fatalf("arguments at the depth limit rejected: %v", err)
+	}
+	if _, err := llm.CanonicalToolArguments(nested(llm.MaxToolArgumentsDepth + 1)); !errors.Is(err, llm.ErrCanonicalJSONLimit) {
+		t.Fatalf("arguments over the depth limit error = %v", err)
+	}
+	// The general canonicalizer still accepts the deeper value; only tool
+	// arguments leave room for the durable records that wrap them.
+	if _, err := llm.CanonicalJSON(nested(llm.MaxToolArgumentsDepth + 1)); err != nil {
+		t.Fatalf("canonical JSON rejected a value within its own limit: %v", err)
 	}
 }

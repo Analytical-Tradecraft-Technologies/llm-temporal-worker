@@ -179,6 +179,47 @@ func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
 	}
 }
 
+func TestProviderExecutionToolCallDepth(t *testing.T) {
+	nested := func(depth int) json.RawMessage {
+		return json.RawMessage(strings.Repeat(`{"a":`, depth-1) + `{}` + strings.Repeat(`}`, depth-1))
+	}
+	succeeded := func(saved SavedProviderExecution, depth int) ProviderExecution {
+		next := saved.Execution
+		next.Revision++
+		next.Stage = ExecutionSucceeded
+		next.UpdatedAt = next.UpdatedAt.Add(time.Second)
+		next.CompletedAt = next.UpdatedAt
+		next.Response = &llm.Response{OperationKey: "operation", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.ToolCall{ID: "call", Name: "lookup", Arguments: nested(depth)}}}
+		return next
+	}
+	// Every tool call an adapter accepts fits inside the saved progress.
+	r, _, _, record, plan, reservation := executionFixture(t)
+	ctx := context.Background()
+	saved := startExecution(t, r, record, plan, reservation)
+	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+	if err := r.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, succeeded(saved, llm.MaxToolArgumentsDepth)); err != nil {
+		t.Fatalf("tool call at the adapter depth limit not saved: %v", err)
+	}
+
+	// Anything deeper is refused as a deterministic record limit, like an
+	// oversized response, so the paid attempt can still be closed.
+	r, _, _, record, plan, reservation = executionFixture(t)
+	saved = startExecution(t, r, record, plan, reservation)
+	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+	err := r.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, succeeded(saved, llm.DefaultCanonicalMaxDepth))
+	if !errors.Is(err, ErrRecordTooLarge) || !errors.Is(err, ErrInvalid) {
+		t.Fatal("too-deep response not refused as a record limit", err)
+	}
+	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
+		e.Stage = ExecutionFailed
+		e.CompletedAt = e.UpdatedAt.Add(time.Second)
+		e.Failure = &ExecutionFailure{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}
+	})
+	if saved.Execution.Stage != ExecutionFailed {
+		t.Fatal("attempt not closed")
+	}
+}
+
 func TestProviderExecutionConcurrentStartsAuthorizeOnlyOneWriter(t *testing.T) {
 	r, table, blobs, record, plan, reservation := executionFixture(t)
 	var group sync.WaitGroup
