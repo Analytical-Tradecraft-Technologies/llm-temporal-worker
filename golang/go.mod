@@ -12,7 +12,7 @@ require (
 	github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers v0.1.1-0.20261006071928-a61f746a491e
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
-	github.com/anthropics/anthropic-sdk-go v1.78.0
+	github.com/anthropics/anthropic-sdk-go v1.80.0
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
