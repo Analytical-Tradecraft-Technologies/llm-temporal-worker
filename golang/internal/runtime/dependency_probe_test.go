@@ -664,17 +664,22 @@ func TestRedisDependencyProbeChecksClusterSlotOwnerAndEveryMaster(t *testing.T) 
 		owner  func(*fakeRedisProbeClient)
 		other  func(*fakeRedisProbeClient)
 		want   ProbeStatus
+		// server marks cases that pass the admission check and reach the
+		// slot owner's server checks.
+		server bool
 	}{
-		{name: "compliant", want: ProbeStatusReady},
+		{name: "compliant", want: ProbeStatusReady, server: true},
 		{
-			name:  "slot owner evicts",
-			owner: func(client *fakeRedisProbeClient) { client.settings["maxmemory-policy"] = "allkeys-lru" },
-			want:  ProbeStatusPolicy,
+			name:   "slot owner evicts",
+			owner:  func(client *fakeRedisProbeClient) { client.settings["maxmemory-policy"] = "allkeys-lru" },
+			want:   ProbeStatusPolicy,
+			server: true,
 		},
 		{
-			name:  "slot owner without aof",
-			owner: func(client *fakeRedisProbeClient) { client.settings["appendonly"] = "no" },
-			want:  ProbeStatusPolicy,
+			name:   "slot owner without aof",
+			owner:  func(client *fakeRedisProbeClient) { client.settings["appendonly"] = "no" },
+			want:   ProbeStatusPolicy,
+			server: true,
 		},
 		{
 			name:  "slot owner without library",
@@ -732,7 +737,7 @@ func TestRedisDependencyProbeChecksClusterSlotOwnerAndEveryMaster(t *testing.T) 
 			if shared.pingCalls+shared.timeCalls+shared.functionListCalls+shared.scriptExistsCalls+len(shared.configGetCalls) != 0 {
 				t.Fatalf("keyless checks reached the shared cluster client: %#v", shared)
 			}
-			if owner.pingCalls == 0 || owner.timeCalls == 0 || owner.configGetCalls["maxmemory-policy"] == 0 {
+			if test.server && (owner.pingCalls == 0 || owner.timeCalls == 0 || owner.configGetCalls["maxmemory-policy"] == 0) {
 				t.Fatalf("server checks skipped the slot owner: %#v", owner)
 			}
 		})

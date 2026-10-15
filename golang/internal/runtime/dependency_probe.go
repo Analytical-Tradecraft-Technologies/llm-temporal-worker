@@ -334,6 +334,13 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 	if err := ctx.Err(); err != nil {
 		return redisUnavailable(err)
 	}
+	// Check the admission code first: a cluster client's per-master fan-out
+	// reloads the slot map synchronously, so the slot owner resolved next
+	// reflects a failover rather than a cached, demoted primary.
+	result := probe.verifyAdmission(ctx)
+	if result.Status != ProbeStatusReady {
+		return result
+	}
 	node, err := probe.budgetNode(ctx)
 	if err != nil || node == nil {
 		if err == nil {
@@ -375,10 +382,6 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 	if probe.config.RequiredPersistence == "none" &&
 		(!strings.EqualFold(strings.TrimSpace(appendOnly), "no") || strings.TrimSpace(save) != "") {
 		return redisPolicyMismatch()
-	}
-	result := probe.verifyAdmission(ctx)
-	if result.Status != ProbeStatusReady {
-		return result
 	}
 	if coordinationStreamEnabled(probe.config) {
 		result = probe.verifyCoordinationStream(ctx, serverTime)
