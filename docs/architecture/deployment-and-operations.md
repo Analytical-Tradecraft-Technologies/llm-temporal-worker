@@ -176,8 +176,9 @@ longest in-flight provider call.
 If the Temporal SDK stops the worker itself (for example, when long polls keep
 failing with a non-retriable error such as `NamespaceNotFound` past the SDK's
 grace period), the worker immediately sets readiness `503` and
-`llmtw_worker_polling` to `0`, drains that poller the same way as a pause, and
-the first monitor check after that drain completes starts a fresh poller.
+`llmtw_worker_polling` to `0`, and the next monitor check starts a fresh
+poller. The stopped poller no longer polls; the SDK lets its in-flight
+Activities finish within the same drain window as a pause.
 
 On termination, readiness fails immediately, polling stops, in-flight Activities
 receive the Temporal worker grace period, and telemetry flushes. Deployment

@@ -175,7 +175,7 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 			MaxConcurrentActivityTaskPollers:   options.MaxConcurrentActivityTaskPolls,
 			WorkerStopTimeout:                  options.PauseDrainTimeout,
 			BackgroundActivityContext:          activityContext,
-			OnFatalError:                       func(error) { worker.handleFatalError(bound) },
+			OnFatalError:                       func(error) { worker.handleFatalError(bound, options.PauseDrainTimeout) },
 		})
 		if err != nil {
 			cancelActivities(nil)
@@ -425,27 +425,31 @@ func (worker *TemporalWorker) drainController(controller *boundController, done 
 	if controller == nil || done == nil {
 		return
 	}
-	go worker.finishDrain(controller, done)
-}
-
-func (worker *TemporalWorker) finishDrain(controller *boundController, done chan struct{}) {
-	controller.drain()
-	worker.mu.Lock()
-	if worker.drainDone == done {
-		worker.drainDone = nil
-		worker.draining = nil
-	}
-	worker.mu.Unlock()
-	close(done)
+	go func() {
+		controller.drain()
+		worker.mu.Lock()
+		if worker.drainDone == done {
+			worker.drainDone = nil
+			worker.draining = nil
+		}
+		worker.mu.Unlock()
+		close(done)
+	}()
 }
 
 // handleFatalError runs when the Temporal SDK stops a started controller
 // itself, for example after long polls keep failing with a non-retriable
-// error. The worker then reports not ready and not polling, and the controller
-// drains like a paused one so the dependency monitor's Resume rebuilds a fresh
-// controller once the drain completes. Callbacks from a controller that is no
-// longer the active, started one are ignored: Pause and Stop own its teardown.
-func (worker *TemporalWorker) handleFatalError(controller *boundController) {
+// error. The worker then reports not ready and not polling and forgets the
+// controller, so the dependency monitor's Resume builds a fresh one. Callbacks
+// from a controller that is no longer the active, started one are ignored:
+// Pause and Stop own its teardown.
+//
+// The SDK calls this synchronously on a poller goroutine that its own Stop
+// waits for, and calls Stop itself once this returns. Stopping or waiting for
+// the controller here would block until the SDK's stop timeout, so the SDK's
+// Stop is left to let in-flight Activities finish within the pause drain
+// window, after which their context is released.
+func (worker *TemporalWorker) handleFatalError(controller *boundController, drainWindow time.Duration) {
 	if worker == nil || controller == nil {
 		return
 	}
@@ -457,14 +461,8 @@ func (worker *TemporalWorker) handleFatalError(controller *boundController) {
 	worker.controller = nil
 	worker.started = false
 	worker.setNotReadyLocked()
-	drainDone, draining := worker.beginDrainLocked(controller)
 	worker.mu.Unlock()
-	if draining {
-		// The SDK invokes this callback on its own goroutine just before it
-		// calls Stop unless Stop has already begun. Stopping synchronously
-		// here makes the SDK skip its own call, so the two can never race.
-		worker.finishDrain(controller, drainDone)
-	}
+	time.AfterFunc(drainWindow, func() { controller.cancelActivities(nil) })
 }
 
 // Stop turns readiness off before stopping pollers. A permanent stop waits for

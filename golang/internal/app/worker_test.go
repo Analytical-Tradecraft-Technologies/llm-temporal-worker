@@ -449,7 +449,7 @@ func workerPollingGauge(t *testing.T, metrics *observability.Metrics) float64 {
 }
 
 // fatalWorker stands in for an SDK worker that stops itself after a fatal poll
-// error: the SDK calls OnFatalError and then Stop unless Stop already began.
+// error: the SDK calls OnFatalError and then, once it returns, Stop.
 type fatalWorker struct {
 	fakeWorker
 	onFatal func(error)
