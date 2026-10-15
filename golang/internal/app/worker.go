@@ -175,7 +175,12 @@ func NewWorker(options WorkerOptions) (*TemporalWorker, error) {
 			MaxConcurrentActivityTaskPollers:   options.MaxConcurrentActivityTaskPolls,
 			WorkerStopTimeout:                  options.PauseDrainTimeout,
 			BackgroundActivityContext:          activityContext,
-			OnFatalError:                       func(error) { worker.handleFatalError(bound, options.PauseDrainTimeout) },
+			// Fail rather than block on a workflow panic or detected
+			// non-determinism (#1324). Blocking retries the workflow task
+			// forever while the caller's get hangs with no error; a failed
+			// workflow is visible to the caller and its operator.
+			WorkflowPanicPolicy: sdkworker.FailWorkflow,
+			OnFatalError:        func(error) { worker.handleFatalError(bound, options.PauseDrainTimeout) },
 		})
 		if err != nil {
 			cancelActivities(nil)

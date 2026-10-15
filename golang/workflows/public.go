@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
@@ -25,9 +26,50 @@ const (
 // code, so an invalid request fails as a typed llm_invalid_argument.
 func Register(registry worker.WorkflowRegistry, limits activity.PayloadLimits) {
 	RegisterInternal(registry, limits)
-	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Generate), workflow.RegisterOptions{Name: GenerateWorkflowName})
-	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Compact), workflow.RegisterOptions{Name: CompactWorkflowName})
-	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, Query), workflow.RegisterOptions{Name: QueryWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, reencoded(limits, generatePayloads, Generate)), workflow.RegisterOptions{Name: GenerateWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, reencoded(limits, compactPayloads, Compact)), workflow.RegisterOptions{Name: CompactWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, reencoded(limits, func(input llm.QueryRequestV1) []any { return []any{input} }, Query)), workflow.RegisterOptions{Name: QueryWorkflowName})
+}
+
+// reencoded rejects, at decode, a request whose worker-encoded payloads cannot
+// fit the inline limit. rawWorkflow bounds only the caller's bytes, but
+// workflow code re-encodes the request for its Activities and the internal
+// child, and Go's JSON escaping of <, > and & can grow it past the limit. That
+// failure would otherwise surface after the plan Activity or paid compaction,
+// or as an SDK panic that blocks the workflow task. Histories recorded before
+// the check skip it, so their replay schedules the same commands.
+func reencoded[T, R any](limits activity.PayloadLimits, payloads func(T) []any, run func(workflow.Context, T) (R, error)) func(workflow.Context, T) (R, error) {
+	return func(ctx workflow.Context, input T) (R, error) {
+		if workflow.GetVersion(ctx, "reencoded-payload-limit-v1", workflow.DefaultVersion, 1) >= 1 {
+			for _, payload := range payloads(input) {
+				if !activity.FitsInlinePayload(limits, payload) {
+					var zero R
+					return zero, invalidInput()
+				}
+			}
+		}
+		return run(ctx, input)
+	}
+}
+
+// generatePayloads are the largest payloads Generate encodes: the internal
+// child's input with the caller's parent and, when a parent is set, with the
+// worker-issued checkpoint handle (ASCII, at most
+// CheckpointHandleMaxCodePoints) that replaces it after compaction. Both carry
+// the original parent too. The plan Activity argument, the request alone, is
+// smaller than either.
+func generatePayloads(input llm.GenerateRequestV1) []any {
+	origin := &llm.GenerationOriginV1{Parent: input.Parent}
+	payloads := []any{llm.PrepareExecutionV1{Generate: &input, OriginalGenerate: origin}}
+	if input.Parent != nil {
+		issued, compacted := llm.CheckpointHandle(strings.Repeat("x", llm.CheckpointHandleMaxCodePoints)), input
+		compacted.Parent = &issued
+		payloads = append(payloads, llm.PrepareExecutionV1{Generate: &compacted, OriginalGenerate: origin})
+	}
+	return payloads
+}
+func compactPayloads(input llm.CompactRequestV1) []any {
+	return []any{llm.PrepareExecutionV1{Compact: &input}}
 }
 
 // Query exposes all five control-plane queries through a workflow boundary.
