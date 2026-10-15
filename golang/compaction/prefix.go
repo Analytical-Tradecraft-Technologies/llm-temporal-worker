@@ -88,8 +88,9 @@ func SelectPrefix(items []llm.Item, recentTurns int) (PrefixSelection, error) {
 
 // SelectRequestPrefix applies the policy to a whole request: it retains
 // Policy.RecentTurns of source.Input when the request that remains after
-// compaction (instructions, tools and the retained window) fits
-// Policy.TargetTokens, and otherwise the longest shorter window that fits,
+// compaction (instructions, tools, the retained window and the summary, sized
+// at Policy.OutputReserveTokens) fits Policy.TargetTokens, and otherwise the
+// longest shorter window that fits,
 // never fewer than one turn. A window the policy already sets to zero stays
 // empty. The size is the serialized request's UTF-8 bytes divided by four, the
 // provider-independent baseline of budget reservation, so plan and compaction
@@ -117,7 +118,9 @@ func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(ret
 		if err != nil {
 			return PrefixSelection{}, err
 		}
-		if size <= policy.TargetTokens {
+		// The summary compaction adds is bounded by the output reserve; leaving
+		// it out would land a near-target window above the trigger again.
+		if size+policy.OutputReserveTokens <= policy.TargetTokens {
 			break
 		}
 		selection, err = SelectPrefix(source.Input, selection.RetainedTurns-1)

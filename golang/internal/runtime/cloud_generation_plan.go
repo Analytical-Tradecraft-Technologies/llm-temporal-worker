@@ -156,11 +156,14 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 	}
 	// Count the request compaction leaves behind as well: the selection's
 	// retained window plus the items this Generate appends after the parent,
-	// under the same instructions and tools. The summarizer cannot remove any
-	// of it, so a policy trigger it already reaches is not worth a paid call.
+	// under the same instructions and tools, and the summary it adds, which
+	// is bounded by the output reserve. The summarizer cannot remove any of
+	// it, so a policy trigger it already reaches is not worth a paid call:
+	// the next turn would compact again and summarize the summary.
 	retained := resolved
 	retained.Input = append(append([]llm.Item(nil), compact.Selection.Retained...), input.Request.Input[parentItems:]...)
 	retainedTokens, err := r.capabilities.BudgetEstimator.CountInputTokens(retained, candidate)
+	retainedTokens += int64(compact.Policy.OutputReserveTokens)
 	if err != nil || retainedTokens > int64(^uint(0)>>1) {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 	}

@@ -20,8 +20,9 @@ const (
 // TriggerInput contains counters and provider capabilities projected for the
 // next Generate checkpoint. Counters must describe the request before adding
 // another model turn; zero provider limits disable that corresponding check.
-// RetainedTokens is the part of ProjectedTokens that compaction cannot remove:
-// instructions, tool schemas, the retained recent window and the new turn.
+// RetainedTokens is the size of the request compaction would leave behind:
+// instructions, tool schemas, the retained recent window and the new turn,
+// plus the summary compaction adds, sized at Policy.OutputReserveTokens.
 // Continuation expiry is supplied as a boolean because the engine owns the
 // durable clock/deadline interpretation.
 type TriggerInput struct {
@@ -49,9 +50,9 @@ type TriggerDecision struct {
 // EvaluateTrigger applies provider limits before policy limits. The provider
 // context check reserves both the generic output budget and any adapter-owned
 // reasoning budget. Policy trigger_tokens is the fallback when no provider
-// context limit is available; it is skipped when the tokens compaction cannot
-// remove already reach it, because a summary would leave the request over the
-// trigger and every following turn would buy another summarizer call. The
+// context limit is available; it is skipped when the request compaction would
+// leave (RetainedTokens, summary included) already reaches it, because a
+// summary would leave the request over the trigger and every following turn would buy another summarizer call. The
 // lower target_tokens value prevents a compaction loop: a freshly materialized
 // checkpoint below that target does not trigger again until a limit is crossed.
 func (policy Policy) EvaluateTrigger(input TriggerInput) (TriggerDecision, error) {

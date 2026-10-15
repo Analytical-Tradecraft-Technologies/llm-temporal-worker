@@ -23,7 +23,7 @@ func TestCloudGenerationPlan(t *testing.T) {
 			case "no-prefix":
 				policy = json.RawMessage(`{"recent_turns":100}`)
 			case "tokens":
-				policy = json.RawMessage(`{"recent_turns":0,"trigger_tokens":10,"target_tokens":5}`)
+				policy = json.RawMessage(`{"recent_turns":0,"trigger_tokens":10,"target_tokens":5,"output_reserve_tokens":1}`)
 			case "bytes":
 				policy = json.RawMessage(`{"recent_turns":0,"materialization_threshold_bytes":1}`)
 			}
@@ -38,7 +38,7 @@ func TestCloudGenerationPlan(t *testing.T) {
 			}
 			if mode == "tokens" || mode == "no-prefix" {
 				// The parent's history is what crosses the trigger; the request
-				// that compaction leaves behind stays below it.
+				// that compaction leaves behind, summary included, stays below it.
 				f.cap.BudgetEstimator.Tokenizer = func(request llm.Request, _ routing.Candidate) (int64, error) {
 					if len(request.Input) > 1 {
 						return 50000, nil

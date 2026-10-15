@@ -3,11 +3,13 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 // compactionTriggerFixture drives the real cloud composition with the bytes/4
@@ -147,5 +149,41 @@ func TestCloudGenerationPlanCompactsRemovablePrefixOnce(t *testing.T) {
 	f.compact(t, "compaction-1")
 	if f.plan(t, "after-compaction", "fourth") {
 		t.Fatal("compacted checkpoint requested compaction again")
+	}
+}
+
+// A system prompt just under the trigger leaves no room for the summary
+// compaction adds: a compacted checkpoint would land at or above the trigger
+// again, so every turn would buy another summary of the previous summary.
+// The summary is sized at its output reserve, so at most one compaction
+// happens per trigger crossing (#1347).
+func TestCloudGenerationPlanCountsTheSummaryNearTheTrigger(t *testing.T) {
+	prompt := llm.Instruction{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: strings.Repeat("x", 42_000)}
+	f := compactionTriggerFixture(t, `{"recent_turns":1}`, prompt)
+	// The summarizer answers with a distinct summary under its 2000-token
+	// reserve, so a summary of a summary is not a cache hit.
+	summarize := false
+	invoke := f.adapter.invoke
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		result, err := invoke(ctx, call, o)
+		if err == nil && summarize {
+			result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: fmt.Sprintf("%d%s", f.submits.Load(), strings.Repeat("s", 7000))}}}}
+		}
+		return result, err
+	}
+	history := strings.Repeat("history ", 128)
+	compactions := 0
+	for i := 1; i <= 10; i++ {
+		key := fmt.Sprintf("turn-%d", i)
+		if i > 1 && f.plan(t, key, history) {
+			compactions++
+			summarize = true
+			f.compact(t, fmt.Sprintf("compaction-%d", compactions))
+			summarize = false
+		}
+		f.turn(t, key, history)
+	}
+	if compactions > 1 {
+		t.Fatalf("compacted %d times in 10 turns, want at most once", compactions)
 	}
 }
