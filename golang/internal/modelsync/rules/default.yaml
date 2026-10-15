@@ -1040,13 +1040,13 @@ providers:
           standard_only:
             input_per_million: "2"
             output_per_million: "10"
-            cache_read_per_million: "0.2"
+            cache_read_per_million: "0.1"
             cache_write_per_million: "2.5"
             per_request: "0"
           auto:
             input_per_million: "2"
             output_per_million: "10"
-            cache_read_per_million: "0.2"
+            cache_read_per_million: "0.1"
             cache_write_per_million: "2.5"
             per_request: "0"
   exa:
