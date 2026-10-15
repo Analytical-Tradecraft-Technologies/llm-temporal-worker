@@ -125,6 +125,33 @@ func (adapter *Adapter) Capabilities(ctx context.Context, query provider.Capabil
 	return adapter.capabilities(ctx, query)
 }
 
+// ValidateRequest rejects structured output the provider documents as an
+// error before an engine reserves budget. Compile repeats the check, and any
+// other lowering failure is left for it to report.
+func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if adapter == nil {
+		return compileError("adapter is nil")
+	}
+	if request.Output == nil {
+		return nil
+	}
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		return nil
+	}
+	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+	if err != nil {
+		return nil
+	}
+	if _, _, err := adapter.lowerRequestMap(normalized, serviceClass, ""); errors.As(err, new(*openaischema.UnsupportedError)) {
+		return lowerError(err)
+	}
+	return nil
+}
+
 func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput) (provider.Call, error) {
 	if adapter == nil {
 		return provider.Call{}, compileError("adapter is nil")
@@ -216,6 +243,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		OperationKey: normalized.OperationKey,
 		ServiceClass: serviceClass,
 		SDKParams:    params,
+		OutputSchema: outputSchema(normalized),
 		Metadata:     metadata,
 	}, nil
 }

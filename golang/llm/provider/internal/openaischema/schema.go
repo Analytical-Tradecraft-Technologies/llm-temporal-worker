@@ -28,20 +28,16 @@ func (err *UnsupportedError) Error() string {
 	return fmt.Sprintf("output schema at %s: %s", err.Path, err.Reason)
 }
 
-// supportedKeywords and supportedStringFormats follow OpenAI's structured
-// outputs guide. A strict request carrying any other keyword is rejected with
-// a 400, so it is moved into the description instead.
+// supportedKeywords is the strict subset both OpenAI and Azure OpenAI accept.
+// OpenAI also enforces some type-specific constraints (pattern, format,
+// numeric bounds, item counts) that Azure's structured outputs reject, so
+// those move into the description on every route, like any other keyword
+// outside the subset that would otherwise be rejected with a 400.
 var supportedKeywords = map[string]struct{}{
 	"$ref": {}, "$defs": {}, "type": {}, "anyOf": {}, "oneOf": {},
 	"description": {}, "title": {}, "enum": {}, "const": {},
 	"properties": {}, "additionalProperties": {}, "required": {},
-	"items": {}, "minItems": {}, "maxItems": {}, "format": {}, "pattern": {},
-	"minimum": {}, "maximum": {}, "exclusiveMinimum": {}, "exclusiveMaximum": {}, "multipleOf": {},
-}
-
-var supportedStringFormats = map[string]struct{}{
-	"date-time": {}, "time": {}, "date": {}, "duration": {}, "email": {},
-	"hostname": {}, "ipv4": {}, "ipv6": {}, "uuid": {},
+	"items": {},
 }
 
 // identifierKeywords carry no constraint and are dropped without a note.
@@ -171,13 +167,6 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 				lowered = append(lowered, nested)
 			}
 			result[key] = lowered
-		case "format":
-			name, _ := value.(string)
-			if _, ok := supportedStringFormats[name]; ok {
-				result[key] = value
-			} else {
-				extras[key] = value
-			}
 		case "additionalProperties", "required":
 			// Decided below, once the object's declared properties are known.
 		default:

@@ -31,8 +31,8 @@ func TestLowerStrictClosesObjectsAndMovesUnsupportedKeywords(t *testing.T) {
 		`"additionalProperties":false,"properties":{` +
 		`"code":{"description":"{if: {\"minLength\":2}, not: {\"const\":\"x\"}, then: {\"maxLength\":4}}","type":"string"},` +
 		`"kind":{"anyOf":[{"const":"a"},{"additionalProperties":false,"properties":{"b":{"description":"{format: regex}","type":"string"}},"required":["b"],"type":"object"}]},` +
-		`"lines":{"description":"{uniqueItems: true}","items":{"$ref":"#/$defs/line"},"maxItems":9,"type":"array"},` +
-		`"total":{"minimum":0,"type":"number"}},` +
+		`"lines":{"description":"{maxItems: 9, uniqueItems: true}","items":{"$ref":"#/$defs/line"},"type":"array"},` +
+		`"total":{"description":"{minimum: 0}","type":"number"}},` +
 		`"required":["total","code","kind","lines"],"type":"object"}`
 	if string(got) != want {
 		t.Fatalf("lowered schema\n got: %s\nwant: %s", got, want)

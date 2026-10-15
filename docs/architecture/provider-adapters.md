@@ -153,14 +153,15 @@ other.
   output accepts, which otherwise returns a 400: every object is closed with
   `additionalProperties: false` and lists every declared property in
   `required` (the caller's required order first, then the rest sorted),
-  `oneOf` becomes `anyOf`, and other keywords outside the subset (such as
-  `not`, `if`/`then`/`else`, `uniqueItems` and length constraints) move into
+  `oneOf` becomes `anyOf`, and other keywords outside the subset shared with
+  Azure OpenAI (such as `not`, `if`/`then`/`else`, `uniqueItems`, `pattern`,
+  `format`, numeric bounds and length and item-count constraints) move into
   the description. A non-object root, an explicitly open object, `allOf`, a
   `required` name that is not declared, or a reference other than `#` or
-  `#/$defs/<name>` fails at compile time with `unsupported_capability`. The
-  answer is still validated against the caller's schema. Non-strict schemas
+  `#/$defs/<name>` fails before admission with `unsupported_capability`. The
+  answer is validated against the caller's schema, not the wire schema. Non-strict schemas
   are sent as written. The same applies to Chat Completions.
-- JSON-object mode (`kind: json`) fails at compile time with
+- JSON-object mode (`kind: json`) fails before admission with
   `unsupported_capability` unless the instructions or input contain "json" in
   any case, because OpenAI rejects it otherwise. A request continuing a stored
   response is not checked, since the earlier context is not visible. The same

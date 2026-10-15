@@ -23,7 +23,7 @@ func TestLocalValidationUsesExactOriginalSchemaNumbers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			call := provider.Call{SDKParams: params}
+			call := provider.Call{SDKParams: params, OutputSchema: schema}
 			for _, tc := range []struct {
 				text  string
 				valid bool

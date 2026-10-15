@@ -45,6 +45,25 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 	}
 }
 
+// Constraints moved out of the wire schema are still enforced by the lift.
+func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"code":{"type":"string","minLength":3}},"required":["code"],"additionalProperties":false}`)
+	call, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: wireAuditUserText("hi"),
+			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
+		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for text, valid := range map[string]bool{`{"code":"abc"}`: true, `{"code":"ab"}`: false} {
+		output := []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}
+		if err := validateFinalJSON(call, output, llm.ResponseStatusCompleted, false, false); (err == nil) != valid {
+			t.Fatalf("%s valid=%v: %v", text, valid, err)
+		}
+	}
+}
+
 func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 	for name, request := range map[string]llm.Request{
 		"strict allOf": {Input: wireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true,
@@ -61,6 +80,11 @@ func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 			var mapped *provider.Error
 			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched {
 				t.Fatalf("compile = %#v, want an unsupported compile rejection", err)
+			}
+			// The engine asks before admission, so nothing is reserved.
+			err = newFixtureAdapter(t, []byte(`{"id":"unused"}`)).ValidateRequest(context.Background(), request)
+			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability {
+				t.Fatalf("validate = %#v, want an unsupported rejection", err)
 			}
 		})
 	}

@@ -108,6 +108,15 @@ func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request
 	if err := lowerExtensions(adapter.profile, request.Extensions, make(map[string]any)); err != nil {
 		return compileError(err.Error())
 	}
+	// Structured output the provider documents as an error is rejected here
+	// too; any other lowering failure is left for Compile to report.
+	if request.Output != nil {
+		if normalized, err := llm.NormalizeRequest(request); err == nil {
+			if _, err := lowerRequestMap(normalized, adapter.profile, ""); errors.As(err, new(*openaischema.UnsupportedError)) {
+				return lowerError(err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -203,6 +212,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		OperationKey: normalized.OperationKey,
 		ServiceClass: serviceClass,
 		SDKParams:    params,
+		OutputSchema: outputSchema(normalized),
 		Metadata:     metadata,
 	}, nil
 }

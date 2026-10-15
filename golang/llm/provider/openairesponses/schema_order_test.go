@@ -107,9 +107,11 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 	}
 	schemas := []json.RawMessage{requestBody.Text.Format.Schema, requestBody.Tools[0].Parameters, requestBody.Tools[0].OutputSchema}
 	for _, raw := range schemas {
-		for _, literal := range []string{`"enum":[9007199254740993]`, `"minimum":9007199254740993`, `"const":0.100000000000000000001`, `"maximum":1.234567890123456789e+20`} {
-			if !strings.Contains(string(raw), literal) {
-				t.Fatalf("schema constraint changed in transport (%s): %s", literal, raw)
+		// A strict output schema carries bounds in its description note
+		// (#1353); the number must stay exact either way.
+		for _, literal := range [][2]string{{`"enum":[9007199254740993]`, ""}, {`"minimum":9007199254740993`, "minimum: 9007199254740993"}, {`"const":0.100000000000000000001`, ""}, {`"maximum":1.234567890123456789e+20`, "maximum: 1.234567890123456789e+20"}} {
+			if !strings.Contains(string(raw), literal[0]) && (literal[1] == "" || !strings.Contains(string(raw), literal[1])) {
+				t.Fatalf("schema constraint changed in transport (%s): %s", literal[0], raw)
 			}
 		}
 	}
