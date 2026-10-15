@@ -221,7 +221,7 @@ func TestResponseCacheLookupRejectsInvalidRequestsAndPlansBeforeStorage(t *testi
 		t.Run(name, func(t *testing.T) {
 			f := newCacheLookupFixture(t)
 			ctx := context.Background()
-			code := provider.CodeConfiguration
+			code, retry := provider.CodeConfiguration, provider.RetryNever
 			switch name {
 			case "Generate request":
 				f.gen.OperationKey = ""
@@ -252,7 +252,9 @@ func TestResponseCacheLookupRejectsInvalidRequestsAndPlansBeforeStorage(t *testi
 			case "lease time":
 				f.genLease.ExpiresAt = f.genLease.AcquiredAt
 			case "expired":
+				// An expired lease is renewed by the next invocation (#1360).
 				f.now = f.genLease.ExpiresAt
+				code, retry = provider.CodeStateUnavailable, provider.RetrySameOperation
 			case "age":
 				f.gen.Cache.MaxAgeSeconds = -1
 				code = provider.CodeInvalidArgument
@@ -288,7 +290,7 @@ func TestResponseCacheLookupRejectsInvalidRequestsAndPlansBeforeStorage(t *testi
 					t.Fatal(err)
 				}
 			} else {
-				assertCacheLookupError(t, err, code, provider.RetryNever)
+				assertCacheLookupError(t, err, code, retry)
 			}
 			if len(f.events) != 0 {
 				t.Fatalf("invalid input reached stores: %v", f.events)

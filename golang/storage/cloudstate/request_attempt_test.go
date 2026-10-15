@@ -120,10 +120,12 @@ func TestRequestAttemptExpiredQuoteUsesNewBudgetAndFencesOldStart(t *testing.T) 
 	ctx, scope := context.Background(), root.Request.Scope
 	first := initialRequestAttempt(t, r, root)
 	child, plan, accepted := saveAttemptPlan(t, r, scope, first, template)
-	if _, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, plan.Reservation.ExpiresAt.Add(-time.Nanosecond)); !errors.Is(err, contracts.ErrConflict) {
+	// An unused quote renews within the margin before it expires (#1360).
+	renewAt := plan.Reservation.ExpiresAt.Add(-UnusedAttemptRenewMargin)
+	if _, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt.Add(-time.Nanosecond)); !errors.Is(err, contracts.ErrConflict) {
 		t.Fatal("renewed active quote", err)
 	}
-	next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, plan.Reservation.ExpiresAt)
+	next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt)
 	if err != nil || next.ID == first.ID || next.Number != 2 || next.PreviousID != first.ID {
 		t.Fatal("renewal", err)
 	}

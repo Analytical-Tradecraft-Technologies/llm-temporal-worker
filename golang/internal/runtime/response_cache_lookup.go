@@ -126,6 +126,8 @@ func responseCacheLookupError(err error) error {
 	if err == nil {
 		return nil
 	}
+	// An expired lease (durable.ErrResponseCacheLeaseExpired) stays retryable:
+	// the next invocation renews the attempt before looking up again (#1360).
 	code, retry := provider.CodeStateUnavailable, provider.RetrySameOperation
 	if errors.Is(err, durable.ErrResponseCacheInvalid) {
 		code, retry = provider.CodeConfiguration, provider.RetryNever

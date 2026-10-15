@@ -112,6 +112,11 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	}
 	if start != nil {
 		if err := start(ctx); err != nil {
+			if errors.Is(err, errCacheFillNotStarted) && saved.Plan.RequiresReservation() {
+				// Like an expired claim, nothing was claimed or sent: close the
+				// attempt so it renews without using up a provider attempt.
+				return executor.save(ctx, call.scope, call.id, saved, executor.unclaimedExecution(saved))
+			}
 			next := saved.Execution
 			next.Stage = cloudstate.ExecutionUnknown
 			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}

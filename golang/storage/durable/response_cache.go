@@ -17,6 +17,9 @@ var (
 	ErrResponseCacheInvalid = errors.New("response cache preparation is invalid")
 	// ErrResponseCacheCorrupt marks cache data that does not match its lookup or origin.
 	ErrResponseCacheCorrupt = errors.New("response cache preparation data is corrupt")
+	// ErrResponseCacheLeaseExpired marks a lookup whose clock has reached the
+	// fill lease's expiry. The caller renews the lease and retries.
+	ErrResponseCacheLeaseExpired = errors.New("response cache fill lease has expired")
 )
 
 // ResponseCache adapts cloud cache preparation to the Generate and Compact
@@ -124,7 +127,7 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 		now = lease.AcquiredAt.UTC()
 	}
 	if !now.Before(lease.ExpiresAt) {
-		return nil, fmt.Errorf("%w: clock is outside the lease", ErrResponseCacheInvalid)
+		return nil, fmt.Errorf("%w: clock is outside the lease", ErrResponseCacheLeaseExpired)
 	}
 	result, err := cache.Prepare(ctx, c.responses, c.fills, cache.ResponseLookup{Key: lease.Key, Now: now, MaxAge: maxAge}, lease)
 	if err != nil {

@@ -233,6 +233,18 @@ func TestResponseCacheRejectsClockRegressionAndExpiredStart(t *testing.T) {
 	}
 }
 
+// A lookup at or after the lease's expiry is an expired lease the caller
+// renews, never an invalid request (#1360).
+func TestResponseCacheExpiredLeaseIsNotInvalid(t *testing.T) {
+	events := []string{}
+	c, lease, _, _ := cacheRunnerFixture(t, cache.OperationGenerate, &events)
+	c.now = func() time.Time { return lease.ExpiresAt }
+	_, err := c.PrepareGenerate(context.Background(), lease, nil)
+	if !errors.Is(err, ErrResponseCacheLeaseExpired) || errors.Is(err, ErrResponseCacheInvalid) || len(events) != 0 {
+		t.Fatalf("expired lease lookup = %v, events %v", err, events)
+	}
+}
+
 func cacheTemplate(t *testing.T, kind cache.OperationKind, lease cache.FillLease) cache.ResponseEntry {
 	t.Helper()
 	var value any
