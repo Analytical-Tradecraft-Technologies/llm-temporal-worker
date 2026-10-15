@@ -91,6 +91,12 @@ func (limits CloudRequestLimits) itemWithin(item llm.Item) bool {
 	case llm.ToolResult:
 		return !limits.exceeds(limits.PartsPerItem, len(item.Content)) && limits.partsWithin(item.Content)
 	case llm.ToolCall:
+		// A provider's tool call is accepted only within
+		// llm.MaxToolArgumentsDepth, so a caller's is held to the same bound:
+		// anything deeper could not be saved once wrapped in a durable record.
+		if _, err := llm.CanonicalToolArguments(item.Arguments); err != nil {
+			return false
+		}
 		return limits.depthWithin(item.Arguments)
 	case llm.Reference:
 		for _, value := range item.Metadata {

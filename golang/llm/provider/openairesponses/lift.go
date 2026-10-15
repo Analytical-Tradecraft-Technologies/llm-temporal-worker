@@ -296,8 +296,9 @@ func liftOutput(items []responses.ResponseOutputItemUnion, truncated bool) ([]ll
 				call.Arguments = "{}"
 			}
 			// encoding/json accepts duplicate keys but a normalized tool call does
-			// not, so arguments must also be canonicalizable.
-			if _, err := llm.CanonicalJSON([]byte(call.Arguments)); err != nil {
+			// not, so arguments must also be canonicalizable, and within
+			// llm.MaxToolArgumentsDepth so the call can be saved.
+			if _, err := llm.CanonicalToolArguments([]byte(call.Arguments)); err != nil {
 				// Keep the paid incomplete response as a length truncation and
 				// drop only the cut-off call.
 				// Only the item that was itself cut off may be dropped; a

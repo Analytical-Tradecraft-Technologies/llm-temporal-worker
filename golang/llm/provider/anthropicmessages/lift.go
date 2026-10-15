@@ -206,8 +206,10 @@ func liftContent(blocks []anthropic.ContentBlockUnion) ([]llm.Item, []llm.Provid
 				return nil, nil, false, false, fmt.Errorf("content block %d tool_use input is invalid JSON", index)
 			}
 			// encoding/json accepts duplicate keys but a normalized tool call
-			// does not. Reject them here as a classified invalid response.
-			if _, err := llm.CanonicalJSON(arguments); err != nil {
+			// does not, and arguments nested deeper than
+			// llm.MaxToolArgumentsDepth could not be saved. Reject both here as
+			// a classified invalid response.
+			if _, err := llm.CanonicalToolArguments(arguments); err != nil {
 				return nil, nil, false, false, fmt.Errorf("content block %d tool_use input is invalid JSON", index)
 			}
 			hasToolCalls = true

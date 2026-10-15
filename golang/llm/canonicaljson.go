@@ -15,6 +15,13 @@ import (
 const (
 	DefaultCanonicalMaxBytes = 8 << 20
 	DefaultCanonicalMaxDepth = 128
+	// MaxToolArgumentsDepth bounds the nesting of tool-call arguments below
+	// DefaultCanonicalMaxDepth. Durable records wrap a tool call several
+	// levels deep (progress, execution, response, output, item, and more for
+	// a finalization plan or cache entry) and are themselves held to
+	// DefaultCanonicalMaxDepth, so arguments any deeper than this could be
+	// accepted from a provider yet never saved.
+	MaxToolArgumentsDepth = 96
 )
 
 // ErrCanonicalJSONLimit marks input or output that exceeds the byte or
@@ -38,6 +45,12 @@ type canonicalObject struct {
 // exactly.
 func CanonicalJSON(data []byte) ([]byte, error) {
 	return CanonicalJSONWithLimits(data, DefaultCanonicalMaxBytes, DefaultCanonicalMaxDepth)
+}
+
+// CanonicalToolArguments is CanonicalJSON for tool-call arguments, whose
+// nesting is held to MaxToolArgumentsDepth.
+func CanonicalToolArguments(data []byte) ([]byte, error) {
+	return CanonicalJSONWithLimits(data, DefaultCanonicalMaxBytes, MaxToolArgumentsDepth)
 }
 
 // CanonicalJSONWithLimits is CanonicalJSON with explicit byte and nesting

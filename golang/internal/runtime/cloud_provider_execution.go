@@ -503,7 +503,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 	var tooLarge executionRecordTooLarge
 	if err != nil && next.Stage == cloudstate.ExecutionSucceeded && errors.As(err, &tooLarge) {
 		// The provider did the work but its response exceeds the durable
-		// record limit, and nothing was written. Close the attempt as a paid,
+		// record's size or nesting limit, and nothing was written. Close the attempt as a paid,
 		// terminal failure settled at the response's cost (the settlement was
 		// built from it above) instead of leaving it submitting with its claim
 		// held until recovery charges the full reservation.
@@ -518,7 +518,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 }
 
 // executionRecordTooLarge marks a save the repository refused only because the
-// encoded record exceeds its size limit. It unwraps to the classified error.
+// encoded record exceeds its size or nesting limit. It unwraps to the classified error.
 type executionRecordTooLarge struct{ error }
 
 func (err executionRecordTooLarge) Unwrap() error { return err.error }
