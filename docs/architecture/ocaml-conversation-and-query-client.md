@@ -14,6 +14,24 @@ encode and decode payloads with the same format and keys, or use a remote codec
 server. Otherwise it cannot read the worker's results. See
 [Temporal payload encryption](../reference/configuration.md#temporal-payload-encryption).
 
+The package also has no Temporal transport security settings.
+`Client.create` accepts only a target URL, namespace and identity, and the
+pinned `temporal-sdk` connects without TLS, a CA, a server name, a client
+certificate or an API key. An `https://` target fails with a `tls` connection
+error, and a TLS frontend rejects a plaintext connection. The same limit
+applies to an OCaml worker that hosts workflows calling these children. The Go
+worker requires TLS plus mTLS or an API key in production unless
+`temporal.mesh_transport` is set (see
+[configuration](../reference/configuration.md)). Until the SDK supports
+authenticated connections
+([ocaml-temporal#496](https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal/issues/496)),
+an OCaml process must reach Temporal through a service mesh that supplies TLS
+and client identity, or through a local TLS-originating sidecar (for example
+in the same pod, listening only on loopback) that presents the mTLS
+certificate or API key. Point `~target_url` at the plaintext mesh or sidecar
+listener. This is a release gate tracked in
+[#1345](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1345).
+
 This document specifies changes to the existing
 **ocaml/llm_temporal_worker** package. It does not create another opam package
 or a parallel client. The implementation extends the same **Llm_temporal**
@@ -1161,3 +1179,8 @@ does not parse provider messages or schedule replacement paid calls.
   compatibility smoke assertion.
 - Dune builds libraries, interfaces, examples, unit tests, and an external
   downstream package under the pinned Temporal SDK version.
+- An OCaml client can start and await a Generate against a TLS plus mTLS (or
+  API-key) Temporal frontend without a mesh or sidecar. This gate is open
+  until ocaml-temporal#496 lands and `Client.create` and worker creation
+  expose CA, server name, client certificate and key, and API key
+  ([#1345](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1345)).
