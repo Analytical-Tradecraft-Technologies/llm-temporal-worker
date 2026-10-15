@@ -40,7 +40,7 @@ func TestCloudGenerationPlan(t *testing.T) {
 				// The parent's history is what crosses the trigger; the request
 				// that compaction leaves behind, summary included, stays below it.
 				f.cap.BudgetEstimator.Tokenizer = func(request llm.Request, _ routing.Candidate) (int64, error) {
-					if len(request.Input) > 1 {
+					if len(request.Input) > 2 {
 						return 50000, nil
 					}
 					return 5, nil

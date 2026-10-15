@@ -118,8 +118,9 @@ func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(ret
 		if err != nil {
 			return PrefixSelection{}, err
 		}
-		// The summary compaction adds is bounded by the output reserve; leaving
-		// it out would land a near-target window above the trigger again.
+		// The summary text compaction adds is bounded by the output reserve;
+		// leaving it out would land a near-target window above the trigger
+		// again. retainedRequestTokens counts the summary item's framing.
 		if size+policy.OutputReserveTokens <= policy.TargetTokens {
 			break
 		}
@@ -172,10 +173,12 @@ func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(ret
 // budget estimator's provider-independent fallback, which excludes inline
 // media bytes: providers bill images and PDFs on their content, not on the
 // base64 this worker serializes, so a recent attachment that fits the
-// provider's budget is not pushed into the lossy summary.
+// provider's budget is not pushed into the lossy summary. The request leads
+// with an empty summary item, so its heading and framing are counted; the
+// caller adds the summary text's output reserve.
 func retainedRequestTokens(source llm.Request, retained []llm.Item) (int, error) {
 	probe := source
-	probe.Input = retained
+	probe.Input = append([]llm.Item{SummaryItem("")}, retained...)
 	tokens, err := budget.Estimator{}.CountInputTokens(probe, routing.Candidate{})
 	if err != nil {
 		return 0, fmt.Errorf("compaction retained request: %w", err)
