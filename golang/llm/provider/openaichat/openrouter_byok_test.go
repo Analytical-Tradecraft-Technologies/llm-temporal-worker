@@ -53,6 +53,8 @@ func TestOpenRouterBYOKWithoutUpstreamCostIsUnknown(t *testing.T) {
 		"null upstream":     `{"prompt_tokens":4,"completion_tokens":2,"cost":0,"is_byok":true,"cost_details":{"upstream_inference_cost":null}}`,
 		"negative upstream": `{"prompt_tokens":4,"completion_tokens":2,"cost":0,"is_byok":true,"cost_details":{"upstream_inference_cost":-1}}`,
 		"no OpenRouter fee": `{"prompt_tokens":4,"completion_tokens":2,"is_byok":true,"cost_details":{"upstream_inference_cost":0.0001}}`,
+		"null marker":       `{"prompt_tokens":4,"completion_tokens":2,"cost":0,"is_byok":null,"cost_details":{"upstream_inference_cost":0.0001}}`,
+		"string marker":     `{"prompt_tokens":4,"completion_tokens":2,"cost":0,"is_byok":"true","cost_details":{"upstream_inference_cost":0.0001}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			lifted := liftOpenRouterUsage(t, usage)

@@ -260,11 +260,20 @@ func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lift
 // own key, and OpenRouter reports that amount as
 // cost_details.upstream_inference_cost. Only usage.is_byok selects this:
 // non-BYOK responses also carry upstream_inference_cost, already included in
-// usage.cost. A BYOK response without both amounts keeps the cost unknown, so
-// the reservation is charged rather than refunded.
+// usage.cost. A BYOK response without both amounts, or an is_byok marker that
+// is not a boolean, keeps the cost unknown, so the reservation is charged
+// rather than refunded.
 func addOpenRouterBYOKCost(lifted *llm.Response, usage map[string]json.RawMessage) {
-	var byok bool
-	if raw, ok := usage["is_byok"]; !ok || json.Unmarshal(raw, &byok) != nil || !byok {
+	raw, ok := usage["is_byok"]
+	if !ok {
+		return
+	}
+	switch strings.TrimSpace(string(raw)) {
+	case "false":
+		return
+	case "true":
+	default:
+		lifted.Cost = llm.Cost{Status: llm.CostStatusUnknown}
 		return
 	}
 	var details struct {
