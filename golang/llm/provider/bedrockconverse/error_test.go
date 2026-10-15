@@ -66,3 +66,21 @@ func TestDefiniteConverseRejectionsRemainRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayTimeoutsRemainAmbiguous(t *testing.T) {
+	for _, status := range []int{http.StatusGatewayTimeout, provider.StatusCloudflareTimeout} {
+		mapped := mapError(fmt.Errorf("wrapped: %w", &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}}, Err: errors.New("provider body")}), "converse")
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d became a rejection: %#v", status, mapped)
+		}
+	}
+}
+
+func TestServerErrorsRemainRejected(t *testing.T) {
+	for _, status := range []int{500, 502, 503, 529} {
+		mapped := mapError(fmt.Errorf("wrapped: %w", &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}}, Err: errors.New("provider body")}), "converse")
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d = %#v, want a retryable rejection", status, mapped)
+		}
+	}
+}

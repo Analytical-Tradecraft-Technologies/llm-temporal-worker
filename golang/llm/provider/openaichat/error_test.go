@@ -53,3 +53,21 @@ func TestMapAPIErrorMapsRetryAfterDelay(t *testing.T) {
 		t.Fatalf("safe retry after = %q, want %q", got, want)
 	}
 }
+
+func TestGatewayTimeoutsRemainAmbiguous(t *testing.T) {
+	for _, status := range []int{http.StatusGatewayTimeout, provider.StatusCloudflareTimeout} {
+		mapped := mapAPIError(&openai.Error{StatusCode: status}, "openai-chat")
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d became a rejection: %#v", status, mapped)
+		}
+	}
+}
+
+func TestServerErrorsRemainRejected(t *testing.T) {
+	for _, status := range []int{500, 502, 503, 529} {
+		mapped := mapAPIError(&openai.Error{StatusCode: status}, "openai-chat")
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d = %#v, want a retryable rejection", status, mapped)
+		}
+	}
+}

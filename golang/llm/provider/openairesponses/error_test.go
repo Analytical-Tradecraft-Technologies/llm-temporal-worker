@@ -112,3 +112,21 @@ func TestMapErrorRedactsTransportCause(t *testing.T) {
 		t.Fatal("mapped error did not preserve the local diagnostic cause")
 	}
 }
+
+func TestGatewayTimeoutsRemainAmbiguous(t *testing.T) {
+	for _, status := range []int{http.StatusGatewayTimeout, provider.StatusCloudflareTimeout} {
+		mapped := mapAPIError(&openai.Error{StatusCode: status})
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d became a rejection: %#v", status, mapped)
+		}
+	}
+}
+
+func TestServerErrorsRemainRejected(t *testing.T) {
+	for _, status := range []int{500, 502, 503, 529} {
+		mapped := mapAPIError(&openai.Error{StatusCode: status})
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d = %#v, want a retryable rejection", status, mapped)
+		}
+	}
+}

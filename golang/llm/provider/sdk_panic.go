@@ -47,8 +47,10 @@ func (probe *DispatchProbe) Middleware(request *http.Request, next func(*http.Re
 //   - after sending but without a response the outcome is ambiguous;
 //   - with a success status the provider accepted (and billed) the request,
 //     so the panic is an invalid response that must not be retried;
-//   - with an error status the provider rejected the request, classified as
-//     the HTTP error would be.
+//   - with a gateway timeout the provider may have run the request, so the
+//     outcome is ambiguous;
+//   - with another error status the provider rejected the request, classified
+//     as the HTTP error would be.
 func (probe *DispatchProbe) PanicError(operationKey string, panicked any) *Error {
 	status := int(probe.status.Load())
 	var mapped *Error
@@ -61,6 +63,8 @@ func (probe *DispatchProbe) PanicError(operationKey string, panicked any) *Error
 		mapped = NewError(CodeProviderInvalidResponse, PhaseLift, DispatchAccepted, RetryNever, fmt.Sprintf("provider SDK panicked while decoding the response: %v", panicked))
 	case status < 400:
 		mapped = NewError(CodeProviderUnavailable, PhaseDispatch, DispatchAmbiguous, RetryNever, "provider redirect response is ambiguous")
+	case IsGatewayTimeoutStatus(status):
+		mapped = NewError(CodeProviderUnavailable, PhaseDispatch, DispatchAmbiguous, RetrySameOperation, "provider request timed out")
 	case status == http.StatusTooManyRequests:
 		mapped = NewError(CodeProviderRateLimited, PhaseDispatch, DispatchRejected, RetryAfter, "provider rate limited the request")
 	case status >= http.StatusInternalServerError:

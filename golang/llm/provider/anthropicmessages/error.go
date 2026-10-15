@@ -63,6 +63,9 @@ func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {
 	switch {
 	case status >= http.StatusMultipleChoices && status < http.StatusBadRequest:
 		dispatch, retry, safe = provider.DispatchAmbiguous, provider.RetryNever, "provider redirect response is ambiguous"
+	case provider.IsGatewayTimeoutStatus(status) || apiErr.Type() == anthropic.ErrorTypeTimeoutError:
+		// The request timed out while processing; it may have been billed.
+		dispatch, safe = provider.DispatchAmbiguous, "provider request timed out"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
 	case status == http.StatusForbidden:

@@ -1,6 +1,7 @@
 package bedrockmessages
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -73,6 +74,36 @@ func TestDefiniteMessagesRejectionsRemainRejected(t *testing.T) {
 		mapped := mapAPIError(&anthropic.Error{StatusCode: status}, "bedrock-messages")
 		if mapped.Dispatch != provider.DispatchRejected {
 			t.Fatalf("status %d became ambiguous", status)
+		}
+	}
+}
+
+func TestGatewayTimeoutsRemainAmbiguous(t *testing.T) {
+	for _, status := range []int{http.StatusGatewayTimeout, provider.StatusCloudflareTimeout} {
+		mapped := mapAPIError(&anthropic.Error{StatusCode: status}, "bedrock-messages")
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d became a rejection: %#v", status, mapped)
+		}
+	}
+	// Anthropic reports a request that timed out while processing as
+	// timeout_error; that type is ambiguous whatever status carries it.
+	for _, status := range []int{http.StatusInternalServerError, http.StatusGatewayTimeout} {
+		apiErr := &anthropic.Error{StatusCode: status}
+		if err := json.Unmarshal([]byte(`{"type":"error","error":{"type":"timeout_error","message":"Request timed out"}}`), apiErr); err != nil {
+			t.Fatal(err)
+		}
+		mapped := mapAPIError(apiErr, "bedrock-messages")
+		if mapped.Dispatch != provider.DispatchAmbiguous || mapped.SafeDetails["provider_type"] != "timeout_error" {
+			t.Fatalf("timeout_error with status %d became a rejection: %#v", status, mapped)
+		}
+	}
+}
+
+func TestServerErrorsRemainRejected(t *testing.T) {
+	for _, status := range []int{500, 502, 503, 529} {
+		mapped := mapAPIError(&anthropic.Error{StatusCode: status}, "bedrock-messages")
+		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation {
+			t.Fatalf("status %d = %#v, want a retryable rejection", status, mapped)
 		}
 	}
 }

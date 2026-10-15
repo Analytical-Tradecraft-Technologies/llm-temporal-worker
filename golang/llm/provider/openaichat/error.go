@@ -87,6 +87,9 @@ func classifyStatus(status int) (provider.Code, provider.RetryDisposition, provi
 	switch {
 	case status >= http.StatusMultipleChoices && status < http.StatusBadRequest:
 		dispatch, retry, safe = provider.DispatchAmbiguous, provider.RetryNever, "provider redirect response is ambiguous"
+	case provider.IsGatewayTimeoutStatus(status):
+		// The gateway timed out; the request may have been billed.
+		dispatch, safe = provider.DispatchAmbiguous, "provider request timed out"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
 	case status == http.StatusForbidden:
