@@ -254,7 +254,7 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 		override := prices.Overrides[0]
 		longFields := []struct{ name, perToken string }{
 			{"input_per_million", cmp.Or(override.Prompt, prices.Prompt)}, {"output_per_million", cmp.Or(override.Completion, prices.Completion)},
-			{"cache_read_per_million", cmp.Or(override.InputCacheRead, prices.InputCacheRead, override.Prompt, prices.Prompt)},
+			{"cache_read_per_million", cmp.Or(override.InputCacheRead, prices.InputCacheRead, prices.Prompt)},
 			{"cache_write_per_million", cmp.Or(override.InputCacheWrite, cacheWrite)},
 		}
 		fmt.Fprintf(&out, "            long_prompt:\n              min_prompt_tokens: %d\n", override.MinPromptTokens)

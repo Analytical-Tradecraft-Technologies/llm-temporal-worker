@@ -70,6 +70,16 @@ type LongPromptPrices struct {
 	Prices          UnitPrices
 }
 
+// cloneLongPrompt detaches a long-prompt tier, so a catalog never shares it
+// with its source entries, its snapshots or its quotes.
+func cloneLongPrompt(long *LongPromptPrices) *LongPromptPrices {
+	if long == nil {
+		return nil
+	}
+	copied := *long
+	return &copied
+}
+
 // PricesFor returns the prices billed for a call of promptTokens prompt
 // tokens.
 func (entry Entry) PricesFor(promptTokens int64) UnitPrices {

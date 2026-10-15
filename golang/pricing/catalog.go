@@ -49,6 +49,7 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 	seenIdentities := make(map[string]struct{}, len(copyEntries))
 	for index := range copyEntries {
 		entry := &copyEntries[index]
+		entry.LongPrompt = cloneLongPrompt(entry.LongPrompt)
 		if err := entry.ValidateUsagePricing(); err != nil {
 			return Catalog{}, fmt.Errorf("pricing entry %d: %w", index, err)
 		}
@@ -260,6 +261,7 @@ func (catalog Catalog) Resolve(query Query) (Quote, error) {
 	for _, entry := range catalog.Entries {
 		if entry.Provider == query.Provider && entry.Family == query.Family && entry.EndpointID == query.EndpointID && entry.Region == query.Region && entry.Model == query.Model && entry.ProviderTier == query.ProviderTier && entry.Active(when) {
 			entry.UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
+			entry.LongPrompt = cloneLongPrompt(entry.LongPrompt)
 			return Quote{Entry: entry, CatalogVersion: catalog.Version, CatalogDigest: catalog.DigestHex()}, nil
 		}
 	}
@@ -271,6 +273,7 @@ func cloneCatalog(catalog Catalog) Catalog {
 	for index, entry := range catalog.Entries {
 		entries[index] = entry
 		entries[index].UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
+		entries[index].LongPrompt = cloneLongPrompt(entry.LongPrompt)
 	}
 	return Catalog{Version: catalog.Version, Entries: entries, Digest: catalog.Digest}
 }

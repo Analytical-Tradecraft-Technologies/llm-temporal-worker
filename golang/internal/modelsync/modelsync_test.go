@@ -265,6 +265,30 @@ func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
 	}
 }
 
+func TestGeneratedLongPromptKeepsBaseComponentsAnOverrideOmits(t *testing.T) {
+	model := Model{ID: "openai/gpt-test", ContextLength: 1_000_000, Endpoints: []Endpoint{{Tag: "openai", Pricing: Pricing{
+		Prompt: "0.000001", Completion: "0.000004",
+		Overrides: []PricingOverride{{MinPromptTokens: 200_000, Prompt: "0.000002"}},
+	}}}}
+	rendered, ok, err := renderGeneratedModel(generatedProviders[0], model)
+	if err != nil || !ok {
+		t.Fatalf("render = %v, %v", ok, err)
+	}
+	// The base cache-read price defaults to the base input price, and the
+	// override leaves it, and the output price, unchanged.
+	want := `            long_prompt:
+              min_prompt_tokens: 200000
+              input_per_million: "2"
+              output_per_million: "4"
+              cache_read_per_million: "1"
+              cache_write_per_million: "0"
+              per_request: "0"
+`
+	if !strings.Contains(rendered, want) || !strings.Contains(rendered, "context_tokens: 1000000\n") {
+		t.Fatalf("rendered = %s, want the real window and long prompt\n%s", rendered, want)
+	}
+}
+
 func TestGenerateDefaultRulesSkipsReasoningPresets(t *testing.T) {
 	document := fetchFixture(t)
 	var base Model

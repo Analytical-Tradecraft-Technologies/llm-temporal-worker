@@ -41,6 +41,30 @@ func TestCostFromUsageSettlesLongPromptAtOverridePrice(t *testing.T) {
 	}
 }
 
+func TestLongPromptPriceIsDetachedFromCatalogCopies(t *testing.T) {
+	source := gpt54DefaultEntry()
+	catalog, err := CompileUSD("v", []Entry{source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.LongPrompt.MinPromptTokens = 1
+	resolver := NewResolver(catalog)
+	query := Query{Provider: "openai", Family: "openai_responses", EndpointID: "openai", Model: "gpt-5.4", ProviderTier: "default"}
+	quote, err := resolver.Resolve(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote.Entry.LongPrompt.MinPromptTokens = 2
+	resolver.Snapshot().Entries[0].LongPrompt.MinPromptTokens = 3
+	again, err := resolver.Resolve(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Entry.LongPrompt.MinPromptTokens; got != 272_000 {
+		t.Fatalf("long-prompt threshold = %d after mutating copies, want 272000", got)
+	}
+}
+
 func TestLongPromptPriceIsValidatedAndOmittedWhenUnset(t *testing.T) {
 	entry := gpt54DefaultEntry()
 	if _, err := CompileUSD("v", []Entry{entry}); err != nil {
