@@ -96,8 +96,11 @@ func summarizerSampling(source *llm.SamplingSpec) *llm.SamplingSpec {
 }
 
 // PlainTextSummary extracts only a completed model message containing text
-// parts.  Tool calls, tool results, provider state, multimodal parts, and
-// non-completed statuses are rejected before a summary can become state.
+// parts.  Tool calls, tool results, multimodal parts, and non-completed
+// statuses are rejected before a summary can become state. Provider state
+// (such as a Responses reasoning item) and references (such as Exa
+// citations) are routine companions of the summary text on some routes and
+// are dropped: only the text becomes the checkpoint summary.
 func PlainTextSummary(response llm.Response, maxBytes int) (string, error) {
 	if response.Status != llm.ResponseStatusCompleted {
 		return "", fmt.Errorf("compaction response status %q is not completed", response.Status)
@@ -107,6 +110,10 @@ func PlainTextSummary(response llm.Response, maxBytes int) (string, error) {
 	}
 	var builder strings.Builder
 	for _, item := range response.Output {
+		switch item.(type) {
+		case llm.ProviderState, llm.Reference:
+			continue
+		}
 		message, ok := item.(llm.Message)
 		if !ok || message.Actor != llm.ActorModel {
 			return "", fmt.Errorf("compaction output contains non-model message")

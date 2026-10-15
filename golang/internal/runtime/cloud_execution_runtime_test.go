@@ -591,6 +591,33 @@ func TestCloudExecutionRuntimeIncompleteCompaction(t *testing.T) {
 	}
 }
 
+// Responses reasoning models lead the summary with a reasoning item and Exa
+// appends citations. Neither makes the paid summary unpublishable.
+func TestCloudExecutionRuntimeCompactionIgnoresReasoningAndCitations(t *testing.T) {
+	f := boundedCloud(t, false)
+	policy := json.RawMessage(`{"recent_turns":0}`)
+	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	parent := f.finish(t)
+	f.now = f.now.Add(time.Minute)
+	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{}}
+	original := f.adapter.invoke
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		v, err := original(ctx, call, o)
+		v.Response.Output = append(append([]llm.Item{llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json", Opaque: []byte(`{}`)}}, v.Response.Output...),
+			llm.Reference{URI: "https://example.com/source"})
+		return v, err
+	}
+	ctx := context.Background()
+	v, err := f.runtime.CompactStepV1(ctx, request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context}
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if v.Compact == nil || v.Compact.Checkpoint.Handle == "" {
+		t.Fatal("summary with reasoning and citations did not publish a checkpoint")
+	}
+}
+
 func TestCloudExecutionRuntimeCacheSemanticIdentity(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
