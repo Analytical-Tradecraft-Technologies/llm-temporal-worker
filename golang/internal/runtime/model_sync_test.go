@@ -164,3 +164,49 @@ func TestModelSyncRejectsADirectProviderWithoutRules(t *testing.T) {
 		t.Fatal("a direct provider without rules was accepted")
 	}
 }
+
+// syncedEndpointDigest compiles the OpenRouter route through model sync after
+// change edits the OpenRouter endpoint, and returns its endpoint digest.
+func syncedEndpointDigest(t *testing.T, change func(*config.EndpointConfig)) [32]byte {
+	t.Helper()
+	value := modelSyncTestConfig()
+	if change != nil {
+		endpoint := value.Endpoints["openrouter"]
+		change(&endpoint)
+		value.Endpoints["openrouter"] = endpoint
+	}
+	syncRuntime, err := newModelSyncRuntime(value, modelSyncTestCatalogs(t), catalog.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syncRuntime.enable(map[string]provider.Adapter{"openrouter": nil, "configured": nil}); err != nil {
+		t.Fatal(err)
+	}
+	document := modelSyncTestDocument()
+	if err := syncRuntime.install(&document); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := syncRuntime.Current(context.Background())
+	routes := snapshot.Routes.Models["openai/gpt-5.4-mini"].Routes
+	if len(routes) != 1 || routes[0].EndpointID != "openrouter" {
+		t.Fatalf("synced routes = %+v", routes)
+	}
+	return routes[0].EndpointDigest
+}
+
+// Synced routes carry the digest a configured route on the same endpoint
+// would, so recovery after a reload can tell an unchanged endpoint from a
+// changed one (#1340).
+func TestModelSyncRoutesCarryTheEndpointDigest(t *testing.T) {
+	want, err := endpointConfigDigest("openrouter", modelSyncTestConfig().Endpoints["openrouter"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := syncedEndpointDigest(t, nil)
+	if got == ([32]byte{}) || got != want {
+		t.Fatalf("synced endpoint digest = %x, want %x", got, want)
+	}
+	if syncedEndpointDigest(t, func(endpoint *config.EndpointConfig) { endpoint.BaseURL = "https://other.example/api/v1" }) == got {
+		t.Fatal("changing the endpoint kept its synced digest")
+	}
+}

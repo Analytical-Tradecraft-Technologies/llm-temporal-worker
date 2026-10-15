@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -108,51 +109,65 @@ func bindReloadEndpoints(source *planningSource, digest [32]byte) {
 
 // A submitted job is paid work. A reload that leaves its route and endpoint
 // alone must let the new configuration poll and publish it; a changed endpoint
-// must wait rather than poll elsewhere or fail the request.
+// must wait rather than poll elsewhere or fail the request. Routes compiled
+// by model sync carry the same endpoint digest (#1340).
 func TestCloudReloadPollsPendingPaidWorkOnlyOnUnchangedEndpoint(t *testing.T) {
-	for _, endpointChanged := range []bool{false, true} {
-		name := "unrelated-change"
-		if endpointChanged {
-			name = "endpoint-change"
+	digests := map[string][2][32]byte{
+		"configured": {{31}, {32}},
+		"synced": {syncedEndpointDigest(t, nil), syncedEndpointDigest(t, func(endpoint *config.EndpointConfig) {
+			endpoint.BaseURL = "https://other.example/api/v1"
+		})},
+	}
+	for _, routeKind := range []string{"configured", "synced"} {
+		unchanged, changed := digests[routeKind][0], digests[routeKind][1]
+		for _, endpointChanged := range []bool{false, true} {
+			name := routeKind + "/unrelated-change"
+			if endpointChanged {
+				name = routeKind + "/endpoint-change"
+			}
+			t.Run(name, func(t *testing.T) {
+				reloadPollsPendingPaidWork(t, unchanged, changed, endpointChanged)
+			})
 		}
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionPending)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
-			f.cap.ConfigDigest[0]++
-			source := f.cap.Snapshot.(*planningSource)
-			source.value.ConfigDigest = f.cap.ConfigDigest
-			if endpointChanged {
-				bindReloadEndpoints(source, [32]byte{32})
-			}
-			f.restart(t)
-			f.now = f.now.Add(2 * time.Second)
-			if endpointChanged {
-				_, err = f.runtime.PollExecutionV1(ctx, ref)
-				assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
-				var mapped *temporal.ApplicationError
-				if !errors.As(activity.ToTemporalError(err), &mapped) || mapped.NonRetryable() {
-					t.Fatal("changed endpoint became a permanent Temporal failure")
-				}
-				if f.polls.Load() != 0 {
-					t.Fatal("polled a changed endpoint")
-				}
-				// Only the endpoint is restored; the configuration digest still differs.
-				bindReloadEndpoints(source, [32]byte{31})
-				f.restart(t)
-			}
-			v, err = f.runtime.PollExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionCompleted)
-			if f.submits.Load() != 1 || f.polls.Load() != 1 {
-				t.Fatalf("submits=%d polls=%d, want one each", f.submits.Load(), f.polls.Load())
-			}
-		})
+	}
+}
+
+func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpointChanged bool) {
+	ctx := context.Background()
+	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, unchanged) })
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	f.cap.ConfigDigest[0]++
+	source := f.cap.Snapshot.(*planningSource)
+	source.value.ConfigDigest = f.cap.ConfigDigest
+	if endpointChanged {
+		bindReloadEndpoints(source, changed)
+	}
+	f.restart(t)
+	f.now = f.now.Add(2 * time.Second)
+	if endpointChanged {
+		_, err = f.runtime.PollExecutionV1(ctx, ref)
+		assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
+		var mapped *temporal.ApplicationError
+		if !errors.As(activity.ToTemporalError(err), &mapped) || mapped.NonRetryable() {
+			t.Fatal("changed endpoint became a permanent Temporal failure")
+		}
+		if f.polls.Load() != 0 {
+			t.Fatal("polled a changed endpoint")
+		}
+		// Only the endpoint is restored; the configuration digest still differs.
+		bindReloadEndpoints(source, unchanged)
+		f.restart(t)
+	}
+	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if f.submits.Load() != 1 || f.polls.Load() != 1 {
+		t.Fatalf("submits=%d polls=%d, want one each", f.submits.Load(), f.polls.Load())
 	}
 }
 
