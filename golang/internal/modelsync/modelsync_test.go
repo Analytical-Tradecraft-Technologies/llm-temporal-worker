@@ -211,6 +211,12 @@ func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 	if got := opus.Prices["standard_only"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.2" || got.CacheWrite != "5" {
 		t.Fatalf("claude-opus-5.5 prices = %+v; want Anthropic's published $4/$20, $0.20 cache read, $5 cache write", got)
 	}
+	sonnet, _ := rules.Direct("anthropic", "anthropic/claude-sonnet-5.5")
+	for _, tier := range []string{"standard_only", "auto"} {
+		if got := sonnet.Prices[tier]; got.Input != "2" || got.Output != "10" || got.CacheRead != "0.1" || got.CacheWrite != "2.5" {
+			t.Fatalf("claude-sonnet-5.5 %s prices = %+v; want Anthropic's published $2/$10, $0.10 cache read, $2.50 cache write", tier, got)
+		}
+	}
 	// OpenRouter lists gpt-5.6-sol at a 50% promotional discount; the
 	// direct route must carry OpenAI's list prices, not the promotion.
 	sol, _ := rules.Direct("openai", "openai/gpt-5.6-sol")
