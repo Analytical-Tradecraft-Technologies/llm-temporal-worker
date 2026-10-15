@@ -327,7 +327,7 @@ func TestSelectPrefixCarriesEveryReferencePastTheSummary(t *testing.T) {
 // SelectRequestPrefix keeps the policy's window when the retained request
 // fits target_tokens and otherwise shortens it, oldest turn first, down to one
 // turn. The window is measured with the instructions and tools that stay in
-// every request, not the items alone.
+// every request and the summary compaction adds, not the items alone.
 func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "one"),
@@ -337,7 +337,7 @@ func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
 	}
 	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items, Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Text: strings.Repeat("p", 400)}}}
 	policy := DefaultPolicy()
-	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens = 3, 2000, 600
+	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens, policy.OutputReserveTokens = 3, 2000, 600, 1
 	selection, err := SelectRequestPrefix(source, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -358,6 +358,18 @@ func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
 	if got, want := selection.Retained, items[1:]; !reflect.DeepEqual(got, want) || selection.RetainedTurns != 3 {
 		t.Fatalf("retained = %#v (%d turns), want the whole window", got, selection.RetainedTurns)
 	}
+
+	// The summary counts: the same window no longer fits once its output
+	// reserve would push the compacted request past the target (#1347).
+	policy.OutputReserveTokens = 1000
+	selection, err = SelectRequestPrefix(source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := selection.Retained, items[2:]; !reflect.DeepEqual(got, want) || selection.RetainedTurns != 2 {
+		t.Fatalf("retained = %#v (%d turns), want the two turns that leave room for the summary", got, selection.RetainedTurns)
+	}
+	policy.OutputReserveTokens = 1
 
 	// Instructions count: the same items no longer fit once the prompt grows.
 	source.Instructions[0].Text = strings.Repeat("p", 4000)
@@ -442,7 +454,7 @@ func TestSelectRequestPrefixDoesNotCountInlineMediaBytesAsText(t *testing.T) {
 	items := []llm.Item{textMessage(llm.ActorHuman, "one"), textMessage(llm.ActorModel, "two"), image, textMessage(llm.ActorModel, "four")}
 	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items}
 	policy := DefaultPolicy()
-	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens = 2, 2000, 600
+	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens, policy.OutputReserveTokens = 2, 2000, 600, 1
 	selection, err := SelectRequestPrefix(source, policy)
 	if err != nil {
 		t.Fatal(err)

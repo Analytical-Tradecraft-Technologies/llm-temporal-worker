@@ -88,8 +88,9 @@ func SelectPrefix(items []llm.Item, recentTurns int) (PrefixSelection, error) {
 
 // SelectRequestPrefix applies the policy to a whole request: it retains
 // Policy.RecentTurns of source.Input when the request that remains after
-// compaction (instructions, tools and the retained window) fits
-// Policy.TargetTokens, and otherwise the longest shorter window that fits,
+// compaction (instructions, tools, the retained window and the summary, sized
+// at Policy.OutputReserveTokens) fits Policy.TargetTokens, and otherwise the
+// longest shorter window that fits,
 // never fewer than one turn. A window the policy already sets to zero stays
 // empty. The size is the serialized request's UTF-8 bytes divided by four, the
 // provider-independent baseline of budget reservation, so plan and compaction
@@ -117,7 +118,10 @@ func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(ret
 		if err != nil {
 			return PrefixSelection{}, err
 		}
-		if size <= policy.TargetTokens {
+		// The summary text compaction adds is bounded by the output reserve;
+		// leaving it out would land a near-target window above the trigger
+		// again. retainedRequestTokens counts the summary item's framing.
+		if size+policy.OutputReserveTokens <= policy.TargetTokens {
 			break
 		}
 		selection, err = SelectPrefix(source.Input, selection.RetainedTurns-1)
@@ -169,10 +173,12 @@ func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(ret
 // budget estimator's provider-independent fallback, which excludes inline
 // media bytes: providers bill images and PDFs on their content, not on the
 // base64 this worker serializes, so a recent attachment that fits the
-// provider's budget is not pushed into the lossy summary.
+// provider's budget is not pushed into the lossy summary. The request leads
+// with an empty summary item, so its heading and framing are counted; the
+// caller adds the summary text's output reserve.
 func retainedRequestTokens(source llm.Request, retained []llm.Item) (int, error) {
 	probe := source
-	probe.Input = retained
+	probe.Input = append([]llm.Item{SummaryItem("")}, retained...)
 	tokens, err := budget.Estimator{}.CountInputTokens(probe, routing.Candidate{})
 	if err != nil {
 		return 0, fmt.Errorf("compaction retained request: %w", err)
