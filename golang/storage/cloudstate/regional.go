@@ -144,8 +144,24 @@ func (s *regionalTable) QueryPartition(ctx context.Context, q kv.KeyValueQuery) 
 		return wrap(page, i)
 	})
 }
+
+// probe revalidates MRSC membership and schema for each endpoint it reaches.
+// As in the single-region path, a provider "unavailable" status (for example
+// an UPDATING table) is tolerated for an endpoint whose handle is already open:
+// the data-plane read in Repository.Probe then decides readiness.
 func (s *regionalTable) probe(ctx context.Context) error {
-	_, err := regional.Run(ctx, &s.router, regional.RetryRead, func(ctx context.Context, i int) (struct{}, error) { _, err := s.open(ctx, i); return struct{}{}, err })
+	_, err := regional.Run(ctx, &s.router, regional.RetryRead, func(ctx context.Context, i int) (struct{}, error) {
+		_, err := s.open(ctx, i)
+		if errors.Is(err, contracts.ErrUnavailable) {
+			s.mu.Lock()
+			opened := s.stores[i] != nil
+			s.mu.Unlock()
+			if opened {
+				return struct{}{}, nil
+			}
+		}
+		return struct{}{}, err
+	})
 	return err
 }
 

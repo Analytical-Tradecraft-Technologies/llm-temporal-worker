@@ -241,6 +241,36 @@ func TestRegionalPayloadHandlesCachedButProbesRevalidate(t *testing.T) {
 	}
 }
 
+func TestRegionalTableProbeToleratesUnavailableStatusOnlyForOpenHandles(t *testing.T) {
+	ctx := context.Background()
+	backend := &memoryTable{rows: map[kv.KeyValueKey]kv.KeyValueRecord{}}
+	var openErr error
+	routed := &regionalTable{router: regional.Router{Count: 1, Timeout: time.Second}, stores: map[int]kv.KeyValueStore{}, open: func(context.Context, int) (kv.KeyValueStore, error) {
+		if openErr != nil {
+			return nil, openErr
+		}
+		return backend, nil
+	}}
+	// No handle yet: an UPDATING (unavailable) table cannot be proven usable.
+	openErr = contracts.ErrUnavailable
+	if err := routed.probe(ctx); !errors.Is(err, contracts.ErrUnavailable) {
+		t.Fatalf("unopened table reported ready: %v", err)
+	}
+	openErr = nil
+	if _, err := routed.QueryPartition(ctx, kv.KeyValueQuery{PartitionKey: "readiness", PageSize: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// With an open handle the data-plane read decides; other failures still count.
+	openErr = contracts.ErrUnavailable
+	if err := routed.probe(ctx); err != nil {
+		t.Fatalf("UPDATING table reported unready: %v", err)
+	}
+	openErr = contracts.ErrUnsupported
+	if err := routed.probe(ctx); !errors.Is(err, contracts.ErrUnsupported) {
+		t.Fatalf("MRSC revalidation skipped: %v", err)
+	}
+}
+
 func TestRegionalOpenRejectsMalformedProviderMaps(t *testing.T) {
 	for _, field := range []string{"key_value_stores", "blob_stores"} {
 		for _, value := range []any{nil, "invalid", []string{"invalid"}, map[string]any{}, map[string]any{"requests": 42, "payloads": 42}, map[string]any{"requests": "", "payloads": ""}} {

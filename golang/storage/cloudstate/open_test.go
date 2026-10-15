@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/provider"
+	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers"
 )
 
 type namedProvider struct {
@@ -158,5 +164,80 @@ func TestOpenProbeRejectsDeletedResources(t *testing.T) {
 	p.tableErr = contracts.ErrPermissionDenied
 	if err := r.Probe(context.Background()); !errors.Is(err, contracts.ErrPermissionDenied) {
 		t.Fatalf("inaccessible table reported ready: %v", err)
+	}
+}
+
+// awsTableProvider keeps the real AWS DynamoDB provider but serves payloads from
+// memory, so readiness exercises the provider's table status handling.
+type awsTableProvider struct {
+	provider.StorageProvider
+	blobs blob.BlobStore
+}
+
+func (p awsTableProvider) OpenBlobStore(context.Context, string) (blob.BlobStore, error) {
+	return p.blobs, nil
+}
+
+func TestOpenProbeToleratesUpdatingTable(t *testing.T) {
+	var status, queryError atomic.Value
+	status.Store("ACTIVE")
+	queryError.Store("")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+		switch target := r.Header.Get("X-Amz-Target"); target {
+		case "DynamoDB_20120810.DescribeTable":
+			io.WriteString(w, `{"Table":{"TableName":"physical-table","TableStatus":"`+status.Load().(string)+`","TableArn":"arn:aws:dynamodb:us-east-1:123456789012:table/physical-table","TableId":"00000000-0000-0000-0000-000000000000",`+
+				`"KeySchema":[{"AttributeName":"pk","KeyType":"HASH"},{"AttributeName":"sk","KeyType":"RANGE"}],"AttributeDefinitions":[{"AttributeName":"pk","AttributeType":"S"},{"AttributeName":"sk","AttributeType":"S"}]}}`)
+		case "DynamoDB_20120810.Query":
+			if kind := queryError.Load().(string); kind != "" {
+				w.WriteHeader(http.StatusBadRequest)
+				io.WriteString(w, `{"__type":"com.amazonaws.dynamodb.v20120810#`+kind+`","message":"table is not accessible"}`)
+				return
+			}
+			io.WriteString(w, `{"Items":[],"Count":0,"ScannedCount":0}`)
+		default:
+			t.Errorf("unexpected DynamoDB call %q", target)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("AWS_ENDPOINT_URL_DYNAMODB", server.URL)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", t.TempDir()+"/absent")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", t.TempDir()+"/absent")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	_, _, blobs, _ := fixture(t)
+	config := Config{Provider: map[string]any{"type": "aws", "aws": map[string]any{"region": "us-east-1"}, "key_value_stores": map[string]any{"requests": "physical-table"}}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}
+	initialize := func(ctx context.Context, value map[string]any) (provider.StorageProvider, error) {
+		backend, err := providers.FromJSON(ctx, value)
+		if err != nil {
+			return nil, err
+		}
+		return awsTableProvider{StorageProvider: backend, blobs: blobs}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := open(ctx, config, bytes.Repeat([]byte{7}, 32), initialize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Probe(ctx); err != nil {
+		t.Fatalf("ACTIVE: %v", err)
+	}
+	// UpdateTable (autoscaling, billing mode, SSE, streams) keeps the table usable.
+	status.Store("UPDATING")
+	if err := r.Probe(ctx); err != nil {
+		t.Fatalf("UPDATING table reported unready: %v", err)
+	}
+	// Unusable statuses still fail readiness through the data-plane read.
+	for state, kind := range map[string]string{"ARCHIVED": "ResourceNotFoundException", "INACCESSIBLE_ENCRYPTION_CREDENTIALS": "KMSAccessDeniedException", "DELETING": "ResourceNotFoundException"} {
+		status.Store(state)
+		queryError.Store(kind)
+		if err := r.Probe(ctx); err == nil {
+			t.Fatalf("%s table reported ready", state)
+		}
 	}
 }

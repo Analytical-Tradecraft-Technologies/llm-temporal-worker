@@ -3,7 +3,9 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
+	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/provider"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers"
 )
@@ -79,7 +81,12 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 		return nil, err
 	}
 	repository.probeStores = func(ctx context.Context) error {
-		if _, err := backend.OpenKeyValueStore(ctx, config.RequestTable); err != nil {
+		// The provider reports any non-ACTIVE table status as unavailable, but an
+		// UPDATING table (capacity, billing, SSE or stream changes) still serves
+		// reads and writes. Readiness already holds an open handle, so let the
+		// data-plane read in Probe decide; deleted, archived or key-inaccessible
+		// tables fail that read. Other revalidation failures remain fatal.
+		if _, err := backend.OpenKeyValueStore(ctx, config.RequestTable); err != nil && !errors.Is(err, contracts.ErrUnavailable) {
 			return err
 		}
 		_, err := backend.OpenBlobStore(ctx, config.PayloadStore)
