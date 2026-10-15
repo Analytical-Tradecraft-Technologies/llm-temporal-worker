@@ -583,6 +583,9 @@ func reasoningOutputEffort(effort llm.ReasoningEffort) string {
 }
 
 func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any) error {
+	// NewProfile rejects allowlists with colliding wire fields; a profile that
+	// bypassed it must still never let map iteration choose the value.
+	written := make(map[string]struct{})
 	for namespace, raw := range extensions {
 		spec, ok := profile.AllowedExtensions[namespace]
 		if !ok {
@@ -607,6 +610,10 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 			if err := json.Unmarshal(value, &decoded); err != nil {
 				return fmt.Errorf("extension %q field %q: %w", namespace, name, err)
 			}
+			if _, duplicate := written[wire]; duplicate {
+				return fmt.Errorf("extension %q field %q maps to wire field %q already set by another extension field", namespace, name, wire)
+			}
+			written[wire] = struct{}{}
 			target[wire] = decoded
 		}
 	}

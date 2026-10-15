@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -161,20 +163,32 @@ func (profile Profile) validate() error {
 			return fmt.Errorf("anthropic messages profile %q actual provider tier %q maps to invalid class %q", profile.ID, providerTier, class)
 		}
 	}
-	for namespace, spec := range profile.AllowedExtensions {
+	// Two allowed fields sharing one effective wire field would let map
+	// iteration pick the provider value, so the same request could lower
+	// differently across compilations. Sorted iteration keeps the reported
+	// collision stable.
+	wireOwners := make(map[string]string)
+	for _, namespace := range slices.Sorted(maps.Keys(profile.AllowedExtensions)) {
 		if namespace == "" {
 			return fmt.Errorf("anthropic messages profile %q contains an empty extension namespace", profile.ID)
 		}
-		for field, wire := range spec.Fields {
+		spec := profile.AllowedExtensions[namespace]
+		for _, field := range slices.Sorted(maps.Keys(spec.Fields)) {
 			if field == "" {
 				return fmt.Errorf("anthropic messages profile %q extension %q contains an empty field", profile.ID, namespace)
 			}
+			wire := spec.Fields[field]
 			if wire == "" {
 				wire = field
 			}
 			if requestOwnedWireField(wire) {
 				return fmt.Errorf("anthropic messages profile %q extension %q cannot override %q", profile.ID, namespace, wire)
 			}
+			owner := namespace + "." + field
+			if previous, ok := wireOwners[wire]; ok {
+				return fmt.Errorf("anthropic messages profile %q extension fields %q and %q both map to wire field %q", profile.ID, previous, owner, wire)
+			}
+			wireOwners[wire] = owner
 		}
 	}
 	if profile.DefaultMaxTokens < 0 {
