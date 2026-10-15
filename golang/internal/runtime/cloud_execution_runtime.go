@@ -372,11 +372,14 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	}
 	// An unused quote/fill can expire while a workflow waits for capacity.
 	// Renew the child, never mutate the original quote or reservation identity.
-	if !r.now().Before(attempt.CreatedAt.Add(cache.MaxFillLease)) {
+	var renewed *cloudstate.RequestAttempt
+	if !r.now().Before(attempt.CreatedAt.Add(cache.MaxFillLease - cloudstate.UnusedAttemptRenewMargin)) {
+		previous := attempt
 		attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
 		if err != nil {
 			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 		}
+		renewed = &previous
 	}
 	budgetAttempt := BudgetAttempt{PriorCandidates: append([]string(nil), attempt.PriorCandidates...), OperationID: durable.OperationID(attempt.ID), GenerationID: r.options.BudgetGeneration, QuotedAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}
 	var call *CloudBudgetCall
@@ -401,6 +404,9 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		return llm.ExecutionResultV1{}, err
 	}
 	if lease != nil {
+		if renewed != nil {
+			r.releaseRenewedFill(ctx, *lease, *renewed)
+		}
 		status, found, err := r.prepareCache(ctx, p, *lease)
 		if err != nil || found {
 			return status, err
@@ -430,6 +436,11 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			}
 			won, err := r.capabilities.ResponseFills.Start(ctx, *lease, now)
 			if err != nil {
+				// A definite conflict once the lease has expired proves the fill
+				// was not started, so nothing may be claimed or sent (#1360).
+				if errors.Is(err, contracts.ErrConflict) && !errors.Is(err, contracts.ErrOutcomeUnknown) && !r.now().Before(lease.ExpiresAt) {
+					return errors.Join(errCacheFillNotStarted, err)
+				}
 				return err
 			}
 			if !won {

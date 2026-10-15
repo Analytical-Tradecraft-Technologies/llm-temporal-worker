@@ -133,6 +133,23 @@ func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedClou
 	}
 }
 
+// errCacheFillNotStarted reports a fill start that definitely did not apply
+// because the attempt's lease had expired.
+var errCacheFillNotStarted = errors.New("cache fill was not started")
+
+// releaseRenewedFill releases the fill still held by the unused attempt that
+// was just renewed before its lease expired, so the renewed attempt does not
+// wait on its own predecessor. It is best effort: a fill that was never held,
+// is held under another route or was taken over is left to expire.
+func (r *CloudExecutionRuntime) releaseRenewedFill(ctx context.Context, lease cache.FillLease, previous cloudstate.RequestAttempt) {
+	lease.Attempt, lease.AcquiredAt, lease.ExpiresAt = string(previous.ID), previous.CreatedAt, previous.CreatedAt.Add(cache.MaxFillLease)
+	now := r.now()
+	if now.Before(lease.AcquiredAt) || !now.Before(lease.ExpiresAt) {
+		return
+	}
+	_ = r.capabilities.ResponseFills.Release(ctx, lease, now)
+}
+
 func (r *CloudExecutionRuntime) finishUnknownFill(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution) error {
 	lease, err := r.cacheLease(ctx, p, attempt, saved.Plan)
 	if err != nil || lease == nil {

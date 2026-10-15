@@ -15,6 +15,14 @@ import (
 
 var ErrRequestAttemptMissing = errors.New("request attempt missing")
 
+// UnusedAttemptRenewMargin is how long before its quote expires an attempt
+// that never began execution may be retired and renewed. A step still spends
+// real time on storage, planning and the cache digest after deciding to use
+// an attempt, so it must not start that work at the very end of the lease
+// (#1360). Retirement marks the child failed, so a racing execution can no
+// longer begin under it.
+const UnusedAttemptRenewMargin = time.Minute
+
 // RequestAttempt identifies a separate discoverable execution record. Unknown
 // paid attempts retain their own pending index even when a later attempt wins.
 // Neither this reference nor allocating it authorizes a provider submission.
@@ -317,7 +325,7 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 		if plan != nil {
 			expires = plan.Reservation.ExpiresAt
 		}
-		if execution == nil && record.Status == StatusRunning && !now.Before(expires) {
+		if execution == nil && record.Status == StatusRunning && !now.Before(expires.Add(-UnusedAttemptRenewMargin)) {
 			reason, status = "unused_quote_expired", StatusFailed
 		} else if execution != nil && execution.Stage == ExecutionUnknown && record.Status == StatusOutcomeUnknown && !now.Before(execution.RecoverAfter) {
 			reason = "outcome_unknown"
