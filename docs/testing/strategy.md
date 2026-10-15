@@ -209,9 +209,12 @@ in the production implementation plan.
 
 The master workflow's scheduled repetition runs the race suite five times for
 flakiness detection, while excluding this scale regression from the repeated
-pass because the ordinary race gate already runs it once. This keeps the
-scheduled job within the Go package timeout without reducing coverage of the
-10,000-turn proof.
+pass because the ordinary race gate already runs it once. Each repetition is a
+separate matrix job running one iteration, so every package gets the same
+timeout budget per iteration as the primary race pass instead of sharing one
+budget across five. A failed scheduled run opens or comments on a "Scheduled
+master build failed" issue, because push and merge-queue runs skip the
+repetition.
 
 `state.TestCheckpointGraphThreeWayForksRemainIsolated` adds the caller-side
 immutability contract: mutating one materialized branch's items or nested model
