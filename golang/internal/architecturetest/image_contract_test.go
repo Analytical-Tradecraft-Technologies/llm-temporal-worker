@@ -56,11 +56,16 @@ func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
 
 	for _, want := range []string{
 		"ARG GO_IMAGE=docker.io/library/golang:" + reviewedGoPatch,
-		"FROM gcr.io/distroless/static-debian12:nonroot",
+		"FROM gcr.io/distroless/static-debian13:nonroot",
 	} {
 		if !strings.Contains(string(dockerfileData), want) {
 			t.Errorf("Dockerfile toolchain policy is missing %q", want)
 		}
+	}
+	// Upstream Distroless stopped updating Debian 12 images, so its mutable tag
+	// no longer picks up base security fixes.
+	if strings.Contains(string(dockerfileData), "static-debian12") {
+		t.Error("Dockerfile must not use the deprecated Distroless static-debian12 runtime")
 	}
 
 	makefileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))

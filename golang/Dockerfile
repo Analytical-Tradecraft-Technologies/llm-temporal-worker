@@ -55,8 +55,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # Distroless static includes CA roots, time-zone data, and uid 65532, but no
 # shell or package manager. Keep the tag mutable so builds pull the current
-# image for this stable Debian 12 variant.
-FROM gcr.io/distroless/static-debian12:nonroot
+# image for this supported Debian 13 variant.
+FROM gcr.io/distroless/static-debian13:nonroot
 
 ARG VERSION
 ARG REVISION

@@ -2,7 +2,7 @@
 
 The worker image is built by the repository [Dockerfile](../Dockerfile) as a
 static, non-root binary on the reviewed Go patch image tag (`golang/.go-version`)
-and the Distroless `static-debian12:nonroot` runtime tag. Base images are
+and the Distroless `static-debian13:nonroot` runtime tag. Base images are
 deliberately referenced by mutable stable tags so they pick up upstream security
 rebuilds; `deploy/verify.sh` rejects base digests in the Dockerfile. Supply-chain
 pinning happens at deployment: the Kubernetes manifests reference the released
