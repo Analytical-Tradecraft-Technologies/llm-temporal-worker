@@ -658,6 +658,44 @@ func TestCloudProviderExecutionFailureAndIncompleteAccounting(t *testing.T) {
 	}
 }
 
+// A paid response too large for its durable record closes the attempt as a
+// terminal accepted failure settled at the response's cost, never leaving it
+// submitting with its claim held.
+func TestCloudProviderExecutionOversizedResponseSettlesAsPaidFailure(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		t.Run(map[bool]string{true: "async", false: "sync"}[async], func(t *testing.T) {
+			f := newProviderExecutionFixture(t, "generate", async)
+			f.store.before = func(next cloudstate.ProviderExecution) error {
+				if next.Stage == cloudstate.ExecutionSucceeded {
+					return cloudstate.ErrRecordTooLarge
+				}
+				return nil
+			}
+			result, err := f.submit(context.Background())
+			if async && err == nil {
+				f.now = f.now.Add(3 * time.Second)
+				result, err = f.resume(context.Background())
+			}
+			execution := result.Saved.Execution
+			if err != nil || execution.Stage != cloudstate.ExecutionFailed || execution.Response != nil || execution.Failure == nil ||
+				execution.Failure.Code != provider.CodeProviderInvalidResponse || execution.Failure.Dispatch != provider.DispatchAccepted || execution.Failure.Retryable {
+				t.Fatalf("oversized response: %+v %v", execution, err)
+			}
+			if !execution.Settled || f.settlements.Load() != 1 || f.submits.Load() != 1 {
+				t.Fatal("oversized response left unsettled or resubmitted")
+			}
+			for _, event := range execution.Settlement.Events {
+				if event.CostStatus != budget.CostExact || event.ActualCostUSD == nil || event.ActualCostUSD.IsZero() {
+					t.Fatal("oversized response not settled at its cost")
+				}
+			}
+			if _, err := f.resume(context.Background()); err != nil || f.submits.Load() != 1 || f.settlements.Load() != 1 {
+				t.Fatal("replay resubmitted or settled twice", err)
+			}
+		})
+	}
+}
+
 func TestCloudProviderExecutionRefusesHTTPWhenSubmissionStateCannotBeSaved(t *testing.T) {
 	f := newProviderExecutionFixture(t, "generate", true)
 	f.store.before = func(next cloudstate.ProviderExecution) error {

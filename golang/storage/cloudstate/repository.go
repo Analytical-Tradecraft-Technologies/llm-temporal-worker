@@ -275,8 +275,11 @@ func (r *Repository) readRevision(ctx context.Context, id RequestID, revision ui
 
 func encodeRecord(record Record) ([]byte, error) {
 	data, err := json.Marshal(record)
-	if err != nil || len(data) > maxPayloadBytes {
+	if err != nil {
 		return nil, ErrInvalid
+	}
+	if len(data) > maxPayloadBytes {
+		return nil, ErrRecordTooLarge
 	}
 	return data, nil
 }

@@ -148,7 +148,19 @@ func TestExecutionCompletedResponseCannotEscapeItsRequest(t *testing.T) {
 	}
 	response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("secret-provider-output", 1000)}}}}
 	a.PayloadLimits.MaxInlineBytes = 2048
-	if got, err := a.GenerateStepV1(context.Background(), validGenerateV1Request()); got != nil || err == nil || strings.Contains(err.Error(), "secret-provider-output") {
-		t.Fatalf("oversized result escaped: %v", err)
+	// A paid response too large to return inline fails as incomplete_response
+	// on every replay, never as an internal not_dispatched error.
+	for _, call := range []func() (*llm.ExecutionResultV1, error){
+		func() (*llm.ExecutionResultV1, error) {
+			return a.GenerateStepV1(context.Background(), validGenerateV1Request())
+		},
+		func() (*llm.ExecutionResultV1, error) {
+			return a.CompleteExecutionV1(context.Background(), llm.ExecutionReferenceV1{RequestID: executionTestID, Context: validGenerateV1Request().Context})
+		},
+	} {
+		got, err := call()
+		if err != nil || got == nil || got.State != llm.ExecutionFailed || got.FailureCode != "incomplete_response" || got.Retryable || got.Dispatch != "" || got.Generate != nil || got.Validate() != nil {
+			t.Fatalf("oversized result=%#v err=%v", got, err)
+		}
 	}
 }

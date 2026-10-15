@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -88,8 +89,19 @@ func executionStep[T any](ctx context.Context, activities *Activities, request T
 		if !executionResponseMatchesRequest(request, response) {
 			return provider.NewError(provider.CodeInternal, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "execution response does not match the request")
 		}
-		if _, err := marshalBounded(response, activities.payloadLimits()); err != nil {
+		data, err := json.Marshal(response)
+		if err != nil {
 			return provider.NewError(provider.CodeInternal, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "execution result is invalid or exceeds its limit")
+		}
+		if len(data) > activities.payloadLimits().inlineBytes() {
+			if response.State != llm.ExecutionCompleted {
+				return provider.NewError(provider.CodeInternal, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "execution result is invalid or exceeds its limit")
+			}
+			// A paid response too large to return inline cannot reach the
+			// caller. Report it as the documented paid-but-unpublishable
+			// failure, the same on every replay, never as an internal error
+			// that invites a resubmission under a new key.
+			response = llm.ExecutionResultV1{RequestID: response.RequestID, Kind: response.Kind, State: llm.ExecutionFailed, FailureCode: "incomplete_response"}
 		}
 		return nil
 	})
