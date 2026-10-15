@@ -291,7 +291,7 @@ func TestCloudLangfuseSupersededPlanDoesNotExportDisabledRequest(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
 	captures, err := f.repository.LoadLangfuseCaptures(ctx, scope, cloudstate.RequestID(v.RequestID))
 	planned := false
