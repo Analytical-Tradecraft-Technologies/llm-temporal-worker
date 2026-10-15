@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	sdkactivity "go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -355,5 +356,28 @@ func TestExecuteRequestFailureCarriesProviderDetails(t *testing.T) {
 	var details ExecutionFailureDetails
 	if err := application.Details(&details); err != nil || details.ErrorCode != "rate_limited" || details.Dispatch != "rejected" {
 		t.Fatalf("details = %+v, %v", details, err)
+	}
+}
+
+// TestFailureDetailsWireShape pins the detail payloads that the OCaml
+// client's Failure decoders read (ocaml/llm_temporal_worker/test/test_failure.ml).
+func TestFailureDetailsWireShape(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		want  string
+	}{
+		{ExecutionFailureDetails{ErrorCode: "permission_denied", Dispatch: "rejected"}, `{"error_code":"permission_denied","dispatch":"rejected"}`},
+		{activity.SafeErrorDetails{OperationID: "op-1", Code: "permission_denied", Phase: "dispatch", Dispatch: "rejected", ProviderRequestID: "req-1"},
+			`{"operation_id":"op-1","code":"permission_denied","phase":"dispatch","dispatch":"rejected","provider_request_id":"req-1"}`},
+		{activity.SafeErrorDetails{Code: "provider_rate_limited", Phase: "dispatch", Dispatch: "not_dispatched", RetryAfterMillis: 1500},
+			`{"code":"provider_rate_limited","phase":"dispatch","dispatch":"not_dispatched","retry_after_ms":1500}`},
+	} {
+		payload, err := converter.GetDefaultDataConverter().ToPayload(tc.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if encoding := string(payload.GetMetadata()["encoding"]); encoding != "json/plain" || string(payload.GetData()) != tc.want {
+			t.Fatalf("payload = %s %s, want json/plain %s", encoding, payload.GetData(), tc.want)
+		}
 	}
 }

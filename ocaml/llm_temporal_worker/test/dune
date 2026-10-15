@@ -38,3 +38,7 @@
 (test
  (name test_hosted_tools)
  (libraries llm_temporal temporal-sdk yojson))
+
+(test
+ (name test_failure)
+ (libraries llm_temporal temporal-sdk yojson))
