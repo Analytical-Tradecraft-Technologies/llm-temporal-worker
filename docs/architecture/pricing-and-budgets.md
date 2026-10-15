@@ -155,7 +155,8 @@ tokens are generated inside that cap on every supported family: Anthropic
 reasoning together. A requested reasoning `token_budget` is therefore not
 added to the window a second time. The reservation still prices the reasoning
 component separately at the catalog's reasoning rate, on top of the full
-output cap, so it stays an upper bound.
+output cap, so it stays an upper bound; every supported family requires that
+rate to be zero (see [Inclusive output usage](#inclusive-output-usage)).
 
 Hosted web research uses the actual prompt estimate and bounded tool-call count,
 not repeated full model context windows. Each possible continuation includes the
@@ -465,13 +466,24 @@ The budget and cloud execution tests cover:
 Live Redis tests exercise the actual Functions and preloaded Lua compatibility
 mode. Offline model tests alone do not prove persistence or restore behavior.
 
-### Inclusive OpenAI output usage
+### Inclusive output usage
 
-The `openai_chat` and `openai_responses` adapters preserve the provider's
-inclusive output-token count, which already contains reasoning tokens. Their
-catalog entries must therefore use an explicit zero `reasoning_per_million`;
-`output_per_million` pays for the entire output, including reasoning. The
-reasoning counter remains available for reporting. Nonzero additive reasoning
-prices are rejected during catalog compilation, reservation estimation, and
-usage settlement to prevent charging the same tokens twice. Supporting separate
-reasoning rates for these families requires disjoint usage normalization first.
+Every supported adapter family preserves the provider's inclusive output-token
+count, which already contains reasoning tokens:
+
+| Family | Inclusive output counter | Reasoning counter |
+|---|---|---|
+| `openai_chat` (and `azure_openai_chat`) | `completion_tokens` | `completion_tokens_details.reasoning_tokens` |
+| `openai_responses` (and `azure_openai_responses`) | `output_tokens` | `output_tokens_details.reasoning_tokens` |
+| `anthropic_messages` (and `anthropic_aws_messages`) | `output_tokens` | `output_tokens_details.thinking_tokens` |
+| `bedrock_messages` (`bedrock_anthropic_messages`) | `output_tokens` | `output_tokens_details.thinking_tokens` |
+| `bedrock_converse` | `outputTokens` | none |
+
+Catalog entries for all of these families must therefore use an explicit zero
+`reasoning_per_million`; `output_per_million` pays for the entire output,
+including reasoning. The reasoning counter remains available for reporting.
+Nonzero additive reasoning prices are rejected during catalog compilation,
+reservation estimation, and usage settlement to prevent charging the same
+tokens twice (or, for Converse, reserving for tokens that settlement never
+bills). Supporting separate reasoning rates for a family requires disjoint
+usage normalization first.
