@@ -115,6 +115,14 @@ func TestRedisBudgetMaterializerAcceptsAndReturnsJournalEvents(t *testing.T) {
 	if invoker.calls != 1 || len(invoker.args[0]) != 8 || invoker.args[0][0] != "durable_reserve" {
 		t.Fatalf("invocation = %#v", invoker.args)
 	}
+	if result.Replayed {
+		t.Fatal("a created acceptance was reported as a replay")
+	}
+	// The same operation returned by Redis as existing is a replay (#1359).
+	invoker.result = []any{"existing", durableAcceptedRecord(t, request, now)}
+	if result, err = materializer.Accept(context.Background(), request); err != nil || !result.Accepted || !result.Replayed {
+		t.Fatalf("existing acceptance = %#v, %v; want a replay", result, err)
+	}
 }
 
 func TestRedisBudgetMaterializerDenialIsReplayable(t *testing.T) {
@@ -133,7 +141,7 @@ func TestRedisBudgetMaterializerDenialIsReplayable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Accepted || result.Denial == nil || result.Denial.PolicyID != "policy" {
+	if result.Accepted || result.Denial == nil || result.Denial.PolicyID != "policy" || !result.Replayed {
 		t.Fatalf("denied result = %#v", result)
 	}
 }

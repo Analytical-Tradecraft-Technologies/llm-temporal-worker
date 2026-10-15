@@ -241,7 +241,9 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 		return durable.ReserveResult{}, ErrRedisBudgetIncarnationMismatch
 	}
 	if record.Status == "denied" {
-		return durableDeniedResult(request, record)
+		denied, err := durableDeniedResult(request, record)
+		denied.Replayed = err == nil && status == "existing"
+		return denied, err
 	}
 	if record.Status != "accepted" {
 		return durable.ReserveResult{}, fmt.Errorf("invalid Redis durable budget operation status %q", record.Status)
@@ -249,7 +251,8 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 	reserve := durable.ReserveResult{
 		OperationID: request.OperationID, Accepted: true,
 		GenerationID: request.GenerationID, IncarnationID: m.incarnation,
-		Events: make([]budget.ReservationEvent, 0, len(record.Reservations)),
+		Events:   make([]budget.ReservationEvent, 0, len(record.Reservations)),
+		Replayed: status == "existing",
 	}
 	for _, value := range record.Reservations {
 		amount, err := pricing.ParseUSD(value.AmountUSD)

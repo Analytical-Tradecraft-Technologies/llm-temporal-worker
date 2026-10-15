@@ -78,6 +78,8 @@ func temporalLogAttrs(keyvals []any) []slog.Attr {
 			key = "activity_id"
 		case "TaskQueue":
 			key = "task_queue"
+		case "request_id", "RequestID", "RequestId":
+			key = "request_id"
 		default:
 			continue
 		}

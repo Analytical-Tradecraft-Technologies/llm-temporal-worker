@@ -132,6 +132,9 @@ type ReserveResult struct {
 	RetryAfter    time.Duration
 	Denial        *admission.Denial
 	Events        []budget.ReservationEvent
+	// Replayed reports that the leaser returned an earlier acceptance for
+	// this operation instead of making a new decision. It is never persisted.
+	Replayed bool `json:"-"`
 }
 
 func (result ReserveResult) Validate(request ReserveRequest) error {

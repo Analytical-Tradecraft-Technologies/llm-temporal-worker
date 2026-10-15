@@ -48,6 +48,12 @@ func TestTemporalLoggerUsesSlogAndFiltersSDKFields(t *testing.T) {
 		t.Fatalf("classified error lost or leaked: %s", output.String())
 	}
 	output.Reset()
+	// The workflow's export warning keeps its request identifier (#1359).
+	bound.Warn("Langfuse export failed", "request_id", "llmtw_req_1")
+	if !strings.Contains(output.String(), `"request_id":"llmtw_req_1"`) {
+		t.Fatalf("request identifier dropped: %s", output.String())
+	}
+	output.Reset()
 	bound.Warn("prompt: private-content")
 	if strings.Contains(output.String(), "private-content") || !strings.Contains(output.String(), `"msg":"event"`) {
 		t.Fatalf("message filtering bypassed: %s", output.String())

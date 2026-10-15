@@ -216,13 +216,19 @@ func (admission *CloudBudgetAdmission) prepare(ctx context.Context, record cloud
 // Reserve performs one acquired/wait decision with the stored quote. Calling it
 // again never moves a bucket, changes an operation ID or extends an expiry.
 func (admission *CloudBudgetAdmission) Reserve(ctx context.Context, call *CloudBudgetCall) (durable.ReserveResult, error) {
+	return admission.reserve(ctx, call, true)
+}
+
+// reserve counts a replayed decision only when acquiring: the dispatch step
+// replays the reservation its acquire step already counted.
+func (admission *CloudBudgetAdmission) reserve(ctx context.Context, call *CloudBudgetCall, acquiring bool) (durable.ReserveResult, error) {
 	if err := admission.verify(ctx, call); err != nil {
 		return durable.ReserveResult{}, err
 	}
 	if !call.plan.RequiresReservation() {
 		return durable.ReserveResult{}, nil
 	}
-	return admission.admit.reserve(ctx, call.plan.Route, call.Plan().Reservation, nil)
+	return admission.admit.reserve(ctx, call.plan.Route, call.Plan().Reservation, nil, acquiring)
 }
 
 // Claim rechecks durable eligibility before consuming Redis's single-use grant.

@@ -137,13 +137,18 @@ func (metrics *Metrics) ExtendAllowed(allowed AllowedValues) {
 	}
 }
 
+// latencyBuckets cover provider calls and v1 Activities, which routinely run
+// from well under a second to several minutes; the Prometheus defaults stop
+// at 10 s and would put every longer observation in +Inf.
+var latencyBuckets = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 180, 300, 450, 600}
+
 func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m := &Metrics{registry: prometheus.NewRegistry(), allowed: allowed.lists()}
 	m.activityTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_activity_total", Help: "Completed and failed Temporal activity calls."}, []string{"status", "error_class"})
 	m.activityFailureTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_activity_failure_total", Help: "Failed Temporal activity attempts by bounded error origin."}, []string{"origin"})
-	m.activityDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_activity_duration_seconds", Help: "Activity duration by lifecycle phase."}, []string{"phase"})
+	m.activityDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_activity_duration_seconds", Help: "Activity duration by lifecycle phase.", Buckets: latencyBuckets}, []string{"phase"})
 	m.providerAttemptTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_attempt_total", Help: "Provider attempts by configured route."}, []string{"endpoint", "model", "class", "outcome"})
-	m.providerDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_provider_duration_seconds", Help: "Provider attempt duration by configured route."}, []string{"endpoint", "model", "class"})
+	m.providerDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_provider_duration_seconds", Help: "Provider attempt duration by configured route.", Buckets: latencyBuckets}, []string{"endpoint", "model", "class"})
 	m.serviceClassActual = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_service_class_actual_total", Help: "Requested and actual public service classes."}, []string{"requested", "actual", "endpoint"})
 	m.budgetAdmission = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_budget_admission_total", Help: "Budget admission outcomes."}, []string{"policy", "outcome"})
 	m.costExactTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_usd_total", Help: "Count of accounted exact-USD cost events; amount remains in the durable ledger."}, []string{"endpoint", "model", "class", "method"})

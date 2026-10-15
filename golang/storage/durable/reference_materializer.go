@@ -159,7 +159,9 @@ func (materializer *ReferenceBudgetMaterializer) Accept(ctx context.Context, req
 		if existing.fingerprint != fingerprint {
 			return ReserveResult{}, ErrReferenceMaterializerConflict
 		}
-		return cloneReserveResult(existing.result), nil
+		replay := cloneReserveResult(existing.result)
+		replay.Replayed = true
+		return replay, nil
 	}
 
 	if !request.ExpiresAt.IsZero() && !request.ExpiresAt.After(now) {

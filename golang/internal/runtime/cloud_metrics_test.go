@@ -86,6 +86,35 @@ func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
 	}
 }
 
+// The Generate step replays the reservation Acquire made. One turn counts
+// one admission decision and one reserved state per policy (#1359).
+func TestCloudRuntimeCountsAdmissionOncePerTurn(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"},
+		OperationStates: []string{"reserved", "dispatching", "completed", "failed", "ambiguous"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithMetrics(context.Background(), metrics)
+	f := boundedCloud(t, false)
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if got := cloudMetricTotal(t, metrics, "llmtw_budget_admission_total", "outcome", "accepted"); got != 1 {
+		t.Fatalf("accepted admissions = %v, want 1", got)
+	}
+	for state, want := range map[string]float64{"reserved": 1, "dispatching": 1, "completed": 1} {
+		if got := cloudMetricTotal(t, metrics, "llmtw_operation_state_total", "state", state); got != want {
+			t.Errorf("operation state %s = %v, want %v", state, got, want)
+		}
+	}
+}
+
 // Outcomes are counted on the saved transition, whichever path saved it, so a
 // recovery-only move to unknown counts as ambiguous and a re-save of the same
 // stage counts nothing. A provider attempt is classified by the provider's

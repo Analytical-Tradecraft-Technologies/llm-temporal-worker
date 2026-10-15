@@ -51,7 +51,7 @@ func (admission *BudgetAdmission) ReserveGenerate(ctx context.Context, request l
 		return durable.ReserveResult{}, err
 	}
 	planned, err := admission.generate(ctx, request, route)
-	return admission.reserve(ctx, route, planned, err)
+	return admission.reserve(ctx, route, planned, err, true)
 }
 
 func (admission *BudgetAdmission) ReserveCompact(ctx context.Context, request llm.CompactRequestV1, route durable.RoutePlan) (durable.ReserveResult, error) {
@@ -60,7 +60,7 @@ func (admission *BudgetAdmission) ReserveCompact(ctx context.Context, request ll
 		return durable.ReserveResult{}, err
 	}
 	planned, err := admission.compact(ctx, request, route)
-	return admission.reserve(ctx, route, planned, err)
+	return admission.reserve(ctx, route, planned, err, true)
 }
 
 // ClaimGenerate consumes the reservation's single-use permission to start. It
@@ -95,7 +95,11 @@ func (admission *BudgetAdmission) validate(ctx context.Context, route durable.Ro
 	return nil
 }
 
-func (admission *BudgetAdmission) reserve(ctx context.Context, route durable.RoutePlan, request durable.ReserveRequest, planErr error) (durable.ReserveResult, error) {
+// reserve records admission metrics for a new decision. A replayed decision is
+// recorded only when countReplay is set: an acquire retry may be recovering a
+// commit whose reply was lost, while the dispatch step's replay repeats an
+// acquire already counted.
+func (admission *BudgetAdmission) reserve(ctx context.Context, route durable.RoutePlan, request durable.ReserveRequest, planErr error, countReplay bool) (durable.ReserveResult, error) {
 	if err := ctx.Err(); err != nil {
 		return durable.ReserveResult{}, err
 	}
@@ -118,7 +122,9 @@ func (admission *BudgetAdmission) reserve(ctx context.Context, route durable.Rou
 		// identical admission is safe; releasing it or changing the quote is not.
 		return durable.ReserveResult{}, budgetAdmissionError(code, provider.DispatchNotDispatched, retry)
 	}
-	recordCloudBudgetAdmission(ctx, request, reservation.Result)
+	if countReplay || !reservation.Replayed {
+		recordCloudBudgetAdmission(ctx, request, reservation.Result)
+	}
 	return reservation.Result, nil
 }
 

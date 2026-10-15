@@ -406,7 +406,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	if step != cloudAcquire && step != cloudSubmit {
 		return cloudStatus(p, llm.ExecutionBudgetRequired, 0), nil
 	}
-	reservation, err := r.execution.admission.Reserve(ctx, call)
+	reservation, err := r.execution.admission.reserve(ctx, call, step == cloudAcquire)
 	if err != nil {
 		return r.resumeAdmissionWinner(ctx, p, attempt, step, err)
 	}
