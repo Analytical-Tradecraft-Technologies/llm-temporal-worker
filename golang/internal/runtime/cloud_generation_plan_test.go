@@ -196,7 +196,7 @@ func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
 	}
 	large := snapshot.Routes.Models["alias"].Routes[1]
 	f.request.OperationKey = "blocked-turn"
-	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: large.ID, EndpointID: large.EndpointID, EndpointAccountHMAC: large.EndpointAccountHMAC, Provider: large.Provider, EndpointFamily: large.Family, Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
+	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: large.ID, EndpointID: large.EndpointID, EndpointAccountHMAC: large.EndpointAccountHMAC, Provider: large.Provider, EndpointFamily: large.Family, Model: large.Model, ProviderTier: large.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
 	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
 		t.Fatalf("blocked larger route still counted as fitting: %+v %v", decision, err)
 	}

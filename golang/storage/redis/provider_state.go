@@ -76,9 +76,19 @@ func (store *ProviderStateStore) key(kind string, digest [32]byte) string {
 // routeField is the only derivation of a route projection's hash field. Route
 // IDs are unique per model, not per configuration, so the endpoint is part of
 // the key: same-named routes of two models on different endpoints must not
-// share one record.
-func (store *ProviderStateStore) routeField(route, endpoint string) string {
-	return store.space.digest("provider-route", route, endpoint)
+// share one record. Model sync gives every synced model on an endpoint one
+// route ID, and provider limits are per model and tier, so a scoped record
+// also keys on the provider model and tier. An unscoped record keeps the
+// field it had before the scope existed.
+func (store *ProviderStateStore) routeField(route, endpoint, model, tier string) string {
+	if model == "" && tier == "" {
+		return store.space.digest("provider-route", route, endpoint)
+	}
+	return store.space.digest("provider-route", route, endpoint, model, tier)
+}
+
+func (store *ProviderStateStore) statusField(status control.RouteStatus) string {
+	return store.routeField(status.RouteID, status.EndpointID, status.Model, status.ProviderTier)
 }
 
 // RecordProviderStatus implements the engine recorder using shared Redis state.
@@ -131,7 +141,7 @@ func (store *ProviderStateStore) PersistStatusEvent(ctx context.Context, event c
 		return false, errors.New("status event digest mismatch")
 	}
 	key := store.key("status", event.ConfigDigest)
-	field := store.routeField(event.RouteID, event.EndpointID)
+	field := store.routeField(event.RouteID, event.EndpointID, event.Model, event.ProviderTier)
 	return store.update(ctx, key, field, func(previous string) (string, bool, error) {
 		var record providerStatusRecord
 		if previous != "" {
@@ -157,7 +167,7 @@ func decodeProviderStatus(raw string, digest [32]byte, record *providerStatusRec
 	_, err := control.NewStatusEvent(control.StatusObservation{
 		ConfigDigest: status.ConfigDigest, ConfigEpoch: status.ConfigEpoch, RouteID: status.RouteID,
 		EndpointID: status.EndpointID, EndpointAccountHMAC: status.EndpointAccountHMAC, Provider: status.Provider,
-		EndpointFamily: status.EndpointFamily, ObservedAt: status.ObservedAt, ExpiresAt: status.StaleAfter,
+		EndpointFamily: status.EndpointFamily, Model: status.Model, ProviderTier: status.ProviderTier, ObservedAt: status.ObservedAt, ExpiresAt: status.StaleAfter,
 		Source: control.SourceOperator, Availability: status.Availability, Credit: status.Credit, Billing: status.Billing,
 		EvidenceDigest: status.LastEventDigest, SafeErrorCode: "projection",
 	})
@@ -169,7 +179,7 @@ func decodeProviderStatus(raw string, digest [32]byte, record *providerStatusRec
 			continue
 		}
 		validated, err := control.NewStatusEvent(evidence.StatusObservation)
-		if err != nil || validated.EventDigest != evidence.EventDigest || evidence.ConfigDigest != digest || evidence.RouteID != status.RouteID || evidence.EndpointID != status.EndpointID || evidence.EndpointAccountHMAC != status.EndpointAccountHMAC || evidence.Provider != status.Provider || evidence.EndpointFamily != status.EndpointFamily || evidence.ConfigEpoch != status.ConfigEpoch || evidence.ObservedAt.After(status.ObservedAt) {
+		if err != nil || validated.EventDigest != evidence.EventDigest || evidence.ConfigDigest != digest || evidence.RouteID != status.RouteID || evidence.EndpointID != status.EndpointID || evidence.EndpointAccountHMAC != status.EndpointAccountHMAC || evidence.Provider != status.Provider || evidence.EndpointFamily != status.EndpointFamily || evidence.Model != status.Model || evidence.ProviderTier != status.ProviderTier || evidence.ConfigEpoch != status.ConfigEpoch || evidence.ObservedAt.After(status.ObservedAt) {
 			return ErrUnavailable
 		}
 	}
@@ -182,7 +192,9 @@ func decodeProviderStatus(raw string, digest [32]byte, record *providerStatusRec
 	return nil
 }
 
-func (store *ProviderStateStore) GetRouteStatus(ctx context.Context, digest [32]byte, route, endpoint string) (control.RouteStatus, error) {
+// GetRouteStatus reads the record of one route, endpoint, provider model and
+// provider tier. Model and tier are empty for an unscoped record.
+func (store *ProviderStateStore) GetRouteStatus(ctx context.Context, digest [32]byte, route, endpoint, model, tier string) (control.RouteStatus, error) {
 	options := control.ProviderStatusListOptions{ConfigDigest: digest, AfterRouteID: route, EndpointID: endpoint}
 	if route == "" || endpoint == "" {
 		return control.RouteStatus{}, errors.New("route and endpoint are required")
@@ -190,7 +202,7 @@ func (store *ProviderStateStore) GetRouteStatus(ctx context.Context, digest [32]
 	if err := options.Normalize(); err != nil {
 		return control.RouteStatus{}, err
 	}
-	raw, err := store.client.HGet(ctx, store.key("status", digest), store.routeField(route, endpoint)).Result()
+	raw, err := store.client.HGet(ctx, store.key("status", digest), store.routeField(route, endpoint, model, tier)).Result()
 	if errors.Is(err, redisclient.Nil) {
 		return control.RouteStatus{}, control.ErrProviderStatusNotFound
 	}
@@ -201,7 +213,7 @@ func (store *ProviderStateStore) GetRouteStatus(ctx context.Context, digest [32]
 	if err := decodeProviderStatus(raw, digest, &record); err != nil {
 		return control.RouteStatus{}, err
 	}
-	if record.Status.RouteID != route || record.Status.EndpointID != endpoint {
+	if record.Status.RouteID != route || record.Status.EndpointID != endpoint || record.Status.Model != model || record.Status.ProviderTier != tier {
 		return control.RouteStatus{}, ErrUnavailable
 	}
 	return record.Status, nil
@@ -446,7 +458,7 @@ func (store *ProviderStateStore) statusView(ctx context.Context, digest [32]byte
 		if err := decodeProviderStatus(raw, digest, &record); err != nil {
 			return nil, err
 		}
-		if field != store.routeField(record.Status.RouteID, record.Status.EndpointID) {
+		if field != store.statusField(record.Status) {
 			// Records written before the endpoint became part of the field are
 			// unreachable by route reads; skip them instead of failing the view.
 			if field == store.space.digest("provider-route", record.Status.RouteID) {
@@ -462,7 +474,13 @@ func (store *ProviderStateStore) statusView(ctx context.Context, digest [32]byte
 		if result[i].Status.RouteID != result[j].Status.RouteID {
 			return result[i].Status.RouteID < result[j].Status.RouteID
 		}
-		return result[i].Status.EndpointID < result[j].Status.EndpointID
+		if result[i].Status.EndpointID != result[j].Status.EndpointID {
+			return result[i].Status.EndpointID < result[j].Status.EndpointID
+		}
+		if result[i].Status.Model != result[j].Status.Model {
+			return result[i].Status.Model < result[j].Status.Model
+		}
+		return result[i].Status.ProviderTier < result[j].Status.ProviderTier
 	})
 	return result, nil
 }
@@ -482,15 +500,17 @@ func (store *ProviderStateStore) ListRouteStatuses(ctx context.Context, options 
 	return store.pageRouteStatuses(records, options)
 }
 
-// routePosition marks one record inside a group of same-named routes. It is a
+// routePosition marks one record inside a group of same-named routes, which
+// includes the model- and tier-scoped records of one route. It is a
 // fixed-length digest, so the position stays within the cursor and
 // normalization bounds whatever the route and endpoint lengths. The tab keeps
 // it distinct from every route ID.
 func (store *ProviderStateStore) routePosition(status control.RouteStatus) string {
-	return "@\t" + store.space.digest("provider-route-position", status.RouteID, status.EndpointID)
+	return "@\t" + store.space.digest("provider-route-position", status.RouteID, status.EndpointID, status.Model, status.ProviderTier)
 }
 
-// pageRouteStatuses pages records already sorted by route ID and endpoint. A
+// pageRouteStatuses pages records already sorted by route ID, endpoint, model
+// and tier. A
 // position is a route ID, or a routePosition marker when a page ended between
 // same-named routes of different models.
 func (store *ProviderStateStore) pageRouteStatuses(records []providerStatusRecord, options control.ProviderStatusListOptions) (control.ProviderStatusPage, error) {

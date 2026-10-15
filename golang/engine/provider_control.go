@@ -33,6 +33,8 @@ func (engine *Engine) recordProviderStatus(ctx context.Context, snapshot Snapsho
 		EndpointAccountHMAC: candidate.EndpointAccountHMAC,
 		Provider:            candidate.Provider,
 		EndpointFamily:      candidate.Family,
+		Model:               candidate.Model,
+		ProviderTier:        candidate.ProviderTier,
 		ObservedAt:          now.UTC(),
 		Source:              control.SourceInference,
 		Availability:        control.AvailabilityAvailable,

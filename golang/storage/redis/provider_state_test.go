@@ -167,3 +167,53 @@ func TestProviderStatusPagePositionIsBoundedForLongIdentifiers(t *testing.T) {
 		t.Fatalf("plain position: %#v %v", page, err)
 	}
 }
+
+// Model sync gives every synced model on an endpoint one route ID. Records of
+// different provider models and tiers must use separate fields, survive a
+// decode, and page one by one; an unscoped record keeps its original field.
+func TestProviderStatusScopedByModelAndTier(t *testing.T) {
+	space, err := newKeySpace(testKeyOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &ProviderStateStore{space: space}
+	now := time.Date(2026, 7, 14, 1, 0, 0, 0, time.UTC)
+	if store.routeField("route", "endpoint", "", "") != space.digest("provider-route", "route", "endpoint") {
+		t.Fatal("unscoped record field changed")
+	}
+	fields := map[string]bool{}
+	var records []providerStatusRecord
+	for _, scope := range [][2]string{{"", ""}, {"model-a", "default"}, {"model-a", "flex"}, {"model-b", "flex"}} {
+		event := providerTestEvent(t, now, "sync-endpoint", func(o *control.StatusObservation) { o.Model, o.ProviderTier = scope[0], scope[1] })
+		record, applied := applyProviderEvent(providerStatusRecord{}, event)
+		if !applied || record.Status.Model != scope[0] || record.Status.ProviderTier != scope[1] {
+			t.Fatalf("scope %v not applied: %#v", scope, record)
+		}
+		raw, _ := json.Marshal(record)
+		var decoded providerStatusRecord
+		if err := decodeProviderStatus(string(raw), event.ConfigDigest, &decoded); err != nil {
+			t.Fatalf("decode scope %v: %v", scope, err)
+		}
+		fields[store.statusField(record.Status)] = true
+		records = append(records, record)
+	}
+	if len(fields) != len(records) {
+		t.Fatalf("scoped records share a field: %d fields for %d records", len(fields), len(records))
+	}
+	// An event of another model or tier never applies to a scoped record.
+	other := providerTestEvent(t, now.Add(time.Second), "sync-endpoint", func(o *control.StatusObservation) { o.Model, o.ProviderTier = "model-b", "default" })
+	if _, applied := applyProviderEvent(records[1], other); applied {
+		t.Fatal("another model's event applied to a scoped record")
+	}
+	options := control.ProviderStatusListOptions{ConfigDigest: records[0].Status.ConfigDigest, IncludeHealthy: true, SnapshotHorizon: now, Limit: 1}
+	for index, record := range records {
+		page, err := store.pageRouteStatuses(records, options)
+		if err != nil || len(page.Routes) != 1 || page.Routes[0].Model != record.Status.Model || page.Routes[0].ProviderTier != record.Status.ProviderTier {
+			t.Fatalf("page %d: %#v %v", index, page, err)
+		}
+		options.AfterRouteID = page.NextRouteID
+	}
+	if options.AfterRouteID != "" {
+		t.Fatal("pagination did not end after the last scoped record")
+	}
+}

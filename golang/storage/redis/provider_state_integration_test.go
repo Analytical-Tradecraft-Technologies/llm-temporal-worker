@@ -83,7 +83,7 @@ func TestLiveRedisProviderStatusConcurrency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	status, err := store.GetRouteStatus(ctx, first.ConfigDigest, "new-route", "endpoint")
+	status, err := store.GetRouteStatus(ctx, first.ConfigDigest, "new-route", "endpoint", "", "")
 	if err != nil || status.LastEventDigest != events[len(events)-1].EventDigest {
 		t.Fatalf("latest event lost: %#v %v", status, err)
 	}
@@ -91,7 +91,7 @@ func TestLiveRedisProviderStatusConcurrency(t *testing.T) {
 		t.Fatalf("incident state has TTL %v", ttl)
 	}
 	// A new process can read the state; no in-process cache is the authority.
-	status, err = second.GetRouteStatus(ctx, first.ConfigDigest, "route", "endpoint")
+	status, err = second.GetRouteStatus(ctx, first.ConfigDigest, "route", "endpoint", "", "")
 	if err != nil || status.LastEventDigest != first.EventDigest {
 		t.Fatalf("second worker: %#v %v", status, err)
 	}
@@ -121,7 +121,7 @@ func TestLiveRedisProviderStickyEvidenceAndIsolation(t *testing.T) {
 		t.Fatalf("sticky credit: %#v", credit)
 	}
 	otherDigest := sha256.Sum256([]byte("different-config"))
-	if _, err := store.GetRouteStatus(ctx, otherDigest, "route", "endpoint"); !errors.Is(err, control.ErrProviderStatusNotFound) {
+	if _, err := store.GetRouteStatus(ctx, otherDigest, "route", "endpoint", "", ""); !errors.Is(err, control.ErrProviderStatusNotFound) {
 		t.Fatalf("config leak: %v", err)
 	}
 	keys := liveKeyOptions("provider-isolated")
@@ -130,7 +130,7 @@ func TestLiveRedisProviderStickyEvidenceAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := other.GetRouteStatus(ctx, incident.ConfigDigest, "route", "endpoint"); !errors.Is(err, control.ErrProviderStatusNotFound) {
+	if _, err := other.GetRouteStatus(ctx, incident.ConfigDigest, "route", "endpoint", "", ""); !errors.Is(err, control.ErrProviderStatusNotFound) {
 		t.Fatalf("prefix leak: %v", err)
 	}
 	// Changed epochs reset incidents; clearing one config cannot change another.
@@ -138,7 +138,7 @@ func TestLiveRedisProviderStickyEvidenceAndIsolation(t *testing.T) {
 	if ok, err := store.PersistStatusEvent(ctx, reset); err != nil || !ok {
 		t.Fatalf("epoch reset: %v %v", ok, err)
 	}
-	status, err := store.GetRouteStatus(ctx, reset.ConfigDigest, "route", "endpoint")
+	status, err := store.GetRouteStatus(ctx, reset.ConfigDigest, "route", "endpoint", "", "")
 	if err != nil || status.Credit != control.CreditOK || status.Billing != control.BillingOK {
 		t.Fatalf("epoch projection: %#v %v", status, err)
 	}
@@ -300,7 +300,7 @@ func TestLiveRedisProviderPaginationSurvivesUpdatesAndExpires(t *testing.T) {
 	if _, err := store.ListRouteStatuses(ctx, statusOptions); !errors.Is(err, control.ErrProviderViewExpired) {
 		t.Fatalf("expired status view: %v", err)
 	}
-	if _, err := store.GetRouteStatus(ctx, snapshot.ConfigDigest, "b", "endpoint"); err != nil {
+	if _, err := store.GetRouteStatus(ctx, snapshot.ConfigDigest, "b", "endpoint", "", ""); err != nil {
 		t.Fatalf("view expiry removed current state: %v", err)
 	}
 }
@@ -341,7 +341,7 @@ func TestLiveRedisProviderFilteringEndpointSelectionAndFailures(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := store.GetRouteStatus(canceled, digest, "route-1", "endpoint-0"); !errors.Is(err, context.Canceled) {
+	if _, err := store.GetRouteStatus(canceled, digest, "route-1", "endpoint-0", "", ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled: %v", err)
 	}
 	event := providerTestEvent(t, now, "capacity-route", nil)
@@ -352,7 +352,7 @@ func TestLiveRedisProviderFilteringEndpointSelectionAndFailures(t *testing.T) {
 	if _, err := store.PersistStatusEvent(ctx, event); err == nil {
 		t.Fatal("capacity overflow accepted")
 	}
-	if _, err := store.GetRouteStatus(ctx, digest, "capacity-route", "endpoint"); !errors.Is(err, control.ErrProviderStatusNotFound) {
+	if _, err := store.GetRouteStatus(ctx, digest, "capacity-route", "endpoint", "", ""); !errors.Is(err, control.ErrProviderStatusNotFound) {
 		t.Fatalf("partial write on capacity failure: %v", err)
 	}
 	if err := client.Del(ctx, key).Err(); err != nil {
@@ -389,7 +389,7 @@ func TestLiveRedisProviderCircuitVisibleAcrossWorkers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	status, err := second.GetRouteStatus(ctx, last.ConfigDigest, "route", "endpoint")
+	status, err := second.GetRouteStatus(ctx, last.ConfigDigest, "route", "endpoint", "", "")
 	if err != nil || status.Circuit != control.CircuitOpen || status.ConsecutiveDefiniteFailures != 3 {
 		t.Fatal("circuit not shared", status, err)
 	}
@@ -400,7 +400,7 @@ func TestLiveRedisProviderCircuitVisibleAcrossWorkers(t *testing.T) {
 	if _, err := second.PersistStatusEvent(ctx, success); err != nil {
 		t.Fatal(err)
 	}
-	status, err = first.GetRouteStatus(ctx, last.ConfigDigest, "route", "endpoint")
+	status, err = first.GetRouteStatus(ctx, last.ConfigDigest, "route", "endpoint", "", "")
 	if err != nil || status.Circuit != control.CircuitClosed || status.ConsecutiveDefiniteFailures != 0 {
 		t.Fatal("recovery not shared", status, err)
 	}
@@ -421,7 +421,7 @@ func TestLiveRedisProviderStatusSeparatesSameRouteIDAcrossEndpoints(t *testing.T
 		if applied, err := store.PersistStatusEvent(ctx, event); err != nil || !applied {
 			t.Fatalf("endpoint %s not recorded: %v %v", event.EndpointID, applied, err)
 		}
-		status, err := store.GetRouteStatus(ctx, event.ConfigDigest, "primary", event.EndpointID)
+		status, err := store.GetRouteStatus(ctx, event.ConfigDigest, "primary", event.EndpointID, "", "")
 		if err != nil || status.EndpointID != event.EndpointID || status.LastEventDigest != event.EventDigest {
 			t.Fatalf("endpoint %s status: %#v %v", event.EndpointID, status, err)
 		}
@@ -445,5 +445,39 @@ func TestLiveRedisProviderStatusSeparatesSameRouteIDAcrossEndpoints(t *testing.T
 	page, err = store.ListRouteStatuses(ctx, options)
 	if err != nil || len(page.Routes) != 1 || page.Routes[0].EndpointID != "endpoint-b" || page.NextRouteID != "" {
 		t.Fatalf("second page: %#v %v", page, err)
+	}
+}
+
+// Synced models on one endpoint share a route ID. A circuit opened by one
+// provider model or tier must not appear on another model's or tier's record.
+func TestLiveRedisProviderStatusSeparatesModelsAndTiers(t *testing.T) {
+	store, _, now := liveProviderStore(t)
+	ctx := context.Background()
+	at := now.Add(-time.Minute)
+	for i := 0; i < 3; i++ {
+		failure := providerTestEvent(t, at.Add(time.Duration(i)*time.Second), "sync-endpoint", func(o *control.StatusObservation) {
+			o.Model, o.ProviderTier, o.Availability, o.SafeErrorCode = "model-a", "flex", control.AvailabilityDegraded, "provider_rate_limited"
+			o.EvidenceDigest = sha256.Sum256([]byte{byte(i)})
+		})
+		if applied, err := store.PersistStatusEvent(ctx, failure); err != nil || !applied {
+			t.Fatalf("failure %d not recorded: %v %v", i, applied, err)
+		}
+	}
+	success := providerTestEvent(t, at.Add(5*time.Second), "sync-endpoint", func(o *control.StatusObservation) { o.Model, o.ProviderTier = "model-b", "flex" })
+	if applied, err := store.PersistStatusEvent(ctx, success); err != nil || !applied {
+		t.Fatalf("success not recorded: %v %v", applied, err)
+	}
+	status, err := store.GetRouteStatus(ctx, success.ConfigDigest, "sync-endpoint", "endpoint", "model-a", "flex")
+	if err != nil || status.Circuit != control.CircuitOpen || status.ConsecutiveDefiniteFailures != 3 {
+		t.Fatalf("model-a flex status: %#v %v", status, err)
+	}
+	status, err = store.GetRouteStatus(ctx, success.ConfigDigest, "sync-endpoint", "endpoint", "model-b", "flex")
+	if err != nil || status.Circuit != control.CircuitClosed || status.Model != "model-b" {
+		t.Fatalf("model-b flex status: %#v %v", status, err)
+	}
+	for _, scope := range [][2]string{{"model-a", "default"}, {"", ""}} {
+		if _, err := store.GetRouteStatus(ctx, success.ConfigDigest, "sync-endpoint", "endpoint", scope[0], scope[1]); !errors.Is(err, control.ErrProviderStatusNotFound) {
+			t.Fatalf("scope %v shares a record: %v", scope, err)
+		}
 	}
 }
