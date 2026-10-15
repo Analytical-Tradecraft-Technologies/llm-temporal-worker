@@ -1050,11 +1050,16 @@ default, because only the caller can authorize a cost/latency class change.
 
 A route `id` must be unique within its model. Two models may use the same
 route ID, for example a `primary` route in each. Shared route health (status,
-credit, billing and circuit state) is stored per route ID and endpoint under
-the configuration digest, so same-named routes on different endpoints never
-share a record. Same-named routes of different models that use the same
-endpoint do share one record: they observe the same upstream endpoint and
-account.
+credit, billing and circuit state) is stored per route ID, endpoint, provider
+model and provider tier under the configuration digest. Same-named routes on
+different endpoints therefore never share a record, and neither do routes for
+different provider models on one endpoint. Model sync gives every synced model
+on an endpoint the same route ID (`sync-<endpoint>`), and provider rate limits,
+overloads and model denials are per model, so a failing model opens only its
+own circuit and a sibling model's success does not reset its failure count.
+The tier is part of the record too: rate limits on a flex tier do not block
+requests that use the standard tier of the same route. Service classes that
+map to the same provider tier share one record.
 
 ## Capability catalog shape
 

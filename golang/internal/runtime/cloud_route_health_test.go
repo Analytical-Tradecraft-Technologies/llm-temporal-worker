@@ -43,10 +43,10 @@ func (h *sharedHealthFixture) RecordProviderStatus(_ context.Context, o control.
 	}
 	return nil
 }
-func (h *sharedHealthFixture) GetRouteStatus(_ context.Context, digest [32]byte, route, endpoint string) (control.RouteStatus, error) {
+func (h *sharedHealthFixture) GetRouteStatus(_ context.Context, digest [32]byte, route, endpoint, model, tier string) (control.RouteStatus, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.status.RouteID != route || h.status.EndpointID != endpoint || h.status.ConfigDigest != digest {
+	if h.status.RouteID != route || h.status.EndpointID != endpoint || h.status.Model != model || h.status.ProviderTier != tier || h.status.ConfigDigest != digest {
 		return control.RouteStatus{}, control.ErrProviderStatusNotFound
 	}
 	return h.status, nil
@@ -132,7 +132,7 @@ func TestCloudOpenCircuitDoesNotAbandonPendingProviderWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	route := snapshot.Routes.Models["alias"].Routes[0]
-	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: route.EndpointAccountHMAC, Provider: route.Provider, EndpointFamily: route.Family, Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
+	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: route.EndpointAccountHMAC, Provider: route.Provider, EndpointFamily: route.Family, Model: route.Model, ProviderTier: route.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
 	f.now = f.now.Add(2 * time.Second)
 	f.restart(t)
 	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
@@ -143,11 +143,12 @@ func TestCloudOpenCircuitDoesNotAbandonPendingProviderWork(t *testing.T) {
 	}
 }
 
-// keyedHealthFixture holds one projection per route and endpoint under a
-// configuration digest, exactly like storage/redis.ProviderStateStore.
+// keyedHealthFixture holds one projection per route, endpoint, provider model
+// and provider tier under a configuration digest, exactly like
+// storage/redis.ProviderStateStore.
 type keyedHealthFixture struct {
 	mu      sync.Mutex
-	records map[[2]string]control.RouteStatus
+	records map[[4]string]control.RouteStatus
 }
 
 func (h *keyedHealthFixture) RecordProviderStatus(_ context.Context, o control.StatusObservation) error {
@@ -158,9 +159,9 @@ func (h *keyedHealthFixture) RecordProviderStatus(_ context.Context, o control.S
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.records == nil {
-		h.records = map[[2]string]control.RouteStatus{}
+		h.records = map[[4]string]control.RouteStatus{}
 	}
-	key := [2]string{o.RouteID, o.EndpointID}
+	key := [4]string{o.RouteID, o.EndpointID, o.Model, o.ProviderTier}
 	status := h.records[key]
 	if status.Apply(event) {
 		h.records[key] = status
@@ -168,10 +169,10 @@ func (h *keyedHealthFixture) RecordProviderStatus(_ context.Context, o control.S
 	return nil
 }
 
-func (h *keyedHealthFixture) GetRouteStatus(_ context.Context, digest [32]byte, route, endpoint string) (control.RouteStatus, error) {
+func (h *keyedHealthFixture) GetRouteStatus(_ context.Context, digest [32]byte, route, endpoint, model, tier string) (control.RouteStatus, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	status, ok := h.records[[2]string{route, endpoint}]
+	status, ok := h.records[[4]string{route, endpoint, model, tier}]
 	if !ok || status.ConfigDigest != digest {
 		return control.RouteStatus{}, control.ErrProviderStatusNotFound
 	}
@@ -227,7 +228,7 @@ func TestCloudRouteHealthIgnoresMismatchedIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	route := snapshot.Routes.Models["alias"].Routes[0]
-	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: [32]byte{9}, Provider: "other-provider", EndpointFamily: route.Family, Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditExhausted, Billing: control.BillingOK}
+	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: [32]byte{9}, Provider: "other-provider", EndpointFamily: route.Family, Model: route.Model, ProviderTier: route.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditExhausted, Billing: control.BillingOK}
 	f.restart(t)
 	result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
 	boundedState(t, result, err, llm.ExecutionProviderCompleted)
@@ -299,7 +300,7 @@ func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 	shared := &keyedHealthFixture{}
 	planning := &ProviderPlanning{routeStatus: shared, clock: func() time.Time { return now }, configDigest: loaded.ConfigDigest, configEpoch: loaded.ConfigEpoch}
 	(&CloudProviderExecution{statusRecorder: shared}).recordRouteStatus(context.Background(), cloudstate.SavedProviderExecution{
-		Plan: cloudstate.BudgetPlan{ConfigDigest: loaded.ConfigDigest, ConfigEpoch: loaded.ConfigEpoch, Family: chat.Family, Route: durable.RoutePlan{OperationID: "operation", RouteID: chat.RouteID, EndpointID: chat.EndpointID, Provider: chat.Provider,
+		Plan: cloudstate.BudgetPlan{ConfigDigest: loaded.ConfigDigest, ConfigEpoch: loaded.ConfigEpoch, Family: chat.Family, ProviderTier: chat.ProviderTier, Route: durable.RoutePlan{OperationID: "operation", RouteID: chat.RouteID, EndpointID: chat.EndpointID, Provider: chat.Provider, Model: chat.Model,
 			CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(chat.EndpointAccountHMAC[:]))}}},
 		Execution: cloudstate.ProviderExecution{Stage: cloudstate.ExecutionSucceeded, CompletedAt: now},
 	})
@@ -310,5 +311,65 @@ func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 		if blocked, err := planning.routeBlocked(context.Background(), check); err != nil || blocked {
 			t.Fatalf("endpoint %s after chat traffic: blocked=%v err=%v", check.EndpointID, blocked, err)
 		}
+	}
+}
+
+// Model sync gives every synced model on an endpoint one route ID, and
+// provider rate limits are per model and tier. Failures of one model or tier
+// must not open the circuit of another, and a sibling's success must not reset
+// the failing model's count.
+func TestCloudRouteHealthScopedToModelAndTier(t *testing.T) {
+	now := time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
+	digest := sha256.Sum256([]byte("config"))
+	account := [32]byte{7}
+	base := routing.Candidate{RouteID: "sync-openai-direct", EndpointID: "openai-direct", Provider: "openai", Family: "responses", EndpointAccountHMAC: account}
+	scoped := func(model, tier string) routing.Candidate {
+		candidate := base
+		candidate.Model, candidate.ProviderTier = model, tier
+		return candidate
+	}
+	x, y, xStandard := scoped("gpt-5-mini", "flex"), scoped("gpt-6-astra", "flex"), scoped("gpt-5-mini", "default")
+	shared := &keyedHealthFixture{}
+	planning := &ProviderPlanning{routeStatus: shared, clock: func() time.Time { return now }, configDigest: digest, configEpoch: "epoch"}
+	execution := &CloudProviderExecution{statusRecorder: shared}
+	operation := 0
+	record := func(candidate routing.Candidate, failure *cloudstate.ExecutionFailure) {
+		t.Helper()
+		operation++
+		now = now.Add(time.Second)
+		stage := cloudstate.ExecutionSucceeded
+		if failure != nil {
+			stage = cloudstate.ExecutionFailed
+		}
+		execution.recordRouteStatus(context.Background(), cloudstate.SavedProviderExecution{
+			Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: "epoch", Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: durable.OperationID(fmt.Sprintf("operation-%d", operation)), RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
+				CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(account[:]))}}},
+			Execution: cloudstate.ProviderExecution{Stage: stage, CompletedAt: now, Failure: failure},
+		})
+	}
+	blocked := func(candidate routing.Candidate) bool {
+		t.Helper()
+		result, err := planning.routeBlocked(context.Background(), candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	rateLimited := &cloudstate.ExecutionFailure{Code: provider.CodeProviderRateLimited, Dispatch: provider.DispatchRejected}
+	for i := 0; i < 2; i++ {
+		record(x, rateLimited)
+		// A sibling model's success must not reset x's failure count.
+		record(y, nil)
+	}
+	record(x, rateLimited)
+	if !blocked(x) {
+		t.Fatalf("three rate limits did not open x's circuit: %+v", shared.records)
+	}
+	if blocked(y) || blocked(xStandard) {
+		t.Fatalf("x's failures blocked another model or tier: %+v", shared.records)
+	}
+	record(y, &cloudstate.ExecutionFailure{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected})
+	if !blocked(y) || blocked(xStandard) {
+		t.Fatalf("a model denial on y was not confined to y: %+v", shared.records)
 	}
 }

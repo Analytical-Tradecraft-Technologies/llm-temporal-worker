@@ -10,11 +10,15 @@ The previous SQL adapters have been removed. No existing SQL data is migrated.
 Production snapshots bind inference outcomes to the same Redis client and key
 namespace used by the worker. The recorder constructs a validated
 `control.StatusEvent`, then atomically updates the route projection. One
-projection exists per route ID and endpoint under a configuration digest; route
-IDs are unique per model only, so the endpoint keeps same-named routes of
-different models apart. Planning reads the projection for the candidate's route
-and endpoint. A stored record whose endpoint, account, provider or family does
-not match the candidate is ignored as "no status" and never fails planning. On the
+projection exists per route ID, endpoint, provider model and provider tier
+under a configuration digest; route IDs are unique per model only, and model
+sync gives every synced model on an endpoint one route ID, so the endpoint,
+model and tier keep their health apart. Planning reads the projection for the
+candidate's route, endpoint, model and tier. A stored record whose endpoint,
+account, provider, family, model or tier does not match the candidate is
+ignored as "no status" and never fails planning. The `provider_status` query
+row has no model or tier, so it lists one row per route and endpoint: the most
+severe of that route's scoped records. On the
 cloud Generate/Compact path, settlement records each definite success or
 supported failure as an availability observation, which drives the shared
 route circuit. Those observations always report credit and billing as `ok`:

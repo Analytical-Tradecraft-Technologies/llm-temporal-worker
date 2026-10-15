@@ -83,16 +83,22 @@ type StatusObservation struct {
 	EndpointAccountHMAC [32]byte
 	Provider            string
 	EndpointFamily      string
-	ObservedAt          time.Time
-	Source              Source
-	Availability        Availability
-	Credit              CreditState
-	Billing             BillingState
-	SafeErrorCode       string
-	ProviderCode        string
-	EvidenceDigest      [32]byte
-	ConfigEpoch         string
-	ExpiresAt           time.Time
+	// Model and ProviderTier scope the observation to one provider model and
+	// tier on the route. Per-model rate limits, overloads and model denials
+	// must not open the circuit of sibling models or tiers on one endpoint.
+	// Either may be empty for an observation that is not model-scoped.
+	Model          string
+	ProviderTier   string
+	ObservedAt     time.Time
+	Source         Source
+	Availability   Availability
+	Credit         CreditState
+	Billing        BillingState
+	SafeErrorCode  string
+	ProviderCode   string
+	EvidenceDigest [32]byte
+	ConfigEpoch    string
+	ExpiresAt      time.Time
 }
 
 // StatusEvent is the closed safe event written to the append-only event
@@ -120,6 +126,14 @@ func validateStatusObservation(observation StatusObservation) error {
 		return errors.New("status observation requires config, account, and evidence digests")
 	}
 	for name, value := range map[string]string{"route_id": observation.RouteID, "endpoint_id": observation.EndpointID, "provider": observation.Provider, "endpoint_family": observation.EndpointFamily, "config_epoch": observation.ConfigEpoch} {
+		if err := validateIdentifier(name, value); err != nil {
+			return err
+		}
+	}
+	for name, value := range map[string]string{"model": observation.Model, "provider_tier": observation.ProviderTier} {
+		if value == "" {
+			continue
+		}
 		if err := validateIdentifier(name, value); err != nil {
 			return err
 		}
@@ -165,14 +179,19 @@ func documentedCreditProviderCode(code string) bool {
 }
 
 func digestStatusObservation(observation StatusObservation) [32]byte {
-	data := []byte(strings.Join([]string{
+	fields := []string{
 		hex.EncodeToString(observation.ConfigDigest[:]), observation.RouteID, observation.EndpointID,
 		hex.EncodeToString(observation.EndpointAccountHMAC[:]), observation.Provider, observation.EndpointFamily,
 		observation.ObservedAt.UTC().Format(time.RFC3339Nano), string(observation.Source), string(observation.Availability),
 		string(observation.Credit), string(observation.Billing), observation.SafeErrorCode, observation.ProviderCode,
 		hex.EncodeToString(observation.EvidenceDigest[:]), observation.ConfigEpoch, observation.ExpiresAt.UTC().Format(time.RFC3339Nano),
-	}, "\x00"))
-	return sha256.Sum256(data)
+	}
+	// Unscoped observations keep the digest they had before the model scope
+	// existed, so persisted evidence still verifies.
+	if observation.Model != "" || observation.ProviderTier != "" {
+		fields = append(fields, "scope", observation.Model, observation.ProviderTier)
+	}
+	return sha256.Sum256([]byte(strings.Join(fields, "\x00")))
 }
 
 func validateIdentifier(name, value string) error {
@@ -207,6 +226,8 @@ type RouteStatus struct {
 	EndpointAccountHMAC         [32]byte
 	Provider                    string
 	EndpointFamily              string
+	Model                       string
+	ProviderTier                string
 	Availability                Availability
 	Credit                      CreditState
 	Billing                     BillingState
@@ -247,7 +268,7 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	if status.RouteID != "" && status.EndpointID != event.EndpointID {
 		return false
 	}
-	if status.RouteID != "" && (status.EndpointAccountHMAC != event.EndpointAccountHMAC || status.Provider != event.Provider) {
+	if status.RouteID != "" && (status.EndpointAccountHMAC != event.EndpointAccountHMAC || status.Provider != event.Provider || status.Model != event.Model || status.ProviderTier != event.ProviderTier) {
 		return false
 	}
 	rawCredit := event.Credit
@@ -280,6 +301,7 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	status.ConfigDigest, status.ConfigEpoch = event.ConfigDigest, event.ConfigEpoch
 	status.RouteID, status.EndpointID = event.RouteID, event.EndpointID
 	status.EndpointAccountHMAC, status.Provider, status.EndpointFamily = event.EndpointAccountHMAC, event.Provider, event.EndpointFamily
+	status.Model, status.ProviderTier = event.Model, event.ProviderTier
 	status.Availability, status.Credit, status.Billing = event.Availability, event.Credit, event.Billing
 	if status.Circuit == "" {
 		status.Circuit = CircuitClosed

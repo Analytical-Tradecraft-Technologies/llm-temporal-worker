@@ -14,22 +14,25 @@ import (
 )
 
 // ProviderRouteStatusReader reads one snapshot-bound shared route projection.
+// Health is scoped to the provider model and tier: model sync gives every
+// synced model on an endpoint the same route ID, and provider rate limits,
+// overloads and model denials are per model and tier.
 type ProviderRouteStatusReader interface {
-	GetRouteStatus(ctx context.Context, configDigest [32]byte, routeID, endpointID string) (control.RouteStatus, error)
+	GetRouteStatus(ctx context.Context, configDigest [32]byte, routeID, endpointID, model, providerTier string) (control.RouteStatus, error)
 }
 
 func (p *ProviderPlanning) routeBlocked(ctx context.Context, candidate routing.Candidate) (bool, error) {
 	if isNilCapability(p.routeStatus) {
 		return false, nil
 	}
-	status, err := p.routeStatus.GetRouteStatus(ctx, p.configDigest, candidate.RouteID, candidate.EndpointID)
+	status, err := p.routeStatus.GetRouteStatus(ctx, p.configDigest, candidate.RouteID, candidate.EndpointID, candidate.Model, candidate.ProviderTier)
 	if errors.Is(err, control.ErrProviderStatusNotFound) {
 		return false, nil
 	}
 	if err != nil {
 		return false, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
 	}
-	if status.ConfigDigest != p.configDigest || status.RouteID != candidate.RouteID || status.EndpointID != candidate.EndpointID || status.EndpointAccountHMAC != candidate.EndpointAccountHMAC || status.Provider != candidate.Provider || status.EndpointFamily != candidate.Family {
+	if status.ConfigDigest != p.configDigest || status.RouteID != candidate.RouteID || status.EndpointID != candidate.EndpointID || status.EndpointAccountHMAC != candidate.EndpointAccountHMAC || status.Provider != candidate.Provider || status.EndpointFamily != candidate.Family || status.Model != candidate.Model || status.ProviderTier != candidate.ProviderTier {
 		// A record for another route identity is not evidence about this
 		// candidate. Health is advisory, so it must not fail the selection.
 		return false, nil
@@ -59,7 +62,7 @@ func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cl
 	}
 	var accountID [32]byte
 	copy(accountID[:], account)
-	o := control.StatusObservation{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RouteID: plan.Route.RouteID, EndpointID: plan.Route.EndpointID, EndpointAccountHMAC: accountID, Provider: plan.Route.Provider, EndpointFamily: plan.Family, ObservedAt: x.CompletedAt, ExpiresAt: x.CompletedAt.Add(30 * time.Second), Source: control.SourceInference, Availability: control.AvailabilityAvailable, Credit: control.CreditOK, Billing: control.BillingOK, EvidenceDigest: sha256.Sum256([]byte(plan.Route.OperationID))}
+	o := control.StatusObservation{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RouteID: plan.Route.RouteID, EndpointID: plan.Route.EndpointID, EndpointAccountHMAC: accountID, Provider: plan.Route.Provider, EndpointFamily: plan.Family, Model: plan.Route.Model, ProviderTier: plan.ProviderTier, ObservedAt: x.CompletedAt, ExpiresAt: x.CompletedAt.Add(30 * time.Second), Source: control.SourceInference, Availability: control.AvailabilityAvailable, Credit: control.CreditOK, Billing: control.BillingOK, EvidenceDigest: sha256.Sum256([]byte(plan.Route.OperationID))}
 	if x.Failure != nil {
 		o.SafeErrorCode = string(x.Failure.Code)
 		switch x.Failure.Code {
