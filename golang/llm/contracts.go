@@ -1353,7 +1353,40 @@ type CompactRequestV1 struct {
 	Context      RequestContext
 	Parent       CheckpointHandle
 	Policy       json.RawMessage
+	// Model and ServiceClass optionally route the summarizer instead of the
+	// parent's settings. A ServiceClass override is exact: the parent's
+	// fallback classes are dropped with it. Neither changes the settings the
+	// compaction child inherits.
+	Model        string
+	ServiceClass ServiceClass
 	Cache        *CachePolicyV1
+}
+
+// GenerateCompaction is the automatic compaction a Generate runs before its
+// turn. Its summarizer routes on the model and service class the Generate's
+// settings_patch sets, the route the turn itself is planned on, so a model
+// retired since the parent was written does not strand the lineage. A
+// Generate that patches neither keeps the parent-routed request unchanged.
+func GenerateCompaction(generate GenerateRequestV1, operationKey string) CompactRequestV1 {
+	request := CompactRequestV1{OperationKey: operationKey, Context: generate.Context, Cache: &CachePolicyV1{}}
+	if generate.Parent != nil {
+		request.Parent = *generate.Parent
+	}
+	if generate.SettingsPatch.Model.Set != nil {
+		request.Model = *generate.SettingsPatch.Model.Set
+	}
+	if generate.SettingsPatch.ServiceClass.Set != nil {
+		request.ServiceClass = *generate.SettingsPatch.ServiceClass.Set
+	}
+	return request
+}
+
+// ParentRoutedCompaction is request without its summarizer overrides: the
+// form GenerateCompaction produced before it carried them, still accepted
+// for compactions that began under it.
+func (request CompactRequestV1) ParentRoutedCompaction() CompactRequestV1 {
+	request.Model, request.ServiceClass = "", ""
+	return request
 }
 
 func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
@@ -1371,6 +1404,9 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 	}
+	if request.ServiceClass != "" && !request.ServiceClass.Valid() {
+		return nil, fmt.Errorf("compact service_class: invalid value %q", request.ServiceClass)
+	}
 	if request.Cache != nil {
 		if err := request.Cache.validate(); err != nil {
 			return nil, err
@@ -1387,6 +1423,12 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 		}
 		fields["policy"] = json.RawMessage(request.Policy)
 	}
+	if request.Model != "" {
+		fields["model"] = request.Model
+	}
+	if request.ServiceClass != "" {
+		fields["service_class"] = request.ServiceClass
+	}
 	if request.Cache != nil {
 		fields["cache"] = request.Cache
 	}
@@ -1397,7 +1439,7 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "policy", "cache"); err != nil {
+	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "policy", "model", "service_class", "cache"); err != nil {
 		return err
 	}
 	version, err := requiredString(fields, "api_version")
@@ -1429,6 +1471,22 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		result.Policy = copyRaw(raw)
+	}
+	if model, ok, err := optionalString(fields, "model"); err != nil {
+		return err
+	} else if ok {
+		if model == "" {
+			return fmt.Errorf("compact model must not be empty")
+		}
+		result.Model = model
+	}
+	if class, ok, err := optionalString(fields, "service_class"); err != nil {
+		return err
+	} else if ok {
+		if !ServiceClass(class).Valid() {
+			return fmt.Errorf("compact service_class: invalid value %q", class)
+		}
+		result.ServiceClass = ServiceClass(class)
 	}
 	if raw, ok := fields["cache"]; ok {
 		var policy CachePolicyV1

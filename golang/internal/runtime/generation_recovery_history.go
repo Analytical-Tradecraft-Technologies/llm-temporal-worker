@@ -111,7 +111,7 @@ func parseGenerationRecoveryHistory(events []*historypb.HistoryEvent, dc convert
 				return fail()
 			}
 			digest := sha256.Sum256(encoded)
-			compactRequest = llm.CompactRequestV1{OperationKey: "llmtw_compact_" + hex.EncodeToString(digest[:]), Context: proof.original.Context, Parent: *proof.original.Parent, Cache: &llm.CachePolicyV1{}}
+			compactRequest = llm.GenerateCompaction(proof.original, "llmtw_compact_"+hex.EncodeToString(digest[:]))
 		case enumspb.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED:
 			a := event.GetActivityTaskScheduledEventAttributes()
 			var input llm.GenerateRequestV1
@@ -141,7 +141,9 @@ func parseGenerationRecoveryHistory(events []*historypb.HistoryEvent, dc convert
 			switch child.kind {
 			case workflows.CompactWorkflowName:
 				var input llm.CompactRequestV1
-				if compact != nil || request != nil || !recoveryDecode(dc, a.Input, &input) || !recoveryJSONEqual(input, compactRequest) {
+				// A compaction that began before the summarizer followed
+				// the Generate's patch still carries the parent-routed form.
+				if compact != nil || request != nil || !recoveryDecode(dc, a.Input, &input) || (!recoveryJSONEqual(input, compactRequest) && !recoveryJSONEqual(input, compactRequest.ParentRoutedCompaction())) {
 					return fail()
 				}
 				compact = child

@@ -105,7 +105,7 @@ func (r *CloudExecutionRuntime) bindPublicGeneration(ctx context.Context, input 
 		return cloudRuntimeError(err, false)
 	}
 	digest := sha256.Sum256(op.Manifest)
-	compact := llm.CompactRequestV1{OperationKey: "llmtw_compact_" + hex.EncodeToString(digest[:]), Context: original.Context, Parent: *original.Parent, Cache: &llm.CachePolicyV1{}}
+	compact := llm.GenerateCompaction(original, "llmtw_compact_"+hex.EncodeToString(digest[:]))
 	compactManifest, _ := compact.MarshalJSON()
 	record, err := r.store.LookupOperation(ctx, cloudstate.Operation{Scope: op.Scope, Kind: "compact", Key: compact.OperationKey, Manifest: compactManifest, Now: r.now()})
 	if err != nil {
@@ -113,6 +113,14 @@ func (r *CloudExecutionRuntime) bindPublicGeneration(ctx context.Context, input 
 	}
 	if record.Status != cloudstate.StatusCompleted {
 		return executionError(provider.CodeStateCorrupt)
+	}
+	// A compaction that began before the summarizer followed the Generate's
+	// patch was recorded in the parent-routed form; preparation still verifies
+	// whichever form is chosen against the recorded manifest.
+	if legacy := compact.ParentRoutedCompaction(); !bytes.Equal(record.Request.Manifest, compactManifest) {
+		if legacyManifest, _ := legacy.MarshalJSON(); bytes.Equal(record.Request.Manifest, legacyManifest) {
+			compact = legacy
+		}
 	}
 	// Preparation verifies the exact child manifest and restores its retained
 	// completed response, without materializing the checkpoint or dispatching.

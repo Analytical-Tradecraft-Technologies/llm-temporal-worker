@@ -50,7 +50,9 @@ provider or storage detail through its Temporal error.
 
 The v1 wire schemas are closed tagged records. Generate responses may carry
 only `generation` or `cache_replay` checkpoints; Compact policies contain only
-the documented `target_tokens` and `summary_style` controls; and each Query
+the documented `target_tokens` and `summary_style` controls, and a Compact
+request's optional summarizer `model` and `service_class` sit beside its
+policy; and each Query
 `kind` is bound to its corresponding filter and result page. Cache variants
 are non-negative signed 32-bit sample indexes for both Generate and Compact.
 They only separate cache entries and do not depend on temperature. These checks are performed by the JSON schema gate where

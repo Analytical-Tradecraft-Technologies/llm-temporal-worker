@@ -110,7 +110,7 @@ type PreparedCompactInput struct {
 }
 
 // PrepareCompactInput applies the inherited policy and the compact request's
-// target/style overrides, selects whole tool exchanges within the target, and
+// target/style and summarizer model/service class overrides, selects whole tool exchanges within the target, and
 // uses the existing versioned plain-text summarizer contract. It grants no
 // provider authority.
 func PrepareCompactInput(ctx context.Context, request llm.CompactRequestV1, replay durable.CompactReplay) (PreparedCompactInput, error) {
@@ -146,7 +146,16 @@ func PrepareCompactInput(ctx context.Context, request llm.CompactRequestV1, repl
 		}
 	}
 	settings := replay.State.Settings.Clone()
-	source, err := prepareSemanticRequest(request.Context, request.OperationKey, settings, replay.State.Items)
+	// The request's summarizer overrides route only the summary call; the
+	// compaction child keeps the parent's settings.
+	routed := settings.Clone()
+	if request.Model != "" {
+		routed.Model = request.Model
+	}
+	if request.ServiceClass != "" {
+		routed.ServiceClass, routed.ServiceClassFallbacks = request.ServiceClass, nil
+	}
+	source, err := prepareSemanticRequest(request.Context, request.OperationKey, routed, replay.State.Items)
 	if err != nil {
 		return PreparedCompactInput{}, preparationError(provider.CodeStateCorrupt)
 	}

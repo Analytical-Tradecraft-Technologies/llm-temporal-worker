@@ -120,7 +120,7 @@ func Generate(ctx workflow.Context, input llm.GenerateRequestV1) (*llm.GenerateR
 		if input.Parent == nil {
 			return nil, invalidState()
 		}
-		compact := llm.CompactRequestV1{OperationKey: compactionKey(input), Context: input.Context, Parent: *input.Parent, Cache: &llm.CachePolicyV1{}}
+		compact := llm.GenerateCompaction(input, compactionKey(input))
 		var result llm.CompactResponseV1
 		if err := workflow.ExecuteChildWorkflow(childContext(ctx), CompactWorkflowName, compact).Get(ctx, &result); err != nil {
 			return nil, err

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
 
 // compactionTriggerFixture drives the real cloud composition with the bytes/4
@@ -47,8 +49,13 @@ func (f *boundedCloudFixture) turn(t *testing.T, key, text string) llm.Checkpoin
 // before the Generate the fixture is about to plan.
 func (f *boundedCloudFixture) compact(t *testing.T, key string) llm.CheckpointHandle {
 	t.Helper()
+	return f.compactWith(t, llm.CompactRequestV1{OperationKey: key, Context: f.request.Context, Parent: *f.request.Parent, Cache: &llm.CachePolicyV1{}})
+}
+
+// compactWith runs request through the same steps as compact.
+func (f *boundedCloudFixture) compactWith(t *testing.T, request llm.CompactRequestV1) llm.CheckpointHandle {
+	t.Helper()
 	ctx := context.Background()
-	request := llm.CompactRequestV1{OperationKey: key, Context: f.request.Context, Parent: *f.request.Parent, Cache: &llm.CachePolicyV1{}}
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
 	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context}
@@ -186,4 +193,43 @@ func TestCloudGenerationPlanCountsTheSummaryNearTheTrigger(t *testing.T) {
 	if compactions > 1 {
 		t.Fatalf("compacted %d times in 10 turns, want at most once", compactions)
 	}
+}
+
+// Retiring the parent's model must not strand a long lineage: once the caller
+// patches a routable model, the automatic compaction routes its summarizer
+// there too, and the over-trigger Generate succeeds (#1348).
+func TestCloudCompactionRoutesSummarizerOnPatchedModelAfterRetirement(t *testing.T) {
+	var source *planningSource
+	f := boundedCloud(t, false, func(b *budgetPlanningFixture) { source = b.source })
+	f.cap.BudgetEstimator.Tokenizer = nil
+	policy := json.RawMessage(`{"recent_turns":1}`)
+	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	f.restart(t)
+	big := strings.Repeat("history ", 3<<10)
+	for i := 1; i <= 3; i++ {
+		f.turn(t, "turn-"+string(rune('0'+i)), big)
+	}
+	// The operator retires alias; its route now serves alias2 only.
+	model := source.value.Routes.Models["alias"]
+	model.Name = "alias2"
+	source.value.Routes.Models = map[string]routing.Model{"alias2": model}
+	source.value.BudgetPolicies[0].Match.LogicalModel = "alias2"
+	f.restart(t)
+	f.request.SettingsPatch.Model.Set = preparationPointer("alias2")
+	if !f.plan(t, "turn-4", "fourth") {
+		t.Fatal("over-trigger Generate on alias2 did not request compaction")
+	}
+	parentRouted := llm.CompactRequestV1{OperationKey: "parent-routed", Context: f.request.Context, Parent: *f.request.Parent, Cache: &llm.CachePolicyV1{}}
+	if _, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Compact: &parentRouted}); err == nil {
+		t.Fatal("summarizer routed on the retired parent model")
+	} else if mapped := (*provider.Error)(nil); !errors.As(err, &mapped) || mapped.Code != provider.CodeNoRoute {
+		t.Fatalf("parent-routed compaction error = %v, want no_route", err)
+	}
+	compact := llm.GenerateCompaction(f.request, "compaction-1")
+	if compact.Model != "alias2" {
+		t.Fatalf("automatic compaction model = %q, want alias2", compact.Model)
+	}
+	f.compactWith(t, compact)
+	f.request.SettingsPatch.Model.Set = preparationPointer("alias2")
+	f.turn(t, "turn-4", "fourth")
 }

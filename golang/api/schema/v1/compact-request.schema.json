@@ -11,6 +11,8 @@
     "context": {"$ref": "#/$defs/context"},
     "parent": {"type": "string", "minLength": 1, "maxLength": 512},
     "policy": {"$ref": "#/$defs/policy"},
+    "model": {"type": "string", "minLength": 1, "maxLength": 256},
+    "service_class": {"enum": ["economy", "standard", "priority"]},
     "cache": {"$ref": "#/$defs/cache"}
   },
   "$defs": {
