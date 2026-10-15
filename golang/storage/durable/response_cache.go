@@ -134,7 +134,7 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 	if result.Entry != nil {
 		entry := result.Entry
 		if entry.Key != lease.Key || entry.ID == "" || entry.OriginOperationID == "" || entry.OriginCheckpointID == "" ||
-			entry.CompletedAt.IsZero() || entry.CompletedAt.After(now) || (maxAge != nil && now.Sub(entry.CompletedAt) > *maxAge) {
+			entry.CompletedAt.IsZero() || entry.CompletedAt.After(now.Add(cache.MaxCompletionSkew)) || (maxAge != nil && now.Sub(entry.CompletedAt) > *maxAge) {
 			return nil, fmt.Errorf("%w: cached response does not match lookup", ErrResponseCacheCorrupt)
 		}
 		p.entry = cloneResponseEntry(entry)

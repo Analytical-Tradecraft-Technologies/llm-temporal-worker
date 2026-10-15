@@ -194,7 +194,8 @@ func (s *responseCache) Lookup(ctx context.Context, lookup cache.ResponseLookup)
 	if entry.Key != lookup.Key {
 		return nil, ErrCorrupt
 	}
-	if entry.CompletedAt.After(lookup.Now) || (lookup.MaxAge != nil && entry.CompletedAt.Before(lookup.Now.Add(-*lookup.MaxAge))) {
+	// A publisher whose clock leads this reader's is not a future entry.
+	if entry.CompletedAt.After(lookup.Now.Add(cache.MaxCompletionSkew)) || (lookup.MaxAge != nil && entry.CompletedAt.Before(lookup.Now.Add(-*lookup.MaxAge))) {
 		return nil, nil
 	}
 	return &entry, nil

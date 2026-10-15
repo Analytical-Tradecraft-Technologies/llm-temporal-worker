@@ -35,6 +35,11 @@ type ResponseEntry struct {
 	Response           json.RawMessage
 }
 
+// MaxCompletionSkew bounds how far a success's CompletedAt may lie after a
+// lookup's Now and still be served. It was stamped by the publishing worker's
+// clock; a reader that lags it must use the entry, not pay for a duplicate.
+const MaxCompletionSkew = 5 * time.Second
+
 type ResponseLookup struct {
 	Key ResponseKey
 	Now time.Time
