@@ -3,6 +3,7 @@ package modelsync
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 	"path"
 	"strings"
 )
@@ -87,7 +88,9 @@ const exaRules = `  exa:
 // endpoint), which are those providers' list prices. A direct route's context
 // window is capped at the first long-prompt price threshold so its base price
 // always applies. Models a provider's own API no longer serves have no
-// first-party endpoint and are left out.
+// first-party endpoint and are left out. An endpoint OpenRouter lists at a
+// discount (a provider promotion) is rendered at its undiscounted price under
+// a REVIEW comment, so a temporary price is never checked in silently.
 func GenerateDefaultRules(document Document) ([]byte, error) {
 	if err := document.Validate(); err != nil {
 		return nil, err
@@ -189,7 +192,10 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 	}
 	out.WriteString("        prices:\n")
 	for _, value := range priced {
-		prices := value.endpoint.Pricing
+		prices, err := undiscountedPricing(value.endpoint.Pricing)
+		if err != nil {
+			return "", false, fmt.Errorf("%s endpoint %q: %w", value.tier, value.endpoint.Tag, err)
+		}
 		cacheRead := prices.InputCacheRead
 		if cacheRead == "" {
 			cacheRead = prices.Prompt
@@ -208,6 +214,10 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 			{"input_per_million", prices.Prompt}, {"output_per_million", prices.Completion},
 			{"cache_read_per_million", cacheRead}, {"cache_write_per_million", cacheWrite},
 		}
+		if discount := value.endpoint.Pricing.Discount; discount != "" {
+			fmt.Fprintf(&out, "          # REVIEW: OpenRouter lists endpoint %q at a %s discount; these are its undiscounted\n", value.endpoint.Tag, discount)
+			out.WriteString("          # prices. Confirm them against the provider's published list price.\n")
+		}
 		fmt.Fprintf(&out, "          %s:\n", value.tier)
 		for _, field := range fields {
 			converted, err := perMillion(field.perToken)
@@ -219,4 +229,56 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 		fmt.Fprintf(&out, "            per_request: %q\n", request)
 	}
 	return out.String(), true, nil
+}
+
+// undiscountedPricing returns prices with OpenRouter's listed discount taken
+// back off, so a promotional price is never rendered as a list price. It fails
+// when a discount leaves no list price or the list price is not an exact
+// decimal.
+func undiscountedPricing(prices Pricing) (Pricing, error) {
+	if prices.Discount == "" {
+		return prices, nil
+	}
+	discount, ok := new(big.Rat).SetString(prices.Discount)
+	if !ok {
+		return Pricing{}, fmt.Errorf("discount %q is not a decimal", prices.Discount)
+	}
+	remaining := new(big.Rat).Sub(big.NewRat(1, 1), discount)
+	if discount.Sign() < 0 || remaining.Sign() <= 0 {
+		return Pricing{}, fmt.Errorf("discount %q is outside [0, 1)", prices.Discount)
+	}
+	for _, target := range []*string{&prices.Prompt, &prices.Completion, &prices.InputCacheRead, &prices.InputCacheWrite, &prices.InputCacheWrite1h, &prices.Request} {
+		if *target == "" {
+			continue
+		}
+		price, ok := new(big.Rat).SetString(*target)
+		if !ok {
+			return Pricing{}, fmt.Errorf("price %q is not a decimal", *target)
+		}
+		list, err := exactDecimal(price.Quo(price, remaining))
+		if err != nil {
+			return Pricing{}, fmt.Errorf("price %q at discount %q: %w", *target, prices.Discount, err)
+		}
+		*target = list
+	}
+	return prices, nil
+}
+
+// exactDecimal formats a rational as a terminating decimal, or fails when it
+// has none (its reduced denominator has a prime factor other than 2 and 5).
+func exactDecimal(value *big.Rat) (string, error) {
+	denominator := new(big.Int).Set(value.Denom())
+	places := 0
+	for _, factor := range []int64{2, 5} {
+		divisor, count := big.NewInt(factor), 0
+		for new(big.Int).Rem(denominator, divisor).Sign() == 0 {
+			denominator.Quo(denominator, divisor)
+			count++
+		}
+		places = max(places, count)
+	}
+	if denominator.Cmp(big.NewInt(1)) != 0 {
+		return "", fmt.Errorf("undiscounted price %s is not an exact decimal", value.RatString())
+	}
+	return value.FloatString(places), nil
 }

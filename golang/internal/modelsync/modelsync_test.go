@@ -2,6 +2,7 @@ package modelsync
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -209,6 +210,17 @@ func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 	if got := opus.Prices["standard_only"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.2" || got.CacheWrite != "5" {
 		t.Fatalf("claude-opus-5.5 prices = %+v; want Anthropic's published $4/$20, $0.20 cache read, $5 cache write", got)
 	}
+	// OpenRouter lists gpt-5.6-sol at a 50% promotional discount; the
+	// direct route must carry OpenAI's list prices, not the promotion.
+	for _, id := range []string{"openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro"} {
+		sol, _ := rules.Direct("openai", id)
+		if got := sol.Prices["default"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.4" || got.CacheWrite != "5" {
+			t.Fatalf("%s default prices = %+v; want OpenAI's published $4/$20, $0.40 cache read, $5 cache write", id, got)
+		}
+		if got := sol.Prices["priority"]; got.Input != "8" || got.Output != "30" {
+			t.Fatalf("%s priority prices = %+v; want OpenAI's published Fast $8/$30", id, got)
+		}
+	}
 }
 
 func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
@@ -235,6 +247,69 @@ func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
 	}
 	if _, ok := rules.Providers["anthropic"].Models["inference-net/schematron-v2-turbo"]; ok {
 		t.Fatal("a third-party model was generated as a direct model")
+	}
+}
+
+func TestDecodePricingKeepsOnlyNonZeroDiscount(t *testing.T) {
+	for raw, want := range map[string]string{`0.5`: "0.5", `"0.25"`: "0.25", `0`: "", `null`: ""} {
+		prices, err := decodePricing(map[string]json.RawMessage{"prompt": json.RawMessage(`"0.000002"`), "completion": json.RawMessage(`"0.00001"`), "discount": json.RawMessage(raw)})
+		if err != nil || prices.Discount != want {
+			t.Fatalf("discount %s decoded as %q, %v; want %q", raw, prices.Discount, err, want)
+		}
+	}
+}
+
+func TestGenerateDefaultRulesNeverRendersDiscountedPricesSilently(t *testing.T) {
+	discounted := func(t *testing.T, discount string, halve bool) Document {
+		t.Helper()
+		document := fetchFixture(t)
+		for modelIndex := range document.Models {
+			model := &document.Models[modelIndex]
+			if model.ID != "openai/gpt-5.4" {
+				continue
+			}
+			for endpointIndex := range model.Endpoints {
+				endpoint := &model.Endpoints[endpointIndex]
+				if endpoint.Tag != "openai/fast" {
+					continue
+				}
+				if halve {
+					// OpenRouter publishes already-discounted prices.
+					endpoint.Pricing.Prompt, endpoint.Pricing.Completion, endpoint.Pricing.InputCacheRead = "0.0000025", "0.0000075", "0.00000025"
+				}
+				endpoint.Pricing.Discount = discount
+				return document
+			}
+		}
+		t.Fatal("fixture has no openai/fast endpoint for openai/gpt-5.4")
+		return Document{}
+	}
+	rendered, err := GenerateDefaultRules(discounted(t, "0.5", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rendered), `# REVIEW: OpenRouter lists endpoint "openai/fast" at a 0.5 discount`) {
+		t.Fatal("a discounted endpoint was rendered without a review marker")
+	}
+	parsed, err := ParseRules(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := MergeRules(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpt, _ := rules.Direct("openai", "openai/gpt-5.4")
+	if got := gpt.Prices["priority"]; got.Input != "5" || got.Output != "15" || got.CacheRead != "0.5" {
+		t.Fatalf("priority prices = %+v; want the undiscounted $5/$15, $0.50 cache read", got)
+	}
+	if got := gpt.Prices["default"]; got.Input != "2.5" {
+		t.Fatalf("default prices = %+v; an undiscounted endpoint changed", got)
+	}
+	for _, discount := range []string{"0.3", "1"} {
+		if _, err := GenerateDefaultRules(discounted(t, discount, false)); err == nil {
+			t.Fatalf("discount %s without an exact list price was accepted", discount)
+		}
 	}
 }
 

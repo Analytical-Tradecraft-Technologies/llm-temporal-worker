@@ -80,6 +80,12 @@ type Pricing struct {
 	InputCacheWrite1h string            `json:"input_cache_write_1h,omitempty"`
 	Request           string            `json:"request,omitempty"`
 	Overrides         []PricingOverride `json:"overrides,omitempty"`
+	// Discount is the fraction OpenRouter has already taken off the prices
+	// above, for example "0.5" during a provider promotion; empty means none.
+	// Only the default rules generator reads it, to recover list prices. It
+	// is not part of the stored Document schema, so workers that decode
+	// stored Documents strictly are unaffected.
+	Discount string `json:"-"`
 }
 
 // PricingOverride replaces prices for prompts of at least MinPromptTokens.
