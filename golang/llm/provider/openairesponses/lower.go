@@ -419,31 +419,59 @@ func mediaURL(rawURL string, data []byte, mediaType string) (string, error) {
 }
 
 // documentExtensions maps a document media type to the extension of the
-// filename sent with an untitled inline document. It is a fixed table rather
-// than the host MIME database so the wire body stays deterministic.
+// filename sent with an untitled inline document; Responses classifies inline
+// files by that suffix. It is a fixed table rather than the host MIME database
+// so the wire body stays deterministic. Keys are lower case.
 var documentExtensions = map[string]string{
-	"application/json":              ".json",
-	"application/msword":            ".doc",
-	"application/pdf":               ".pdf",
-	"application/rtf":               ".rtf",
-	"application/vnd.ms-excel":      ".xls",
-	"application/vnd.ms-powerpoint": ".ppt",
+	"application/csv":                         ".csv",
+	"application/javascript":                  ".js",
+	"application/json":                        ".json",
+	"application/msword":                      ".doc",
+	"application/pdf":                         ".pdf",
+	"application/rtf":                         ".rtf",
+	"application/typescript":                  ".ts",
+	"application/vnd.ms-excel":                ".xls",
+	"application/vnd.ms-powerpoint":           ".ppt",
+	"application/vnd.oasis.opendocument.text": ".odt",
 	"application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
 	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         ".xlsx",
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   ".docx",
-	"application/xml": ".xml",
-	"text/csv":        ".csv",
-	"text/html":       ".html",
-	"text/markdown":   ".md",
-	"text/plain":      ".txt",
-	"text/xml":        ".xml",
+	"application/x-sql":         ".sql",
+	"application/x-yaml":        ".yaml",
+	"application/xml":           ".xml",
+	"application/yaml":          ".yaml",
+	"message/rfc822":            ".eml",
+	"text/calendar":             ".ics",
+	"text/css":                  ".css",
+	"text/csv":                  ".csv",
+	"text/html":                 ".html",
+	"text/javascript":           ".js",
+	"text/markdown":             ".md",
+	"text/plain":                ".txt",
+	"text/rtf":                  ".rtf",
+	"text/tab-separated-values": ".tsv",
+	"text/tsv":                  ".tsv",
+	"text/vtt":                  ".vtt",
+	"text/x-c":                  ".c",
+	"text/x-c++":                ".cpp",
+	"text/x-python":             ".py",
+	"text/x-script.python":      ".py",
+	"text/xml":                  ".xml",
 }
 
 // inlineDocumentFilename derives the filename for an untitled inline document
-// from its media type, ignoring parameters and case.
+// from its media type, ignoring parameters and case. Any other text type,
+// such as a source-code type, is sent as plain text.
 func inlineDocumentFilename(mediaType string) string {
 	base, _, _ := strings.Cut(mediaType, ";")
-	return "document" + documentExtensions[strings.ToLower(strings.TrimSpace(base))]
+	base = strings.ToLower(strings.TrimSpace(base))
+	if extension, ok := documentExtensions[base]; ok {
+		return "document" + extension
+	}
+	if strings.HasPrefix(base, "text/") {
+		return "document.txt"
+	}
+	return "document"
 }
 
 func mediaFile(rawURL string, data []byte, mediaType string) (string, string, error) {
