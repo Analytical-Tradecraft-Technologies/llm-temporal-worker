@@ -67,11 +67,43 @@ module Response : sig
 end
 
 module Failure : sig
+  (** [Provider_error], [Provider_rejected] and [Incomplete_response] are the
+      terminal failure types of the public workflows; the others before
+      [Other] are the [llm_*] Activity failure types. *)
   type kind = Invalid_argument | Authentication | Budget_wait | Provider_transient
     | Ambiguous_dispatch | Operation_conflict | State_corrupt | Internal
+    | Provider_error | Provider_rejected | Incomplete_response
     | Other of string option
 
+  (** Whether the provider may have accepted, and charged for, the request.
+      [Not_dispatched] and [Rejected] are definite non-acceptance. *)
+  type dispatch = Not_dispatched | Rejected | Accepted | Ambiguous
+
+  (** The details of a [provider_error], [provider_rejected] or
+      [incomplete_response] public workflow failure. *)
+  type execution_details = { error_code : string option; dispatch : dispatch option }
+
+  (** The bounded details of an [llm_*] Activity failure. *)
+  type safe_details = {
+    code : string; phase : string; dispatch : dispatch; operation_id : string option;
+    retry_after_ms : int option; provider_request_id : string option }
+
   (** Classifies the retained application failure type; never discards the
-      SDK error or invents a retry policy for paid work. *)
+      SDK error or invents a retry policy for paid work. A provider failure
+      whose details report [Ambiguous] dispatch is [Ambiguous_dispatch], and
+      one whose error code is [authentication] or [permission_denied] is
+      [Authentication], as the Activity classification does. *)
   val kind : Temporal.Error.t -> kind
+
+  (** Decodes a public workflow failure's details. [Ok None] means the failure
+      has another type or carries no details (it was saved before they
+      existed); malformed details are an error. *)
+  val execution_details : Temporal.Error.t -> (execution_details option, Temporal.Error.t) result
+
+  (** Decodes an [llm_*] Activity failure's details, like {!execution_details}. *)
+  val safe_details : Temporal.Error.t -> (safe_details option, Temporal.Error.t) result
+
+  (** The dispatch certainty from either detail shape. [None] means it is
+      absent or malformed, which callers must treat as possibly dispatched. *)
+  val dispatch : Temporal.Error.t -> dispatch option
 end

@@ -133,15 +133,104 @@ end
 
 module Failure = struct
   type kind = Invalid_argument | Authentication | Budget_wait | Provider_transient
-    | Ambiguous_dispatch | Operation_conflict | State_corrupt | Internal | Other of string option
-  let kind error = match Temporal.Error.error_type error with
-    | Some "llm_invalid_argument" -> Invalid_argument
-    | Some "llm_authentication" -> Authentication
-    | Some "llm_budget_wait" -> Budget_wait
-    | Some "llm_provider_transient" -> Provider_transient
-    | Some "llm_ambiguous_dispatch" -> Ambiguous_dispatch
-    | Some "llm_operation_conflict" -> Operation_conflict
-    | Some "llm_state_corrupt" -> State_corrupt
-    | Some "llm_internal" -> Internal
-    | other -> Other other
+    | Ambiguous_dispatch | Operation_conflict | State_corrupt | Internal
+    | Provider_error | Provider_rejected | Incomplete_response | Other of string option
+  type dispatch = Not_dispatched | Rejected | Accepted | Ambiguous
+  type execution_details = { error_code : string option; dispatch : dispatch option }
+  type safe_details = {
+    code : string; phase : string; dispatch : dispatch; operation_id : string option;
+    retry_after_ms : int option; provider_request_id : string option }
+
+  let activity_kind = function
+    | "llm_invalid_argument" -> Some Invalid_argument
+    | "llm_authentication" -> Some Authentication
+    | "llm_budget_wait" -> Some Budget_wait
+    | "llm_provider_transient" -> Some Provider_transient
+    | "llm_ambiguous_dispatch" -> Some Ambiguous_dispatch
+    | "llm_operation_conflict" -> Some Operation_conflict
+    | "llm_state_corrupt" -> Some State_corrupt
+    | "llm_internal" -> Some Internal
+    | _ -> None
+  let is_execution_type = function
+    | "provider_error" | "provider_rejected" | "incomplete_response" -> true
+    | _ -> false
+
+  let dispatch_of_string = function
+    | "not_dispatched" -> Ok Not_dispatched | "rejected" -> Ok Rejected
+    | "accepted" -> Ok Accepted | "ambiguous" -> Ok Ambiguous
+    | _ -> error "failure details dispatch is not a known certainty"
+  let optional_string name fields = match List.assoc_opt name fields with
+    | None -> Ok None
+    | Some (`String value) when value <> "" -> Ok (Some value)
+    | Some _ -> error ("failure details " ^ name ^ " must be a nonempty string")
+  let required_string name fields =
+    let* value = optional_string name fields in
+    match value with Some value -> Ok value | None -> error ("failure details require " ^ name)
+
+  (* Go encodes each detail struct as one JSON object payload. The first payload
+     belongs to the outermost application failure, the one [error_type]
+     reports. Unknown fields are ignored so a newer worker can add facts. *)
+  let decode_details failure decode =
+    match (Temporal.Error.view failure).details with
+    | [] -> Ok None
+    | payload :: _ ->
+        match Temporal.Codec.decode Temporal.Codec.json payload with
+        | Ok (`Assoc fields) ->
+            let names = List.map fst fields in
+            if List.length (List.sort_uniq String.compare names) <> List.length names then
+              error "failure details contain duplicate fields"
+            else Result.map Option.some (decode fields)
+        | Ok _ | Error _ -> error "failure details are not a JSON object payload"
+
+  let execution_details failure =
+    match Temporal.Error.error_type failure with
+    | Some error_type when is_execution_type error_type ->
+        decode_details failure (fun fields ->
+          let* error_code = optional_string "error_code" fields in
+          let* dispatch = optional_string "dispatch" fields in
+          let* dispatch = match dispatch with
+            | None -> Ok None
+            | Some value -> Result.map Option.some (dispatch_of_string value) in
+          Ok { error_code; dispatch })
+    | _ -> Ok None
+
+  let safe_details failure =
+    match Option.bind (Temporal.Error.error_type failure) activity_kind with
+    | None -> Ok None
+    | Some _ ->
+        decode_details failure (fun fields ->
+          let* code = required_string "code" fields in
+          let* phase = required_string "phase" fields in
+          let* dispatch = required_string "dispatch" fields in
+          let* dispatch = dispatch_of_string dispatch in
+          let* operation_id = optional_string "operation_id" fields in
+          let* provider_request_id = optional_string "provider_request_id" fields in
+          let* retry_after_ms = match List.assoc_opt "retry_after_ms" fields with
+            | None -> Ok None
+            | Some (`Int value) when value > 0 -> Ok (Some value)
+            | Some _ -> error "failure details retry_after_ms must be a positive integer" in
+          Ok { code; phase; dispatch; operation_id; retry_after_ms; provider_request_id })
+
+  let dispatch failure =
+    match execution_details failure, safe_details failure with
+    | Ok (Some { dispatch; _ }), _ -> dispatch
+    | _, Ok (Some { dispatch; _ }) -> Some dispatch
+    | _ -> None
+
+  (* A public workflow failure keeps the provider's error code and dispatch in
+     its details. Possible acceptance outranks the error code so a caller never
+     treats a possibly charged call as safe to resubmit. *)
+  let provider_kind failure fallback =
+    match execution_details failure with
+    | Ok (Some { dispatch = Some Ambiguous; _ }) -> Ambiguous_dispatch
+    | Ok (Some { error_code = Some ("authentication" | "permission_denied"); _ }) -> Authentication
+    | Ok _ | Error _ -> fallback
+
+  let kind failure = match Temporal.Error.error_type failure with
+    | Some "provider_error" -> provider_kind failure Provider_error
+    | Some "provider_rejected" -> provider_kind failure Provider_rejected
+    | Some "incomplete_response" -> Incomplete_response
+    | Some error_type as other ->
+        (match activity_kind error_type with Some kind -> kind | None -> Other other)
+    | None -> Other None
 end

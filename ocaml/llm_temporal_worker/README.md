@@ -555,7 +555,12 @@ for a larger available budget than ordinary generation.
 `Context.make`, `Tool.function_`, `Output.*`, `Generate.make_checked`,
 `Compact.make`, and `Compaction_policy.make` provide checked constructors.
 `Failure.kind` classifies worker failures without hiding the original
-`Temporal.Error.t`. Raw records and codecs remain available for compatibility.
+`Temporal.Error.t`, including the public workflows' `provider_error`,
+`provider_rejected` and `incomplete_response` failures.
+`Failure.execution_details` and `Failure.safe_details` decode their detail
+payloads, and `Failure.dispatch` reports whether the provider may have accepted
+the request: only `Not_dispatched` and `Rejected` are definitely unpaid.
+Raw records and codecs remain available for compatibility.
 
 `Exa.answer ~operation_key ~context ~model ~question ()` builds an Exa Answer
 Generate request using your configured model selector. Its

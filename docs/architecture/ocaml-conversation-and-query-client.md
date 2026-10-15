@@ -1133,8 +1133,10 @@ SDK errors, including typed workflow failure details, and exposes
 `Failure.kind` to distinguish validation/protocol errors from Temporal
 failures. Inspect the original error for its message, retryability, and raw
 payloads. Provider failure code and dispatch certainty are retained in the
-Go workflow's application-error detail payload when available; the library
-does not parse provider messages or schedule replacement paid calls.
+Go workflow's application-error detail payload when available, and
+`Failure.execution_details`, `Failure.safe_details` and `Failure.dispatch`
+decode them; the library does not parse provider messages or schedule
+replacement paid calls.
 
 
 ## OCaml implementation order
