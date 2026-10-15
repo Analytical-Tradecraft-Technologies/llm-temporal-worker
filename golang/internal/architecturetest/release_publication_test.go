@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -74,6 +75,7 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 			t.Fatalf("release preflight does not retain trusted-evidence guard %q", want)
 		}
 	}
+	assertPreflightRescansTheReleaseSubject(t, release)
 	assertTrustedMasterEvidenceArtifactSource(t, master)
 	assertGitHubTokenIsExclusiveToArtifactDownload(t, release)
 	assertPublicRunVerifierIsTokenless(t)
@@ -252,6 +254,7 @@ func TestReleaseGuardBindsDownloadedEvidenceToTheTagCommitAndDigest(t *testing.T
 		}
 		return map[string]any{
 			"schema_version": 2,
+			"generated_at":   time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
 			"source":         map[string]any{"revision": revision},
 			"image": map[string]any{
 				"digest":     imageDigest,
@@ -299,6 +302,21 @@ func TestReleaseGuardBindsDownloadedEvidenceToTheTagCommitAndDigest(t *testing.T
 		{name: "image index missing", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
 			delete(evidence["artifacts"].(map[string]any), "image_index")
 		}, wantError: true},
+		{name: "evidence nearly at the age limit", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
+			evidence["generated_at"] = time.Now().UTC().Add(-7*24*time.Hour + time.Hour).Format(time.RFC3339)
+		}},
+		{name: "stale evidence", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
+			evidence["generated_at"] = time.Now().UTC().Add(-8 * 24 * time.Hour).Format(time.RFC3339)
+		}, wantError: true},
+		{name: "future evidence", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
+			evidence["generated_at"] = time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+		}, wantError: true},
+		{name: "evidence without a time zone", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
+			evidence["generated_at"] = time.Now().UTC().Format("2006-01-02T15:04:05")
+		}, wantError: true},
+		{name: "evidence without generated_at", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
+			delete(evidence, "generated_at")
+		}, wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			evidence := filepath.Join(t.TempDir(), "evidence.json")
@@ -332,6 +350,7 @@ func TestReleaseGuardAcceptsVerifiedLocalTask23EvidenceFixture(t *testing.T) {
 	bundle := writeReleaseEvidenceBundle(t, false)
 	evidence := readReleaseEvidence(t, bundle.directory)
 	evidence["source"].(map[string]any)["revision"] = commit
+	evidence["generated_at"] = time.Now().UTC().Format(time.RFC3339)
 	writeReleaseEvidence(t, bundle.directory, evidence)
 
 	root := repositoryRoot(t)
@@ -418,6 +437,40 @@ func TestPublicEvidenceRunVerifierValidatesTrustedMasterMetadata(t *testing.T) {
 			},
 			wantError: true,
 		},
+		{
+			name: "run nearly at the age limit",
+			mutate: func(metadata map[string]any) {
+				metadata["run_started_at"] = time.Now().UTC().Add(-7*24*time.Hour + time.Hour).Format(time.RFC3339)
+			},
+		},
+		{
+			name: "stale run",
+			mutate: func(metadata map[string]any) {
+				metadata["run_started_at"] = time.Now().UTC().Add(-8 * 24 * time.Hour).Format(time.RFC3339)
+			},
+			wantError: true,
+		},
+		{
+			name: "future run",
+			mutate: func(metadata map[string]any) {
+				metadata["run_started_at"] = time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+			},
+			wantError: true,
+		},
+		{
+			name: "run start without a time zone",
+			mutate: func(metadata map[string]any) {
+				metadata["run_started_at"] = time.Now().UTC().Format("2006-01-02T15:04:05")
+			},
+			wantError: true,
+		},
+		{
+			name: "missing run start",
+			mutate: func(metadata map[string]any) {
+				delete(metadata, "run_started_at")
+			},
+			wantError: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			metadata := trustedPublicEvidenceRunMetadata(repository, commit)
@@ -484,6 +537,34 @@ func TestPublicEvidenceRunVerifierRejectsMalformedOrOversizedFixturesWithoutEcho
 	}
 }
 
+func TestReleasePreflightScanRejectsInvalidRequestsBeforeScanning(t *testing.T) {
+	existing := t.TempDir()
+	for _, test := range []struct {
+		name      string
+		arguments []string
+		want      string
+	}{
+		{name: "no command", arguments: nil, want: "usage"},
+		{name: "abbreviated tag commit", arguments: []string{"tag-source", "--tag-commit", "abc123", "--worktree", filepath.Join(existing, "tag")}, want: "tag_commit must be a lowercase commit SHA"},
+		{name: "missing worktree", arguments: []string{"tag-source", "--tag-commit", strings.Repeat("a", 40)}, want: "worktree is required"},
+		{name: "existing worktree path", arguments: []string{"tag-source", "--tag-commit", strings.Repeat("a", 40), "--worktree", existing}, want: "must not already exist"},
+		{name: "tag image reference", arguments: []string{"image", "--image-reference", "registry.example.com/team/llm-temporal-worker:v1.0.0"}, want: "sha256 digest reference"},
+		{name: "unknown option", arguments: []string{"image", "--skip-db-update", "true"}, want: "unknown image option"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.Command("bash", append([]string{filepath.Join(repositoryRoot(t), "scripts", "release", "preflight-scan.sh")}, test.arguments...)...)
+			command.Dir = t.TempDir()
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("preflight scan accepted %s", test.name)
+			}
+			if !strings.Contains(string(output), test.want) {
+				t.Fatalf("preflight scan output = %q, want %q", output, test.want)
+			}
+		})
+	}
+}
+
 func trustedPublicEvidenceRunMetadata(repository, commit string) map[string]any {
 	return map[string]any{
 		"id":          int64(29386817789),
@@ -493,9 +574,82 @@ func trustedPublicEvidenceRunMetadata(repository, commit string) map[string]any 
 		"conclusion":  "success",
 		"head_sha":    commit,
 		"path":        ".github/workflows/master.yml",
+		// GitHub reports run timestamps in UTC with a Z suffix.
+		"run_started_at": time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
 		"repository": map[string]any{
 			"full_name": repository,
 		},
+	}
+}
+
+// assertPreflightRescansTheReleaseSubject pins #1326: the retained evidence
+// scans are not trusted alone; the tag commit and the publication digest are
+// rescanned with current vulnerability data after the evidence is verified.
+func assertPreflightRescansTheReleaseSubject(t *testing.T, workflow workflowDocument) {
+	t.Helper()
+	preflight := workflowJob(t, workflow, "preflight")
+	for _, command := range []string{
+		"bash scripts/ci/setup-trivy.sh",
+		"bash scripts/release/preflight-scan.sh tag-source \\",
+		"bash scripts/release/preflight-scan.sh image \\",
+	} {
+		if !jobHasRunCommand(preflight, command) {
+			t.Fatalf("release preflight does not run %q", command)
+		}
+	}
+	evidence := strings.Index(workflow.raw, "bash scripts/release/guard.sh verify-evidence")
+	tagSource := strings.Index(workflow.raw, "bash scripts/release/preflight-scan.sh tag-source")
+	image := strings.Index(workflow.raw, "bash scripts/release/preflight-scan.sh image")
+	if evidence < 0 || tagSource < evidence || image < tagSource {
+		t.Fatal("release preflight must rescan the tag commit and then the image after verifying the evidence binding")
+	}
+	for _, want := range []string{
+		`--tag-commit "$TAG_COMMIT"`,
+		`--worktree "$RUNNER_TEMP/release-tag"`,
+		`--image-reference "$IMAGE_REFERENCE"`,
+	} {
+		if !strings.Contains(workflow.raw, want) {
+			t.Fatalf("release preflight rescan does not bind %q", want)
+		}
+	}
+
+	scan := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "preflight-scan.sh")
+	for _, want := range []string{
+		`git -C "$root" worktree add --quiet --detach "$worktree" "$tag_commit"`,
+		`chmod -R a-w "$worktree"`,
+		`go -C "$root/golang" build -o "$tools/govulncheck" golang.org/x/vuln/cmd/govulncheck`,
+		`GOTOOLCHAIN="go$go_version" CGO_ENABLED=0 GOFLAGS=-mod=readonly "$tools/govulncheck" ./...`,
+		"--image-src remote",
+		`--config "$root/scripts/release/trivy.yaml"`,
+		"--exit-code 1",
+		"readonly platforms=(linux/amd64 linux/arm64)",
+	} {
+		if !strings.Contains(scan, want) {
+			t.Fatalf("release preflight scan does not retain %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"--skip-db-update",
+		"--offline-scan",
+		"make ",
+		"go run",
+		"go test",
+		"curl ",
+		"wget ",
+		"docker ",
+		"cosign ",
+		"oras ",
+		"skopeo ",
+		"gh api",
+		"gh release",
+		"git push",
+		"git tag",
+		"git remote",
+		"git checkout",
+	} {
+		if strings.Contains(strings.ToLower(scan), forbidden) {
+			t.Fatalf("release preflight scan uses stale data, executes tag code, or reaches a write sink: %q", forbidden)
+		}
 	}
 }
 

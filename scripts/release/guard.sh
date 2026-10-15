@@ -202,11 +202,16 @@ verify_evidence() {
 import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 
 INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
 PLATFORMS = ("linux/amd64", "linux/arm64")
 PLATFORM_ARTIFACTS = ("image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64")
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
+# Retained scans go stale as vulnerability data changes, so publication only
+# accepts recently generated evidence; preflight-scan.sh rescans the subject.
+MAX_EVIDENCE_AGE = timedelta(days=7)
+MAX_CLOCK_SKEW = timedelta(minutes=5)
 
 path, expected_revision, expected_digest = sys.argv[1:]
 try:
@@ -223,6 +228,16 @@ if not isinstance(source, dict) or source.get("revision") != expected_revision:
     raise SystemExit("guarded release: evidence revision does not match the release tag commit")
 if not isinstance(image, dict) or image.get("digest") != expected_digest:
     raise SystemExit("guarded release: evidence image digest does not match the requested publication subject")
+generated_at = evidence.get("generated_at")
+try:
+    generated = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+except (AttributeError, ValueError):
+    raise SystemExit("guarded release: evidence generated_at is missing or not RFC 3339")
+if generated.tzinfo is None:
+    raise SystemExit("guarded release: evidence generated_at has no time zone")
+age = datetime.now(timezone.utc) - generated
+if age > MAX_EVIDENCE_AGE or age < -MAX_CLOCK_SKEW:
+    raise SystemExit("guarded release: evidence is older than 7 days or dated in the future")
 # The publication subject must be the multi-platform image index that master
 # scanned and published. A schema-v1 bundle bound only the linux/amd64
 # manifest, so it cannot authorize publishing the index.
