@@ -62,7 +62,7 @@ func TestBedrockConverseContractFixturesMatchLoweringAndLifting(t *testing.T) {
 
 	response := bedrockConverseResponse("Hello from the fixture response.", 7, 6)
 	assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), "response.completed.json")
-	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID)
+	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 			assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), fixture.wire)
 			request := llm.Request{OperationKey: fixture.operation, Model: bedrockFixtureModel, ServiceClass: fixture.requested, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "fixture"}}}}}
 			call := provider.Call{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model, OperationKey: fixture.operation, ServiceClass: fixture.requested}
-			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID)
+			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -168,7 +168,7 @@ func TestBedrockConverseToolUseContractFixtures(t *testing.T) {
 
 	response := bedrockConverseToolResponse()
 	assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), "response.tool-use.completed.json")
-	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID)
+	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

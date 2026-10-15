@@ -1,16 +1,20 @@
 package bedrockconverse
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"unicode/utf8"
 
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -195,7 +199,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		mapped.Provider.RequestID = requestID
 		return provider.Result{}, mapped
 	}
-	lifted, err := adapter.liftResponse(call, response, requestID)
+	var rawToolUses []rawToolUse
+	if stage.body != nil {
+		if rawToolUses, err = decodeRawToolUses(stage.body); err != nil {
+			return provider.Result{}, invalidResponseError(call, requestID, err.Error())
+		}
+	}
+	lifted, err := adapter.liftResponse(call, response, requestID, rawToolUses)
 	if err != nil {
 		return provider.Result{}, err
 	}
@@ -207,10 +217,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 // Converse call got: whether the request reached the transport and whether an
 // HTTP response came back. It is registered as the innermost deserialize
 // middleware, so it runs immediately around the transport and before the
-// SDK's own response decoding.
+// SDK's own response decoding. It also keeps a copy of a successful response
+// body: the SDK decodes tool input into a Smithy document whose numbers are
+// already float64, so tool-call arguments are lifted from these raw bytes.
 type dispatchStage struct {
 	sent     bool
 	received bool
+	body     []byte
 }
 
 func (*dispatchStage) ID() string { return "llmtwDispatchStage" }
@@ -221,8 +234,23 @@ func (stage *dispatchStage) HandleDeserialize(ctx context.Context, in middleware
 	if out.RawResponse != nil {
 		stage.received = true
 	}
+	if response, ok := out.RawResponse.(*smithyhttp.Response); ok && err == nil && response.Body != nil && response.StatusCode >= 200 && response.StatusCode < 300 {
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		stage.body = body
+		// The SDK decoder sees the same bytes, and the same read failure.
+		reader := io.Reader(bytes.NewReader(body))
+		if readErr != nil {
+			reader = io.MultiReader(reader, failingReader{readErr})
+		}
+		response.Body = io.NopCloser(reader)
+	}
 	return out, metadata, err
 }
+
+type failingReader struct{ err error }
+
+func (reader failingReader) Read([]byte) (int, error) { return 0, reader.err }
 
 func (stage *dispatchStage) register(options *bedrockruntime.Options) {
 	options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
@@ -265,13 +293,50 @@ func converseRecovered(ctx context.Context, service converseService, params *bed
 	return response, nil, err
 }
 
-func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntime.ConverseOutput, requestID string) (llm.Response, error) {
+// rawToolUse is one toolUse content block as it appeared in the response body,
+// with its input kept as the provider's JSON text.
+type rawToolUse struct {
+	ToolUseID *string         `json:"toolUseId"`
+	Name      *string         `json:"name"`
+	Input     json.RawMessage `json:"input"`
+}
+
+// decodeRawToolUses returns the response body's toolUse blocks in content
+// order. A body with none returns an empty, non-nil slice so the lift still
+// checks that the SDK decoded no tool use the body does not contain.
+func decodeRawToolUses(body []byte) ([]rawToolUse, error) {
+	var envelope struct {
+		Output struct {
+			Message struct {
+				Content []struct {
+					ToolUse *rawToolUse `json:"toolUse"`
+				} `json:"content"`
+			} `json:"message"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("provider response body is invalid JSON")
+	}
+	uses := []rawToolUse{}
+	for _, block := range envelope.Output.Message.Content {
+		if block.ToolUse != nil {
+			uses = append(uses, *block.ToolUse)
+		}
+	}
+	return uses, nil
+}
+
+// liftResponse lifts a decoded Converse response. rawToolUses, when non-nil,
+// are the body's toolUse blocks and supply tool-call arguments byte for byte;
+// nil is only for responses that never crossed the wire (tests and replays),
+// whose documents are encoded as they are.
+func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntime.ConverseOutput, requestID string, rawToolUses []rawToolUse) (llm.Response, error) {
 	actualTier := ""
 	if response.ServiceTier != nil {
 		actualTier = string(response.ServiceTier.Type)
 	}
 	actual := adapter.profile.actualClass(actualTier)
-	output, hasToolCalls, err := liftOutput(response.Output)
+	output, hasToolCalls, err := liftOutput(response.Output, rawToolUses)
 	if err != nil {
 		return llm.Response{}, invalidResponseError(call, requestID, err.Error())
 	}
@@ -292,13 +357,14 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 		Usage:   usage, Provider: llm.ProviderFacts{RequestID: requestID, FinishReason: string(response.StopReason)}}, nil
 }
 
-func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
+func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.Item, bool, error) {
 	message, ok := output.(*types.ConverseOutputMemberMessage)
 	if !ok || message == nil {
 		return nil, false, fmt.Errorf("provider response omitted a message output")
 	}
 	items := make([]llm.Item, 0, len(message.Value.Content))
 	hasToolCalls := false
+	toolUses := 0
 	var text strings.Builder
 	flushText := func() {
 		if text.Len() > 0 {
@@ -318,7 +384,8 @@ func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 			if value == nil || value.Value.Input == nil || value.Value.ToolUseId == nil || *value.Value.ToolUseId == "" || value.Value.Name == nil || *value.Value.Name == "" {
 				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
 			}
-			arguments, err := value.Value.Input.MarshalSmithyDocument()
+			arguments, err := toolUseArguments(value.Value, rawToolUses, toolUses)
+			toolUses++
 			if err != nil || !json.Valid(arguments) {
 				return nil, false, fmt.Errorf("content block %d tool use is invalid", index)
 			}
@@ -339,7 +406,33 @@ func liftOutput(output types.ConverseOutput) ([]llm.Item, bool, error) {
 		}
 	}
 	flushText()
+	if rawToolUses != nil && toolUses != len(rawToolUses) {
+		return nil, false, fmt.Errorf("provider response tool uses do not match the response body")
+	}
 	return items, hasToolCalls, nil
+}
+
+// toolUseArguments returns the JSON arguments of the position-th tool use.
+// With raw blocks it takes the body's input text, after checking that it is
+// the block the SDK decoded at that position, so integers beyond 2^53 and
+// exact decimal spellings survive. Without them it encodes the document.
+func toolUseArguments(block types.ToolUseBlock, rawToolUses []rawToolUse, position int) ([]byte, error) {
+	if rawToolUses == nil {
+		return block.Input.MarshalSmithyDocument()
+	}
+	if position >= len(rawToolUses) {
+		return nil, fmt.Errorf("tool use is missing from the response body")
+	}
+	raw := rawToolUses[position]
+	if raw.ToolUseID == nil || *raw.ToolUseID != *block.ToolUseId || raw.Name == nil || *raw.Name != *block.Name || len(raw.Input) == 0 {
+		return nil, fmt.Errorf("tool use does not match the response body")
+	}
+	// encoding/json accepts invalid UTF-8 inside strings, which the SDK
+	// document encoding used to replace. Raw bytes are kept, so reject it.
+	if !utf8.Valid(raw.Input) {
+		return nil, fmt.Errorf("tool use input is not valid UTF-8")
+	}
+	return append(json.RawMessage(nil), raw.Input...), nil
 }
 
 func liftStatus(reason types.StopReason, hasToolCalls bool) (llm.ResponseStatus, error) {

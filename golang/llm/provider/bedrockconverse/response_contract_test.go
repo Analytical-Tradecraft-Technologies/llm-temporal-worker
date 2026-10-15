@@ -34,7 +34,7 @@ func TestMalformedToolOutputReturnsAcceptedErrorWithoutPanic(t *testing.T) {
 	}
 	for name, output := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: output, StopReason: types.StopReasonMalformedToolUse, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id")
+			_, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: output, StopReason: types.StopReasonMalformedToolUse, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id", nil)
 			var mapped *provider.Error
 			if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAccepted {
 				t.Fatalf("malformed output lost paid dispatch: %v", err)
@@ -71,7 +71,7 @@ func TestConversePreservesCacheUsage(t *testing.T) {
 			usage.CacheReadInputTokens = aws.Int32(7)
 			usage.CacheWriteInputTokens = aws.Int32(5)
 		}
-		result, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "answer"}}}}, StopReason: types.StopReasonEndTurn, Usage: usage, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id")
+		result, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "answer"}}}}, StopReason: types.StopReasonEndTurn, Usage: usage, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -17,7 +17,7 @@ func TestReplayGroupsParallelToolTurnWithoutReordering(t *testing.T) {
 		&types.ContentBlockMemberText{Value: "Between tools"},
 		&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: aws.String("b"), Name: aws.String("lookup"), Input: document.NewLazyDocument(map[string]any{"city": "Melbourne"})}},
 	}
-	lifted, hasTools, err := liftOutput(&types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: original}})
+	lifted, hasTools, err := liftOutput(&types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: original}}, nil)
 	if err != nil || !hasTools {
 		t.Fatalf("lift tool turn: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestReplayGroupsParallelToolTurnWithoutReordering(t *testing.T) {
 	if len(input.Messages[0].Content) != 2 || len(input.Messages[1].Content) != 4 || len(input.Messages[2].Content) != 2 {
 		t.Fatal("turn grouping lost content")
 	}
-	replayed, _, err := liftOutput(&types.ConverseOutputMemberMessage{Value: input.Messages[1]})
+	replayed, _, err := liftOutput(&types.ConverseOutputMemberMessage{Value: input.Messages[1]}, nil)
 	if err != nil || !reflect.DeepEqual(replayed, lifted) {
 		t.Fatalf("assistant replay changed content order or tool arguments: %v", err)
 	}
