@@ -315,7 +315,7 @@ func (handler *persistedQueryHandler) budgetStatus(ctx context.Context, request 
 	}
 	result, err := handler.budget.ReadBudgetStatus(ctx, query, activeAt)
 	if err != nil {
-		return control.QueryResponse{}, err
+		return control.QueryResponse{}, budgetStatusError(err, query.ActiveAt != nil)
 	}
 	if result.ActiveAt.IsZero() || !result.ActiveAt.UTC().Equal(activeAt) {
 		return control.QueryResponse{}, fmt.Errorf("budget status reader returned a mismatched active_at")
@@ -519,6 +519,29 @@ func (handler *persistedQueryHandler) sign(request control.QueryRequest, positio
 		return "", control.ErrQueryCursor
 	}
 	return handler.cursor.Sign(request, position, horizon, issuedAt)
+}
+
+// budgetStatusError maps budget reads that can never succeed for this request
+// to a permanent invalid_argument; every other failure is returned unchanged
+// so the query boundary keeps classifying it as retryable unavailable state.
+// A history or coverage miss is the caller's error only when the caller chose
+// the instant: the default instant is the worker clock, so a delay between
+// clock samples or a publisher that has not rotated yet is transient.
+func budgetStatusError(err error, explicitActiveAt bool) error {
+	var reason string
+	switch {
+	case explicitActiveAt && errors.Is(err, redisstore.ErrBudgetHistoryNotAvailable):
+		reason = "budget status active_at is in the past; only current status is available"
+	case errors.Is(err, redisstore.ErrBudgetStatusUnknownPolicy):
+		reason = "budget status policy key is unknown"
+	case explicitActiveAt && errors.Is(err, redisstore.ErrBudgetStatusOutsideCoverage):
+		reason = "budget status active_at is outside the published coverage"
+	default:
+		return err
+	}
+	mapped := provider.NewError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, reason)
+	mapped.Cause = err
+	return mapped
 }
 
 func unsupportedQuery(kind llm.QueryKind, reason string) error {

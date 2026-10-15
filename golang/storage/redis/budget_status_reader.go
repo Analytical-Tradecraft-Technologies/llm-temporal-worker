@@ -38,7 +38,14 @@ const (
 var (
 	ErrBudgetStatusUnavailable   = errors.New("Redis budget status is unavailable")
 	ErrBudgetHistoryNotAvailable = errors.New("budget_history_not_available")
-	budgetStatusStreamID         = regexp.MustCompile(`^[0-9]+-[0-9]+$`)
+	// ErrBudgetStatusUnknownPolicy and ErrBudgetStatusOutsideCoverage are
+	// request misses against a valid published generation, not storage
+	// outages. They are joined with ErrBudgetStatusUnavailable so existing
+	// callers keep matching it, while the query boundary can report them as
+	// permanent caller errors instead of retryable state failures.
+	ErrBudgetStatusUnknownPolicy   = errors.New("budget status policy key is unknown")
+	ErrBudgetStatusOutsideCoverage = errors.New("budget status active_at is outside the published coverage")
+	budgetStatusStreamID           = regexp.MustCompile(`^[0-9]+-[0-9]+$`)
 )
 
 // BudgetStatusWindowRecord is the storage-neutral DTO returned by the
@@ -207,7 +214,7 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: manifest digest mismatch", ErrBudgetStatusUnavailable)
 	}
 	if activeAt.Before(manifest.CoverageStart) || !activeAt.Before(manifest.CoverageEnd) {
-		return control.BudgetStatusResult{}, fmt.Errorf("%w: active_at outside coverage", ErrBudgetStatusUnavailable)
+		return control.BudgetStatusResult{}, reader.requestMiss(ctx, pointer, ErrBudgetStatusOutsideCoverage)
 	}
 	if len(manifest.Members) == 0 || len(manifest.Members) > maxBudgetStatusMembers {
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: member catalog is incomplete", ErrBudgetStatusUnavailable)
@@ -240,7 +247,7 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 			}
 		}
 		if !found {
-			return control.BudgetStatusResult{}, fmt.Errorf("%w: policy key is unknown", ErrBudgetStatusUnavailable)
+			return control.BudgetStatusResult{}, reader.requestMiss(ctx, pointer, ErrBudgetStatusUnknownPolicy)
 		}
 	}
 	args := []any{BudgetStatusAction, string(pointer.GenerationID), string(pointer.IncarnationID), digest, strconv.FormatInt(now.UnixMilli(), 10), strconv.Itoa(len(manifest.Members)), strconv.Itoa(reader.maxExpiry)}
@@ -287,6 +294,21 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 		}
 	}
 	return result, nil
+}
+
+// requestMiss reports a manifest-derived miss as typed only when the manifest
+// still belongs to the active generation. A miss read from a generation that
+// was replaced mid-request may succeed against the new one, so it stays a
+// plain unavailable error that callers retry.
+func (reader *RedisBudgetStatusReader) requestMiss(ctx context.Context, pointer ActiveBudgetGeneration, miss error) error {
+	current, err := reader.generation.ActiveGeneration(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: active generation: %v", ErrBudgetStatusUnavailable, err)
+	}
+	if current != pointer {
+		return fmt.Errorf("%w: active generation changed during read", ErrBudgetStatusUnavailable)
+	}
+	return fmt.Errorf("%w: %w", ErrBudgetStatusUnavailable, miss)
 }
 
 func budgetStatusFunctionResult(values []any) (string, string, error) {

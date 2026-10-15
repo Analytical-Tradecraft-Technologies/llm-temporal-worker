@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	"github.com/google/uuid"
 )
 
@@ -35,12 +37,16 @@ type fakeBudgetStatus struct {
 	query    control.BudgetStatusQuery
 	activeAt time.Time
 	calls    int
+	err      error
 }
 
 func (fake *fakeBudgetStatus) ReadBudgetStatus(_ context.Context, query control.BudgetStatusQuery, activeAt time.Time) (control.BudgetStatusResult, error) {
 	fake.query = query
 	fake.activeAt = activeAt
 	fake.calls++
+	if fake.err != nil {
+		return control.BudgetStatusResult{}, fake.err
+	}
 	return fake.result, nil
 }
 
@@ -192,6 +198,58 @@ func TestPersistedQueryBudgetStatusRejectsMismatchedReaderInstant(t *testing.T) 
 	}
 	if _, err := service.Execute(context.Background(), request); err == nil {
 		t.Fatal("mismatched budget reader instant unexpectedly accepted")
+	}
+}
+
+func TestPersistedQueryBudgetStatusClassifiesPermanentMisses(t *testing.T) {
+	now := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
+	future := now.Add(48 * time.Hour)
+	past := now.Add(-time.Hour)
+	for _, test := range []struct {
+		name      string
+		err       error
+		activeAt  *time.Time
+		permanent bool
+	}{
+		{name: "explicit history", err: redisstore.ErrBudgetHistoryNotAvailable, activeAt: &past, permanent: true},
+		{name: "default instant history", err: redisstore.ErrBudgetHistoryNotAvailable},
+		{name: "unknown policy", err: fmt.Errorf("%w: %w", redisstore.ErrBudgetStatusUnavailable, redisstore.ErrBudgetStatusUnknownPolicy), permanent: true},
+		{name: "explicit instant outside coverage", err: fmt.Errorf("%w: %w", redisstore.ErrBudgetStatusUnavailable, redisstore.ErrBudgetStatusOutsideCoverage), activeAt: &future, permanent: true},
+		{name: "default instant outside coverage", err: fmt.Errorf("%w: %w", redisstore.ErrBudgetStatusUnavailable, redisstore.ErrBudgetStatusOutsideCoverage)},
+		{name: "redis outage", err: fmt.Errorf("%w: coherent Redis read: connection refused", redisstore.ErrBudgetStatusUnavailable)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := &fakeBudgetStatus{err: test.err}
+			codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+			handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return now }}
+			service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return now }}
+			request, err := control.EncodeQueryRequest(control.QueryRequest{
+				OperationKey: "budget-op",
+				Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
+				Kind:         llm.QueryBudgetStatus,
+				Filter:       control.BudgetStatusQuery{ActiveAt: test.activeAt},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.Execute(context.Background(), request)
+			var providerErr *provider.Error
+			if !errors.As(err, &providerErr) {
+				t.Fatalf("error = %T %v, want provider.Error", err, err)
+			}
+			if !errors.Is(err, test.err) {
+				t.Fatalf("error = %v, want original cause %v", err, test.err)
+			}
+			if test.permanent {
+				if providerErr.Code != provider.CodeInvalidArgument || providerErr.Retry != provider.RetryNever {
+					t.Fatalf("provider error = %#v, want permanent invalid_argument", providerErr)
+				}
+				return
+			}
+			if providerErr.Code != provider.CodeStateUnavailable || providerErr.Retry != provider.RetrySameOperation {
+				t.Fatalf("provider error = %#v, want retryable state_unavailable", providerErr)
+			}
+		})
 	}
 }
 

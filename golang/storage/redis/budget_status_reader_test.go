@@ -136,6 +136,75 @@ func TestRedisBudgetStatusReaderRejectsHistoryAndV1OrMalformedState(t *testing.T
 	}
 }
 
+func TestRedisBudgetStatusReaderTypesRequestMisses(t *testing.T) {
+	invoker := &budgetStatusInvokerFake{}
+	reader, manifest, activeAt := testBudgetStatusReader(t, invoker)
+	invoker.result = budgetStatusResultForManifest(t, manifest, "1-4")
+	_, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, manifest.CoverageEnd)
+	if !errors.Is(err, ErrBudgetStatusOutsideCoverage) || !errors.Is(err, ErrBudgetStatusUnavailable) {
+		t.Fatalf("outside coverage error = %v", err)
+	}
+	unknown := control.PolicyKey("missing-policy")
+	_, err = reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{PolicyKey: &unknown}, activeAt)
+	if !errors.Is(err, ErrBudgetStatusUnknownPolicy) || !errors.Is(err, ErrBudgetStatusUnavailable) {
+		t.Fatalf("unknown policy error = %v", err)
+	}
+	if invoker.calls != 0 {
+		t.Fatalf("function calls = %d, want request misses rejected before the Redis read", invoker.calls)
+	}
+}
+
+type budgetStatusRotatingGenerationFake struct {
+	budgetStatusGenerationFake
+	next  ActiveBudgetGeneration
+	calls *int
+}
+
+func (fake budgetStatusRotatingGenerationFake) ActiveGeneration(context.Context) (ActiveBudgetGeneration, error) {
+	*fake.calls++
+	if *fake.calls == 1 {
+		return fake.pointer, nil
+	}
+	return fake.next, nil
+}
+
+func TestRedisBudgetStatusReaderKeepsMissesRetryableAcrossRotation(t *testing.T) {
+	invoker := &budgetStatusInvokerFake{}
+	_, manifest, activeAt := testBudgetStatusReader(t, invoker)
+	pointer, err := manifest.Pointer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := pointer
+	next.GenerationID = "generation-2"
+	unknown := control.PolicyKey("missing-policy")
+	for _, test := range []struct {
+		name     string
+		query    control.BudgetStatusQuery
+		activeAt time.Time
+	}{
+		{name: "outside coverage", activeAt: manifest.CoverageEnd},
+		{name: "unknown policy", query: control.BudgetStatusQuery{PolicyKey: &unknown}, activeAt: activeAt},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			reader, err := NewRedisBudgetStatusReader(BudgetStatusReaderOptions{
+				Generation: budgetStatusRotatingGenerationFake{budgetStatusGenerationFake: budgetStatusGenerationFake{pointer: pointer, manifest: manifest}, next: next, calls: &calls},
+				Invoker:    invoker,
+				Keys:       testBudgetKeySpaceForAdapter(t),
+				Clock:      func() time.Time { return activeAt },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = reader.ReadBudgetStatus(context.Background(), test.query, test.activeAt)
+			if !errors.Is(err, ErrBudgetStatusUnavailable) || errors.Is(err, ErrBudgetStatusOutsideCoverage) || errors.Is(err, ErrBudgetStatusUnknownPolicy) {
+				t.Fatalf("error = %v, want untyped unavailable after rotation", err)
+			}
+		})
+	}
+}
+
 func TestRedisBudgetStatusReaderFailsClosedWhenActivePointerChanges(t *testing.T) {
 	readerInvoker := &budgetStatusInvokerFake{}
 	_, manifest, activeAt := testBudgetStatusReader(t, readerInvoker)

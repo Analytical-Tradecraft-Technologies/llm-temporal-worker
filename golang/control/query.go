@@ -167,6 +167,14 @@ func (service *QueryService) Execute(ctx context.Context, request llm.QueryReque
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return llm.QueryResponseV1{}, ctxErr
 		}
+		// A continuation whose pinned provider view has expired can never be
+		// served: retrying the same cursor fails identically. Report it as a
+		// permanent cursor error so the caller restarts from the first page.
+		if errors.Is(err, ErrProviderViewExpired) {
+			mapped := provider.NewError(provider.CodeInvalidArgument, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "query cursor view expired; restart pagination")
+			mapped.Cause = fmt.Errorf("%w: %w", ErrQueryCursor, err)
+			return llm.QueryResponseV1{}, mapped
+		}
 		// Query handlers are the storage/control-plane boundary. Untyped
 		// handler failures must not cross the Activity seam as caller input:
 		// classify them as unavailable durable state so Temporal can retry the

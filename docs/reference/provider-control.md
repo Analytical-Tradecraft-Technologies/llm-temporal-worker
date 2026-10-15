@@ -169,8 +169,9 @@ through pagination. Filters and the keyset position are applied to the pinned
 view; public scope/filter authentication stays in `control.CursorCodec`.
 
 Views expire 15 minutes after creation, independently of observation freshness.
-An expired continuation returns `control.ErrProviderViewExpired`; callers must
-restart pagination. It never silently reconstructs a continuation from newer
+An expired continuation returns `control.ErrProviderViewExpired`, which the
+query boundary reports as a non-retryable `invalid_argument` cursor error;
+callers must restart pagination. It never silently reconstructs a continuation from newer
 state, even when a deployment gives its signed cursor a longer lifetime.
 These views are temporary query snapshots, not a historical event ledger.
 
