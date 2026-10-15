@@ -14,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid"
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string) (anthropic.MessageNewParams, error) {
@@ -249,7 +250,7 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 			"role": "assistant",
 			"content": []any{map[string]any{
 				"type":  "tool_use",
-				"id":    value.ID,
+				"id":    toolcallid.Portable(value.ID),
 				"name":  value.Name,
 				"input": input,
 			}},
@@ -266,7 +267,7 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 			"role": "user",
 			"content": []any{map[string]any{
 				"type":        "tool_result",
-				"tool_use_id": value.CallID,
+				"tool_use_id": toolcallid.Portable(value.CallID),
 				"content":     content,
 				"is_error":    value.IsError,
 			}},

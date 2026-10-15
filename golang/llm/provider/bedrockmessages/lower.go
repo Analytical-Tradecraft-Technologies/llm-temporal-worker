@@ -14,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid"
 )
 
 // lowerRequest builds the Anthropic body InvokeModel forwards to the model.
@@ -185,7 +186,7 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 		}
 		// Preserve numeric literals in historical tool arguments.
 		input := json.RawMessage(value.Arguments)
-		return map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": value.ID, "name": value.Name, "input": input}}}, nil
+		return map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": toolcallid.Portable(value.ID), "name": value.Name, "input": input}}}, nil
 	case llm.ToolResult:
 		if value.CallID == "" {
 			return nil, fmt.Errorf("tool result requires call ID")
@@ -194,7 +195,7 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": value.CallID, "content": content, "is_error": value.IsError}}}, nil
+		return map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": toolcallid.Portable(value.CallID), "content": content, "is_error": value.IsError}}}, nil
 	case llm.ProviderState:
 		raw, err := providerStateRaw(value)
 		if err != nil {

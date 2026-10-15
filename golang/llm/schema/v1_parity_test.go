@@ -119,11 +119,19 @@ func parityGenerateRequests() map[string]llm.GenerateRequestV1 {
 	}
 	var all []llm.Item
 	for name, item := range parityItems() {
+		// Requests reject empty message content and empty text parts; a
+		// response may still carry them (see TestV1RequestsRejectEmptyContent).
+		if name == "message-empty" || name == "message-text-empty" {
+			continue
+		}
 		requests["append-"+name] = llm.GenerateRequestV1{OperationKey: "op", Context: context, Append: []llm.Item{item}}
 		all = append(all, item)
 	}
 	requests["append-every-item"] = llm.GenerateRequestV1{OperationKey: "op", Context: context, Parent: &parent, Append: all}
 	for name, part := range parityParts() {
+		if name == "text-empty" {
+			continue
+		}
 		instructions := []llm.Instruction{{Kind: llm.InstructionKindParts, Level: llm.InstructionLevelApplication, Content: []llm.Part{part}}}
 		requests["instruction-"+name] = llm.GenerateRequestV1{OperationKey: "op", Context: context, SettingsPatch: llm.SettingsPatchV1{Instructions: llm.Patch[[]llm.Instruction]{Set: &instructions}}}
 	}
