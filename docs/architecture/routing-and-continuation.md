@@ -312,8 +312,9 @@ plain-text message from which provider-state items and parts are left out, no
 retained items, and no `Continuation`. The planner therefore routes it like any
 stateless request. The retained items keep their provenance at their new
 positions in the compacted checkpoint, so the next Generate is pinned as
-before. A summary that itself contains provider state is rejected
-(`compaction.PlainTextSummary`), so a compaction never records new provenance.
+before. Provider state returned beside the summary text (such as a Responses
+reasoning item) is dropped by `compaction.PlainTextSummary`: only the text
+becomes the summary, so a compaction never records new provenance.
 
 Not applied on this path: soft provider prompt-cache affinity. No v1
 publication records a `ProviderCacheAffinitySet`, so there is nothing to

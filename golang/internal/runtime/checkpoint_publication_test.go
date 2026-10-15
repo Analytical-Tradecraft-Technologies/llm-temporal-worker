@@ -173,8 +173,9 @@ func TestCheckpointPublicationRetriesIdenticalBlobs(t *testing.T) {
 	}
 }
 func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
-	for _, noWork := range []bool{false, true} {
-		t.Run(map[bool]string{false: "summary", true: "no_work"}[noWork], func(t *testing.T) {
+	for _, mode := range []string{"summary", "summary_with_reasoning_and_citations", "no_work"} {
+		t.Run(mode, func(t *testing.T) {
+			noWork := mode == "no_work"
 			p, replay, store, id, req, result := publicationFixture(t)
 			if !noWork {
 				for i := 0; i < 20; i++ {
@@ -194,6 +195,13 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 			id = nextPublication(id)
 			result.OperationKey = compact.OperationKey
 			result.OperationID = string(id.OperationID)
+			text := publishedSummaryText(t, result)
+			if mode == "summary_with_reasoning_and_citations" {
+				// Responses reasoning models lead with a reasoning item and
+				// Exa appends citations; only the text is the summary.
+				result.Output = append(append([]llm.Item{llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json", Opaque: []byte(`{}`)}}, result.Output...),
+					llm.Reference{URI: "https://example.com/source"})
+			}
 			var summary *llm.Response
 			if !noWork {
 				summary = &result
@@ -210,7 +218,7 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 			}
 			want := base.State.Items
 			if !noWork {
-				want = append([]llm.Item{compaction.SummaryItem(publishedSummaryText(t, result))}, prepared.Selection.Retained...)
+				want = append([]llm.Item{compaction.SummaryItem(text)}, prepared.Selection.Retained...)
 			}
 			if !reflect.DeepEqual(next.State.Items, want) || !reflect.DeepEqual(next.State.Settings, base.State.Settings) {
 				t.Fatal("compaction changed suffix or application settings")

@@ -151,6 +151,27 @@ func TestPlainTextSummaryRejectsToolAndBoundsOutput(t *testing.T) {
 	if got, err := PlainTextSummary(response, 64); err != nil || got != "summary" {
 		t.Fatalf("summary = %q, err=%v", got, err)
 	}
+	reasoning := llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json", Opaque: []byte(`{}`)}
+	citation := llm.Reference{URI: "https://example.com/source"}
+	withCompanions := response
+	withCompanions.Output = append(append([]llm.Item{reasoning}, response.Output...), citation)
+	if got, err := PlainTextSummary(withCompanions, 64); err != nil || got != "summary" {
+		t.Fatalf("summary with reasoning and citation = %q, err=%v", got, err)
+	}
+	withCompanions.Output = append(append([]llm.Item{&reasoning}, response.Output...), &citation)
+	if got, err := PlainTextSummary(withCompanions, 64); err != nil || got != "summary" {
+		t.Fatalf("summary with pointer-form reasoning and citation = %q, err=%v", got, err)
+	}
+	for _, malformed := range []llm.Item{(*llm.ProviderState)(nil), (*llm.Reference)(nil)} {
+		withCompanions.Output = append([]llm.Item{malformed}, response.Output...)
+		if _, err := PlainTextSummary(withCompanions, 64); err == nil {
+			t.Fatalf("typed nil %T accepted as a summary companion", malformed)
+		}
+	}
+	withCompanions.Output = []llm.Item{reasoning, citation}
+	if _, err := PlainTextSummary(withCompanions, 64); err == nil {
+		t.Fatal("summary without model text accepted")
+	}
 	response.Output = append(response.Output, llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)})
 	if _, err := PlainTextSummary(response, 64); err == nil {
 		t.Fatal("tool call accepted as compaction output")
