@@ -13,6 +13,7 @@ import (
 	domainactivity "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
@@ -430,6 +431,119 @@ func TestWorkerPauseStopsPollingAndResumeBuildsFreshController(t *testing.T) {
 	if !controllers[1].stopped.Load() || health.Ready() {
 		t.Fatal("permanent stop did not stop the resumed controller")
 	}
+}
+
+func workerPollingGauge(t *testing.T, metrics *observability.Metrics) float64 {
+	t.Helper()
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() == "llmtw_worker_polling" && len(family.GetMetric()) == 1 {
+			return family.GetMetric()[0].GetGauge().GetValue()
+		}
+	}
+	t.Fatal("llmtw_worker_polling gauge not found")
+	return 0
+}
+
+// fatalWorker stands in for an SDK worker that stops itself after a fatal poll
+// error: the SDK calls OnFatalError and then, once it returns, Stop.
+type fatalWorker struct {
+	fakeWorker
+	onFatal func(error)
+}
+
+func (worker *fatalWorker) fail(err error) {
+	worker.onFatal(err)
+	if !worker.stopped.Load() {
+		worker.Stop()
+	}
+}
+
+func TestWorkerFatalSDKStopClearsReadinessAndResumeRebuildsController(t *testing.T) {
+	health := httpserver.NewHealthState()
+	metrics, err := observability.NewMetrics(observability.AllowedValues{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	controllers := make([]*fatalWorker, 0, 2)
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health, Metrics: metrics,
+		Factory: func(_ client.Client, _ string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+			if options.OnFatalError == nil {
+				t.Fatal("worker options have no OnFatalError callback")
+			}
+			controller := &fatalWorker{onFatal: options.OnFatalError}
+			mu.Lock()
+			controllers = append(controllers, controller)
+			mu.Unlock()
+			return controller, &fakeRegistry{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := temporalWorker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if !health.Ready() || workerPollingGauge(t, metrics) != 1 {
+		t.Fatal("worker did not report polling after Start")
+	}
+	controllers[0].fail(errors.New("namespace not found"))
+	if health.Ready() || temporalWorker.Started() || workerPollingGauge(t, metrics) != 0 {
+		t.Fatalf("after fatal stop ready=%v started=%v polling=%v, want all false", health.Ready(), temporalWorker.Started(), workerPollingGauge(t, metrics))
+	}
+	if !controllers[0].stopped.Load() {
+		t.Fatal("fatally stopped controller was not stopped")
+	}
+	resumeWorkerAfterDrain(t, temporalWorker, "fatally stopped controller drain")
+	mu.Lock()
+	count := len(controllers)
+	mu.Unlock()
+	if count != 2 || !controllers[1].started.Load() || !health.Ready() || !temporalWorker.Started() || workerPollingGauge(t, metrics) != 1 {
+		t.Fatalf("resume after fatal stop controllers=%d ready=%v started=%v", count, health.Ready(), temporalWorker.Started())
+	}
+	// A late callback from the replaced controller must not touch the new one.
+	controllers[0].onFatal(errors.New("late"))
+	if !health.Ready() || !temporalWorker.Started() || controllers[1].stopped.Load() {
+		t.Fatal("stale fatal callback affected the replacement controller")
+	}
+	temporalWorker.Stop()
+	if !controllers[1].stopped.Load() || health.Ready() {
+		t.Fatal("permanent stop did not stop the rebuilt controller")
+	}
+}
+
+func TestWorkerFatalSDKStopAfterPauseIsIgnored(t *testing.T) {
+	health := httpserver.NewHealthState()
+	var controller *fatalWorker
+	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
+		Factory: func(_ client.Client, _ string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+			controller = &fatalWorker{onFatal: options.OnFatalError}
+			return controller, &fakeRegistry{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := temporalWorker.Start(); err != nil {
+		t.Fatal(err)
+	}
+	paused := controller
+	temporalWorker.Pause()
+	waitForWorkerCondition(t, func() bool { return paused.stopped.Load() }, "paused controller stop")
+	paused.onFatal(errors.New("namespace not found"))
+	resumeWorkerAfterDrain(t, temporalWorker, "paused controller drain")
+	if controller == paused || !health.Ready() || !temporalWorker.Started() {
+		t.Fatal("fatal callback from a paused controller blocked Resume")
+	}
+	temporalWorker.Stop()
 }
 
 func TestWorkerPauseReturnsBeforeDrainAndResumeWaitsForCompletion(t *testing.T) {
