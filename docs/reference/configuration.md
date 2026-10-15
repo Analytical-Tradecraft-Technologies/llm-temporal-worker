@@ -603,15 +603,23 @@ workflow Activity policy using this worker must use the same cadence and a
 Validation enforces the bounds of the internal request workflow's Activity
 options: `heartbeat_keepalive_interval` may be at most `10s` (one third of the
 `30s` heartbeat timeout), `limits.provider_timeout` must be shorter than the
-`5m` Activity start-to-close timeout, and `server.inline_payload_bytes` may be
+`10m` Activity start-to-close timeout, and `server.inline_payload_bytes` may be
 at most 2 MiB, Temporal's default payload blob limit.
+
+Provider execution uses that same ten-minute Activity bound, including resumable
+polls, while preserving any shorter parent deadline. Choose endpoint and global
+provider timeouts below this bound with room to save the outcome. The durable
+uncertain-submission fence remains fifteen minutes, so raising these limits does
+not grant a second dispatch while a slow attempt can still be running. Endpoint
+defaults are unchanged; increasing only a caller's workflow timeout does not
+extend a configured provider HTTP deadline.
 
 `server.shutdown_timeout` is the process-wide shutdown budget. It must be
 strictly greater than `temporal.worker.graceful_stop_timeout` plus
 `server.finalization_timeout`; equality is rejected so shutdown still has
 bounded time to close clients and flush telemetry after in-flight Activities
 drain. `graceful_stop_timeout` applies only to termination: a dependency
-pause lets in-flight Activities finish within the `5m` start-to-close timeout
+pause lets in-flight Activities finish within the `10m` start-to-close timeout
 instead of cancelling them. Kubernetes `terminationGracePeriodSeconds` must then exceed the same
 shutdown budget (with deployment-specific margin), as described in the
 [deployment shutdown contract](../architecture/deployment-and-operations.md#probes-and-shutdown).

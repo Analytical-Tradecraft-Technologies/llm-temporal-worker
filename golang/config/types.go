@@ -622,7 +622,7 @@ func validateIdentifier(value, path string) error {
 // heartbeat timeout, and a larger inline payload is rejected by Temporal.
 // An architecture test keeps these aligned with workflows/internal.go.
 const (
-	ActivityStartToClose     = 5 * time.Minute
+	ActivityStartToClose     = 10 * time.Minute
 	ActivityHeartbeatTimeout = 30 * time.Second
 	TemporalBlobLimitBytes   = 2 << 20
 )

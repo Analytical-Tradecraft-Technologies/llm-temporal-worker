@@ -64,7 +64,8 @@ follow. Results are compared in canonical JSON form, so the key order a provider
 used in tool-call arguments is not a different result. Callers receive the
 canonical, key-sorted arguments held in the saved response.
 
-Provider calls have a five-minute bound. Saving an execution revision and
+Provider calls share the Activity's ten-minute bound and honor any shorter
+parent or configured HTTP deadline. Saving an execution revision and
 settlement each have a separate bound even if the activity context has ended.
 One save attempt has ten seconds. A transient storage failure is retried in
 process, with the identical revision, after 200 ms, 1 s and 3 s while a
