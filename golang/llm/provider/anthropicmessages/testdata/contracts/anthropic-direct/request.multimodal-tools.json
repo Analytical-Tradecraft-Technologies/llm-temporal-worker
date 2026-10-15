@@ -1,5 +1,5 @@
 {
-  "container": "container-1",
+  "inference_geo": "us",
   "max_tokens": 321,
   "messages": [
     {

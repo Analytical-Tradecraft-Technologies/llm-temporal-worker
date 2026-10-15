@@ -1168,7 +1168,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}
-		return openairesponses.NewOpenAIAdapter(openaiClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)))
+		return openairesponses.NewOpenAIAdapter(openaiClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)), openairesponses.WithAllowedExtensionFields(responsesExtensionFields(endpoint)...))
 	case "azure_openai_responses":
 		apiVersion := factory.azureAPIVersion(endpointID, endpoint)
 		if apiVersion == "" {
@@ -1184,7 +1184,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)), openairesponses.WithAllowedExtensionFields(responsesExtensionFields(endpoint)...))
 		case "bearer_env", "header_env":
 			key, err := factory.providerSecret(ctx, endpoint.Auth, endpointID)
 			if err != nil {
@@ -1194,7 +1194,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 			if err != nil {
 				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 			}
-			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)))
+			return openairesponses.NewAzureAdapter(azureClient, endpointID, capabilities.Version, openairesponses.WithProviderStoragePermitted(providerStoragePermitted(value, endpoint)), openairesponses.WithAllowedExtensionFields(responsesExtensionFields(endpoint)...))
 		default:
 			return nil, factory.unsupportedAuth(endpointID, endpoint.Auth.Kind)
 		}
@@ -1609,6 +1609,16 @@ func anthropicExtensionSpecs(endpoint config.EndpointConfig) map[string]anthropi
 		result[namespace] = anthropicmessages.ExtensionSpec{Fields: mapped}
 	}
 	return result
+}
+
+// responsesExtensionFields lists the openai.responses extension keys the
+// endpoint configures. The adapter keeps only the fields it supports.
+func responsesExtensionFields(endpoint config.EndpointConfig) []string {
+	fields := make([]string, 0, len(endpoint.Extensions["openai.responses"]))
+	for field := range endpoint.Extensions["openai.responses"] {
+		fields = append(fields, field)
+	}
+	return fields
 }
 
 func extensionValue(endpoint config.EndpointConfig, namespace, field string) any {

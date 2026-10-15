@@ -169,7 +169,10 @@ func (profile Profile) validate() error {
 			if field == "" {
 				return fmt.Errorf("anthropic messages profile %q extension %q contains an empty field", profile.ID, namespace)
 			}
-			if wire == "model" || wire == "messages" || wire == "service_tier" {
+			if wire == "" {
+				wire = field
+			}
+			if requestOwnedWireField(wire) {
 				return fmt.Errorf("anthropic messages profile %q extension %q cannot override %q", profile.ID, namespace, wire)
 			}
 		}
@@ -178,6 +181,21 @@ func (profile Profile) validate() error {
 		return fmt.Errorf("anthropic messages profile %q default max_tokens must not be negative", profile.ID)
 	}
 	return nil
+}
+
+// These controls belong to the normalized request used for capability checks,
+// estimation, admission and lift validation. A caller extension may not
+// replace them after those checks: doing so could drop the output schema or
+// instructions, bypass sampling ranges, or add unbudgeted server tools.
+func requestOwnedWireField(wire string) bool {
+	switch wire {
+	case "model", "messages", "service_tier", "max_tokens", "system", "tools",
+		"tool_choice", "output_config", "thinking", "temperature", "top_p",
+		"top_k", "stop_sequences", "container", "mcp_servers", "metadata", "stream":
+		return true
+	default:
+		return false
+	}
 }
 
 func (profile Profile) capabilityVersion() string {

@@ -43,7 +43,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
 		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopK: &topK, StopSequences: []string{"END"}},
 		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone},
-		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"container_id":"container-1"}`)},
+		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"geo":"us"}`)},
 	}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: request,
@@ -95,8 +95,8 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	if wire["output_config"].(map[string]any)["format"].(map[string]any)["type"] != "json_schema" {
 		t.Fatalf("output config = %#v", wire["output_config"])
 	}
-	if wire["container"] != "container-1" {
-		t.Fatalf("extension = %#v", wire["container"])
+	if wire["inference_geo"] != "us" {
+		t.Fatalf("extension = %#v", wire["inference_geo"])
 	}
 }
 

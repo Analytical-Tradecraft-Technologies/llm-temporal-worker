@@ -282,16 +282,20 @@ Extensions are namespaced by adapter profile:
 {
   "extensions": {
     "openrouter": {"provider_order": ["Lambda", "Together"]},
-    "openai_responses": {"include": ["reasoning.encrypted_content"]}
+    "openai.responses": {"include": ["reasoning.encrypted_content"]}
   }
 }
 ```
 
-Each endpoint profile has an allow-list and schema. An extension for a different
-profile is an error in strict mode and a diagnostic drop in best-effort mode.
+Each endpoint profile has an allow-list and schema. An extension that the
+endpoint does not allow, or that targets a different profile, is rejected before
+dispatch in both portability modes; an adapter without an allow-list (Bedrock
+Messages, Bedrock Converse) rejects every extension.
 Extensions are included in request hashing and price/capability resolution.
 They may not override model, service class, maximum output, routing, auth, base
-URL, timeout, retry count, or budget fields.
+URL, timeout, retry count, or budget fields, nor any control the normalized
+request owns (instructions, tools and tool choice, output format, reasoning,
+sampling, stop sequences or streaming).
 
 ## Generate response
 

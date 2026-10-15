@@ -442,12 +442,16 @@ func newFixtureAdapterWithTransport(t *testing.T, body []byte, onCall func()) *A
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "openai-prod", "cap-test")
+	adapter, err := New(client, "openai-prod", "cap-test", allowSupportedExtensions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return adapter
 }
+
+// allowSupportedExtensions allows every supported openai.responses extension
+// field, as an endpoint that lists all of them would.
+var allowSupportedExtensions = WithAllowedExtensionFields("include", "store", "truncation")
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

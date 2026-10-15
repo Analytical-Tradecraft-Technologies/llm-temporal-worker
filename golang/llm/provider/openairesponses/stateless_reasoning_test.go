@@ -19,7 +19,7 @@ const encryptedReasoningInclude = "reasoning.encrypted_content"
 func storagePolicyAdapter(t *testing.T, permitted bool, body []byte) *ModelListerAdapter {
 	t.Helper()
 	fixture := newFixtureAdapterWithTransport(t, body, nil)
-	adapter, err := NewOpenAIAdapter(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(permitted))
+	adapter, err := NewOpenAIAdapter(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(permitted), allowSupportedExtensions)
 	if err != nil {
 		t.Fatal(err)
 	}

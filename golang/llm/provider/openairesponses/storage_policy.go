@@ -19,6 +19,23 @@ func WithProviderStoragePermitted(permitted bool) AdapterOption {
 	return func(adapter *Adapter) { adapter.storageDenied = !permitted }
 }
 
+// WithAllowedExtensionFields sets the openai.responses extension fields the
+// endpoint accepts, normally the keys configured under the endpoint's
+// openai.responses extension. Only fields the adapter supports are kept, and
+// background is never accepted: a queued response is not a terminal result,
+// so the run would be billed but never retrieved.
+func WithAllowedExtensionFields(fields ...string) AdapterOption {
+	return func(adapter *Adapter) {
+		allowed := make(map[string]struct{}, len(fields))
+		for _, field := range fields {
+			if _, supported := supportedExtensionFields[field]; supported {
+				allowed[field] = struct{}{}
+			}
+		}
+		adapter.allowedExtensions = allowed
+	}
+}
+
 func (adapter *Adapter) enforceStoragePolicy(params *responses.ResponseNewParams) error {
 	if !adapter.storageDenied {
 		return nil

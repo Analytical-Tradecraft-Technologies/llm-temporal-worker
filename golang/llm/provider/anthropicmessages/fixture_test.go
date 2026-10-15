@@ -52,7 +52,7 @@ func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
 		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
 		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopK: &topK, StopSequences: []string{"END"}},
 		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone},
-		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"container_id":"container-1"}`)},
+		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"geo":"us"}`)},
 	}
 	params, err := lowerRequest(request, profile, "auto")
 	if err != nil {

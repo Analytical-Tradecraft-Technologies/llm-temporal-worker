@@ -574,10 +574,9 @@ telemetry:
 ```
 
 `continuation.allow_provider_hosted_state` is the global switch for provider-held
-conversation state. A Responses endpoint may store responses, run in the
-background or continue from `previous_response_id` only when both this switch
-and the endpoint's `provider_storage.permitted` are true; otherwise it runs
-statelessly. `continuation.retain_canonical_transcript` must be `true` (the
+conversation state. A Responses endpoint may store responses or continue from
+`previous_response_id` only when both this switch and the endpoint's
+`provider_storage.permitted` are true; otherwise it runs statelessly. `continuation.retain_canonical_transcript` must be `true` (the
 default when omitted): v1 checkpoints always retain the canonical transcript.
 `capabilities.unknown_in_strict_mode` must be `reject`, the only implemented
 strict-mode behaviour. `limits.items`, `limits.parts_per_item`, `limits.tools`,
@@ -1358,11 +1357,24 @@ atomic rename or a ConfigMap update, which are never observed half written.
 ### Responses provider storage policy
 
 For OpenAI and Azure Responses endpoints, `provider_storage.permitted: false`
-(the default) explicitly sends `store: false`. Requests that enable `store` or
-`background`, or use a stored-response continuation ID, are rejected before
-provider dispatch. Returned responses do not expose provider continuation
-handles under this policy. Set `permitted: true` to permit those provider
-storage features; callers may still explicitly request `store: false`.
+(the default) explicitly sends `store: false`. Requests that enable `store`, or
+use a stored-response continuation ID, are rejected before provider dispatch.
+Returned responses do not expose provider continuation handles under this
+policy. Set `permitted: true` to permit those provider storage features;
+callers may still explicitly request `store: false`.
+
+A caller's `openai.responses` extension may set only the fields the endpoint
+lists under `extensions.openai.responses`, and only `include`, `store` and
+`truncation` are supported. `background` is always rejected: a background run
+returns a queued response that the worker cannot complete, while the provider
+continues and bills it.
+
+```yaml
+    extensions:
+      openai.responses:
+        include: {}
+        truncation: {}
+```
 
 Because a request with `store: false` cannot refer back to a stored reasoning
 item, a storage-denied endpoint also requests

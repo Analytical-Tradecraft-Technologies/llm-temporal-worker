@@ -22,6 +22,9 @@ type Adapter struct {
 	storageDenied     bool
 	omitServiceTier   bool
 	exaAgent          bool
+	// allowedExtensions holds the openai.responses extension fields this
+	// endpoint accepts. Empty rejects every extension field.
+	allowedExtensions map[string]struct{}
 }
 
 // WithoutRequestServiceTier keeps service_tier out of the request for APIs
@@ -82,7 +85,7 @@ func (adapter *Adapter) Name() string { return adapterName }
 // endpoint's configured provider value for the class; empty keeps the
 // canonical Responses tier for the class.
 func (adapter *Adapter) lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, tier string) (map[string]any, loweredToolPolicy, error) {
-	requestMap, policy, err := lowerRequestMap(request, serviceClass, adapter.storageDenied)
+	requestMap, policy, err := lowerRequestMap(request, serviceClass, adapter.storageDenied, adapter.allowedExtensions)
 	if err != nil {
 		return nil, loweredToolPolicy{}, err
 	}

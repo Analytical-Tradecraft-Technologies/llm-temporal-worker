@@ -14,7 +14,7 @@ func testProfile() Profile {
 	profile.ExpectedBaseURL = "https://api.anthropic.com/v1"
 	profile.ExpectedModel = "claude-contract"
 	profile.AllowedExtensions = map[string]ExtensionSpec{
-		"anthropic.contract": {Fields: map[string]string{"container_id": "container"}},
+		"anthropic.contract": {Fields: map[string]string{"geo": "inference_geo"}},
 	}
 	return profile
 }
