@@ -395,6 +395,10 @@ func lowerPart(part llm.Part) (map[string]any, error) {
 		}
 		if value.Title != "" {
 			file["filename"] = value.Title
+		} else if url == "" {
+			// Responses rejects file_data without a filename, and a v1 title
+			// is optional, so an untitled inline document gets a fixed name.
+			file["filename"] = inlineDocumentFilename(value.MediaType)
 		}
 		return file, nil
 	case llm.RefusalPart, llm.ProviderStatePart:
@@ -412,6 +416,34 @@ func mediaURL(rawURL string, data []byte, mediaType string) (string, error) {
 		return "", fmt.Errorf("blob-backed media is not available to adapter")
 	}
 	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// documentExtensions maps a document media type to the extension of the
+// filename sent with an untitled inline document. It is a fixed table rather
+// than the host MIME database so the wire body stays deterministic.
+var documentExtensions = map[string]string{
+	"application/json":              ".json",
+	"application/msword":            ".doc",
+	"application/pdf":               ".pdf",
+	"application/rtf":               ".rtf",
+	"application/vnd.ms-excel":      ".xls",
+	"application/vnd.ms-powerpoint": ".ppt",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         ".xlsx",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   ".docx",
+	"application/xml": ".xml",
+	"text/csv":        ".csv",
+	"text/html":       ".html",
+	"text/markdown":   ".md",
+	"text/plain":      ".txt",
+	"text/xml":        ".xml",
+}
+
+// inlineDocumentFilename derives the filename for an untitled inline document
+// from its media type, ignoring parameters and case.
+func inlineDocumentFilename(mediaType string) string {
+	base, _, _ := strings.Cut(mediaType, ";")
+	return "document" + documentExtensions[strings.ToLower(strings.TrimSpace(base))]
 }
 
 func mediaFile(rawURL string, data []byte, mediaType string) (string, string, error) {

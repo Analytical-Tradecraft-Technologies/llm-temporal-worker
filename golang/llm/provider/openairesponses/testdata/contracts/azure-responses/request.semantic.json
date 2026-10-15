@@ -16,7 +16,8 @@
       "content": [
         {"kind": "text", "text": "describe the azure fixture"},
         {"kind": "image", "url": "https://example.test/azure-fixture.png", "media_type": "image/png", "detail": "high"},
-        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf", "title": "azure-fixture.pdf"}
+        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf", "title": "azure-fixture.pdf"},
+        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf"}
       ]
     },
     {"kind": "tool_call", "id": "azure-call-input", "name": "lookup", "arguments": {"query": "azure fixture"}},
