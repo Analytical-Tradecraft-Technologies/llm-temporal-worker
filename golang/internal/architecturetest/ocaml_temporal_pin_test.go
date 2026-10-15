@@ -15,6 +15,7 @@ func TestOCamlTemporalPinCheckerRejectsMismatchedPrefetchHelperCommit(t *testing
 		"scripts/check-ocaml-temporal-pin.sh",
 		"scripts/ci/prefetch-temporal-sdk-cargo.sh",
 		"ocaml/llm_temporal_worker/llm-temporal-ocaml.opam",
+		"ocaml/llm_temporal_worker/README.md",
 		".github/workflows/master.yml",
 		".github/workflows/pull-request.yml",
 	} {

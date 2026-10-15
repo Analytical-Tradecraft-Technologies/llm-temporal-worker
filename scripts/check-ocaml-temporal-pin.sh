@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep the package's immutable SDK source and both CI install paths aligned.
-# The source and hash are intentionally repeated in package metadata and
-# workflows, while the Cargo prefetch helper records the approved checkout.
-# This check prevents any copy from silently drifting.
+# Keep the package's immutable SDK source, its documented install recipe, and
+# both CI install paths aligned. The source and hash are intentionally repeated
+# in package metadata, the README, and workflows, while the Cargo prefetch
+# helper records the approved checkout. This check prevents any copy from
+# silently drifting.
 canonical_source='git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git'
 source_reference_pattern='git\+https://github\.com/[^/]+/ocaml-temporal\.git#[0-9a-f]{40}'
 prefetch_helper='scripts/ci/prefetch-temporal-sdk-cargo.sh'
 files=(
   ocaml/llm_temporal_worker/llm-temporal-ocaml.opam
+  ocaml/llm_temporal_worker/README.md
   .github/workflows/master.yml
   .github/workflows/pull-request.yml
 )

@@ -28,23 +28,42 @@ extension/provider metadata) use `Yojson.Safe.t`.
 
 ## Install
 
-Pin the nested package at the deployment commit:
+The `temporal-sdk` dependency builds a Rust library with `cargo build --locked`.
+opam's default build sandbox (Bubblewrap on Linux, `sandbox-exec` on macOS) has
+no network access, so Cargo cannot download crates or the Temporal Core Git
+dependency during `opam install`. Fetch them first, outside the sandbox, into a
+`CARGO_HOME` that the sandbox leaves writable (opam's Dune cache directory), and
+build offline. This needs `cargo` and `protoc` on `PATH`.
 
+Pin both packages at the deployment commit, prefetch, then install:
+
+<!-- ci:readme-install:begin -->
 ```sh
-opam pin add --yes --kind=git llm-temporal-ocaml \
+export CARGO_HOME="${XDG_CACHE_HOME:-$HOME/.cache}/dune/cargo"
+mkdir -p "$CARGO_HOME"
+opam pin add --yes --no-action --kind=git temporal-sdk \
+  'git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#0d3f618590ed09501b004d5052b7bd88b81e2723'
+opam pin add --yes --no-action --kind=git llm-temporal-ocaml \
   'git+https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git#<commit>' \
   --subpath=ocaml/llm_temporal_worker
-opam install --yes llm-temporal-ocaml
+cargo fetch --locked \
+  --manifest-path "$(opam var prefix)/.opam-switch/sources/temporal-sdk/rust/Cargo.toml"
+CARGO_NET_OFFLINE=true opam install --yes llm-temporal-ocaml
 ```
+<!-- ci:readme-install:end -->
 
-Its metadata pins `temporal-sdk` to the validated child-workflow-routing SDK commit
-`0d3f618590ed09501b004d5052b7bd88b81e2723`. Commit an application lock file
-after `opam lock .`, then deploy with `opam install . --locked`.
+The `temporal-sdk` pin is the validated child-workflow-routing SDK commit that
+the package metadata also pins. Commit an application lock file after
+`opam lock .`, then deploy with `opam install . --locked`. Keep the same
+`CARGO_HOME`, repeat the `cargo fetch`, and set `CARGO_NET_OFFLINE=true` for any
+later opam command that rebuilds `temporal-sdk`.
 
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
 
 The repository also contains a separate [downstream Dune consumer smoke
-project](../consumer_smoke). CI installs this package from the Git subpath,
+project](../consumer_smoke). A separate CI job runs the install commands above
+verbatim on a fresh opam switch, with an empty `CARGO_HOME` and opam's build
+sandbox enabled. CI also installs this package from the Git subpath,
 builds that project against the installed public library, and runs its
 deterministic smoke test. This catches packaging, public-name, and basic
 runtime-dispatch regressions that a build from the source directory cannot

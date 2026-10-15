@@ -325,7 +325,7 @@ func TestWorkflowOCamlSandboxUserNamespacesAreGuardedAndScoped(t *testing.T) {
 			t.Fatalf("%s runs OCaml sandbox setup in wrong order: apt=%d sysctl=%d cache=%d setup=%d", workflow.name, aptIndex, sysctlIndex, cacheIndex, setupIndex)
 		}
 		for jobName, rawJob := range workflowMapping(t, workflow, "jobs") {
-			if jobName == "ocaml" {
+			if jobName == "ocaml" || jobName == "ocaml-readme-install" {
 				continue
 			}
 			otherJob, ok := rawJob.(map[string]any)
