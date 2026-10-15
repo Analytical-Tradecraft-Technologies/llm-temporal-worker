@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
 func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testing.T) {
@@ -610,5 +611,33 @@ func TestRedisServiceMeshSecurityContract(t *testing.T) {
 				t.Fatalf("schema validation = %v, valid = %v", err, test.valid)
 			}
 		})
+	}
+}
+
+// validate-config must accept exactly the continuation handle key IDs that
+// state.NewKeyring accepts at startup; payload-codec style IDs with dots or
+// more than 32 characters are rejected up front instead of crash-looping.
+func TestContinuationHandleKeyIDMatchesKeyring(t *testing.T) {
+	base := string(exampleYAML(t))
+	const anchor = "    - id: key-2026-07\n"
+	if !strings.Contains(base, anchor) {
+		t.Fatal("example no longer sets continuation.handle_keys[0].id to key-2026-07")
+	}
+	for _, id := range []string{
+		"key-2026-07",
+		"key_2026",
+		strings.Repeat("k", 32),
+		"key.2026.07",
+		strings.Repeat("k", 33),
+		"key:1",
+	} {
+		_, loadErr := config.Load([]byte(strings.Replace(base, anchor, "    - id: \""+id+"\"\n", 1)))
+		_, keyringErr := state.NewKeyring([]state.Key{{ID: id, Secret: make([]byte, 32), Primary: true}}, nil)
+		if (loadErr == nil) != (keyringErr == nil) {
+			t.Errorf("id %q: Load() = %v, NewKeyring() = %v", id, loadErr, keyringErr)
+		}
+		if loadErr != nil && !strings.Contains(loadErr.Error(), "continuation.handle_keys[0].id must be 1-32 characters") {
+			t.Errorf("id %q: Load() = %v", id, loadErr)
+		}
 	}
 }

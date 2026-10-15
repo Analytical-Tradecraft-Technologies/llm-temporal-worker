@@ -573,6 +573,12 @@ telemetry:
   content_logging: disabled
 ```
 
+`continuation.handle_keys` must hold unique key IDs and exactly one
+`primary: true` key. Each ID is embedded in every handle it signs, so it must be
+1-32 characters from `A-Z a-z 0-9 _ -`. This is stricter than
+`temporal.payload_codec` key IDs: `.` is not allowed, so an ID such as
+`key.2026.07` is rejected.
+
 `continuation.allow_provider_hosted_state` is the global switch for provider-held
 conversation state. A Responses endpoint may store responses or continue from
 `previous_response_id` only when both this switch and the endpoint's
@@ -1348,7 +1354,9 @@ worker:
   classes mapped by those endpoints;
 - `temporal.payload_codec`, when set, names a supported kind and exactly one
   primary key among unique, well-formed key IDs;
-- budget windows, continuation keys, Redis numeric bounds, and retention
+- continuation handle keys use the key ID pattern the worker enforces at
+  startup (`^[A-Za-z0-9_-]{1,32}$`) and name exactly one primary key;
+- budget windows, Redis numeric bounds, and retention
   inequalities are safe, including window bucket counts, limits Redis can
   represent, policy ID length, and the `state.redis.admission_hash_tag`
   character set (1 to 64 bytes without braces or whitespace);
