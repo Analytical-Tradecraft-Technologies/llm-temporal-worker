@@ -36,6 +36,9 @@ type CloudRequestPreparation struct {
 	// activatedAt is when this worker's configuration began serving; each
 	// preparation records it (#1320). Zero records nothing.
 	activatedAt time.Time
+	// references issues and verifies the internal capability a reference
+	// step must present with a request ID (#1362). Nil refuses every Load.
+	references *state.Keyring
 }
 
 // PreparedCloudRequest is invocation-local, not a Temporal result or authority
@@ -393,7 +396,10 @@ func retainedParentFits(parent state.MaterializedState) func([]llm.Item) (bool, 
 }
 
 // Load authenticates the current caller but uses the original immutable input.
-// A request ID is only a locator, never permission to read its transcript.
+// A request ID is only a locator, never permission to read its transcript:
+// the reference must also carry the capability preparation issued for this
+// scope and request. Without one, Load fails exactly as for an unknown
+// request, before any storage read.
 func (p *CloudRequestPreparation) Load(ctx context.Context, reference llm.ExecutionReferenceV1) (PreparedCloudRequest, error) {
 	if _, err := reference.MarshalJSON(); err != nil {
 		return PreparedCloudRequest{}, checkpointReplayError(provider.CodeInvalidArgument)
@@ -403,6 +409,9 @@ func (p *CloudRequestPreparation) Load(ctx context.Context, reference llm.Execut
 		return PreparedCloudRequest{}, err
 	}
 	scope := cloudstate.Scope{Tenant: reference.Context.Tenant, Project: reference.Context.Project}
+	if !p.references.VerifyReferenceCapability(scope.Tenant, scope.Project, reference.RequestID, reference.Capability) {
+		return PreparedCloudRequest{}, cloudRuntimeError(contracts.ErrNotFound, false)
+	}
 	record, err := p.store.Read(ctx, scope, cloudstate.RequestID(reference.RequestID))
 	if err != nil {
 		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
@@ -438,6 +447,21 @@ func (p *CloudRequestPreparation) completedAfterError(ctx context.Context, origi
 		return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 	}
 	return p.restore(ctx, current, cloudstate.RequestPreparation{}, checkpointScope)
+}
+
+// withCapability adds to a successful step result the capability a reference
+// step must present for record's request. Results are saved before this, so
+// the capability is never stored with them.
+func (p *CloudRequestPreparation) withCapability(result llm.ExecutionResultV1, err error, record cloudstate.Record) (llm.ExecutionResultV1, error) {
+	if err != nil || result.RequestID != string(record.Request.ID) {
+		return result, err
+	}
+	capability, err := p.references.IssueReferenceCapability(record.Request.Scope.Tenant, record.Request.Scope.Project, result.RequestID)
+	if err != nil {
+		return llm.ExecutionResultV1{}, checkpointReplayError(provider.CodeConfiguration)
+	}
+	result.Capability = capability
+	return result, nil
 }
 
 func (p *CloudRequestPreparation) authorize(ctx context.Context, caller llm.RequestContext) (string, error) {

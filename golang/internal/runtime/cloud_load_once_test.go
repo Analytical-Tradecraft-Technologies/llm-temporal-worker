@@ -35,7 +35,7 @@ func TestCloudPreparedInputMatchesPreparation(t *testing.T) {
 	f := boundedCloud(t, false, withParentSnapshotBlob)
 	child, v := loadOnceChild(t, f, "child")
 	ctx := context.Background()
-	p, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context})
+	p, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestCloudExecutionRuntimeReadsParentOncePerStep(t *testing.T) {
 	}
 	parentKey = blob.BlobKey(progress.Preparation.Ref.Blob)
 	f.now = f.now.Add(time.Second)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
 	step("acquire", 1, func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) }, llm.ExecutionAcquired)
 	step("generate", 1, func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, child) }, llm.ExecutionProviderCompleted)
 	step("complete", 1, func() (llm.ExecutionResultV1, error) { return f.runtime.CompleteExecutionV1(ctx, ref) }, llm.ExecutionCompleted)
@@ -163,7 +163,7 @@ func TestCloudExecutionRuntimeTurnStillRejectsCorruptParent(t *testing.T) {
 	if json.Unmarshal(record.Progress, &progress) != nil || progress.Preparation.Ref.Blob == "" {
 		t.Fatal("no parent reference")
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.GenerateStepV1(ctx, child)

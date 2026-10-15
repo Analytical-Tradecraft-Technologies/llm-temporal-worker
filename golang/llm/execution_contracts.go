@@ -77,32 +77,53 @@ func (request *PrepareExecutionV1) UnmarshalJSON(data []byte) error {
 
 // ExecutionReferenceV1 is scoped to the caller, not a bearer credential. Runtime
 // implementations must authorize Context before looking up RequestID.
+//
+// RequestID is also the public operation ID, so it is only a locator.
+// Capability is the internal MAC over the scope and request ID that
+// preparation returned; a runtime treats a reference without a valid one as
+// an unknown request. The decoder accepts a missing or unverifiable value for
+// that reason, bounding only its size and alphabet.
 type ExecutionReferenceV1 struct {
-	RequestID string
-	Context   RequestContext
+	RequestID  string
+	Context    RequestContext
+	Capability string
 }
 
 func (request ExecutionReferenceV1) MarshalJSON() ([]byte, error) {
 	if !validExecutionRequestID(request.RequestID) {
 		return nil, fmt.Errorf("execution request ID is invalid")
 	}
+	if !validExecutionCapability(request.Capability) {
+		return nil, fmt.Errorf("execution capability is invalid")
+	}
 	caller, err := marshalRequestContextV1(request.Context)
 	if err != nil {
 		return nil, err
 	}
-	return marshalObject(map[string]any{"request_id": request.RequestID, "context": caller})
+	fields := map[string]any{"request_id": request.RequestID, "context": caller}
+	if request.Capability != "" {
+		fields["capability"] = request.Capability
+	}
+	return marshalObject(fields)
 }
 func (request *ExecutionReferenceV1) UnmarshalJSON(data []byte) error {
 	fields, err := decodeObject(data)
 	if err != nil {
 		return err
 	}
-	if err = checkUnknownFields(fields, "request_id", "context"); err != nil {
+	if err = checkUnknownFields(fields, "request_id", "context", "capability"); err != nil {
 		return err
 	}
 	id, err := requiredString(fields, "request_id")
 	if err != nil || !validExecutionRequestID(id) {
 		return fmt.Errorf("execution request ID is invalid")
+	}
+	capability := ""
+	if _, present := fields["capability"]; present {
+		capability, err = requiredString(fields, "capability")
+		if err != nil || capability == "" || !validExecutionCapability(capability) {
+			return fmt.Errorf("execution capability is invalid")
+		}
 	}
 	raw, err := requireField(fields, "context")
 	if err != nil {
@@ -112,7 +133,7 @@ func (request *ExecutionReferenceV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*request = ExecutionReferenceV1{RequestID: id, Context: caller}
+	*request = ExecutionReferenceV1{RequestID: id, Context: caller, Capability: capability}
 	return nil
 }
 
@@ -149,10 +170,14 @@ type ExecutionResultV1 struct {
 	RetryAfterSeconds int32               `json:"retry_after_seconds,omitempty"`
 	Generate          *GenerateResponseV1 `json:"generate,omitempty"`
 	Compact           *CompactResponseV1  `json:"compact,omitempty"`
+	// Capability is the internal reference capability for RequestID (see
+	// ExecutionReferenceV1). The request workflow removes it before returning
+	// a result, so it never reaches a public caller.
+	Capability string `json:"capability,omitempty"`
 }
 
 func (result ExecutionResultV1) Validate() error {
-	if !validExecutionRequestID(result.RequestID) || (result.Kind != "generate" && result.Kind != "compact") {
+	if !validExecutionRequestID(result.RequestID) || (result.Kind != "generate" && result.Kind != "compact") || !validExecutionCapability(result.Capability) {
 		return fmt.Errorf("execution identity is invalid")
 	}
 	if result.State == ExecutionFailed {
@@ -219,7 +244,7 @@ func (result ExecutionResultV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire(result))
 }
 func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "error_code", "dispatch", "retryable", "generate", "compact"); err != nil {
+	if err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "error_code", "dispatch", "retryable", "generate", "compact", "capability"); err != nil {
 		return err
 	}
 	type wire ExecutionResultV1
@@ -272,6 +297,20 @@ func validExecutionRequestID(id string) bool {
 	}
 	parsed, err := uuid.Parse(strings.TrimPrefix(id, prefix))
 	return err == nil && parsed != uuid.Nil && prefix+parsed.String() == id
+}
+
+// validExecutionCapability bounds an optional reference capability to the
+// size and alphabet the runtime issues. Verification belongs to the runtime.
+func validExecutionCapability(value string) bool {
+	if len(value) > 128 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' && r != '.' {
+			return false
+		}
+	}
+	return true
 }
 func executionFields(data []byte, allowed ...string) error {
 	fields, err := decodeObject(data)

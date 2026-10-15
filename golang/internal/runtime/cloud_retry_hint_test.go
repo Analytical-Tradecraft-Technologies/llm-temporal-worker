@@ -68,7 +68,7 @@ func TestCloudRetryAfterDoesNotDelayFailover(t *testing.T) {
 	if !v.Retryable {
 		t.Fatal("rate limit not retryable")
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.GenerateStepV1(ctx, f.request)
@@ -87,7 +87,7 @@ func TestCloudRetryAfterHoldsTheHintedRoute(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	f.now = f.now.Add(time.Minute)
@@ -124,7 +124,7 @@ func TestCloudExhaustionDoesNotWaitForRetryAfter(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionFailed)
 	if v.Retryable || v.ErrorCode != string(provider.CodeProviderRateLimited) {

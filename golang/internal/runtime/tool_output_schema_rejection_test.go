@@ -77,7 +77,7 @@ func TestToolOutputSchemaRoutingRejectsBeforeBudgetOrDispatch(t *testing.T) {
 			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 			if err == nil {
 				boundedState(t, v, err, llm.ExecutionBudgetRequired)
-				_, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context})
+				_, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
 			}
 			details := rejectedSelection(t, err, provider.CodeUnsupportedCapability, provider.PhaseCompile)
 			if details["route_1"] != "route" || details["reason_1"] != "route_compile_rejected" {

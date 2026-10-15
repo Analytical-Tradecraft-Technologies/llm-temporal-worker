@@ -44,7 +44,7 @@ func TestCloudConcurrentFailureFinalization(t *testing.T) {
 			ctx := context.Background()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, v, err, llm.ExecutionFailed)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 			f.now = f.now.Add(time.Second)
 			// Force another acquisition to advance the root between this caller's
@@ -108,7 +108,7 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 			}
 			ctx := context.Background()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			if async {
 				boundedState(t, v, err, llm.ExecutionPending)
 				f.now = f.now.Add(2 * time.Second)
@@ -221,7 +221,7 @@ func TestCloudPermanentFailureReplaysWithoutParentOrProvider(t *testing.T) {
 	}
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {

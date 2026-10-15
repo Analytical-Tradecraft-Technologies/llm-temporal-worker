@@ -20,7 +20,7 @@ func TestCloudLostRecordBlobIsCorruptNotANewOperation(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	if f.submits.Load() != 1 {

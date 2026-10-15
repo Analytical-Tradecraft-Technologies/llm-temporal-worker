@@ -39,7 +39,7 @@ func TestCloudClockSkewBehindPreviousStepStillAdvances(t *testing.T) {
 				}
 				v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 				boundedState(t, v, err, llm.ExecutionBudgetRequired)
-				ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+				ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 				step("acquire", func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) }, llm.ExecutionAcquired)
 				if async {
 					step("submit", func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, f.request) }, llm.ExecutionPending)
@@ -83,7 +83,7 @@ func TestCloudClockSkewBehindPreviousStepReplacesAttempt(t *testing.T) {
 			lag := func() { f.now = f.now.Add(-skew); f.restart(t) }
 			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 			boundedState(t, v, err, llm.ExecutionBudgetRequired)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			lag()
 			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionAcquired)

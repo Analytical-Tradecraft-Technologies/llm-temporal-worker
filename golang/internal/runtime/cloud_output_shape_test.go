@@ -123,7 +123,7 @@ func TestCloudGenerateUnusableOutputFailsTerminally(t *testing.T) {
 			if err != nil || saved.Execution.Stage != cloudstate.ExecutionSucceeded || !saved.Execution.Settled || saved.Execution.Response.Cost.ActualCostUSD == nil {
 				t.Fatalf("paid attempt was not settled with its cost: %+v, err=%v", saved.Execution, err)
 			}
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			f.now = f.now.Add(time.Hour)
 			f.restart(t)
 			for _, run := range []func() (llm.ExecutionResultV1, error){
@@ -178,7 +178,7 @@ func TestCloudGenerateOutputShapeAfterPoll(t *testing.T) {
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.PollExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context})
+	v, err = f.runtime.PollExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
 	boundedState(t, v, err, llm.ExecutionFailed)
 	if v.FailureCode != "incomplete_response" || f.submits.Load() != 3 {
 		t.Fatalf("failure=%+v submits=%d", v, f.submits.Load())

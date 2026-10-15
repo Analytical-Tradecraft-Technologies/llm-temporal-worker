@@ -37,7 +37,7 @@ func TestCloudCacheWaiterOwnsFillAfterOwnerEndsUnpublished(t *testing.T) {
 	f.now = f.now.Add(31 * time.Second)
 	v, err = f.runtime.GenerateStepV1(ctx, waiter)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: waiter.Context})
+	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: waiter.Context, Capability: v.Capability})
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	if v.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 2 {
 		t.Fatalf("waiter after failed owner: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
@@ -71,7 +71,7 @@ func TestCloudUnknownAttemptContinuesAfterFillTakeover(t *testing.T) {
 			ctx := context.Background()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, v, err, llm.ExecutionPending)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			if f.submits.Load() != 0 {
 				t.Fatal("HTTP without a started fill")
 			}
@@ -80,7 +80,7 @@ func TestCloudUnknownAttemptContinuesAfterFillTakeover(t *testing.T) {
 			second.OperationKey = "second"
 			v, err = f.runtime.GenerateStepV1(ctx, second)
 			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: second.Context})
+			v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: second.Context, Capability: v.Capability})
 			boundedState(t, v, err, llm.ExecutionCompleted)
 			if poll {
 				v, err = f.runtime.PollExecutionV1(ctx, ref)

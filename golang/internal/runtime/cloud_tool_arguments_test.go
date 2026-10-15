@@ -75,7 +75,7 @@ func TestCloudExecutionToolArgumentsKeyOrderCompletesFirstAttempt(t *testing.T) 
 	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Stage != cloudstate.ExecutionSucceeded || !execution.Settled {
 		t.Fatalf("execution stage=%s settled=%t", execution.Stage, execution.Settled)
 	}
-	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context})
+	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	// Callers keep receiving the canonical arguments the saved response holds.
 	call, ok := v.Generate.Output[0].(llm.ToolCall)

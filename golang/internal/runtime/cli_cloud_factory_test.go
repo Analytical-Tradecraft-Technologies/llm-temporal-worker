@@ -420,7 +420,7 @@ func TestTrustedTemporalRevocationPrecedesTerminalReplay(t *testing.T) {
 	store := &preparationTestStore{}
 	f.runtime.preparation.store = store
 	ctx := context.Background()
-	ref := llm.ExecutionReferenceV1{RequestID: completed.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: completed.RequestID, Context: f.request.Context, Capability: completed.Capability}
 	compact := llm.CompactRequestV1{APIVersion: llm.CompactAPIVersion, OperationKey: "compact", Parent: completed.Generate.Checkpoint.Handle, Context: f.request.Context}
 	for name, call := range map[string]func() error{
 		"plan": func() error { _, err := f.runtime.PlanGenerationV1(ctx, f.request); return err },

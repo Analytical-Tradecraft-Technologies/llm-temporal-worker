@@ -122,8 +122,15 @@ states exclude response bodies. Provider job IDs, raw errors, and Redis lease
 receipts are not representable in these envelopes.
 
 Subsequent steps accept an `ExecutionReferenceV1` containing the internal request
-ID and caller context. An ID is not a bearer credential: each runtime step must
-authorize the caller before any lookup, including cached or completed reads.
+ID, caller context and `capability`. An ID is not a bearer credential: each
+runtime step must authorize the caller before any lookup, including cached or
+completed reads. The request ID is also the public `operation_id`, so the cloud
+runtime additionally requires `capability`, a MAC over the tenant, project and
+request ID under the continuation keyring. Runtime steps return it in the
+internal `capability` result field; the request workflow keeps it in its
+reference and strips it from every result it returns, so it never reaches a
+public caller. A reference with a missing or invalid capability fails exactly
+like an unknown request, before any storage read.
 The snapshot proxy holds the configuration lease throughout every step, so a
 reload cannot close a client while that step uses it.
 

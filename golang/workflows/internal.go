@@ -115,6 +115,7 @@ func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResu
 				return llm.ExecutionResultV1{}, err
 			}
 		default:
+			result.Capability = ""
 			return result, nil
 		}
 		if continueRun(ctx, steps+1) {
@@ -145,7 +146,12 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 	if err := checkResult(result, kind, ""); err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: caller}
+	// Preparation returns the internal capability reference steps present with
+	// the request ID. Keep it in the reference only; no returned result carries it.
+	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: caller, Capability: result.Capability}
+	defer func() {
+		returned.Capability = ""
+	}()
 	defer func() {
 		if !workflow.IsContinueAsNewError(returnedErr) && workflow.GetVersion(ctx, "langfuse-export-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
 			exportCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}})

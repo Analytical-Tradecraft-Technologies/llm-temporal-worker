@@ -29,7 +29,7 @@ func TestCloudReloadCompletesSavedSuccessAndWaitsForPendingRecovery(t *testing.T
 				want = llm.ExecutionPending
 			}
 			boundedState(t, v, err, want)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			original := f.cap.ConfigDigest
 			f.cap.ConfigDigest[0]++
 			source := f.cap.Snapshot.(*planningSource)
@@ -74,7 +74,7 @@ func TestCloudReloadWaitsBeforeBudgetAdmission(t *testing.T) {
 	f := boundedCloud(t, false)
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	original := f.cap.ConfigDigest
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
@@ -137,7 +137,7 @@ func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpo
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, unchanged) })
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
@@ -178,7 +178,7 @@ func TestCloudReloadWaitsWhenBoundRouteIsRemoved(t *testing.T) {
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
