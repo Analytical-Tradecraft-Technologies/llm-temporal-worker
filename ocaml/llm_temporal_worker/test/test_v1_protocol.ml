@@ -212,6 +212,7 @@ let () =
 let () =
   assert_shared_fixture "generate-request-all-kinds.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
   assert_shared_fixture "generate-fork-patch-sampling.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
+  assert_shared_fixture "generate-fork-patch-compaction.json" V1_codec.decode_generate_request V1_codec.encode_generate_request;
   assert_shared_fixture "generate-response-all-kinds.json" V1_codec.decode_generate_response V1_codec.encode_generate_response;
   assert_shared_fixture "generate-response-cache-origin-cost.json" V1_codec.decode_generate_response V1_codec.encode_generate_response;
   let cached = ok (V1_codec.decode_generate_response (Bytes.of_string (fixture_in "v1" "generate-response-cache-origin-cost.json"))) in
