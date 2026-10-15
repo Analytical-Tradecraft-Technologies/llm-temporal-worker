@@ -206,3 +206,42 @@ func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing
 		t.Fatalf("recovered execution = %+v, recoveries=%d submits=%d, %v", saved.Execution.Stage, recoveries, f.submits.Load(), err)
 	}
 }
+
+// A reload that leaves a model-sync route's endpoint alone still lets the poll
+// path settle and report its expired unknown attempt (#1340).
+func TestCloudReloadSettlesUnknownWorkOnSyncedRoute(t *testing.T) {
+	digest := syncedEndpointDigest(t, nil)
+	f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, digest) })
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		f.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.Result{}, err
+		}
+		return provider.Result{}, errors.New("lost paid response")
+	}
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.cap.ConfigDigest[0]++
+	source := f.cap.Snapshot.(*planningSource)
+	source.value.ConfigDigest = f.cap.ConfigDigest
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
+		t.Fatalf("unknown claim not settled after the reload: %+v %v", saved.Execution, err)
+	}
+	assertUnknownWorkCharged(t, saved)
+	assertCloudStatus(t, f, first.ID, cloudstate.StatusOutcomeUnknown)
+	if f.submits.Load() != 1 {
+		t.Fatal("unknown attempt resubmitted", f.submits.Load())
+	}
+}
