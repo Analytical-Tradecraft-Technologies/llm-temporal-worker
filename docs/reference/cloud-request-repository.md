@@ -220,8 +220,8 @@ the claim once, and `already_claimed` proves the claim applied; a claim that
 succeeded is kept even if the context ended afterwards. An attempt left without
 a recorded claim is asked again once its recovery window passes and, if the
 claim applied, is settled with `finalize_unknown` at its full reservation. An
-expired claim is a settled, immediately retryable non-dispatch that does not
-use up a route attempt. Workflow timers
+expired claim, at submission or on that recovery, is a settled, immediately
+retryable non-dispatch that does not use up a route attempt. Workflow timers
 and recovery policy remain outside these callbacks. No provider cancellation
 API is added. Planner/Redis error text is excluded from caller errors.
 

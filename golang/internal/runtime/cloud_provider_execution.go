@@ -292,8 +292,9 @@ func (executor *CloudProviderExecution) resume(ctx context.Context, scope clouds
 // authorized correction (resolve_unknown_exact), not a second settlement.
 // An attempt that never recorded its claim (a lost reply, or a crash between
 // claim and the pre-HTTP marker) asks Redis first (#1312). A claim that
-// applied is settled the same way. One that never applied holds nothing: its
-// reservation leaves through the expiry index, so the attempt is left as is.
+// applied is settled the same way. One that never applied holds nothing (its
+// reservation leaves through the expiry index) and was never dispatched, so it
+// is closed as a definite non-dispatch, as at submission.
 func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {
 	if !saved.Plan.RequiresReservation() || executor.clock().Before(saved.Execution.RecoverAfter) {
 		return executor.result(saved), nil
@@ -302,7 +303,7 @@ func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope
 	if next.Claim == nil {
 		receipt, err := executor.admission.admit.claimFenced(ctx, saved.Plan.Route, saved.Execution.Reservation)
 		if unclaimed(err) {
-			return executor.result(saved), nil
+			return executor.save(ctx, scope, id, saved, executor.unclaimedExecution(saved))
 		}
 		if err != nil {
 			return ProviderExecutionResult{}, executionError(provider.CodeStateUnavailable)

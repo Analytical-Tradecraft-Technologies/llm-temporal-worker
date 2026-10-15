@@ -295,6 +295,47 @@ func TestCloudExecutionRuntimeSettlesLostClaimReplyAfterRecoveryWindow(t *testin
 	}
 }
 
+// An attempt whose claim never reached Redis is unknown until its recovery
+// window passes. Redis then answers expired, so recovery closes it as a
+// definite non-dispatch and renews it without using up a provider attempt.
+func TestCloudExecutionRuntimeRenewsUnclaimedUnknownAttempt(t *testing.T) {
+	f := boundedCloud(t, false)
+	f.options.MaxAttempts = 1
+	leaser := &admissionLeaser{BudgetLeaser: f.cap.Budgets}
+	leaser.claim = func(context.Context, durable.ClaimRequest) (durable.ClaimReceipt, error) {
+		return durable.ClaimReceipt{}, errors.New("Redis unavailable")
+	}
+	f.cap.Budgets = leaser
+	f.restart(t)
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaser.claim = nil
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
+		t.Fatalf("unclaimed unknown attempt = %+v, %v", saved.Execution, err)
+	}
+	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
+		t.Fatalf("unclaimed attempt not renewed: %+v, %v", next, err)
+	}
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	if f.submits.Load() != 1 {
+		t.Fatal("renewed attempt not submitted once", f.submits.Load())
+	}
+}
+
 // expired is a definite non-dispatch (#1312): no outcome_unknown, no wait for
 // the recovery window and no provider attempt used. Acquisition renews the
 // attempt at once, even when only one provider attempt is allowed.

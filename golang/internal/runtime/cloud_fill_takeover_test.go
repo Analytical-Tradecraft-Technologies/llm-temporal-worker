@@ -59,31 +59,41 @@ func (s *unstartedFills) Start(ctx context.Context, lease cache.FillLease, now t
 
 // An unknown attempt whose held fill expired, was taken over and was finished
 // by another request has nothing left to finish. It must start a replacement
-// attempt, which consumes the other request's published response.
+// attempt, which consumes the other request's published response. Its claim
+// was never made, so recovery closes it as a definite non-dispatch (#1312).
 func TestCloudUnknownAttemptContinuesAfterFillTakeover(t *testing.T) {
-	f := boundedCloud(t, false)
-	f.request.Cache = &llm.CachePolicyV1{}
-	f.cap.ResponseFills = &unstartedFills{FillRepository: f.cap.ResponseFills}
-	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
-	if f.submits.Load() != 0 {
-		t.Fatal("HTTP without a started fill")
-	}
-	f.now = f.now.Add(16 * time.Minute)
-	second := f.request
-	second.OperationKey = "second"
-	v, err = f.runtime.GenerateStepV1(ctx, second)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: second.Context})
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 1 {
-		t.Fatalf("unknown attempt after takeover: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
+	for _, poll := range []bool{true, false} {
+		t.Run(map[bool]string{true: "poll", false: "acquire"}[poll], func(t *testing.T) {
+			f := boundedCloud(t, false)
+			f.request.Cache = &llm.CachePolicyV1{}
+			f.cap.ResponseFills = &unstartedFills{FillRepository: f.cap.ResponseFills}
+			f.restart(t)
+			ctx := context.Background()
+			v, err := f.runtime.GenerateStepV1(ctx, f.request)
+			boundedState(t, v, err, llm.ExecutionPending)
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			if f.submits.Load() != 0 {
+				t.Fatal("HTTP without a started fill")
+			}
+			f.now = f.now.Add(16 * time.Minute)
+			second := f.request
+			second.OperationKey = "second"
+			v, err = f.runtime.GenerateStepV1(ctx, second)
+			boundedState(t, v, err, llm.ExecutionProviderCompleted)
+			v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: second.Context})
+			boundedState(t, v, err, llm.ExecutionCompleted)
+			if poll {
+				v, err = f.runtime.PollExecutionV1(ctx, ref)
+				v = boundedState(t, v, err, llm.ExecutionFailed)
+				if !v.Retryable || v.Dispatch != string(provider.DispatchNotDispatched) {
+					t.Fatalf("unclaimed attempt after takeover = %+v", v)
+				}
+			}
+			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			boundedState(t, v, err, llm.ExecutionCompleted)
+			if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 1 {
+				t.Fatalf("unknown attempt after takeover: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
+			}
+		})
 	}
 }

@@ -171,7 +171,14 @@ func (r *CloudExecutionRuntime) finishTerminalFill(ctx context.Context, p Prepar
 	if err != nil || lease == nil {
 		return err
 	}
-	if err := r.capabilities.ResponseFills.Complete(ctx, *lease, cache.FillCompletion{Outcome: outcome, CompletedAt: saved.Execution.CompletedAt}); err != nil {
+	err = r.capabilities.ResponseFills.Complete(ctx, *lease, cache.FillCompletion{Outcome: outcome, CompletedAt: saved.Execution.CompletedAt})
+	if err != nil && errors.Is(err, contracts.ErrConflict) && saved.Execution.Unclaimed(saved.Plan) {
+		// An unclaimed attempt closed by recovery may have lost its expired
+		// fill, held or never started, to another attempt (#1312). That fill
+		// is observed exactly as for an unknown attempt.
+		err = r.finishUnknownFill(ctx, p, attempt, saved)
+	}
+	if err != nil {
 		// A transient storage failure must stay retryable: otherwise the
 		// Activity fails permanently and the fill stays started for waiters.
 		return cloudRuntimeError(err, true)

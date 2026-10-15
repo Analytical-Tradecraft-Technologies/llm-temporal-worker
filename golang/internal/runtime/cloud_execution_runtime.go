@@ -302,18 +302,27 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			// Polling or idempotent recovery may have resolved the attempt
 			// (pending, succeeded or failed); finish that outcome instead of
 			// replacing it, which only an unknown attempt permits.
-			if recovered.Saved.Execution.Stage != cloudstate.ExecutionUnknown {
+			unclaimed := recovered.Saved.Execution.Unclaimed(recovered.Saved.Plan)
+			if recovered.Saved.Execution.Stage != cloudstate.ExecutionUnknown && !unclaimed {
 				return r.resumeAttempt(ctx, p, attempt, recovered.Saved, step)
 			}
-			if err := r.finishUnknownFill(ctx, p, attempt, saved); err != nil {
-				return llm.ExecutionResultV1{}, err
-			}
-			if len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
-				failure, err := r.store.FinishRequestExhausted(ctx, root.Scope, root.ID, attempt.ID, r.options.MaxAttempts, r.now())
-				if err != nil {
-					return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+			if unclaimed {
+				// Redis proved the claim never applied (#1312). Close the
+				// attempt and renew it without using up a provider attempt.
+				if _, err := r.finishProviderStep(ctx, p, attempt, recovered); err != nil {
+					return llm.ExecutionResultV1{}, err
 				}
-				return failure, nil
+			} else {
+				if err := r.finishUnknownFill(ctx, p, attempt, saved); err != nil {
+					return llm.ExecutionResultV1{}, err
+				}
+				if len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
+					failure, err := r.store.FinishRequestExhausted(ctx, root.Scope, root.ID, attempt.ID, r.options.MaxAttempts, r.now())
+					if err != nil {
+						return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+					}
+					return failure, nil
+				}
 			}
 			attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
 			if err != nil {
