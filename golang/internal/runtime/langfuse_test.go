@@ -264,6 +264,70 @@ func TestCloudLangfuseDisabledFallbackDoesNotExportResponse(t *testing.T) {
 	}
 }
 
+// A plan on an enabled endpoint that is renewed before it runs must not make
+// the trace eligible when only a Langfuse-disabled endpoint served it (#1358).
+func TestCloudLangfuseSupersededPlanDoesNotExportDisabledRequest(t *testing.T) {
+	var planning *budgetPlanningFixture
+	f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
+		planning = b
+		model := b.source.value.Routes.Models["alias"]
+		second := model.Routes[0]
+		second.ID, second.EndpointID = "fallback-route", "fallback"
+		model.Routes = append(model.Routes, second)
+		b.source.value.Routes.Models["alias"] = model
+		b.source.value.BudgetPolicies[0].Match.EndpointID = ""
+		entry := b.entry
+		entry.EndpointID = "fallback"
+		b.prices(t, []pricing.Entry{b.entry, entry})
+	})
+	f.cap.Adapters = engine.AdapterMap{"endpoint": f.adapter.executionSyncAdapter, "fallback": f.adapter.executionSyncAdapter}
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
+	defer server.Close()
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	disabled := false
+	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}, "fallback": {Langfuse: &config.LangfuseEndpointConfig{Enabled: &disabled}}}
+	f.restart(t)
+	ctx := context.Background()
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
+	captures, err := f.repository.LoadLangfuseCaptures(ctx, scope, cloudstate.RequestID(v.RequestID))
+	planned := false
+	for key, data := range captures {
+		var capture generationCapture
+		if key != "operation" && json.Unmarshal(data, &capture) == nil && capture.Plan.Route.EndpointID == "endpoint" {
+			planned = true
+		}
+	}
+	if err != nil || !planned {
+		t.Fatal("fixture did not plan the enabled endpoint first", err)
+	}
+	// The enabled endpoint is no longer priced when the expired plan renews.
+	entry := planning.entry
+	entry.EndpointID = "fallback"
+	planning.prices(t, []pricing.Entry{entry})
+	f.restart(t)
+	f.now = f.now.Add(16 * time.Minute)
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	paid, last, err := f.repository.LangfusePaidAttempts(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil || len(paid) != 1 || paid[last].Plan.Route.EndpointID != "fallback" {
+		t.Fatal("fixture was not served only by the disabled endpoint", err)
+	}
+	if err := f.runtime.ExportLangfuseV1(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatal("superseded plan exported a request served by a disabled endpoint")
+	}
+}
+
 type failedLangfuseCapture struct{ *cloudstate.Repository }
 
 func (s failedLangfuseCapture) SaveLangfuseCapture(context.Context, cloudstate.Scope, cloudstate.RequestID, string, json.RawMessage) error {
