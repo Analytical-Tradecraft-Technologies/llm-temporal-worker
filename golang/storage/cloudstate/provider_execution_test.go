@@ -133,27 +133,49 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 }
 
 func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
-	r, _, _, record, plan, reservation := executionFixture(t)
-	saved := startExecution(t, r, record, plan, reservation)
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
-	next := saved.Execution
-	next.Revision++
-	next.Stage = ExecutionSucceeded
-	next.UpdatedAt = next.UpdatedAt.Add(time.Second)
-	next.CompletedAt = next.UpdatedAt
-	next.Response = &llm.Response{OperationKey: "operation", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("x", maxPayloadBytes)}}}}}
-	err := r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next)
-	if !errors.Is(err, ErrRecordTooLarge) || !errors.Is(err, ErrInvalid) {
-		t.Fatal("oversized response not refused by size", err)
-	}
-	// Nothing was written, so the same revision can still close the attempt.
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
-		e.Stage = ExecutionFailed
-		e.CompletedAt = e.UpdatedAt.Add(time.Second)
-		e.Failure = &ExecutionFailure{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}
-	})
-	if saved.Execution.Stage != ExecutionFailed {
-		t.Fatal("attempt not closed")
+	// "progress" exceeds the progress limit itself; "record" fits the progress
+	// but not the whole encoded record with its request.
+	for _, mode := range []string{"progress", "record"} {
+		t.Run(mode, func(t *testing.T) {
+			r, _, _, record, plan, reservation := executionFixture(t)
+			ctx := context.Background()
+			saved := startExecution(t, r, record, plan, reservation)
+			saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+			next := saved.Execution
+			next.Revision++
+			next.Stage = ExecutionSucceeded
+			next.UpdatedAt = next.UpdatedAt.Add(time.Second)
+			next.CompletedAt = next.UpdatedAt
+			response := func(text string) *llm.Response {
+				return &llm.Response{OperationKey: "operation", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}}
+			}
+			size := maxPayloadBytes
+			if mode == "record" {
+				current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The saved progress replaces the current execution entry.
+				next.Response = response("")
+				encoded, _ := json.Marshal(next)
+				previous, _ := json.Marshal(saved.Execution)
+				size = maxPayloadBytes - (len(current.Progress) - len(previous)) - len(encoded) - 64
+			}
+			next.Response = response(strings.Repeat("x", size))
+			err := r.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, next)
+			if !errors.Is(err, ErrRecordTooLarge) || !errors.Is(err, ErrInvalid) {
+				t.Fatal("oversized response not refused by size", err)
+			}
+			// Nothing was written, so the same revision can still close the attempt.
+			saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
+				e.Stage = ExecutionFailed
+				e.CompletedAt = e.UpdatedAt.Add(time.Second)
+				e.Failure = &ExecutionFailure{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}
+			})
+			if saved.Execution.Stage != ExecutionFailed {
+				t.Fatal("attempt not closed")
+			}
+		})
 	}
 }
 

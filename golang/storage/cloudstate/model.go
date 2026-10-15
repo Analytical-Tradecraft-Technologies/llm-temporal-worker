@@ -138,7 +138,10 @@ func safeText(value string, max int) bool {
 }
 
 func objectJSON(value json.RawMessage) (json.RawMessage, error) {
-	if !utf8.Valid(value) || len(value) == 0 || len(value) > maxPayloadBytes {
+	if len(value) > maxPayloadBytes {
+		return nil, ErrRecordTooLarge
+	}
+	if !utf8.Valid(value) || len(value) == 0 {
 		return nil, ErrInvalid
 	}
 	canonical, err := llm.CanonicalJSONWithLimits(value, maxPayloadBytes, llm.DefaultCanonicalMaxDepth)
