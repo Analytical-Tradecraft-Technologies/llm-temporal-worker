@@ -31,9 +31,15 @@ result blobs, budgets, and audit identifiers bind to that scope. Store lookup
 requires the scope and handle MAC; knowing a continuation ID alone is
 insufficient.
 
-Logical model routes declare allowed tenants/projects, regions, and data
-classifications. A continuation cannot cross those restrictions. Shared Redis
-keys use keyed hashes so tenant identifiers are not exposed in key scans.
+A logical model may restrict the tenants that route to it with
+`allowed_tenants`; the planner rejects every route of that model for any other
+tenant, including continuation turns. `data_regions` is recorded with the model
+but not enforced, because v1 requests carry no region tag; restrict residency
+through the routes and endpoints a model lists instead. There are no project or
+data-classification route restrictions. See
+[model tenant restriction](../reference/configuration.md#model-tenant-restriction).
+Shared Redis keys use keyed hashes so tenant identifiers are not exposed in key
+scans.
 
 ## Secrets
 
