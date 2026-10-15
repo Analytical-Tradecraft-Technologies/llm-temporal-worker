@@ -356,24 +356,95 @@ func TestCloudProviderExecutionConcurrentObservationCanRetry(t *testing.T) {
 	}
 }
 
-func TestCloudProviderExecutionLostClaimReplyRetainsBudget(t *testing.T) {
+// The fence holder is the only claimant, so a claim Redis applied is its own
+// whatever happened to the reply (#1312): a replay answering already_claimed,
+// a client resend answering already_claimed first, or a context that ended
+// after the claim all keep the claim and dispatch exactly once.
+func TestCloudProviderExecutionResolvesAppliedClaimReply(t *testing.T) {
+	for _, name := range []string{"lost reply", "resent request", "context ended after claim"} {
+		t.Run(name, func(t *testing.T) {
+			f := newProviderExecutionFixture(t, "generate", false)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			claims := 0
+			f.leaser.claim = func(ctx context.Context, request durable.ClaimRequest) (durable.ClaimReceipt, error) {
+				claims++
+				receipt, err := f.leaser.BudgetLeaser.Claim(ctx, request)
+				if claims > 1 {
+					return receipt, err
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch name {
+				case "lost reply":
+					return durable.ClaimReceipt{}, errors.New("lost claim reply")
+				case "resent request":
+					return f.leaser.BudgetLeaser.Claim(ctx, request)
+				}
+				cancel()
+				return receipt, nil
+			}
+			result, err := f.submit(ctx)
+			execution := result.Saved.Execution
+			if err != nil || execution.Stage != cloudstate.ExecutionSucceeded || execution.Claim == nil || !execution.Settled || f.submits.Load() != 1 {
+				t.Fatalf("applied claim not kept: %+v %v", execution, err)
+			}
+		})
+	}
+}
+
+// A claim whose outcome stays unknown (the replay also fails) is retained
+// without dispatch. Once its recovery window passes, Redis is asked again and
+// already_claimed proves the claim, so it is settled at its full reservation.
+func TestCloudProviderExecutionSettlesUnrecordedClaimAfterRecoveryWindow(t *testing.T) {
 	f := newProviderExecutionFixture(t, "generate", true)
 	f.leaser.claim = func(ctx context.Context, request durable.ClaimRequest) (durable.ClaimReceipt, error) {
-		_, err := f.leaser.BudgetLeaser.Claim(ctx, request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return durable.ClaimReceipt{}, errors.New("lost claim")
+		// The first try applies; neither reply arrives.
+		_, _ = f.leaser.BudgetLeaser.Claim(ctx, request)
+		return durable.ClaimReceipt{}, errors.New("Redis unavailable")
 	}
 	result, err := f.submit(context.Background())
-	if err != nil || result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || f.submits.Load() != 0 || f.settlements.Load() != 0 {
+	if err != nil || result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || result.Saved.Execution.Claim != nil || f.submits.Load() != 0 || f.settlements.Load() != 0 {
 		t.Fatal("uncertain claim dispatched/refunded", err)
 	}
+	f.leaser.claim = nil
 	if _, err := f.resume(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if f.submits.Load() != 0 || f.settlements.Load() != 0 {
-		t.Fatal("recovery reused uncertain claim")
+		t.Fatal("recovery reused uncertain claim inside its window")
+	}
+	f.now = f.now.Add(16 * time.Minute)
+	result, err = f.resume(context.Background())
+	if err != nil || f.submits.Load() != 0 || f.settlements.Load() != 1 {
+		t.Fatal("unrecorded claim not settled after its recovery window", err)
+	}
+	if result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || !result.Saved.Execution.Settled {
+		t.Fatalf("settled execution = %+v", result.Saved.Execution)
+	}
+	assertUnknownWorkCharged(t, result.Saved)
+}
+
+// expired is a definite answer: nothing was claimed or dispatched. The attempt
+// is a settled, immediately retryable non-dispatch with nothing to reconcile.
+func TestCloudProviderExecutionExpiredClaimIsNotDispatched(t *testing.T) {
+	f := newProviderExecutionFixture(t, "generate", false)
+	f.leaser.claim = func(context.Context, durable.ClaimRequest) (durable.ClaimReceipt, error) {
+		return durable.ClaimReceipt{}, durable.ErrLeaseExpired
+	}
+	result, err := f.submit(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := result.Saved
+	failure := saved.Execution.Failure
+	if saved.Execution.Stage != cloudstate.ExecutionFailed || failure == nil || failure.Dispatch != provider.DispatchNotDispatched || !failure.Retryable ||
+		failure.RetryNotBefore.After(f.now) || !saved.Execution.Settled || saved.Execution.Settlement != nil || saved.Execution.Claim != nil || !saved.Execution.Unclaimed(saved.Plan) {
+		t.Fatalf("expired claim = %+v", saved.Execution)
+	}
+	if f.submits.Load() != 0 || f.settlements.Load() != 0 {
+		t.Fatal("expired claim dispatched or settled")
 	}
 }
 

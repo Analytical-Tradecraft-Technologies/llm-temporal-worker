@@ -119,11 +119,16 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	}
 	var claim *durable.ClaimReceipt
 	if saved.Plan.RequiresReservation() {
-		value, claimErr := executor.admission.admit.claim(ctx, saved.Plan.Route, saved.Execution.Reservation)
+		// This caller holds the execution fence, so it is the only claimant
+		// and an uncertain reply can be resolved against Redis (#1312).
+		value, claimErr := executor.admission.admit.claimFenced(ctx, saved.Plan.Route, saved.Execution.Reservation)
 		err = claimErr
 		if err == nil {
 			claim = &value
 		}
+	}
+	if unclaimed(err) {
+		return executor.save(ctx, call.scope, call.id, saved, executor.unclaimedExecution(saved))
 	}
 	if err != nil {
 		// Even a lost claim reply remains charged. Do not infer that the start
@@ -285,13 +290,25 @@ func (executor *CloudProviderExecution) resume(ctx context.Context, scope clouds
 // window like confirmed cost, after which it ages out; without them the claim
 // would hold its reservation forever. An exact cost learned later is an
 // authorized correction (resolve_unknown_exact), not a second settlement.
-// An attempt without a recorded claim is left as it is: nothing proves Redis
-// moved its reservation out of the expiry index.
+// An attempt that never recorded its claim (a lost reply, or a crash between
+// claim and the pre-HTTP marker) asks Redis first (#1312). A claim that
+// applied is settled the same way. One that never applied holds nothing: its
+// reservation leaves through the expiry index, so the attempt is left as is.
 func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {
-	if saved.Execution.Claim == nil || !saved.Plan.RequiresReservation() || executor.clock().Before(saved.Execution.RecoverAfter) {
+	if !saved.Plan.RequiresReservation() || executor.clock().Before(saved.Execution.RecoverAfter) {
 		return executor.result(saved), nil
 	}
 	next := saved.Execution
+	if next.Claim == nil {
+		receipt, err := executor.admission.admit.claimFenced(ctx, saved.Plan.Route, saved.Execution.Reservation)
+		if unclaimed(err) {
+			return executor.result(saved), nil
+		}
+		if err != nil {
+			return ProviderExecutionResult{}, executionError(provider.CodeStateUnavailable)
+		}
+		next.Claim = &receipt
+	}
 	next.UpdatedAt = executor.now(saved)
 	next.Settlement = executionSettlement(next)
 	result, err := executor.save(ctx, scope, id, saved, next)
@@ -299,6 +316,25 @@ func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope
 		return result, err
 	}
 	return executor.settle(ctx, scope, id, result.Saved)
+}
+
+// unclaimed reports a claim that definitely did not apply: Redis answered
+// expired, so the start permission was never consumed.
+func unclaimed(err error) bool {
+	var classified *provider.Error
+	return errors.As(err, &classified) && classified.Code == provider.CodeBudgetDenied && classified.Dispatch == provider.DispatchNotDispatched
+}
+
+// unclaimedExecution closes an attempt whose claim never applied. Nothing was
+// dispatched and Redis holds no claim to settle (the unclaimed reservation
+// leaves through its expiry index), so it is a settled, immediately retryable
+// non-dispatch that does not use up a provider attempt.
+func (executor *CloudProviderExecution) unclaimedExecution(saved cloudstate.SavedProviderExecution) cloudstate.ProviderExecution {
+	next := saved.Execution
+	now := executor.now(saved)
+	next.Stage, next.UpdatedAt, next.CompletedAt, next.Settled = cloudstate.ExecutionFailed, now, now, true
+	next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeBudgetDenied, Dispatch: provider.DispatchNotDispatched, Retryable: true, RetryNotBefore: now}
+	return next
 }
 
 func (executor *CloudProviderExecution) reconstruct(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, plan cloudstate.BudgetPlan, generate durable.GenerateReplay, compact durable.CompactReplay, input *cloudPreparedInput) (PlannedProviderCall, []llm.Item, error) {

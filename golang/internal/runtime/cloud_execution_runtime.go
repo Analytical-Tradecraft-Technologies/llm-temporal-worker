@@ -330,8 +330,9 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			// Exhaustion is checked before the failure's Retry-After: a
 			// request with no attempts left fails now instead of waiting for
 			// nothing. The hint is applied after selection, and only when the
-			// replacement chooses the same route (#1334).
-			if len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
+			// replacement chooses the same route (#1334). An attempt whose
+			// claim never applied used no provider attempt and is renewed (#1312).
+			if !saved.Execution.Unclaimed(saved.Plan) && len(attempt.PriorCandidates)+1 >= r.options.MaxAttempts {
 				failure, err := r.store.FinishRequestExhausted(ctx, root.Scope, root.ID, attempt.ID, r.options.MaxAttempts, r.now())
 				if err != nil {
 					return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
@@ -450,7 +451,11 @@ func (r *CloudExecutionRuntime) retryHintWait(ctx context.Context, scope cloudst
 		}
 		saved, err := r.store.LoadProviderExecution(ctx, scope, id)
 		if err == nil {
-			executions++
+			// Like an unused quote renewal, an unclaimed execution has no
+			// prior candidate entry (#1312).
+			if !saved.Execution.Unclaimed(saved.Plan) {
+				executions++
+			}
 			failed, route := saved.Execution, saved.Plan.Route
 			if failed.Stage == cloudstate.ExecutionFailed && failed.Failure != nil && failed.Failure.Retryable &&
 				route.RouteID == plan.Route.RouteID && route.EndpointID == plan.Route.EndpointID && route.Model == plan.Route.Model &&
