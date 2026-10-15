@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -212,13 +213,23 @@ func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 	}
 	// OpenRouter lists gpt-5.6-sol at a 50% promotional discount; the
 	// direct route must carry OpenAI's list prices, not the promotion.
-	for _, id := range []string{"openai/gpt-5.6-sol", "openai/gpt-5.6-sol-pro"} {
-		sol, _ := rules.Direct("openai", id)
-		if got := sol.Prices["default"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.4" || got.CacheWrite != "5" {
-			t.Fatalf("%s default prices = %+v; want OpenAI's published $4/$20, $0.40 cache read, $5 cache write", id, got)
+	sol, _ := rules.Direct("openai", "openai/gpt-5.6-sol")
+	if got := sol.Prices["default"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.4" || got.CacheWrite != "5" {
+		t.Fatalf("gpt-5.6-sol default prices = %+v; want OpenAI's published $4/$20, $0.40 cache read, $5 cache write", got)
+	}
+	if got := sol.Prices["priority"]; got.Input != "8" || got.Output != "30" {
+		t.Fatalf("gpt-5.6-sol priority prices = %+v; want OpenAI's published Fast $8/$30", got)
+	}
+	// OpenRouter's reasoning-mode presets are not OpenAI model IDs, so they
+	// must route to OpenRouter rather than to the direct OpenAI endpoint.
+	for _, id := range []string{"openai/gpt-5.6-luna-pro", "openai/gpt-5.6-sol-pro", "openai/gpt-5.6-terra-pro", "openai/gpt-6-astra-pro", "openai/gpt-6-luna-pro", "openai/gpt-6-sol-pro", "openai/gpt-6.1-sol-pro"} {
+		if preset, ok := rules.Direct("openai", id); ok {
+			t.Fatalf("OpenRouter preset %s has a direct route %+v", id, preset)
 		}
-		if got := sol.Prices["priority"]; got.Input != "8" || got.Output != "30" {
-			t.Fatalf("%s priority prices = %+v; want OpenAI's published Fast $8/$30", id, got)
+	}
+	for _, id := range []string{"openai/gpt-5-pro", "openai/gpt-5.2-pro", "openai/gpt-5.4-pro", "openai/gpt-5.5-pro", "openai/o1-pro", "openai/o3-pro"} {
+		if _, ok := rules.Direct("openai", id); !ok {
+			t.Fatalf("OpenAI Pro model %s has no direct route", id)
 		}
 	}
 }
@@ -247,6 +258,47 @@ func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
 	}
 	if _, ok := rules.Providers["anthropic"].Models["inference-net/schematron-v2-turbo"]; ok {
 		t.Fatal("a third-party model was generated as a direct model")
+	}
+}
+
+func TestGenerateDefaultRulesSkipsReasoningPresets(t *testing.T) {
+	document := fetchFixture(t)
+	var base Model
+	for _, model := range document.Models {
+		if model.ID == "openai/gpt-5.4" {
+			base = model
+		}
+	}
+	if base.ID == "" {
+		t.Fatal("fixture has no openai/gpt-5.4")
+	}
+	// OpenRouter publishes presets with the base model's first-party
+	// endpoints, so only the ID tells them apart from a real Pro model.
+	for _, id := range []string{"openai/gpt-5.4-pro", "openai/gpt-6-astra-pro", "openai/gpt-5.4-high"} {
+		clone := base
+		clone.ID = id
+		document.Models = append(document.Models, clone)
+	}
+	slices.SortFunc(document.Models, func(a, b Model) int { return strings.Compare(a.ID, b.ID) })
+	rendered, err := GenerateDefaultRules(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseRules(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := MergeRules(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pro, ok := rules.Direct("openai", "openai/gpt-5.4-pro"); !ok || pro.Model != "gpt-5.4-pro" {
+		t.Fatalf("OpenAI Pro model gpt-5.4-pro = %+v, %v; want a direct route", pro, ok)
+	}
+	for _, id := range []string{"openai/gpt-6-astra-pro", "openai/gpt-5.4-high"} {
+		if _, ok := rules.Direct("openai", id); ok {
+			t.Fatalf("OpenRouter preset %s was generated as a direct model", id)
+		}
 	}
 }
 

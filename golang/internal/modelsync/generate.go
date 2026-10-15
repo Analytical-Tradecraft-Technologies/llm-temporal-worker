@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -20,6 +21,9 @@ type generatedProvider struct {
 	// skip lists OpenRouter IDs that are not model IDs of the provider's own
 	// API (OpenRouter presets, media-only models, completions-only models).
 	skip []string
+	// keep lists OpenRouter IDs a skip pattern matches that are nonetheless
+	// model IDs of the provider's own API.
+	keep []string
 }
 
 type generatedTier struct {
@@ -35,7 +39,12 @@ var generatedProviders = []generatedProvider{
 			{tier: "default", tags: []string{"openai", "openai/default"}},
 			{tier: "priority", tags: []string{"openai/fast"}},
 		},
-		skip: []string{"openai/*-high", "openai/*image*", "openai/*audio*", "openai/gpt-chat-latest", "openai/gpt-3.5-turbo-instruct"},
+		// OpenRouter's "-high" and most "-pro" IDs are reasoning presets of a
+		// base model (openai/gpt-6-astra-pro is gpt-6-astra served with
+		// reasoning.mode pro) that OpenAI's API does not serve, so only the
+		// Pro models OpenAI itself lists are kept.
+		skip: []string{"openai/*-high", "openai/*-pro", "openai/*image*", "openai/*audio*", "openai/gpt-chat-latest", "openai/gpt-3.5-turbo-instruct"},
+		keep: []string{"openai/gpt-5-pro", "openai/gpt-5.2-pro", "openai/gpt-5.4-pro", "openai/gpt-5.5-pro", "openai/o1-pro", "openai/o3-pro"},
 	},
 	{
 		name: "anthropic", prefix: "anthropic/", modelID: ModelIDDotsToDashes,
@@ -116,7 +125,7 @@ providers:
 		fmt.Fprintf(&out, "  %s:\n    prefix: %s\n    model_id: %s\n    models:\n", provider.name, provider.prefix, provider.modelID)
 		count := 0
 		for _, model := range document.Models {
-			if !strings.HasPrefix(model.ID, provider.prefix) || skipped(provider.skip, model.ID) {
+			if !strings.HasPrefix(model.ID, provider.prefix) || provider.skipped(model.ID) {
 				continue
 			}
 			rendered, ok, err := renderGeneratedModel(provider, model)
@@ -144,8 +153,12 @@ providers:
 	return rendered, nil
 }
 
-func skipped(patterns []string, id string) bool {
-	for _, pattern := range patterns {
+// skipped reports whether id matches a skip pattern and is not kept.
+func (provider generatedProvider) skipped(id string) bool {
+	if slices.Contains(provider.keep, id) {
+		return false
+	}
+	for _, pattern := range provider.skip {
 		if matched, _ := path.Match(pattern, id); matched {
 			return true
 		}
