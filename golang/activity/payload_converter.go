@@ -96,6 +96,15 @@ func DecodeBoundedPayload[T any](limits PayloadLimits, input converter.RawValue)
 	return value, true
 }
 
+// FitsInlinePayload reports whether value, encoded the way this worker encodes
+// its own Temporal payloads, stays within the inline limit. The worker's JSON
+// encoding can be larger than the caller's, since Go escapes <, > and & while
+// other encoders need not.
+func FitsInlinePayload(limits PayloadLimits, value any) bool {
+	payload, err := converter.GetDefaultDataConverter().ToPayload(value)
+	return err == nil && len(payload.GetData()) <= limits.inlineBytes()
+}
+
 func (converter *boundedDataConverter) ToString(payload *commonpb.Payload) string {
 	return converter.delegate.ToString(payload)
 }

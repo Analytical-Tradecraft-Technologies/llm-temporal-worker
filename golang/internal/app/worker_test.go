@@ -172,6 +172,10 @@ func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 	if gotQueue != "queue-a" || gotOptions.Identity != "identity-a" || gotOptions.MaxConcurrentActivityExecutionSize != 3 || gotOptions.MaxConcurrentActivityTaskPollers != 2 {
 		t.Fatalf("worker options = %#v queue=%q", gotOptions, gotQueue)
 	}
+	// A workflow panic must fail the workflow, not block it forever (#1324).
+	if gotOptions.WorkflowPanicPolicy != worker.FailWorkflow {
+		t.Fatalf("workflow panic policy = %v, want FailWorkflow", gotOptions.WorkflowPanicPolicy)
+	}
 	// Without a v1 runtime the v1 workflows could only stall, so none are
 	// registered, and the legacy Activity keeps its own name (#1102).
 	if len(registry.workflows) != 0 {

@@ -49,6 +49,10 @@ const (
 
 type CheckpointHandle string
 
+// CheckpointHandleMaxCodePoints bounds every checkpoint handle, including the
+// handles this worker issues.
+const CheckpointHandleMaxCodePoints = checkpointHandleMaxCodePoints
+
 func (handle CheckpointHandle) valid() bool {
 	return validateCodePointLength("checkpoint handle", string(handle), 1, checkpointHandleMaxCodePoints) == nil
 }

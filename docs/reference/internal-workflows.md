@@ -97,6 +97,18 @@ negative wait count or an invalid reference fails the same way. The wire format 
 unchanged: callers still send the typed v1 JSON record, and decoding depends
 only on the recorded input, so it is deterministic on replay.
 
+The public workflows also check the payloads the worker itself will encode,
+since Go's JSON escapes `<`, `>` and `&` as six bytes and a caller's encoder,
+such as the OCaml client's, need not. A Generate request fails the same way at
+decode unless its internal `PrepareExecutionV1` envelope fits the limit, both
+with the caller's parent and, when a parent is set, with a maximum-length
+checkpoint handle substituted for it after compaction. Compact and Query
+requests are checked against their envelope and Activity argument. A request
+accepted at decode therefore reaches preparation. Histories recorded before
+this check skip it on replay. The worker sets `WorkflowPanicPolicy` to
+`FailWorkflow`, so a workflow panic or detected non-determinism fails the
+workflow instead of retrying its workflow task forever.
+
 ### Failed attempts and retry timing
 
 Known provider failures retain a bounded retry classification and earliest retry
