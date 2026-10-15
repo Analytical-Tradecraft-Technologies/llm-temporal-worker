@@ -181,3 +181,53 @@ func TestRouteStatusRejectsForeignConfigAfterEpochChange(t *testing.T) {
 		t.Fatalf("foreign event changed projection: %#v", status)
 	}
 }
+
+func TestRouteStatusPermissionDeniedCountsTowardThreshold(t *testing.T) {
+	base := time.Unix(400, 0)
+	status := RouteStatus{}
+	for i := 0; i < 3; i++ {
+		denied := observation(base.Add(time.Duration(i) * time.Second))
+		denied.Availability, denied.SafeErrorCode = AvailabilityUnavailable, "permission_denied"
+		event, err := NewStatusEvent(denied)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !status.Apply(event) {
+			t.Fatal("permission denial rejected")
+		}
+		if want := i == 2; (status.Circuit == CircuitOpen) != want {
+			t.Fatalf("after %d permission denials circuit = %s", i+1, status.Circuit)
+		}
+	}
+}
+
+func TestRouteStatusLaterFailureDoesNotShortenOpenHold(t *testing.T) {
+	base := time.Unix(500, 0)
+	status := RouteStatus{}
+	auth := observation(base)
+	auth.Availability, auth.SafeErrorCode, auth.ExpiresAt = AvailabilityUnavailable, "authentication", base.Add(24*time.Hour)
+	authEvent, err := NewStatusEvent(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Apply(authEvent) || status.Circuit != CircuitOpen {
+		t.Fatalf("authentication failure did not open the circuit: %#v", status)
+	}
+	transient := observation(base.Add(time.Second))
+	transient.Availability, transient.SafeErrorCode = AvailabilityUnavailable, "provider_unavailable"
+	transientEvent, err := NewStatusEvent(transient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Apply(transientEvent) || status.Circuit != CircuitOpen || !status.StaleAfter.Equal(auth.ExpiresAt) {
+		t.Fatalf("later failure shortened the open hold: %#v", status)
+	}
+	success := observation(base.Add(2 * time.Second))
+	successEvent, err := NewStatusEvent(success)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Apply(successEvent) || status.Circuit != CircuitClosed || !status.StaleAfter.Equal(success.ExpiresAt) {
+		t.Fatalf("success did not close the circuit: %#v", status)
+	}
+}

@@ -337,8 +337,14 @@ V1 health is operator-configured plus passive:
 - administratively enabled/disabled;
 - open after a bounded run of definite transient failures;
 - half-open probes through separately admitted real calls;
-- authentication and invalid-configuration failures hold the endpoint open
-  until configuration changes;
+- authentication and invalid-configuration rejections from the provider hold
+  the endpoint open until configuration changes (bounded at 24 hours, so a
+  credential rotated in place eventually recovers), and a later failure never
+  shortens that hold; a credential lookup that fails before dispatch keeps the
+  ordinary cooldown;
+- a permission denial counts toward the transient-failure threshold instead
+  of opening the circuit at once, because a 403 such as a moderation rejection
+  can be specific to one request;
 - ambiguous calls do not count as safe transient failures.
 
 Authentication and configuration state is scoped to the immutable configuration

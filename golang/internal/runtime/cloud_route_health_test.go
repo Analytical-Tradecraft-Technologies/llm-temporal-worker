@@ -368,8 +368,68 @@ func TestCloudRouteHealthScopedToModelAndTier(t *testing.T) {
 	if blocked(y) || blocked(xStandard) {
 		t.Fatalf("x's failures blocked another model or tier: %+v", shared.records)
 	}
-	record(y, &cloudstate.ExecutionFailure{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected})
+	denied := &cloudstate.ExecutionFailure{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected}
+	record(y, denied)
+	if blocked(y) {
+		t.Fatalf("a single permission denial opened y for every caller: %+v", shared.records)
+	}
+	record(y, denied)
+	record(y, denied)
 	if !blocked(y) || blocked(xStandard) {
-		t.Fatalf("a model denial on y was not confined to y: %+v", shared.records)
+		t.Fatalf("repeated model denials on y were not confined to y: %+v", shared.records)
+	}
+}
+
+func TestCloudRouteHealthHoldsAuthenticationFailureForSnapshot(t *testing.T) {
+	now := time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
+	digest := sha256.Sum256([]byte("config"))
+	account := [32]byte{7}
+	candidate := routing.Candidate{RouteID: "primary", EndpointID: "openai-direct", Provider: "openai", Family: "responses", Model: "gpt-5-mini", ProviderTier: "default", EndpointAccountHMAC: account}
+	shared := &keyedHealthFixture{}
+	planning := &ProviderPlanning{routeStatus: shared, clock: func() time.Time { return now }, configDigest: digest, configEpoch: "epoch"}
+	execution := &CloudProviderExecution{statusRecorder: shared}
+	operation := 0
+	record := func(code provider.Code, dispatch provider.DispatchCertainty) {
+		t.Helper()
+		operation++
+		now = now.Add(time.Second)
+		execution.recordRouteStatus(context.Background(), cloudstate.SavedProviderExecution{
+			Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: "epoch", Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: durable.OperationID(fmt.Sprintf("operation-%d", operation)), RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
+				CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(account[:]))}}},
+			Execution: cloudstate.ProviderExecution{Stage: cloudstate.ExecutionFailed, CompletedAt: now, Failure: &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch}},
+		})
+	}
+	blocked := func(planning *ProviderPlanning) bool {
+		t.Helper()
+		result, err := planning.routeBlocked(context.Background(), candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	// A credential lookup that failed before dispatch can recover without a
+	// snapshot change, so it keeps the short cooldown.
+	record(provider.CodeAuthentication, provider.DispatchNotDispatched)
+	if !blocked(planning) {
+		t.Fatalf("a credential lookup failure did not open the route: %+v", shared.records)
+	}
+	now = now.Add(time.Minute)
+	if blocked(planning) {
+		t.Fatalf("a credential lookup failure was held past the cooldown: %+v", shared.records)
+	}
+	record(provider.CodeAuthentication, provider.DispatchRejected)
+	if !blocked(planning) {
+		t.Fatalf("an authentication failure did not open the route: %+v", shared.records)
+	}
+	// An in-flight transient failure must not shorten the credential hold.
+	record(provider.CodeProviderUnavailable, provider.DispatchRejected)
+	now = now.Add(time.Hour)
+	if !blocked(planning) {
+		t.Fatalf("an authentication failure stopped blocking the route within its snapshot: %+v", shared.records)
+	}
+	replacement := *planning
+	replacement.configDigest = sha256.Sum256([]byte("replacement"))
+	if blocked(&replacement) {
+		t.Fatal("an authentication failure blocked the route in a replacement snapshot")
 	}
 }
