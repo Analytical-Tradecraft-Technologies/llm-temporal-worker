@@ -110,9 +110,19 @@ func PlainTextSummary(response llm.Response, maxBytes int) (string, error) {
 	}
 	var builder strings.Builder
 	for _, item := range response.Output {
-		switch item.(type) {
+		switch value := item.(type) {
 		case llm.ProviderState, llm.Reference:
 			continue
+		case *llm.ProviderState:
+			// Items implement llm.Item with value receivers, so output may
+			// carry pointer forms. A typed nil is malformed, not a companion.
+			if value != nil {
+				continue
+			}
+		case *llm.Reference:
+			if value != nil {
+				continue
+			}
 		}
 		message, ok := item.(llm.Message)
 		if !ok || message.Actor != llm.ActorModel {
