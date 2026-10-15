@@ -840,6 +840,10 @@ func acceptedInvalidResponse(failure *provider.Error) bool {
 		failure.Dispatch == provider.DispatchAccepted && failure.Retry == provider.RetryNever
 }
 
+// maxProviderRetryDelay caps how long a provider's Retry-After can hold a
+// request back from the route that returned it.
+const maxProviderRetryDelay = 24 * time.Hour
+
 // Only a valid provider retry classification can authorize a new attempt. Raw
 // errors remain outcome_unknown; they never become a free or immediate retry.
 func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, failure *provider.Error, now time.Time) *cloudstate.ExecutionFailure {
@@ -857,8 +861,8 @@ func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, f
 		if delay < time.Second {
 			delay = time.Second
 		}
-		if delay > 24*time.Hour {
-			delay = 24 * time.Hour
+		if delay > maxProviderRetryDelay {
+			delay = maxProviderRetryDelay
 		}
 		result.Retryable, result.RetryNotBefore = true, now.UTC().Add(delay)
 	}
