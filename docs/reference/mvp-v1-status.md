@@ -91,8 +91,10 @@ only a compatible worker applies the request's attempt limit.
   and [#819](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/819).
 - The typed OCaml client and OCaml workers cannot open a TLS or authenticated
   Temporal connection; the pinned SDK has no TLS or API-key options. Until
-  ocaml-temporal#496 lands they require `temporal.mesh_transport` or a local
-  TLS-originating sidecar. Release is gated on
+  ocaml-temporal#496 lands they must reach Temporal through a service mesh that
+  supplies TLS and client identity, or a local TLS-originating sidecar. The
+  `temporal.mesh_transport` flag only relaxes the Go worker's own validation
+  and gives OCaml no transport. Release is gated on
   [#1345](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1345).
 - Live AWS/provider execution, backup/restore qualification and deployment remain
   separate evidence gates. Passing offline tests does not complete those gates.
