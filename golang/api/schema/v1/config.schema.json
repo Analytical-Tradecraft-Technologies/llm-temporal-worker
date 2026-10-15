@@ -624,7 +624,7 @@
     "continuation": {
       "type": "object", "additionalProperties": false, "required": ["handle_keys", "retain_canonical_transcript", "allow_provider_hosted_state"],
       "properties": {
-        "handle_keys": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "primary", "secret"], "properties": { "id": { "type": "string" }, "primary": { "type": "boolean" }, "secret": { "$ref": "#/$defs/secret" } } } },
+        "handle_keys": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "primary", "secret"], "properties": { "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,32}$" }, "primary": { "type": "boolean" }, "secret": { "$ref": "#/$defs/secret" } } } },
         "retain_canonical_transcript": { "const": true }, "allow_provider_hosted_state": { "type": "boolean" }
       }
     },
