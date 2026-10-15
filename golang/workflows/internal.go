@@ -150,8 +150,8 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 		if !workflow.IsContinueAsNewError(returnedErr) && workflow.GetVersion(ctx, "langfuse-export-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
 			exportCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}})
 			if err := workflow.ExecuteActivity(exportCtx, activity.ExportLangfuseActivityName, ref).Get(exportCtx, nil); err != nil {
+				// The export Activity counts each failed attempt in llmtw_langfuse_export_failures_total.
 				workflow.GetLogger(ctx).Warn("Langfuse export failed", "request_id", ref.RequestID)
-				workflow.GetMetricsHandler(ctx).Counter("langfuse_export_failures").Inc(1)
 			}
 		}
 	}()

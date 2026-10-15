@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -44,6 +48,44 @@ func TestExportLangfuseRetriesOnlyDeliveryFailures(t *testing.T) {
 		var applicationErr *temporal.ApplicationError
 		if !errors.As(err, &applicationErr) || applicationErr.Type() != tc.kind || applicationErr.NonRetryable() != tc.nonRetryable {
 			t.Fatalf("%v: got %v, want %s nonRetryable=%v", tc.err, err, tc.kind, tc.nonRetryable)
+		}
+	}
+}
+
+func TestExportLangfuseFailureIsVisibleOnMetrics(t *testing.T) {
+	payload, err := json.Marshal(llm.ExecutionReferenceV1{RequestID: executionTestID, Context: validGenerateV1Request().Context})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := observability.NewMetrics(observability.AllowedValues{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scrape := func() string {
+		recorder := httptest.NewRecorder()
+		metrics.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
+		body, err := io.ReadAll(recorder.Result().Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	// A healthy worker already exports every reason at zero, so alerts can
+	// match the series before the first failure.
+	if body := scrape(); !strings.Contains(body, `llmtw_langfuse_export_failures_total{reason="rejected"} 0`) {
+		t.Fatalf("missing zero series:\n%s", body)
+	}
+	for _, exportErr := range []error{nil, langfuse.ErrRejected, langfuse.ErrUnavailable, langfuse.ErrExport} {
+		activities := &Activities{Metrics: metrics, V1Runtime: &langfuseRuntimeStub{err: exportErr}}
+		var suite testsuite.WorkflowTestSuite
+		environment := suite.NewTestActivityEnvironment()
+		environment.RegisterActivityWithOptions(activities.exportLangfuseTemporal, sdkactivity.RegisterOptions{Name: ExportLangfuseActivityName})
+		_, _ = environment.ExecuteActivity(ExportLangfuseActivityName, rawJSONArgument(t, payload))
+	}
+	body := scrape()
+	for _, reason := range []string{"rejected", "unavailable", "failed"} {
+		if want := `llmtw_langfuse_export_failures_total{reason="` + reason + `"} 1`; !strings.Contains(body, want) {
+			t.Fatalf("missing %s:\n%s", want, body)
 		}
 	}
 }
