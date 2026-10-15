@@ -118,23 +118,51 @@ func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(ret
 			return PrefixSelection{}, err
 		}
 		if size <= policy.TargetTokens {
-			if fits == nil {
-				break
-			}
-			ok, err := fits(selection.Retained)
-			if err != nil {
-				return PrefixSelection{}, fmt.Errorf("compaction retained window: %w", err)
-			}
-			if ok {
-				break
-			}
+			break
 		}
 		selection, err = SelectPrefix(source.Input, selection.RetainedTurns-1)
 		if err != nil {
 			return PrefixSelection{}, err
 		}
 	}
-	return selection, nil
+	if fits == nil || selection.RetainedTurns <= 1 {
+		return selection, nil
+	}
+	// A shorter window is never larger, so binary search for the longest one
+	// fits accepts: fits may encode the whole window, and probing every turn
+	// of a long window would encode it once per turn.
+	accepted := func(turns int) (bool, error) {
+		candidate, err := SelectPrefix(source.Input, turns)
+		if err != nil {
+			return false, err
+		}
+		ok, err := fits(candidate.Retained)
+		if err != nil {
+			return false, fmt.Errorf("compaction retained window: %w", err)
+		}
+		return ok, nil
+	}
+	ok, err := accepted(selection.RetainedTurns)
+	if err != nil {
+		return PrefixSelection{}, err
+	}
+	if ok {
+		return selection, nil
+	}
+	best, low, high := 1, 2, selection.RetainedTurns-1
+	for low <= high {
+		middle := low + (high-low)/2
+		ok, err := accepted(middle)
+		if err != nil {
+			return PrefixSelection{}, err
+		}
+		if ok {
+			best, low = middle, middle+1
+		} else {
+			high = middle - 1
+		}
+	}
+	return SelectPrefix(source.Input, best)
 }
 
 // retainedRequestTokens sizes the request left after compaction with the

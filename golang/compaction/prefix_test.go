@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -404,6 +405,21 @@ func TestSelectBoundedRequestPrefixShortensWindowToBound(t *testing.T) {
 	if err != nil || selection.RetainedTurns != 1 || !reflect.DeepEqual(selection.Retained, items[3:]) {
 		t.Fatalf("selection = %#v, err = %v, want the last turn alone", selection, err)
 	}
+	// A long window is searched, not probed once per turn.
+	long := make([]llm.Item, 256)
+	for i := range long {
+		long[i] = image(fmt.Sprint(i))
+	}
+	policy.RecentTurns = len(long)
+	calls := 0
+	selection, err = SelectBoundedRequestPrefix(llm.Request{OperationKey: "compact-1", Model: "alias", Input: long}, policy, func(retained []llm.Item) (bool, error) {
+		calls++
+		return len(retained) <= 37, nil
+	})
+	if err != nil || selection.RetainedTurns != 37 || calls > 10 {
+		t.Fatalf("selection kept %d turns after %d probes, err = %v; want 37 turns within 10 probes", selection.RetainedTurns, calls, err)
+	}
+	policy.RecentTurns = 3
 	failure := errors.New("bound failed")
 	if _, err := SelectBoundedRequestPrefix(source, policy, func([]llm.Item) (bool, error) { return false, failure }); !errors.Is(err, failure) {
 		t.Fatalf("err = %v, want the bound's error", err)
