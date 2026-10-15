@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -122,6 +123,25 @@ func (admission *BudgetAdmission) reserve(ctx context.Context, route durable.Rou
 }
 
 func (admission *BudgetAdmission) claim(ctx context.Context, route durable.RoutePlan, result durable.ReserveResult) (durable.ClaimReceipt, error) {
+	return admission.claimWith(ctx, route, result, false)
+}
+
+// claimFenced is claim for the holder of the attempt's durable execution
+// fence, the only caller that ever claims this reservation, so Redis's answer
+// is its own (#1312). A claim that succeeded is kept even if the context ended
+// afterwards, and an uncertain reply is resolved by replaying the claim once:
+// already_claimed, on that replay or on a client resend of the first request,
+// proves the claim applied. It is also how recovery probes an attempt that
+// never recorded the outcome of its claim.
+func (admission *BudgetAdmission) claimFenced(ctx context.Context, route durable.RoutePlan, result durable.ReserveResult) (durable.ClaimReceipt, error) {
+	return admission.claimWith(ctx, route, result, true)
+}
+
+// claimConfirmTimeout bounds the replay that resolves an uncertain claim. It
+// is detached from the caller, whose context may be what ended the first try.
+const claimConfirmTimeout = 5 * time.Second
+
+func (admission *BudgetAdmission) claimWith(ctx context.Context, route durable.RoutePlan, result durable.ReserveResult, fenced bool) (durable.ClaimReceipt, error) {
 	request := durable.ReserveRequest{OperationID: route.OperationID, GenerationID: route.GenerationID}
 	if !result.Accepted || result.Validate(request) != nil {
 		return durable.ClaimReceipt{}, budgetAdmissionError(provider.CodeInvalidArgument, provider.DispatchNotDispatched, provider.RetryNever)
@@ -144,16 +164,41 @@ func (admission *BudgetAdmission) claim(ctx context.Context, route durable.Route
 		return durable.ClaimReceipt{}, err
 	}
 	receipt, err := admission.boundary.Claim(ctx, &lifecycle, &reservation)
+	if err != nil && fenced && !errors.Is(err, durable.ErrLeaseExpired) {
+		receipt, err = admission.confirmClaim(ctx, &lifecycle, &reservation, err)
+	}
 	if err != nil {
 		if errors.Is(err, durable.ErrLeaseExpired) {
+			// durable_claim reports already_claimed before it checks the start
+			// deadline, so expired proves nothing was claimed or dispatched.
 			return durable.ClaimReceipt{}, budgetAdmissionError(provider.CodeBudgetDenied, provider.DispatchNotDispatched, provider.RetryAfter)
 		}
 		// Includes lost replies, duplicate claims, and malformed receipts. The
 		// consumed lease stays charged; a new paid attempt needs fresh budget.
 		return durable.ClaimReceipt{}, budgetAdmissionError(provider.CodeAmbiguousDispatch, provider.DispatchAmbiguous, provider.RetryNever)
 	}
-	if ctx.Err() != nil {
+	if !fenced && ctx.Err() != nil {
 		return durable.ClaimReceipt{}, budgetAdmissionError(provider.CodeAmbiguousDispatch, provider.DispatchAmbiguous, provider.RetryNever)
+	}
+	return receipt, nil
+}
+
+// confirmClaim resolves a fenced claim that failed without a definite answer.
+// A replay answers claimed or already_claimed when the claim applied, either
+// first time or now, and expired when it never did and no longer can.
+func (admission *BudgetAdmission) confirmClaim(ctx context.Context, lifecycle *durable.Lifecycle, reservation *durable.BudgetReservation, cause error) (durable.ClaimReceipt, error) {
+	if !errors.Is(cause, durable.ErrAlreadyClaimed) {
+		replayCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), claimConfirmTimeout)
+		defer cancel()
+		receipt, err := admission.boundary.Claim(replayCtx, lifecycle, reservation)
+		if !errors.Is(err, durable.ErrAlreadyClaimed) {
+			return receipt, err
+		}
+	}
+	result := reservation.Result
+	receipt := durable.ClaimReceipt{OperationID: result.OperationID, GenerationID: result.GenerationID, IncarnationID: result.IncarnationID}
+	if err := receipt.Validate(result); err != nil {
+		return durable.ClaimReceipt{}, err
 	}
 	return receipt, nil
 }

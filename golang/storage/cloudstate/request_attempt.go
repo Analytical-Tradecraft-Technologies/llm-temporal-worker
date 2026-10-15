@@ -20,7 +20,8 @@ var ErrRequestAttemptMissing = errors.New("request attempt missing")
 // Neither this reference nor allocating it authorizes a provider submission.
 type RequestAttempt struct {
 	// PriorCandidates records one entry per retired provider execution, including
-	// unknown outcomes. Unused quote renewals do not consume a provider attempt.
+	// unknown outcomes. Unused quote renewals and unclaimed executions do not
+	// consume a provider attempt.
 	PriorCandidates []string  `json:"prior_candidates,omitempty"`
 	Version         int       `json:"version"`
 	RootID          RequestID `json:"root_id"`
@@ -112,7 +113,9 @@ func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootI
 			priorCandidates = append([]string(nil), active.PriorCandidates...)
 			previousExecution, loadErr := r.LoadProviderExecution(ctx, scope, active.ID)
 			if loadErr == nil {
-				priorCandidates = append(priorCandidates, previousExecution.Plan.Estimate.CandidateID)
+				if !previousExecution.Execution.Unclaimed(previousExecution.Plan) {
+					priorCandidates = append(priorCandidates, previousExecution.Plan.Estimate.CandidateID)
+				}
 			} else if !errors.Is(loadErr, ErrProviderExecutionMissing) && !errors.Is(loadErr, ErrBudgetPlanMissing) {
 				return RequestAttempt{}, loadErr
 			}

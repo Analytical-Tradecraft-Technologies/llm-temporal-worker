@@ -134,7 +134,7 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 	if execution.Stage != ExecutionPending && !execution.PollAfter.IsZero() {
 		return ErrInvalid
 	}
-	if execution.Settled && paid && execution.Settlement == nil {
+	if execution.Settled && paid && execution.Settlement == nil && !execution.Unclaimed(plan) {
 		return ErrInvalid
 	}
 	terminal := execution.Stage == ExecutionSucceeded || execution.Stage == ExecutionFailed
@@ -167,6 +167,15 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 		}
 	}
 	return nil
+}
+
+// Unclaimed reports a paid attempt that failed before Redis applied its claim
+// (#1312). Nothing was dispatched and no claim exists to settle, so it is
+// settled without a settlement and, like an unused quote renewal, does not use
+// up a provider attempt.
+func (execution ProviderExecution) Unclaimed(plan BudgetPlan) bool {
+	return plan.RequiresReservation() && execution.Claim == nil && execution.Stage == ExecutionFailed &&
+		execution.Failure != nil && execution.Failure.Dispatch == provider.DispatchNotDispatched
 }
 
 func executionReservationMatches(plan BudgetPlan, result durable.ReserveResult) bool {

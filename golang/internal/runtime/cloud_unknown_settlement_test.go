@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
 // Limits sized for exactly one reservation of the fixture's quote.
@@ -243,5 +244,143 @@ func TestCloudReloadSettlesUnknownWorkOnSyncedRoute(t *testing.T) {
 	assertCloudStatus(t, f, first.ID, cloudstate.StatusOutcomeUnknown)
 	if f.submits.Load() != 1 {
 		t.Fatal("unknown attempt resubmitted", f.submits.Load())
+	}
+}
+
+// A claim Redis applied whose reply, and the replay resolving it, were both
+// lost leaves no local receipt (#1312). Once the recovery window passes, Redis
+// answers already_claimed, so the attempt is charged at its full reservation
+// and the charge ages out instead of holding every matched window forever.
+func TestCloudExecutionRuntimeSettlesLostClaimReplyAfterRecoveryWindow(t *testing.T) {
+	f := boundedCloud(t, false, singleReservationLimits)
+	leaser := &admissionLeaser{BudgetLeaser: f.cap.Budgets}
+	leaser.claim = func(ctx context.Context, request durable.ClaimRequest) (durable.ClaimReceipt, error) {
+		_, _ = leaser.BudgetLeaser.Claim(ctx, request)
+		return durable.ClaimReceipt{}, errors.New("lost claim reply")
+	}
+	f.cap.Budgets = leaser
+	f.restart(t)
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Claim != nil || f.submits.Load() != 0 {
+		t.Fatalf("unresolved claim = %+v, %v", saved.Execution, err)
+	}
+	leaser.claim = nil
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	// The retry stays behind the lost claim's conservative charge.
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionBudgetWait)
+	saved, err = f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
+		t.Fatalf("lost claim not settled after the recovery window: %+v %v", saved.Execution, err)
+	}
+	assertUnknownWorkCharged(t, saved)
+	// An independent request after every window has rolled over is admitted.
+	f.now = f.now.Add(48 * time.Hour)
+	f.restart(t)
+	f.request.OperationKey = "independent"
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	if f.submits.Load() != 1 {
+		t.Fatal("lost claim dispatched", f.submits.Load())
+	}
+}
+
+// An attempt whose claim never reached Redis is unknown until its recovery
+// window passes. Redis then answers expired, so recovery closes it as a
+// definite non-dispatch and renews it without using up a provider attempt.
+func TestCloudExecutionRuntimeRenewsUnclaimedUnknownAttempt(t *testing.T) {
+	f := boundedCloud(t, false)
+	f.options.MaxAttempts = 1
+	leaser := &admissionLeaser{BudgetLeaser: f.cap.Budgets}
+	leaser.claim = func(context.Context, durable.ClaimRequest) (durable.ClaimReceipt, error) {
+		return durable.ClaimReceipt{}, errors.New("Redis unavailable")
+	}
+	f.cap.Budgets = leaser
+	f.restart(t)
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaser.claim = nil
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
+		t.Fatalf("unclaimed unknown attempt = %+v, %v", saved.Execution, err)
+	}
+	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
+		t.Fatalf("unclaimed attempt not renewed: %+v, %v", next, err)
+	}
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	if f.submits.Load() != 1 {
+		t.Fatal("renewed attempt not submitted once", f.submits.Load())
+	}
+}
+
+// expired is a definite non-dispatch (#1312): no outcome_unknown, no wait for
+// the recovery window and no provider attempt used. Acquisition renews the
+// attempt at once, even when only one provider attempt is allowed.
+func TestCloudExecutionRuntimeExpiredClaimRenewsAttempt(t *testing.T) {
+	f := boundedCloud(t, false)
+	f.options.MaxAttempts = 1
+	leaser := &admissionLeaser{BudgetLeaser: f.cap.Budgets}
+	expired := false
+	leaser.claim = func(ctx context.Context, request durable.ClaimRequest) (durable.ClaimReceipt, error) {
+		if !expired {
+			// The claim lands after its start deadline.
+			expired = true
+			f.now = f.now.Add(durable.BudgetStartLease)
+		}
+		return leaser.BudgetLeaser.Claim(ctx, request)
+	}
+	f.cap.Budgets = leaser
+	f.restart(t)
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	v = boundedState(t, v, err, llm.ExecutionFailed)
+	if !v.Retryable || v.Dispatch != string(provider.DispatchNotDispatched) || v.RetryAfterSeconds != 0 {
+		t.Fatalf("expired claim result = %+v", v)
+	}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
+	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
+		t.Fatalf("expired claim = %+v, %v", saved.Execution, err)
+	}
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
+		t.Fatalf("expired attempt not renewed: %+v, %v", next, err)
+	}
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if f.submits.Load() != 1 {
+		t.Fatal("renewed attempt not submitted once", f.submits.Load())
 	}
 }

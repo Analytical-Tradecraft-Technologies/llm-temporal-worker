@@ -290,6 +290,53 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 					t.Fatalf("resurrected lease: %v", err)
 				}
 			})
+			t.Run("replay decides a claim's outcome after its deadline", func(t *testing.T) {
+				// A worker resolves an uncertain claim by replaying it (#1312).
+				// durable_claim reports already_claimed before it checks the
+				// deadline, so a lost claim reply stays provable, and expired
+				// proves the lease was never claimed.
+				m := newMaterializer(t)
+				short := func(req durable.ReserveRequest) durable.ReserveRequest {
+					req.Reservations[0].BucketNanos = int64(time.Second)
+					req.Reservations[0].DurationNanos = int64(2 * time.Second)
+					req.Reservations[0].Bucket = time.Now().Unix()
+					req.ExpiresAt = time.Now().Add(2 * time.Second)
+					return req
+				}
+				lostReq := short(request("lost-claim", "0.6"))
+				lost := acquire(t, m, lostReq)
+				unclaimed := acquire(t, m, short(request("unclaimed", "0.4")))
+				invoke := m.invoke
+				m.invoke = &lostBudgetReply{delegate: invoke, action: "durable_claim"}
+				if _, err := m.Claim(ctx, claim(lost)); err == nil {
+					t.Fatal("expected lost claim reply")
+				}
+				m.invoke = invoke
+				time.Sleep(time.Until(lostReq.ExpiresAt) + 20*time.Millisecond)
+				if _, err := m.Claim(ctx, claim(lost)); !errors.Is(err, durable.ErrAlreadyClaimed) {
+					t.Fatalf("replayed applied claim: %v", err)
+				}
+				for range 2 {
+					if _, err := m.Claim(ctx, claim(unclaimed)); !errors.Is(err, durable.ErrLeaseExpired) {
+						t.Fatalf("replayed unclaimed lease: %v", err)
+					}
+				}
+				// The applied claim holds its reservation until it is settled;
+				// the expired, unclaimed lease does not.
+				held, err := m.Accept(ctx, short(request("held", "0.5")))
+				if err != nil || held.Accepted {
+					t.Fatalf("lost claim released before settlement: %#v %v", held, err)
+				}
+				// Charged at its full reservation, the claim ages out with its window.
+				unknown := settle(lost, "0.6")
+				event := &unknown.Events[0]
+				event.Kind, event.CostStatus, event.ActualCostUSD, event.UnknownReasonCode = budget.JournalFinalizeUnknown, budget.CostUnknown, nil, "provider_cost_unknown"
+				if err := m.Reconcile(ctx, unknown); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(time.Until(time.Unix(lostReq.Reservations[0].Bucket+3, 0)) + 20*time.Millisecond)
+				acquire(t, m, request("after-rollover", "1"))
+			})
 			t.Run("paid work survives window rollover until settlement", func(t *testing.T) {
 				m := newMaterializer(t)
 				req := request("slow-provider", "0.8")
