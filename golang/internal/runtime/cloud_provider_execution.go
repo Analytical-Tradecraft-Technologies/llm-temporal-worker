@@ -475,6 +475,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			// \ufffd in its place.
 			next.Response.Output = llm.SanitizeOutputSurrogates(next.Response.Output)
 			next.Response.Usage.ProviderRaw = llm.SanitizeRawMapSurrogates(next.Response.Usage.ProviderRaw)
+			next.Response.Provider.Raw = llm.SanitizeRawMapSurrogates(next.Response.Provider.Raw)
 			if saved.Plan.Kind == "generate" {
 				next.Response.Output = uniqueToolCallIDs(saved.Plan.Route.OperationID, transcript, next.Response.Output)
 			}

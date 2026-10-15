@@ -24,6 +24,7 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	// place.
 	response.Output = llm.SanitizeOutputSurrogates(response.Output)
 	response.Usage.ProviderRaw = llm.SanitizeRawMapSurrogates(response.Usage.ProviderRaw)
+	response.Provider.Raw = llm.SanitizeRawMapSurrogates(response.Provider.Raw)
 	ctx, finalizeSpan := engine.startTrace(ctx, "llmtw.finalization", operationTraceAttrs(operation.ID, candidate.candidate)...)
 	defer func() {
 		if resultErr != nil {
