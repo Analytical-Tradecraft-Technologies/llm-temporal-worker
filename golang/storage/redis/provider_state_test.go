@@ -169,8 +169,10 @@ func TestProviderStatusPagePositionIsBoundedForLongIdentifiers(t *testing.T) {
 }
 
 // Model sync gives every synced model on an endpoint one route ID. Records of
-// different provider models and tiers must use separate fields, survive a
-// decode, and page one by one; an unscoped record keeps its original field.
+// different provider models and tiers must use separate fields and survive a
+// decode; an unscoped record keeps its original field. The public row has no
+// model or tier, so a listing shows one row per route and endpoint: the most
+// severe scoped record.
 func TestProviderStatusScopedByModelAndTier(t *testing.T) {
 	space, err := newKeySpace(testKeyOptions())
 	if err != nil {
@@ -184,7 +186,12 @@ func TestProviderStatusScopedByModelAndTier(t *testing.T) {
 	fields := map[string]bool{}
 	var records []providerStatusRecord
 	for _, scope := range [][2]string{{"", ""}, {"model-a", "default"}, {"model-a", "flex"}, {"model-b", "flex"}} {
-		event := providerTestEvent(t, now, "sync-endpoint", func(o *control.StatusObservation) { o.Model, o.ProviderTier = scope[0], scope[1] })
+		event := providerTestEvent(t, now, "sync-endpoint", func(o *control.StatusObservation) {
+			o.Model, o.ProviderTier = scope[0], scope[1]
+			if scope[1] == "flex" && scope[0] == "model-a" {
+				o.Availability = control.AvailabilityDegraded
+			}
+		})
 		record, applied := applyProviderEvent(providerStatusRecord{}, event)
 		if !applied || record.Status.Model != scope[0] || record.Status.ProviderTier != scope[1] {
 			t.Fatalf("scope %v not applied: %#v", scope, record)
@@ -205,15 +212,22 @@ func TestProviderStatusScopedByModelAndTier(t *testing.T) {
 	if _, applied := applyProviderEvent(records[1], other); applied {
 		t.Fatal("another model's event applied to a scoped record")
 	}
+	tail := providerTestEvent(t, now, "tail-route", nil)
+	extra, _ := applyProviderEvent(providerStatusRecord{}, tail)
+	records = append(records, extra)
 	options := control.ProviderStatusListOptions{ConfigDigest: records[0].Status.ConfigDigest, IncludeHealthy: true, SnapshotHorizon: now, Limit: 1}
-	for index, record := range records {
-		page, err := store.pageRouteStatuses(records, options)
-		if err != nil || len(page.Routes) != 1 || page.Routes[0].Model != record.Status.Model || page.Routes[0].ProviderTier != record.Status.ProviderTier {
-			t.Fatalf("page %d: %#v %v", index, page, err)
-		}
-		options.AfterRouteID = page.NextRouteID
+	page, err := store.pageRouteStatuses(records, options)
+	if err != nil || len(page.Routes) != 1 || page.Routes[0].RouteID != "sync-endpoint" || page.Routes[0].Model != "model-a" || page.Routes[0].ProviderTier != "flex" || page.NextRouteID != "sync-endpoint" {
+		t.Fatalf("scoped records were not listed as their most severe row: %#v %v", page, err)
 	}
-	if options.AfterRouteID != "" {
-		t.Fatal("pagination did not end after the last scoped record")
+	options.AfterRouteID = page.NextRouteID
+	page, err = store.pageRouteStatuses(records, options)
+	if err != nil || len(page.Routes) != 1 || page.Routes[0].RouteID != "tail-route" || page.NextRouteID != "" {
+		t.Fatalf("second page: %#v %v", page, err)
+	}
+	// Without healthy rows, the group is listed because one scoped record is degraded.
+	options = control.ProviderStatusListOptions{ConfigDigest: records[0].Status.ConfigDigest, SnapshotHorizon: now, Limit: 10}
+	if page, err := store.pageRouteStatuses(records, options); err != nil || len(page.Routes) != 1 || page.Routes[0].Availability != control.AvailabilityDegraded {
+		t.Fatalf("unhealthy filter: %#v %v", page, err)
 	}
 }

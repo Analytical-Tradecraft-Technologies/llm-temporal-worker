@@ -22,6 +22,11 @@ const providerStateSchema = "provider-state/v1"
 const providerViewTTL = 15 * time.Minute
 const maxProviderRecordBytes = 4 << 20
 
+// maxProviderRecords bounds the records of one configuration-scoped hash.
+// Route health is scoped to the provider model and tier, so model sync's 4096
+// models with up to three tiers each must fit alongside configured routes.
+const maxProviderRecords = 16384
+
 // ProviderStateOptions shares the worker's Redis client and opaque namespace.
 // Clock is used for query-view retention; observation freshness comes from the
 // provider's ObservedAt/ExpiresAt fields, not from Redis key expiration.
@@ -235,7 +240,7 @@ func (store *ProviderStateStore) update(ctx context.Context, key, field string, 
 		if len(next) > maxProviderRecordBytes {
 			return false, errors.New("provider state record exceeds size limit")
 		}
-		applied, err := providerStateScript.Run(ctx, store.client, []string{key}, field, previous, next).Int()
+		applied, err := providerStateScript.Run(ctx, store.client, []string{key}, field, previous, next, maxProviderRecords).Int()
 		if err != nil {
 			return false, resolveStateError(ctx, err)
 		}
@@ -405,7 +410,7 @@ func (store *ProviderStateStore) view(ctx context.Context, kind string, digest [
 	key := store.space.admissionKey("provider-view", kind, hex.EncodeToString(digest[:]), horizon.UTC().Truncate(time.Second).Format(time.RFC3339))
 	decode := func(raw string) (providerView, error) {
 		var view providerView
-		if len(raw) > 64<<20 || json.Unmarshal([]byte(raw), &view) != nil || view.Schema != providerStateSchema || view.Horizon.Unix() != horizon.Unix() || len(view.Records) > 4097 {
+		if len(raw) > 64<<20 || json.Unmarshal([]byte(raw), &view) != nil || view.Schema != providerStateSchema || view.Horizon.Unix() != horizon.Unix() || len(view.Records) > maxProviderRecords+1 {
 			return view, ErrUnavailable
 		}
 		return view, nil
@@ -430,7 +435,7 @@ func (store *ProviderStateStore) view(ctx context.Context, kind string, digest [
 	if err != nil {
 		return providerView{}, err
 	}
-	if len(data) > 64<<20 || len(values) > 4096 {
+	if len(data) > 64<<20 || len(values) > maxProviderRecords {
 		return providerView{}, ErrUnavailable
 	}
 	won, err := store.client.SetNX(ctx, key, data, providerViewTTL).Result()
@@ -500,21 +505,22 @@ func (store *ProviderStateStore) ListRouteStatuses(ctx context.Context, options 
 	return store.pageRouteStatuses(records, options)
 }
 
-// routePosition marks one record inside a group of same-named routes, which
-// includes the model- and tier-scoped records of one route. It is a
+// routePosition marks one record inside a group of same-named routes. It is a
 // fixed-length digest, so the position stays within the cursor and
 // normalization bounds whatever the route and endpoint lengths. The tab keeps
 // it distinct from every route ID.
 func (store *ProviderStateStore) routePosition(status control.RouteStatus) string {
-	return "@\t" + store.space.digest("provider-route-position", status.RouteID, status.EndpointID, status.Model, status.ProviderTier)
+	return "@\t" + store.space.digest("provider-route-position", status.RouteID, status.EndpointID)
 }
 
 // pageRouteStatuses pages records already sorted by route ID, endpoint, model
-// and tier. A
-// position is a route ID, or a routePosition marker when a page ended between
-// same-named routes of different models.
+// and tier. A position is a route ID, or a routePosition marker when a page
+// ended between same-named routes of different models. The public row has no
+// model or tier, so the model- and tier-scoped records of one route and
+// endpoint are listed as one row: the most severe of them.
 func (store *ProviderStateStore) pageRouteStatuses(records []providerStatusRecord, options control.ProviderStatusListOptions) (control.ProviderStatusPage, error) {
 	var page control.ProviderStatusPage
+	records = coalesceScopedStatuses(records)
 	// A marker resumes after the record it names. The pinned view still holds
 	// that record; if it does not, the caller must restart pagination.
 	marker := strings.Contains(options.AfterRouteID, "\t")
@@ -545,6 +551,42 @@ func (store *ProviderStateStore) pageRouteStatuses(records []providerStatusRecor
 		return control.ProviderStatusPage{}, control.ErrProviderViewExpired
 	}
 	return page, nil
+}
+
+// coalesceScopedStatuses keeps, for each route and endpoint, the record with
+// the most severe circuit, credit, billing and availability state, preferring
+// the newest observation among equals. A group is healthy only when every
+// scoped record in it is.
+func coalesceScopedStatuses(records []providerStatusRecord) []providerStatusRecord {
+	result := make([]providerStatusRecord, 0, len(records))
+	for _, record := range records {
+		last := len(result) - 1
+		if last < 0 || result[last].Status.RouteID != record.Status.RouteID || result[last].Status.EndpointID != record.Status.EndpointID {
+			result = append(result, record)
+			continue
+		}
+		if moreSevereStatus(record.Status, result[last].Status) {
+			result[last] = record
+		}
+	}
+	return result
+}
+
+func moreSevereStatus(candidate, current control.RouteStatus) bool {
+	rank := func(status control.RouteStatus) [4]int {
+		circuit := map[control.CircuitState]int{control.CircuitOpen: 2, control.CircuitHalfOpen: 1}[status.Circuit]
+		credit := map[control.CreditState]int{control.CreditExhausted: 3, control.CreditLow: 2, control.CreditUnknown: 1}[status.Credit]
+		billing := map[control.BillingState]int{control.BillingIssue: 2, control.BillingUnknown: 1}[status.Billing]
+		availability := map[control.Availability]int{control.AvailabilityUnavailable: 3, control.AvailabilityDegraded: 2, control.AvailabilityUnknown: 1}[status.Availability]
+		return [4]int{circuit, credit, billing, availability}
+	}
+	a, b := rank(candidate), rank(current)
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return candidate.ObservedAt.After(current.ObservedAt)
 }
 
 func (store *ProviderStateStore) ListCreditStatuses(ctx context.Context, options control.CreditStatusListOptions) (control.CreditStatusPage, error) {

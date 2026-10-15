@@ -16,7 +16,9 @@ sync gives every synced model on an endpoint one route ID, so the endpoint,
 model and tier keep their health apart. Planning reads the projection for the
 candidate's route, endpoint, model and tier. A stored record whose endpoint,
 account, provider, family, model or tier does not match the candidate is
-ignored as "no status" and never fails planning. On the
+ignored as "no status" and never fails planning. The `provider_status` query
+row has no model or tier, so it lists one row per route and endpoint: the most
+severe of that route's scoped records. On the
 cloud Generate/Compact path, settlement records each definite success or
 supported failure as an availability observation, which drives the shared
 route circuit. Those observations always report credit and billing as `ok`:
