@@ -9,7 +9,10 @@
 include module type of Llm_temporal_models
 include module type of Llm_temporal_invocation
 
+(** [Cache_policy.t] keeps the implementation path so the checked policy is
+    the same type wherever the facade accepts it, including [Compact.make]. *)
 module Conversation : module type of Llm_temporal_conversation
+  with type Cache_policy.t = Llm_temporal_conversation.Cache_policy.t
 module Query : module type of Llm_temporal_query
 module Generate : module type of Llm_temporal_generate
 module Client : module type of Llm_temporal_workflow_client
