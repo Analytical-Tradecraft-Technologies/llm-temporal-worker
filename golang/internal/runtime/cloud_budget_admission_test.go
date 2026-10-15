@@ -12,6 +12,7 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -455,6 +456,35 @@ func TestCloudBudgetAdmissionWaitAndLeaseExpiryDoNotBecomeDispatchGrants(t *test
 	f.attempt.QuotedAt = f.attempt.QuotedAt.Add(16 * time.Minute)
 	_, err = f.helper.Claim(ctx, call, accepted)
 	assertBudgetAdmissionError(t, err, provider.CodeBudgetDenied, provider.DispatchNotDispatched, provider.RetryAfter)
+}
+
+// An acquire retry that finds the reservation already committed is counted,
+// because the lost reply left the first decision unrecorded; the dispatch
+// step's replay is not counted again (#1359).
+func TestCloudBudgetAdmissionCountsRecoveredAcquireButNotDispatchReplay(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Outcomes: []string{"accepted", "denied"}, OperationStates: []string{"reserved"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newCloudAdmissionFixture(t, "generate")
+	call, err := f.prepare(context.Background(), f.attempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Redis commits the acceptance without the worker recording it.
+	if result, err := f.leaser.Accept(context.Background(), call.Plan().Reservation); err != nil || !result.Accepted {
+		t.Fatalf("commit: %+v %v", result, err)
+	}
+	ctx := observability.WithMetrics(context.Background(), metrics)
+	if result, err := f.helper.reserve(ctx, call, true); err != nil || !result.Accepted {
+		t.Fatalf("acquire retry: %+v %v", result, err)
+	}
+	if result, err := f.helper.reserve(ctx, call, false); err != nil || !result.Accepted {
+		t.Fatalf("dispatch replay: %+v %v", result, err)
+	}
+	if got := cloudMetricTotal(t, metrics, "llmtw_operation_state_total", "state", "reserved"); got != 1 {
+		t.Fatalf("reserved = %v, want the recovered acquire counted once", got)
+	}
 }
 
 func TestCloudBudgetAdmissionIndependentAttemptsUseDifferentProviderKeys(t *testing.T) {

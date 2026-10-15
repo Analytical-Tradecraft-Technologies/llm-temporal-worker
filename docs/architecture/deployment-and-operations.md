@@ -292,8 +292,9 @@ parent checkpoint, `created` per published child), `llmtw_cache_events_total`
 `llmtw_provider_poll_total`. A provider attempt is counted once, when its
 submission returns. A budget admission is counted once per acquire decision
 and policy, so a request waiting for capacity contributes one `denied` per
-retry; the Generate or Compact step's replay of an accepted reservation is not
-counted again. `llmtw_activity_duration_seconds` and
+retry. The Generate or Compact step's replay of the reservation its acquire
+step made is not counted again; an acquire retry that recovers a committed
+reservation whose reply was lost is counted. `llmtw_activity_duration_seconds` and
 `llmtw_provider_duration_seconds` use buckets from 0.1 s to 600 s so
 minute-long calls stay in finite buckets. The maintenance series are emitted only by the legacy engine Activity
 that memory mode runs.
