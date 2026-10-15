@@ -31,8 +31,20 @@ type brokenReader struct{ err error }
 
 func (b brokenReader) Read([]byte) (int, error) { return 0, b.err }
 
+// failingAfterReader returns all of data together with err.
+type failingAfterReader struct {
+	data []byte
+	err  error
+}
+
+func (b *failingAfterReader) Read(p []byte) (int, error) {
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	return n, b.err
+}
+
 func TestPayloadReadLimitsAndBodyOwnership(t *testing.T) {
-	for _, kind := range []string{"valid", "nil", "negative", "oversized-declared", "oversized-body", "truncated", "trailing", "reader-failure"} {
+	for _, kind := range []string{"valid", "nil", "negative", "oversized-declared", "oversized-body", "truncated", "trailing", "reader-failure", "unexpected-eof-with-body"} {
 		t.Run(kind, func(t *testing.T) {
 			r, _, blobs, request := fixture(t)
 			key, err := r.writeBlob(context.Background(), r.stream(request.ID), []byte("payload"))
@@ -58,6 +70,10 @@ func TestPayloadReadLimitsAndBodyOwnership(t *testing.T) {
 				body.Reader = bytes.NewReader(append(append([]byte(nil), data...), 0))
 			case "reader-failure":
 				body.Reader = brokenReader{err: failure}
+			case "unexpected-eof-with-body":
+				// A transport failure reported with the complete declared
+				// body is still a failure, not a clean end of body.
+				body.Reader = &failingAfterReader{data: data, err: io.ErrUnexpectedEOF}
 			}
 			r.blobs = openedBlobs{BlobStore: blobs, result: opened}
 			stored := append([]byte(nil), data...)
@@ -70,8 +86,11 @@ func TestPayloadReadLimitsAndBodyOwnership(t *testing.T) {
 				return
 			}
 			want := ErrCorrupt
-			if kind == "reader-failure" {
+			switch kind {
+			case "reader-failure":
 				want = failure
+			case "unexpected-eof-with-body":
+				want = io.ErrUnexpectedEOF
 			}
 			if !errors.Is(err, want) {
 				t.Fatalf("read accepted %s: %v", kind, err)

@@ -82,10 +82,10 @@ func CanonicalJSONWithLimits(data []byte, maxBytes, maxDepth int) ([]byte, error
 		return nil, fmt.Errorf("canonical JSON trailing input: %w", err)
 	}
 
-	// Canonical output is close to the input size, so one allocation usually
-	// holds it instead of repeated buffer doubling on large values (#1112).
+	// Size the output once from the input's compact length instead of
+	// repeatedly doubling the buffer on large values (#1112).
 	var output bytes.Buffer
-	output.Grow(len(data))
+	output.Grow(compactSizeHint(data))
 	if err := writeCanonicalValue(&output, value); err != nil {
 		return nil, err
 	}
@@ -224,6 +224,32 @@ func writeCanonicalValue(output *bytes.Buffer, value any) error {
 	default:
 		return fmt.Errorf("canonical JSON value %T is unsupported", value)
 	}
+}
+
+// compactSizeHint estimates the canonical size of valid JSON data: its length
+// without insignificant whitespace. Whitespace-heavy input therefore does not
+// reserve its full length. Escape rewriting may still change the final size
+// slightly; the value is only a buffer hint.
+func compactSizeHint(data []byte) int {
+	size, inString, escaped := 0, false, false
+	for _, c := range data {
+		switch {
+		case inString:
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+		case c == '"':
+			inString = true
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			continue
+		}
+		size++
+	}
+	return size
 }
 
 // writeCanonicalString writes value exactly as json.Marshal encodes a string.

@@ -102,13 +102,22 @@ func (r *Repository) readBlob(ctx context.Context, stream, key string) ([]byte, 
 	}
 	// The size is bounded above, so read into one buffer of the declared size
 	// plus one byte that detects a longer body, then decrypt in place, rather
-	// than growing a buffer and copying the plaintext out (#1112).
+	// than growing a buffer and copying the plaintext out (#1112). Only a
+	// clean io.EOF ends the body; any other reader error, including
+	// io.ErrUnexpectedEOF, is returned as it was by io.ReadAll.
 	data := make([]byte, opened.Size+1)
-	read, err := io.ReadFull(opened.Body, data)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return nil, err
+	read := 0
+	for read < len(data) {
+		n, err := opened.Body.Read(data[read:])
+		read += n
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	if err == nil || int64(read) != opened.Size {
+	if int64(read) != opened.Size {
 		return nil, ErrCorrupt
 	}
 	data = data[:read]
