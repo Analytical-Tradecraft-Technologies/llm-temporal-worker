@@ -218,12 +218,13 @@ module Failure = struct
     | _ -> None
 
   (* A public workflow failure keeps the provider's error code and dispatch in
-     its details. Possible acceptance outranks the error code so a caller never
-     treats a possibly charged call as safe to resubmit. *)
+     its details. Only a definitely unaccepted call is [Authentication], so a
+     caller never treats a possibly charged call as safe to resubmit. *)
   let provider_kind failure fallback =
     match execution_details failure with
     | Ok (Some { dispatch = Some Ambiguous; _ }) -> Ambiguous_dispatch
-    | Ok (Some { error_code = Some ("authentication" | "permission_denied"); _ }) -> Authentication
+    | Ok (Some { error_code = Some ("authentication" | "permission_denied");
+                 dispatch = Some (Not_dispatched | Rejected) }) -> Authentication
     | Ok _ | Error _ -> fallback
 
   let kind failure = match Temporal.Error.error_type failure with

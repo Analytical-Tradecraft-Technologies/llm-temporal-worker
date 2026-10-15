@@ -56,6 +56,12 @@ let () =
   (* Possible acceptance outranks an authentication error code. *)
   expect_kind "ambiguous auth" Ambiguous_dispatch
     (failure "provider_error" ~details:{|{"error_code":"permission_denied","dispatch":"ambiguous"}|});
+  (* An accepted or unknown dispatch may have been charged, so it is not
+     reported as an authentication-only failure. *)
+  expect_kind "accepted auth" Provider_error
+    (failure "provider_error" ~details:{|{"error_code":"authentication","dispatch":"accepted"}|});
+  expect_kind "auth without dispatch" Provider_error
+    (failure "provider_error" ~details:{|{"error_code":"permission_denied"}|});
   let rate_limited =
     failure "provider_rejected" ~details:{|{"error_code":"rate_limited","dispatch":"rejected"}|} in
   expect_kind "rate limited" Provider_rejected rate_limited;

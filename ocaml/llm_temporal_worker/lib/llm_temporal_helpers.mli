@@ -91,8 +91,10 @@ module Failure : sig
   (** Classifies the retained application failure type; never discards the
       SDK error or invents a retry policy for paid work. A provider failure
       whose details report [Ambiguous] dispatch is [Ambiguous_dispatch], and
-      one whose error code is [authentication] or [permission_denied] is
-      [Authentication], as the Activity classification does. *)
+      one whose error code is [authentication] or [permission_denied] with
+      [Not_dispatched] or [Rejected] dispatch is [Authentication], as the
+      Activity classification does. An accepted or unknown dispatch keeps the
+      [Provider_*] kind. *)
   val kind : Temporal.Error.t -> kind
 
   (** Decodes a public workflow failure's details. [Ok None] means the failure
