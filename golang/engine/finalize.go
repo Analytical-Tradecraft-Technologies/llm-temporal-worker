@@ -20,8 +20,10 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	}
 	candidate := quoted.candidates[index]
 	// Strict JSON clients reject a lone surrogate escape in the model's open
-	// JSON; store and return it with \ufffd in its place.
+	// JSON or raw provider values; store and return it with \ufffd in its
+	// place.
 	response.Output = llm.SanitizeOutputSurrogates(response.Output)
+	response.Usage.ProviderRaw = llm.SanitizeRawMapSurrogates(response.Usage.ProviderRaw)
 	ctx, finalizeSpan := engine.startTrace(ctx, "llmtw.finalization", operationTraceAttrs(operation.ID, candidate.candidate)...)
 	defer func() {
 		if resultErr != nil {

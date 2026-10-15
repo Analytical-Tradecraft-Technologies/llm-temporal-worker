@@ -251,3 +251,14 @@ func TestLowerSkipsReferenceInsideToolExchange(t *testing.T) {
 		t.Fatalf("reference reached the wire: %s", encoded)
 	}
 }
+
+func TestExaCitationLoneSurrogateIsSanitizedInOutput(t *testing.T) {
+	items, err := exaReferences(json.RawMessage(`[{"url":"https://example.com/a","id":"r1","title":"Emoji cut \ud83d","score":0.5}]`), "citations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := mustMarshal(t, llm.SanitizeOutputSurrogates(items)[0])
+	if strings.Contains(encoded, `\ud83d`) || !strings.Contains(encoded, `"title":"Emoji cut \ufffd"`) {
+		t.Fatalf("sanitized citation = %s", encoded)
+	}
+}
