@@ -199,7 +199,8 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 		{name: "budget with default effort", reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortProviderDefault, TokenBudget: &budget}, wantType: "enabled"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning}
+			// A manual budget must stay below max_tokens.
+			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}}
 			params, err := lowerRequest(request, mustBedrockProfile(t, ""))
 			if err != nil {
 				t.Fatal(err)

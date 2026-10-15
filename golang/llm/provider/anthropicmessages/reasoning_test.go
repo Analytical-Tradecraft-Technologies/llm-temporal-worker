@@ -108,7 +108,7 @@ func compileReasoning(t *testing.T, reasoning llm.ReasoningSpec, strict bool) (m
 	t.Helper()
 	adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, testProfile())}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "v1-reasoning", Model: "claude-contract", Reasoning: &reasoning},
+		Request: llm.Request{OperationKey: "v1-reasoning", Model: "claude-contract", Reasoning: &reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}},
 		Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
 		Strict:  strict,
 	})

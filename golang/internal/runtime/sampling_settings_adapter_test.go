@@ -93,7 +93,9 @@ func TestSettingsPatchSamplingAndReasoningReachEveryAdapter(t *testing.T) {
 		stopOnly    = `{"stop_sequences":{"set":["END"]}}`
 		seed        = `{"seed":{"set":42}}`
 		budget      = `{"reasoning_mode":{"set":"enabled"},"reasoning_token_budget":{"set":2048}}`
-		disabled    = `{"reasoning_mode":{"set":"disabled"}}`
+		// Messages APIs require a manual budget below max_tokens.
+		budgetWithMax = `{"reasoning_mode":{"set":"enabled"},"reasoning_token_budget":{"set":2048},"output":{"set":{"max_tokens":4096,"format":{"kind":"text"}}}}`
+		disabled      = `{"reasoning_mode":{"set":"disabled"}}`
 	)
 	type check struct {
 		patch  string
@@ -109,14 +111,16 @@ func TestSettingsPatchSamplingAndReasoningReachEveryAdapter(t *testing.T) {
 			{patch: topPAndStop, path: []string{"top_p"}, want: 0.9},
 			{patch: topPAndStop, path: []string{"stop_sequences"}, want: stop},
 			{patch: seed, reject: "sampling field is not supported"},
-			{patch: budget, path: []string{"thinking"}, want: map[string]any{"type": "enabled", "budget_tokens": float64(2048)}},
+			{patch: budget, reject: "must be less than max_tokens"},
+			{patch: budgetWithMax, path: []string{"thinking"}, want: map[string]any{"type": "enabled", "budget_tokens": float64(2048)}},
 			{patch: disabled, path: []string{"thinking"}, want: map[string]any{"type": "disabled"}},
 		},
 		"bedrock_anthropic_messages": {
 			{patch: topPAndStop, path: []string{"top_p"}, want: 0.9},
 			{patch: topPAndStop, path: []string{"stop_sequences"}, want: stop},
 			{patch: seed, reject: "sampling field is not supported"},
-			{patch: budget, path: []string{"thinking"}, want: map[string]any{"type": "enabled", "budget_tokens": float64(2048)}},
+			{patch: budget, reject: "must be less than max_tokens"},
+			{patch: budgetWithMax, path: []string{"thinking"}, want: map[string]any{"type": "enabled", "budget_tokens": float64(2048)}},
 			{patch: disabled, path: []string{"thinking"}, want: map[string]any{"type": "disabled"}},
 		},
 		"bedrock_converse": {

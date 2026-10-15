@@ -42,7 +42,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
 		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
 		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopK: &topK, StopSequences: []string{"END"}},
-		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: intPtr(2048), Summary: llm.ReasoningSummaryNone},
+		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone},
 		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"container_id":"container-1"}`)},
 	}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
@@ -89,7 +89,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 		t.Fatalf("tool choice = %#v", wire["tool_choice"])
 	}
 	thinking := wire["thinking"].(map[string]any)
-	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(2048) || thinking["display"] != "omitted" {
+	if thinking["type"] != "adaptive" || thinking["budget_tokens"] != nil || thinking["display"] != "omitted" {
 		t.Fatalf("thinking = %#v", thinking)
 	}
 	if wire["output_config"].(map[string]any)["format"].(map[string]any)["type"] != "json_schema" {
@@ -236,7 +236,8 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 		{name: "budget with default effort", reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortProviderDefault, TokenBudget: &budget}, wantType: "enabled"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning}
+			// A manual budget must stay below max_tokens.
+			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}}
 			adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, testProfile())}
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: request,
