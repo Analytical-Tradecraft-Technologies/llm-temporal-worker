@@ -136,3 +136,36 @@ func TestCloudReloadOlderWorkerWaitsForNewerRequest(t *testing.T) {
 	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 }
+
+// During a rolling deployment a worker still on the old configuration may
+// prepare a request after a new worker started. Once the old workers drain,
+// the new worker must fail it fast, not wait for one that never returns
+// (#1320). A live old worker can still complete it.
+func TestCloudReloadNewerWorkerFailsRequestPreparedByDrainingWorker(t *testing.T) {
+	ctx := context.Background()
+	f := boundedCloud(t, false)
+	started := f.now
+	// The old worker prepares the request after the new worker started.
+	f.now = started.Add(3 * time.Minute)
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	f.now = started.Add(time.Minute)
+	restore := f.reload(t)
+	f.now = f.now.Add(defaultCloudReloadGrace - time.Second)
+	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
+	f.now = f.now.Add(time.Second)
+	for _, step := range []func() error{
+		func() error { _, err := f.runtime.AcquireBudgetV1(ctx, ref); return err },
+		func() error { _, err := f.runtime.GenerateStepV1(ctx, f.request); return err },
+	} {
+		assertRecoveryError(t, step(), provider.CodeConfiguration, provider.RetryNever)
+	}
+	if f.submits.Load() != 0 {
+		t.Fatal("retired configuration dispatched")
+	}
+	restore()
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+}

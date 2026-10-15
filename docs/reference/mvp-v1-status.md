@@ -62,14 +62,16 @@ endpoint's own configuration are unchanged; it is never submitted again. If
 either changed, an incompatible worker returns a retryable state-unavailable
 error until compatible settings return. Work that still needs planning, budget
 admission or a new attempt (including after a retryable provider failure) has
-nothing unfinished paid. A worker whose configuration started serving after
-such a request was prepared returns the same retryable wait for its first 15
-minutes, which covers a rolling deployment, and then fails fast with a
-non-retryable `configuration` error; a worker on an older configuration always
-waits, since a newer one may be rolling out. Submit a failed request again under
-a new operation key; it is never re-planned under the new configuration. The
-saved request is not changed, so restoring its settings still resumes it, and
-only a compatible worker applies the request's attempt limit.
+nothing unfinished paid. Each preparation records when the preparing worker's
+configuration started serving. A worker whose configuration started serving
+later returns the same retryable wait for its first 15 minutes, which covers a
+rolling deployment, and then fails fast with a non-retryable `configuration`
+error, even when a draining worker prepared the request after it started; a
+worker on an older configuration always waits, since a newer one may be rolling
+out. Submit a failed request again under a new operation key; it is never
+re-planned under the new configuration. The saved request is not changed, so
+restoring its settings still resumes it, and only a compatible worker applies
+the request's attempt limit.
 
 ## Separate or deferred capabilities
 

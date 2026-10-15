@@ -32,6 +32,9 @@ type CloudRequestPreparation struct {
 	digest        [32]byte
 	clock         func() time.Time
 	requestLimits CloudRequestLimits
+	// activatedAt is when this worker's configuration began serving; each
+	// preparation records it (#1320). Zero records nothing.
+	activatedAt time.Time
 }
 
 // PreparedCloudRequest is invocation-local, not a Temporal result or authority
@@ -297,7 +300,7 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 	if err != nil {
 		return nil, err
 	}
-	preparation := cloudstate.RequestPreparation{Version: 1, ConfigDigest: p.digest, CheckpointScope: checkpointScope, PreparedAt: at}
+	preparation := cloudstate.RequestPreparation{Version: 1, ConfigDigest: p.digest, CheckpointScope: checkpointScope, PreparedAt: at, ConfigActivatedAt: p.activatedAt}
 	if parent != "" {
 		codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxPreparedParentBytes}
 		preparation.ParentSnapshot, err = codec.EncodeSnapshot(*state.NewCheckpointSnapshot(materialized))

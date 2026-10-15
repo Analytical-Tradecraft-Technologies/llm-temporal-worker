@@ -103,6 +103,8 @@ func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, opt
 		return nil, err
 	}
 	preparation.requestLimits = options.RequestLimits
+	startedAt := c.Clock().UTC()
+	preparation.activatedAt = startedAt
 	execution, err := c.NewCloudProviderExecution(ctx)
 	if err != nil {
 		return nil, err
@@ -112,7 +114,7 @@ func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, opt
 	if err != nil {
 		return nil, err
 	}
-	return &CloudExecutionRuntime{capabilities: c, store: store, preparation: preparation, execution: execution, publication: publication, options: options, startedAt: c.Clock().UTC()}, nil
+	return &CloudExecutionRuntime{capabilities: c, store: store, preparation: preparation, execution: execution, publication: publication, options: options, startedAt: startedAt}, nil
 }
 
 type cloudStep int
@@ -270,13 +272,20 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		} else if !errors.Is(err, cloudstate.ErrRequestAttemptMissing) {
 			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 		}
-		// Nothing unfinished is paid. A request prepared before this worker's
-		// configuration began serving belongs to an older configuration: wait
-		// while a worker on it may still exist, then fail fast instead of
-		// waiting forever (#1161). A request prepared later may belong to a
-		// newer configuration rolling out, so an older worker always waits.
+		// Nothing unfinished is paid. A request whose configuration began
+		// serving before this worker's did belongs to an older configuration:
+		// wait while a worker on it may still exist, then fail fast instead of
+		// waiting forever (#1161). That holds even when a draining worker
+		// prepared it after this one started (#1320). A request from a
+		// configuration activated later may belong to a newer configuration
+		// rolling out, so an older worker always waits. A preparation that
+		// does not record its activation is ordered by when it was prepared.
 		// The request is not changed, so restoring its configuration resumes it.
-		if p.Preparation.PreparedAt.Before(r.startedAt) && r.now().Sub(r.startedAt) >= r.options.ReloadGrace {
+		activated := p.Preparation.ConfigActivatedAt
+		if activated.IsZero() {
+			activated = p.Preparation.PreparedAt
+		}
+		if activated.Before(r.startedAt) && r.now().Sub(r.startedAt) >= r.options.ReloadGrace {
 			return llm.ExecutionResultV1{}, cloudConfigurationRetired()
 		}
 		return llm.ExecutionResultV1{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
