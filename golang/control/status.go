@@ -282,6 +282,7 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 			event.Billing = BillingIssue
 		}
 	}
+	wasOpen := status.Circuit == CircuitOpen
 	if event.Availability == AvailabilityAvailable && event.Credit == CreditOK && event.Billing == BillingOK {
 		status.ConsecutiveDefiniteFailures = 0
 		status.Circuit = CircuitClosed
@@ -295,8 +296,17 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 			status.Circuit = CircuitOpen
 		}
 	}
-	if event.SafeErrorCode == "authentication" || event.SafeErrorCode == "permission_denied" || event.SafeErrorCode == "configuration" || event.Credit == CreditExhausted || event.Billing == BillingIssue {
+	// Credential and configuration failures are endpoint-level and open the
+	// circuit at once. A permission denial can be specific to one request,
+	// such as a moderation rejection, so it only counts toward the threshold.
+	if event.SafeErrorCode == "authentication" || event.SafeErrorCode == "configuration" || event.Credit == CreditExhausted || event.Billing == BillingIssue {
 		status.Circuit = CircuitOpen
+	}
+	staleAfter := event.ExpiresAt
+	if wasOpen && status.Circuit == CircuitOpen && status.StaleAfter.After(staleAfter) {
+		// A later failure must not shorten an open hold, for example an
+		// in-flight 5xx arriving after an authentication failure.
+		staleAfter = status.StaleAfter
 	}
 	status.ConfigDigest, status.ConfigEpoch = event.ConfigDigest, event.ConfigEpoch
 	status.RouteID, status.EndpointID = event.RouteID, event.EndpointID
@@ -306,7 +316,7 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	if status.Circuit == "" {
 		status.Circuit = CircuitClosed
 	}
-	status.LastEventDigest, status.ObservedAt, status.StaleAfter = event.EventDigest, event.ObservedAt, event.ExpiresAt
+	status.LastEventDigest, status.ObservedAt, status.StaleAfter = event.EventDigest, event.ObservedAt, staleAfter
 	if status.Credit == CreditLow || status.Credit == CreditExhausted {
 		// Keep the authoritative confirmation timestamp across ordinary
 		// inference/startup observations. A provider code is explicit incident

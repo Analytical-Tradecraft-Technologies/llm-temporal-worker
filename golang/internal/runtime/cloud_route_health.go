@@ -43,6 +43,16 @@ func (p *ProviderPlanning) routeBlocked(ctx context.Context, candidate routing.C
 	return status.Circuit == control.CircuitOpen && p.clock().Before(status.StaleAfter), nil
 }
 
+// routeHealthCooldown is how long an ordinary definite failure keeps counting
+// toward, or holding open, a route circuit before a later request may probe it.
+const routeHealthCooldown = 30 * time.Second
+
+// credentialFailureHold keeps a route open after an authentication or
+// configuration failure. Health records are keyed by the configuration digest,
+// so publishing a new snapshot clears the hold at once; the bound only lets a
+// credential rotated in place, without a snapshot change, recover eventually.
+const credentialFailureHold = 24 * time.Hour
+
 // Stable completion timestamps make activity replay idempotent at the Redis
 // projection. Health is best effort and cannot prevent budget settlement.
 func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cloudstate.SavedProviderExecution) {
@@ -62,11 +72,17 @@ func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cl
 	}
 	var accountID [32]byte
 	copy(accountID[:], account)
-	o := control.StatusObservation{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RouteID: plan.Route.RouteID, EndpointID: plan.Route.EndpointID, EndpointAccountHMAC: accountID, Provider: plan.Route.Provider, EndpointFamily: plan.Family, Model: plan.Route.Model, ProviderTier: plan.ProviderTier, ObservedAt: x.CompletedAt, ExpiresAt: x.CompletedAt.Add(30 * time.Second), Source: control.SourceInference, Availability: control.AvailabilityAvailable, Credit: control.CreditOK, Billing: control.BillingOK, EvidenceDigest: sha256.Sum256([]byte(plan.Route.OperationID))}
+	o := control.StatusObservation{ConfigDigest: plan.ConfigDigest, ConfigEpoch: plan.ConfigEpoch, RouteID: plan.Route.RouteID, EndpointID: plan.Route.EndpointID, EndpointAccountHMAC: accountID, Provider: plan.Route.Provider, EndpointFamily: plan.Family, Model: plan.Route.Model, ProviderTier: plan.ProviderTier, ObservedAt: x.CompletedAt, ExpiresAt: x.CompletedAt.Add(routeHealthCooldown), Source: control.SourceInference, Availability: control.AvailabilityAvailable, Credit: control.CreditOK, Billing: control.BillingOK, EvidenceDigest: sha256.Sum256([]byte(plan.Route.OperationID))}
 	if x.Failure != nil {
 		o.SafeErrorCode = string(x.Failure.Code)
 		switch x.Failure.Code {
-		case provider.CodeProviderUnavailable, provider.CodeAuthentication, provider.CodePermissionDenied, provider.CodeConfiguration:
+		case provider.CodeAuthentication, provider.CodeConfiguration:
+			o.Availability = control.AvailabilityUnavailable
+			o.ExpiresAt = x.CompletedAt.Add(credentialFailureHold)
+		case provider.CodeProviderUnavailable, provider.CodePermissionDenied:
+			// A 403 can be a request-level rejection such as a moderation
+			// flag, so it counts toward the threshold instead of opening the
+			// shared circuit for every caller.
 			o.Availability = control.AvailabilityUnavailable
 		case provider.CodeProviderRateLimited:
 			o.Availability = control.AvailabilityDegraded
