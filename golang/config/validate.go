@@ -848,6 +848,10 @@ func hasBudgetMatchRestriction(match BudgetMatch) bool {
 		match.ServiceClass != ""
 }
 
+// continuationHandleKeyIDPattern matches the pattern state.NewKeyring
+// enforces at startup; handle key IDs are embedded in every handle.
+var continuationHandleKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
+
 func (continuation ContinuationConfig) validate() error {
 	// Checkpoints always keep the canonical transcript, which replay and
 	// compaction depend on; a setting that claims otherwise is rejected
@@ -862,8 +866,8 @@ func (continuation ContinuationConfig) validate() error {
 	seen := make(map[string]struct{}, len(continuation.HandleKeys))
 	for index, key := range continuation.HandleKeys {
 		path := fmt.Sprintf("continuation.handle_keys[%d]", index)
-		if err := validateIdentifier(key.ID, path+".id"); err != nil {
-			return err
+		if !continuationHandleKeyIDPattern.MatchString(key.ID) {
+			return fmt.Errorf("%s.id must be 1-32 characters from [A-Za-z0-9_-]", path)
 		}
 		if _, exists := seen[key.ID]; exists {
 			return fmt.Errorf("%s duplicate key ID %q", path, key.ID)
