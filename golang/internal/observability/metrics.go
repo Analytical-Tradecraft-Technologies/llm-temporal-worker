@@ -68,6 +68,7 @@ type Metrics struct {
 	cacheEvents          *prometheus.CounterVec
 	pendingPolls         *prometheus.CounterVec
 	costStatus           *prometheus.CounterVec
+	langfuseExportFailed *prometheus.CounterVec
 	workerPolling        prometheus.Gauge
 	heartbeatAge         prometheus.Gauge
 }
@@ -82,6 +83,12 @@ var activityFailureOrigins = map[string]struct{}{
 	"provider": {},
 	"caller":   {},
 	"budget":   {},
+}
+
+var langfuseExportFailureReasons = map[string]struct{}{
+	"failed":      {},
+	"rejected":    {},
+	"unavailable": {},
 }
 
 func values(values []string) map[string]struct{} {
@@ -150,6 +157,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.cacheEvents = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cache_events_total", Help: "Response cache hits, uses, fills, misses, and bounded failures."}, []string{"event"})
 	m.pendingPolls = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_poll_total", Help: "Provider-owned operation poll outcomes."}, []string{"outcome"})
 	m.costStatus = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_status_total", Help: "Exact and unknown cost accounting events; amounts remain in the durable ledger."}, []string{"endpoint", "model", "class", "status", "method"})
+	m.langfuseExportFailed = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_langfuse_export_failures_total", Help: "Failed Langfuse export Activity attempts by bounded reason."}, []string{"reason"})
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
 	collectors := []prometheus.Collector{
@@ -157,7 +165,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 		m.serviceClassActual, m.budgetAdmission, m.costExactTotal,
 		m.operationState, m.ambiguousTotal, m.continuationTotal, m.configReloadTotal,
 		m.maintenanceRows, m.maintenanceFailures, m.maintenanceDuration,
-		m.cacheEvents, m.pendingPolls, m.costStatus,
+		m.cacheEvents, m.pendingPolls, m.costStatus, m.langfuseExportFailed,
 		m.workerPolling, m.heartbeatAge,
 	}
 	for _, collector := range collectors {
@@ -171,6 +179,11 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	// failure series to be present.
 	for origin := range activityFailureOrigins {
 		m.activityFailureTotal.WithLabelValues(origin)
+	}
+	// Likewise, an alert on lost Langfuse exports needs the series before
+	// the first failure.
+	for reason := range langfuseExportFailureReasons {
+		m.langfuseExportFailed.WithLabelValues(reason)
 	}
 	return m, nil
 }
@@ -403,6 +416,17 @@ func (metrics *Metrics) RecordPendingPoll(outcome string) {
 	metrics.mu.RLock()
 	defer metrics.mu.RUnlock()
 	metrics.pendingPolls.WithLabelValues(metrics.builtIn(outcome, outcomes)).Inc()
+}
+
+// RecordLangfuseExportFailure records one failed Langfuse export Activity
+// attempt. Reason is restricted to the fixed vocabulary.
+func (metrics *Metrics) RecordLangfuseExportFailure(reason string) {
+	if metrics == nil {
+		return
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.langfuseExportFailed.WithLabelValues(metrics.builtIn(reason, langfuseExportFailureReasons)).Inc()
 }
 
 func nonNegativeDuration(duration time.Duration) time.Duration {

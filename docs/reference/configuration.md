@@ -1475,8 +1475,13 @@ whether the breaker closes. During a Langfuse outage, most operations therefore
 gain only one fast-failing Activity round trip. At most two per worker at a time
 wait up to 5 seconds per attempt, and a compaction-backed Generate can be
 delayed by that wait twice. Failed export logs a
-safe warning and increments `langfuse_export_failures`, preserving the operation's
-original result or error. Capture failures also log a safe warning; missing paid
+safe warning, preserving the operation's original result or error. Each failed
+export Activity attempt increments the worker's
+`llmtw_langfuse_export_failures_total{reason}` counter on `/metrics`, where
+`reason` is `rejected` (Langfuse refused the batch, such as bad credentials),
+`unavailable` (breaker open or concurrency limit reached; nothing was sent) or
+`failed` (any other failure, retried up to three attempts). Every reason is
+exported at zero from startup. Capture failures also log a safe warning; missing paid
 captures prevent acknowledgement of an incomplete trace. Content stays in the
 existing encrypted blob store before export. No credentials or opaque provider
 continuation state are exported, and caller-owned tools are represented in I/O
