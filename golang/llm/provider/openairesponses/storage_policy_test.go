@@ -22,15 +22,15 @@ func TestStoragePolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, permitted := range []bool{false, true} {
-		for _, extension := range []string{`{}`, `{"store":false}`, `{"store":true}`, `{"background":true}`} {
+		for _, extension := range []string{`{}`, `{"store":false}`, `{"store":true}`} {
 			calls := 0
 			fixture := newFixtureAdapterWithTransport(t, body, func() { calls++ })
-			adapter, err := New(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(permitted))
+			adapter, err := New(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(permitted), allowSupportedExtensions)
 			if err != nil {
 				t.Fatal(err)
 			}
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "policy", Model: "gpt-contract", Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(extension)}}, Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"}, Strict: true})
-			if !permitted && (extension == `{"store":true}` || extension == `{"background":true}`) {
+			if !permitted && extension == `{"store":true}` {
 				if err == nil || calls != 0 {
 					t.Fatalf("override accepted: %s", extension)
 				}

@@ -2,7 +2,6 @@ package anthropicmessages
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -18,9 +17,6 @@ func compileHaiku55(t *testing.T, request llm.Request, strict bool) (provider.Ca
 	}
 	profile := testProfile()
 	profile.ExpectedModel = request.Model
-	profile.AllowedExtensions["anthropic.haiku55"] = ExtensionSpec{Fields: map[string]string{
-		"temperature": "temperature", "top_p": "top_p", "top_k": "top_k", "thinking": "thinking",
-	}}
 	adapter := &Adapter{endpointID: "anthropic-test", profile: mustProfile(t, profile)}
 	request.OperationKey = "haiku55-parameters"
 	return adapter.Compile(context.Background(), provider.CompileInput{
@@ -48,14 +44,6 @@ func TestHaiku55RejectsUnsupportedParametersBeforeDispatch(t *testing.T) {
 		{name: "top p", request: llm.Request{Sampling: &llm.SamplingSpec{TopP: &topP}}},
 		{name: "top k", request: llm.Request{Sampling: &llm.SamplingSpec{TopK: &topK}}},
 		{name: "combined defaults", request: llm.Request{Sampling: &llm.SamplingSpec{Temperature: &defaultTemperature, TopP: &defaultTopP}}},
-		{name: "extension temperature", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"temperature":0.5}`)}}},
-		{name: "extension top p", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"top_p":1}`)}}},
-		{name: "extension top k", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"top_k":0}`)}}},
-		{name: "extension combined defaults", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"temperature":1,"top_p":0.99}`)}}},
-		{name: "extension enabled thinking", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"thinking":{"type":"enabled","budget_tokens":2048}}`)}}},
-		{name: "extension adaptive budget", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"thinking":{"type":"adaptive","budget_tokens":2048}}`)}}},
-		{name: "extension null thinking", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"thinking":null}`)}}},
-		{name: "mixed sampling and extension", request: llm.Request{Sampling: &llm.SamplingSpec{Temperature: &defaultTemperature}, Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"top_p":0.99}`)}}},
 	} {
 		for _, strict := range []bool{false, true} {
 			t.Run(test.name+portabilityName(strict), func(t *testing.T) {
@@ -107,21 +95,6 @@ func TestHaiku55PreservesSupportedParameters(t *testing.T) {
 			}
 		}},
 		{name: "top p default", request: llm.Request{Sampling: &llm.SamplingSpec{TopP: &topP}}, check: func(t *testing.T, wire map[string]any) {
-			if wire["top_p"] != topP {
-				t.Fatal(wire)
-			}
-		}},
-		{name: "extension adaptive", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"thinking":{"type":"adaptive"}}`)}}, check: func(t *testing.T, wire map[string]any) {
-			if wire["thinking"].(map[string]any)["type"] != "adaptive" {
-				t.Fatal(wire)
-			}
-		}},
-		{name: "extension temperature default", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"temperature":1}`)}}, check: func(t *testing.T, wire map[string]any) {
-			if wire["temperature"] != temperature {
-				t.Fatal(wire)
-			}
-		}},
-		{name: "extension top p default", request: llm.Request{Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"top_p":0.99}`)}}, check: func(t *testing.T, wire map[string]any) {
 			if wire["top_p"] != topP {
 				t.Fatal(wire)
 			}

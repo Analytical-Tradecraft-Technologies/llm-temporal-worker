@@ -23,8 +23,8 @@ func validateHaiku55Request(request llm.Request) error {
 	return nil
 }
 
-// Validate the final document too: an allowed profile extension can supply or
-// replace these fields, including combining them with semantic sampling fields.
+// Validate the final document too. Extensions cannot supply these
+// request-owned fields, so this is a backstop for the lowered wire itself.
 func validateHaiku55Wire(model string, wire map[string]any) error {
 	if model != haiku55Model {
 		return nil

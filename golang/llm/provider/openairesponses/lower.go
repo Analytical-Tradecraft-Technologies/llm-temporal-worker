@@ -31,7 +31,7 @@ func providerTier(class llm.ServiceClass) string {
 // it into the SDK parameter type; the two must stay wire-equivalent. A
 // storage-denied endpoint is used statelessly, so a reasoning item is only
 // replayable when it carries its encrypted content.
-func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool) (map[string]any, loweredToolPolicy, error) {
+func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storageDenied bool, allowedExtensions map[string]struct{}) (map[string]any, loweredToolPolicy, error) {
 	input := make([]any, 0, len(request.Input))
 	for _, instruction := range request.Instructions {
 		item, err := lowerInstruction(instruction)
@@ -125,7 +125,7 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 	if continuation != "" {
 		requestMap["previous_response_id"] = continuation
 	}
-	if err := lowerExtensions(request.Extensions, requestMap, request.WebSearch || request.WebFetch || request.CodeExecution); err != nil {
+	if err := lowerExtensions(request.Extensions, allowedExtensions, requestMap); err != nil {
 		return nil, loweredToolPolicy{}, err
 	}
 	if storageDenied && (reasoningState || reasoningRequested(request.Reasoning)) {
@@ -134,8 +134,10 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 	return requestMap, policy, nil
 }
 
+// lowerRequest is the endpoint-independent lowering: every supported extension
+// field is allowed. Adapters lower through their own endpoint allowlist.
 func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses.ResponseNewParams, error) {
-	requestMap, policy, err := lowerRequestMap(request, serviceClass, false)
+	requestMap, policy, err := lowerRequestMap(request, serviceClass, false, supportedExtensionFields)
 	if err != nil {
 		return responses.ResponseNewParams{}, err
 	}
@@ -662,7 +664,11 @@ func lowerContinuation(continuation *llm.Continuation) (string, error) {
 	return "", fmt.Errorf("continuation does not contain an OpenAI Responses response ID")
 }
 
-func lowerExtensions(extensions map[string]json.RawMessage, target map[string]any, hosted ...bool) error {
+// supportedExtensionFields are the openai.responses extension fields the
+// adapter can lower. An endpoint must also allow each one.
+var supportedExtensionFields = map[string]struct{}{"include": {}, "store": {}, "truncation": {}}
+
+func lowerExtensions(extensions map[string]json.RawMessage, allowed map[string]struct{}, target map[string]any) error {
 	for namespace, raw := range extensions {
 		if namespace != "openai.responses" {
 			return fmt.Errorf("extension namespace %q is not supported by Responses", namespace)
@@ -672,26 +678,27 @@ func lowerExtensions(extensions map[string]json.RawMessage, target map[string]an
 			return fmt.Errorf("extension %q must be an object: %w", namespace, err)
 		}
 		for name, value := range fields {
-			switch name {
-			case "include":
+			// background makes the provider return a queued response, which
+			// the lift cannot accept, while the run continues and is billed.
+			if _, supported := supportedExtensionFields[name]; !supported {
+				return fmt.Errorf("extension field %q is not supported by Responses", name)
+			}
+			if _, ok := allowed[name]; !ok {
+				return fmt.Errorf("extension field %q is not allowed by this endpoint", name)
+			}
+			if name == "include" {
 				var include []string
 				if err := json.Unmarshal(value, &include); err != nil {
 					return fmt.Errorf("extension include: %w", err)
 				}
-
 				target["include"] = include
-			case "store", "background", "truncation":
-				var decoded any
-				if err := json.Unmarshal(value, &decoded); err != nil {
-					return fmt.Errorf("extension %s: %w", name, err)
-				}
-				if len(hosted) > 0 && hosted[0] && (name == "tools" || name == "max_tool_calls" || name == "tool_choice" || name == "container") {
-					return fmt.Errorf("extension cannot override hosted tool controls")
-				}
-				target[name] = decoded
-			default:
-				return fmt.Errorf("extension field %q is not supported by Responses", name)
+				continue
 			}
+			var decoded any
+			if err := json.Unmarshal(value, &decoded); err != nil {
+				return fmt.Errorf("extension %s: %w", name, err)
+			}
+			target[name] = decoded
 		}
 	}
 	return nil

@@ -415,7 +415,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 		t.Fatalf("NewProductionEngineFactory() error = %v", err)
 	}
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
-		"openai": {Family: "openai_responses", BaseURL: "https://api.openai.com/v1", OutboundHosts: []string{"api.openai.com"}, Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_KEY"}},
+		"openai": {Family: "openai_responses", BaseURL: "https://api.openai.com/v1", OutboundHosts: []string{"api.openai.com"}, Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_KEY"}, Extensions: map[string]map[string]any{"openai.responses": {"store": nil, "background": nil}}},
 	}}
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		"model": {Routes: []routing.Route{{EndpointID: "openai", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
@@ -449,6 +449,18 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 		}
 		if !permitted && err == nil {
 			t.Fatalf("factory ignored storage policy (endpoint=%t global=%t)", test.endpoint, test.global)
+		}
+	}
+
+	// Only the endpoint's configured openai.responses keys are accepted, and
+	// background is refused even when configured.
+	for _, extension := range []string{`{"truncation":"auto"}`, `{"background":true}`} {
+		_, err = adapter.Compile(context.Background(), provider.CompileInput{
+			Request: llm.Request{OperationKey: "allowlist", Model: "model", Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(extension)}},
+			Query:   provider.CapabilityQuery{EndpointID: "openai", Family: provider.FamilyOpenAIResponses, Model: "model"},
+		})
+		if err == nil {
+			t.Fatalf("extension %s accepted outside the endpoint allowlist", extension)
 		}
 	}
 }

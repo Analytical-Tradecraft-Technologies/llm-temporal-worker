@@ -29,14 +29,14 @@ func wireAuditProfiles() []wireAuditProfile {
 			if err != nil {
 				return nil, err
 			}
-			return New(client, "wire-audit", "wire-audit/v1", options...)
+			return New(client, "wire-audit", "wire-audit/v1", append([]AdapterOption{allowSupportedExtensions}, options...)...)
 		}},
 		{id: "azure", newAdapter: func(httpClient *http.Client, options ...AdapterOption) (*Adapter, error) {
 			client, err := NewAzureClient(AzureClientConfig{Endpoint: "https://127.0.0.1", APIVersion: "v1", APIKey: "audit-azure-key", HTTPClient: httpClient})
 			if err != nil {
 				return nil, err
 			}
-			return NewAzureAdapter(client, "wire-audit", "wire-audit/v1", options...)
+			return NewAzureAdapter(client, "wire-audit", "wire-audit/v1", append([]AdapterOption{allowSupportedExtensions}, options...)...)
 		}},
 	}
 }
@@ -259,10 +259,10 @@ func wireAuditCases() []wireAuditCase {
 		{name: "zero values", request: llm.Request{Input: wireAuditUserText("hello"), Output: &llm.OutputSpec{MaxTokens: &zeroTokens}, Sampling: &llm.SamplingSpec{Temperature: &zero, TopP: &zero}}},
 		{name: "continuation handle", request: llm.Request{Input: wireAuditUserText("hello"), Continuation: &llm.Continuation{Handle: "openai-responses:resp-prev"}}},
 		{name: "extensions", request: llm.Request{Input: wireAuditUserText("hello"), Extensions: map[string]json.RawMessage{
-			"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content","message.output_text.logprobs"],"store":false,"background":false,"truncation":"auto"}`),
+			"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content","message.output_text.logprobs"],"store":false,"truncation":"auto"}`),
 		}}},
-		{name: "stored background extensions", request: llm.Request{Input: wireAuditUserText("hello"), Extensions: map[string]json.RawMessage{
-			"openai.responses": json.RawMessage(`{"include":[],"store":true,"background":true,"truncation":"disabled"}`),
+		{name: "stored extensions", request: llm.Request{Input: wireAuditUserText("hello"), Extensions: map[string]json.RawMessage{
+			"openai.responses": json.RawMessage(`{"include":[],"store":true,"truncation":"disabled"}`),
 		}}},
 		{name: "everything", request: llm.Request{
 			Instructions: []llm.Instruction{{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"}},

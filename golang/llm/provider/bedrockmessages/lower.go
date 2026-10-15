@@ -25,6 +25,12 @@ func lowerRequest(request llm.Request, profile Profile) (anthropic.MessageNewPar
 }
 
 func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (anthropic.MessageNewParams, error) {
+	// The profile has no extension allowlist, so no namespace can be carried
+	// to the wire. Reject them in both modes, as Bedrock Converse does,
+	// instead of silently dropping caller controls.
+	if len(request.Extensions) > 0 {
+		return anthropic.MessageNewParams{}, fmt.Errorf("extensions are not supported by the Bedrock Messages adapter")
+	}
 	if strict && hasMixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Messages in strict portability mode")
 	}

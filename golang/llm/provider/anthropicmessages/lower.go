@@ -152,7 +152,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto && request.ToolPolicy.Mode != llm.ToolChoiceNone {
 		return anthropic.MessageNewParams{}, fmt.Errorf("tool policy %q requires at least one tool", request.ToolPolicy.Mode)
 	}
-	if err := lowerExtensions(profile, request.Extensions, requestMap, request.WebSearch || request.WebFetch || request.CodeExecution || containerID != ""); err != nil {
+	if err := lowerExtensions(profile, request.Extensions, requestMap); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
 	if err := validateHaiku55Wire(request.Model, requestMap); err != nil {
@@ -581,7 +581,7 @@ func reasoningOutputEffort(effort llm.ReasoningEffort) string {
 	}
 }
 
-func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any, hosted ...bool) error {
+func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, target map[string]any) error {
 	for namespace, raw := range extensions {
 		spec, ok := profile.AllowedExtensions[namespace]
 		if !ok {
@@ -599,15 +599,12 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 			if wire == "" {
 				wire = name
 			}
-			if wire == "model" || wire == "messages" || wire == "service_tier" || wire == "max_tokens" {
+			if requestOwnedWireField(wire) {
 				return fmt.Errorf("extension %q field %q cannot override %q", namespace, name, wire)
 			}
 			var decoded any
 			if err := json.Unmarshal(value, &decoded); err != nil {
 				return fmt.Errorf("extension %q field %q: %w", namespace, name, err)
-			}
-			if len(hosted) > 0 && hosted[0] && (wire == "tools" || wire == "max_tool_calls" || wire == "tool_choice" || wire == "container") {
-				return fmt.Errorf("extension cannot override hosted tool controls")
 			}
 			target[wire] = decoded
 		}

@@ -348,7 +348,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := NewAdapter(client, profile.endpoint, "openai-responses/fixture")
+	adapter, err := NewAdapter(client, profile.endpoint, "openai-responses/fixture", allowSupportedExtensions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := NewAzureAdapter(client, profile.endpoint, "azure-responses/fixture")
+	adapter, err := NewAzureAdapter(client, profile.endpoint, "azure-responses/fixture", allowSupportedExtensions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +592,7 @@ func fixtureAdapterForProfile(t *testing.T, profile responsesFixtureProfile) *Ad
 		if err != nil {
 			t.Fatal(err)
 		}
-		adapter, err := NewAzureAdapter(client, profile.endpoint, "azure-responses/fixture")
+		adapter, err := NewAzureAdapter(client, profile.endpoint, "azure-responses/fixture", allowSupportedExtensions)
 		if err != nil {
 			t.Fatal(err)
 		}

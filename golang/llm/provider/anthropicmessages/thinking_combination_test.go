@@ -65,17 +65,3 @@ func TestCompileRejectsIncompatibleManualThinkingCombinations(t *testing.T) {
 		})
 	}
 }
-
-// An allowed profile extension can add sampling after the semantic fields are
-// lowered, so the check runs on the final wire document.
-func TestCompileRejectsManualThinkingWithExtensionTemperature(t *testing.T) {
-	_, err := compileHaiku55(t, llm.Request{
-		Model:      "claude-contract",
-		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: intPtr(2048)},
-		Output:     &llm.OutputSpec{MaxTokens: intPtr(4096)},
-		Extensions: map[string]json.RawMessage{"anthropic.haiku55": json.RawMessage(`{"temperature":0.3}`)},
-	}, true)
-	if err == nil || !strings.Contains(err.Error(), "temperature") {
-		t.Fatalf("Compile() = %v, want temperature rejection", err)
-	}
-}
