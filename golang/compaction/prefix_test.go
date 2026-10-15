@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -378,6 +379,34 @@ func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
 	selection, err = SelectRequestPrefix(source, policy)
 	if err != nil || selection.RetainedTurns != 0 || len(selection.Retained) != 0 {
 		t.Fatalf("selection = %#v, err = %v, want an empty window", selection, err)
+	}
+}
+
+// SelectBoundedRequestPrefix shortens a window that fits target_tokens but
+// not the caller's bound, such as recent inline images the token estimate
+// leaves out, down to one turn; a bound error is returned (#1346).
+func TestSelectBoundedRequestPrefixShortensWindowToBound(t *testing.T) {
+	image := func(text string) llm.Item {
+		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}, llm.ImagePart{Bytes: make([]byte, 1000), MediaType: "image/png"}}}
+	}
+	items := []llm.Item{image("one"), image("two"), image("three"), image("four")}
+	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items}
+	policy := DefaultPolicy()
+	policy.RecentTurns = 3
+	images := func(limit int) func([]llm.Item) (bool, error) {
+		return func(retained []llm.Item) (bool, error) { return len(retained) <= limit, nil }
+	}
+	selection, err := SelectBoundedRequestPrefix(source, policy, images(2))
+	if err != nil || selection.RetainedTurns != 2 || !reflect.DeepEqual(selection.Retained, items[2:]) || !reflect.DeepEqual(selection.Prefix, items[:2]) {
+		t.Fatalf("selection = %#v, err = %v, want the two turns within the bound", selection, err)
+	}
+	selection, err = SelectBoundedRequestPrefix(source, policy, images(0))
+	if err != nil || selection.RetainedTurns != 1 || !reflect.DeepEqual(selection.Retained, items[3:]) {
+		t.Fatalf("selection = %#v, err = %v, want the last turn alone", selection, err)
+	}
+	failure := errors.New("bound failed")
+	if _, err := SelectBoundedRequestPrefix(source, policy, func([]llm.Item) (bool, error) { return false, failure }); !errors.Is(err, failure) {
+		t.Fatalf("err = %v, want the bound's error", err)
 	}
 }
 

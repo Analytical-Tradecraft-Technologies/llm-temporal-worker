@@ -95,6 +95,16 @@ func SelectPrefix(items []llm.Item, recentTurns int) (PrefixSelection, error) {
 // provider-independent baseline of budget reservation, so plan and compaction
 // select the same boundary whichever route later serves the summarizer.
 func SelectRequestPrefix(source llm.Request, policy Policy) (PrefixSelection, error) {
+	return SelectBoundedRequestPrefix(source, policy, nil)
+}
+
+// SelectBoundedRequestPrefix is SelectRequestPrefix with one more bound: it
+// keeps shrinking the retained window, never below one turn, until fits
+// accepts it. fits measures what the token estimate leaves out, such as the
+// inline media bytes a checkpoint stores, so a window of recent screenshots
+// that the provider bills cheaply is still summarized when the checkpoint it
+// leaves could not be extended. A nil fits accepts every window.
+func SelectBoundedRequestPrefix(source llm.Request, policy Policy, fits func(retained []llm.Item) (bool, error)) (PrefixSelection, error) {
 	if err := policy.Validate(); err != nil {
 		return PrefixSelection{}, err
 	}
@@ -108,7 +118,16 @@ func SelectRequestPrefix(source llm.Request, policy Policy) (PrefixSelection, er
 			return PrefixSelection{}, err
 		}
 		if size <= policy.TargetTokens {
-			break
+			if fits == nil {
+				break
+			}
+			ok, err := fits(selection.Retained)
+			if err != nil {
+				return PrefixSelection{}, fmt.Errorf("compaction retained window: %w", err)
+			}
+			if ok {
+				break
+			}
 		}
 		selection, err = SelectPrefix(source.Input, selection.RetainedTurns-1)
 		if err != nil {

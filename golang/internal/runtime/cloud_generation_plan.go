@@ -4,15 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
-
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -86,6 +88,35 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 	if err != nil {
 		return llm.GenerationPlanV1{}, err
 	}
+	// Preparation refuses a Generate whose transcript would pass
+	// MaxExtendableParentBytes or leave no item for its output, whatever the
+	// policy says, so such a turn must compact first. Compaction is the remedy
+	// only when the parent it leaves would fit: otherwise every retry would pay
+	// for another summary that changes nothing, so fail before any of them.
+	limits := lineageLimits(r.preparation.replay.limits)
+	fits, err := generateFits(replay.State, input, input.Request.Input, limits)
+	if err != nil {
+		return llm.GenerationPlanV1{}, err
+	}
+	parentItems := len(compact.Selection.Prefix) + len(compact.Selection.Retained)
+	if parentItems > len(input.Request.Input) {
+		return llm.GenerationPlanV1{}, executionError(provider.CodeStateCorrupt)
+	}
+	if !fits {
+		if compact.Request == nil {
+			return llm.GenerationPlanV1{}, generateCannotFitError()
+		}
+		// The summary is projected at its output reserve, four bytes a token.
+		summary := compaction.SummaryItem(strings.Repeat("x", 4*compact.Policy.OutputReserveTokens))
+		compacted := append(append([]llm.Item{summary}, compact.Selection.Retained...), input.Request.Input[parentItems:]...)
+		compactedFits, err := generateFits(replay.State, input, compacted, limits)
+		if err != nil {
+			return llm.GenerationPlanV1{}, err
+		}
+		if !compactedFits {
+			return llm.GenerationPlanV1{}, generateCannotFitError()
+		}
+	}
 	if compact.Request == nil {
 		return llm.GenerationPlanV1{}, nil
 	}
@@ -128,10 +159,6 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 	// under the same instructions and tools. The summarizer cannot remove any
 	// of it, so a policy trigger it already reaches is not worth a paid call.
 	retained := resolved
-	parentItems := len(compact.Selection.Prefix) + len(compact.Selection.Retained)
-	if parentItems > len(input.Request.Input) {
-		return llm.GenerationPlanV1{}, executionError(provider.CodeStateCorrupt)
-	}
 	retained.Input = append(append([]llm.Item(nil), compact.Selection.Retained...), input.Request.Input[parentItems:]...)
 	retainedTokens, err := r.capabilities.BudgetEstimator.CountInputTokens(retained, candidate)
 	if err != nil || retainedTokens > int64(^uint(0)>>1) {
@@ -187,14 +214,29 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 			decision.ShouldCompact = true
 		}
 	}
-	// Preparation refuses to extend a parent past MaxExtendableParentBytes,
-	// whatever the policy says, so compact first instead of failing the turn.
-	if !decision.ShouldCompact {
-		fits, err := extendedParentFits(replay.State, input)
-		if err != nil {
-			return llm.GenerationPlanV1{}, err
-		}
-		decision.ShouldCompact = !fits
+	// A turn preparation would refuse compacts first instead of failing; the
+	// check above already proved that the compacted parent fits.
+	if !fits {
+		decision.ShouldCompact = true
 	}
 	return llm.GenerationPlanV1{CompactBeforeGenerate: decision.ShouldCompact}, nil
+}
+
+// generateFits reports whether preparation would extend parent with a
+// Generate whose whole transcript is items: within MaxExtendableParentBytes
+// and leaving room under the lineage item bound for one output item.
+func generateFits(parent state.MaterializedState, input PreparedGenerateInput, items []llm.Item, limits state.MaterializeLimits) (bool, error) {
+	if len(items)+1 > limits.MaxItems {
+		return false, nil
+	}
+	probe := input
+	probe.Request.Input = items
+	return extendedParentFits(parent, probe)
+}
+
+// generateCannotFitError reports a turn that neither fits its parent nor
+// would fit the parent compaction leaves. Nothing has been paid for; the
+// caller must shorten the append or start a new lineage.
+func generateCannotFitError() error {
+	return provider.NewError(provider.CodeInvalidArgument, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "generate input cannot fit the parent checkpoint, even after compaction")
 }
