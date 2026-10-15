@@ -158,6 +158,47 @@ func TestLoweringRejectsLossyFields(t *testing.T) {
 	}
 }
 
+// Responses rejects an input_file carrying file_data without a filename, and
+// a v1 document title is optional, so an untitled inline document gets a
+// deterministic name from its media type. URL documents and titled documents
+// are unchanged.
+func TestUntitledInlineDocumentGetsDeterministicFilename(t *testing.T) {
+	request := llm.Request{Model: "gpt-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
+		llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf"},
+		llm.DocumentPart{Bytes: []byte("notes"), MediaType: "Text/Plain; charset=utf-8"},
+		llm.DocumentPart{Bytes: []byte("a\tb"), MediaType: "text/tsv"},
+		llm.DocumentPart{Bytes: []byte("odt"), MediaType: "application/vnd.oasis.opendocument.text"},
+		llm.DocumentPart{Bytes: []byte("fn main() {}"), MediaType: "text/x-rust"},
+		llm.DocumentPart{Bytes: []byte("blob"), MediaType: "application/x-unknown"},
+		llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf", Title: "contract.pdf"},
+		llm.DocumentPart{URL: "https://example.test/report.pdf", MediaType: "application/pdf"},
+	}}}}
+	first := mustJSON(t, mustLower(t, request))
+	if again := mustJSON(t, mustLower(t, request)); string(again) != string(first) {
+		t.Fatalf("lowering is not deterministic:\n%s\n%s", first, again)
+	}
+	wire := marshalParams(t, mustLower(t, request))
+	content := wire["input"].([]any)[0].(map[string]any)["content"].([]any)
+	want := []any{"document.pdf", "document.txt", "document.tsv", "document.odt", "document.txt", "document", "contract.pdf", nil}
+	if len(content) != len(want) {
+		t.Fatalf("content = %#v, want %d parts", content, len(want))
+	}
+	for index, part := range content {
+		if got := part.(map[string]any)["filename"]; got != want[index] {
+			t.Fatalf("part %d filename = %#v, want %#v", index, got, want[index])
+		}
+	}
+}
+
+func mustLower(t *testing.T, request llm.Request) responses.ResponseNewParams {
+	t.Helper()
+	params, err := lowerRequest(request, llm.ServiceClassStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return params
+}
+
 func marshalParams(t *testing.T, params responses.ResponseNewParams) map[string]any {
 	t.Helper()
 	var wire map[string]any

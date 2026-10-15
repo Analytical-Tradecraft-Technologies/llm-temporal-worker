@@ -16,7 +16,8 @@
       "content": [
         {"kind": "text", "text": "describe the fixture"},
         {"kind": "image", "url": "https://example.test/fixture.png", "media_type": "image/png", "detail": "high"},
-        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf", "title": "fixture.pdf"}
+        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf", "title": "fixture.pdf"},
+        {"kind": "document", "bytes": "cGRm", "media_type": "application/pdf"}
       ]
     },
     {"kind": "tool_call", "id": "call-input", "name": "lookup", "arguments": {"query": "fixture"}},
