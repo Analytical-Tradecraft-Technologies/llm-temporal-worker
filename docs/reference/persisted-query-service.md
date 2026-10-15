@@ -283,7 +283,11 @@ contract:
    The query is current-only. A requested `active_at` older than the current
    snapshot instant (or any historical instant that is merely inside the
    coverage interval) returns the typed `budget_history_not_available` error;
-   coverage membership is not a time-travel guarantee. The current snapshot
+   coverage membership is not a time-travel guarantee. The query boundary
+   reports that miss, an unknown `policy_key`, and an explicit `active_at`
+   outside the published coverage as non-retryable `invalid_argument`; a
+   default (current) instant outside coverage and genuine Redis failures stay
+   retryable `state_unavailable`. The current snapshot
    instant, generation, manifest digest, and Stream high-water mark must all
    be captured and validated by the same coherent read.
 

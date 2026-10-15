@@ -38,7 +38,14 @@ const (
 var (
 	ErrBudgetStatusUnavailable   = errors.New("Redis budget status is unavailable")
 	ErrBudgetHistoryNotAvailable = errors.New("budget_history_not_available")
-	budgetStatusStreamID         = regexp.MustCompile(`^[0-9]+-[0-9]+$`)
+	// ErrBudgetStatusUnknownPolicy and ErrBudgetStatusOutsideCoverage are
+	// request misses against a valid published generation, not storage
+	// outages. They are joined with ErrBudgetStatusUnavailable so existing
+	// callers keep matching it, while the query boundary can report them as
+	// permanent caller errors instead of retryable state failures.
+	ErrBudgetStatusUnknownPolicy   = errors.New("budget status policy key is unknown")
+	ErrBudgetStatusOutsideCoverage = errors.New("budget status active_at is outside the published coverage")
+	budgetStatusStreamID           = regexp.MustCompile(`^[0-9]+-[0-9]+$`)
 )
 
 // BudgetStatusWindowRecord is the storage-neutral DTO returned by the
@@ -207,7 +214,7 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: manifest digest mismatch", ErrBudgetStatusUnavailable)
 	}
 	if activeAt.Before(manifest.CoverageStart) || !activeAt.Before(manifest.CoverageEnd) {
-		return control.BudgetStatusResult{}, fmt.Errorf("%w: active_at outside coverage", ErrBudgetStatusUnavailable)
+		return control.BudgetStatusResult{}, fmt.Errorf("%w: %w", ErrBudgetStatusUnavailable, ErrBudgetStatusOutsideCoverage)
 	}
 	if len(manifest.Members) == 0 || len(manifest.Members) > maxBudgetStatusMembers {
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: member catalog is incomplete", ErrBudgetStatusUnavailable)
@@ -240,7 +247,7 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 			}
 		}
 		if !found {
-			return control.BudgetStatusResult{}, fmt.Errorf("%w: policy key is unknown", ErrBudgetStatusUnavailable)
+			return control.BudgetStatusResult{}, fmt.Errorf("%w: %w", ErrBudgetStatusUnavailable, ErrBudgetStatusUnknownPolicy)
 		}
 	}
 	args := []any{BudgetStatusAction, string(pointer.GenerationID), string(pointer.IncarnationID), digest, strconv.FormatInt(now.UnixMilli(), 10), strconv.Itoa(len(manifest.Members)), strconv.Itoa(reader.maxExpiry)}

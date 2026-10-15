@@ -136,6 +136,24 @@ func TestRedisBudgetStatusReaderRejectsHistoryAndV1OrMalformedState(t *testing.T
 	}
 }
 
+func TestRedisBudgetStatusReaderTypesRequestMisses(t *testing.T) {
+	invoker := &budgetStatusInvokerFake{}
+	reader, manifest, activeAt := testBudgetStatusReader(t, invoker)
+	invoker.result = budgetStatusResultForManifest(t, manifest, "1-4")
+	_, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, manifest.CoverageEnd)
+	if !errors.Is(err, ErrBudgetStatusOutsideCoverage) || !errors.Is(err, ErrBudgetStatusUnavailable) {
+		t.Fatalf("outside coverage error = %v", err)
+	}
+	unknown := control.PolicyKey("missing-policy")
+	_, err = reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{PolicyKey: &unknown}, activeAt)
+	if !errors.Is(err, ErrBudgetStatusUnknownPolicy) || !errors.Is(err, ErrBudgetStatusUnavailable) {
+		t.Fatalf("unknown policy error = %v", err)
+	}
+	if invoker.calls != 0 {
+		t.Fatalf("function calls = %d, want request misses rejected before the Redis read", invoker.calls)
+	}
+}
+
 func TestRedisBudgetStatusReaderFailsClosedWhenActivePointerChanges(t *testing.T) {
 	readerInvoker := &budgetStatusInvokerFake{}
 	_, manifest, activeAt := testBudgetStatusReader(t, readerInvoker)

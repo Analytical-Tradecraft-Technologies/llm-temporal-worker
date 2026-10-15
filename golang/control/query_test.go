@@ -551,6 +551,26 @@ func TestQueryServiceClassifiesRawHandlerFailureAsRetryableStateUnavailable(t *t
 	}
 }
 
+func TestQueryServiceMapsExpiredProviderViewToPermanentCursorError(t *testing.T) {
+	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return llm.QueryResponseV1{}, ErrProviderViewExpired
+	}), func(context.Context, Authorization) error { return nil })
+	_, err := service.Execute(context.Background(), queryRequest())
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want provider.Error", err, err)
+	}
+	if providerErr.Code != provider.CodeInvalidArgument || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetryNever {
+		t.Fatalf("provider error = %#v", providerErr)
+	}
+	if !strings.Contains(providerErr.SafeMessage, "restart pagination") {
+		t.Fatalf("safe message = %q, want restart pagination guidance", providerErr.SafeMessage)
+	}
+	if !errors.Is(err, ErrQueryCursor) || !errors.Is(err, ErrProviderViewExpired) {
+		t.Fatalf("error = %v, want cursor and expired-view causes", err)
+	}
+}
+
 func TestQueryServicePreservesPreclassifiedProviderFailure(t *testing.T) {
 	request := queryRequest()
 	providerErr := provider.NewError(provider.CodePermissionDenied, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "query access denied")
