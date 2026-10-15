@@ -1154,8 +1154,9 @@ region tag, and v1 requests carry no context tags, so no request is ever
 restricted by it. Do not rely on it for data residency. Restrict residency
 through the routes and endpoints a model lists instead.
 
-A model has no project or data-classification restriction; `allowed_tenants`
-is the only access restriction the planner enforces.
+A model has no project or data-classification restriction. On the durable v1
+path, `allowed_tenants` is therefore the only access restriction the planner
+enforces.
 
 ## Price catalog shape
 
