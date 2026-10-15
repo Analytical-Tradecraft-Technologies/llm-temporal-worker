@@ -58,3 +58,36 @@ func TestSanitizeOutputSurrogatesCoversPointerForms(t *testing.T) {
 		t.Fatal("the caller's part was mutated")
 	}
 }
+
+func TestSanitizeOutputSurrogatesCoversReferenceMetadata(t *testing.T) {
+	metadata := map[string]json.RawMessage{"id": json.RawMessage(`"r1"`), "title": json.RawMessage(`"Emoji cut \ud83d"`), "score": json.RawMessage(`0.5`)}
+	output := SanitizeOutputSurrogates([]Item{
+		Reference{URI: "https://example.com/a", Metadata: metadata},
+		&Reference{URI: "https://example.com/b", Metadata: map[string]json.RawMessage{"title": json.RawMessage(`"\udc00 tail"`)}},
+	})
+	sanitized := output[0].(Reference).Metadata
+	if string(sanitized["title"]) != `"Emoji cut \ufffd"` || string(sanitized["id"]) != `"r1"` || string(sanitized["score"]) != `0.5` {
+		t.Fatalf("reference metadata = %s", sanitized)
+	}
+	if string(metadata["title"]) != `"Emoji cut \ud83d"` {
+		t.Fatal("the caller's metadata was mutated")
+	}
+	if got := string(output[1].(*Reference).Metadata["title"]); got != `"\ufffd tail"` {
+		t.Fatalf("pointer reference title = %s", got)
+	}
+}
+
+func TestSanitizeRawMapSurrogates(t *testing.T) {
+	clean := map[string]json.RawMessage{"total_tokens": json.RawMessage(`3`), "empty": nil}
+	if got := SanitizeRawMapSurrogates(clean); len(got) != len(clean) || string(got["total_tokens"]) != `3` {
+		t.Fatalf("clean map = %s", got)
+	}
+	if SanitizeRawMapSurrogates(nil) != nil {
+		t.Fatal("nil map was replaced")
+	}
+	raw := map[string]json.RawMessage{"note": json.RawMessage(`"x\ud800"`), "n": json.RawMessage(`1`)}
+	got := SanitizeRawMapSurrogates(raw)
+	if string(got["note"]) != `"x\ufffd"` || string(got["n"]) != `1` || string(raw["note"]) != `"x\ud800"` {
+		t.Fatalf("sanitized map = %s (original %s)", got, raw)
+	}
+}

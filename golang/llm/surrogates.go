@@ -72,9 +72,35 @@ func escapeUnit(raw []byte, index int) (uint64, bool) {
 	return value, err == nil
 }
 
+// SanitizeRawMapSurrogates applies SanitizeLoneSurrogates to every value of a
+// map of raw provider JSON, such as reference metadata or Usage.ProviderRaw.
+// The input map is returned unchanged when no value needs replacing;
+// otherwise a copy is returned so the caller's map is never mutated.
+func SanitizeRawMapSurrogates(values map[string]json.RawMessage) map[string]json.RawMessage {
+	var result map[string]json.RawMessage
+	for key, value := range values {
+		// SanitizeLoneSurrogates returns its input when nothing changes.
+		sanitized := SanitizeLoneSurrogates(value)
+		if len(value) == 0 || &sanitized[0] == &value[0] {
+			continue
+		}
+		if result == nil {
+			result = make(map[string]json.RawMessage, len(values))
+			for key, value := range values {
+				result[key] = value
+			}
+		}
+		result[key] = sanitized
+	}
+	if result == nil {
+		return values
+	}
+	return result
+}
+
 // SanitizeOutputSurrogates applies SanitizeLoneSurrogates to the open JSON a
-// model produced: tool call arguments and JSON parts of messages and tool
-// results. Items without open JSON are returned as they are.
+// model or provider produced: tool call arguments, JSON parts of messages and
+// tool results, and reference metadata. Other items are returned as they are.
 func SanitizeOutputSurrogates(items []Item) []Item {
 	if len(items) == 0 {
 		return items
@@ -116,6 +142,17 @@ func SanitizeOutputSurrogates(items []Item) []Item {
 			}
 			copy := *value
 			copy.Content = sanitizePartSurrogates(copy.Content)
+			result[index] = &copy
+		case Reference:
+			value.Metadata = SanitizeRawMapSurrogates(value.Metadata)
+			result[index] = value
+		case *Reference:
+			if value == nil {
+				result[index] = item
+				continue
+			}
+			copy := *value
+			copy.Metadata = SanitizeRawMapSurrogates(copy.Metadata)
 			result[index] = &copy
 		default:
 			result[index] = item
