@@ -6,23 +6,48 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 var ErrExport = errors.New("Langfuse export failed")
 var ErrRejected = errors.New("Langfuse export rejected")
 
+// ErrUnavailable is a local fast-fail: the breaker is open or the in-flight
+// limit is reached, so nothing was sent. It wraps ErrExport so callers that
+// treat every export failure alike keep working.
+var ErrUnavailable = fmt.Errorf("%w: exporter unavailable", ErrExport)
+
 const maxBody = 16 << 20
+
+// Export shares the worker's Activity slots with model calls, so a slow or
+// black-holed Langfuse must hold only a few of them. At most maxInFlight
+// requests wait on the network per client; after breakerThreshold consecutive
+// transport or server failures, exports fail immediately for breakerCooldown,
+// then a single probe decides whether the breaker closes again.
+const (
+	httpTimeout      = 5 * time.Second
+	maxInFlight      = 2
+	breakerThreshold = 3
+	breakerCooldown  = 30 * time.Second
+)
 
 type Client struct {
 	endpoint, public, secret string
 	http                     *http.Client
+	slots                    chan struct{}
+	now                      func() time.Time
+
+	mu        sync.Mutex
+	failures  int
+	openUntil time.Time
 }
 
 func NewClient(base, public, secret string, transport *http.Client) (*Client, error) {
@@ -34,11 +59,49 @@ func NewClient(base, public, secret string, transport *http.Client) (*Client, er
 	if transport == nil {
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.Proxy = nil
-		transport = &http.Client{Timeout: 8 * time.Second, Transport: t}
+		transport = &http.Client{Timeout: httpTimeout, Transport: t}
 	}
 	copy := *transport
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{endpoint: u.String(), public: public, secret: secret, http: &copy}, nil
+	return &Client{endpoint: u.String(), public: public, secret: secret, http: &copy, slots: make(chan struct{}, maxInFlight), now: time.Now}, nil
+}
+
+// admit claims an in-flight slot unless the breaker is open. Once the cooldown
+// elapses, the first caller becomes the probe and re-arms the cooldown so
+// concurrent callers keep failing fast until the probe reports.
+func (c *Client) admit() bool {
+	select {
+	case c.slots <- struct{}{}:
+	default:
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failures >= breakerThreshold {
+		now := c.now()
+		if now.Before(c.openUntil) {
+			<-c.slots
+			return false
+		}
+		c.openUntil = now.Add(breakerCooldown)
+	}
+	return true
+}
+
+// release returns the slot and records the outcome. A rejection proves
+// Langfuse answered, so only ErrExport counts towards the breaker.
+func (c *Client) release(err error) {
+	c.mu.Lock()
+	if errors.Is(err, ErrExport) {
+		c.failures++
+		if c.failures >= breakerThreshold {
+			c.openUntil = c.now().Add(breakerCooldown)
+		}
+	} else {
+		c.failures = 0
+	}
+	c.mu.Unlock()
+	<-c.slots
 }
 
 type Operation struct {
@@ -112,6 +175,15 @@ func makeSpan(o Operation, id, parent, name, typ string, start, end time.Time, i
 	return s
 }
 func (c *Client) Export(ctx context.Context, o Operation) error {
+	if !c.admit() {
+		return ErrUnavailable
+	}
+	err := c.send(ctx, o)
+	c.release(err)
+	return err
+}
+
+func (c *Client) send(ctx context.Context, o Operation) error {
 	spans := []span{makeSpan(o, o.SpanID, "", o.Kind, "span", o.StartedAt, o.EndedAt, o.Input, o.Output, o.Metadata)}
 	for _, g := range o.Generations {
 		s := makeSpan(o, g.ID, o.SpanID, g.Provider+"/"+g.Model, "generation", g.StartedAt, g.EndedAt, g.Input, g.Output, g.Metadata)
