@@ -177,7 +177,12 @@ failure, rather than returning after merely queueing spans in process memory.
 
 After exhaustion, log only safe delivery identifiers/status and increment bounded
 export-failure metrics. Return the original workflow outcome. This design adds at
-most the export schedule-to-close budget to normal completion. It is not durable
+most the export schedule-to-close budget to normal completion, twice for a
+compaction-backed Generate. Because export shares Activity slots with model
+calls, the exporter also limits in-flight requests per worker and opens a
+breaker after consecutive delivery failures; refused exports fail fast and are
+nonretryable, so an outage costs most operations one Activity round trip. It is
+not durable
 background delivery and does not recover traces from administratively terminated
 workflows automatically.
 

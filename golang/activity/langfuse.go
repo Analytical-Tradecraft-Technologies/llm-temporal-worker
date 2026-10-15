@@ -29,6 +29,11 @@ func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter
 		return nil
 	}
 	if err := runtime.ExportLangfuseV1(ctx, ref); err != nil {
+		// A local fast-fail sent nothing; retrying would only reoccupy a slot
+		// and delay the workflow's return by the retry backoff.
+		if errors.Is(err, langfuse.ErrUnavailable) {
+			return temporal.NewNonRetryableApplicationError("Langfuse export unavailable", "langfuse_export_unavailable", nil)
+		}
 		if errors.Is(err, langfuse.ErrRejected) {
 			return temporal.NewNonRetryableApplicationError("Langfuse export rejected", "langfuse_export_rejected", nil)
 		}

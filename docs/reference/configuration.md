@@ -1435,7 +1435,16 @@ model pricing configuration is separate from the worker's authoritative ledger.
 
 Export uses the dedicated final `llm.ExportLangfuse.v1` activity: 10-second
 start-to-close, 30-second schedule-to-close, at most three attempts. Rejection
-errors are nonretryable; outages retry within those bounds. Failed export logs a
+errors are nonretryable; outages retry within those bounds. The export shares
+the worker's Activity slots with model calls, so each worker bounds it: each
+HTTP request times out after 5 seconds, at most two requests wait on Langfuse at
+once, and three consecutive transport or server failures open a breaker. While
+the breaker is open, or both requests are in flight, export fails immediately
+without retry and without sending. After 30 seconds one probe request decides
+whether the breaker closes. During a Langfuse outage, most operations therefore
+gain only one fast-failing Activity round trip. At most two per worker at a time
+wait up to 5 seconds per attempt, and a compaction-backed Generate can be
+delayed by that wait twice. Failed export logs a
 safe warning and increments `langfuse_export_failures`, preserving the operation's
 original result or error. Capture failures also log a safe warning; missing paid
 captures prevent acknowledgement of an incomplete trace. Content stays in the
