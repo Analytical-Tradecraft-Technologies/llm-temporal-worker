@@ -3,12 +3,14 @@ package modelsync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,7 +48,7 @@ func fixtureServer(t *testing.T, requests *atomic.Int64) *httptest.Server {
 func fetchFixture(t *testing.T) Document {
 	t.Helper()
 	server := fixtureServer(t, nil)
-	document, err := Fetcher{Client: server.Client(), BaseURL: server.URL, Clock: func() time.Time { return fixtureTime }}.Fetch(context.Background())
+	document, err := Fetcher{Client: server.Client(), BaseURL: server.URL, Clock: func() time.Time { return fixtureTime }}.Fetch(context.Background(), Document{})
 	if err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
@@ -101,8 +103,90 @@ func TestFetchRejectsWhenTooManyEndpointLookupsFail(t *testing.T) {
 		http.Error(writer, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	if _, err := (Fetcher{Client: server.Client(), BaseURL: server.URL}).Fetch(context.Background()); err == nil {
+	if _, err := (Fetcher{Client: server.Client(), BaseURL: server.URL, RetryDelay: time.Millisecond}).Fetch(context.Background(), Document{}); err == nil {
 		t.Fatal("Fetch() succeeded although every endpoint lookup failed")
+	}
+}
+
+func TestRefreshCarriesForwardModelsWhoseEndpointLookupFails(t *testing.T) {
+	// Twenty listed models, so a few failed lookups stay under the rejection
+	// threshold. Each phase sets which models are listed and how lookups
+	// answer.
+	var listed []string
+	for index := range 20 {
+		listed = append(listed, fmt.Sprintf("openai/m%02d", index))
+	}
+	var mutex sync.Mutex
+	failing := map[string]int{} // model → remaining failure count; -1 always fails
+	status := map[string]int{}
+	empty := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if request.URL.Path == "/models" {
+			var data []map[string]any
+			for _, id := range listed {
+				data = append(data, map[string]any{"id": id, "context_length": 1000, "architecture": map[string]any{"input_modalities": []string{"text"}, "output_modalities": []string{"text"}},
+					"pricing": map[string]string{"prompt": "0.000001", "completion": "0.000002"}})
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": data})
+			return
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/models/"), "/endpoints")
+		if remaining := failing[id]; remaining != 0 {
+			failing[id] = remaining - 1
+			http.Error(writer, "busy", status[id])
+			return
+		}
+		endpoints := []map[string]any{}
+		if !empty[id] {
+			endpoints = append(endpoints, map[string]any{"tag": "upstream", "context_length": 1000, "pricing": map[string]string{"prompt": "0.000001", "completion": "0.000002"}})
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"data": map[string]any{"endpoints": endpoints}})
+	}))
+	defer server.Close()
+	store := NewMemoryStore(nil)
+	now := fixtureTime
+	var installed Document
+	refresher := &Refresher{Store: store, MinInterval: time.Hour, MaxInterval: time.Hour, Clock: func() time.Time { return now },
+		Fetch: func(ctx context.Context, previous Document) (Document, error) {
+			return Fetcher{Client: server.Client(), BaseURL: server.URL, RetryDelay: time.Millisecond, Clock: func() time.Time { return now }}.Fetch(ctx, previous)
+		},
+		Install: func(document Document) error { installed = document; return nil }}
+	if err := refresher.Refresh(context.Background()); err != nil || len(installed.Models) != 20 {
+		t.Fatalf("first Refresh() = %v with %d models, want 20", err, len(installed.Models))
+	}
+	// m07 is rate limited throughout, the new m20 answers 503 once and
+	// succeeds on retry, m11 now has no usable endpoint and OpenRouter no
+	// longer lists m19.
+	mutex.Lock()
+	failing["openai/m07"], status["openai/m07"] = -1, http.StatusTooManyRequests
+	failing["openai/m20"], status["openai/m20"] = 1, http.StatusServiceUnavailable
+	empty["openai/m11"] = true
+	listed = append(listed[:19], "openai/m20")
+	mutex.Unlock()
+	now = now.Add(2 * time.Hour)
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !installed.FetchedAt.Equal(now) {
+		t.Fatalf("installed FetchedAt = %v, want the second fetch", installed.FetchedAt)
+	}
+	present := map[string]bool{}
+	for _, model := range installed.Models {
+		present[model.ID] = true
+	}
+	if len(installed.Models) != 19 || !present["openai/m07"] || !present["openai/m20"] || present["openai/m11"] || present["openai/m19"] {
+		t.Fatalf("installed %d models (m07 %v m20 %v m11 %v m19 %v), want m07 carried forward, m20 retried, m11 and m19 removed",
+			len(installed.Models), present["openai/m07"], present["openai/m20"], present["openai/m11"], present["openai/m19"])
+	}
+	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
+	compiled, err := Compile(Input{Document: &installed, Rules: mergedRules(t), OpenRouter: &openrouter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compiled.Models["openai/m07"].Routes) == 0 {
+		t.Fatal("the carried-forward model has no route")
 	}
 }
 
@@ -612,9 +696,9 @@ func TestRefresherFetchesOnceAcrossWorkersAndInstallsEverywhere(t *testing.T) {
 	newWorker := func(id int) *Refresher {
 		return &Refresher{
 			Store: store,
-			Fetch: func(ctx context.Context) (Document, error) {
+			Fetch: func(ctx context.Context, previous Document) (Document, error) {
 				fetches++
-				return Fetcher{Client: server.Client(), BaseURL: server.URL, Clock: clock}.Fetch(ctx)
+				return Fetcher{Client: server.Client(), BaseURL: server.URL, Clock: clock}.Fetch(ctx, previous)
 			},
 			Install:     func(Document) error { installed[id]++; return nil },
 			MinInterval: 55 * time.Minute, MaxInterval: 65 * time.Minute, Clock: clock,
@@ -656,7 +740,7 @@ func TestRefresherKeepsThePublishedDocumentWhenAFetchFails(t *testing.T) {
 	}
 	refresher := &Refresher{Store: store, MinInterval: time.Hour, MaxInterval: time.Hour,
 		Clock:   func() time.Time { return fixtureTime.Add(2 * time.Hour) },
-		Fetch:   func(context.Context) (Document, error) { return Document{}, context.DeadlineExceeded },
+		Fetch:   func(context.Context, Document) (Document, error) { return Document{}, context.DeadlineExceeded },
 		Install: func(Document) error { return nil }}
 	if err := refresher.Refresh(context.Background()); err == nil {
 		t.Fatal("Refresh() hid a fetch failure")

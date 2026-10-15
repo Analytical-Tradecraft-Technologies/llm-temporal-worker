@@ -22,9 +22,13 @@ const (
 	defaultFetchConcurrency  = 8
 	// maxEndpointFailureRatio bounds how many per-model endpoint lookups may
 	// fail before the whole fetch is rejected. A rejected fetch keeps the
-	// previously published Document, so an OpenRouter incident never shrinks
-	// the routable model set by more than this share.
+	// previously published Document; in an accepted fetch, a model whose
+	// lookup failed keeps its previously published entry.
 	maxEndpointFailureRatio = 0.1
+	// endpointLookupAttempts bounds attempts per endpoint lookup when
+	// OpenRouter answers 429 or 5xx.
+	endpointLookupAttempts    = 3
+	defaultEndpointRetryDelay = 500 * time.Millisecond
 )
 
 // Fetcher reads OpenRouter's public model and endpoint lists.
@@ -36,13 +40,18 @@ type Fetcher struct {
 	APIKey      string
 	Concurrency int
 	Clock       func() time.Time
+	// RetryDelay is the first wait before retrying a lookup OpenRouter
+	// answered with 429 or 5xx; it doubles per attempt. Zero uses 500ms.
+	RetryDelay time.Duration
 }
 
 // Fetch returns a complete, normalized Document. Models whose output is not
 // text-only (image and audio generators), models OpenRouter lists without a
 // usable price (for example its own variable-priced routers) and alias or
-// variant IDs (prefixed with "~" or containing ":") are skipped.
-func (fetcher Fetcher) Fetch(ctx context.Context) (Document, error) {
+// variant IDs (prefixed with "~" or containing ":") are skipped. A listed
+// model whose endpoint lookup still fails after retries keeps its entry from
+// previous, the last published Document (empty when none is published).
+func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, error) {
 	if fetcher.Client == nil {
 		return Document{}, fmt.Errorf("OpenRouter fetch requires an HTTP client")
 	}
@@ -94,11 +103,21 @@ func (fetcher Fetcher) Fetch(ctx context.Context) (Document, error) {
 		return Document{}, err
 	}
 	document := Document{Schema: DocumentSchema, FetchedAt: clock().UTC(), Models: make([]Model, 0, len(listed))}
+	published := make(map[string]Model, len(previous.Models))
+	for _, model := range previous.Models {
+		published[model.ID] = model
+	}
 	failures := 0
-	for _, value := range results {
+	for index, value := range results {
 		switch {
 		case value.err != nil:
 			failures++
+			// A transient lookup failure must not drop a routable model for a
+			// whole refresh period; only a model /models no longer lists or
+			// whose lookup returns no usable endpoint is removed.
+			if model, found := published[listed[index].ID]; found {
+				document.Models = append(document.Models, model)
+			}
 		case value.ok:
 			document.Models = append(document.Models, value.model)
 		}
@@ -183,8 +202,28 @@ func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]End
 			Endpoints []wireEndpoint `json:"endpoints"`
 		} `json:"data"`
 	}
-	if err := fetcher.get(ctx, "/models/"+strings.Join(segments, "/")+"/endpoints", &body); err != nil {
-		return nil, err
+	path := "/models/" + strings.Join(segments, "/") + "/endpoints"
+	delay := fetcher.RetryDelay
+	if delay <= 0 {
+		delay = defaultEndpointRetryDelay
+	}
+	for attempt := 1; ; attempt++ {
+		err := fetcher.get(ctx, path, &body)
+		if err == nil {
+			break
+		}
+		var status statusError
+		if attempt == endpointLookupAttempts || !errors.As(err, &status) || !status.transient() {
+			return nil, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		delay *= 2
 	}
 	endpoints := make([]Endpoint, 0, len(body.Data.Endpoints))
 	seen := make(map[string]struct{}, len(body.Data.Endpoints))
@@ -332,6 +371,19 @@ func decimalLiteral(raw json.RawMessage) (string, error) {
 
 var errUnexpectedStatus = errors.New("unexpected OpenRouter status")
 
+// statusError reports a non-200 OpenRouter response.
+type statusError struct{ code int }
+
+func (err statusError) Error() string { return fmt.Sprintf("%v %d", errUnexpectedStatus, err.code) }
+
+func (err statusError) Unwrap() error { return errUnexpectedStatus }
+
+// transient reports whether a retry may succeed: rate limiting or a server
+// error.
+func (err statusError) transient() bool {
+	return err.code == http.StatusTooManyRequests || err.code >= 500
+}
+
 func (fetcher Fetcher) get(ctx context.Context, path string, target any) error {
 	base := strings.TrimRight(fetcher.BaseURL, "/")
 	if base == "" {
@@ -355,7 +407,7 @@ func (fetcher Fetcher) get(ctx context.Context, path string, target any) error {
 		return err
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w %d", errUnexpectedStatus, response.StatusCode)
+		return statusError{code: response.StatusCode}
 	}
 	if len(data) > maxResponseBytes {
 		return fmt.Errorf("OpenRouter response exceeds %d bytes", maxResponseBytes)

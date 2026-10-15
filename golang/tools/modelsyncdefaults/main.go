@@ -21,7 +21,7 @@ func main() {
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	document, err := modelsync.Fetcher{Client: &http.Client{Timeout: 30 * time.Second}}.Fetch(ctx)
+	document, err := modelsync.Fetcher{Client: &http.Client{Timeout: 30 * time.Second}}.Fetch(ctx, modelsync.Document{})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fetch OpenRouter catalog:", err)
 		os.Exit(1)
