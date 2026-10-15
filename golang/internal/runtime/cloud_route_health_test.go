@@ -389,14 +389,14 @@ func TestCloudRouteHealthHoldsAuthenticationFailureForSnapshot(t *testing.T) {
 	planning := &ProviderPlanning{routeStatus: shared, clock: func() time.Time { return now }, configDigest: digest, configEpoch: "epoch"}
 	execution := &CloudProviderExecution{statusRecorder: shared}
 	operation := 0
-	record := func(code provider.Code) {
+	record := func(code provider.Code, dispatch provider.DispatchCertainty) {
 		t.Helper()
 		operation++
 		now = now.Add(time.Second)
 		execution.recordRouteStatus(context.Background(), cloudstate.SavedProviderExecution{
 			Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: "epoch", Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: durable.OperationID(fmt.Sprintf("operation-%d", operation)), RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
 				CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(account[:]))}}},
-			Execution: cloudstate.ProviderExecution{Stage: cloudstate.ExecutionFailed, CompletedAt: now, Failure: &cloudstate.ExecutionFailure{Code: code, Dispatch: provider.DispatchRejected}},
+			Execution: cloudstate.ProviderExecution{Stage: cloudstate.ExecutionFailed, CompletedAt: now, Failure: &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch}},
 		})
 	}
 	blocked := func(planning *ProviderPlanning) bool {
@@ -407,12 +407,22 @@ func TestCloudRouteHealthHoldsAuthenticationFailureForSnapshot(t *testing.T) {
 		}
 		return result
 	}
-	record(provider.CodeAuthentication)
+	// A credential lookup that failed before dispatch can recover without a
+	// snapshot change, so it keeps the short cooldown.
+	record(provider.CodeAuthentication, provider.DispatchNotDispatched)
+	if !blocked(planning) {
+		t.Fatalf("a credential lookup failure did not open the route: %+v", shared.records)
+	}
+	now = now.Add(time.Minute)
+	if blocked(planning) {
+		t.Fatalf("a credential lookup failure was held past the cooldown: %+v", shared.records)
+	}
+	record(provider.CodeAuthentication, provider.DispatchRejected)
 	if !blocked(planning) {
 		t.Fatalf("an authentication failure did not open the route: %+v", shared.records)
 	}
 	// An in-flight transient failure must not shorten the credential hold.
-	record(provider.CodeProviderUnavailable)
+	record(provider.CodeProviderUnavailable, provider.DispatchRejected)
 	now = now.Add(time.Hour)
 	if !blocked(planning) {
 		t.Fatalf("an authentication failure stopped blocking the route within its snapshot: %+v", shared.records)

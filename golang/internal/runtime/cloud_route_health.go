@@ -47,8 +47,8 @@ func (p *ProviderPlanning) routeBlocked(ctx context.Context, candidate routing.C
 // toward, or holding open, a route circuit before a later request may probe it.
 const routeHealthCooldown = 30 * time.Second
 
-// credentialFailureHold keeps a route open after an authentication or
-// configuration failure. Health records are keyed by the configuration digest,
+// credentialFailureHold keeps a route open after the provider rejects it with
+// an authentication or configuration failure. Health records are keyed by the configuration digest,
 // so publishing a new snapshot clears the hold at once; the bound only lets a
 // credential rotated in place, without a snapshot change, recover eventually.
 const credentialFailureHold = 24 * time.Hour
@@ -78,7 +78,12 @@ func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cl
 		switch x.Failure.Code {
 		case provider.CodeAuthentication, provider.CodeConfiguration:
 			o.Availability = control.AvailabilityUnavailable
-			o.ExpiresAt = x.CompletedAt.Add(credentialFailureHold)
+			// Only a provider rejection proves the credentials are bad. A
+			// local credential lookup that failed before dispatch, such as an
+			// unreachable IMDS, can recover without a snapshot change.
+			if x.Failure.Dispatch == provider.DispatchRejected {
+				o.ExpiresAt = x.CompletedAt.Add(credentialFailureHold)
+			}
 		case provider.CodeProviderUnavailable, provider.CodePermissionDenied:
 			// A 403 can be a request-level rejection such as a moderation
 			// flag, so it counts toward the threshold instead of opening the
