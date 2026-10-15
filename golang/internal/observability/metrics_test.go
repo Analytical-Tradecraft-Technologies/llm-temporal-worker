@@ -303,3 +303,45 @@ func TestExtendAllowedLabelsIdentifiersIntroducedByReload(t *testing.T) {
 	var disabled *observability.Metrics
 	disabled.ExtendAllowed(observability.AllowedValues{Policies: []string{"policy-c"}})
 }
+
+// Provider calls and v1 Activities run for minutes; their latency histograms
+// must resolve observations past the Prometheus default 10 s ceiling (#1359).
+func TestLatencyHistogramsResolveMinuteLongObservations(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Models: []string{"model"}, Outcomes: []string{"success"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, duration := range []time.Duration{30 * time.Second, 240 * time.Second} {
+		metrics.RecordProviderAttempt("endpoint", "model", "standard", "success", duration)
+		metrics.RecordActivity("completed", "none", duration, "generate")
+	}
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"llmtw_provider_duration_seconds", "llmtw_activity_duration_seconds"} {
+		var histogram *dto.Histogram
+		for _, family := range families {
+			if family.GetName() == name && len(family.GetMetric()) == 1 {
+				histogram = family.GetMetric()[0].GetHistogram()
+			}
+		}
+		if histogram == nil {
+			t.Fatalf("%s has no single series", name)
+		}
+		// The smallest finite bucket holding 30 s must not hold 240 s, and a
+		// finite bucket must hold both.
+		first, both := -1.0, -1.0
+		for _, bucket := range histogram.GetBucket() {
+			if first < 0 && bucket.GetCumulativeCount() == 1 {
+				first = bucket.GetUpperBound()
+			}
+			if both < 0 && bucket.GetCumulativeCount() == 2 {
+				both = bucket.GetUpperBound()
+			}
+		}
+		if first < 30 || first >= 240 || both < 240 || both > 600 {
+			t.Fatalf("%s buckets: 30 s first counted at le=%v, 240 s at le=%v", name, first, both)
+		}
+	}
+}

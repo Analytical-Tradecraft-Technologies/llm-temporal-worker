@@ -100,6 +100,25 @@ func advanceDispatched(t *testing.T, lifecycle *Lifecycle) {
 	}
 }
 
+// A repeated Reserve returns the earlier acceptance and reports it as a replay
+// so admission metrics count one decision (#1359). The flag stays off the
+// result that callers persist.
+func TestBudgetBoundaryReportsReplayedAcceptance(t *testing.T) {
+	now := time.Now().UTC()
+	materializer := newReferenceMaterializer(t, func() time.Time { return now })
+	boundary := newBoundary(materializer)
+	request := ReserveRequest{OperationID: "operation-1", GenerationID: "gen-1", ExpiresAt: now.Add(time.Hour),
+		Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "0.10")}}
+	first, err := boundary.Reserve(context.Background(), newLifecycle(t), request)
+	if err != nil || !first.Result.Accepted || first.Replayed {
+		t.Fatalf("first reserve = %+v, %v; want a new acceptance", first, err)
+	}
+	replay, err := boundary.Reserve(context.Background(), newLifecycle(t), request)
+	if err != nil || !replay.Result.Accepted || !replay.Replayed || replay.Result.Replayed {
+		t.Fatalf("second reserve = %+v, %v; want a replayed acceptance", replay, err)
+	}
+}
+
 func TestBudgetBoundaryOrdersClaimBeforeDispatchAndReconcile(t *testing.T) {
 	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 	request := boundaryRequest(now)

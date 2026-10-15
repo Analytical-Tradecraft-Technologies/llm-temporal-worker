@@ -36,6 +36,8 @@ var allowedLogAttrs = map[string]struct{}{
 	"request_fingerprint": {}, "response_digest": {}, "source": {},
 	"actual_cost_usd": {}, "cost_status": {}, "cost_method": {}, "cost_unknown_reason": {},
 	"started_at": {}, "completed_at": {},
+	// request_id is the worker-generated cloud request identifier.
+	"request_id": {},
 	// cause is a bounded failure class and config_field a configuration schema
 	// path; neither carries a configured value.
 	"cause": {}, "config_field": {},

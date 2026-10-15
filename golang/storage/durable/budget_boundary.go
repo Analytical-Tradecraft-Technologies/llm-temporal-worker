@@ -30,8 +30,11 @@ func (boundary BudgetBoundary) Validate() error {
 }
 
 type BudgetReservation struct {
-	Result  ReserveResult
-	claimed bool
+	Result ReserveResult
+	// Replayed reports that Reserve returned an earlier acceptance rather
+	// than a new admission decision.
+	Replayed bool
+	claimed  bool
 }
 
 func (reservation BudgetReservation) DispatchReady() bool {
@@ -79,6 +82,7 @@ func (boundary BudgetBoundary) Reserve(ctx context.Context, lifecycle *Lifecycle
 			}
 		}
 	}
+	result.Replayed, accepted.Replayed = accepted.Replayed, false
 	result.Result = accepted
 	return result, nil
 }

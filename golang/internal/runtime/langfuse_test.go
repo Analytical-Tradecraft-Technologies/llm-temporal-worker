@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -283,6 +284,41 @@ func TestCloudLangfuseCaptureFailurePreservesModelAndFailsExport(t *testing.T) {
 	}
 	if calls != 0 || f.submits.Load() != 1 {
 		t.Fatal("capture failure changed model execution")
+	}
+}
+
+// Capture failures go through the configured logger, as structured records
+// carrying only allow-listed keys (#1359).
+func TestCloudLangfuseCaptureFailureUsesConfiguredLogger(t *testing.T) {
+	f := boundedCloud(t, false)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
+	defer server.Close()
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
+	f.cap.Requests = failedLangfuseCapture{f.repository}
+	f.restart(t)
+	var output strings.Builder
+	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Format: "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithLogger(context.Background(), logger)
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	v, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context})
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line is not JSON: %q", line)
+		}
+		if record["level"] == "WARN" && record["request_id"] != nil {
+			seen[record["msg"].(string)] = true
+		}
+	}
+	if !seen["Langfuse operation capture failed"] || !seen["Langfuse generation capture failed"] {
+		t.Fatalf("capture failures not logged through the configured logger: %s", output.String())
 	}
 }
 

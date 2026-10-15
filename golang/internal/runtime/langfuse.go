@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -154,7 +155,7 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if err := store.SaveLangfuseCapture(bounded, scope, p.Record.Request.ID, "operation", data); err != nil {
-		slog.WarnContext(ctx, "Langfuse operation capture failed", "request_id", p.Record.Request.ID)
+		observability.LoggerFromContext(ctx).Warn(ctx, "Langfuse operation capture failed", slog.String("request_id", string(p.Record.Request.ID)))
 	}
 }
 func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *CloudBudgetCall, saved cloudstate.SavedProviderExecution) {
@@ -193,7 +194,7 @@ func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *Clou
 		return
 	}
 	if err := store.SaveLangfuseCapture(bounded, call.scope, attempt.RootID, string(call.id), data); err != nil {
-		slog.WarnContext(ctx, "Langfuse generation capture failed", "request_id", attempt.RootID)
+		observability.LoggerFromContext(ctx).Warn(ctx, "Langfuse generation capture failed", slog.String("request_id", string(attempt.RootID)))
 	}
 }
 func (r *CloudExecutionRuntime) ExportLangfuseV1(ctx context.Context, ref llm.ExecutionReferenceV1) error {
