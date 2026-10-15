@@ -61,6 +61,18 @@ func TestNewProfileAllowsSharedReservedExtensionWireField(t *testing.T) {
 	if _, err := NewProfile(profile); err != nil {
 		t.Fatal(err)
 	}
+	// NewProfile reserves wire defaults too, so they need no explicit entry.
+	profile.ReservedWireFields = nil
+	profile.WireDefaults = map[string]json.RawMessage{"provider": json.RawMessage(`{"allow_fallbacks":false}`)}
+	validated, err := NewProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &Adapter{endpointID: "chat-prod", profile: validated}
+	request := collisionRequest(map[string]json.RawMessage{"alpha": json.RawMessage(`{"first":{}}`)})
+	if _, err := adapter.Compile(context.Background(), collisionInput(request)); err == nil || !strings.Contains(err.Error(), "reserved wire field") {
+		t.Fatalf("Compile() = %v, want reserved-field refusal", err)
+	}
 }
 
 // A profile that bypasses NewProfile must still fail every compilation of a

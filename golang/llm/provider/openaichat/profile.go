@@ -212,9 +212,13 @@ func (profile Profile) validate() error {
 			if requestOwnedWireField(wire) {
 				return fmt.Errorf("openai chat profile %q extension %q cannot override %q", profile.ID, namespace, wire)
 			}
+			// Lowering refuses every write to a reserved field (NewProfile
+			// also reserves wire defaults), so several names may share one
+			// to report that refusal.
 			if _, reserved := profile.ReservedWireFields[wire]; reserved {
-				// Lowering refuses every write to a reserved field, so
-				// several names may share one to report that refusal.
+				continue
+			}
+			if _, defaulted := profile.WireDefaults[wire]; defaulted {
 				continue
 			}
 			owner := namespace + "." + field
