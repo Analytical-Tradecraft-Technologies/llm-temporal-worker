@@ -102,8 +102,13 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 	if estimator.MaxReasoning > reasoningTokens {
 		reasoningTokens = estimator.MaxReasoning
 	}
+	// promptBound selects a long-prompt price tier. The media allowance is not
+	// capped here: a price threshold is not a window the provider enforces.
+	promptBound := inputTokens
 	if estimator.Tokenizer == nil {
-		inputTokens = addMediaAllowance(inputTokens, mediaInputAllowance(request), candidate.ContextTokens, outputTokens)
+		allowance := mediaInputAllowance(request)
+		promptBound = saturatingAdd(inputTokens, allowance)
+		inputTokens = addMediaAllowance(inputTokens, allowance, candidate.ContextTokens, outputTokens)
 	}
 	// reasoningTokens stays a separately priced reservation component below,
 	// but it is spent inside the output cap and takes no extra context room.
@@ -133,6 +138,7 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		}
 	}
 	cacheWrite := inputTokens
+	prices := entry.PricesFor(max(promptBound, inputTokens))
 	components := []struct {
 		component     pricing.PriceComponent
 		price         pricing.DecimalUSD
@@ -140,13 +146,13 @@ func (estimator Estimator) EstimateCandidate(request llm.Request, candidate rout
 		unitsPerPrice int64
 		name          string
 	}{
-		{pricing.PriceComponentInput, entry.Prices.InputPerMillion, inputTokens, 1_000_000, "input"},
-		{pricing.PriceComponentOutput, entry.Prices.OutputPerMillion, outputTokens, 1_000_000, "output"},
-		{pricing.PriceComponentReasoning, entry.Prices.ReasoningPerMillion, reasoningTokens, 1_000_000, "reasoning"},
-		{pricing.PriceComponentCacheWrite, entry.Prices.CacheWritePerMillion, cacheWrite, 1_000_000, "cache_write"},
+		{pricing.PriceComponentInput, prices.InputPerMillion, inputTokens, 1_000_000, "input"},
+		{pricing.PriceComponentOutput, prices.OutputPerMillion, outputTokens, 1_000_000, "output"},
+		{pricing.PriceComponentReasoning, prices.ReasoningPerMillion, reasoningTokens, 1_000_000, "reasoning"},
+		{pricing.PriceComponentCacheWrite, prices.CacheWritePerMillion, cacheWrite, 1_000_000, "cache_write"},
 		// PerRequest is already an amount in USD for this invocation. It is
 		// not quoted per million units like the token components.
-		{pricing.PriceComponentPerRequest, entry.Prices.PerRequest, 1, 1, "per_request"},
+		{pricing.PriceComponentPerRequest, prices.PerRequest, 1, 1, "per_request"},
 	}
 	totalUSD := pricing.MustUSD("0")
 	legacyTotal := pricing.MicroUSD(0)

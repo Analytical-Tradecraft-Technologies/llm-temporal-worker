@@ -79,6 +79,21 @@ type TierPrices struct {
 	CacheRead  string `yaml:"cache_read_per_million"`
 	CacheWrite string `yaml:"cache_write_per_million"`
 	PerRequest string `yaml:"per_request"`
+	// LongPrompt replaces every component above for a call whose prompt
+	// (input, cache read and cache write) reaches its threshold. A tier
+	// override restates it or drops it with the tier.
+	LongPrompt *LongPromptTierPrices `yaml:"long_prompt,omitempty"`
+}
+
+// LongPromptTierPrices is a tier's long-prompt price. Every component is
+// required.
+type LongPromptTierPrices struct {
+	MinPromptTokens int64  `yaml:"min_prompt_tokens"`
+	Input           string `yaml:"input_per_million"`
+	Output          string `yaml:"output_per_million"`
+	CacheRead       string `yaml:"cache_read_per_million"`
+	CacheWrite      string `yaml:"cache_write_per_million"`
+	PerRequest      string `yaml:"per_request"`
 }
 
 // Rules is the merged, validated rule set.
@@ -234,6 +249,9 @@ func (rules Rules) validate() error {
 				if _, err := prices.unitPrices(); err != nil {
 					return fmt.Errorf("model-sync rules provider %q model %q tier %q: %w", name, id, tier, err)
 				}
+				if _, err := prices.longPrompt(); err != nil {
+					return fmt.Errorf("model-sync rules provider %q model %q tier %q: %w", name, id, tier, err)
+				}
 			}
 		}
 	}
@@ -262,6 +280,22 @@ func (prices TierPrices) unitPrices() (pricing.UnitPrices, error) {
 	}
 	result.ReasoningPerMillion = pricing.MustDecimalUSD("0")
 	return result, nil
+}
+
+// longPrompt returns the tier's long-prompt price, or nil when it has none.
+func (prices TierPrices) longPrompt() (*pricing.LongPromptPrices, error) {
+	long := prices.LongPrompt
+	if long == nil {
+		return nil, nil
+	}
+	if long.MinPromptTokens <= 0 {
+		return nil, fmt.Errorf("long_prompt min_prompt_tokens must be positive")
+	}
+	unit, err := TierPrices{Input: long.Input, Output: long.Output, CacheRead: long.CacheRead, CacheWrite: long.CacheWrite, PerRequest: long.PerRequest}.unitPrices()
+	if err != nil {
+		return nil, fmt.Errorf("long_prompt %w", err)
+	}
+	return &pricing.LongPromptPrices{MinPromptTokens: long.MinPromptTokens, Prices: unit}, nil
 }
 
 // Excluded reports whether an OpenRouter ID is excluded from routing.

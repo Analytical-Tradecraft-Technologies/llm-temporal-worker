@@ -62,6 +62,15 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 				return Catalog{}, fmt.Errorf("pricing entry %d %s: %w", index, name, err)
 			}
 		}
+		if long := entry.LongPrompt; long != nil {
+			for name, price := range map[string]DecimalUSD{
+				"input": long.Prices.InputPerMillion, "output": long.Prices.OutputPerMillion, "cache_read": long.Prices.CacheReadPerMillion, "cache_write": long.Prices.CacheWritePerMillion, "reasoning": long.Prices.ReasoningPerMillion, "per_request": long.Prices.PerRequest,
+			} {
+				if err := price.valid(); err != nil {
+					return Catalog{}, fmt.Errorf("pricing entry %d long-prompt %s: %w", index, name, err)
+				}
+			}
+		}
 		seenUnknown := make(map[PriceComponent]struct{}, len(entry.UnknownComponents))
 		for _, component := range entry.UnknownComponents {
 			if !component.Valid() {
@@ -75,6 +84,11 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 			// catalog's cost and digest semantics contradictory, so fail closed at
 			// the compilation boundary.
 			price := decimalUSDForComponent(entry.Prices, component)
+			if entry.LongPrompt != nil {
+				if long := decimalUSDForComponent(entry.LongPrompt.Prices, component); long.numerator.Sign() != 0 {
+					return Catalog{}, fmt.Errorf("pricing entry %d marks component %q unknown but supplies a non-zero long-prompt price", index, component)
+				}
+			}
 			if price.numerator.Sign() != 0 {
 				return Catalog{}, fmt.Errorf("pricing entry %d marks component %q unknown but supplies a non-zero price", index, component)
 			}
