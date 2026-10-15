@@ -500,3 +500,27 @@ func TestRequestPreparationIdenticalInitializersConverge(t *testing.T) {
 		t.Fatalf("converged preparation: %v", err)
 	}
 }
+
+// A preparation keeps when its worker's configuration began serving, so
+// workers can order configurations during a rollout (#1320). It is optional.
+func TestRequestPreparationConfigActivation(t *testing.T) {
+	r, _, _, record, preparation := preparationFixture(t)
+	ctx := context.Background()
+	invalid := preparation
+	invalid.ConfigActivatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid activation: %v", err)
+	}
+	preparation.ConfigActivatedAt = preparation.PreparedAt.Add(-time.Hour).In(time.FixedZone("x", 3600))
+	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)
+	if err != nil || !got.ConfigActivatedAt.Equal(preparation.ConfigActivatedAt) || got.ConfigActivatedAt.Location() != time.UTC {
+		t.Fatalf("activation = %v, %v", got.ConfigActivatedAt, err)
+	}
+	encoded, err := json.Marshal(RequestPreparation{Version: 1, PreparedAt: preparation.PreparedAt})
+	if err != nil || bytes.Contains(encoded, []byte("config_activated_at")) {
+		t.Fatalf("unset activation encoded: %s", encoded)
+	}
+}

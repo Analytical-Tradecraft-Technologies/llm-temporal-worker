@@ -46,6 +46,10 @@ type RequestPreparation struct {
 	// It is additive: a preparation saved without it restores with none.
 	ParentProvenance []state.ProviderStateProvenance `json:"parent_provenance,omitempty"`
 	PreparedAt       time.Time                       `json:"prepared_at"`
+	// ConfigActivatedAt is when the preparing worker's configuration began
+	// serving. Workers order configurations by it during a rollout (#1320).
+	// It is additive: a preparation saved without it is ordered by PreparedAt.
+	ConfigActivatedAt time.Time `json:"config_activated_at,omitzero"`
 }
 
 func (p RequestPreparation) Validate() error {
@@ -74,7 +78,8 @@ func (p RequestPreparation) ValidateParent() (*state.CheckpointSnapshot, error) 
 
 // validateFields checks everything except the parent snapshot's content.
 func (p RequestPreparation) validateFields(hasParent bool) error {
-	if p.Version != 1 || p.ConfigDigest == ([32]byte{}) || !safeText(p.CheckpointScope, 512) || !validTime(p.PreparedAt) {
+	if p.Version != 1 || p.ConfigDigest == ([32]byte{}) || !safeText(p.CheckpointScope, 512) || !validTime(p.PreparedAt) ||
+		(!p.ConfigActivatedAt.IsZero() && !validTime(p.ConfigActivatedAt)) {
 		return ErrInvalid
 	}
 	if (len(p.ParentProvenance) != 0 && !hasParent) || state.ValidateProviderStateProvenance(p.ParentProvenance) != nil {
@@ -233,6 +238,9 @@ func (r *Repository) SaveRequestPreparationKnown(ctx context.Context, scope Scop
 		return ErrInvalid
 	}
 	preparation.PreparedAt = preparation.PreparedAt.UTC()
+	if !preparation.ConfigActivatedAt.IsZero() {
+		preparation.ConfigActivatedAt = preparation.ConfigActivatedAt.UTC()
+	}
 	stored := storedRequestPreparation{RequestPreparation: preparation}
 	var snapshot []byte
 	if r.parentSnapshotBlob && len(preparation.ParentSnapshot) != 0 {
