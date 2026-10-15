@@ -63,12 +63,17 @@ type DirectModel struct {
 	// ContextTokens bounds input plus reserved output; zero is unspecified.
 	ContextTokens int64 `yaml:"context_tokens"`
 	OutputTokens  int64 `yaml:"output_tokens"`
-	// Exclude removes the direct route; an OpenRouter route remains.
-	Exclude bool `yaml:"exclude"`
+	// Exclude removes the direct route; an OpenRouter route remains. It is
+	// tri-state so a later layer that omits it keeps an earlier exclusion;
+	// only an explicit exclude: false restores the route.
+	Exclude *bool `yaml:"exclude,omitempty"`
 	// Prices are keyed by the endpoint's service-class provider_value. A
 	// class whose tier has no price is not offered on the direct route.
 	Prices map[string]TierPrices `yaml:"prices"`
 }
+
+// excluded reports whether the merged rule removes the direct route.
+func (model DirectModel) excluded() bool { return model.Exclude != nil && *model.Exclude }
 
 // TierPrices are exact per-million (and per-request) USD decimals. Every
 // component is required: a direct model is never partially priced.
@@ -196,7 +201,9 @@ func mergeModels(base, layer map[string]DirectModel) map[string]DirectModel {
 		if model.OutputTokens != 0 {
 			current.OutputTokens = model.OutputTokens
 		}
-		current.Exclude = model.Exclude
+		if model.Exclude != nil {
+			current.Exclude = model.Exclude
+		}
 		current.Prices = mergeMap(current.Prices, model.Prices)
 		result[id] = current
 	}
@@ -239,7 +246,7 @@ func (rules Rules) validate() error {
 			if model.ContextTokens < 0 || model.OutputTokens < 0 {
 				return fmt.Errorf("model-sync rules provider %q model %q token limits must not be negative", name, id)
 			}
-			if !model.Exclude && len(model.Prices) == 0 {
+			if !model.excluded() && len(model.Prices) == 0 {
 				return fmt.Errorf("model-sync rules provider %q model %q has no prices", name, id)
 			}
 			for tier, prices := range model.Prices {
@@ -316,7 +323,7 @@ func (rules Rules) Direct(providerName, id string) (DirectModel, bool) {
 		return DirectModel{}, false
 	}
 	model, listed := provider.Models[id]
-	if !listed || model.Exclude {
+	if !listed || model.excluded() {
 		return DirectModel{}, false
 	}
 	if model.Model == "" {

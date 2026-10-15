@@ -187,6 +187,47 @@ providers:
 	}
 }
 
+func TestRulesLaterLayerKeepsEarlierExclusionUnlessCleared(t *testing.T) {
+	excluded := `
+version: model-sync-rules/v1
+providers:
+  anthropic:
+    models:
+      anthropic/claude-sonnet-4.5: {exclude: true}
+`
+	limitOnly := `
+version: model-sync-rules/v1
+providers:
+  anthropic:
+    models:
+      anthropic/claude-sonnet-4.5: {output_tokens: 32000}
+`
+	priceOnly := `
+version: model-sync-rules/v1
+providers:
+  anthropic:
+    models:
+      anthropic/claude-sonnet-4.5:
+        prices:
+          standard_only: ` + testPrices + `
+`
+	for name, layer := range map[string]string{"limit": limitOnly, "price": priceOnly} {
+		if _, ok := mergedRules(t, excluded, layer).Direct("anthropic", "anthropic/claude-sonnet-4.5"); ok {
+			t.Fatalf("a %s-only override restored an excluded direct route", name)
+		}
+	}
+	cleared := `
+version: model-sync-rules/v1
+providers:
+  anthropic:
+    models:
+      anthropic/claude-sonnet-4.5: {exclude: false}
+`
+	if sonnet, ok := mergedRules(t, excluded, limitOnly, cleared).Direct("anthropic", "anthropic/claude-sonnet-4.5"); !ok || sonnet.OutputTokens != 32000 {
+		t.Fatalf("sonnet = %+v, %v; want an explicit exclude: false to restore the route with the limit override", sonnet, ok)
+	}
+}
+
 func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 	rules := mergedRules(t)
 	for name, provider := range rules.Providers {
