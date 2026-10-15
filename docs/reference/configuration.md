@@ -1281,7 +1281,9 @@ prices OpenRouter publishes with `go run ./tools/modelsyncdefaults` (from
 
 Files in `model_sync.rules` are layered over the built-in rules at runtime.
 Model fields override field by field, prices merge per tier, and exclusions
-accumulate, so an override only states what it changes:
+accumulate, so an override only states what it changes. A model's
+`exclude: true` stays in force through later layers that omit `exclude`; only
+an explicit `exclude: false` restores its direct route:
 
 ```yaml
 version: model-sync-rules/v1
