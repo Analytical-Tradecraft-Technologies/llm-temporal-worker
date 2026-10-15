@@ -82,7 +82,10 @@ func CanonicalJSONWithLimits(data []byte, maxBytes, maxDepth int) ([]byte, error
 		return nil, fmt.Errorf("canonical JSON trailing input: %w", err)
 	}
 
+	// Canonical output is close to the input size, so one allocation usually
+	// holds it instead of repeated buffer doubling on large values (#1112).
 	var output bytes.Buffer
+	output.Grow(len(data))
 	if err := writeCanonicalValue(&output, value); err != nil {
 		return nil, err
 	}
@@ -175,11 +178,9 @@ func writeCanonicalValue(output *bytes.Buffer, value any) error {
 			if index > 0 {
 				output.WriteByte(',')
 			}
-			encodedKey, err := json.Marshal(key)
-			if err != nil {
+			if err := writeCanonicalString(output, key); err != nil {
 				return fmt.Errorf("canonical JSON object key: %w", err)
 			}
-			output.Write(encodedKey)
 			output.WriteByte(':')
 			if err := writeCanonicalValue(output, value.values[key]); err != nil {
 				return err
@@ -206,11 +207,9 @@ func writeCanonicalValue(output *bytes.Buffer, value any) error {
 		output.WriteString(string(value))
 		return nil
 	case string:
-		encoded, err := json.Marshal(value)
-		if err != nil {
+		if err := writeCanonicalString(output, value); err != nil {
 			return fmt.Errorf("canonical JSON string: %w", err)
 		}
-		output.Write(encoded)
 		return nil
 	case bool:
 		if value {
@@ -225,4 +224,26 @@ func writeCanonicalValue(output *bytes.Buffer, value any) error {
 	default:
 		return fmt.Errorf("canonical JSON value %T is unsupported", value)
 	}
+}
+
+// writeCanonicalString writes value exactly as json.Marshal encodes a string.
+// A string of printable ASCII that json.Marshal leaves unescaped is written
+// directly, avoiding a temporary encoding per string; any other string
+// (control, HTML-sensitive, quote, backslash or non-ASCII bytes) is encoded by
+// json.Marshal itself.
+func writeCanonicalString(output *bytes.Buffer, value string) error {
+	for index := 0; index < len(value); index++ {
+		if c := value[index]; c < 0x20 || c > 0x7f || c == '"' || c == '\\' || c == '<' || c == '>' || c == '&' {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			output.Write(encoded)
+			return nil
+		}
+	}
+	output.WriteByte('"')
+	output.WriteString(value)
+	output.WriteByte('"')
+	return nil
 }

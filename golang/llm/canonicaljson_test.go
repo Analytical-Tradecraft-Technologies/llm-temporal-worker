@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -92,5 +93,56 @@ func TestCanonicalToolArgumentsHoldsTheToolArgumentDepth(t *testing.T) {
 	// arguments leave room for the durable records that wrap them.
 	if _, err := llm.CanonicalJSON(nested(llm.MaxToolArgumentsDepth + 1)); err != nil {
 		t.Fatalf("canonical JSON rejected a value within its own limit: %v", err)
+	}
+}
+
+// TestCanonicalJSONStringsMatchJSONMarshal pins the unescaped-ASCII fast path
+// (#1112) to json.Marshal: every byte value, in a string value and in an
+// object key, canonicalizes to exactly the encoding json.Marshal gives the
+// decoded string.
+func TestCanonicalJSONStringsMatchJSONMarshal(t *testing.T) {
+	values := []string{"", "plain ascii ~\x7f", "é", "日本", "  ", "a\xffb"}
+	for b := 0; b < 256; b++ {
+		values = append(values, "a"+string([]byte{byte(b)})+"z")
+	}
+	for _, value := range values {
+		input, err := json.Marshal(map[string]string{value: value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]string
+		if err := json.Unmarshal(input, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		want, err := json.Marshal(decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := llm.CanonicalJSON(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("CanonicalJSON(%s) = %s, want %s", input, got, want)
+		}
+	}
+}
+
+func BenchmarkCanonicalJSONLargeObject(b *testing.B) {
+	items := make([]map[string]any, 0, 1000)
+	for i := 0; i < cap(items); i++ {
+		items = append(items, map[string]any{"type": "message", "role": "user", "index": i, "text": strings.Repeat(fmt.Sprintf("item %d ", i), 128)})
+	}
+	input, err := json.Marshal(map[string]any{"items": items, "status": "running"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(input)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := llm.CanonicalJSON(input); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
