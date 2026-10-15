@@ -223,6 +223,21 @@ func appendInputItem(messages *[]any, item llm.Item, toolCalls map[string]struct
 		if err != nil {
 			return err
 		}
+		// Model text between tool calls of one turn joins the assistant
+		// message that already carries those calls. A second assistant
+		// message would sit between the calls and their tool messages, which
+		// Chat Completions rejects.
+		if value.Actor == llm.ActorModel && len(*messages) > 0 {
+			if last, ok := (*messages)[len(*messages)-1].(map[string]any); ok && last["role"] == "assistant" {
+				if _, hasToolCalls := last["tool_calls"]; hasToolCalls {
+					if content, hasContent := message["content"].([]any); hasContent {
+						existing, _ := last["content"].([]any)
+						last["content"] = append(existing, content...)
+					}
+					return nil
+				}
+			}
+		}
 		*messages = append(*messages, message)
 		return nil
 	case llm.ToolCall:
