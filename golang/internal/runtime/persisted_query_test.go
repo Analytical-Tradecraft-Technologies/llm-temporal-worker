@@ -204,13 +204,15 @@ func TestPersistedQueryBudgetStatusRejectsMismatchedReaderInstant(t *testing.T) 
 func TestPersistedQueryBudgetStatusClassifiesPermanentMisses(t *testing.T) {
 	now := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
 	future := now.Add(48 * time.Hour)
+	past := now.Add(-time.Hour)
 	for _, test := range []struct {
 		name      string
 		err       error
 		activeAt  *time.Time
 		permanent bool
 	}{
-		{name: "history", err: redisstore.ErrBudgetHistoryNotAvailable, permanent: true},
+		{name: "explicit history", err: redisstore.ErrBudgetHistoryNotAvailable, activeAt: &past, permanent: true},
+		{name: "default instant history", err: redisstore.ErrBudgetHistoryNotAvailable},
 		{name: "unknown policy", err: fmt.Errorf("%w: %w", redisstore.ErrBudgetStatusUnavailable, redisstore.ErrBudgetStatusUnknownPolicy), permanent: true},
 		{name: "explicit instant outside coverage", err: fmt.Errorf("%w: %w", redisstore.ErrBudgetStatusUnavailable, redisstore.ErrBudgetStatusOutsideCoverage), activeAt: &future, permanent: true},
 		{name: "default instant outside coverage", err: fmt.Errorf("%w: %w", redisstore.ErrBudgetStatusUnavailable, redisstore.ErrBudgetStatusOutsideCoverage)},

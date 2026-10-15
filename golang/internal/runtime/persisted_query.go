@@ -524,13 +524,13 @@ func (handler *persistedQueryHandler) sign(request control.QueryRequest, positio
 // budgetStatusError maps budget reads that can never succeed for this request
 // to a permanent invalid_argument; every other failure is returned unchanged
 // so the query boundary keeps classifying it as retryable unavailable state.
-// An instant outside the published coverage is the caller's error only when
-// the caller chose it: the default instant is the worker clock, and a current
-// instant past the coverage end means the publisher has not rotated yet.
+// A history or coverage miss is the caller's error only when the caller chose
+// the instant: the default instant is the worker clock, so a delay between
+// clock samples or a publisher that has not rotated yet is transient.
 func budgetStatusError(err error, explicitActiveAt bool) error {
 	var reason string
 	switch {
-	case errors.Is(err, redisstore.ErrBudgetHistoryNotAvailable):
+	case explicitActiveAt && errors.Is(err, redisstore.ErrBudgetHistoryNotAvailable):
 		reason = "budget status active_at is in the past; only current status is available"
 	case errors.Is(err, redisstore.ErrBudgetStatusUnknownPolicy):
 		reason = "budget status policy key is unknown"

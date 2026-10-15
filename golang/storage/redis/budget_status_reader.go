@@ -214,7 +214,7 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: manifest digest mismatch", ErrBudgetStatusUnavailable)
 	}
 	if activeAt.Before(manifest.CoverageStart) || !activeAt.Before(manifest.CoverageEnd) {
-		return control.BudgetStatusResult{}, fmt.Errorf("%w: %w", ErrBudgetStatusUnavailable, ErrBudgetStatusOutsideCoverage)
+		return control.BudgetStatusResult{}, reader.requestMiss(ctx, pointer, ErrBudgetStatusOutsideCoverage)
 	}
 	if len(manifest.Members) == 0 || len(manifest.Members) > maxBudgetStatusMembers {
 		return control.BudgetStatusResult{}, fmt.Errorf("%w: member catalog is incomplete", ErrBudgetStatusUnavailable)
@@ -247,7 +247,7 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 			}
 		}
 		if !found {
-			return control.BudgetStatusResult{}, fmt.Errorf("%w: %w", ErrBudgetStatusUnavailable, ErrBudgetStatusUnknownPolicy)
+			return control.BudgetStatusResult{}, reader.requestMiss(ctx, pointer, ErrBudgetStatusUnknownPolicy)
 		}
 	}
 	args := []any{BudgetStatusAction, string(pointer.GenerationID), string(pointer.IncarnationID), digest, strconv.FormatInt(now.UnixMilli(), 10), strconv.Itoa(len(manifest.Members)), strconv.Itoa(reader.maxExpiry)}
@@ -294,6 +294,21 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 		}
 	}
 	return result, nil
+}
+
+// requestMiss reports a manifest-derived miss as typed only when the manifest
+// still belongs to the active generation. A miss read from a generation that
+// was replaced mid-request may succeed against the new one, so it stays a
+// plain unavailable error that callers retry.
+func (reader *RedisBudgetStatusReader) requestMiss(ctx context.Context, pointer ActiveBudgetGeneration, miss error) error {
+	current, err := reader.generation.ActiveGeneration(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: active generation: %v", ErrBudgetStatusUnavailable, err)
+	}
+	if current != pointer {
+		return fmt.Errorf("%w: active generation changed during read", ErrBudgetStatusUnavailable)
+	}
+	return fmt.Errorf("%w: %w", ErrBudgetStatusUnavailable, miss)
 }
 
 func budgetStatusFunctionResult(values []any) (string, string, error) {
