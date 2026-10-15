@@ -37,8 +37,11 @@ prove that the caller included every semantic input.
 `Lookup` returns the newest published successful completion, or nil for a miss.
 The caller supplies `Now`; nil `MaxAge` means no age restriction. A supplied age
 must be positive. The boundary is inclusive, measured from `CompletedAt`;
-lookups and cache-use receipts never refresh it. Future-dated completions are
-not returned. Storage errors, missing referenced objects and corruption are
+lookups and cache-use receipts never refresh it. `CompletedAt` comes from the
+publishing worker's clock, so a completion up to `cache.MaxCompletionSkew`
+(5 seconds) after `Now` is returned: a reader whose clock lags uses it instead
+of paying for a duplicate. Completions further in the future are not returned
+(the boundary is inclusive). Storage errors, missing referenced objects and corruption are
 errors, never cache misses that could silently cause another paid request.
 
 ## Publishing a successful origin
