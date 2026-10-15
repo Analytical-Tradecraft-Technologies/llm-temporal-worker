@@ -140,6 +140,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	metadata.SchemaDigest = digest
 	metadata.CapabilityVersion = capabilities.Version
 	metadata.ProviderTier = tier
+	metadata.SequentialToolUseDropped = !input.Strict && sequentialToolUseDropped(normalized)
 	if metadata.EstimatedBytes == 0 {
 		encoded, marshalErr := json.Marshal(params)
 		if marshalErr == nil {
@@ -351,10 +352,23 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 		usage.CacheReadTokens = int64Value(response.Usage.CacheReadInputTokens)
 		usage.CacheWriteTokens = int64Value(response.Usage.CacheWriteInputTokens)
 	}
+	var diagnostics []llm.Diagnostic
+	if call.Metadata.SequentialToolUseDropped {
+		diagnostics = append(diagnostics, sequentialToolUseDroppedDiagnostic())
+	}
 	return llm.Response{APIVersion: llm.APIVersion, OperationKey: call.OperationKey, Status: status, Output: output,
 		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model},
 		Service: llm.ServiceFacts{Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual, ProviderValue: actualTier},
-		Usage:   usage, Provider: llm.ProviderFacts{RequestID: requestID, FinishReason: string(response.StopReason)}}, nil
+		Usage:   usage, Provider: llm.ProviderFacts{RequestID: requestID, FinishReason: string(response.StopReason)},
+		Diagnostics: diagnostics}, nil
+}
+
+// sequentialToolUseDroppedDiagnostic tells a best-effort caller that the
+// provider received no one-tool-call-per-turn restriction, so the response
+// may carry several tool calls despite ToolPolicy.Parallel being false.
+func sequentialToolUseDroppedDiagnostic() llm.Diagnostic {
+	return llm.Diagnostic{Code: "tool_policy_parallel_dropped", Severity: llm.DiagnosticWarning, Path: "/tool_policy/parallel",
+		Message: "Bedrock Converse cannot restrict a turn to one tool call; parallel false was not sent to the provider"}
 }
 
 func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.Item, bool, error) {

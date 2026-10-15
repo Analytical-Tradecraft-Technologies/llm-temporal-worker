@@ -31,7 +31,7 @@ func TestCompileSkipsReplayedReferenceAnnotations(t *testing.T) {
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 		llm.Reference{URI: "https://example.com/third-source"},
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "found"}}},
-	}, Tools: []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}}
+	}, Tools: []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Parallel: true}}
 	for name, strict := range map[string]bool{"strict": true, "best effort": false} {
 		t.Run(name, func(t *testing.T) {
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockConverse, Model: request.Model}, Strict: strict})

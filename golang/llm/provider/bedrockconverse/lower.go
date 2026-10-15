@@ -97,6 +97,13 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		if request.ToolPolicy.Mode == llm.ToolChoiceNone {
 			return bedrockruntime.ConverseInput{}, fmt.Errorf("tool policy none with tool definitions is unsupported by Bedrock Converse")
 		}
+		// Converse has no field restricting a turn to one tool call, and no
+		// model/profile combination is verified to honor one through
+		// additionalModelRequestFields. Strict mode refuses the constraint;
+		// best effort drops it and Compile records a diagnostic.
+		if strict && sequentialToolUseDropped(request) {
+			return bedrockruntime.ConverseInput{}, provider.NewStrictPortabilityError("sequential tool use (parallel false) is not representable by Bedrock Converse in strict portability mode")
+		}
 		tools, err := lowerTools(request.Tools)
 		if err != nil {
 			return bedrockruntime.ConverseInput{}, err
@@ -246,6 +253,12 @@ func lowerTools(tools []llm.Tool) ([]types.Tool, error) {
 		result = append(result, &types.ToolMemberToolSpec{Value: types.ToolSpecification{Name: stringPtr(tool.Name), Description: description, InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(schema)}}})
 	}
 	return result, nil
+}
+
+// sequentialToolUseDropped reports a request whose tool policy forbids
+// parallel tool calls while offering tools Converse would leave unconstrained.
+func sequentialToolUseDropped(request llm.Request) bool {
+	return len(request.Tools) > 0 && request.ToolPolicy.Mode != llm.ToolChoiceNone && !request.ToolPolicy.Parallel
 }
 
 func lowerToolChoice(policy llm.ToolPolicy) (types.ToolChoice, error) {

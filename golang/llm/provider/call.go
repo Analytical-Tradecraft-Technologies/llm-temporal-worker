@@ -37,6 +37,10 @@ type CallMetadata struct {
 	CapabilityVersion   string
 	ProviderTier        string
 	OpaqueStateRequired bool
+	// SequentialToolUseDropped records a best-effort compilation that sent
+	// the provider no restriction for a ToolPolicy with Parallel false. The
+	// lift reports it as a response diagnostic.
+	SequentialToolUseDropped bool
 }
 
 type Result struct {

@@ -66,6 +66,13 @@ in strict mode until a profile documents a lossless lowering. Streaming is
 always marked unsupported because a Temporal Activity receives one durable
 result rather than an open response stream.
 
+Converse has no control restricting a turn to one tool call, and no
+model/profile combination is verified to honor one. A request that offers tools
+with `tool_policy.parallel: false` (the default) is therefore rejected in strict
+mode as an unsupported capability before dispatch, for automatic, required, and
+named choices alike. Best-effort mode sends the request without the restriction
+and adds a `tool_policy_parallel_dropped` warning diagnostic to the response.
+
 Requests are lowered to `ConverseInput` and responses are lifted to the
 provider-neutral response model. AWS SigV4 signing and the default credential
 chain remain inside the SDK client; credentials never enter the normalized
