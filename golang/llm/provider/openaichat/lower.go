@@ -615,6 +615,9 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 	if len(extensions) == 0 {
 		return nil
 	}
+	// NewProfile rejects allowlists with colliding wire fields; a profile that
+	// bypassed it must still never let map iteration choose the value.
+	written := make(map[string]struct{})
 	for namespace, raw := range extensions {
 		spec, ok := profile.AllowedExtensions[namespace]
 		if !ok {
@@ -648,6 +651,10 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 			if len(hosted) > 0 && hosted[0] && (wire == "tools" || wire == "max_tool_calls" || wire == "tool_choice" || wire == "container") {
 				return fmt.Errorf("extension cannot override hosted tool controls")
 			}
+			if _, duplicate := written[wire]; duplicate {
+				return fmt.Errorf("extension %q field %q maps to wire field %q already set by another extension field", namespace, field, wire)
+			}
+			written[wire] = struct{}{}
 			target[wire] = decoded
 		}
 	}
