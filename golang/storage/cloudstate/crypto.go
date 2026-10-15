@@ -100,15 +100,29 @@ func (r *Repository) readBlob(ctx context.Context, stream, key string) ([]byte, 
 	if opened.Size < int64(r.cipher.NonceSize()+r.cipher.Overhead()) || opened.Size > limit {
 		return nil, ErrCorrupt
 	}
-	data, err := io.ReadAll(io.LimitReader(opened.Body, limit+1))
-	if err != nil {
-		return nil, err
+	// The size is bounded above, so read into one buffer of the declared size
+	// plus one byte that detects a longer body, then decrypt in place, rather
+	// than growing a buffer and copying the plaintext out (#1112). Only a
+	// clean io.EOF ends the body; any other reader error, including
+	// io.ErrUnexpectedEOF, is returned as it was by io.ReadAll.
+	data := make([]byte, opened.Size+1)
+	read := 0
+	for read < len(data) {
+		n, err := opened.Body.Read(data[read:])
+		read += n
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	if int64(len(data)) != opened.Size {
+	if int64(read) != opened.Size {
 		return nil, ErrCorrupt
 	}
+	data = data[:read]
 	n := r.cipher.NonceSize()
-	plain, err := r.cipher.Open(nil, data[:n], data[n:], []byte(key))
+	plain, err := r.cipher.Open(data[n:n], data[:n], data[n:], []byte(key))
 	if err != nil {
 		return nil, ErrCorrupt
 	}
