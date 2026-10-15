@@ -138,4 +138,24 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 			t.Fatalf("accepted %s", bad)
 		}
 	}
+	// The capability is optional at decode (the runtime verifies it) but
+	// bounded in size and alphabet, and never present but empty.
+	reference.Capability = "ref_v1.k1.abc-_"
+	if data, err = json.Marshal(reference); err != nil {
+		t.Fatal(err)
+	}
+	decoded = llm.ExecutionReferenceV1{}
+	if err := json.Unmarshal(data, &decoded); err != nil || !reflect.DeepEqual(reference, decoded) {
+		t.Fatalf("reference with capability: %v", err)
+	}
+	for _, capability := range []string{`""`, `null`, `1`, `"has space"`, `"` + strings.Repeat("a", 129) + `"`} {
+		bad := strings.Replace(string(data), `"ref_v1.k1.abc-_"`, capability, 1)
+		if err := json.Unmarshal([]byte(bad), &decoded); err == nil {
+			t.Fatalf("accepted %s", bad)
+		}
+	}
+	reference.Capability = strings.Repeat("a", 129)
+	if _, err := json.Marshal(reference); err == nil {
+		t.Fatal("oversize capability marshalled")
+	}
 }

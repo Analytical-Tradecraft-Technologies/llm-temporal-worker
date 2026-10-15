@@ -28,7 +28,7 @@ func TestCloudExecutionExhaustionRetainsUnknownPaidWork(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		result, err := f.runtime.GenerateStepV1(ctx, f.request)
 		boundedState(t, result, err, llm.ExecutionPending)
-		ref = llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
+		ref = llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
 		attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(result.RequestID))
 		if err != nil {
 			t.Fatal(err)
@@ -95,7 +95,7 @@ func TestCloudExecutionExhaustionAfterRetryableRejection(t *testing.T) {
 		t.Fatal("fixture rejection not retryable")
 	}
 	f.now = f.now.Add(time.Minute)
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
 	result, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, result, err, llm.ExecutionFailed)
 	if result.Retryable {

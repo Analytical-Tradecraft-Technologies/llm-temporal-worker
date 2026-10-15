@@ -16,6 +16,10 @@
         "const": "llmtw_req_00000000-0000-0000-0000-000000000000"
       }
     },
+    "capability": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,128}$"
+    },
     "kind": {
       "enum": [
         "generate",

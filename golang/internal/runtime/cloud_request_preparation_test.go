@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -144,6 +145,7 @@ func cloudPreparationFixture(t *testing.T, kind string) (*CloudRequestPreparatio
 	if err != nil {
 		t.Fatal(err)
 	}
+	helper.references = preparationTestKeyring
 	var input llm.PrepareExecutionV1
 	if kind == "compact" {
 		input.Compact = &c
@@ -156,9 +158,24 @@ func cloudPreparationFixture(t *testing.T, kind string) (*CloudRequestPreparatio
 	}
 	return helper, store, materializer, input
 }
+
+// preparationTestKeyring issues the reference capabilities of preparation
+// fixtures.
+var preparationTestKeyring = func() *state.Keyring {
+	keys, err := state.NewKeyring([]state.Key{{ID: "test", Primary: true, Secret: bytes.Repeat([]byte{9}, 32)}}, nil)
+	if err != nil {
+		panic(err)
+	}
+	return keys
+}()
+
 func referenceFor(prepared PreparedCloudRequest) llm.ExecutionReferenceV1 {
 	caller := prepared.Record.Request.Scope
-	return llm.ExecutionReferenceV1{RequestID: string(prepared.Record.Request.ID), Context: llm.RequestContext{Tenant: caller.Tenant, Project: caller.Project, Actor: "actor"}}
+	capability, err := preparationTestKeyring.IssueReferenceCapability(caller.Tenant, caller.Project, string(prepared.Record.Request.ID))
+	if err != nil {
+		panic(err)
+	}
+	return llm.ExecutionReferenceV1{RequestID: string(prepared.Record.Request.ID), Context: llm.RequestContext{Tenant: caller.Tenant, Project: caller.Project, Actor: "actor"}, Capability: capability}
 }
 
 func TestCloudRequestPreparationSurvivesParentExpiryAndProcessRestart(t *testing.T) {

@@ -98,7 +98,7 @@ func TestCloudRuntimeCountsAdmissionOncePerTurn(t *testing.T) {
 	f := boundedCloud(t, false)
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.GenerateStepV1(ctx, f.request)
@@ -163,7 +163,7 @@ func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	f.now = f.now.Add(2 * time.Second)
 	v, err = f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
@@ -179,7 +179,7 @@ func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
 	f.request.OperationKey = "cached-repeat"
 	v, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	if err != nil || v.State != llm.ExecutionCompleted {
-		ref = llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+		ref = llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 		v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	}
 	boundedState(t, v, err, llm.ExecutionCompleted)
@@ -207,7 +207,7 @@ func TestCloudRuntimeCountsInvalidPollAsFailed(t *testing.T) {
 	}
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	f.now = f.now.Add(2 * time.Second)
 	if v, err = f.runtime.PollExecutionV1(ctx, ref); err == nil && v.State == llm.ExecutionProviderCompleted {
 		t.Fatal("invalid poll result completed")

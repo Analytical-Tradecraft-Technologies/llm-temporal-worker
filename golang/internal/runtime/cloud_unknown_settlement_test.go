@@ -40,7 +40,7 @@ func TestCloudExecutionRuntimeUnknownOutcomeSettlesAfterRecoveryWindow(t *testin
 			ctx := context.Background()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, v, err, llm.ExecutionPending)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 			first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 			if err != nil {
@@ -134,7 +134,7 @@ func TestCloudExecutionRuntimeSettlesExpiredUnknownAcrossConfigRollout(t *testin
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {
@@ -180,7 +180,7 @@ func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {
@@ -223,7 +223,7 @@ func TestCloudReloadSettlesUnknownWorkOnSyncedRoute(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {
@@ -263,7 +263,7 @@ func TestCloudExecutionRuntimeSettlesLostClaimReplyAfterRecoveryWindow(t *testin
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {
@@ -310,7 +310,7 @@ func TestCloudExecutionRuntimeRenewsUnclaimedUnknownAttempt(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {
@@ -360,7 +360,7 @@ func TestCloudExecutionRuntimeExpiredClaimRenewsAttempt(t *testing.T) {
 	if !v.Retryable || v.Dispatch != string(provider.DispatchNotDispatched) || v.RetryAfterSeconds != 0 {
 		t.Fatalf("expired claim result = %+v", v)
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {

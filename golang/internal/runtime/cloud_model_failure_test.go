@@ -22,7 +22,7 @@ func TestCloudModelProcessingFailureRetainsPaidClaim(t *testing.T) {
 	}
 	result, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, result, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(result.RequestID))
 	if err != nil {

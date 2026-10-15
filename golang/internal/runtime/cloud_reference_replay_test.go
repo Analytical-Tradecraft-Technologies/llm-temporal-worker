@@ -82,7 +82,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 	compact := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: child.Generate.Checkpoint.Handle}
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &compact})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.CompactStepV1(ctx, compact)

@@ -68,7 +68,7 @@ func TestCloudCompleteTransientFillReadIsRetryable(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	fired := f.failNextFillRead(t)
 	_, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	requireRetryableStateUnavailable(t, fired, err)
@@ -124,7 +124,7 @@ func TestCloudUnknownFillTransientFillReadIsRetryable(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
 	v, err = f.runtime.PollExecutionV1(ctx, ref)

@@ -147,7 +147,7 @@ func (f *boundedCloudFixture) finish(t testing.TB) llm.ExecutionResultV1 {
 		return v
 	}
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	f.restart(t)
@@ -226,7 +226,7 @@ func TestCloudExecutionRuntimeCompaction(t *testing.T) {
 							return v
 						}
 						boundedState(t, v, err, llm.ExecutionBudgetRequired)
-						ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context}
+						ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
 						v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 						boundedState(t, v, err, llm.ExecutionAcquired)
 						f.restart(t)
@@ -299,7 +299,7 @@ func TestCloudExecutionRuntimeUnknownRetryGetsNewBudget(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {
@@ -386,7 +386,7 @@ func TestCloudExecutionRuntimeAuthorizationPrecedesStorage(t *testing.T) {
 	// A panic repository proves even a terminal replay is authorized before access.
 	f.runtime.preparation.store = (*preparationTestStore)(nil)
 	ctx := context.Background()
-	ref := llm.ExecutionReferenceV1{RequestID: completed.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: completed.RequestID, Context: f.request.Context, Capability: completed.Capability}
 	for _, call := range []func() (llm.ExecutionResultV1, error){
 		func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, f.request) },
 		func() (llm.ExecutionResultV1, error) {
@@ -408,7 +408,7 @@ func TestCloudExecutionRuntimeSingleSubmissionUnderConcurrency(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	var wg sync.WaitGroup
@@ -446,7 +446,7 @@ func TestCloudExecutionRuntimeStartAcknowledgementLost(t *testing.T) {
 		t.Fatal("retry reused dispatch authorization")
 	}
 	f.now = f.now.Add(16 * time.Minute)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 
@@ -487,7 +487,7 @@ func TestCloudExecutionRuntimeCacheWaitAndBudgetWait(t *testing.T) {
 		t.Fatal("cache waiter submitted")
 	}
 	f.now = f.now.Add(2 * time.Second)
-	ref := llm.ExecutionReferenceV1{RequestID: first.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: first.RequestID, Context: f.request.Context, Capability: first.Capability}
 	v, err = f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
@@ -578,7 +578,7 @@ func TestCloudExecutionRuntimeIncompleteCompaction(t *testing.T) {
 	if v.FailureCode != "incomplete_response" {
 		t.Fatal("bad summary accepted")
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionFailed)
 	f.adapter.invoke = original
@@ -610,7 +610,7 @@ func TestCloudExecutionRuntimeCompactionIgnoresReasoningAndCitations(t *testing.
 	ctx := context.Background()
 	v, err := f.runtime.CompactStepV1(ctx, request)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	if v.Compact == nil || v.Compact.Checkpoint.Handle == "" {
@@ -788,7 +788,7 @@ func TestCloudExecutionRuntimePreDispatchContextEndIsRetryable(t *testing.T) {
 			}
 			f.adapter.invoke = original
 			ctx := context.Background()
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			f.now = f.now.Add(2 * time.Second)
 			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionAcquired)
@@ -956,7 +956,7 @@ func TestCloudExecutionRuntimeContinuationPinnedWhenPinnedRouteIneligible(t *tes
 	ctx := context.Background()
 	v, err := p.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &p.request})
 	if err == nil && v.State == llm.ExecutionBudgetRequired {
-		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context})
+		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context, Capability: v.Capability})
 	}
 	var failure *provider.Error
 	if !errors.As(err, &failure) {
@@ -1051,7 +1051,7 @@ func (p *pinnedCloudFixture) planFailure(t *testing.T) *provider.Error {
 	ctx := context.Background()
 	v, err := p.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &p.request})
 	if err == nil && v.State == llm.ExecutionBudgetRequired {
-		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context})
+		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context, Capability: v.Capability})
 	}
 	var failure *provider.Error
 	if !errors.As(err, &failure) || failure.Code != provider.CodeNoRoute || failure.SafeDetails["continuation"] != "continuation_pinned" {
@@ -1277,7 +1277,7 @@ func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("validated restore differs: err=%v", err)
 	}
-	loaded, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context})
+	loaded, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability})
 	if err != nil || !reflect.DeepEqual(loaded.GenerateReplay, want.GenerateReplay) || !reflect.DeepEqual(loaded.Preparation, want.Preparation) {
 		t.Fatalf("Load differs from a fully validated restore: err=%v", err)
 	}
@@ -1315,7 +1315,7 @@ func TestCloudExecutionRuntimeTurnParentSnapshotStorage(t *testing.T) {
 				t.Fatalf("inline=%t referenced=%t with blob storage %t", inline, referenced, blobStorage)
 			}
 			f.now = f.now.Add(time.Second)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
 			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionAcquired)
 			v, err = f.runtime.GenerateStepV1(ctx, child)
@@ -1380,7 +1380,7 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 				return f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
 			})
 			boundedState(b, v, err, llm.ExecutionBudgetRequired)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
 			v, err = timed("acquire", func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) })
 			boundedState(b, v, err, llm.ExecutionAcquired)
 			v, err = timed("generate", func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, child) })

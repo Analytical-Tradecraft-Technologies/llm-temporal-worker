@@ -29,7 +29,9 @@ The worker validates before:
 Every request has a validated tenant scope. Operation keys, continuation records,
 result blobs, budgets, and audit identifiers bind to that scope. Store lookup
 requires the scope and handle MAC; knowing a continuation ID alone is
-insufficient.
+insufficient. Likewise, the internal request steps (including a directly started
+`llm.budget.wait.v1`) require a scope-bound reference capability that never
+appears in public output; a public `operation_id` alone reads nothing.
 
 A logical model may restrict the tenants that route to it with
 `allowed_tenants`; the planner rejects every route of that model for any other

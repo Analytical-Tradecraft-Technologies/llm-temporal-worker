@@ -100,7 +100,7 @@ func TestCloudV1BuilderFactoryExecutionSurvivesReload(t *testing.T) {
 			runtime := build()
 			v, err := runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 			boundedState(t, v, err, llm.ExecutionBudgetRequired)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			v, err = runtime.AcquireBudgetV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionAcquired)
 			runtime = build()

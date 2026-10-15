@@ -145,3 +145,44 @@ func FuzzVerifyHandleNeverPanics(f *testing.F) {
 		}
 	})
 }
+
+func TestReferenceCapabilityBindsScopeRequestAndKey(t *testing.T) {
+	old, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{7}, 32), Primary: true}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := old.IssueReferenceCapability("tenant", "project", "llmtw_req_a")
+	if err != nil || !strings.HasPrefix(capability, "ref_v1.k1.") || len(capability) > 128 {
+		t.Fatalf("capability=%q err=%v", capability, err)
+	}
+	if !old.VerifyReferenceCapability("tenant", "project", "llmtw_req_a", capability) {
+		t.Fatal("issued capability was rejected")
+	}
+	for name, ok := range map[string]bool{
+		"tenant":  old.VerifyReferenceCapability("other", "project", "llmtw_req_a", capability),
+		"project": old.VerifyReferenceCapability("tenant", "other", "llmtw_req_a", capability),
+		"request": old.VerifyReferenceCapability("tenant", "project", "llmtw_req_b", capability),
+		"missing": old.VerifyReferenceCapability("tenant", "project", "llmtw_req_a", ""),
+		"handle":  old.VerifyReferenceCapability("tenant", "project", "llmtw_req_a", "ctn_v1"+strings.TrimPrefix(capability, "ref_v1")),
+	} {
+		if ok {
+			t.Fatalf("%s mismatch was accepted", name)
+		}
+	}
+	// A rotation keeps verifying capabilities of a retained key and fails
+	// closed once that key is retired.
+	rotated, err := NewKeyring([]Key{{ID: "k2", Secret: bytes.Repeat([]byte{8}, 32), Primary: true}, {ID: "k1", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rotated.VerifyReferenceCapability("tenant", "project", "llmtw_req_a", capability) {
+		t.Fatal("retained key's capability was rejected")
+	}
+	retired, err := NewKeyring([]Key{{ID: "k2", Secret: bytes.Repeat([]byte{8}, 32), Primary: true}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired.VerifyReferenceCapability("tenant", "project", "llmtw_req_a", capability) {
+		t.Fatal("retired key's capability was accepted")
+	}
+}

@@ -65,7 +65,7 @@ func TestCloudExecutionAdmissionResumesConcurrentWinner(t *testing.T) {
 						}
 						v, err := f.runtime.PrepareExecutionV1(ctx, input)
 						boundedState(t, v, err, llm.ExecutionBudgetRequired)
-						ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+						ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 						v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 						boundedState(t, v, err, llm.ExecutionAcquired)
 						winner := f.runtime
@@ -129,7 +129,7 @@ func TestCloudExecutionStaleAdmissionCannotSubmitReplacementAttempt(t *testing.T
 	}
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	winner := f.runtime
 	f.restart(t)
 	store := &admissionRaceStore{cloudExecutionStore: f.runtime.store, beforePlan: func(n int) {

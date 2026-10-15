@@ -31,7 +31,7 @@ func TestCloudExecutionConcurrentCompletionReplaysWinner(t *testing.T) {
 			ctx := context.Background()
 			result, err := f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, result, err, llm.ExecutionProviderCompleted)
-			ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
 			other := *f.runtime
 			var winner llm.ExecutionResultV1
 			store := &completeBeforeAttemptLoad{cloudExecutionStore: f.runtime.store}

@@ -103,6 +103,7 @@ func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, opt
 		return nil, err
 	}
 	preparation.requestLimits = options.RequestLimits
+	preparation.references = options.Keyring
 	startedAt := c.Clock().UTC()
 	preparation.activatedAt = startedAt
 	execution, err := c.NewCloudProviderExecution(ctx)
@@ -170,7 +171,8 @@ func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.Prepa
 		return llm.ExecutionResultV1{}, err
 	}
 	r.captureLangfuseOperation(ctx, prepared)
-	return r.advance(ctx, prepared, step)
+	result, err := r.advance(ctx, prepared, step)
+	return r.preparation.withCapability(result, err, prepared.Record)
 }
 func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.ExecutionReferenceV1, step cloudStep) (llm.ExecutionResultV1, error) {
 	if r == nil {
@@ -181,7 +183,8 @@ func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.Execu
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
-	return r.advance(ctx, prepared, step)
+	result, err := r.advance(ctx, prepared, step)
+	return r.preparation.withCapability(result, err, prepared.Record)
 }
 
 func (r *CloudExecutionRuntime) advance(ctx context.Context, p PreparedCloudRequest, step cloudStep) (llm.ExecutionResultV1, error) {

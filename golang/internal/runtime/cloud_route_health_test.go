@@ -94,7 +94,7 @@ func TestCloudRouteHealthAcrossWorkersAndCooldown(t *testing.T) {
 		t.Fatal("successful probe did not close circuit")
 	}
 	before := shared.observations
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
 	_, err = f.runtime.PollExecutionV1(context.Background(), ref)
 	if err != nil || shared.observations != before {
 		t.Fatal("replay duplicated health observation", err)
@@ -135,7 +135,7 @@ func TestCloudOpenCircuitDoesNotAbandonPendingProviderWork(t *testing.T) {
 	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: route.EndpointAccountHMAC, Provider: route.Provider, EndpointFamily: route.Family, Model: route.Model, ProviderTier: route.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
 	f.now = f.now.Add(2 * time.Second)
 	f.restart(t)
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
 	result, err = f.runtime.PollExecutionV1(context.Background(), ref)
 	boundedState(t, result, err, llm.ExecutionProviderCompleted)
 	if f.submits.Load() != 1 || f.polls.Load() != 1 {

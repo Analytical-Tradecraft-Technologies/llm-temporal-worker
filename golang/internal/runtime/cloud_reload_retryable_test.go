@@ -58,7 +58,7 @@ func TestCloudReloadRetryableFailureWaitsForNextAttempt(t *testing.T) {
 			f.rejectRetryably()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, v, err, llm.ExecutionFailed)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 			restore := f.reload(t)
 			f.now = f.now.Add(time.Minute)
 			for i := 0; i < 2; i++ {
@@ -92,7 +92,7 @@ func TestCloudReloadFailsUnpaidWorkAfterGrace(t *testing.T) {
 	f := boundedCloud(t, false)
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	f.now = f.now.Add(time.Second)
 	restore := f.reload(t)
 	f.now = f.now.Add(defaultCloudReloadGrace - time.Second)
@@ -128,7 +128,7 @@ func TestCloudReloadOlderWorkerWaitsForNewerRequest(t *testing.T) {
 	restore := f.reload(t)
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	// The older worker started long before the request was prepared.
 	f.now = f.now.Add(-time.Hour)
 	restore()
@@ -149,7 +149,7 @@ func TestCloudReloadNewerWorkerFailsRequestPreparedByDrainingWorker(t *testing.T
 	f.now = started.Add(3 * time.Minute)
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	f.now = started.Add(time.Minute)
 	restore := f.reload(t)
 	f.now = f.now.Add(defaultCloudReloadGrace - time.Second)

@@ -41,7 +41,7 @@ func TestCloudWorkflowLiveExpiredAdmission(t *testing.T) {
 	ageLiveCloudAttempt(t, h)
 	prepared, err := f.runtime.PrepareExecutionV1(h.ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: prepared.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: prepared.RequestID, Context: f.request.Context, Capability: prepared.Capability}
 	acquired, err := f.runtime.AcquireBudgetV1(h.ctx, ref)
 	boundedState(t, acquired, err, llm.ExecutionAcquired)
 	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}

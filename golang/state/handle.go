@@ -16,7 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const handleVersion = "ctn_v1"
+const (
+	handleVersion    = "ctn_v1"
+	referenceVersion = "ref_v1"
+)
 
 var keyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
@@ -177,6 +180,52 @@ func (keyring *Keyring) VerifyCheckpointHandle(ctx context.Context, scope, handl
 		return "", ErrInvalidHandle
 	}
 	return CheckpointID(parsed.String()), nil
+}
+
+// IssueReferenceCapability returns the internal capability that lets a
+// workflow resume one execution request after preparation. It is a MAC over
+// the request ID and its tenant/project scope, so knowing a public operation
+// ID alone never authorizes reading the request. It must never be returned in
+// public output.
+func (keyring *Keyring) IssueReferenceCapability(tenant, project, requestID string) (string, error) {
+	if keyring == nil || tenant == "" || project == "" || requestID == "" {
+		return "", ErrInvalidHandle
+	}
+	keyID := keyring.order[0]
+	mac := keyring.referenceMAC(keyring.keys[keyID], keyID, tenant, project, requestID)
+	return strings.Join([]string{referenceVersion, keyID, base64.RawURLEncoding.EncodeToString(mac)}, "."), nil
+}
+
+// VerifyReferenceCapability reports whether capability was issued by this
+// keyring for exactly this scope and request ID. Retired keys fail closed.
+func (keyring *Keyring) VerifyReferenceCapability(tenant, project, requestID, capability string) bool {
+	if keyring == nil || tenant == "" || project == "" || requestID == "" || len(capability) > 128 {
+		return false
+	}
+	parts := strings.Split(capability, ".")
+	if len(parts) != 3 || parts[0] != referenceVersion || !keyIDPattern.MatchString(parts[1]) {
+		return false
+	}
+	secret, ok := keyring.keys[parts[1]]
+	if !ok {
+		return false
+	}
+	provided, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || len(provided) != sha256.Size {
+		return false
+	}
+	return hmac.Equal(provided, keyring.referenceMAC(secret, parts[1], tenant, project, requestID))
+}
+
+func (keyring *Keyring) referenceMAC(secret []byte, keyID, tenant, project, requestID string) []byte {
+	hash := hmac.New(sha256.New, secret)
+	for _, value := range []string{referenceVersion, keyID, tenant, project, requestID} {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+		hash.Write(length[:])
+		hash.Write([]byte(value))
+	}
+	return hash.Sum(nil)
 }
 
 func (keyring *Keyring) mac(keyID string, randomID []byte, tenant string) []byte {

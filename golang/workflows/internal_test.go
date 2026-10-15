@@ -19,7 +19,12 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-const testRequestID = "llmtw_req_49c0cb63-15ed-4da7-aa74-17a7d711c9a5"
+const (
+	testRequestID = "llmtw_req_49c0cb63-15ed-4da7-aa74-17a7d711c9a5"
+	// testCapability stands for the reference capability every runtime step
+	// returns; workflows must pass it to reference steps and never return it.
+	testCapability = "ref_v1.test.capability"
+)
 
 type workflowStep struct {
 	name  string
@@ -88,7 +93,7 @@ func workflowTest(t *testing.T, kind string, steps ...workflowStep) *workflowFix
 	})
 	for _, name := range []string{activity.AcquireBudgetActivityName, activity.PollActivityName, activity.CompleteActivityName} {
 		register(name, func(_ context.Context, ref llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-			if ref.RequestID != testRequestID || !reflect.DeepEqual(ref.Context, f.caller()) {
+			if ref.RequestID != testRequestID || !reflect.DeepEqual(ref.Context, f.caller()) || ref.Capability != testCapability {
 				return nil, invalidState()
 			}
 			return f.next(name)
@@ -123,6 +128,7 @@ func (f *workflowFixture) next(name string) (*llm.ExecutionResultV1, error) {
 	case llm.ExecutionFailed:
 		result.FailureCode = "provider_error"
 	}
+	result.Capability = testCapability
 	if step.alter != nil {
 		step.alter(&result)
 	}
@@ -238,7 +244,7 @@ func TestInternalWorkflowsContinueAsNew(t *testing.T) {
 		if budget {
 			f.steps = []workflowStep{step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait)}
 			name = BudgetWorkflowName
-			input = BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate"}
+			input = BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"}
 		}
 		f.env.ExecuteWorkflow(name, input)
 		var continued *workflow.ContinueAsNewError
@@ -250,19 +256,19 @@ func TestInternalWorkflowsContinueAsNew(t *testing.T) {
 func TestBudgetWorkflowReturnsExistingWork(t *testing.T) {
 	for _, state := range []llm.ExecutionStateV1{llm.ExecutionAcquired, llm.ExecutionPending, llm.ExecutionProviderCompleted, llm.ExecutionCompleted, llm.ExecutionOutcomeUnknown, llm.ExecutionFailed} {
 		f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, state))
-		f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate"})
+		f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
 		if err := f.env.GetWorkflowError(); err != nil {
 			t.Fatal(err)
 		}
 		var result llm.ExecutionResultV1
-		if err := f.env.GetWorkflowResult(&result); err != nil || result.State != state {
-			t.Fatalf("wrong budget result: %v", err)
+		if err := f.env.GetWorkflowResult(&result); err != nil || result.State != state || result.Capability != "" {
+			t.Fatalf("wrong budget result: %+v %v", result, err)
 		}
 	}
 }
 func TestBudgetWorkflowRejectsNonProgressingAcquisition(t *testing.T) {
 	f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetRequired))
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate"})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
 	if f.env.GetWorkflowError() == nil {
 		t.Fatal("nonprogressing acquisition accepted")
 	}
@@ -274,7 +280,7 @@ func TestBudgetWorkflowBoundsHistoryWithoutServerHint(t *testing.T) {
 		steps[i] = step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait)
 	}
 	f := workflowTest(t, "generate", steps...)
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate"})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
 	var continued *workflow.ContinueAsNewError
 	if !errors.As(f.env.GetWorkflowError(), &continued) || len(f.calls) != maxStepsPerRun {
 		t.Fatal("unbounded budget history")
@@ -306,7 +312,7 @@ func TestBudgetWorkflowBacksOffConsecutiveDenials(t *testing.T) {
 	f.env.SetOnTimerScheduledListener(func(_ string, duration time.Duration) {
 		timers = append(timers, duration)
 	})
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate"})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
 	if err := f.env.GetWorkflowError(); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +337,7 @@ func TestBudgetBackoffHonoursLongerHintAndCarriedWaits(t *testing.T) {
 
 func TestBudgetWorkflowRejectsNegativeWaits(t *testing.T) {
 	f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait))
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller()}, Kind: "generate", Waits: -1})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate", Waits: -1})
 	if f.env.GetWorkflowError() == nil {
 		t.Fatal("negative denial count accepted")
 	}

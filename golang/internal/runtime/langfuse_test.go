@@ -41,7 +41,7 @@ func TestCloudLangfuseExportsFinalizedRequestOnce(t *testing.T) {
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	result := f.finish(t)
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
 	if err := f.runtime.ExportLangfuseV1(context.Background(), ref); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestCloudLangfuseDefaultOpenRouterExcludesContent(t *testing.T) {
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat", Extensions: map[string]map[string]any{"openrouter": {}}}}
 	f.restart(t)
 	result := f.finish(t)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}); err != nil {
+	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
@@ -98,13 +98,13 @@ func TestCloudLangfuseCacheHitHasTraceWithoutPaidGeneration(t *testing.T) {
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	first := f.finish(t)
-	f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: first.RequestID, Context: f.request.Context})
+	f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: first.RequestID, Context: f.request.Context, Capability: first.Capability})
 	f.request.OperationKey = "cache-client"
 	second := f.finish(t)
 	if second.Generate.Cache.Disposition != "hit" {
 		t.Fatal("fixture did not use cache", second.Generate.Cache)
 	}
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: second.RequestID, Context: f.request.Context}); err != nil {
+	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: second.RequestID, Context: f.request.Context, Capability: second.Capability}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 || !strings.Contains(payloads[1], "hit") || strings.Contains(payloads[1], `"stringValue":"generation"`) {
@@ -129,7 +129,7 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 	f.request.SettingsPatch.CompactionPolicy.Set = &policy
 	export := func(v llm.ExecutionResultV1) {
 		t.Helper()
-		if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}); err != nil {
+		if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -147,7 +147,7 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 	ctx := context.Background()
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &compact})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context, Capability: v.Capability}
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.CompactStepV1(ctx, compact)
@@ -231,7 +231,7 @@ func TestCloudLangfuseDisabledFallbackDoesNotExportResponse(t *testing.T) {
 	f.restart(t)
 	ctx := context.Background()
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context}
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
 	for n := 0; n < 10 && err == nil && v.State != llm.ExecutionCompleted; n++ {
 		switch v.State {
 		case llm.ExecutionBudgetRequired:
@@ -343,7 +343,7 @@ func TestCloudLangfuseCaptureFailurePreservesModelAndFailsExport(t *testing.T) {
 	f.cap.Requests = failedLangfuseCapture{f.repository}
 	f.restart(t)
 	result := f.finish(t)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context}); !errors.Is(err, langfuse.ErrExport) {
+	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}); !errors.Is(err, langfuse.ErrExport) {
 		t.Fatalf("capture loss silently acknowledged: %v", err)
 	}
 	if calls != 0 || f.submits.Load() != 1 {
@@ -369,7 +369,7 @@ func TestCloudLangfuseCaptureFailureUsesConfiguredLogger(t *testing.T) {
 	ctx := observability.WithLogger(context.Background(), logger)
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	v, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context})
+	v, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
@@ -404,7 +404,7 @@ func TestCloudLangfuseNoWorkCompactionExportsOnlyRoot(t *testing.T) {
 	compact := llm.CompactRequestV1{OperationKey: "no-work", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
 	v, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Compact: &compact})
 	boundedState(t, v, err, llm.ExecutionCompleted)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context}); err != nil {
+	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context, Capability: v.Capability}); err != nil {
 		t.Fatal(err)
 	}
 	if serverCalls != 1 || !strings.Contains(payload, "no_work") || strings.Contains(payload, `\"stringValue\":\"generation\"`) {
