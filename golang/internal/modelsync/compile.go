@@ -172,8 +172,12 @@ func directRoute(source Source, direct DirectModel, version string) (routing.Rou
 		if err != nil {
 			return routing.Route{}, nil, false, err
 		}
+		long, err := direct.Prices[tier].longPrompt()
+		if err != nil {
+			return routing.Route{}, nil, false, err
+		}
 		entries = append(entries, pricing.Entry{Provider: source.provider(), Family: source.Family, EndpointID: source.EndpointID, Region: source.Region,
-			Model: direct.Model, ProviderTier: tier, Prices: unit, Provenance: "model-sync-rules", Version: version})
+			Model: direct.Model, ProviderTier: tier, Prices: unit, LongPrompt: long, Provenance: "model-sync-rules", Version: version})
 	}
 	route := source.route(direct.Model, classes, direct.ContextTokens, direct.OutputTokens)
 	route.ID = "sync-" + source.EndpointID

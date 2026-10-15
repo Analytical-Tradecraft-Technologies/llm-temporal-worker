@@ -65,8 +65,15 @@ prices.
   long-prompt override, so a reservation never undercounts. OpenRouter's
   reported cost settles the call.
 - **Direct routes stay exact.** A direct route uses its tier's checked-in
-  price, and its context window is capped at the first long-prompt price
-  threshold, so a request the base price does not cover is never admitted.
+  price. A tier with a long-prompt price (OpenAI's 2x input and 1.5x output
+  from 272,000 prompt tokens) carries the threshold and its prices in the
+  price entry, and the route keeps the provider's real context window.
+  Settlement uses the long-prompt prices when the reported prompt (input,
+  cache read and cache write) reaches the threshold. Reservation uses them
+  when the text estimate plus the uncapped media allowance can reach it, as
+  media and documents are not bounded by a price threshold. A price
+  threshold beyond the first, and Anthropic's long-context window (which
+  needs a beta header the adapters never send), still cap the window.
   Anthropic cache writes use the five-minute price, the only cache the
   adapters request.
 - **In-flight requests are unaffected.** An installed document produces a new

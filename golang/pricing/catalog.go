@@ -49,6 +49,7 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 	seenIdentities := make(map[string]struct{}, len(copyEntries))
 	for index := range copyEntries {
 		entry := &copyEntries[index]
+		entry.LongPrompt = cloneLongPrompt(entry.LongPrompt)
 		if err := entry.ValidateUsagePricing(); err != nil {
 			return Catalog{}, fmt.Errorf("pricing entry %d: %w", index, err)
 		}
@@ -60,6 +61,15 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 		} {
 			if err := price.valid(); err != nil {
 				return Catalog{}, fmt.Errorf("pricing entry %d %s: %w", index, name, err)
+			}
+		}
+		if long := entry.LongPrompt; long != nil {
+			for name, price := range map[string]DecimalUSD{
+				"input": long.Prices.InputPerMillion, "output": long.Prices.OutputPerMillion, "cache_read": long.Prices.CacheReadPerMillion, "cache_write": long.Prices.CacheWritePerMillion, "reasoning": long.Prices.ReasoningPerMillion, "per_request": long.Prices.PerRequest,
+			} {
+				if err := price.valid(); err != nil {
+					return Catalog{}, fmt.Errorf("pricing entry %d long-prompt %s: %w", index, name, err)
+				}
 			}
 		}
 		seenUnknown := make(map[PriceComponent]struct{}, len(entry.UnknownComponents))
@@ -75,6 +85,11 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 			// catalog's cost and digest semantics contradictory, so fail closed at
 			// the compilation boundary.
 			price := decimalUSDForComponent(entry.Prices, component)
+			if entry.LongPrompt != nil {
+				if long := decimalUSDForComponent(entry.LongPrompt.Prices, component); long.numerator.Sign() != 0 {
+					return Catalog{}, fmt.Errorf("pricing entry %d marks component %q unknown but supplies a non-zero long-prompt price", index, component)
+				}
+			}
 			if price.numerator.Sign() != 0 {
 				return Catalog{}, fmt.Errorf("pricing entry %d marks component %q unknown but supplies a non-zero price", index, component)
 			}
@@ -246,6 +261,7 @@ func (catalog Catalog) Resolve(query Query) (Quote, error) {
 	for _, entry := range catalog.Entries {
 		if entry.Provider == query.Provider && entry.Family == query.Family && entry.EndpointID == query.EndpointID && entry.Region == query.Region && entry.Model == query.Model && entry.ProviderTier == query.ProviderTier && entry.Active(when) {
 			entry.UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
+			entry.LongPrompt = cloneLongPrompt(entry.LongPrompt)
 			return Quote{Entry: entry, CatalogVersion: catalog.Version, CatalogDigest: catalog.DigestHex()}, nil
 		}
 	}
@@ -257,6 +273,7 @@ func cloneCatalog(catalog Catalog) Catalog {
 	for index, entry := range catalog.Entries {
 		entries[index] = entry
 		entries[index].UnknownComponents = append([]PriceComponent(nil), entry.UnknownComponents...)
+		entries[index].LongPrompt = cloneLongPrompt(entry.LongPrompt)
 	}
 	return Catalog{Version: catalog.Version, Entries: entries, Digest: catalog.Digest}
 }

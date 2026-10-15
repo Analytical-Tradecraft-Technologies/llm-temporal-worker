@@ -176,8 +176,8 @@ providers:
 	if custom, ok := rules.Direct("anthropic", "anthropic/claude-custom"); !ok || custom.Model != "claude-custom-20261001" {
 		t.Fatalf("custom model = %+v, %v", custom, ok)
 	}
-	if gpt, ok := rules.Direct("openai", "openai/gpt-5.4"); !ok || gpt.Model != "gpt-5.4" || gpt.ContextTokens != 272000 {
-		t.Fatalf("gpt-5.4 = %+v, %v; want the context capped below the long-prompt price", gpt, ok)
+	if gpt, ok := rules.Direct("openai", "openai/gpt-5.4"); !ok || gpt.Model != "gpt-5.4" || gpt.ContextTokens != 1050000 || gpt.Prices["default"].LongPrompt == nil || gpt.Prices["default"].LongPrompt.MinPromptTokens != 272000 {
+		t.Fatalf("gpt-5.4 = %+v, %v; want the real window and a long-prompt price from 272,000 tokens", gpt, ok)
 	}
 	if _, ok := rules.Direct("anthropic", "openai/gpt-5.4"); ok {
 		t.Fatal("a provider served a model outside its prefix")
@@ -249,8 +249,12 @@ func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	gpt, ok := rules.Direct("openai", "openai/gpt-5.4")
-	if !ok || gpt.ContextTokens != 272000 || gpt.Prices["flex"].Input != "1.25" || gpt.Prices["default"].Input != "2.5" || gpt.Prices["priority"].Input != "5" {
+	if !ok || gpt.ContextTokens != 1050000 || gpt.Prices["flex"].Input != "1.25" || gpt.Prices["default"].Input != "2.5" || gpt.Prices["priority"].Input != "5" {
 		t.Fatalf("generated gpt-5.4 = %+v", gpt)
+	}
+	// The long-prompt price is carried as a price tier, not as a window.
+	if long := gpt.Prices["default"].LongPrompt; long == nil || *long != (LongPromptTierPrices{MinPromptTokens: 272000, Input: "5", Output: "22.5", CacheRead: "0.5", CacheWrite: "0", PerRequest: "0"}) {
+		t.Fatalf("generated gpt-5.4 default long_prompt = %+v", long)
 	}
 	sonnet, ok := rules.Direct("anthropic", "anthropic/claude-sonnet-4.5")
 	if !ok || sonnet.ContextTokens != 200000 || sonnet.Prices["standard_only"].CacheWrite != "3.75" || sonnet.Prices["auto"].Output != "15" {
@@ -258,6 +262,30 @@ func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
 	}
 	if _, ok := rules.Providers["anthropic"].Models["inference-net/schematron-v2-turbo"]; ok {
 		t.Fatal("a third-party model was generated as a direct model")
+	}
+}
+
+func TestGeneratedLongPromptKeepsBaseComponentsAnOverrideOmits(t *testing.T) {
+	model := Model{ID: "openai/gpt-test", ContextLength: 1_000_000, Endpoints: []Endpoint{{Tag: "openai", Pricing: Pricing{
+		Prompt: "0.000001", Completion: "0.000004",
+		Overrides: []PricingOverride{{MinPromptTokens: 200_000, Prompt: "0.000002"}},
+	}}}}
+	rendered, ok, err := renderGeneratedModel(generatedProviders[0], model)
+	if err != nil || !ok {
+		t.Fatalf("render = %v, %v", ok, err)
+	}
+	// The base cache-read price defaults to the base input price, and the
+	// override leaves it, and the output price, unchanged.
+	want := `            long_prompt:
+              min_prompt_tokens: 200000
+              input_per_million: "2"
+              output_per_million: "4"
+              cache_read_per_million: "1"
+              cache_write_per_million: "0"
+              per_request: "0"
+`
+	if !strings.Contains(rendered, want) || !strings.Contains(rendered, "context_tokens: 1000000\n") {
+		t.Fatalf("rendered = %s, want the real window and long prompt\n%s", rendered, want)
 	}
 }
 
@@ -448,8 +476,14 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	}
 
 	gpt := compiled.Models["openai/gpt-5.4"]
-	if len(gpt.Routes) != 2 || gpt.Routes[0].Model != "gpt-5.4" || len(gpt.Routes[0].Classes) != 3 || gpt.Routes[0].ContextTokens != 272000 {
+	if len(gpt.Routes) != 2 || gpt.Routes[0].Model != "gpt-5.4" || len(gpt.Routes[0].Classes) != 3 || gpt.Routes[0].ContextTokens != 1050000 {
 		t.Fatalf("gpt direct route = %+v", gpt.Routes[0])
+	}
+	// The direct entry carries OpenAI's long-prompt price from 272,000 tokens.
+	if long := priceFor(t, compiled.Prices, "openai-direct", "gpt-5.4", "default").LongPrompt; long == nil || long.MinPromptTokens != 272000 {
+		t.Fatalf("gpt direct default long-prompt price = %+v", long)
+	} else {
+		assertPrices(t, pricing.Entry{Prices: long.Prices}, "5", "22.5", "0.5", "0")
 	}
 	// A model the rules price but OpenRouter did not list routes directly.
 	if routes := compiled.Models["openai/gpt-5.5"].Routes; len(routes) != 1 || routes[0].EndpointID != "openai-direct" {

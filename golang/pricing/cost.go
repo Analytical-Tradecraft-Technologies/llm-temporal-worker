@@ -1,11 +1,24 @@
 package pricing
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 	if err := entry.ValidateUsagePricing(); err != nil {
 		return Cost{}, err
 	}
+	// A long-prompt tier is selected by the prompt the provider bills:
+	// uncached input plus cache reads and writes. Negative counts are
+	// rejected below.
+	prompt := int64(0)
+	for _, units := range []int64{usage.InputTokens, usage.CacheReadTokens, usage.CacheWriteTokens} {
+		if units > 0 {
+			prompt = min(prompt, math.MaxInt64-units) + units
+		}
+	}
+	prices := entry.PricesFor(prompt)
 	components := []struct {
 		component     PriceComponent
 		price         DecimalUSD
@@ -13,15 +26,15 @@ func CostFromUsage(entry Entry, usage Usage) (Cost, error) {
 		unitsPerPrice int64
 		name          string
 	}{
-		{PriceComponentInput, entry.Prices.InputPerMillion, usage.InputTokens, 1_000_000, "input"},
-		{PriceComponentOutput, entry.Prices.OutputPerMillion, usage.OutputTokens, 1_000_000, "output"},
-		{PriceComponentCacheRead, entry.Prices.CacheReadPerMillion, usage.CacheReadTokens, 1_000_000, "cache_read"},
-		{PriceComponentCacheWrite, entry.Prices.CacheWritePerMillion, usage.CacheWriteTokens, 1_000_000, "cache_write"},
-		{PriceComponentReasoning, entry.Prices.ReasoningPerMillion, usage.ReasoningTokens, 1_000_000, "reasoning"},
+		{PriceComponentInput, prices.InputPerMillion, usage.InputTokens, 1_000_000, "input"},
+		{PriceComponentOutput, prices.OutputPerMillion, usage.OutputTokens, 1_000_000, "output"},
+		{PriceComponentCacheRead, prices.CacheReadPerMillion, usage.CacheReadTokens, 1_000_000, "cache_read"},
+		{PriceComponentCacheWrite, prices.CacheWritePerMillion, usage.CacheWriteTokens, 1_000_000, "cache_write"},
+		{PriceComponentReasoning, prices.ReasoningPerMillion, usage.ReasoningTokens, 1_000_000, "reasoning"},
 		// PerRequest is an absolute USD charge for one invocation, not a
 		// per-million-unit price. Keep its denominator at one so a catalog
 		// value such as 0.10 is charged as ten cents.
-		{PriceComponentPerRequest, entry.Prices.PerRequest, 1, 1, "per_request"},
+		{PriceComponentPerRequest, prices.PerRequest, 1, 1, "per_request"},
 	}
 	totalUSD := MustUSD("0")
 	legacyTotal := MicroUSD(0)

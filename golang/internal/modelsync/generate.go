@@ -2,6 +2,7 @@ package modelsync
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"math/big"
 	"path"
@@ -24,6 +25,11 @@ type generatedProvider struct {
 	// keep lists OpenRouter IDs a skip pattern matches that are nonetheless
 	// model IDs of the provider's own API.
 	keep []string
+	// windowAtLongPrompt caps the context window at the first long-prompt
+	// price threshold instead of rendering a long-prompt price, for a
+	// provider whose window beyond that threshold needs a request option the
+	// adapters never send, so the provider itself rejects longer prompts.
+	windowAtLongPrompt bool
 }
 
 type generatedTier struct {
@@ -52,6 +58,8 @@ var generatedProviders = []generatedProvider{
 			{tier: "standard_only", tags: []string{"anthropic"}},
 			{tier: "auto", tags: []string{"anthropic"}},
 		},
+		// Anthropic's long-context window needs a beta header.
+		windowAtLongPrompt: true,
 	},
 }
 
@@ -191,8 +199,12 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 	for _, value := range priced {
 		contextTokens = minPositive(contextTokens, value.endpoint.ContextLength)
 		outputTokens = minPositive(outputTokens, value.endpoint.MaxCompletionTokens)
-		if overrides := value.endpoint.Pricing.Overrides; len(overrides) > 0 {
+		// Rules carry at most one long-prompt tier; a further threshold caps
+		// the window so no request reaches a price the rules do not hold.
+		if overrides := value.endpoint.Pricing.Overrides; provider.windowAtLongPrompt && len(overrides) > 0 {
 			contextTokens = minPositive(contextTokens, overrides[0].MinPromptTokens)
+		} else if len(overrides) > 1 {
+			contextTokens = minPositive(contextTokens, overrides[1].MinPromptTokens)
 		}
 	}
 	var out strings.Builder
@@ -232,16 +244,38 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 			out.WriteString("          # prices. Confirm them against the provider's published list price.\n")
 		}
 		fmt.Fprintf(&out, "          %s:\n", value.tier)
-		for _, field := range fields {
-			converted, err := perMillion(field.perToken)
-			if err != nil {
-				return "", false, fmt.Errorf("%s %s: %w", value.tier, field.name, err)
-			}
-			fmt.Fprintf(&out, "            %s: %q\n", field.name, converted.CanonicalString())
+		if err := writePriceFields(&out, "            ", fields, request); err != nil {
+			return "", false, fmt.Errorf("%s %w", value.tier, err)
 		}
-		fmt.Fprintf(&out, "            per_request: %q\n", request)
+		if provider.windowAtLongPrompt || len(prices.Overrides) == 0 {
+			continue
+		}
+		// An override component it omits keeps the base price.
+		override := prices.Overrides[0]
+		longFields := []struct{ name, perToken string }{
+			{"input_per_million", cmp.Or(override.Prompt, prices.Prompt)}, {"output_per_million", cmp.Or(override.Completion, prices.Completion)},
+			{"cache_read_per_million", cmp.Or(override.InputCacheRead, prices.InputCacheRead, prices.Prompt)},
+			{"cache_write_per_million", cmp.Or(override.InputCacheWrite, cacheWrite)},
+		}
+		fmt.Fprintf(&out, "            long_prompt:\n              min_prompt_tokens: %d\n", override.MinPromptTokens)
+		if err := writePriceFields(&out, "              ", longFields, request); err != nil {
+			return "", false, fmt.Errorf("%s long_prompt %w", value.tier, err)
+		}
 	}
 	return out.String(), true, nil
+}
+
+// writePriceFields renders per-token prices as per-million rule fields.
+func writePriceFields(out *strings.Builder, indent string, fields []struct{ name, perToken string }, request string) error {
+	for _, field := range fields {
+		converted, err := perMillion(field.perToken)
+		if err != nil {
+			return fmt.Errorf("%s: %w", field.name, err)
+		}
+		fmt.Fprintf(out, "%s%s: %q\n", indent, field.name, converted.CanonicalString())
+	}
+	fmt.Fprintf(out, "%sper_request: %q\n", indent, request)
+	return nil
 }
 
 // undiscountedPricing returns prices with OpenRouter's listed discount taken
@@ -260,7 +294,13 @@ func undiscountedPricing(prices Pricing) (Pricing, error) {
 	if discount.Sign() < 0 || remaining.Sign() <= 0 {
 		return Pricing{}, fmt.Errorf("discount %q is outside [0, 1)", prices.Discount)
 	}
-	for _, target := range []*string{&prices.Prompt, &prices.Completion, &prices.InputCacheRead, &prices.InputCacheWrite, &prices.InputCacheWrite1h, &prices.Request} {
+	targets := []*string{&prices.Prompt, &prices.Completion, &prices.InputCacheRead, &prices.InputCacheWrite, &prices.InputCacheWrite1h, &prices.Request}
+	prices.Overrides = append([]PricingOverride(nil), prices.Overrides...)
+	for index := range prices.Overrides {
+		override := &prices.Overrides[index]
+		targets = append(targets, &override.Prompt, &override.Completion, &override.InputCacheRead, &override.InputCacheWrite, &override.InputCacheWrite1h)
+	}
+	for _, target := range targets {
 		if *target == "" {
 			continue
 		}

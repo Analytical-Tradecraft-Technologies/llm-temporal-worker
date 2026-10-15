@@ -1332,8 +1332,13 @@ model_sync:
 price is not offered on the direct route. Every price component is required.
 A model without `model` derives its provider ID from the OpenRouter ID
 (`model_id: verbatim`, or `dots_to_dashes` for `claude-sonnet-4.5` →
-`claude-sonnet-4-5`). Built-in context limits are capped below any
-long-prompt price threshold so the listed price always applies.
+`claude-sonnet-4-5`). A tier may add a `long_prompt` price with
+`min_prompt_tokens` and every price component; it replaces the tier's prices
+for a call whose prompt (input, cache read and cache write) reaches the
+threshold, and a tier override that omits it drops it. Built-in OpenAI rules
+carry OpenAI's long-prompt prices with the real context window; built-in
+Anthropic context limits stay capped at the long-prompt threshold, because the
+longer window needs a beta header the adapters never send.
 
 ## Validation
 

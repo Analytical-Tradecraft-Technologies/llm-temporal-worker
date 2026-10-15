@@ -48,6 +48,11 @@ type Entry struct {
 	Model        string
 	ProviderTier string
 	Prices       UnitPrices
+	// LongPrompt, when set, replaces Prices for a call whose prompt reaches
+	// its threshold, as a provider's long-context price tier does. It is
+	// omitted from the canonical encoding when unset, so single-price
+	// entries keep their digest.
+	LongPrompt *LongPromptPrices `json:",omitempty"`
 	// UnknownComponents records omitted source prices. It is deliberately
 	// separate from UnitPrices so a missing value cannot be confused with a
 	// known-free zero. Cost and estimate callers fail closed when they need one.
@@ -56,6 +61,32 @@ type Entry struct {
 	EffectiveUntil    time.Time
 	Provenance        string
 	Version           string
+}
+
+// LongPromptPrices is a price tier that applies from MinPromptTokens prompt
+// tokens (input, cache read and cache write together).
+type LongPromptPrices struct {
+	MinPromptTokens int64
+	Prices          UnitPrices
+}
+
+// cloneLongPrompt detaches a long-prompt tier, so a catalog never shares it
+// with its source entries, its snapshots or its quotes.
+func cloneLongPrompt(long *LongPromptPrices) *LongPromptPrices {
+	if long == nil {
+		return nil
+	}
+	copied := *long
+	return &copied
+}
+
+// PricesFor returns the prices billed for a call of promptTokens prompt
+// tokens.
+func (entry Entry) PricesFor(promptTokens int64) UnitPrices {
+	if entry.LongPrompt != nil && promptTokens >= entry.LongPrompt.MinPromptTokens {
+		return entry.LongPrompt.Prices
+	}
+	return entry.Prices
 }
 
 func (entry Entry) ComponentUnknown(component PriceComponent) bool {
@@ -101,9 +132,12 @@ type Cost struct {
 // ValidateUsagePricing rejects additive prices for overlapping usage counters.
 // Chat and Responses report reasoning inside their inclusive output total.
 func (entry Entry) ValidateUsagePricing() error {
+	if entry.LongPrompt != nil && entry.LongPrompt.MinPromptTokens <= 0 {
+		return fmt.Errorf("long-prompt price threshold must be positive")
+	}
 	switch entry.Family {
 	case "openai_chat", "openai_responses":
-		if entry.Prices.ReasoningPerMillion.numerator.Sign() != 0 {
+		if entry.Prices.ReasoningPerMillion.numerator.Sign() != 0 || (entry.LongPrompt != nil && entry.LongPrompt.Prices.ReasoningPerMillion.numerator.Sign() != 0) {
 			return fmt.Errorf("%s reasoning price must be zero: reasoning tokens are included in output usage", entry.Family)
 		}
 	}
