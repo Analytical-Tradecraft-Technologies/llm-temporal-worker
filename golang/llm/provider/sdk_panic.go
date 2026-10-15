@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -39,6 +41,27 @@ func (probe *DispatchProbe) Middleware(request *http.Request, next func(*http.Re
 		probe.status.Store(int64(response.StatusCode))
 	}
 	return response, err
+}
+
+// Sent reports whether the call reached the probe, and so the transport.
+func (probe *DispatchProbe) Sent() bool { return probe.sent.Load() }
+
+// ClassifyUnsentError classifies an SDK error returned before the request
+// reached the transport, for example while the SDK resolved AWS credentials
+// to sign it. Nothing was sent, so it is a pre-dispatch failure rather than
+// an ambiguous, possibly paid outcome. It returns nil for errors that keep
+// their own classification: caller cancellation or deadline, and egress or
+// transport evidence.
+func ClassifyUnsentError(err error) *Error {
+	switch {
+	case err == nil, errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, ErrProviderEgressDenied), errors.Is(err, ErrProviderPreDispatch):
+		return nil
+	case errors.Is(err, ErrProviderCredentials):
+		return NewPreDispatchCredentialError(err)
+	default:
+		return NewPreDispatchUnavailableError(err)
+	}
 }
 
 // PanicError classifies a panic recovered from the probed SDK call:

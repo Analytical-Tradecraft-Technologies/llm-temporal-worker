@@ -229,6 +229,12 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
 			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
 		}
+		// An error raised before the probe, such as an AWS credential
+		// failure while signing, means nothing reached the transport.
+		if mapped := provider.ClassifyUnsentError(err); mapped != nil && !probe.Sent() {
+			mapped.SafeDetails = map[string]string{"provider": adapter.Name()}
+			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
+		}
 		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {

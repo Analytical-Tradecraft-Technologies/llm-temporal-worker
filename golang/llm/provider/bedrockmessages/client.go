@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/awscredentials"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
 
@@ -50,12 +51,14 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if config.AWSConfig.Region == "" {
 		return nil, fmt.Errorf("bedrock messages: AWS region is required")
 	}
+	awsConfig := config.AWSConfig
+	awsConfig.Credentials = awscredentials.Wrap(awsConfig.Credentials)
 	opts := []option.RequestOption{
 		option.WithoutEnvironmentDefaults(),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithRequestTimeout(clientconfig.MessagesRequestTimeout(config.HTTPClient)),
 		option.WithMaxRetries(0),
-		bedrock.WithConfig(config.AWSConfig),
+		bedrock.WithConfig(awsConfig),
 	}
 	if baseURL != "" {
 		// Keep the SDK's Bedrock request rewriting/signing while allowing a
