@@ -191,7 +191,8 @@ func requestOwnedWireField(wire string) bool {
 	switch wire {
 	case "model", "messages", "service_tier", "max_tokens", "system", "tools",
 		"tool_choice", "output_config", "thinking", "temperature", "top_p",
-		"top_k", "stop_sequences", "container", "mcp_servers", "metadata", "stream":
+		"top_k", "stop_sequences", "container", "mcp_servers", "metadata", "stream",
+		"max_tool_calls":
 		return true
 	default:
 		return false

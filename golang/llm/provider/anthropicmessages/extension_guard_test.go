@@ -13,7 +13,7 @@ import (
 var requestOwnedFields = []string{
 	"model", "messages", "service_tier", "max_tokens", "system", "tools",
 	"tool_choice", "output_config", "thinking", "temperature", "top_p", "top_k",
-	"stop_sequences", "container", "mcp_servers", "metadata", "stream",
+	"stop_sequences", "container", "mcp_servers", "metadata", "stream", "max_tool_calls",
 }
 
 // An endpoint's extension allowlist identity-maps each configured key, so a
