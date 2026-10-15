@@ -42,8 +42,9 @@ type Event struct {
 // OpenRouter unless another worker already published within the interval.
 type Refresher struct {
 	Store Store
-	// Fetch returns a new Document; Fetcher.Fetch in production.
-	Fetch func(context.Context) (Document, error)
+	// Fetch returns a new Document given the last published one (empty when
+	// none is published or it cannot be read); Fetcher.Fetch in production.
+	Fetch func(context.Context, Document) (Document, error)
 	// Install compiles and publishes a Document into the worker's snapshot.
 	Install      func(Document) error
 	MinInterval  time.Duration
@@ -121,7 +122,7 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 		defer cancel()
 		_ = refresher.Store.ReleaseRefresh(releaseContext, token)
 	}()
-	_, fetchedAt, _, found, err := refresher.Store.Latest(ctx)
+	latest, fetchedAt, body, found, err := refresher.Store.Latest(ctx)
 	if err != nil {
 		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "store"})
 		return err
@@ -134,8 +135,17 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 		_, err := refresher.Sync(ctx)
 		return err
 	}
+	// The fetch carries forward entries of models whose endpoint lookup
+	// fails. A published Document that cannot be verified or decoded only
+	// loses that carry-forward; the fetch still proceeds.
+	var previous Document
+	if found && Digest(body) == latest {
+		if decoded, err := DecodeDocument(body); err == nil {
+			previous = decoded
+		}
+	}
 	fetchContext, cancel := context.WithTimeout(ctx, refresher.fetchTimeout())
-	document, err := refresher.Fetch(fetchContext)
+	document, err := refresher.Fetch(fetchContext, previous)
 	cancel()
 	if err != nil {
 		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "fetch"})

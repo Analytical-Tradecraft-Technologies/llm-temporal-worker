@@ -35,9 +35,13 @@ prices.
   and music generators) is never routable, on OpenRouter or directly; models
   that merely accept media input stay. OpenRouter alias (`~`), variant (`:`)
   and variable-priced router IDs are skipped too.
-- **A failed fetch never shrinks the catalog.** A fetch with more than 10% of
-  endpoint lookups failing is rejected and the previous document stays
-  published. The document has no TTL.
+- **A failed fetch never shrinks the catalog.** An endpoint lookup answered
+  with 429 or 5xx is retried, at most three attempts within the fetch timeout.
+  A fetch with more than 10% of endpoint lookups still failing is rejected and
+  the previous document stays published. In an accepted fetch, a model whose
+  lookup failed keeps its entry from the previous document. A model is removed
+  only when `/models` no longer lists it or its `/endpoints` lookup succeeds
+  with no usable endpoint. The document has no TTL.
 - **One namespace, checked-in direct prices.** Direct OpenAI, Anthropic and
   Exa endpoints serve the same OpenRouter IDs. Their models, provider model
   IDs, limits and per-tier prices are hard-coded in a checked-in rules file
