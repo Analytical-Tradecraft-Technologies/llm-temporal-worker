@@ -424,6 +424,11 @@ security-verify:
 	vulnerability_status=pass; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) test -json ./... >"$$workspace/test-output.json" 2>&1 || { status=1; test_status=fail; }; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/sourceverify -test-output "$$workspace/test-output.json" || { status=1; source_status=fail; }; \
+	if [ "$$test_status" = fail ]; then \
+		echo "security-verify: tests failed; raw output withheld, allowlisted diagnostics follow" >&2; \
+		if [ "$$source_status" = pass ]; then detail=--detail; else detail=; fi; \
+		python3 ../scripts/release/collect.py gate-diagnostics --input "$$workspace/test-output.json" $$detail >&2 || true; \
+	fi; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) mod edit -json >"$$workspace/go-mod.json" 2>&1 || { status=1; go_mod_status=fail; }; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) tool govulncheck -format json ./... >"$$workspace/govulncheck.json" 2>"$$workspace/govulncheck.stderr" || { status=1; vulnerability_status=fail; }; \
 	GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN) $(GO) run ./tools/supplychainverify -baseline tools/supplychainverify/baseline.json -go-mod "$$workspace/go-mod.json" -vulnerability-output "$$workspace/govulncheck.json" -report "$$workspace/security-verify.json" -test-status "$$test_status" -source-status "$$source_status" -go-mod-status "$$go_mod_status" -vulnerability-status "$$vulnerability_status" || status=1; \

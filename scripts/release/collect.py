@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any
+from typing import Any, BinaryIO, Iterator
 from urllib.parse import urlsplit
 
 
@@ -53,6 +53,35 @@ TEMPORAL_RUNTIME_EVENTS = {
 }
 MAX_LOG_INPUT_BYTES = 8 * 1024 * 1024
 MAX_LOG_LINES = 100000
+# Failed gate output stays withheld. Only these line shapes may reach the CI
+# log: their character classes cannot carry free text, so they identify the
+# failing test, fuzz target, crasher file, or race without echoing payloads.
+STRUCTURED_DIAGNOSTICS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"^\s{0,32}--- FAIL: [A-Za-z0-9_/#.:=+,-]{1,256} \([0-9.]+s\)$",
+        r"^FAIL\t[A-Za-z0-9._~/-]{1,256}\t[0-9.]+s$",
+        r"^FAIL\t[A-Za-z0-9._~/-]{1,256} \[(?:build|setup) failed\]$",
+        r"^(?:fuzz|replay) \./[A-Za-z0-9_./-]{0,256} Fuzz[A-Za-z0-9_]{0,128}(?: for [0-9a-z.]{1,32})?$",
+        r"^\s{0,32}Failing input written to testdata/fuzz/Fuzz[A-Za-z0-9_]{0,128}/[a-f0-9]{16,64}$",
+        r"^\s{0,32}go test -run=Fuzz[A-Za-z0-9_]{0,128}/[a-f0-9]{16,64}$",
+        r"^WARNING: DATA RACE$",
+        r"^\s{0,32}testing\.go:[0-9]+: race detected during execution of test$",
+        r"^panic: test timed out after [0-9a-z.]{1,32}$",
+    )
+)
+# Free-text failure messages are shown only when the caller has first passed
+# the complete output through tools/sourceverify.
+DETAIL_DIAGNOSTICS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"^panic: \S",
+        r"^fatal error: \S",
+        r"^\s{0,32}[A-Za-z0-9_.-]{1,128}\.go:[0-9]+: \S",
+    )
+)
+MAX_DIAGNOSTIC_LINES = 200
+MAX_DIAGNOSTIC_LINE_CHARS = 512
 
 
 def fail(message: str) -> None:
@@ -189,6 +218,47 @@ def command_gate_summary(args: argparse.Namespace) -> None:
             "redacted": True,
         },
     )
+
+
+def gate_output_lines(handle: BinaryIO) -> Iterator[str]:
+    """Yield text lines from plain or ``go test -json`` gate output."""
+
+    for raw in handle:
+        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        if line.startswith("{"):
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                event = None
+            if isinstance(event, dict):
+                output = event.get("Output")
+                if isinstance(output, str):
+                    yield from output.splitlines()
+                continue
+        yield line
+
+
+def command_gate_diagnostics(args: argparse.Namespace) -> None:
+    patterns = STRUCTURED_DIAGNOSTICS + (DETAIL_DIAGNOSTICS if args.detail else ())
+    printed = 0
+    omitted = 0
+    with Path(args.input).open("rb") as handle:
+        for line in gate_output_lines(handle):
+            if any(ord(character) < 0x20 and character != "\t" for character in line):
+                continue
+            if not any(pattern.search(line) for pattern in patterns):
+                continue
+            if printed == MAX_DIAGNOSTIC_LINES:
+                omitted += 1
+                continue
+            if len(line) > MAX_DIAGNOSTIC_LINE_CHARS:
+                line = line[:MAX_DIAGNOSTIC_LINE_CHARS] + " [truncated]"
+            print(line)
+            printed += 1
+    if omitted:
+        print(f"... {omitted} further diagnostic lines omitted")
+    if not args.detail:
+        print("free-text failure messages withheld: captured output was not accepted by tools/sourceverify")
 
 
 def metadata_values(path: Path) -> dict[str, str]:
@@ -613,6 +683,11 @@ def parser() -> argparse.ArgumentParser:
     gate.add_argument("--input", required=True)
     gate.add_argument("--output", required=True)
     gate.set_defaults(handler=command_gate_summary)
+
+    diagnostics = commands.add_parser("gate-diagnostics")
+    diagnostics.add_argument("--input", required=True)
+    diagnostics.add_argument("--detail", action="store_true")
+    diagnostics.set_defaults(handler=command_gate_diagnostics)
 
     fixture = commands.add_parser("fixture-manifest")
     fixture.add_argument("--root", required=True)

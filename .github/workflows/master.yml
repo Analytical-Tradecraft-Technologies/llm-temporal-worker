@@ -267,6 +267,32 @@ jobs:
         working-directory: golang
         run: FUZZ_TIME=250000x bash ../scripts/release/run-gate.sh fuzz_summary "$RUNNER_TEMP/fuzz-evidence/fuzz-${{ matrix.shard }}.json" bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"
 
+      # Go writes a failing input below the package's testdata/fuzz directory.
+      # Mutation is random, so keep each new crasher for local replay.
+      - name: Collect new fuzz crashers
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination="$RUNNER_TEMP/fuzz-crashers"
+          mkdir -p "$destination"
+          git ls-files -z --others --exclude-standard -- 'golang/**/testdata/fuzz/**' |
+            while IFS= read -r -d '' path; do
+              echo "new fuzz crasher: $path"
+              mkdir -p "$destination/$(dirname -- "$path")"
+              cp -- "$path" "$destination/$path"
+            done
+
+      - name: Retain new fuzz crashers
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashers-${{ matrix.shard }}
+          path: ${{ runner.temp }}/fuzz-crashers/
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
       - name: Retain successful fuzz evidence
         if: github.event_name == 'push'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
