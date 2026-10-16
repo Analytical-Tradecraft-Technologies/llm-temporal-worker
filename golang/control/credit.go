@@ -39,7 +39,11 @@ func ClassifyCredit(source Source, configEpoch, providerCode, safeCode string, o
 	// Provider codes are deliberately an allow-list, not a substring match.
 	// This prevents a generic HTTP 429 from being treated as exhausted credit.
 	switch providerCode {
-	case "insufficient_quota", "billing_hard_limit", "payment_required":
+	case "insufficient_quota", "billing_hard_limit", "payment_required",
+		// OpenAI's documented billing 429 codes and Anthropic's tier spend-cap
+		// error.details.error_code; retrying none of them restores access.
+		"credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
+		"organization_usage_limit_exceeded", "enforced_spend_limit_reached":
 		incident.Credit, incident.Billing = CreditExhausted, BillingIssue
 	case "quota_low", "billing_warning":
 		incident.Credit = CreditLow

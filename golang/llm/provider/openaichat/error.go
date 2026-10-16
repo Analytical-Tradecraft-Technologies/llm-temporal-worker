@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	openai "github.com/openai/openai-go/v3"
@@ -58,7 +59,7 @@ func mapAPIError(apiErr *openai.Error, profileName string) *provider.Error {
 	status := apiErr.StatusCode
 	code, retry, dispatch, safe := classifyStatus(status)
 	if status == http.StatusTooManyRequests && creditExhausted(apiErr) {
-		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, creditExhaustedMessage
+		code, retry, safe = provider.CodePermissionDenied, provider.RetryNextRoute, creditExhaustedMessage
 	}
 	mapped := provider.NewError(code, provider.PhaseDispatch, dispatch, retry, safe)
 	mapped.Cause = apiErr
@@ -89,7 +90,17 @@ const creditExhaustedMessage = "provider account has exhausted its credit or spe
 // be insufficient_quota while error.code names the cause. Like a 402, it is an
 // account-wide denial, so it is classified as one: it holds the route and lets
 // the request move to another route instead of retrying a dead account.
+//
+// The codes are OpenAI's, so only a response from an OpenAI API host counts.
+// Azure OpenAI and other OpenAI-compatible providers share this client but
+// document their 429s as throttling that clears on retry.
 func creditExhausted(apiErr *openai.Error) bool {
+	if apiErr.Request == nil || apiErr.Request.URL == nil {
+		return false
+	}
+	if host := apiErr.Request.URL.Hostname(); host != "openai.com" && !strings.HasSuffix(host, ".openai.com") {
+		return false
+	}
 	switch apiErr.Code {
 	case "credit_balance_exhausted", "insufficient_quota", "organization_spend_limit_exceeded",
 		"project_spend_limit_exceeded", "organization_usage_limit_exceeded":

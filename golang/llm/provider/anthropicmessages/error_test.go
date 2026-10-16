@@ -107,7 +107,7 @@ func TestSpendCapRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 		t.Fatal(err)
 	}
 	mapped := mapAPIError(spendCap, "anthropic-messages")
-	if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNever {
+	if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNextRoute {
 		t.Fatalf("spend-cap 429 = %#v, want a rejected permission denial", mapped)
 	}
 	if mapped.SafeDetails["status"] != "429" || mapped.SafeDetails["provider_code"] != "enforced_spend_limit_reached" {

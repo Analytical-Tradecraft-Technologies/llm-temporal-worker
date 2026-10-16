@@ -79,7 +79,7 @@ func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
 		code, retry, safe = provider.CodeInvalidArgument, provider.RetryNever, "provider rejected request parameters"
 	case status == http.StatusTooManyRequests && spendCapReached(apiErr):
-		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider account reached its monthly spend cap"
+		code, retry, safe = provider.CodePermissionDenied, provider.RetryNextRoute, "provider account reached its monthly spend cap"
 	case status == http.StatusTooManyRequests:
 		code, retry, safe = provider.CodeProviderRateLimited, provider.RetryAfter, "provider rate limited the request"
 	case status >= http.StatusInternalServerError:
