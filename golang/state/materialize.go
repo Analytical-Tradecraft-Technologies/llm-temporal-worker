@@ -108,16 +108,19 @@ func validateItemEncoding(items []llm.Item) error {
 // json.Marshal would also re-scan and compact the whole encoding, which for a
 // large transcript dominates validation; every type in the closed Item union
 // builds its encoding from json.Marshal output, so that scan cannot fail.
+// Other types, such as one embedding a built-in item with its own
+// MarshalJSON, keep the full json.Marshal check.
 func checkItemEncoding(item llm.Item) error {
-	marshaler, ok := item.(json.Marshaler)
-	if !ok {
+	switch value := item.(type) {
+	case llm.Message, llm.ToolCall, llm.ToolResult, llm.ProviderState, llm.Reference:
+		if _, err := value.(json.Marshaler).MarshalJSON(); err != nil {
+			return &json.MarshalerError{Type: reflect.TypeOf(value), Err: err}
+		}
+		return nil
+	default:
 		_, err := json.Marshal(item)
 		return err
 	}
-	if _, err := marshaler.MarshalJSON(); err != nil {
-		return &json.MarshalerError{Type: reflect.TypeOf(item), Err: err}
-	}
-	return nil
 }
 
 // itemValue normalizes the closed Item union without a JSON round trip.

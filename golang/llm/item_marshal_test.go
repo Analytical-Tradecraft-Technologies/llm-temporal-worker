@@ -102,10 +102,17 @@ func TestItemEncodingMatchesLegacyMapEncoding(t *testing.T) {
 	}
 }
 
+// malformedPart embeds a built-in part but returns invalid JSON, which only
+// json.Marshal's scan of the encoding detects.
+type malformedPart struct{ TextPart }
+
+func (malformedPart) MarshalJSON() ([]byte, error) { return []byte("{"), nil }
+
 func TestItemEncodingErrorsMatchLegacyMapEncoding(t *testing.T) {
 	invalid := []Part{TextPart{Text: "ok"}, ImagePart{MediaType: "image/png"}}
 	pointerInvalid := []Part{&ImagePart{MediaType: "image/png"}}
-	for index, content := range [][]Part{invalid, pointerInvalid, {JSONPart{Value: json.RawMessage("{")}}} {
+	malformed := []Part{malformedPart{}}
+	for index, content := range [][]Part{invalid, pointerInvalid, malformed, {JSONPart{Value: json.RawMessage("{")}}} {
 		message := Message{Actor: ActorHuman, Content: content}
 		_, gotErr := message.MarshalJSON()
 		_, wantErr := legacyMarshalMessage(message)

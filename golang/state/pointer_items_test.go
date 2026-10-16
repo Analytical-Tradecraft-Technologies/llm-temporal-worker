@@ -65,6 +65,12 @@ func TestCheckpointCopiesPointerToolItems(t *testing.T) {
 	}
 }
 
+// malformedItem embeds a built-in item but returns invalid JSON, which only
+// json.Marshal's scan of the encoding detects.
+type malformedItem struct{ llm.Message }
+
+func (malformedItem) MarshalJSON() ([]byte, error) { return []byte("{"), nil }
+
 // checkItemEncoding skips json.Marshal's re-scan of the encoding, so it must
 // still accept and reject exactly what json.Marshal does, with the same error.
 func TestCheckItemEncodingMatchesJSONMarshal(t *testing.T) {
@@ -80,6 +86,7 @@ func TestCheckItemEncodingMatchesJSONMarshal(t *testing.T) {
 		llm.ProviderState{},
 		llm.Reference{URI: "https://example.test/source"},
 		llm.Reference{},
+		malformedItem{},
 	} {
 		_, want := json.Marshal(item)
 		got := checkItemEncoding(item)
