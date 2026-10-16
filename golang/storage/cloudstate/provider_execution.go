@@ -209,10 +209,13 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 // Unclaimed reports a paid attempt that failed before Redis applied its claim
 // (#1312). Nothing was dispatched and no claim exists to settle, so it is
 // settled without a settlement and, like an unused quote renewal, does not use
-// up a provider attempt.
+// up a provider attempt. An unreserved attempt never has a claim, so only one
+// closed the same way before reaching the provider (budget_denied) counts
+// (#1454); its other pre-dispatch failures still use up an attempt.
 func (execution ProviderExecution) Unclaimed(plan BudgetPlan) bool {
-	return plan.RequiresReservation() && execution.Claim == nil && execution.Stage == ExecutionFailed &&
-		execution.Failure != nil && execution.Failure.Dispatch == provider.DispatchNotDispatched
+	return execution.Claim == nil && execution.Stage == ExecutionFailed && execution.Failure != nil &&
+		execution.Failure.Dispatch == provider.DispatchNotDispatched &&
+		(plan.RequiresReservation() || execution.Failure.Code == provider.CodeBudgetDenied)
 }
 
 func executionReservationMatches(plan BudgetPlan, result durable.ReserveResult) bool {

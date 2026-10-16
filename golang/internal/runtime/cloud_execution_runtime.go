@@ -300,6 +300,8 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	if err != nil {
 		return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 	}
+	// renewed is the unused attempt this step replaced, whose fill it releases.
+	var renewed *cloudstate.RequestAttempt
 	saved, loadErr := r.store.LoadProviderExecution(ctx, root.Scope, attempt.ID)
 	if loadErr == nil {
 		// Only explicit acquisition can replace an unresolved paid attempt.
@@ -360,9 +362,15 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 				}
 				return failure, nil
 			}
+			previous := attempt
 			attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
 			if err != nil {
 				return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+			}
+			if saved.Execution.Unclaimed(saved.Plan) {
+				// Its fill may still be held, never started, before its lease
+				// expires; release it like an unused renewal's (#1454).
+				renewed = &previous
 			}
 		} else {
 			return r.resumeAttempt(ctx, p, attempt, saved, step)
@@ -372,7 +380,6 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	}
 	// An unused quote/fill can expire while a workflow waits for capacity.
 	// Renew the child, never mutate the original quote or reservation identity.
-	var renewed *cloudstate.RequestAttempt
 	if !r.now().Before(attempt.CreatedAt.Add(cache.MaxFillLease - cloudstate.UnusedAttemptRenewMargin)) {
 		previous := attempt
 		attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())

@@ -409,3 +409,26 @@ func TestProviderExecutionKeepsUnknownCostReasonOutsideTheResponse(t *testing.T)
 		t.Fatalf("stored execution without a reason = %#v, %v", legacy, err)
 	}
 }
+
+// An unreserved attempt has no claim, so only one closed before reaching the
+// provider as an unclaimed non-dispatch renews without using up an attempt
+// (#1454). Its other pre-dispatch failures still count.
+func TestProviderExecutionUnclaimedUnreservedPlans(t *testing.T) {
+	for _, mode := range []BudgetMode{BudgetReserved, BudgetUnmatched, BudgetFree} {
+		plan := BudgetPlan{Mode: mode}
+		for _, tc := range []struct {
+			code     provider.Code
+			dispatch provider.DispatchCertainty
+			want     bool
+		}{
+			{provider.CodeBudgetDenied, provider.DispatchNotDispatched, true},
+			{provider.CodeStateUnavailable, provider.DispatchNotDispatched, mode == BudgetReserved},
+			{provider.CodeBudgetDenied, provider.DispatchAmbiguous, false},
+		} {
+			execution := ProviderExecution{Stage: ExecutionFailed, Failure: &ExecutionFailure{Code: tc.code, Dispatch: tc.dispatch}}
+			if got := execution.Unclaimed(plan); got != tc.want {
+				t.Fatalf("%s %s/%s unclaimed = %v", mode, tc.code, tc.dispatch, got)
+			}
+		}
+	}
+}
