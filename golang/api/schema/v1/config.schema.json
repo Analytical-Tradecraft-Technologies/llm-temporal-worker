@@ -126,7 +126,8 @@
       "properties": {
         "base_url": { "type": "string", "format": "uri" },
         "public_key": { "$ref": "#/$defs/secret" },
-        "secret_key": { "$ref": "#/$defs/secret" }
+        "secret_key": { "$ref": "#/$defs/secret" },
+        "max_in_flight": { "type": "integer", "minimum": 1, "description": "Export requests one worker sends to Langfuse at once. Must be less than temporal.worker.max_concurrent_activities; defaults to 2, or fewer on a worker with fewer than three Activity slots." }
       }
     },
     "secret": {

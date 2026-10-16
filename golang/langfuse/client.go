@@ -28,15 +28,16 @@ var ErrUnavailable = fmt.Errorf("%w: exporter unavailable", ErrExport)
 const maxBody = 16 << 20
 
 // Export shares the worker's Activity slots with model calls, so a slow or
-// black-holed Langfuse must hold only a few of them. At most maxInFlight
-// requests wait on the network per client; after breakerThreshold consecutive
+// black-holed Langfuse must hold only a few of them. At most the configured
+// in-flight limit (defaultMaxInFlight unless set) of requests wait on the
+// network per client; after breakerThreshold consecutive
 // transport or server failures, exports fail immediately for breakerCooldown,
 // then a single probe decides whether the breaker closes again.
 const (
-	httpTimeout      = 5 * time.Second
-	maxInFlight      = 2
-	breakerThreshold = 3
-	breakerCooldown  = 30 * time.Second
+	httpTimeout        = 5 * time.Second
+	defaultMaxInFlight = 2
+	breakerThreshold   = 3
+	breakerCooldown    = 30 * time.Second
 )
 
 type Client struct {
@@ -50,7 +51,9 @@ type Client struct {
 	openUntil time.Time
 }
 
-func NewClient(base, public, secret string, transport *http.Client) (*Client, error) {
+// NewClient builds an exporter. maxInFlight bounds concurrent requests to
+// Langfuse; a non-positive value uses the default of two.
+func NewClient(base, public, secret string, transport *http.Client, maxInFlight int) (*Client, error) {
 	u, err := url.Parse(base)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || public == "" || secret == "" {
 		return nil, ErrExport
@@ -60,6 +63,9 @@ func NewClient(base, public, secret string, transport *http.Client) (*Client, er
 		t := http.DefaultTransport.(*http.Transport).Clone()
 		t.Proxy = nil
 		transport = &http.Client{Timeout: httpTimeout, Transport: t}
+	}
+	if maxInFlight <= 0 {
+		maxInFlight = defaultMaxInFlight
 	}
 	copy := *transport
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

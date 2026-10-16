@@ -34,7 +34,7 @@ const maxAdmissionFieldBytes = 256
 // inequalities. It never resolves secret values or performs network I/O.
 func (config Config) Validate() error {
 	if config.Langfuse != nil {
-		if err := config.Langfuse.validate(); err != nil {
+		if err := config.Langfuse.validate(config.Temporal.Worker.MaxConcurrentActivities); err != nil {
 			return err
 		}
 	}

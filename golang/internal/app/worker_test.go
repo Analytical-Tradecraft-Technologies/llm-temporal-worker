@@ -900,7 +900,7 @@ func TestWorkerRegistersV1WorkflowsAndActivitiesAgainAfterDrain(t *testing.T) {
 	for _, descriptor := range descriptors {
 		expectedActivities = append(expectedActivities, descriptor.Name)
 	}
-	expectedWorkflows := []string{workflows.RequestWorkflowName, workflows.BudgetWorkflowName, workflows.GenerateWorkflowName, workflows.CompactWorkflowName, workflows.QueryWorkflowName}
+	expectedWorkflows := []string{workflows.RequestWorkflowName, workflows.BudgetWorkflowName, workflows.LangfuseExportWorkflowName, workflows.GenerateWorkflowName, workflows.CompactWorkflowName, workflows.QueryWorkflowName}
 	for _, registry := range registries {
 		if !reflect.DeepEqual(registry.workflows, expectedWorkflows) {
 			t.Fatalf("missing/duplicate workflows: %v", registry.workflows)
