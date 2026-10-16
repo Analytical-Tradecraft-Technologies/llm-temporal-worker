@@ -68,6 +68,11 @@ func mapAPIError(apiErr *openai.Error) *provider.Error {
 		dispatch, safe = provider.DispatchAmbiguous, "provider request timed out"
 	case status == http.StatusUnauthorized:
 		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
+	case status == http.StatusPaymentRequired:
+		// Exa reports used-up credits or an exhausted key budget as 402. That
+		// is an operator-side account denial, not a caller error, so it counts
+		// toward the route circuit and lets planning move to other routes.
+		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider account has insufficient credit"
 	case status == http.StatusForbidden:
 		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider permission was denied"
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
