@@ -151,6 +151,8 @@ func TestTemporalVersioningSchemaMatchesTemporalRules(t *testing.T) {
 		"reserved build":      {"worker", "__b", false},
 		"long deployment":     {long, "b1", false},
 		"long build":          {"worker", long, false},
+		"long utf8 build":     {"worker", strings.Repeat("é", 128), false},
+		"short utf8 build":    {"worker", strings.Repeat("é", 63), true},
 	} {
 		value := loaded.Clone()
 		value.Temporal.Worker.Versioning = config.WorkerVersioningConfig{Enabled: true, DeploymentName: test.deployment, BuildID: test.build}
