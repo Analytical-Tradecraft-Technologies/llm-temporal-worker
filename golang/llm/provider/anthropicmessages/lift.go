@@ -134,7 +134,7 @@ func priceModifiedUsage(raw map[string]json.RawMessage) bool {
 			continue
 		}
 		var reported string
-		if json.Unmarshal(value, &reported) != nil || (reported != "" && reported != base) {
+		if json.Unmarshal(value, &reported) != nil || reported != base {
 			return true
 		}
 	}

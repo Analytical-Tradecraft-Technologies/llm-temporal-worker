@@ -29,6 +29,8 @@ func TestLiftKeepsPriceModifiedUsageUnknown(t *testing.T) {
 		{name: "us fast mode", fields: `,"inference_geo":"us","speed":"fast"`, unknown: true},
 		{name: "unrecognized geo", fields: `,"inference_geo":"eu"`, unknown: true},
 		{name: "non-string speed", fields: `,"speed":2`, unknown: true},
+		{name: "empty geo", fields: `,"inference_geo":""`, unknown: true},
+		{name: "empty speed", fields: `,"speed":""`, unknown: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var message anthropic.Message
