@@ -3,18 +3,19 @@ package llm
 import (
 	"encoding/json"
 	"net/url"
-	"strings"
 )
 
-// SupportsWebSearch limits the flag to reviewed native provider transports.
-func SupportsWebSearch(provider, family, model string) bool {
+// SupportsWebSearch limits the flag to reviewed provider transports. OpenRouter
+// supplies a server tool, using native search or a search-engine fallback, so
+// its support does not depend on the model's publisher.
+func SupportsWebSearch(provider, family, _ string) bool {
 	switch family {
 	case "openai_responses":
 		return provider == "openai"
 	case "anthropic_messages":
 		return provider == "anthropic"
 	case "openai_chat":
-		return provider == "openrouter" && (strings.HasPrefix(model, "openai/") || strings.HasPrefix(model, "anthropic/"))
+		return provider == "openrouter"
 	}
 	return false
 }

@@ -79,10 +79,13 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 			return nil, err
 		}
 		if request.WebSearch {
-			if profile.ExpectedBaseURL != openRouterBaseURL || !(strings.HasPrefix(request.Model, "openai/") || strings.HasPrefix(request.Model, "anthropic/")) {
-				return nil, fmt.Errorf("web_search requires an OpenRouter OpenAI or Anthropic model")
+			if profile.ExpectedBaseURL != openRouterBaseURL {
+				return nil, fmt.Errorf("web_search requires an OpenRouter profile")
 			}
-			tools = append(tools, map[string]any{"type": "openrouter:web_search", "parameters": map[string]any{"engine": "native", "max_uses": llm.MaxWebSearchCalls}})
+			// The server tool prefers native search and falls back to a search
+			// engine for other models. Keep the overall tool-call bound too:
+			// some native providers ignore the per-search max_uses field.
+			tools = append(tools, map[string]any{"type": "openrouter:web_search", "parameters": map[string]any{"engine": "auto", "max_uses": llm.MaxWebSearchCalls}})
 			requestMap["max_tool_calls"] = llm.MaxWebSearchCalls
 		}
 		requestMap["tools"] = tools
