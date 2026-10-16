@@ -864,11 +864,11 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 	// A provider-reported amount is not promoted to a known cost without a
 	// catalog quote (docs/architecture/pricing-and-budgets.md).
 	if plan.Unpriced {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownCatalogIncomplete
 		return
 	}
 	if response.Cost.ActualCostUSD != nil && response.Cost.ActualCostUSD.Validate() == nil {
-		response.Cost.Status, response.Cost.Method = llm.CostStatusKnown, string(pricing.CostProviderReported)
+		response.Cost.Status, response.Cost.Method, response.Cost.UnknownReason = llm.CostStatusKnown, string(pricing.CostProviderReported), ""
 		return
 	}
 	usage := response.Usage
@@ -876,7 +876,7 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 	// provider omitted usage, so pricing it would settle a near-zero exact
 	// cost and release the reservation; keep the cost unknown instead.
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownProviderDidNotReport
 		return
 	}
 	priceUsage := pricing.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
@@ -894,9 +894,16 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 			}
 		}
 	}
+	// A provider method without a valid amount means the provider's cost
+	// report was missing or unusable; usage the entry cannot price means the
+	// catalog is incomplete.
+	if response.Cost.Method != "" {
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownProviderDidNotReport
+		return
+	}
 	cost, err := pricing.CostFromUsage(plan.Quote.Entry, priceUsage)
-	if err != nil || response.Cost.Method != "" {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+	if err != nil {
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownCatalogIncomplete
 		return
 	}
 	applyHostedToolCharge(response, cost)
@@ -1020,9 +1027,11 @@ func preDispatchContextEnded(failure *provider.Error) bool {
 }
 
 func applyHostedToolCharge(response *llm.Response, cost pricing.Cost) {
+	// HostedToolCharge fails only when the provider did not report the tool
+	// usage or charge separately.
 	fee, err := llm.HostedToolCharge(response.Usage, response.Route.ResolvedModel)
 	if err != nil {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownProviderDidNotReport
 		return
 	}
 	total, err := cost.USD.Add(fee)
@@ -1030,5 +1039,5 @@ func applyHostedToolCharge(response *llm.Response, cost pricing.Cost) {
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
-	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &total, string(cost.Method)
+	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method, response.Cost.UnknownReason = llm.CostStatusKnown, &total, string(cost.Method), ""
 }

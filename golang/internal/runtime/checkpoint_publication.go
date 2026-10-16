@@ -358,8 +358,19 @@ func publicationCost(cost llm.Cost) llm.CostV1 {
 		amount := cost.ActualCostUSD.String()
 		return llm.CostV1{Status: "exact", ActualCostUSD: &amount, Method: cost.Method, CatalogVersion: cost.CatalogVersion}
 	}
-	return llm.CostV1{Status: "unknown", UnknownReason: "provider_did_not_report_cost"}
+	// A response stored before Cost carried a reason, or with a reason outside
+	// the v1 set, keeps the label it was always published with.
+	reason := cost.UnknownReason
+	if reason != llm.CostUnknownCatalogIncomplete {
+		reason = llm.CostUnknownProviderDidNotReport
+	}
+	return llm.CostV1{Status: "unknown", UnknownReason: reason}
 }
+
+// zeroPublicationCost is the exact zero of a cache replay or no-work
+// compaction. No provider was called; the v1 method set is closed, so it keeps
+// provider_reported, and cache.disposition and checkpoint provenance identify
+// these responses (docs/reference/cloud-response-cache.md).
 func zeroPublicationCost() llm.CostV1 {
 	zero := "0"
 	return llm.CostV1{Status: "exact", ActualCostUSD: &zero, Method: "provider_reported"}

@@ -104,8 +104,10 @@ durable fill coordinator plus separate paid-attempt authorization.
 ## Original cost on cache hits
 
 Generate and Compact cache hits keep `cost.actual_cost_usd` at zero: no provider
-call or budget charge occurs for the replay. A `cache_origin_cost` information
-diagnostic at path `cache` carries the immutable original receipt in its string
+call or budget charge occurs for the replay. The zero keeps method
+`provider_reported`, because the v1 method set is closed and has no value for
+"no provider call"; the `hit` disposition identifies it. A `cache_origin_cost`
+information diagnostic at path `cache` carries the immutable original receipt in its string
 `details`: `origin_operation_id`, `cost_status`, and, for an exact cost,
 `actual_cost_usd`, `method` and optional `catalog_version`. An unknown original
 cost carries `unknown_reason` and no invented amount. This existing v1 extension

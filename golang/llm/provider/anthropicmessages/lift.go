@@ -116,7 +116,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		result.Cost.Status = llm.CostStatusUnknown
 	}
 	if priceModifiedUsage(usage.ProviderRaw) {
-		result.Cost.Status = llm.CostStatusUnknown
+		result.Cost.Status, result.Cost.UnknownReason = llm.CostStatusUnknown, llm.CostUnknownCatalogIncomplete
 	}
 	return result, nil
 }
