@@ -14,6 +14,7 @@ var requestOwnedFields = []string{
 	"model", "messages", "service_tier", "max_tokens", "system", "tools",
 	"tool_choice", "output_config", "thinking", "temperature", "top_p", "top_k",
 	"stop_sequences", "container", "mcp_servers", "metadata", "stream", "max_tool_calls",
+	"inference_geo", "speed",
 }
 
 // An endpoint's extension allowlist identity-maps each configured key, so a
@@ -82,7 +83,7 @@ func TestCompileAcceptsAllowedNonOwnedExtensionField(t *testing.T) {
 					OperationKey: "allowed-extension",
 					Model:        "claude-contract",
 					Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
-					Extensions:   map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"geo":"us"}`)},
+					Extensions:   map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"tag":"us"}`)},
 				},
 				Query:  provider.CapabilityQuery{EndpointID: "anthropic-test", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
 				Strict: strict,
@@ -90,7 +91,7 @@ func TestCompileAcceptsAllowedNonOwnedExtensionField(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if wire := marshalWire(t, call.SDKParams); wire["inference_geo"] != "us" {
+			if wire := marshalWire(t, call.SDKParams); wire["contract_tag"] != "us" {
 				t.Fatalf("wire = %#v", wire)
 			}
 		})

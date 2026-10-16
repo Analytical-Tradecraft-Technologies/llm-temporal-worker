@@ -16,18 +16,18 @@ import (
 func TestNewProfileRejectsCollidingExtensionWireFields(t *testing.T) {
 	cases := map[string]map[string]ExtensionSpec{
 		"across namespaces": {
-			"alpha": {Fields: map[string]string{"value": "inference_geo"}},
-			"beta":  {Fields: map[string]string{"value": "inference_geo"}},
+			"alpha": {Fields: map[string]string{"value": "contract_tag"}},
+			"beta":  {Fields: map[string]string{"value": "contract_tag"}},
 		},
 		"within namespace": {
-			"alpha": {Fields: map[string]string{"first": "inference_geo", "second": "inference_geo"}},
+			"alpha": {Fields: map[string]string{"first": "contract_tag", "second": "contract_tag"}},
 		},
 		"empty alias": {
-			"alpha": {Fields: map[string]string{"inference_geo": "", "value": "inference_geo"}},
+			"alpha": {Fields: map[string]string{"contract_tag": "", "value": "contract_tag"}},
 		},
 		"empty alias across namespaces": {
-			"alpha": {Fields: map[string]string{"inference_geo": ""}},
-			"beta":  {Fields: map[string]string{"value": "inference_geo"}},
+			"alpha": {Fields: map[string]string{"contract_tag": ""}},
+			"beta":  {Fields: map[string]string{"value": "contract_tag"}},
 		},
 	}
 	for name, extensions := range cases {
@@ -37,7 +37,7 @@ func TestNewProfileRejectsCollidingExtensionWireFields(t *testing.T) {
 				profile := testProfile()
 				profile.AllowedExtensions = extensions
 				_, err := NewProfile(profile)
-				if err == nil || !strings.Contains(err.Error(), `both map to wire field "inference_geo"`) {
+				if err == nil || !strings.Contains(err.Error(), `both map to wire field "contract_tag"`) {
 					t.Fatalf("NewProfile() = %v, want wire collision", err)
 				}
 				if first == "" {
@@ -55,8 +55,8 @@ func TestNewProfileRejectsCollidingExtensionWireFields(t *testing.T) {
 func TestCompileRejectsCollidingExtensionWireFields(t *testing.T) {
 	profile := testProfile()
 	profile.AllowedExtensions = map[string]ExtensionSpec{
-		"alpha": {Fields: map[string]string{"value": "inference_geo"}},
-		"beta":  {Fields: map[string]string{"value": "inference_geo"}},
+		"alpha": {Fields: map[string]string{"value": "contract_tag"}},
+		"beta":  {Fields: map[string]string{"value": "contract_tag"}},
 	}
 	adapter := &Adapter{endpointID: "anthropic-test", profile: profile}
 	request := collisionRequest(map[string]json.RawMessage{
@@ -65,7 +65,7 @@ func TestCompileRejectsCollidingExtensionWireFields(t *testing.T) {
 	})
 	for range 200 {
 		call, err := adapter.Compile(context.Background(), collisionInput(request))
-		if err == nil || !strings.Contains(err.Error(), `wire field "inference_geo" already set`) {
+		if err == nil || !strings.Contains(err.Error(), `wire field "contract_tag" already set`) {
 			t.Fatalf("Compile() = %v, want wire collision", err)
 		}
 		if call.SDKParams != nil {
@@ -78,8 +78,8 @@ func TestCompileRejectsCollidingExtensionWireFields(t *testing.T) {
 func TestCompileNonOverlappingExtensionsSerializeConsistently(t *testing.T) {
 	profile := testProfile()
 	profile.AllowedExtensions = map[string]ExtensionSpec{
-		"alpha": {Fields: map[string]string{"value": "inference_geo"}},
-		"beta":  {Fields: map[string]string{"value": "speed"}},
+		"alpha": {Fields: map[string]string{"value": "contract_tag"}},
+		"beta":  {Fields: map[string]string{"value": "contract_mode"}},
 	}
 	adapter := &Adapter{endpointID: "anthropic-test", profile: mustProfile(t, profile)}
 	request := collisionRequest(map[string]json.RawMessage{
@@ -99,7 +99,7 @@ func TestCompileNonOverlappingExtensionsSerializeConsistently(t *testing.T) {
 		if first == nil {
 			first = encoded
 			wire := marshalWire(t, call.SDKParams)
-			if wire["inference_geo"] != "us" || wire["speed"] != "fast" {
+			if wire["contract_tag"] != "us" || wire["contract_mode"] != "fast" {
 				t.Fatalf("wire = %#v", wire)
 			}
 		} else if string(encoded) != string(first) {

@@ -201,12 +201,14 @@ func (profile Profile) validate() error {
 // estimation, admission and lift validation. A caller extension may not
 // replace them after those checks: doing so could drop the output schema or
 // instructions, bypass sampling ranges, or add unbudgeted server tools.
+// inference_geo and speed multiply every token price (US-only inference and
+// fast mode), which the catalog quote used for the reservation does not model.
 func requestOwnedWireField(wire string) bool {
 	switch wire {
 	case "model", "messages", "service_tier", "max_tokens", "system", "tools",
 		"tool_choice", "output_config", "thinking", "temperature", "top_p",
 		"top_k", "stop_sequences", "container", "mcp_servers", "metadata", "stream",
-		"max_tool_calls":
+		"max_tool_calls", "inference_geo", "speed":
 		return true
 	default:
 		return false
