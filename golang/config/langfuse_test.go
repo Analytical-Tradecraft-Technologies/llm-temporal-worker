@@ -37,3 +37,25 @@ func TestLangfuseCredentialsRequirePair(t *testing.T) {
 		t.Fatal("embedded credentials accepted")
 	}
 }
+
+func TestLangfuseMaxInFlightDefaultsAndLeavesModelSlots(t *testing.T) {
+	c, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Langfuse = &config.LangfuseConfig{BaseURL: "https://cloud.langfuse.com", PublicKey: config.SecretRef{Kind: "env", Name: "LANGFUSE_PUBLIC_KEY"}, SecretKey: config.SecretRef{Kind: "env", Name: "LANGFUSE_SECRET_KEY"}}
+	if err := c.Validate(); err != nil || c.Langfuse.EffectiveMaxInFlight() != config.DefaultLangfuseMaxInFlight {
+		t.Fatalf("omitted limit: %v, %d", err, c.Langfuse.EffectiveMaxInFlight())
+	}
+	slots := c.Temporal.Worker.MaxConcurrentActivities
+	c.Langfuse.MaxInFlight = slots - 1
+	if err := c.Validate(); err != nil || c.Langfuse.EffectiveMaxInFlight() != slots-1 {
+		t.Fatalf("limit below the Activity slots: %v", err)
+	}
+	for _, invalid := range []int{-1, slots, slots + 1} {
+		c.Langfuse.MaxInFlight = invalid
+		if c.Validate() == nil {
+			t.Fatalf("max_in_flight %d accepted with %d Activity slots", invalid, slots)
+		}
+	}
+}

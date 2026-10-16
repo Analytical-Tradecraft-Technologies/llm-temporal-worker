@@ -158,6 +158,9 @@ func TestInternalWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
 		{BudgetWorkflowName, "no payload", nil},
 		{RequestWorkflowName, "no payload", nil},
 		{BudgetWorkflowName, "oversize payload", json.RawMessage(`{"reference":{},"kind":"` + inputMarker + oversize + `"}`)},
+		{LangfuseExportWorkflowName, "malformed reference", json.RawMessage(`{"request_id":"` + inputMarker + `"}`)},
+		{LangfuseExportWorkflowName, "JSON null", json.RawMessage(`null`)},
+		{LangfuseExportWorkflowName, "no payload", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.workflow+"/"+tc.name, func(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,7 @@ func TestExportCarriesCallerIdentityAndProvider(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	c, err := NewClient(server.URL, "public", "secret", server.Client())
+	c, err := NewClient(server.URL, "public", "secret", server.Client(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func TestExportRejectsPartialSuccessAndNeverLeaksResponse(t *testing.T) {
 		w.Write([]byte(`{"partialSuccess":{"rejectedSpans":"1","errorMessage":"private response"}}`))
 	}))
 	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client())
+	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
 	err := c.Export(context.Background(), Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()})
 	if err == nil || strings.Contains(err.Error(), "private response") {
 		t.Fatalf("unsafe or absent failure: %v", err)
@@ -64,7 +65,7 @@ func TestExportRejectsPartialSuccessAndNeverLeaksResponse(t *testing.T) {
 func TestExportAuthenticationRejectionIsPermanent(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) }))
 	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client())
+	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
 	err := c.Export(context.Background(), Operation{})
 	if err != ErrRejected {
 		t.Fatalf("authentication failure must be permanent: %v", err)
@@ -83,7 +84,7 @@ func TestExportBreakerFailsFastThenProbes(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client())
+	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
 	now := time.Unix(1000, 0)
 	c.now = func() time.Time { return now }
 	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: now, EndedAt: now}
@@ -123,7 +124,7 @@ func TestExportLocalRejectionDoesNotResetBreaker(t *testing.T) {
 		w.WriteHeader(503)
 	}))
 	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client())
+	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
 	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
 	oversized := op
 	oversized.Input = strings.Repeat("x", maxBody)
@@ -143,33 +144,37 @@ func TestExportLocalRejectionDoesNotResetBreaker(t *testing.T) {
 }
 
 func TestExportLimitsRequestsWaitingOnLangfuse(t *testing.T) {
-	release := make(chan struct{})
-	var arrived sync.WaitGroup
-	arrived.Add(maxInFlight)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		arrived.Done()
-		<-release
-		w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client())
-	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
-	results := make(chan error, maxInFlight)
-	for i := 0; i < maxInFlight; i++ {
-		go func() { results <- c.Export(context.Background(), op) }()
-	}
-	arrived.Wait()
-	start := time.Now()
-	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("export beyond the in-flight limit must fail fast: %v", err)
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("over-limit export waited %v", elapsed)
-	}
-	close(release)
-	for i := 0; i < maxInFlight; i++ {
-		if err := <-results; err != nil {
-			t.Fatal(err)
-		}
+	for _, tc := range []struct{ configured, want int }{{0, defaultMaxInFlight}, {3, 3}} {
+		t.Run(strconv.Itoa(tc.configured), func(t *testing.T) {
+			release := make(chan struct{})
+			var arrived sync.WaitGroup
+			arrived.Add(tc.want)
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				arrived.Done()
+				<-release
+				w.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+			c, _ := NewClient(server.URL, "public", "secret", server.Client(), tc.configured)
+			op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+			results := make(chan error, tc.want)
+			for i := 0; i < tc.want; i++ {
+				go func() { results <- c.Export(context.Background(), op) }()
+			}
+			arrived.Wait()
+			start := time.Now()
+			if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("export beyond the in-flight limit must fail fast: %v", err)
+			}
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("over-limit export waited %v", elapsed)
+			}
+			close(release)
+			for i := 0; i < tc.want; i++ {
+				if err := <-results; err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
 	}
 }

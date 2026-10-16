@@ -176,13 +176,14 @@ exporter retries that exceed these limits. Await actual exporter acceptance or
 failure, rather than returning after merely queueing spans in process memory.
 
 After exhaustion, log only safe delivery identifiers/status and increment bounded
-export-failure metrics. Return the original workflow outcome. This design adds at
-most the export schedule-to-close budget to normal completion, twice for a
-compaction-backed Generate. Because export shares Activity slots with model
-calls, the exporter also limits in-flight requests per worker and opens a
-breaker after consecutive delivery failures; refused exports fail fast and are
-nonretryable, so an outage costs most operations one Activity round trip. It is
-not durable
+export-failure metrics. Return the original workflow outcome. The request
+workflow runs the export Activity in a separate export workflow, started as an
+abandoned child that it does not wait for (#1351), so export adds only the time
+to start that child to normal completion, including a compaction-backed
+Generate. Because export shares Activity slots with model calls, the exporter
+also limits in-flight requests per worker (`langfuse.max_in_flight`, default 2)
+and opens a breaker after consecutive delivery failures; refused exports fail
+fast and are nonretryable. It is not durable
 background delivery and does not recover traces from administratively terminated
 workflows automatically.
 

@@ -1454,7 +1454,14 @@ langfuse:
   secret_key:
     kind: env
     name: LANGFUSE_SECRET_KEY
+  max_in_flight: 2 # optional; the default
 ```
+
+`max_in_flight` bounds how many export requests one worker sends to Langfuse at
+once, and therefore how many Activity slots a slow Langfuse can hold. It
+defaults to 2 and, when set, must be at least 1 and less than
+`temporal.worker.max_concurrent_activities`, so model Activities always keep a
+slot.
 
 Each existing endpoint can contain `langfuse: {enabled: false}`. Omission defaults
 to enabled, except endpoints with the `openrouter` extension, which default to
@@ -1480,16 +1487,21 @@ model pricing configuration is separate from the worker's authoritative ledger.
 
 Export uses the dedicated final `llm.ExportLangfuse.v1` activity: 10-second
 start-to-close, 30-second schedule-to-close, at most three attempts. Rejection
-errors are nonretryable; outages retry within those bounds. The export shares
-the worker's Activity slots with model calls, so each worker bounds it: each
-HTTP request times out after 5 seconds, at most two requests wait on Langfuse at
-once, and three consecutive transport or server failures open a breaker. While
-the breaker is open, or both requests are in flight, export fails immediately
-without retry and without sending. After 30 seconds one probe request decides
-whether the breaker closes. During a Langfuse outage, most operations therefore
-gain only one fast-failing Activity round trip. At most two per worker at a time
-wait up to 5 seconds per attempt, and a compaction-backed Generate can be
-delayed by that wait twice. Failed export logs a
+errors are nonretryable; outages retry within those bounds. The request
+workflow runs it in a separate `llm.langfuse.export.v1` workflow that it starts
+as an abandoned child and does not wait for, so export adds only the time to
+start that child (one workflow task) to a Generate or Compact result, and a
+compaction-backed Generate starts its model call without waiting for the
+compaction's export. Requests already running the export inline when a worker
+is upgraded finish it inline. The export still runs on the request task queue
+and shares the worker's Activity slots with model calls, so each worker bounds
+it: each HTTP request times out after 5 seconds, at most `max_in_flight`
+requests wait on Langfuse at once, and three consecutive transport or server
+failures open a breaker. While the breaker is open, or the in-flight limit is
+reached, export fails immediately without retry and without sending. After 30
+seconds one probe request decides whether the breaker closes. During a Langfuse
+outage, export therefore holds at most `max_in_flight` slots per worker, for up
+to 5 seconds per attempt. Failed export logs a
 safe warning, preserving the operation's original result or error. Each failed
 export Activity attempt increments the worker's
 `llmtw_langfuse_export_failures_total{reason}` counter on `/metrics`, where

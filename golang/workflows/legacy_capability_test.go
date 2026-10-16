@@ -68,7 +68,10 @@ func TestLegacyBudgetChildReturnsToParent(t *testing.T) {
 		step(activity.CompleteActivityName, llm.ExecutionCompleted))
 	f.env.OnGetVersion(requestCapabilityChange+"1", workflow.DefaultVersion, workflow.Version(1)).Return(workflow.DefaultVersion)
 	var children []string
-	f.env.SetOnChildWorkflowStartedListener(func(_ *workflow.Info, _ workflow.Context, args converter.EncodedValues) {
+	f.env.SetOnChildWorkflowStartedListener(func(info *workflow.Info, _ workflow.Context, args converter.EncodedValues) {
+		if info.WorkflowType.Name != BudgetWorkflowName {
+			return
+		}
 		var request BudgetRequest
 		if err := args.Get(&request); err != nil {
 			t.Error(err)
@@ -139,7 +142,7 @@ func (h *legacyHistory) activity(name string, input any, result llm.ExecutionRes
 }
 
 // taskActivity schedules an activity in the workflow task just completed.
-func (h *legacyHistory) taskActivity(name string, input any, result llm.ExecutionResultV1) {
+func (h *legacyHistory) taskActivity(name string, input, result any) {
 	scheduled := h.add(enumspb.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED, nil)
 	h.events[scheduled-1].Attributes = &historypb.HistoryEvent_ActivityTaskScheduledEventAttributes{ActivityTaskScheduledEventAttributes: &historypb.ActivityTaskScheduledEventAttributes{
 		ActivityId: strconv.FormatInt(scheduled, 10), ActivityType: &commonpb.ActivityType{Name: name}, TaskQueue: &taskqueuepb.TaskQueue{Name: "llm"}, Input: h.payloads(input)}}

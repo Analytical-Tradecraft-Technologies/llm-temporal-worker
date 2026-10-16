@@ -33,7 +33,7 @@ func TestCloudLangfuseExportsFinalizedRequestOnce(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	exporter, err := langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	exporter, err := langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestCloudLangfuseDefaultOpenRouterExcludesContent(t *testing.T) {
 	calls := 0
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat", Extensions: map[string]map[string]any{"openrouter": {}}}}
 	f.restart(t)
 	result := f.finish(t)
@@ -94,7 +94,7 @@ func TestCloudLangfuseCacheHitHasTraceWithoutPaidGeneration(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	first := f.finish(t)
@@ -122,7 +122,7 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	policy := json.RawMessage(`{"recent_turns":0}`)
@@ -225,7 +225,7 @@ func TestCloudLangfuseDisabledFallbackDoesNotExportResponse(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	disabled := false
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}, "fallback": {Langfuse: &config.LangfuseEndpointConfig{Enabled: &disabled}}}
 	f.restart(t)
@@ -284,7 +284,7 @@ func TestCloudLangfuseSupersededPlanDoesNotExportDisabledRequest(t *testing.T) {
 	calls := 0
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	disabled := false
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}, "fallback": {Langfuse: &config.LangfuseEndpointConfig{Enabled: &disabled}}}
 	f.restart(t)
@@ -338,7 +338,7 @@ func TestCloudLangfuseCaptureFailurePreservesModelAndFailsExport(t *testing.T) {
 	calls := 0
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
 	f.cap.Requests = failedLangfuseCapture{f.repository}
 	f.restart(t)
@@ -357,7 +357,7 @@ func TestCloudLangfuseCaptureFailureUsesConfiguredLogger(t *testing.T) {
 	f := boundedCloud(t, false)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
 	f.cap.Requests = failedLangfuseCapture{f.repository}
 	f.restart(t)
@@ -397,7 +397,7 @@ func TestCloudLangfuseNoWorkCompactionExportsOnlyRoot(t *testing.T) {
 		w.Write([]byte(`{}`))
 	}))
 	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client())
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
 	f.restart(t)
 	parent := f.finish(t)

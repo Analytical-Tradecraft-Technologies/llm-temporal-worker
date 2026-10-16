@@ -22,13 +22,18 @@ import (
 const (
 	RequestWorkflowName = "llm.request.execute.v1"
 	BudgetWorkflowName  = "llm.budget.wait.v1"
-	maxStepsPerRun      = 128
-	maxBudgetBackoff    = 5 * time.Minute
+	// LangfuseExportWorkflowName runs the best-effort export after the request
+	// workflow has returned its result (#1351).
+	LangfuseExportWorkflowName = "llm.langfuse.export.v1"
+	maxStepsPerRun             = 128
+	maxBudgetBackoff           = 5 * time.Minute
 	// Change ID prefixes for runs whose Preparation recorded no reference
 	// capability (#1362). Each check appends its own sequence number; see
 	// ExecuteRequest.
 	requestCapabilityChange = "reference-capability-v1-"
 	budgetCapabilityChange  = "budget-reference-capability-v1-"
+	// asyncExportChange moves the Langfuse export into a child workflow.
+	asyncExportChange = "langfuse-export-async-v1"
 )
 
 // RegisterInternal registers implementation workflows, not client entry points.
@@ -40,6 +45,7 @@ const (
 func RegisterInternal(registry worker.WorkflowRegistry, limits activity.PayloadLimits) {
 	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, ExecuteRequest), workflow.RegisterOptions{Name: RequestWorkflowName})
 	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, WaitForBudget), workflow.RegisterOptions{Name: BudgetWorkflowName})
+	registry.RegisterWorkflowWithOptions(rawWorkflow(limits, ExportLangfuse), workflow.RegisterOptions{Name: LangfuseExportWorkflowName})
 }
 
 // rawWorkflow adapts a typed workflow to the registered raw-payload signature.
@@ -206,11 +212,25 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 	}()
 	defer func() {
 		if !workflow.IsContinueAsNewError(returnedErr) && workflow.GetVersion(ctx, "langfuse-export-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
-			exportCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}})
+			exportCtx := workflow.WithActivityOptions(ctx, exportActivityOptions)
 			// The export is best effort, so its capability recovery is bounded
 			// like the export rather than retried for a day.
 			if err := authorize(exportCtx); err != nil {
 				workflow.GetLogger(ctx).Warn("Langfuse export skipped", "request_id", ref.RequestID)
+				return
+			}
+			// Hand the export to an abandoned child so a slow or unreachable
+			// Langfuse no longer delays the caller's result (#1351). Waiting only
+			// for the child to start costs one workflow task. Histories that
+			// already scheduled the export Activity keep running it inline.
+			if workflow.GetVersion(ctx, asyncExportChange, workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+				child := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+					ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON, WaitForCancellation: false,
+					WorkflowExecutionTimeout: exportWorkflowTimeout,
+				})
+				if err := workflow.ExecuteChildWorkflow(child, LangfuseExportWorkflowName, ref).GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+					workflow.GetLogger(ctx).Warn("Langfuse export not started", "request_id", ref.RequestID)
+				}
 				return
 			}
 			if err := workflow.ExecuteActivity(exportCtx, activity.ExportLangfuseActivityName, ref).Get(exportCtx, nil); err != nil {
@@ -287,6 +307,32 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 			return llm.ExecutionResultV1{}, workflow.NewContinueAsNewError(ctx, RequestWorkflowName, input)
 		}
 	}
+}
+
+// exportActivityOptions bound the best-effort Langfuse export and the
+// capability recovery before it. They never inherit the request workflow's
+// unbounded retries.
+var exportActivityOptions = workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}}
+
+// exportWorkflowTimeout bounds an export workflow that no worker picks up, for
+// example while a rolling deploy still runs workers that do not register it.
+const exportWorkflowTimeout = 5 * time.Minute
+
+// ExportLangfuse delivers one finished request's trace. The request workflow
+// starts it as an abandoned child and does not wait for it, so an outage costs
+// the caller nothing. A failed export is logged and the workflow still
+// completes, reporting whether the export succeeded.
+func ExportLangfuse(ctx workflow.Context, ref llm.ExecutionReferenceV1) (bool, error) {
+	if _, err := ref.MarshalJSON(); err != nil {
+		return false, invalidInput()
+	}
+	ctx = workflow.WithActivityOptions(ctx, exportActivityOptions)
+	if err := workflow.ExecuteActivity(ctx, activity.ExportLangfuseActivityName, ref).Get(ctx, nil); err != nil {
+		// The export Activity counts each failed attempt in llmtw_langfuse_export_failures_total.
+		workflow.GetLogger(ctx).Warn("Langfuse export failed", "request_id", ref.RequestID)
+		return false, nil
+	}
+	return true, nil
 }
 
 func executionContext(ctx workflow.Context) workflow.Context {
