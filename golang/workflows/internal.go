@@ -175,9 +175,9 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 	// the capability, and this run keeps the progress it already has. Old
 	// histories replay reference steps that ran without a capability, so every
 	// check gets its own change ID and only the first one past the old history
-	// takes the new path.
+	// takes the new path. ctx carries the activity options for the preparation.
 	checks := 0
-	authorize := func() error {
+	authorize := func(ctx workflow.Context) error {
 		if ref.Capability != "" {
 			return nil
 		}
@@ -206,11 +206,13 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 	}()
 	defer func() {
 		if !workflow.IsContinueAsNewError(returnedErr) && workflow.GetVersion(ctx, "langfuse-export-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
-			if err := authorize(); err != nil {
+			exportCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}})
+			// The export is best effort, so its capability recovery is bounded
+			// like the export rather than retried for a day.
+			if err := authorize(exportCtx); err != nil {
 				workflow.GetLogger(ctx).Warn("Langfuse export skipped", "request_id", ref.RequestID)
 				return
 			}
-			exportCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}})
 			if err := workflow.ExecuteActivity(exportCtx, activity.ExportLangfuseActivityName, ref).Get(exportCtx, nil); err != nil {
 				// The export Activity counts each failed attempt in llmtw_langfuse_export_failures_total.
 				workflow.GetLogger(ctx).Warn("Langfuse export failed", "request_id", ref.RequestID)
@@ -241,7 +243,7 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 					return llm.ExecutionResultV1{}, err
 				}
 			}
-			if err := authorize(); err != nil {
+			if err := authorize(ctx); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
 			child := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON, WaitForCancellation: false})
@@ -260,14 +262,14 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 			if err := wait(ctx, result); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
-			if err := authorize(); err != nil {
+			if err := authorize(ctx); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
 			if err := workflow.ExecuteActivity(ctx, activity.PollActivityName, ref).Get(ctx, &result); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
 		case llm.ExecutionProviderCompleted:
-			if err := authorize(); err != nil {
+			if err := authorize(ctx); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
 			if err := workflow.ExecuteActivity(ctx, activity.CompleteActivityName, ref).Get(ctx, &result); err != nil {

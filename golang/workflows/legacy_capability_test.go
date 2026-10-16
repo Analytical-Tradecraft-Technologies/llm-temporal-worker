@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
+	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
@@ -210,5 +212,20 @@ func TestLegacyCapabilityHistoryReplays(t *testing.T) {
 	RegisterInternal(replayer, activity.PayloadLimits{})
 	if err := replayer.ReplayWorkflowHistory(nil, &historypb.History{Events: h.events}); err != nil {
 		t.Fatalf("legacy history does not replay: %v", err)
+	}
+}
+
+// A legacy run that completes recovers the capability for the best-effort
+// export under the export's bounded retries: a failing Preparation skips the
+// export after three attempts instead of delaying the response.
+func TestLegacyExportCapabilityRecoveryIsBounded(t *testing.T) {
+	failure := temporal.NewApplicationError("storage temporarily unavailable", activity.ErrorTypeProviderTransient)
+	f := workflowTest(t, "generate", legacyPrepare(llm.ExecutionCompleted),
+		workflowStep{name: activity.PrepareActivityName, err: failure}, workflowStep{name: activity.PrepareActivityName, err: failure}, workflowStep{name: activity.PrepareActivityName, err: failure})
+	exports := 0
+	f.env.RegisterActivityWithOptions(func(context.Context, llm.ExecutionReferenceV1) error { exports++; return nil }, sdkactivity.RegisterOptions{Name: activity.ExportLangfuseActivityName})
+	f.run(t)
+	if exports != 0 || len(f.calls) != 4 {
+		t.Fatalf("exports = %d, calls = %v", exports, f.calls)
 	}
 }
