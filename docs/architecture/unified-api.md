@@ -292,8 +292,11 @@ Extensions are namespaced by adapter profile:
 
 Each endpoint profile has an allow-list and schema. An extension that the
 endpoint does not allow, or that targets a different profile, is rejected before
-dispatch in both portability modes; an adapter without an allow-list (Bedrock
-Messages, Bedrock Converse) rejects every extension.
+dispatch in both portability modes. Bedrock Converse has no allow-list and
+rejects every extension. Bedrock Messages has no allow-list either: an extension
+is an error in strict mode and a diagnostic drop in best-effort mode, where the
+extensions are not sent and the response carries an `extensions_dropped`
+warning diagnostic.
 Extensions are included in request hashing and price/capability resolution.
 They may not override model, service class, maximum output, routing, auth, base
 URL, timeout, retry count, or budget fields, nor any control the normalized

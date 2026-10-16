@@ -41,6 +41,10 @@ type CallMetadata struct {
 	// the provider no restriction for a ToolPolicy with Parallel false. The
 	// lift reports it as a response diagnostic.
 	SequentialToolUseDropped bool
+	// ExtensionsDropped records a best-effort compilation that sent the
+	// provider none of the request's extensions because the adapter has no
+	// extension allowlist. The lift reports it as a response diagnostic.
+	ExtensionsDropped bool
 }
 
 type Result struct {
