@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"reflect"
 	"testing"
@@ -61,5 +62,36 @@ func TestCheckpointCopiesPointerToolItems(t *testing.T) {
 	stored, ok := got.Items[len(got.Items)-1].(llm.ToolCall)
 	if !ok || string(stored.Arguments) != "{}" {
 		t.Fatalf("stored call=%#v", got.Items)
+	}
+}
+
+// malformedItem embeds a built-in item but returns invalid JSON, which only
+// json.Marshal's scan of the encoding detects.
+type malformedItem struct{ llm.Message }
+
+func (malformedItem) MarshalJSON() ([]byte, error) { return []byte("{"), nil }
+
+// checkItemEncoding skips json.Marshal's re-scan of the encoding, so it must
+// still accept and reject exactly what json.Marshal does, with the same error.
+func TestCheckItemEncodingMatchesJSONMarshal(t *testing.T) {
+	for _, item := range []llm.Item{
+		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "<ok>"}}},
+		llm.Message{Actor: "system"},
+		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ImagePart{MediaType: "image/png"}}},
+		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
+		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{")},
+		llm.ToolResult{CallID: "a", Content: []llm.Part{llm.JSONPart{Value: []byte("[1]")}}},
+		llm.ToolResult{},
+		llm.ProviderState{Provider: "p", EndpointFamily: "f", MediaType: "m"},
+		llm.ProviderState{},
+		llm.Reference{URI: "https://example.test/source"},
+		llm.Reference{},
+		malformedItem{},
+	} {
+		_, want := json.Marshal(item)
+		got := checkItemEncoding(item)
+		if (got == nil) != (want == nil) || (got != nil && got.Error() != want.Error()) {
+			t.Fatalf("checkItemEncoding(%#v) = %v, want %v", item, got, want)
+		}
 	}
 }

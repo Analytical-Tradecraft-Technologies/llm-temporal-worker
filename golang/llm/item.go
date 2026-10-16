@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 )
 
@@ -48,15 +49,18 @@ func (message Message) MarshalJSON() ([]byte, error) {
 	if !message.Actor.Valid() {
 		return nil, fmt.Errorf("message actor %q is invalid", message.Actor)
 	}
-	content := message.Content
-	if content == nil {
-		content = []Part{}
+	// Written directly in json.Marshal's sorted-key form so that each part's
+	// encoding is not re-scanned here; see writeParts. A valid actor needs no
+	// escaping.
+	var output bytes.Buffer
+	output.WriteString(`{"actor":"`)
+	output.WriteString(string(message.Actor))
+	output.WriteString(`","content":`)
+	if err := writeParts(&output, message.Content); err != nil {
+		return nil, err
 	}
-	return marshalObject(map[string]any{
-		"kind":    ItemKindMessage,
-		"actor":   message.Actor,
-		"content": content,
-	})
+	output.WriteString(`,"kind":"` + string(ItemKindMessage) + `"}`)
+	return output.Bytes(), nil
 }
 
 func decodeMessage(data []byte) (Message, error) {
@@ -176,20 +180,30 @@ func (result ToolResult) MarshalJSON() ([]byte, error) {
 	if result.CallID == "" {
 		return nil, errorsForField("tool result", "call_id")
 	}
-	content := result.Content
-	if content == nil {
-		content = []Part{}
+	// Written directly in json.Marshal's sorted-key form; see writeParts.
+	var output bytes.Buffer
+	output.WriteString(`{"call_id":`)
+	if err := writeCanonicalString(&output, result.CallID); err != nil {
+		return nil, err
 	}
-	fields := map[string]any{
-		"kind":     ItemKindToolResult,
-		"call_id":  result.CallID,
-		"content":  content,
-		"is_error": result.IsError,
+	output.WriteString(`,"content":`)
+	if err := writeParts(&output, result.Content); err != nil {
+		return nil, err
 	}
+	if result.IsError {
+		output.WriteString(`,"is_error":true`)
+	} else {
+		output.WriteString(`,"is_error":false`)
+	}
+	output.WriteString(`,"kind":"` + string(ItemKindToolResult) + `"`)
 	if result.Name != "" {
-		fields["name"] = result.Name
+		output.WriteString(`,"name":`)
+		if err := writeCanonicalString(&output, result.Name); err != nil {
+			return nil, err
+		}
 	}
-	return marshalObject(fields)
+	output.WriteByte('}')
+	return output.Bytes(), nil
 }
 
 func decodeToolResult(data []byte) (ToolResult, error) {
@@ -447,7 +461,48 @@ func (TextPart) part()              {}
 func (TextPart) PartKind() PartKind { return PartKindText }
 
 func (part TextPart) MarshalJSON() ([]byte, error) {
-	return marshalObject(map[string]any{"kind": PartKindText, "text": part.Text})
+	var output bytes.Buffer
+	output.Grow(len(part.Text) + len(`{"kind":"text","text":""}`))
+	output.WriteString(`{"kind":"` + string(PartKindText) + `","text":`)
+	if err := writeCanonicalString(&output, part.Text); err != nil {
+		return nil, err
+	}
+	output.WriteByte('}')
+	return output.Bytes(), nil
+}
+
+// writeParts writes parts as a JSON array exactly as json.Marshal encodes a
+// []Part, with a nil slice written as []. json.Marshal re-scans and compacts
+// every MarshalJSON result it embeds, so nested json.Marshal calls rescan a
+// part's text once per nesting level. Every value type in the closed Part
+// union encodes through json.Marshal or writeCanonicalString, so its output
+// is already compact and HTML-escaped and is appended as is. Nil and pointer
+// parts keep the json.Marshal path.
+func writeParts(output *bytes.Buffer, parts []Part) error {
+	output.WriteByte('[')
+	for index, part := range parts {
+		if index > 0 {
+			output.WriteByte(',')
+		}
+		var encoded []byte
+		var err error
+		switch value := part.(type) {
+		case TextPart, ImagePart, DocumentPart, JSONPart, RefusalPart, ProviderStatePart:
+			encoded, err = value.(json.Marshaler).MarshalJSON()
+			if err != nil {
+				// The same error json.Marshal reports for a failing part.
+				return &json.MarshalerError{Type: reflect.TypeOf(value), Err: err}
+			}
+		default:
+			encoded, err = json.Marshal(part)
+			if err != nil {
+				return err
+			}
+		}
+		output.Write(encoded)
+	}
+	output.WriteByte(']')
+	return nil
 }
 
 func decodeTextPart(data []byte) (TextPart, error) {

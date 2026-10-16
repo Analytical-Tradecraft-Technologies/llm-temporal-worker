@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
@@ -26,7 +27,7 @@ func validateItems(items []llm.Item) ([]string, error) {
 		if item == nil {
 			return nil, fmt.Errorf("transcript item %d is nil", index)
 		}
-		if _, err := json.Marshal(item); err != nil {
+		if err := checkItemEncoding(item); err != nil {
 			return nil, fmt.Errorf("transcript item %d: %w", index, err)
 		}
 		if len(pending) == 0 {
@@ -95,11 +96,31 @@ func validateItemEncoding(items []llm.Item) error {
 		if item == nil {
 			return fmt.Errorf("transcript item %d is nil", index)
 		}
-		if _, err := json.Marshal(item); err != nil {
+		if err := checkItemEncoding(item); err != nil {
 			return fmt.Errorf("transcript item %d: %w", index, err)
 		}
 	}
 	return nil
+}
+
+// checkItemEncoding reports the error json.Marshal(item) would return for a
+// value from itemValue. It calls the item's MarshalJSON directly because
+// json.Marshal would also re-scan and compact the whole encoding, which for a
+// large transcript dominates validation; every type in the closed Item union
+// builds its encoding from json.Marshal output, so that scan cannot fail.
+// Other types, such as one embedding a built-in item with its own
+// MarshalJSON, keep the full json.Marshal check.
+func checkItemEncoding(item llm.Item) error {
+	switch value := item.(type) {
+	case llm.Message, llm.ToolCall, llm.ToolResult, llm.ProviderState, llm.Reference:
+		if _, err := value.(json.Marshaler).MarshalJSON(); err != nil {
+			return &json.MarshalerError{Type: reflect.TypeOf(value), Err: err}
+		}
+		return nil
+	default:
+		_, err := json.Marshal(item)
+		return err
+	}
 }
 
 // itemValue normalizes the closed Item union without a JSON round trip.
