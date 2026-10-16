@@ -163,16 +163,17 @@ func validateStateBlobComposition(stateKind, blobKind string) error {
 // validateOutputSizeBounds rejects a default output reservation that permits
 // a paid response which can never be read or returned. Every output token is
 // at least one byte, so a full-length response to a request that relies on
-// limits.max_output_tokens is at least that many bytes. It must fit in one
-// provider response body and in the inline execution result; the inline bound
+// limits.max_output_tokens is at least that many bytes before any provider or
+// result framing, so it must be strictly smaller than one provider response
+// body and the inline execution result; the inline bound
 // (at most 2 MiB) also keeps it below the 8 MiB durable record limit.
 func validateOutputSizeBounds(server ServerConfig, limits LimitsConfig) error {
 	outputBytes := int64(limits.MaxOutputTokens)
-	if outputBytes > int64(server.InlinePayloadBytes) {
-		return fmt.Errorf("limits.max_output_tokens must not exceed server.inline_payload_bytes (%d); a full-length response could never be returned", server.InlinePayloadBytes)
+	if outputBytes >= int64(server.InlinePayloadBytes) {
+		return fmt.Errorf("limits.max_output_tokens must be less than server.inline_payload_bytes (%d); a full-length response could never be returned", server.InlinePayloadBytes)
 	}
-	if outputBytes > limits.ProviderResponseBytes {
-		return fmt.Errorf("limits.max_output_tokens must not exceed limits.provider_response_bytes (%d); a full-length response could never be read", limits.ProviderResponseBytes)
+	if outputBytes >= limits.ProviderResponseBytes {
+		return fmt.Errorf("limits.max_output_tokens must be less than limits.provider_response_bytes (%d); a full-length response could never be read", limits.ProviderResponseBytes)
 	}
 	return nil
 }

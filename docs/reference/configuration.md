@@ -184,8 +184,9 @@ for retries; recovery refuses a different limit under an existing reservation.
 Limits must be positive and fit the providers' signed 32-bit SDK fields. Zero is
 rejected because some adapters treat it as an omitted cap.
 Because every output token is at least one byte, `limits.max_output_tokens`
-must also not exceed `server.inline_payload_bytes` or
-`limits.provider_response_bytes`; otherwise a full-length response could be paid
+must also be less than `server.inline_payload_bytes` and
+`limits.provider_response_bytes`, which also hold provider and result framing;
+otherwise a full-length response could be paid
 for but never read or returned. The 2 MiB inline cap keeps this bound below the
 8 MiB durable record limit. This is a lower bound only: a response averaging
 more than one byte per token, or a larger explicit caller limit, can still

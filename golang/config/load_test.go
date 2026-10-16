@@ -618,17 +618,17 @@ func TestLoadRejectsOutputReservationThatCannotBeReturned(t *testing.T) {
 		pairs []string
 		want  string
 	}{
-		{pairs: []string{"max_output_tokens: 32768", "max_output_tokens: 524289"}, want: "limits.max_output_tokens must not exceed server.inline_payload_bytes (524288)"},
-		{pairs: []string{"inline_payload_bytes: 524288", "inline_payload_bytes: 32767"}, want: "limits.max_output_tokens must not exceed server.inline_payload_bytes (32767)"},
-		{pairs: []string{"provider_response_bytes: 16777216", "provider_response_bytes: 32767"}, want: "limits.max_output_tokens must not exceed limits.provider_response_bytes (32767)"},
+		{pairs: []string{"max_output_tokens: 32768", "max_output_tokens: 524288"}, want: "limits.max_output_tokens must be less than server.inline_payload_bytes (524288)"},
+		{pairs: []string{"inline_payload_bytes: 524288", "inline_payload_bytes: 32768"}, want: "limits.max_output_tokens must be less than server.inline_payload_bytes (32768)"},
+		{pairs: []string{"provider_response_bytes: 16777216", "provider_response_bytes: 32768"}, want: "limits.max_output_tokens must be less than limits.provider_response_bytes (32768)"},
 	} {
 		if _, err := config.Load([]byte(replace(example, test.pairs...))); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Fatalf("Load(%v) error = %v, want %q", test.pairs, err, test.want)
 		}
 	}
 	for _, pairs := range [][]string{
-		{"max_output_tokens: 32768", "max_output_tokens: 524288"},
-		{"inline_payload_bytes: 524288", "inline_payload_bytes: 32768", "provider_response_bytes: 16777216", "provider_response_bytes: 32768"},
+		{"max_output_tokens: 32768", "max_output_tokens: 524287"},
+		{"inline_payload_bytes: 524288", "inline_payload_bytes: 32769", "provider_response_bytes: 16777216", "provider_response_bytes: 32769"},
 	} {
 		if _, err := config.Load([]byte(replace(example, pairs...))); err != nil {
 			t.Fatalf("Load(%v) error = %v", pairs, err)
