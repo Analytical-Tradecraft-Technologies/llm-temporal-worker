@@ -602,6 +602,40 @@ func TestLoadRejectsActivityBoundsTheWorkflowCannotHonour(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsOutputReservationThatCannotBeReturned(t *testing.T) {
+	example := string(exampleYAML(t))
+	replace := func(data string, pairs ...string) string {
+		t.Helper()
+		for i := 0; i < len(pairs); i += 2 {
+			if !strings.Contains(data, pairs[i]) {
+				t.Fatalf("example does not contain %q", pairs[i])
+			}
+			data = strings.Replace(data, pairs[i], pairs[i+1], 1)
+		}
+		return data
+	}
+	for _, test := range []struct {
+		pairs []string
+		want  string
+	}{
+		{pairs: []string{"max_output_tokens: 32768", "max_output_tokens: 524289"}, want: "limits.max_output_tokens must not exceed server.inline_payload_bytes (524288)"},
+		{pairs: []string{"inline_payload_bytes: 524288", "inline_payload_bytes: 32767"}, want: "limits.max_output_tokens must not exceed server.inline_payload_bytes (32767)"},
+		{pairs: []string{"provider_response_bytes: 16777216", "provider_response_bytes: 32767"}, want: "limits.max_output_tokens must not exceed limits.provider_response_bytes (32767)"},
+	} {
+		if _, err := config.Load([]byte(replace(example, test.pairs...))); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("Load(%v) error = %v, want %q", test.pairs, err, test.want)
+		}
+	}
+	for _, pairs := range [][]string{
+		{"max_output_tokens: 32768", "max_output_tokens: 524288"},
+		{"inline_payload_bytes: 524288", "inline_payload_bytes: 32768", "provider_response_bytes: 16777216", "provider_response_bytes: 32768"},
+	} {
+		if _, err := config.Load([]byte(replace(example, pairs...))); err != nil {
+			t.Fatalf("Load(%v) error = %v", pairs, err)
+		}
+	}
+}
+
 func TestValidateMatchesRuntimeParsersForStartupSettings(t *testing.T) {
 	for _, test := range []struct{ from, to, want string }{
 		{from: `sample_ratio: "0.05"`, to: `sample_ratio: "1/20"`, want: "sample_ratio must be a decimal between 0 and 1"},
