@@ -122,7 +122,19 @@ would buy another summarizer call that re-summarizes the previous summary. The
 remaining limits are still evaluated for such a request. A caller whose fixed
 prompt and tools exceed the default trigger therefore needs a higher
 `trigger_tokens`; the provider context limit still compacts the transcript
-when a route's window is reached.
+when a route's window is reached. Typed OCaml callers set it with
+`Compaction_policy.make_settings` and `Settings.make ~compaction_settings` or
+`Settings.Patch.set_compaction_settings`.
+
+`target_tokens` must stay below the effective `trigger_tokens`. A Generate's
+`settings_patch.compaction_policy` replaces the inherited policy, and its
+omitted fields take the defaults (`trigger_tokens` 12000, `target_tokens`
+8000), so the rule is decided by the patch alone; the OCaml client refuses a
+patch that breaks it when the request is encoded. A Compact request's
+`policy.target_tokens` is merged into the parent checkpoint's policy instead,
+so its wire bound (1 to 10000000) cannot express the rule: a target at or
+above the checkpoint's trigger is wire-valid, and request preparation fails
+the compaction with `invalid_argument` before any provider work.
 
 When compaction is required, the decision returns the policy's lower
 `target_tokens` hysteresis target. The prefix selector materializes a

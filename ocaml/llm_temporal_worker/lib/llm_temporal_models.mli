@@ -225,6 +225,19 @@ type generate_response = {
   diagnostics : diagnostic list;
 }
 type summary_style = Concise | Balanced | Detailed
+(** Full generic compaction policy a Generate's settings may set. A set policy
+    replaces the inherited one, and omitted fields take the worker defaults
+    (trigger_tokens 12000, target_tokens 8000). Declared before
+    [compaction_policy] so record literals with only its two fields keep
+    resolving to [compaction_policy]. *)
+type compaction_settings = {
+  trigger_tokens : int64 option;
+  target_tokens : int64 option;
+  summary_style : summary_style option;
+  recent_turns : int option;
+  output_reserve_tokens : int64 option;
+  materialization_threshold_bytes : int64 option;
+}
 type compaction_policy = { target_tokens : int64 option; summary_style : summary_style option }
 type compact_request = {
   api_version : string;

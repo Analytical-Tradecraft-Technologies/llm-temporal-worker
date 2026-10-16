@@ -9,7 +9,12 @@ module Settings : sig
   (** Settings are the locally known effective values used to build the first
       sparse Generate patch. Every field maps to its exact v1 wire type; an
       omitted optional value remains [Keep] so inherited worker state is not
-      accidentally cleared. *)
+      accidentally cleared.
+
+      [compaction_policy] and [compaction_settings] both set the whole
+      compaction policy; [compaction_settings] (built with
+      [Compaction_policy.make_settings]) can also set [trigger_tokens] and
+      the other policy fields. Passing both raises [Invalid_argument]. *)
   val make :
     ?service_class:service_class ->
     ?service_class_fallbacks:service_class list ->
@@ -22,6 +27,7 @@ module Settings : sig
     ?web_fetch:bool ->
     ?code_execution:bool ->
     ?compaction_policy:compaction_policy ->
+    ?compaction_settings:compaction_settings ->
     ?temperature:Usd_decimal.t ->
     ?top_p:Usd_decimal.t ->
     ?stop_sequences:string list ->
@@ -47,6 +53,10 @@ module Settings : sig
     val set_web_search : bool -> t -> t
     val clear_web_search : t -> t
     val set_compaction : compaction_policy -> t -> t
+
+    (** Sets the full compaction policy, replacing the inherited one; see
+        [Compaction_policy.make_settings]. *)
+    val set_compaction_settings : compaction_settings -> t -> t
     val set_model : Model_selector.t -> t -> t
     val clear_model : t -> t
     val set_service_class : service_class -> t -> t
