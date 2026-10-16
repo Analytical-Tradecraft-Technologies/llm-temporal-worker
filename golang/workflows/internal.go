@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
@@ -23,6 +24,11 @@ const (
 	BudgetWorkflowName  = "llm.budget.wait.v1"
 	maxStepsPerRun      = 128
 	maxBudgetBackoff    = 5 * time.Minute
+	// Change ID prefixes for runs whose Preparation recorded no reference
+	// capability (#1362). Each check appends its own sequence number; see
+	// ExecuteRequest.
+	requestCapabilityChange = "reference-capability-v1-"
+	budgetCapabilityChange  = "budget-reference-capability-v1-"
 )
 
 // RegisterInternal registers implementation workflows, not client entry points.
@@ -94,6 +100,20 @@ func WaitForBudget(ctx workflow.Context, input BudgetRequest) (llm.ExecutionResu
 	}
 	ctx = executionContext(ctx)
 	for steps := 0; ; steps++ {
+		// A request workflow started this child before reference steps carried a
+		// capability (#1362). Acquisition would fail as for an unknown request, so
+		// hand the request back; the parent obtains a capability and starts a new
+		// child. A directly started workflow has no parent and keeps failing like
+		// an unknown request.
+		if input.Reference.Capability == "" && workflow.GetInfo(ctx).ParentWorkflowExecution != nil &&
+			workflow.GetVersion(ctx, budgetCapabilityChange+strconv.Itoa(steps), workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+			// A parent from before this change starts another child at once; the
+			// timer keeps that loop from spinning until it continues as new.
+			if err := workflow.Sleep(ctx, time.Second); err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
+			return llm.ExecutionResultV1{RequestID: input.Reference.RequestID, Kind: input.Kind, State: llm.ExecutionBudgetRequired}, nil
+		}
 		var result llm.ExecutionResultV1
 		if err := workflow.ExecuteActivity(ctx, activity.AcquireBudgetActivityName, input.Reference).Get(ctx, &result); err != nil {
 			return result, err
@@ -149,12 +169,50 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 	// Preparation returns the internal capability reference steps present with
 	// the request ID. Keep it in the reference only; no returned result carries it.
 	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: caller, Capability: result.Capability}
+	// A Preparation recorded before that capability existed returned none, and
+	// reference steps now fail without one (#1362). Before each reference step,
+	// prepare the same request again: that re-authorizes the caller and issues
+	// the capability, and this run keeps the progress it already has. Old
+	// histories replay reference steps that ran without a capability, so every
+	// check gets its own change ID and only the first one past the old history
+	// takes the new path. ctx carries the activity options for the preparation.
+	checks := 0
+	authorize := func(ctx workflow.Context) error {
+		if ref.Capability != "" {
+			return nil
+		}
+		checks++
+		if workflow.GetVersion(ctx, requestCapabilityChange+strconv.Itoa(checks), workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+			return nil
+		}
+		var prepared llm.ExecutionResultV1
+		if err := workflow.ExecuteActivity(ctx, activity.PrepareActivityName, input).Get(ctx, &prepared); err != nil {
+			return err
+		}
+		if err := checkResult(prepared, kind, ref.RequestID); err != nil {
+			return err
+		}
+		ref.Capability = prepared.Capability
+		if ref.Capability == "" {
+			// An Activity worker from before the capability prepared it again
+			// during a rolling deploy. Its reference steps need none; back off so
+			// a retry cannot spin.
+			return workflow.Sleep(ctx, time.Second)
+		}
+		return nil
+	}
 	defer func() {
 		returned.Capability = ""
 	}()
 	defer func() {
 		if !workflow.IsContinueAsNewError(returnedErr) && workflow.GetVersion(ctx, "langfuse-export-v1", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
 			exportCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}})
+			// The export is best effort, so its capability recovery is bounded
+			// like the export rather than retried for a day.
+			if err := authorize(exportCtx); err != nil {
+				workflow.GetLogger(ctx).Warn("Langfuse export skipped", "request_id", ref.RequestID)
+				return
+			}
 			if err := workflow.ExecuteActivity(exportCtx, activity.ExportLangfuseActivityName, ref).Get(exportCtx, nil); err != nil {
 				// The export Activity counts each failed attempt in llmtw_langfuse_export_failures_total.
 				workflow.GetLogger(ctx).Warn("Langfuse export failed", "request_id", ref.RequestID)
@@ -185,6 +243,9 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 					return llm.ExecutionResultV1{}, err
 				}
 			}
+			if err := authorize(ctx); err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
 			child := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON, WaitForCancellation: false})
 			if err := workflow.ExecuteChildWorkflow(child, BudgetWorkflowName, BudgetRequest{Reference: ref, Kind: kind}).Get(ctx, &result); err != nil {
 				return llm.ExecutionResultV1{}, err
@@ -201,10 +262,16 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 			if err := wait(ctx, result); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
+			if err := authorize(ctx); err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
 			if err := workflow.ExecuteActivity(ctx, activity.PollActivityName, ref).Get(ctx, &result); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}
 		case llm.ExecutionProviderCompleted:
+			if err := authorize(ctx); err != nil {
+				return llm.ExecutionResultV1{}, err
+			}
 			if err := workflow.ExecuteActivity(ctx, activity.CompleteActivityName, ref).Get(ctx, &result); err != nil {
 				return llm.ExecutionResultV1{}, err
 			}

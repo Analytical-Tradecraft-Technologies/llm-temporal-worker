@@ -131,6 +131,13 @@ internal `capability` result field; the request workflow keeps it in its
 reference and strips it from every result it returns, so it never reaches a
 public caller. A reference with a missing or invalid capability fails exactly
 like an unknown request, before any storage read.
+A request workflow whose history recorded Preparation before the capability
+existed holds none. Behind a `GetVersion` gate, it runs Preparation again with
+its original request before its next reference step, which re-authorizes the
+caller and issues the capability; a budget child it started earlier returns
+`budget_required` so the parent can start a new child with the capability. A
+directly started `llm.budget.wait.v1` without a capability still fails like an
+unknown request.
 The snapshot proxy holds the configuration lease throughout every step, so a
 reload cannot close a client while that step uses it.
 
