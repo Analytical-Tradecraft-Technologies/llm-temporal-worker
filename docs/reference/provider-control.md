@@ -24,7 +24,9 @@ supported failure as an availability observation, which drives the shared
 route circuit. Those observations always report credit and billing as `ok`:
 provider-specific credit/billing evidence (for example `insufficient_quota`)
 is not yet derived on the cloud path, so sticky credit/billing incident
-detection only runs for the legacy engine. It stores
+detection only runs for the legacy engine. A provider HTTP 402 (account out of
+credit) is recorded with safe error code `insufficient_credit`, which opens the
+route circuit at once for a short hold while credit stays `ok`. It stores
 safe codes and digests, never prompts, outputs, credentials, or raw provider
 bodies. Recorder failures remain control-plane telemetry and do not replace a
 provider result. Memory-mode snapshots do not create external stores.

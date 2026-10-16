@@ -345,6 +345,18 @@ V1 health is operator-configured plus passive:
 - a permission denial counts toward the transient-failure threshold instead
   of opening the circuit at once, because a 403 such as a moderation rejection
   can be specific to one request;
+- a provider account out of credit (HTTP 402) is account-wide, so it opens the
+  circuit at once and holds it for 15 minutes (or until configuration
+  changes); it is recorded with safe error code `insufficient_credit` and is
+  not a sticky credit incident, so a top-up made in place recovers after one
+  probe request;
+- a provider authentication rejection (401) or insufficient-credit rejection
+  (402) fails the attempt but leaves the request retryable: the replacement
+  attempt prefers routes not yet tried and skips the held route. When the only
+  routes left are held by route health, or none can take the request, the
+  replacement's selection fails terminally with the original
+  `authentication` or `permission_denied` code; without shared health the
+  route attempt limit ends the request with the same code;
 - ambiguous calls do not count as safe transient failures.
 
 Authentication and configuration state is scoped to the immutable configuration

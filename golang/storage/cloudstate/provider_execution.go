@@ -37,6 +37,10 @@ type ExecutionFailure struct {
 	Dispatch       provider.DispatchCertainty `json:"dispatch"`
 	Retryable      bool                       `json:"retryable,omitempty"`
 	RetryNotBefore time.Time                  `json:"retry_not_before,omitempty"`
+	// CreditExhausted marks a provider rejection for an account out of
+	// credit, such as an OpenRouter 402. Credit is account-wide, so route
+	// health holds the route instead of counting toward the threshold.
+	CreditExhausted bool `json:"credit_exhausted,omitempty"`
 }
 
 // ProviderExecution is one provider attempt, never permission to submit it again.
@@ -122,6 +126,9 @@ func (execution ProviderExecution) Validate(plan BudgetPlan) error {
 				return ErrInvalid
 			}
 		} else if !failure.RetryNotBefore.IsZero() {
+			return ErrInvalid
+		}
+		if failure.CreditExhausted && (failure.Code != provider.CodePermissionDenied || failure.Dispatch != provider.DispatchRejected) {
 			return ErrInvalid
 		}
 	}

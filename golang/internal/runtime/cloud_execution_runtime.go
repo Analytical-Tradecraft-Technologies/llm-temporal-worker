@@ -389,6 +389,9 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		call, err = r.execution.admission.prepareCompact(ctx, root.Scope, attempt.ID, p.CompactReplay, p.input, budgetAttempt)
 	}
 	if err != nil {
+		if exhausted := r.credentialRoutesExhausted(ctx, root.Scope, attempt, err); exhausted != nil {
+			return llm.ExecutionResultV1{}, exhausted
+		}
 		return r.resumeAdmissionWinner(ctx, p, attempt, step, err)
 	}
 	r.execution.captureLangfuse(ctx, call, cloudstate.SavedProviderExecution{Plan: call.plan})
@@ -500,6 +503,31 @@ func (r *CloudExecutionRuntime) retryHintWait(ctx context.Context, scope cloudst
 		id = link.PreviousID
 	}
 	return wait, nil
+}
+
+// credentialRoutesExhausted turns a replacement's failed route selection into
+// the terminal failure that started it. A provider 401 or 402 is retryable
+// only so the request can move to another route (#1335, #1336); when the
+// failed route is held by route health, or no other route can take the
+// request, waiting for the hold would only run out the workflow deadline.
+// It returns nil when cause is not such a selection failure.
+func (r *CloudExecutionRuntime) credentialRoutesExhausted(ctx context.Context, scope cloudstate.Scope, attempt cloudstate.RequestAttempt, cause error) error {
+	var selection *provider.Error
+	if attempt.PreviousID == "" || !errors.As(cause, &selection) || selection.Phase != provider.PhasePlan ||
+		(selection.Code != provider.CodeProviderUnavailable && selection.Code != provider.CodeNoRoute) {
+		return nil
+	}
+	previous, err := r.store.LoadProviderExecution(ctx, scope, attempt.PreviousID)
+	if err != nil {
+		return nil
+	}
+	failed := previous.Execution.Failure
+	if previous.Execution.Stage != cloudstate.ExecutionFailed || failed == nil || !failed.Retryable || failed.Dispatch != provider.DispatchRejected ||
+		(failed.Code != provider.CodeAuthentication && !failed.CreditExhausted) {
+		return nil
+	}
+	return provider.NewError(failed.Code, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever,
+		"provider rejected the route's credentials or account and no other route can serve the request")
 }
 
 // Admission is fenced as soon as another caller starts the same attempt. A
