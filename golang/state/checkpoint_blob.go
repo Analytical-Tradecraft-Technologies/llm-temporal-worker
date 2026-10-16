@@ -61,6 +61,9 @@ func (codec CheckpointBlobCodec) encode(kind CheckpointBlobKind, payload any) ([
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s checkpoint blob: %w", kind, err)
 	}
+	if encoded, ok := codec.encodeEnvelope(kind, encodedPayload); ok {
+		return encoded, nil
+	}
 	canonicalPayload, err := llm.CanonicalJSONWithLimits(encodedPayload, codec.MaxBytes, codec.MaxDepth)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize %s checkpoint blob: %w", kind, typedCanonicalLimit(err))
@@ -74,6 +77,41 @@ func (codec CheckpointBlobCodec) encode(kind CheckpointBlobKind, payload any) ([
 		return nil, fmt.Errorf("canonicalize %s checkpoint blob envelope: %w", kind, typedCanonicalLimit(err))
 	}
 	return canonical, nil
+}
+
+// encodeEnvelope writes the canonical envelope of encodedPayload directly:
+// its keys in sorted order around the canonical payload. Canonicalizing an
+// already canonical payload again returns it unchanged, so this is the result
+// encode's second marshal and canonicalization would produce, without another
+// full pass over the transcript (#1112). It reports false, leaving every
+// result and error to that path, unless the payload is canonicalized one
+// level shallower than the limit, as it is nested in the envelope, and the
+// envelope fits within the byte limit.
+func (codec CheckpointBlobCodec) encodeEnvelope(kind CheckpointBlobKind, encodedPayload []byte) ([]byte, bool) {
+	if codec.MaxDepth <= 1 {
+		return nil, false
+	}
+	canonicalPayload, err := llm.CanonicalJSONWithLimits(encodedPayload, codec.MaxBytes, codec.MaxDepth-1)
+	if err != nil {
+		return nil, false
+	}
+	encodedKind, err := json.Marshal(string(kind))
+	if err != nil {
+		return nil, false
+	}
+	const head, middle, tail = `{"kind":`, `,"payload":`, `,"version":"` + CheckpointBlobCodecVersion + `"}`
+	// Both encodings are bounded by MaxBytes, so the sum cannot overflow.
+	if len(encodedKind) > codec.MaxBytes || len(canonicalPayload) > codec.MaxBytes-len(encodedKind) {
+		return nil, false
+	}
+	size := len(head) + len(encodedKind) + len(middle) + len(canonicalPayload) + len(tail)
+	if size > codec.MaxBytes {
+		return nil, false
+	}
+	encoded := make([]byte, 0, size)
+	encoded = append(append(encoded, head...), encodedKind...)
+	encoded = append(append(encoded, middle...), canonicalPayload...)
+	return append(encoded, tail...), true
 }
 
 func (codec CheckpointBlobCodec) decode(kind CheckpointBlobKind, data []byte, target any) error {
@@ -215,7 +253,7 @@ func (codec CheckpointBlobCodec) EncodeSnapshot(snapshot CheckpointSnapshot) ([]
 	if itemsValue == nil {
 		itemsValue = []llm.Item{}
 	}
-	items, err := json.Marshal(itemsValue)
+	items, err := appendItemsJSON(nil, itemsValue)
 	if err != nil {
 		return nil, fmt.Errorf("marshal snapshot items: %w", err)
 	}
@@ -250,10 +288,12 @@ func (codec CheckpointBlobCodec) DecodeSnapshot(data []byte) (CheckpointSnapshot
 		lineage[i] = Handle(handle)
 	}
 	snapshot := CheckpointSnapshot{Items: cloneItems(items), Settings: settings, Depth: payload.Depth, Lineage: lineage}
-	snapshot.Digest = snapshot.digest()
-	if err := snapshot.validate(); err != nil {
+	// The digest is computed from these values, so comparing it with a second
+	// computation, as validate does, cannot fail and re-encodes the transcript.
+	if err := snapshot.validateContent(); err != nil {
 		return CheckpointSnapshot{}, err
 	}
+	snapshot.Digest = snapshot.digest()
 	return snapshot, nil
 }
 
