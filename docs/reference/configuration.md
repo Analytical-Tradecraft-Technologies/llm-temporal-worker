@@ -970,7 +970,7 @@ once the cluster fails the replica, and checks it again when it rejoins.
 Replicas are identified with `CLUSTER MYID` and `CLUSTER SLOTS`, so the Redis
 user also needs those commands and `CONFIG GET` on every replica of the slot
 owner. Configure any primary that may take over the slot the same way;
-replicas of other primaries are not inspected.
+replicas of other primaries are not contacted.
 
 `state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned

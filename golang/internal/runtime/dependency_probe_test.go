@@ -855,7 +855,7 @@ func TestRedisDependencyProbeChecksSlotOwnerReplicas(t *testing.T) {
 	}
 }
 
-func TestRedisReplicaIDsSelectsSlotOwnerReplicas(t *testing.T) {
+func TestRedisSlotOwnerReplicasSelectsOwnReplicas(t *testing.T) {
 	node := func(id string) redisclient.ClusterNode { return redisclient.ClusterNode{ID: id, Addr: id + ":6379"} }
 	slots := []redisclient.ClusterSlot{
 		{Start: 0, End: 5460, Nodes: []redisclient.ClusterNode{node("a"), node("a1")}},
@@ -863,14 +863,11 @@ func TestRedisReplicaIDsSelectsSlotOwnerReplicas(t *testing.T) {
 		{Start: 10923, End: 12000, Nodes: []redisclient.ClusterNode{node("b"), node("b1")}},
 		{Start: 12001, End: 16383, Nodes: []redisclient.ClusterNode{node("c")}},
 	}
-	got, err := redisReplicaIDs("b", slots)
-	if err != nil || len(got) != 2 || got["b1"] || got["b2"] {
+	got, err := redisSlotOwnerReplicas("b", slots)
+	if err != nil || len(got) != 2 || got["b1:6379"] != "b1" || got["b2:6379"] != "b2" {
 		t.Fatalf("replicas of b = %v, %v", got, err)
 	}
-	if _, ok := got["a1"]; ok {
-		t.Fatalf("replicas of b include another primary's replica: %v", got)
-	}
-	if got, err := redisReplicaIDs("c", slots); err != nil || len(got) != 0 {
+	if got, err := redisSlotOwnerReplicas("c", slots); err != nil || len(got) != 0 {
 		t.Fatalf("replicas of c = %v, %v", got, err)
 	}
 	for _, test := range []struct {
@@ -881,8 +878,9 @@ func TestRedisReplicaIDsSelectsSlotOwnerReplicas(t *testing.T) {
 		{name: "no owner ID", owner: "", slots: slots},
 		{name: "owner not a primary", owner: "b1", slots: slots},
 		{name: "replica without ID", owner: "a", slots: []redisclient.ClusterSlot{{Nodes: []redisclient.ClusterNode{node("a"), {Addr: "x:6379"}}}}},
+		{name: "replica without address", owner: "a", slots: []redisclient.ClusterSlot{{Nodes: []redisclient.ClusterNode{node("a"), {ID: "x"}}}}},
 	} {
-		if got, err := redisReplicaIDs(test.owner, test.slots); err == nil {
+		if got, err := redisSlotOwnerReplicas(test.owner, test.slots); err == nil {
 			t.Fatalf("%s: replicas = %v, want an error", test.name, got)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,9 @@ type fakeClusterNode struct {
 	replicas []*fakeClusterNode
 	slots    [2]int
 	topology *[]*fakeClusterNode
+	// stalled nodes still serve the connection handshake and topology, but
+	// never answer a per-node probe command, as a hung node would.
+	stalled atomic.Bool
 }
 
 func newFakeClusterNode(t *testing.T, id string, topology *[]*fakeClusterNode) *fakeClusterNode {
@@ -69,6 +73,10 @@ func (node *fakeClusterNode) handle(conn net.Conn) {
 	for {
 		args, err := readRESPCommand(reader)
 		if err != nil {
+			return
+		}
+		if command := strings.ToUpper(strings.Join(args, " ")); node.stalled.Load() && (command == "CLUSTER MYID" || strings.HasPrefix(command, "CONFIG GET")) {
+			_, _ = io.Copy(io.Discard, conn)
 			return
 		}
 		if _, err := io.WriteString(conn, node.reply(args)); err != nil {
@@ -156,6 +164,8 @@ func TestRedisDependencyProbeChecksReplicasOnClusterClient(t *testing.T) {
 		name   string
 		mutate func(owner *fakeClusterNode, others []*fakeClusterNode)
 		want   ProbeStatus
+		// fast marks cases that must not wait on a stalled node.
+		fast bool
 	}{
 		{name: "compliant", want: ProbeStatusReady},
 		{
@@ -178,6 +188,18 @@ func TestRedisDependencyProbeChecksReplicasOnClusterClient(t *testing.T) {
 				}
 			},
 			want: ProbeStatusReady,
+		},
+		{
+			// Replicas of other primaries are never contacted, so a hung
+			// one cannot consume the probe deadline.
+			name: "other primary replica stalled",
+			mutate: func(_ *fakeClusterNode, others []*fakeClusterNode) {
+				for _, other := range others {
+					other.replicas[0].stalled.Store(true)
+				}
+			},
+			want: ProbeStatusReady,
+			fast: true,
 		},
 		{
 			name:   "slot owner replica unreachable",
@@ -206,7 +228,7 @@ func TestRedisDependencyProbeChecksReplicasOnClusterClient(t *testing.T) {
 				}
 				topology = append(topology, master)
 			}
-			cluster := redisclient.NewClusterClient(&redisclient.ClusterOptions{Addrs: []string{topology[0].addr()}, MaxRedirects: -1, MaxRetries: -1, Protocol: 2, DisableIdentity: true})
+			cluster := redisclient.NewClusterClient(&redisclient.ClusterOptions{Addrs: []string{topology[0].addr()}, MaxRedirects: -1, MaxRetries: -1, Protocol: 2, DisableIdentity: true, ReadTimeout: 5 * time.Second})
 			t.Cleanup(func() { _ = cluster.Close() })
 			value := testRedisProbeConfig()
 			value.KeyPrefix = "worker"
@@ -239,8 +261,12 @@ func TestRedisDependencyProbeChecksReplicasOnClusterClient(t *testing.T) {
 				test.mutate(owner, others)
 			}
 			for attempt := 0; attempt < 3; attempt++ {
+				started := time.Now()
 				if result := probe.Probe(ctx); result.Status != test.want {
 					t.Fatalf("attempt %d result = %#v, want %s", attempt, result, test.want)
+				}
+				if elapsed := time.Since(started); test.fast && elapsed > 2*time.Second {
+					t.Fatalf("attempt %d took %s waiting on a stalled node", attempt, elapsed)
 				}
 			}
 		})

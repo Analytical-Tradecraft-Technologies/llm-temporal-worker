@@ -273,12 +273,13 @@ func redisProbeNodes(client redisProbeClient, value config.RedisConfig) (func(co
 }
 
 // redisClusterReplicas calls fn on every replica that the slot owner's own
-// CLUSTER SLOTS lists for its ranges. Replicas are matched by node ID rather
-// than address, since the client may rewrite announced addresses. Redis omits
-// replicas it has marked as failed from CLUSTER SLOTS, so a replica that is
-// briefly unreachable fails the probe until the cluster fails it or it
-// recovers, as an unreachable master does. A listed replica the client cannot
-// reach or identify cannot be verified and fails the probe.
+// CLUSTER SLOTS lists for its ranges. The client's replica connections are
+// selected by the address CLUSTER SLOTS reported, so replicas of other
+// primaries are never contacted, and each selected node must confirm its
+// node ID. Redis omits replicas it has marked as failed from CLUSTER SLOTS,
+// so a replica that is briefly unreachable fails the probe until the cluster
+// fails it or it recovers, as an unreachable master does. A listed replica
+// the client cannot reach or identify cannot be verified and fails the probe.
 func redisClusterReplicas(ctx context.Context, cluster *redisclient.ClusterClient, owner redisProbeClient, fn func(context.Context, redisProbeClient) error) error {
 	ownerNode, ok := owner.(*redisclient.Client)
 	if !ok {
@@ -292,28 +293,34 @@ func redisClusterReplicas(ctx context.Context, cluster *redisclient.ClusterClien
 	if err != nil {
 		return err
 	}
-	expected, err := redisReplicaIDs(ownerID, slots)
+	replicas, err := redisSlotOwnerReplicas(ownerID, slots)
 	if err != nil {
 		return err
 	}
-	if len(expected) == 0 {
+	if len(replicas) == 0 {
 		return nil
 	}
-	var mu sync.Mutex
+	var (
+		mu       sync.Mutex
+		verified = make(map[string]bool, len(replicas))
+	)
 	err = cluster.ForEachSlave(ctx, func(ctx context.Context, node *redisclient.Client) error {
-		id, err := node.ClusterMyID(ctx).Result()
-		if err != nil {
-			// A replica of another primary may be down; a missing replica of
-			// the slot owner is caught below.
+		id, ok := replicas[node.NodeAddress()]
+		if !ok {
+			id, ok = replicas[node.Options().Addr]
+		}
+		if !ok {
+			return nil
+		}
+		// An unreachable or reassigned replica stays unverified below.
+		if got, err := node.ClusterMyID(ctx).Result(); err != nil || got != id {
 			return nil
 		}
 		mu.Lock()
-		seen, ok := expected[id]
-		if ok && !seen {
-			expected[id] = true
-		}
+		seen := verified[id]
+		verified[id] = true
 		mu.Unlock()
-		if !ok || seen {
+		if seen {
 			return nil
 		}
 		return fn(ctx, node)
@@ -321,10 +328,8 @@ func redisClusterReplicas(ctx context.Context, cluster *redisclient.ClusterClien
 	if err != nil {
 		return err
 	}
-	for _, seen := range expected {
-		if !seen {
-			return errors.New("Redis budget slot owner replica is not reachable")
-		}
+	if len(verified) != len(replicas) {
+		return errors.New("Redis budget slot owner replica is not reachable")
 	}
 	return nil
 }
@@ -445,13 +450,13 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 	return probe.verifyBudgetGeneration(ctx)
 }
 
-// redisReplicaIDs returns, as unvisited, the node IDs of the replicas listed
-// for the primary ownerID in a CLUSTER SLOTS reply.
-func redisReplicaIDs(ownerID string, slots []redisclient.ClusterSlot) (map[string]bool, error) {
+// redisSlotOwnerReplicas maps the reported address of each replica listed for
+// the primary ownerID in a CLUSTER SLOTS reply to its node ID.
+func redisSlotOwnerReplicas(ownerID string, slots []redisclient.ClusterSlot) (map[string]string, error) {
 	if ownerID == "" {
 		return nil, errors.New("Redis returned no node ID for the budget slot owner")
 	}
-	expected := make(map[string]bool)
+	replicas := make(map[string]string)
 	owned := false
 	for _, slot := range slots {
 		if len(slot.Nodes) == 0 || slot.Nodes[0].ID != ownerID {
@@ -459,16 +464,16 @@ func redisReplicaIDs(ownerID string, slots []redisclient.ClusterSlot) (map[strin
 		}
 		owned = true
 		for _, replica := range slot.Nodes[1:] {
-			if replica.ID == "" {
-				return nil, errors.New("Redis returned a replica without a node ID")
+			if replica.ID == "" || replica.Addr == "" {
+				return nil, errors.New("Redis returned a replica without a node ID or address")
 			}
-			expected[replica.ID] = false
+			replicas[replica.Addr] = replica.ID
 		}
 	}
 	if !owned {
 		return nil, errors.New("Redis budget slot owner does not list itself as a primary")
 	}
-	return expected, nil
+	return replicas, nil
 }
 
 // verifyServerPolicy checks the eviction and persistence settings of one node
