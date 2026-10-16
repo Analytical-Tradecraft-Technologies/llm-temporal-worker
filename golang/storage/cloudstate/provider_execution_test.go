@@ -374,3 +374,38 @@ func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderExecutionKeepsUnknownCostReasonOutsideTheResponse(t *testing.T) {
+	execution := ProviderExecution{StartToken: "token", Version: 1, Stage: ExecutionSucceeded,
+		Response: &llm.Response{APIVersion: llm.APIVersion, OperationKey: "op", Status: llm.ResponseStatusCompleted, Cost: llm.Cost{Status: llm.CostStatusUnknown, UnknownReason: llm.CostUnknownCatalogIncomplete}}}
+	encoded, err := json.Marshal(execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil || string(fields["cost_unknown_reason"]) != `"catalog_incomplete"` || fields["start_token"] == nil {
+		t.Fatalf("encoded execution = %s, %v", encoded, err)
+	}
+	// An earlier worker decodes the response cost strictly, so the response
+	// encoding must not change.
+	if strings.Contains(string(fields["response"]), "catalog_incomplete") {
+		t.Fatalf("response encoding carries the reason: %s", fields["response"])
+	}
+	var decoded ProviderExecution
+	if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.StartToken != "token" || decoded.Response == nil || decoded.Response.Cost.UnknownReason != llm.CostUnknownCatalogIncomplete {
+		t.Fatalf("decoded = %#v, %v", decoded, err)
+	}
+	if !equalExecution(execution, decoded) {
+		t.Fatal("round-tripped execution is not equal")
+	}
+
+	delete(fields, "cost_unknown_reason")
+	stored, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy ProviderExecution
+	if err := json.Unmarshal(stored, &legacy); err != nil || legacy.Response == nil || legacy.Response.Cost.Status != llm.CostStatusUnknown || legacy.Response.Cost.UnknownReason != "" {
+		t.Fatalf("stored execution without a reason = %#v, %v", legacy, err)
+	}
+}

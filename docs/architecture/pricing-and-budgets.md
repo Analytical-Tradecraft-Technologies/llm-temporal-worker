@@ -121,6 +121,19 @@ Unknown catalog components and actual costs are NULL with an explicit
 status/reason, while exact zero means known free. Known spend totals exclude
 NULLs and separately report unknown operation counts.
 
+A Generate or Compact response with an unknown cost reports one of two
+`unknown_reason` values. `catalog_incomplete` means the provider reported usage
+the catalog cannot price: an allowed unpriced route, usage on a component the
+entry leaves unknown, or a billing multiplier the entry does not model (such
+as Anthropic US-only inference or fast mode). `provider_did_not_report_cost`
+means the provider omitted the usage, cost or hosted-tool charge needed to
+settle the call; a stored response recorded before the worker kept a reason
+also reports it. `state_unavailable` and `ambiguous_dispatch` are reserved in
+the v1 set and are not currently emitted. A cache replay or no-work compaction
+reports an exact zero with method `provider_reported` even though no provider
+was called, because the v1 method set is closed; `cache.disposition` and the
+checkpoint provenance identify those responses.
+
 The current YAML loader carries omitted components as an `unknown` marker on
 the compiled pricing entry. Costing and reservation estimation fail closed if
 the request needs that component; omission is never decoded as a free USD

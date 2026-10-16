@@ -495,7 +495,7 @@ func (f *CloudFinalizer) verifyUnreserved(ctx context.Context, scope cloudstate.
 		}
 		cost = response.Cost
 	}
-	if !equalFinalizationValue(cost, publicationCost(execution.Response.Cost)) {
+	if !publishedCostMatches(cost, execution.Response.Cost) {
 		return cloudstate.ErrCorrupt
 	}
 	return nil

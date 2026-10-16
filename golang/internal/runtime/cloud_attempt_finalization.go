@@ -139,6 +139,8 @@ func (f *CloudFinalizer) loadAttemptResult(ctx context.Context, scope cloudstate
 	if err != nil || json.Unmarshal(data, &response) != nil {
 		return zero, "", cloudstate.ErrCorrupt
 	}
+	// The unknown-cost reason is not part of the response encoding.
+	response.Cost.UnknownReason = execution.Response.Cost.UnknownReason
 	response.OperationID, response.OperationKey = string(rootID), original.OperationKey
 	return CloudAttemptResult{CheckpointScope: preparation.CheckpointScope, Attempt: attempt, Saved: saved, Response: response}, root.Request.Kind, nil
 }
@@ -182,7 +184,7 @@ func (f *CloudFinalizer) verifyProviderFinalization(ctx context.Context, scope c
 		}
 		cost, usage = response.Cost, response.Usage
 	}
-	if !equalFinalizationValue(cost, publicationCost(result.Response.Cost)) || !equalFinalizationValue(usage, &result.Response.Usage) {
+	if !publishedCostMatches(cost, result.Response.Cost) || !equalFinalizationValue(usage, &result.Response.Usage) {
 		return cloudstate.ErrCorrupt
 	}
 	return nil

@@ -166,7 +166,9 @@ type cache_policy = { max_age_seconds : int64 option; variant : int32 }
 type cache_disposition_kind = Cache_disabled | Cache_miss_populated | Cache_hit | Cache_miss_not_populated
 type cache_disposition = { disposition : cache_disposition_kind; variant : int32; entry_age_seconds : int64 option }
 type cost_method = Provider_reported | Catalog_usage | Control_query_zero
+(** A cache replay or no-work compaction reports an exact zero as [Provider_reported]; its cache disposition and provenance show no provider was called. *)
 type cost_unknown_reason = Provider_did_not_report_cost | Catalog_incomplete | State_unavailable | Ambiguous_dispatch
+(** The worker currently emits only [Provider_did_not_report_cost] and [Catalog_incomplete]; the others are reserved. *)
 type settled_cost =
   | Exact_cost of { actual_cost_usd : Usd_decimal.t; method_ : cost_method; catalog_version : Cost_catalog_version.t option }
   | Unknown_cost of { reason : cost_unknown_reason }
