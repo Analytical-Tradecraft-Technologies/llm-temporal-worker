@@ -429,5 +429,5 @@ func unusedAttemptRetired(child Record, progress map[string]json.RawMessage, roo
 	var retired attemptRetirement
 	data := progress["attempt_retired"]
 	return child.Status == StatusFailed && data != nil && progress["provider_execution"] == nil &&
-		json.Unmarshal(data, &retired) == nil && retired.Version == 1 && retired.RootID == rootID && retired.Reason == "unused_quote_expired"
+		json.Unmarshal(data, &retired) == nil && retired.Version == 1 && retired.RootID == rootID && validTime(retired.RetiredAt) && retired.Reason == "unused_quote_expired"
 }
