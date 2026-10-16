@@ -217,8 +217,8 @@
           "type": "object", "additionalProperties": false,
           "properties": {
             "enabled": {"type": "boolean"},
-            "deployment_name": {"type": "string", "minLength": 1},
-            "build_id": {"type": "string", "minLength": 1}
+            "deployment_name": {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^.:]+$", "not": {"pattern": "^__"}},
+            "build_id": {"type": "string", "minLength": 1, "maxLength": 255, "not": {"pattern": "^__"}}
           },
           "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
           "then": {"required": ["deployment_name", "build_id"]},

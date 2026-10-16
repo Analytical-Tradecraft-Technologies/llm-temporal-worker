@@ -953,6 +953,11 @@ func validateAddress(value, path string) error {
 	return nil
 }
 
+// WorkerVersioningIdentityMaxBytes is the default Temporal server limit on a
+// worker build ID. Deployment names use the same bound, which is below the
+// server's deployment name limit.
+const WorkerVersioningIdentityMaxBytes = 255
+
 // Validate rejects incomplete version identities rather than silently polling
 // the unversioned queue when a deployment controller is misconfigured.
 func (versioning WorkerVersioningConfig) Validate() error {
@@ -969,6 +974,17 @@ func (versioning WorkerVersioningConfig) Validate() error {
 		if strings.ContainsAny(value, "\x00") {
 			return fmt.Errorf("temporal.worker.versioning.%s contains a control character", name)
 		}
+		// The Temporal server rejects these forms with InvalidArgument, which the
+		// SDK treats as a fatal poll error, so the worker would never poll.
+		if strings.HasPrefix(value, "__") {
+			return fmt.Errorf("temporal.worker.versioning.%s must not start with '__'", name)
+		}
+		if len(value) > WorkerVersioningIdentityMaxBytes {
+			return fmt.Errorf("temporal.worker.versioning.%s must be at most %d bytes", name, WorkerVersioningIdentityMaxBytes)
+		}
+	}
+	if strings.ContainsAny(versioning.DeploymentName, ".:") {
+		return fmt.Errorf("temporal.worker.versioning.deployment_name must not contain '.' or ':'")
 	}
 	return nil
 }
