@@ -99,14 +99,19 @@ func (codec CheckpointBlobCodec) encodeEnvelope(kind CheckpointBlobKind, encoded
 	if err != nil {
 		return nil, false
 	}
-	encoded := make([]byte, 0, len(canonicalPayload)+len(encodedKind)+64)
-	encoded = append(append(encoded, `{"kind":`...), encodedKind...)
-	encoded = append(append(encoded, `,"payload":`...), canonicalPayload...)
-	encoded = append(encoded, `,"version":"`+CheckpointBlobCodecVersion+`"}`...)
-	if len(encoded) > codec.MaxBytes {
+	const head, middle, tail = `{"kind":`, `,"payload":`, `,"version":"` + CheckpointBlobCodecVersion + `"}`
+	// Both encodings are bounded by MaxBytes, so the sum cannot overflow.
+	if len(encodedKind) > codec.MaxBytes || len(canonicalPayload) > codec.MaxBytes-len(encodedKind) {
 		return nil, false
 	}
-	return encoded, true
+	size := len(head) + len(encodedKind) + len(middle) + len(canonicalPayload) + len(tail)
+	if size > codec.MaxBytes {
+		return nil, false
+	}
+	encoded := make([]byte, 0, size)
+	encoded = append(append(encoded, head...), encodedKind...)
+	encoded = append(append(encoded, middle...), canonicalPayload...)
+	return append(encoded, tail...), true
 }
 
 func (codec CheckpointBlobCodec) decode(kind CheckpointBlobKind, data []byte, target any) error {
