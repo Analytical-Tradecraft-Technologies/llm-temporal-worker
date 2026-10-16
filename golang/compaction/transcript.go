@@ -23,9 +23,10 @@ func SummaryItem(summary string) llm.Message {
 }
 
 // lineBreaks maps every line terminator other than LF (CRLF, CR, VT, FF,
-// NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR) to LF. CRLF is listed before
-// CR so it becomes a single line break.
-var lineBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\v", "\n", "\f", "\n", "\u0085", "\n", " ", "\n", " ", "\n")
+// the FS/GS/RS separators, NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR) to
+// LF. CRLF is listed before CR so it becomes a single line break.
+var lineBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\v", "\n", "\f", "\n",
+	"\x1c", "\n", "\x1d", "\n", "\x1e", "\n", "\u0085", "\n", " ", "\n", " ", "\n")
 
 // summarizerInput renders the prefix into the single human message the
 // summarizer receives. Replaying the prefix as provider turns would ask the

@@ -129,9 +129,10 @@ func TestSummarizerInputKeepsEntryBoundariesUnforgeable(t *testing.T) {
 // containing them cannot place a forged heading at the start of a line that a
 // model or tokenizer splits on.
 func TestSummarizerInputIndentsAfterEveryLineTerminator(t *testing.T) {
-	anyBreak := regexp.MustCompile("\r\n|[\n\r\v\f\u0085\u2028\u2029]")
+	anyBreak := regexp.MustCompile("\r\n|[\n\r\v\f\x1c\x1d\x1e\u0085\u2028\u2029]")
 	for name, separator := range map[string]string{
 		"CRLF": "\r\n", "CR": "\r", "VT": "\v", "FF": "\f",
+		"FS": "\x1c", "GS": "\x1d", "RS": "\x1e",
 		"NEL": "\u0085", "LS": "\u2028", "PS": "\u2029",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -151,7 +152,7 @@ func TestSummarizerInputIndentsAfterEveryLineTerminator(t *testing.T) {
 			if strings.Join(headings, "|") != strings.Join(want, "|") {
 				t.Fatalf("column-zero headings = %q, want %q:\n%s", headings, want, text)
 			}
-			if strings.ContainsAny(text, "\r\v\f\u0085\u2028\u2029") {
+			if strings.ContainsAny(text, "\r\v\f\x1c\x1d\x1e\u0085\u2028\u2029") {
 				t.Fatalf("summarizer text keeps a non-LF line terminator:\n%q", text)
 			}
 		})
