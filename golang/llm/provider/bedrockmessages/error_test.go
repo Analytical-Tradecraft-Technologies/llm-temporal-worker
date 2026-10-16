@@ -107,3 +107,15 @@ func TestServerErrorsRemainRejected(t *testing.T) {
 		}
 	}
 }
+
+// An account out of credit is an operator-side route failure: it must not
+// surface as the caller's invalid_argument, which route health ignores.
+func TestPaymentRequiredIsARouteLevelDenial(t *testing.T) {
+	mapped := mapAPIError(&anthropic.Error{StatusCode: http.StatusPaymentRequired}, "bedrock-messages")
+	if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNever {
+		t.Fatalf("402 = %#v, want a rejected permission denial", mapped)
+	}
+	if got, want := mapped.SafeDetails["status"], "402"; got != want {
+		t.Fatalf("safe status = %q, want %q", got, want)
+	}
+}
