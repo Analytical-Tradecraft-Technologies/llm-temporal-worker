@@ -516,6 +516,7 @@ type fakeRedisProbeClient struct {
 	streamInfoErr     error
 	functionListErr   error
 	scriptExistsErr   error
+	configGetErr      error
 	settings          map[string]string
 	streamType        string
 	streamInfo        *redisclient.XInfoStream
@@ -595,6 +596,7 @@ func (client *fakeRedisProbeClient) ConfigGet(ctx context.Context, setting strin
 	client.configGetCalls[setting]++
 	command := redisclient.NewMapStringStringCmd(ctx)
 	command.SetVal(map[string]string{setting: client.settings[setting]})
+	command.SetErr(client.configGetErr)
 	return command
 }
 
@@ -744,6 +746,148 @@ func TestRedisDependencyProbeChecksClusterSlotOwnerAndEveryMaster(t *testing.T) 
 	}
 }
 
+// withFakeRedisReplicas routes the slot owner's replica checks to replicas.
+func withFakeRedisReplicas(t *testing.T, probe DependencyProbe, owner *fakeRedisProbeClient, replicas ...*fakeRedisProbeClient) {
+	t.Helper()
+	redisProbe, ok := probe.(*redisDependencyProbe)
+	if !ok {
+		t.Fatalf("probe type = %T", probe)
+	}
+	redisProbe.budgetReplicas = func(ctx context.Context, node redisProbeClient, fn func(context.Context, redisProbeClient) error) error {
+		if node != redisProbeClient(owner) {
+			t.Fatalf("replicas resolved for %v, want the slot owner", node)
+		}
+		for _, replica := range replicas {
+			if err := fn(ctx, replica); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func TestRedisDependencyProbeChecksSlotOwnerReplicas(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		first    func(*fakeRedisProbeClient)
+		second   func(*fakeRedisProbeClient)
+		routeErr error
+		want     ProbeStatus
+	}{
+		{name: "compliant", want: ProbeStatusReady},
+		{
+			name:  "replica evicts",
+			first: func(client *fakeRedisProbeClient) { client.settings["maxmemory-policy"] = "allkeys-lru" },
+			want:  ProbeStatusPolicy,
+		},
+		{
+			name:   "replica without aof",
+			second: func(client *fakeRedisProbeClient) { client.settings["appendonly"] = "no" },
+			want:   ProbeStatusPolicy,
+		},
+		{
+			name:  "replica without rdb",
+			first: func(client *fakeRedisProbeClient) { client.settings["save"] = "" },
+			want:  ProbeStatusPolicy,
+		},
+		{
+			name:  "unreachable replica",
+			first: func(client *fakeRedisProbeClient) { client.configGetErr = errors.New("connection refused") },
+			want:  ProbeStatusUnavailable,
+		},
+		{
+			name:   "policy mismatch outranks unreachable replica",
+			first:  func(client *fakeRedisProbeClient) { client.configGetErr = errors.New("connection refused") },
+			second: func(client *fakeRedisProbeClient) { client.settings["maxmemory-policy"] = "allkeys-lru" },
+			want:   ProbeStatusPolicy,
+		},
+		{
+			name:     "listed replica not reachable by the client",
+			routeErr: errors.New("Redis budget slot owner replica is not reachable"),
+			want:     ProbeStatusUnavailable,
+		},
+		{
+			name:     "policy mismatch outranks unlisted replica",
+			first:    func(client *fakeRedisProbeClient) { client.settings["appendonly"] = "no" },
+			routeErr: errors.New("Redis budget slot owner replica is not reachable"),
+			want:     ProbeStatusPolicy,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := testRedisProbeConfig()
+			value.KeyPrefix = "worker"
+			value.AdmissionHashTag = "budget"
+			shared, owner := healthyRedisProbeClient(), healthyRedisProbeClient()
+			first, second := healthyRedisProbeClient(), healthyRedisProbeClient()
+			if test.first != nil {
+				test.first(first)
+			}
+			if test.second != nil {
+				test.second(second)
+			}
+			probe, err := NewRedisDependencyProbe(shared, value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			withFakeRedisCluster(t, probe, owner, owner)
+			withFakeRedisReplicas(t, probe, owner, first, second)
+			if test.routeErr != nil {
+				route := probe.(*redisDependencyProbe).budgetReplicas
+				probe.(*redisDependencyProbe).budgetReplicas = func(ctx context.Context, node redisProbeClient, fn func(context.Context, redisProbeClient) error) error {
+					_ = route(ctx, node, fn)
+					return test.routeErr
+				}
+			}
+			for attempt := 0; attempt < 3; attempt++ {
+				if result := probe.Probe(context.Background()); result.Status != test.want {
+					t.Fatalf("attempt %d result = %#v, want %s", attempt, result, test.want)
+				}
+			}
+			for _, replica := range []*fakeRedisProbeClient{first, second} {
+				if replica.configGetCalls["maxmemory-policy"] == 0 {
+					t.Fatalf("replica checks skipped a replica: %#v", replica)
+				}
+				if replica.mutations != 0 {
+					t.Fatalf("replica checks mutated a replica: %#v", replica)
+				}
+			}
+		})
+	}
+}
+
+func TestRedisReplicaIDsSelectsSlotOwnerReplicas(t *testing.T) {
+	node := func(id string) redisclient.ClusterNode { return redisclient.ClusterNode{ID: id, Addr: id + ":6379"} }
+	slots := []redisclient.ClusterSlot{
+		{Start: 0, End: 5460, Nodes: []redisclient.ClusterNode{node("a"), node("a1")}},
+		{Start: 5461, End: 10922, Nodes: []redisclient.ClusterNode{node("b"), node("b1"), node("b2")}},
+		{Start: 10923, End: 12000, Nodes: []redisclient.ClusterNode{node("b"), node("b1")}},
+		{Start: 12001, End: 16383, Nodes: []redisclient.ClusterNode{node("c")}},
+	}
+	got, err := redisReplicaIDs("b", slots)
+	if err != nil || len(got) != 2 || got["b1"] || got["b2"] {
+		t.Fatalf("replicas of b = %v, %v", got, err)
+	}
+	if _, ok := got["a1"]; ok {
+		t.Fatalf("replicas of b include another primary's replica: %v", got)
+	}
+	if got, err := redisReplicaIDs("c", slots); err != nil || len(got) != 0 {
+		t.Fatalf("replicas of c = %v, %v", got, err)
+	}
+	for _, test := range []struct {
+		name  string
+		owner string
+		slots []redisclient.ClusterSlot
+	}{
+		{name: "no owner ID", owner: "", slots: slots},
+		{name: "owner not a primary", owner: "b1", slots: slots},
+		{name: "replica without ID", owner: "a", slots: []redisclient.ClusterSlot{{Nodes: []redisclient.ClusterNode{node("a"), {Addr: "x:6379"}}}}},
+	} {
+		if got, err := redisReplicaIDs(test.owner, test.slots); err == nil {
+			t.Fatalf("%s: replicas = %v, want an error", test.name, got)
+		}
+	}
+}
+
 func TestRedisDependencyProbeRoutesByClientTopology(t *testing.T) {
 	value := testRedisProbeConfig()
 	value.KeyPrefix = "worker"
@@ -759,6 +903,12 @@ func TestRedisDependencyProbeRoutesByClientTopology(t *testing.T) {
 	node, err := probe.(*redisDependencyProbe).budgetNode(context.Background())
 	if err != nil || node != redisProbeClient(single) {
 		t.Fatalf("single-server budget node = %v, %v", node, err)
+	}
+	if err := probe.(*redisDependencyProbe).budgetReplicas(context.Background(), node, func(context.Context, redisProbeClient) error {
+		t.Fatal("single-server probe visited a replica")
+		return nil
+	}); err != nil {
+		t.Fatalf("single-server replicas = %v", err)
 	}
 	// An unreachable cluster cannot resolve the slot owner, and the probe must
 	// fail closed rather than fall back to an arbitrary master.
