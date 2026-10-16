@@ -640,7 +640,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			closeAll()
 			return nil, nil, fmt.Errorf("resolve Langfuse secret key: %w", err)
 		}
-		langfuseClient, err = langfuse.NewClient(value.Langfuse.BaseURL, strings.TrimSpace(string(public)), strings.TrimSpace(string(secret)), nil, value.Langfuse.EffectiveMaxInFlight())
+		langfuseClient, err = langfuse.NewClient(value.Langfuse.BaseURL, strings.TrimSpace(string(public)), strings.TrimSpace(string(secret)), nil, value.Langfuse.EffectiveMaxInFlight(value.Temporal.Worker.MaxConcurrentActivities))
 		if err != nil {
 			closeAll()
 			return nil, nil, err

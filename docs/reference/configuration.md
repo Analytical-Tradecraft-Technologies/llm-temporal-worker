@@ -1458,10 +1458,11 @@ langfuse:
 ```
 
 `max_in_flight` bounds how many export requests one worker sends to Langfuse at
-once, and therefore how many Activity slots a slow Langfuse can hold. It
-defaults to 2 and, when set, must be at least 1 and less than
-`temporal.worker.max_concurrent_activities`, so model Activities always keep a
-slot.
+once, and therefore how many Activity slots a slow Langfuse can hold. When set,
+it must be at least 1 and less than `temporal.worker.max_concurrent_activities`,
+so model Activities always keep a slot. It defaults to 2, reduced to one less
+than `max_concurrent_activities` on smaller workers (and to 1 on a worker with
+a single Activity slot).
 
 Each existing endpoint can contain `langfuse: {enabled: false}`. Omission defaults
 to enabled, except endpoints with the `openrouter` extension, which default to

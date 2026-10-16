@@ -22,10 +22,12 @@ type LangfuseEndpointConfig struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
-// EffectiveMaxInFlight applies the default to an omitted limit.
-func (c LangfuseConfig) EffectiveMaxInFlight() int {
+// EffectiveMaxInFlight applies the default to an omitted limit. The default
+// shrinks so it, too, leaves a slot for model Activities; a worker with a
+// single Activity slot has none to spare and exports one at a time.
+func (c LangfuseConfig) EffectiveMaxInFlight(activitySlots int) int {
 	if c.MaxInFlight == 0 {
-		return DefaultLangfuseMaxInFlight
+		return max(1, min(DefaultLangfuseMaxInFlight, activitySlots-1))
 	}
 	return c.MaxInFlight
 }
