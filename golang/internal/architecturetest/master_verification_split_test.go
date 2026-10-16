@@ -1,7 +1,9 @@
 package architecturetest
 
 import (
+	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -171,4 +173,45 @@ func TestWorkflowMasterReportsScheduledFailures(t *testing.T) {
 	}
 	assertJobRunContains(t, master, "report-scheduled-failure", "gh issue create")
 	assertJobRunContains(t, master, "report-scheduled-failure", "gh issue comment")
+}
+
+// TestWorkflowScheduledWorkflowsReportFailures requires every workflow with a
+// schedule trigger to report a failed scheduled run as an issue. Nothing else
+// watches a scheduled run, so without the report a red run goes unnoticed.
+func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join(repositoryRoot(t), ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scheduled []string
+	for _, path := range paths {
+		workflow := readWorkflow(t, filepath.Base(path))
+		if _, ok := workflowMapping(t, workflow, "on")["schedule"]; !ok {
+			continue
+		}
+		scheduled = append(scheduled, workflow.name)
+		job := workflowJob(t, workflow, "report-scheduled-failure")
+		if got, want := scalarString(t, workflow.name, job, "if"), "failure() && github.event_name == 'schedule'"; got != want {
+			t.Fatalf("%s report-scheduled-failure if = %q, want %q", workflow.name, got, want)
+		}
+		needs := stringSequence(t, workflow.name, job, "needs")
+		if len(needs) == 0 {
+			t.Fatalf("%s report-scheduled-failure needs no jobs", workflow.name)
+		}
+		for _, need := range needs {
+			_ = workflowJob(t, workflow, need)
+		}
+		permissions := nestedMapping(t, workflow.name, job, "permissions")
+		if len(permissions) != 1 || scalarString(t, workflow.name, permissions, "issues") != "write" {
+			t.Fatalf("%s report-scheduled-failure permissions = %#v, want only issues: write", workflow.name, permissions)
+		}
+		assertJobRunContains(t, workflow, "report-scheduled-failure", "gh issue create")
+		assertJobRunContains(t, workflow, "report-scheduled-failure", "gh issue comment")
+	}
+	// Guard against the scan silently matching nothing.
+	for _, want := range []string{"master.yml", "security-scheduled.yml"} {
+		if !slices.Contains(scheduled, want) {
+			t.Fatalf("scheduled workflows = %v, want them to include %s", scheduled, want)
+		}
+	}
 }

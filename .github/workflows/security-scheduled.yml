@@ -35,3 +35,33 @@ jobs:
       - name: Scan current dependencies and enforce exception expiry
         working-directory: golang
         run: make security-verify
+
+  # Pull requests only compare base and head, so this is the only gate that
+  # re-evaluates current master against new vulnerability data and exception
+  # expiry. A failed scheduled run opens, or comments on, one tracking issue
+  # that carries only the run URL and commit, never raw scanner output.
+  report-scheduled-failure:
+    name: Report scheduled failure
+    if: failure() && github.event_name == 'schedule'
+    needs: [security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the scheduled failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Scheduled security review failed"
+          body="Scheduled security review run $RUN_URL failed at commit $GITHUB_SHA."
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\"))[0].number // empty")"
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
