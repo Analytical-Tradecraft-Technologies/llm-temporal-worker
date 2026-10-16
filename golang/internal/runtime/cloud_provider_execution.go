@@ -239,6 +239,21 @@ func (executor *CloudProviderExecution) resume(ctx context.Context, scope clouds
 	if (stage == cloudstate.ExecutionClaiming || stage == cloudstate.ExecutionSubmitting) && executor.clock().Before(saved.Execution.RecoverAfter) {
 		return executor.result(saved), nil
 	}
+	// Without a provider job to poll, only documented idempotency recovery
+	// could still read the outcome. Otherwise marking it unknown and settling
+	// it is accounting only, so it is decided before reconstruction: a rollout
+	// that changed the bound route or endpoint would otherwise strand the
+	// attempt and its claim forever (#1452). Pollable work still waits for a
+	// compatible endpoint.
+	if saved.Execution.ProviderOperationID == "" {
+		recoverable, err := executor.admission.recovery.recoversByIdempotencyKey(ctx, saved.Plan.Route)
+		if err != nil {
+			return ProviderExecutionResult{}, err
+		}
+		if !recoverable || (saved.Execution.Claim == nil && saved.Plan.RequiresReservation()) {
+			return executor.unrecoverable(ctx, scope, id, saved)
+		}
+	}
 	planned, transcript, err := executor.reconstruct(ctx, scope, id, saved.Plan, generate, compact, input)
 	if err != nil {
 		return ProviderExecutionResult{}, err
@@ -264,13 +279,7 @@ func (executor *CloudProviderExecution) resume(ctx context.Context, scope clouds
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderUnavailable)
 		}
 	} else {
-		if stage == cloudstate.ExecutionUnknown {
-			return executor.settleUnknown(ctx, scope, id, saved)
-		}
-		next := saved.Execution
-		next.Stage = cloudstate.ExecutionUnknown
-		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-		return executor.save(ctx, scope, id, saved, next)
+		return executor.unrecoverable(ctx, scope, id, saved)
 	}
 	result, err := executor.completeCall(ctx, scope, id, saved, planned, transcript, outcome, nil, true)
 	if saved.Execution.ProviderOperationID != "" {
@@ -290,6 +299,18 @@ func (executor *CloudProviderExecution) resume(ctx context.Context, scope clouds
 	return result, err
 }
 
+// unrecoverable records an attempt that nothing can recover as unknown, or
+// settles one already recorded so. Neither consults the provider.
+func (executor *CloudProviderExecution) unrecoverable(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {
+	if saved.Execution.Stage == cloudstate.ExecutionUnknown {
+		return executor.settleUnknown(ctx, scope, id, saved)
+	}
+	next := saved.Execution
+	next.Stage = cloudstate.ExecutionUnknown
+	next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
+	return executor.save(ctx, scope, id, saved, next)
+}
+
 // settleUnknown charges an unresolved paid attempt at its full reservation
 // once its recovery window has passed and nothing can recover it. The
 // finalize_unknown events count the conservative charge through each budget
@@ -304,6 +325,11 @@ func (executor *CloudProviderExecution) resume(ctx context.Context, scope clouds
 func (executor *CloudProviderExecution) settleUnknown(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution) (ProviderExecutionResult, error) {
 	if !saved.Plan.RequiresReservation() || executor.clock().Before(saved.Execution.RecoverAfter) {
 		return executor.result(saved), nil
+	}
+	// A repeated step only finishes the saved settlement; recomputing it
+	// would try to rewrite settled work.
+	if saved.Execution.Settlement != nil {
+		return executor.settle(ctx, scope, id, saved)
 	}
 	next := saved.Execution
 	if next.Claim == nil {
