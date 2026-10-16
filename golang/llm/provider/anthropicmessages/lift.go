@@ -115,7 +115,30 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 	if _, err := llm.HostedToolCharge(usage, result.Route.ResolvedModel); err != nil {
 		result.Cost.Status = llm.CostStatusUnknown
 	}
+	if priceModifiedUsage(usage.ProviderRaw) {
+		result.Cost.Status = llm.CostStatusUnknown
+	}
 	return result, nil
+}
+
+// priceModifiedUsage reports whether the provider billed the response with a
+// request-level multiplier the catalog entry does not model: US-only inference
+// (usage.inference_geo "us", 1.1x on Claude 4.6 and later) or fast mode
+// (usage.speed "fast", 2x). A workspace default_inference_geo applies without
+// any request field, so only the reported usage settles the question. Such a
+// response is kept at the reservation rather than settled at base prices.
+func priceModifiedUsage(raw map[string]json.RawMessage) bool {
+	for key, base := range map[string]string{"inference_geo": "global", "speed": "standard"} {
+		value, present := raw[key]
+		if !present || string(value) == "null" {
+			continue
+		}
+		var reported string
+		if json.Unmarshal(value, &reported) != nil || reported != base {
+			return true
+		}
+	}
+	return false
 }
 
 func webSearchCallCount(response *anthropic.Message) json.RawMessage {
