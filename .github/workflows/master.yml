@@ -241,6 +241,51 @@ jobs:
         working-directory: golang
         run: make cloud-workflow-ocaml-integration
 
+  # Mirrors the pull-request ocaml-readme-install job. The ocaml job above
+  # prefetches Cargo dependencies and builds offline, so only this job shows
+  # that the documented install still works after merge and against upstream
+  # changes on the nightly schedule (#1350, #1449).
+  ocaml-readme-install:
+    name: OCaml README install
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Protocol Buffers compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes protobuf-compiler bubblewrap
+          sudo apt-get install --yes cargo
+
+      - name: Enable unprivileged user namespaces for OPAM sandboxing
+        if: ${{ runner.environment == 'github-hosted' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for setting in \
+            kernel.unprivileged_userns_clone=1 \
+            kernel.apparmor_restrict_unprivileged_userns=0; do
+            key="${setting%=*}"
+            want="${setting#*=}"
+            if current="$(sysctl -n "${key}" 2>/dev/null)" && [[ "${current}" != "${want}" ]]; then
+              sudo sysctl -w "${key}=${want}"
+            fi
+          done
+
+      - name: Set up OCaml
+        run: bash scripts/ci/setup-opam.sh
+
+      - name: Run README install commands verbatim
+        env:
+          PACKAGE_REF: ${{ github.sha }}
+        run: bash scripts/ci/run-ocaml-readme-install.sh
+
   fuzz-shard:
     name: Fuzz shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
@@ -717,7 +762,7 @@ jobs:
   report-scheduled-failure:
     name: Report scheduled failure
     if: failure() && github.event_name == 'schedule'
-    needs: [verify, ocaml, fuzz-shard, container]
+    needs: [verify, ocaml, ocaml-readme-install, fuzz-shard, container]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

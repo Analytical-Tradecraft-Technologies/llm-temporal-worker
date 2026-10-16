@@ -165,7 +165,7 @@ func TestWorkflowMasterReportsScheduledFailures(t *testing.T) {
 	if got, want := scalarString(t, master.name, job, "if"), "failure() && github.event_name == 'schedule'"; got != want {
 		t.Fatalf("report-scheduled-failure if = %q, want %q", got, want)
 	}
-	if got, want := stringSequence(t, master.name, job, "needs"), []string{"verify", "ocaml", "fuzz-shard", "container"}; !reflect.DeepEqual(got, want) {
+	if got, want := stringSequence(t, master.name, job, "needs"), []string{"verify", "ocaml", "ocaml-readme-install", "fuzz-shard", "container"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("report-scheduled-failure needs = %v, want %v", got, want)
 	}
 	permissions := nestedMapping(t, master.name, job, "permissions")
