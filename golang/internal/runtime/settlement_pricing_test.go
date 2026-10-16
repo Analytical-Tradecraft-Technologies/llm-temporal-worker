@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -109,24 +108,23 @@ func TestPublishedUnknownCostReason(t *testing.T) {
 	}
 }
 
-func TestCostUnknownReasonRoundTripsAndIsOptional(t *testing.T) {
-	encoded, err := json.Marshal(llm.Cost{Status: llm.CostStatusUnknown, UnknownReason: llm.CostUnknownCatalogIncomplete})
-	if err != nil {
-		t.Fatal(err)
+func TestPublishedCostMatchesReasonOrPreviousLabel(t *testing.T) {
+	cost := llm.Cost{Status: llm.CostStatusUnknown, UnknownReason: llm.CostUnknownCatalogIncomplete}
+	for _, tc := range []struct {
+		reason string
+		want   bool
+	}{
+		{reason: "catalog_incomplete", want: true},
+		// A worker on the previous release publishes every unknown cost with
+		// this label for the same saved execution.
+		{reason: "provider_did_not_report_cost", want: true},
+		{reason: "state_unavailable", want: false},
+	} {
+		if got := publishedCostMatches(llm.CostV1{Status: "unknown", UnknownReason: tc.reason}, cost); got != tc.want {
+			t.Fatalf("published %s matches = %v, want %v", tc.reason, got, tc.want)
+		}
 	}
-	var decoded llm.Cost
-	if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.UnknownReason != llm.CostUnknownCatalogIncomplete {
-		t.Fatalf("decoded = %#v, %v from %s", decoded, err, encoded)
-	}
-	encoded, err = json.Marshal(llm.Cost{Status: llm.CostStatusUnknown})
-	if err != nil || strings.Contains(string(encoded), "unknown_reason") {
-		t.Fatalf("cost without a reason encoded as %s, %v", encoded, err)
-	}
-	var stored llm.Cost
-	if err := json.Unmarshal([]byte(`{"cost_status":"unknown","method":"","catalog_version":"prices-v1","reserved_cost_usd":"0.5","actual_cost_usd":null}`), &stored); err != nil {
-		t.Fatal(err)
-	}
-	if got := publicationCost(stored); got.Status != "unknown" || got.UnknownReason != "provider_did_not_report_cost" {
-		t.Fatalf("stored record published as %#v", got)
+	if publishedCostMatches(llm.CostV1{Status: "unknown", UnknownReason: "catalog_incomplete"}, llm.Cost{Status: llm.CostStatusUnknown}) {
+		t.Fatal("a reasonless cost matched a published catalog_incomplete")
 	}
 }

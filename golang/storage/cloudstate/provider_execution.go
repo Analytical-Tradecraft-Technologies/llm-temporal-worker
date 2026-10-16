@@ -65,6 +65,36 @@ type ProviderExecution struct {
 	Settled             bool                      `json:"settled"`
 }
 
+type providerExecutionFields ProviderExecution
+
+// The response's unknown-cost reason is saved beside the response, not in
+// its strictly decoded cost, so an earlier worker still reads the execution
+// and ignores the reason. A record without it decodes with no reason.
+type providerExecutionJSON struct {
+	providerExecutionFields
+	CostUnknownReason string `json:"cost_unknown_reason,omitempty"`
+}
+
+func (execution ProviderExecution) MarshalJSON() ([]byte, error) {
+	encoded := providerExecutionJSON{providerExecutionFields: providerExecutionFields(execution)}
+	if execution.Response != nil {
+		encoded.CostUnknownReason = execution.Response.Cost.UnknownReason
+	}
+	return json.Marshal(encoded)
+}
+
+func (execution *ProviderExecution) UnmarshalJSON(data []byte) error {
+	var decoded providerExecutionJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*execution = ProviderExecution(decoded.providerExecutionFields)
+	if execution.Response != nil {
+		execution.Response.Cost.UnknownReason = decoded.CostUnknownReason
+	}
+	return nil
+}
+
 type SavedProviderExecution struct {
 	Plan      BudgetPlan
 	Execution ProviderExecution

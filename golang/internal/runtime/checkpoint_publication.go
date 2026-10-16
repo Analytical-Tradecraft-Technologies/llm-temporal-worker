@@ -367,6 +367,15 @@ func publicationCost(cost llm.Cost) llm.CostV1 {
 	return llm.CostV1{Status: "unknown", UnknownReason: reason}
 }
 
+// publishedCostMatches reports whether published is cost's publication. An
+// unknown cost also matches the reasonless label, which a worker on the
+// previous release publishes for the same saved execution.
+func publishedCostMatches(published llm.CostV1, cost llm.Cost) bool {
+	legacy := cost
+	legacy.UnknownReason = ""
+	return equalFinalizationValue(published, publicationCost(cost)) || equalFinalizationValue(published, publicationCost(legacy))
+}
+
 // zeroPublicationCost is the exact zero of a cache replay or no-work
 // compaction. No provider was called; the v1 method set is closed, so it keeps
 // provider_reported, and cache.disposition and checkpoint provenance identify

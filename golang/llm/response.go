@@ -281,7 +281,7 @@ const (
 )
 
 // Unknown-cost reasons a worker records on a Cost, from the v1 unknown_reason
-// set. A cost with no reason predates the field and reports
+// set. A cost with no reason, such as one stored before the field, reports
 // CostUnknownProviderDidNotReport.
 const (
 	// CostUnknownProviderDidNotReport: the provider omitted the usage, cost or
@@ -310,8 +310,9 @@ type Cost struct {
 	ActualCostUSD   *pricing.USD
 	Method          string
 	CatalogVersion  string
-	// UnknownReason says why an unknown cost is unknown. It is empty for a
-	// known cost and optional on stored records.
+	// UnknownReason says why an unknown cost is unknown; it is empty for a
+	// known cost. It is not part of the Cost encoding, which earlier workers
+	// decode strictly: storage that keeps it saves it beside the response.
 	UnknownReason string
 }
 
@@ -330,9 +331,6 @@ func (cost Cost) MarshalJSON() ([]byte, error) {
 	if cost.Status != "" {
 		fields["cost_status"] = cost.Status
 	}
-	if cost.UnknownReason != "" {
-		fields["unknown_reason"] = cost.UnknownReason
-	}
 	return marshalObject(fields)
 }
 
@@ -350,7 +348,7 @@ func decodeCost(data []byte) (Cost, error) {
 	if err != nil {
 		return Cost{}, err
 	}
-	if err := checkUnknownFields(fields, "cost_status", "reserved_cost_usd", "actual_cost_usd", "method", "catalog_version", "unknown_reason"); err != nil {
+	if err := checkUnknownFields(fields, "cost_status", "reserved_cost_usd", "actual_cost_usd", "method", "catalog_version"); err != nil {
 		return Cost{}, err
 	}
 	cost := Cost{}
@@ -366,9 +364,6 @@ func decodeCost(data []byte) (Cost, error) {
 		return Cost{}, err
 	}
 	if cost.CatalogVersion, _, err = optionalString(fields, "catalog_version"); err != nil {
-		return Cost{}, err
-	}
-	if cost.UnknownReason, _, err = optionalString(fields, "unknown_reason"); err != nil {
 		return Cost{}, err
 	}
 	if raw, ok := fields["reserved_cost_usd"]; ok && string(raw) != "null" {
