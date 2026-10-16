@@ -171,12 +171,15 @@ func (handler *Handler) create(writer http.ResponseWriter, request *http.Request
 	if mapped.Generate.SettingsPatch.Model.Set != nil {
 		meta.Model = *mapped.Generate.SettingsPatch.Model.Set
 	}
+	// The ID is exposed before the start: a start that times out may still
+	// have created the workflow, and the caller must be able to poll it rather
+	// than retry under a new ID and pay twice.
+	writer.Header().Set("X-Response-Id", responseID)
 	run, apiErr := handler.start(request.Context(), identity, responseID, idempotent, mapped.Generate)
 	if apiErr != nil {
 		writeError(writer, apiErr)
 		return
 	}
-	writer.Header().Set("X-Response-Id", responseID)
 	if mapped.Background {
 		writeJSON(writer, http.StatusOK, newResponseObject(meta, "queued"))
 		return
@@ -219,7 +222,7 @@ func (handler *Handler) start(parent context.Context, identity llm.RequestContex
 	}
 	run, err := handler.options.Client.ExecuteWorkflow(ctx, options, workflows.GenerateWorkflowName, generate)
 	if err != nil {
-		return nil, unavailable("the request could not be submitted to Temporal")
+		return nil, unavailable("the request may not have been submitted; poll GET /v1/responses/" + responseID + " before retrying")
 	}
 	return run, nil
 }

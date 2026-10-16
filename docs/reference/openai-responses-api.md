@@ -44,7 +44,10 @@ response = client.responses.create(model="fast", input="Summarise this ticket.")
 | `POST /v1/responses` with `"background": true` | Starts the workflow and returns at once with `status: "queued"`. |
 | `GET /v1/responses/{id}` | Returns the response's current state: `queued`, `in_progress`, `completed`, `incomplete`, `failed` or `cancelled`. |
 
-Every create response carries the response ID in the `X-Response-Id` header.
+Every create response carries the response ID in the `X-Response-Id` header,
+including a `503` from a start that Temporal may have accepted before the call
+failed. Poll that ID before retrying such a request without an
+`Idempotency-Key`, or the retry may pay for the same work twice.
 
 ### Response IDs and idempotency
 
@@ -88,9 +91,17 @@ namespace retention removes a workflow, only its durable record remains.
 ## Request mapping
 
 Settings map to the Generate request's settings patch. On a continuation an
-omitted setting inherits the previous response's value, except instructions,
-which OpenAI does not carry across `previous_response_id`; an omitted
-`instructions` clears them.
+omitted `model`, `tools`, `temperature`, `top_p`, `reasoning` or
+`service_tier` inherits the previous response's value. The rest follow OpenAI,
+which applies them per request rather than carrying them across
+`previous_response_id`:
+
+- An omitted `instructions` clears them.
+- `tool_choice` with `parallel_tool_calls`, and `max_output_tokens` with
+  `text.format`, are each one setting in the worker. On a continuation both
+  are always set in full, with OpenAI's defaults (`auto`, parallel calls, text,
+  no token limit) for anything omitted, so sending one half never keeps a
+  stale inherited other half.
 
 | OpenAI field | Generate request |
 |---|---|

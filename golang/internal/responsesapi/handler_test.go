@@ -45,6 +45,7 @@ type fakeClient struct {
 	args       []llm.GenerateRequestV1
 	describes  int
 	onStart    func(id string) *fakeExecution
+	startErr   error
 }
 
 func newFakeClient() *fakeClient {
@@ -59,6 +60,9 @@ func (fake *fakeClient) ExecuteWorkflow(_ context.Context, options client.StartW
 	}
 	fake.started = append(fake.started, options)
 	fake.args = append(fake.args, args[0].(llm.GenerateRequestV1))
+	if fake.startErr != nil {
+		return nil, fake.startErr
+	}
 	execution, ok := fake.executions[options.ID]
 	if !ok {
 		execution = &fakeExecution{status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING}
@@ -417,5 +421,18 @@ func TestDrainEndsWaitingCreateRequests(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("drain did not end the wait")
+	}
+}
+
+func TestAnAmbiguousStartStillReturnsTheResponseID(t *testing.T) {
+	fake := newFakeClient()
+	fake.startErr = context.DeadlineExceeded
+	recorder := serve(newTestHandler(t, fake, nil), http.MethodPost, "/v1/responses", testKey, `{"model":"fast","input":"hi"}`)
+	id := recorder.Header().Get("X-Response-Id")
+	if recorder.Code != http.StatusServiceUnavailable || !validResponseID(id) {
+		t.Fatalf("status %d, id %q", recorder.Code, id)
+	}
+	if fake.args[0].OperationKey != id || !strings.Contains(decodeBody(t, recorder)["error"].(map[string]any)["message"].(string), id) {
+		t.Fatal("the exposed ID is not the submitted operation")
 	}
 }

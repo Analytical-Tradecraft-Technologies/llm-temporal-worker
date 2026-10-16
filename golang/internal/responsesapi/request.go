@@ -100,9 +100,13 @@ func jsonErrorText(err error) string {
 
 // mapCreateRequest converts the OpenAI request to the v1 Generate request.
 // Settings are a patch over the parent checkpoint, so an omitted setting on a
-// continuation inherits the previous response's value. Instructions are the
-// exception: OpenAI does not carry them across previous_response_id, so an
-// omitted value clears them.
+// continuation inherits the previous response's value. The exceptions follow
+// OpenAI, which applies them per request rather than carrying them across
+// previous_response_id: an omitted instructions clears them, and the
+// composite tool policy (tool_choice, parallel_tool_calls) and output
+// (max_output_tokens, text.format) are always set in full, with OpenAI's
+// defaults for omitted parts. A partial patch of either composite would
+// otherwise silently replace the inherited other half.
 func mapCreateRequest(request createRequest, identity llm.RequestContext, responseID string) (mappedRequest, *apiError) {
 	if request.Stream != nil && *request.Stream {
 		return mappedRequest{}, invalidParam("stream", "streaming is not supported; use background: true and poll GET /v1/responses/{id}")
@@ -158,7 +162,8 @@ func mapCreateRequest(request createRequest, identity llm.RequestContext, respon
 		settings.Instructions.Clear = true
 	}
 
-	if apiErr := mapTools(request, settings); apiErr != nil {
+	continuation := mapped.PreviousResponseID != ""
+	if apiErr := mapTools(request, settings, continuation); apiErr != nil {
 		return mappedRequest{}, apiErr
 	}
 	if request.Temperature != nil {
@@ -175,7 +180,7 @@ func mapCreateRequest(request createRequest, identity llm.RequestContext, respon
 		}
 		settings.TopP.Set = &value
 	}
-	if apiErr := mapOutput(request, settings); apiErr != nil {
+	if apiErr := mapOutput(request, settings, continuation); apiErr != nil {
 		return mappedRequest{}, apiErr
 	}
 	if apiErr := mapReasoning(request.Reasoning, settings); apiErr != nil {
@@ -467,7 +472,7 @@ type functionTool struct {
 	Strict      *bool           `json:"strict"`
 }
 
-func mapTools(request createRequest, settings *llm.SettingsPatchV1) *apiError {
+func mapTools(request createRequest, settings *llm.SettingsPatchV1, continuation bool) *apiError {
 	if request.Tools != nil {
 		tools := make([]llm.Tool, 0, len(request.Tools))
 		for index, raw := range request.Tools {
@@ -486,7 +491,7 @@ func mapTools(request createRequest, settings *llm.SettingsPatchV1) *apiError {
 		}
 		settings.Tools.Set = &tools
 	}
-	if len(request.ToolChoice) == 0 && request.ParallelToolCalls == nil && request.Tools == nil {
+	if !continuation && len(request.ToolChoice) == 0 && request.ParallelToolCalls == nil && request.Tools == nil {
 		return nil
 	}
 	policy := llm.ToolPolicy{Mode: llm.ToolChoiceAuto, Parallel: true}
@@ -521,12 +526,12 @@ func mapTools(request createRequest, settings *llm.SettingsPatchV1) *apiError {
 	return nil
 }
 
-func mapOutput(request createRequest, settings *llm.SettingsPatchV1) *apiError {
+func mapOutput(request createRequest, settings *llm.SettingsPatchV1, continuation bool) *apiError {
 	var format *textFormat
 	if request.Text != nil {
 		format = request.Text.Format
 	}
-	if format == nil && request.MaxOutputTokens == nil {
+	if !continuation && format == nil && request.MaxOutputTokens == nil {
 		return nil
 	}
 	output := llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindText}}
