@@ -3,6 +3,7 @@ package architecturetest
 import (
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -194,12 +195,23 @@ func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
 		if got, want := scalarString(t, workflow.name, job, "if"), "failure() && github.event_name == 'schedule'"; got != want {
 			t.Fatalf("%s report-scheduled-failure if = %q, want %q", workflow.name, got, want)
 		}
-		needs := stringSequence(t, workflow.name, job, "needs")
-		if len(needs) == 0 {
-			t.Fatalf("%s report-scheduled-failure needs no jobs", workflow.name)
+		// failure() only observes ancestor jobs, so every other job that can
+		// run on a schedule must be a transitive dependency of the reporter.
+		covered := map[string]bool{}
+		pending := jobNeeds(t, workflow, "report-scheduled-failure")
+		for len(pending) > 0 {
+			need := pending[0]
+			pending = pending[1:]
+			if !covered[need] {
+				covered[need] = true
+				pending = append(pending, jobNeeds(t, workflow, need)...)
+			}
 		}
-		for _, need := range needs {
-			_ = workflowJob(t, workflow, need)
+		for name := range workflowMapping(t, workflow, "jobs") {
+			if name == "report-scheduled-failure" || covered[name] || !jobCanRunOnSchedule(t, workflow, name) {
+				continue
+			}
+			t.Fatalf("%s job %q can fail on a schedule without report-scheduled-failure depending on it", workflow.name, name)
 		}
 		permissions := nestedMapping(t, workflow.name, job, "permissions")
 		if len(permissions) != 1 || scalarString(t, workflow.name, permissions, "issues") != "write" {
@@ -214,4 +226,38 @@ func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
 			t.Fatalf("scheduled workflows = %v, want them to include %s", scheduled, want)
 		}
 	}
+}
+
+// jobNeeds returns a job's direct dependencies, accepting both the scalar and
+// sequence forms of needs.
+func jobNeeds(t *testing.T, workflow workflowDocument, name string) []string {
+	t.Helper()
+	job := workflowJob(t, workflow, name)
+	switch needs := job["needs"].(type) {
+	case nil:
+		return nil
+	case string:
+		return []string{needs}
+	default:
+		return stringSequence(t, workflow.name, job, "needs")
+	}
+}
+
+var eventNameEquality = regexp.MustCompile(`github\.event_name == '([a-z_]+)'`)
+
+// jobCanRunOnSchedule reports false only for a job whose condition requires a
+// specific non-schedule event, such as push-only release evidence.
+func jobCanRunOnSchedule(t *testing.T, workflow workflowDocument, name string) bool {
+	t.Helper()
+	condition, _ := workflowJob(t, workflow, name)["if"].(string)
+	matches := eventNameEquality.FindAllStringSubmatch(condition, -1)
+	if len(matches) == 0 || strings.Contains(condition, "||") {
+		return true
+	}
+	for _, match := range matches {
+		if match[1] == "schedule" {
+			return true
+		}
+	}
+	return false
 }
