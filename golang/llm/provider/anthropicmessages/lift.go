@@ -15,12 +15,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 	if response == nil {
 		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
 	}
-	actual, err := profile.actualClass(string(response.Usage.ServiceTier))
-	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
-	}
+	actual := profile.actualClass(string(response.Usage.ServiceTier))
 	output, states, hasToolCalls, hasRefusal, err := liftContent(response.Content)
 	if err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())

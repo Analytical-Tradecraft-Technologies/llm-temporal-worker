@@ -333,14 +333,15 @@ inclusive provider count remains in `usage.provider_raw` as `prompt_tokens`
 the total are rejected as invalid provider responses.
 
 A successful response is never rejected over its tier label, because the
-provider has already done billable work. The OpenAI Chat, OpenAI Responses,
-Bedrock Messages and Bedrock Converse adapters treat the response tier as
-optional evidence:
+provider has already done billable work. Every adapter (OpenAI Chat, OpenAI
+Responses, Anthropic Messages, Bedrock Messages and Bedrock Converse) treats the
+response tier as optional evidence:
 
 - A response with no tier is accepted and reports no actual class
   (`service.actual` is omitted). `service_tier` is optional in the OpenAI
-  response schemas and in Converse, and is absent from the Azure OpenAI and Exa
-  response shapes and from the Bedrock InvokeModel body.
+  response schemas and in Converse, nullable in Anthropic's `usage`, and is
+  absent from the Azure OpenAI and Exa response shapes and from the Bedrock
+  InvokeModel body.
 - An unrecognized provider tier (for example an upstream label relayed by
   OpenRouter, or Bedrock `reserved`) also maps to no public class. The raw
   label is kept in `service.provider_value`. It must not be mislabeled as
@@ -350,9 +351,6 @@ optional evidence:
 
 Pricing and cost metrics use the attempted class whenever no actual class is
 reported, and the actual-class metric records `unknown`.
-
-The Anthropic Messages profiles (direct and AWS gateway) still require
-`usage.service_tier`, which that API documents as always present.
 
 Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
 a string, and some compatible providers send an empty string for a tool that
