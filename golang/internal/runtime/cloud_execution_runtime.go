@@ -505,6 +505,10 @@ func (r *CloudExecutionRuntime) retryHintWait(ctx context.Context, scope cloudst
 	return wait, nil
 }
 
+// maxCredentialFailureWalk bounds how many earlier attempts
+// credentialRoutesExhausted reads to find the last provider execution.
+const maxCredentialFailureWalk = 16
+
 // credentialRoutesExhausted turns a replacement's failed route selection into
 // the terminal failure that started it. A provider 401 or 402 is retryable
 // only so the request can move to another route (#1335, #1336); when the
@@ -517,9 +521,31 @@ func (r *CloudExecutionRuntime) credentialRoutesExhausted(ctx context.Context, s
 		(selection.Code != provider.CodeProviderUnavailable && selection.Code != provider.CodeNoRoute) {
 		return nil
 	}
-	previous, err := r.store.LoadProviderExecution(ctx, scope, attempt.PreviousID)
-	if err != nil {
-		return nil
+	// Unused quote renewals and unclaimed executions may sit between this
+	// attempt and the execution that failed; walk past them, as
+	// retryHintWait does.
+	var previous cloudstate.SavedProviderExecution
+	for id, hops := attempt.PreviousID, 0; ; hops++ {
+		if id == "" || hops >= maxCredentialFailureWalk {
+			return nil
+		}
+		saved, err := r.store.LoadProviderExecution(ctx, scope, id)
+		if err == nil && !saved.Execution.Unclaimed(saved.Plan) {
+			previous = saved
+			break
+		}
+		if err != nil && !errors.Is(err, cloudstate.ErrProviderExecutionMissing) && !errors.Is(err, cloudstate.ErrBudgetPlanMissing) {
+			return nil
+		}
+		record, err := r.store.Read(ctx, scope, id)
+		if err != nil {
+			return nil
+		}
+		link, err := cloudRequestAttempt(record)
+		if err != nil || link == nil {
+			return nil
+		}
+		id = link.PreviousID
 	}
 	failed := previous.Execution.Failure
 	if previous.Execution.Stage != cloudstate.ExecutionFailed || failed == nil || !failed.Retryable || failed.Dispatch != provider.DispatchRejected ||

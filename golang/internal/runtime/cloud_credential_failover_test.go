@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -173,6 +174,49 @@ func TestCloudCredentialRejectionExhaustsAttempts(t *testing.T) {
 	}
 	if f.submits.Load() != 2 {
 		t.Fatalf("submits = %d, want one per attempt", f.submits.Load())
+	}
+}
+
+// flakyHealthReader fails reads while failing is set.
+type flakyHealthReader struct {
+	*keyedHealthFixture
+	failing bool
+}
+
+func (h *flakyHealthReader) GetRouteStatus(ctx context.Context, digest [32]byte, route, endpoint, model, tier string) (control.RouteStatus, error) {
+	if h.failing {
+		return control.RouteStatus{}, errors.New("health unavailable")
+	}
+	return h.keyedHealthFixture.GetRouteStatus(ctx, digest, route, endpoint, model, tier)
+}
+
+// An unused quote renewal between the replacement and the rejected attempt
+// must not hide the rejection: selection still ends the request terminally.
+func TestCloudCredentialRejectionTerminalAfterRenewal(t *testing.T) {
+	f, shared, _ := credentialFailoverCloud(t, false, providerUnauthorized)
+	reader := &flakyHealthReader{keyedHealthFixture: shared}
+	f.cap.ProviderRouteStatus = reader
+	f.restart(t)
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	f.now = f.now.Add(2 * time.Second)
+	reader.failing = true
+	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable {
+		t.Fatalf("acquire error = %v, want the health read failure", err)
+	}
+	// The replacement attempt is now old enough to be renewed unused.
+	reader.failing = false
+	f.now = f.now.Add(cache.MaxFillLease)
+	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	if !errors.As(err, &classified) || classified.Code != provider.CodeAuthentication || classified.Retry != provider.RetryNever {
+		t.Fatalf("acquire error = %v, want a terminal authentication failure", err)
+	}
+	if f.submits.Load() != 1 {
+		t.Fatalf("submits = %d, want the held route not dispatched again", f.submits.Load())
 	}
 }
 
