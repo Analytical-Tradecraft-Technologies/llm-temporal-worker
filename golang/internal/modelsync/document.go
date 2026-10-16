@@ -88,7 +88,7 @@ type Pricing struct {
 	Discount string `json:"-"`
 }
 
-// PricingOverride replaces prices for prompts of at least MinPromptTokens.
+// PricingOverride replaces prices for prompts of more than MinPromptTokens.
 // Components it omits keep the base price.
 type PricingOverride struct {
 	MinPromptTokens   int64  `json:"min_prompt_tokens"`

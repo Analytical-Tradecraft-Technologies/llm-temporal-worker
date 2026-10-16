@@ -85,7 +85,7 @@ type TierPrices struct {
 	CacheWrite string `yaml:"cache_write_per_million"`
 	PerRequest string `yaml:"per_request"`
 	// LongPrompt replaces every component above for a call whose prompt
-	// (input, cache read and cache write) reaches its threshold. A tier
+	// (input, cache read and cache write) exceeds its threshold. A tier
 	// override restates it or drops it with the tier.
 	LongPrompt *LongPromptTierPrices `yaml:"long_prompt,omitempty"`
 }

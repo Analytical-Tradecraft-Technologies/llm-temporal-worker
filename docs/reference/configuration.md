@@ -1369,11 +1369,12 @@ A model without `model` derives its provider ID from the OpenRouter ID
 (`model_id: verbatim`, or `dots_to_dashes` for `claude-sonnet-4.5` →
 `claude-sonnet-4-5`). A tier may add a `long_prompt` price with
 `min_prompt_tokens` and every price component; it replaces the tier's prices
-for a call whose prompt (input, cache read and cache write) reaches the
-threshold, and a tier override that omits it drops it. Built-in OpenAI rules
-carry OpenAI's long-prompt prices with the real context window; built-in
-Anthropic context limits stay capped at the long-prompt threshold, because the
-longer window needs a beta header the adapters never send.
+for a call whose prompt (input, cache read and cache write) exceeds the
+threshold, and a tier override that omits it drops it. Built-in OpenAI and
+Claude Haiku 5.5 rules carry the provider's long-prompt prices with the real
+context window; built-in context limits of Anthropic models before Claude 4.6
+stay capped at the long-prompt threshold, because their longer window needs a
+beta header the adapters never send.
 
 ## Validation
 
