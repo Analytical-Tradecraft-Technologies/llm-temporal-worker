@@ -1007,10 +1007,16 @@ func routeCredentialRejection(failure *provider.Error) bool {
 }
 
 // insufficientCredit reports a provider 402, which adapters map to a
-// permission denial that carries the HTTP status in its safe details.
+// permission denial that carries the HTTP status in its safe details. A 429 is
+// mapped to a permission denial only for a documented billing signal, such as
+// OpenAI credit_balance_exhausted or the Anthropic tier spend cap, which is the
+// same account-wide credit denial (#1442).
 func insufficientCredit(failure *provider.Error) bool {
-	return failure != nil && failure.Code == provider.CodePermissionDenied && failure.Dispatch == provider.DispatchRejected &&
-		failure.SafeDetails["status"] == "402"
+	if failure == nil || failure.Code != provider.CodePermissionDenied || failure.Dispatch != provider.DispatchRejected {
+		return false
+	}
+	status := failure.SafeDetails["status"]
+	return status == "402" || status == "429"
 }
 
 func preDispatchContextEnded(failure *provider.Error) bool {

@@ -345,8 +345,10 @@ V1 health is operator-configured plus passive:
 - a permission denial counts toward the transient-failure threshold instead
   of opening the circuit at once, because a 403 such as a moderation rejection
   can be specific to one request;
-- a provider account out of credit (HTTP 402) is account-wide, so it opens the
-  circuit at once and holds it for 15 minutes (or until configuration
+- a provider account out of credit (HTTP 402, or a documented billing 429 such
+  as OpenAI `credit_balance_exhausted` or the Anthropic tier spend cap) is
+  account-wide, so it opens the circuit at once and holds it for 15 minutes
+  (or until configuration
   changes); it is recorded with safe error code `insufficient_credit` and is
   not a sticky credit incident, so a top-up made in place recovers after one
   probe request;

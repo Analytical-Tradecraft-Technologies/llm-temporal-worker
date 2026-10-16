@@ -51,8 +51,12 @@ and credentials are never part of the event.
 Credit classification is conservative. A generic HTTP 429 is a rate/capacity
 signal and does not establish exhausted credit. Exhausted/billing incidents
 require one of the reviewed provider codes (`insufficient_quota`,
-`billing_hard_limit`, `payment_required`, `quota_low`, `billing_warning`,
-`quota_restored`, or `billing_restored`) or an authorized operator event.
+`billing_hard_limit`, `payment_required`, OpenAI's billing 429 codes
+`credit_balance_exhausted`, `organization_spend_limit_exceeded`,
+`project_spend_limit_exceeded` and `organization_usage_limit_exceeded`,
+Anthropic's tier spend-cap `enforced_spend_limit_reached`, `quota_low`,
+`billing_warning`, `quota_restored`, or `billing_restored`) or an authorized
+operator event.
 Arbitrary provider text, even when printable and bounded, is not incident
 evidence.
 `RouteStatus.Apply` keeps a confirmed incident sticky across ordinary
