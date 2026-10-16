@@ -63,6 +63,10 @@ type ProviderExecution struct {
 	Failure             *ExecutionFailure         `json:"failure,omitempty"`
 	Settlement          *durable.ReconcileRequest `json:"settlement,omitempty"`
 	Settled             bool                      `json:"settled"`
+	// Uncached marks an attempt of a cached request that stopped waiting on a
+	// stalled fill of another attempt (#1455). It started no fill of its own,
+	// so it neither completes a fill nor publishes a cache entry.
+	Uncached bool `json:"uncached,omitempty"`
 }
 
 type providerExecutionFields ProviderExecution
@@ -246,7 +250,8 @@ func executionReservationMatches(plan BudgetPlan, result durable.ReserveResult) 
 // BeginProviderExecution fences initial admission before consuming its claim.
 // Only a confirmed fresh write returns true. An uncertain acknowledgement or
 // an existing record never authorizes submission, even by the same caller.
-func (r *Repository) BeginProviderExecution(ctx context.Context, scope Scope, id RequestID, reservation durable.ReserveResult, now time.Time) (SavedProviderExecution, bool, error) {
+// uncached is saved immutably on a fresh execution; see ProviderExecution.
+func (r *Repository) BeginProviderExecution(ctx context.Context, scope Scope, id RequestID, reservation durable.ReserveResult, uncached bool, now time.Time) (SavedProviderExecution, bool, error) {
 	// Distinct proposal tokens stop identical concurrent CAS retries from both
 	// observing the event stream's idempotent success as a fresh start grant.
 	startToken, err := uuid.NewRandom()
@@ -273,7 +278,7 @@ func (r *Repository) BeginProviderExecution(ctx context.Context, scope Scope, id
 		if now.Before(record.UpdatedAt) {
 			now = record.UpdatedAt
 		}
-		execution := ProviderExecution{Version: 1, StartToken: startToken.String(), Revision: 1, Stage: ExecutionClaiming, Reservation: reservation, StartedAt: now.UTC(), UpdatedAt: now.UTC(), RecoverAfter: now.UTC().Add(durable.BudgetStartLease)}
+		execution := ProviderExecution{Version: 1, StartToken: startToken.String(), Revision: 1, Stage: ExecutionClaiming, Reservation: reservation, StartedAt: now.UTC(), UpdatedAt: now.UTC(), RecoverAfter: now.UTC().Add(durable.BudgetStartLease), Uncached: uncached}
 		if execution.Validate(*plan) != nil {
 			return SavedProviderExecution{}, false, ErrInvalid
 		}
@@ -383,7 +388,7 @@ func (r *Repository) writeExecution(ctx context.Context, record Record, progress
 }
 
 func validExecutionTransition(old, next ProviderExecution) bool {
-	if old.StartToken != next.StartToken || !old.StartedAt.Equal(next.StartedAt) || !old.RecoverAfter.Equal(next.RecoverAfter) || next.UpdatedAt.Before(old.UpdatedAt) ||
+	if old.StartToken != next.StartToken || old.Uncached != next.Uncached || !old.StartedAt.Equal(next.StartedAt) || !old.RecoverAfter.Equal(next.RecoverAfter) || next.UpdatedAt.Before(old.UpdatedAt) ||
 		!equalExecutionJSON(old.Reservation, next.Reservation) || (old.Claim != nil && !equalExecutionJSON(old.Claim, next.Claim)) ||
 		(old.ProviderOperationID != "" && old.ProviderOperationID != next.ProviderOperationID) || (!old.CompletedAt.IsZero() && !old.CompletedAt.Equal(next.CompletedAt)) {
 		return false

@@ -147,3 +147,31 @@ func TestPrepareRejectsInvalidOrCancelledBeforeIO(t *testing.T) {
 		t.Fatal("expired attempt")
 	}
 }
+
+// Only another attempt's started fill, measured from its start, stalls (#1455).
+func TestStalledFill(t *testing.T) {
+	started := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	key := ResponseKey{ScopeID: "scope", Operation: OperationGenerate, RequestIndex: 1}
+	owner := FillLease{Key: key, OperationID: "owner", Attempt: "owner-attempt", AcquiredAt: started, ExpiresAt: started.Add(MaxFillLease)}
+	record := FillRecord{Lease: owner, State: FillStarted, UpdatedAt: started}
+	waiter := owner
+	waiter.OperationID, waiter.Attempt = "waiter", "waiter-attempt"
+	stalled := started.Add(StalledFillAfter)
+	if StalledFill(record, waiter, stalled.Add(-time.Nanosecond)) || !StalledFill(record, waiter, stalled) {
+		t.Fatal("stall bound")
+	}
+	if StalledFill(record, owner, stalled) {
+		t.Fatal("the owner's own fill stalled")
+	}
+	other := waiter
+	other.Key.RequestIndex = 2
+	if StalledFill(record, other, stalled) {
+		t.Fatal("a fill under another key stalled")
+	}
+	for _, state := range []FillState{FillHeld, FillReleased, FillFinished} {
+		record.State = state
+		if StalledFill(record, waiter, stalled) {
+			t.Fatalf("%s fill stalled", state)
+		}
+	}
+}

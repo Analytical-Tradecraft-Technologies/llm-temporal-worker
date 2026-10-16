@@ -47,7 +47,7 @@ func (s *executionTestStore) LoadProviderExecution(ctx context.Context, scope cl
 	_ = json.Unmarshal(s.execution, &saved.Execution)
 	return saved, nil
 }
-func (s *executionTestStore) BeginProviderExecution(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, reservation durable.ReserveResult, now time.Time) (cloudstate.SavedProviderExecution, bool, error) {
+func (s *executionTestStore) BeginProviderExecution(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, reservation durable.ReserveResult, uncached bool, now time.Time) (cloudstate.SavedProviderExecution, bool, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -59,7 +59,7 @@ func (s *executionTestStore) BeginProviderExecution(ctx context.Context, scope c
 		_ = json.Unmarshal(s.execution, &saved.Execution)
 		return saved, false, nil
 	}
-	saved.Execution = cloudstate.ProviderExecution{Version: 1, StartToken: uuid.NewString(), Revision: 1, Stage: cloudstate.ExecutionClaiming, Reservation: reservation, StartedAt: now, UpdatedAt: now, RecoverAfter: now.Add(durable.BudgetStartLease)}
+	saved.Execution = cloudstate.ProviderExecution{Version: 1, StartToken: uuid.NewString(), Revision: 1, Stage: cloudstate.ExecutionClaiming, Reservation: reservation, StartedAt: now, UpdatedAt: now, RecoverAfter: now.Add(durable.BudgetStartLease), Uncached: uncached}
 	if err := saved.Execution.Validate(saved.Plan); err != nil {
 		return saved, false, err
 	}

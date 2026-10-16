@@ -26,7 +26,7 @@ import (
 
 type CloudProviderExecutionStore interface {
 	Read(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.Record, error)
-	BeginProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID, durable.ReserveResult, time.Time) (cloudstate.SavedProviderExecution, bool, error)
+	BeginProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID, durable.ReserveResult, bool, time.Time) (cloudstate.SavedProviderExecution, bool, error)
 	LoadProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.SavedProviderExecution, error)
 	SaveProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID, uint64, cloudstate.ProviderExecution) error
 }
@@ -85,13 +85,15 @@ func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.
 // durable fence is written before Claim, and BeforePossibleWrite persists the
 // claim before allowing HTTP. A saved claim is never reused as a dispatch grant.
 func (executor *CloudProviderExecution) Submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult) (ProviderExecutionResult, error) {
-	return executor.submit(ctx, call, reservation, nil)
+	return executor.submit(ctx, call, reservation, nil, false)
 }
 
 // The optional cache gate runs only for the durable execution-fence winner,
 // before a budget claim or HTTP request. A crash or uncertain gate reply stays
 // recoverable as an unknown child; retries cannot regain dispatch permission.
-func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult, start func(context.Context) error) (ProviderExecutionResult, error) {
+// uncached marks a cached request's attempt that bypasses a stalled fill
+// without a gate of its own; it is saved with the execution.
+func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult, start func(context.Context) error, uncached bool) (ProviderExecutionResult, error) {
 	if executor == nil || call == nil || call.owner != executor.admission || ctx == nil {
 		return ProviderExecutionResult{}, executionError(provider.CodeConfiguration)
 	}
@@ -100,7 +102,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	}
 	// An already-started attempt is resumed through Resume, including after a
 	// lost acknowledgement of Begin. It can never enter initial admission.
-	saved, fresh, err := executor.store.BeginProviderExecution(ctx, call.scope, call.id, reservation, executor.clock())
+	saved, fresh, err := executor.store.BeginProviderExecution(ctx, call.scope, call.id, reservation, uncached, executor.clock())
 	if err != nil {
 		return ProviderExecutionResult{}, cloudRuntimeError(err, false)
 	}

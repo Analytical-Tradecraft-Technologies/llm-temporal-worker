@@ -160,6 +160,7 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 		p.disposition = CacheWait
 	case cache.FillRecoveryNeeded, cache.FillAttemptFinished:
 		p.disposition = CacheRecoveryRequired
+		p.stalled = cache.StalledFill(result.Fill.Record, lease, now)
 	default:
 		return nil, fmt.Errorf("%w: unknown cache fill decision", ErrResponseCacheCorrupt)
 	}
@@ -171,6 +172,16 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 // returns nil. FinalizeCache must still create a distinct zero-cost child.
 func (d CacheDecision) Entry() *cache.ResponseEntry        { return d.preparation.origin() }
 func (d CompactCacheDecision) Entry() *cache.ResponseEntry { return d.preparation.origin() }
+
+// StalledFill reports a recovery decision on another attempt's started fill
+// older than cache.StalledFillAfter. The caller may then stop waiting and make
+// its own paid call without the cache; it never takes that fill over.
+func (d CacheDecision) StalledFill() bool        { return d.preparation.stalledFill() }
+func (d CompactCacheDecision) StalledFill() bool { return d.preparation.stalledFill() }
+
+func (p *responseCachePreparation) stalledFill() bool {
+	return p != nil && p.disposition == CacheRecoveryRequired && p.stalled
+}
 
 func (p *responseCachePreparation) origin() *cache.ResponseEntry {
 	if p == nil {
