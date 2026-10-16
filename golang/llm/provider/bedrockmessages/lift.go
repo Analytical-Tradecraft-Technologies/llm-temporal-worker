@@ -70,7 +70,18 @@ func (profile Profile) liftResponseWithTier(call provider.Call, response *anthro
 			ResponseID: response.ID, RequestID: requestID, FinishReason: string(response.StopReason), Raw: rawResponseFacts(response),
 		},
 		Continuation: continuationForResponse(call, response, states),
+		Diagnostics:  liftDiagnostics(call),
 	}, nil
+}
+
+// liftDiagnostics reports what a best-effort compilation left out of the
+// provider request.
+func liftDiagnostics(call provider.Call) []llm.Diagnostic {
+	if !call.Metadata.ExtensionsDropped {
+		return nil
+	}
+	return []llm.Diagnostic{{Code: "extensions_dropped", Severity: llm.DiagnosticWarning, Path: "/extensions",
+		Message: "Bedrock Messages has no extension allowlist; the request's extensions were not sent to the provider"}}
 }
 
 // validateFinalJSON enforces the caller's json_schema output locally. The

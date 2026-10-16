@@ -156,6 +156,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	metadata.CapabilityVersion = set.Version
 	metadata.ProviderTier = providerTier
 	metadata.OpaqueStateRequired = normalized.Continuation != nil
+	metadata.ExtensionsDropped = !input.Strict && len(normalized.Extensions) > 0
 	if metadata.EstimatedBytes == 0 {
 		canonical, canonicalErr := canonicalRequestBytes(normalized)
 		if canonicalErr != nil {
