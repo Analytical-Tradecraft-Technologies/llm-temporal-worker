@@ -320,6 +320,9 @@ func anthropicAWSFixtureProfile(t *testing.T) Profile {
 	profile.CapabilityVersion = "anthropic-aws-contract/v1"
 	profile.Capabilities.Version = profile.CapabilityVersion
 	profile.ExpectedBaseURL = "http://127.0.0.1/aws-contract"
+	// Claude Platform on AWS has no fast mode, so the gateway offers no
+	// priority class.
+	profile.ServiceTiers[llm.ServiceClassPriority] = ""
 	return mustProfile(t, profile)
 }
 

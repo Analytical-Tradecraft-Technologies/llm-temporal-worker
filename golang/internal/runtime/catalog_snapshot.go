@@ -214,7 +214,22 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 		}
 		models[modelName] = routing.Model{Name: modelName, Routes: routes}
 	}
-	return routing.CompileCatalog(value.Version, models)
+	compiled, err := routing.CompileCatalog(value.Version, models)
+	if err != nil {
+		return routing.Catalog{}, err
+	}
+	return compiled.WithClassPolicies(classPolicies(value.ServiceClassPolicies))
+}
+
+func classPolicies(policies []config.ServiceClassPolicy) []routing.ClassPolicy {
+	if len(policies) == 0 {
+		return nil
+	}
+	result := make([]routing.ClassPolicy, 0, len(policies))
+	for _, policy := range policies {
+		result = append(result, routing.ClassPolicy{ID: policy.ID, Tenant: policy.Match.Tenant, Project: policy.Match.Project, Classes: append([]llm.ServiceClass(nil), policy.Classes...)})
+	}
+	return result
 }
 
 // endpointConfigDigest binds everything configured for one endpoint, including

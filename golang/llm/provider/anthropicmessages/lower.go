@@ -100,7 +100,10 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		}
 		requestMap["system"] = system
 	}
-	if serviceTier != "" {
+	if serviceTier == FastTier {
+		requestMap["service_tier"] = "standard_only"
+		requestMap["speed"] = "fast"
+	} else if serviceTier != "" {
 		requestMap["service_tier"] = serviceTier
 	}
 	if request.Sampling != nil {

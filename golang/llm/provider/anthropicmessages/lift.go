@@ -15,7 +15,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 	if response == nil {
 		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
 	}
-	actual, err := profile.actualClass(string(response.Usage.ServiceTier))
+	actual, err := profile.actualClass(responseTier(response))
 	if err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
@@ -93,7 +93,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		Requested:     call.ServiceClass,
 		Attempted:     call.ServiceClass,
 		Actual:        actual,
-		ProviderValue: string(response.Usage.ServiceTier),
+		ProviderValue: responseTier(response),
 		FallbackIndex: 0,
 	}
 	result := llm.Response{
@@ -115,7 +115,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 	if _, err := llm.HostedToolCharge(usage, result.Route.ResolvedModel); err != nil {
 		result.Cost.Status = llm.CostStatusUnknown
 	}
-	if priceModifiedUsage(usage.ProviderRaw) {
+	if priceModifiedUsage(usage.ProviderRaw, call.Metadata.ProviderTier) {
 		result.Cost.Status = llm.CostStatusUnknown
 	}
 	return result, nil
@@ -124,11 +124,17 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 // priceModifiedUsage reports whether the provider billed the response with a
 // request-level multiplier the catalog entry does not model: US-only inference
 // (usage.inference_geo "us", 1.1x on Claude 4.6 and later) or fast mode
-// (usage.speed "fast", 2x). A workspace default_inference_geo applies without
-// any request field, so only the reported usage settles the question. Such a
-// response is kept at the reservation rather than settled at base prices.
-func priceModifiedUsage(raw map[string]json.RawMessage) bool {
-	for key, base := range map[string]string{"inference_geo": "global", "speed": "standard"} {
+// (usage.speed "fast", 2x) on a call that did not attempt the fast tier, whose
+// own catalog entry carries fast-mode prices. A workspace default_inference_geo
+// applies without any request field, so only the reported usage settles the
+// question. Such a response is kept at the reservation rather than settled at
+// base prices.
+func priceModifiedUsage(raw map[string]json.RawMessage, attemptedTier string) bool {
+	modifiers := map[string]string{"inference_geo": "global"}
+	if attemptedTier != FastTier {
+		modifiers["speed"] = "standard"
+	}
+	for key, base := range modifiers {
 		value, present := raw[key]
 		if !present || string(value) == "null" {
 			continue
@@ -285,6 +291,19 @@ func liftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal bool) 
 	default:
 		return "", fmt.Errorf("provider returned unknown stop reason %q", stopReason)
 	}
+}
+
+// responseTier names the provider tier that served the response. Fast mode is
+// reported as usage.speed "fast" beside usage.service_tier "standard", so it
+// is named FastTier to price and classify it apart from standard.
+func responseTier(response *anthropic.Message) string {
+	var usage struct {
+		Speed string `json:"speed"`
+	}
+	if json.Unmarshal([]byte(response.Usage.RawJSON()), &usage) == nil && usage.Speed == "fast" {
+		return FastTier
+	}
+	return string(response.Usage.ServiceTier)
 }
 
 func rawResponseFacts(response *anthropic.Message) map[string]json.RawMessage {

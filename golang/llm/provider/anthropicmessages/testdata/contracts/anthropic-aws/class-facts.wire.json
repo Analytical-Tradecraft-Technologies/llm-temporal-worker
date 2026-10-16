@@ -1,6 +1,5 @@
 [
   {"class": "economy", "supported": false},
   {"class": "standard", "supported": true, "requested_tier": "standard_only", "actual_tier": "standard"},
-  {"class": "priority", "supported": false, "priority_capacity": false},
-  {"class": "priority", "supported": true, "requested_tier": "auto", "actual_tier": "priority", "priority_capacity": true}
+  {"class": "priority", "supported": false}
 ]

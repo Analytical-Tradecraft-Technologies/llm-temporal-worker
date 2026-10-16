@@ -298,7 +298,10 @@ func (planning *ProviderPlanning) containsCandidate(request llm.Request, candida
 		return false
 	}
 	route := model.Routes[candidate.RouteIndex]
-	classes := append([]llm.ServiceClass{request.ServiceClass}, request.ServiceClassFallbacks...)
+	classes, err := planning.catalog.ServiceClasses(request)
+	if err != nil {
+		return false
+	}
 	return candidate.FallbackIndex < len(classes) && candidate.AttemptedClass == classes[candidate.FallbackIndex] && candidate.RequestedClass == request.ServiceClass &&
 		candidate.ID != "" && candidate.RouteID == route.ID && candidate.EndpointID == route.EndpointID && candidate.Provider == route.Provider &&
 		provider.Family(candidate.Family).Valid() && candidate.Family == route.Family && candidate.Model == route.Model && candidate.ModelRevision == route.ModelRevision &&
@@ -486,6 +489,9 @@ func providerPlanningError(code provider.Code, phase provider.Phase, retry provi
 func copyProviderCatalog(source routing.Catalog) (routing.Catalog, error) {
 	catalog, err := routing.CompileCatalog(source.Version, source.Models)
 	if err != nil {
+		return routing.Catalog{}, err
+	}
+	if catalog, err = catalog.WithClassPolicies(source.ClassPolicies); err != nil {
 		return routing.Catalog{}, err
 	}
 	for _, model := range catalog.Models {

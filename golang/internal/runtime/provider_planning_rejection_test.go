@@ -58,16 +58,17 @@ func TestCloudExecutionReportsUnsupportedCapabilityForRejectedRoutes(t *testing.
 				_, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
 			}
 			details := rejectedSelection(t, err, provider.CodeUnsupportedCapability, provider.PhaseCompile)
-			// The fixture's priority class has no route; the compile rejection
-			// of the standard fallback explains the code and comes first.
-			if details["rejected_routes"] != "2" || details["route_1"] != "route" || details["reason_1"] != "route_compile_rejected" || details["reason_2"] != routing.RejectClass {
+			// No route offers the fixture's priority class, so it is served at
+			// standard, the same class as its fallback; the compile rejection
+			// of that one candidate explains the code.
+			if details["rejected_routes"] != "1" || details["route_1"] != "route" || details["reason_1"] != "route_compile_rejected" {
 				t.Fatalf("details = %v", details)
 			}
 			if f.submits.Load() != 0 {
 				t.Fatal("rejected request reached the provider")
 			}
 			line := logs.String()
-			if strings.Count(line, "\n") != 2 || !strings.Contains(line, `"route_id":"route"`) || !strings.Contains(line, `"cause":"route_compile_rejected"`) ||
+			if strings.Count(line, "\n") != 1 || !strings.Contains(line, `"route_id":"route"`) || !strings.Contains(line, `"cause":"route_compile_rejected"`) ||
 				!strings.Contains(line, `"error_code":"unsupported_capability"`) || strings.Contains(line, "sensitive") || strings.Contains(line, "instruction") {
 				t.Fatalf("rejection log = %q", line)
 			}

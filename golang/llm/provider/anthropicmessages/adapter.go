@@ -221,6 +221,9 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	probe := &provider.DispatchProbe{}
 	response, panicked, err := provider.CallRecovered(func() (*anthropic.Message, error) {
 		requestOptions := []option.RequestOption{option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware)}
+		if call.Metadata.ProviderTier == FastTier {
+			requestOptions = append(requestOptions, option.WithHeaderAdd("anthropic-beta", fastModeBeta))
+		}
 		for _, override := range overrides {
 			requestOptions = append(requestOptions, option.WithJSONSet(override.Path, override.Value))
 		}
@@ -248,7 +251,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if response == nil {
 		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
 	}
-	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.Usage.ServiceTier)}
+	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: responseTier(response)}
 	if rawResponse != nil {
 		metadata.Status = rawResponse.StatusCode
 		metadata.RequestID = rawResponse.Header.Get("request-id")

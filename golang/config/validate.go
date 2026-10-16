@@ -117,6 +117,9 @@ func (config Config) Validate() error {
 	if err := config.Budgets.validate(); err != nil {
 		return err
 	}
+	if err := validateServiceClassPolicies(config.ServiceClassPolicies); err != nil {
+		return err
+	}
 	if err := config.validateBudgetReferences(); err != nil {
 		return err
 	}
@@ -796,6 +799,37 @@ func validateCatalogs(catalogs []CatalogRef, path string) error {
 		}
 		if _, err := hex.DecodeString(catalog.SHA256); err != nil {
 			return fmt.Errorf("%s[%d].sha256 must be hex", path, index)
+		}
+	}
+	return nil
+}
+
+// validateServiceClassPolicies requires every policy to keep standard
+// enabled: a request for a disabled class is served at standard, so standard
+// is the class no request can be left without.
+func validateServiceClassPolicies(policies []ServiceClassPolicy) error {
+	seen := make(map[string]struct{}, len(policies))
+	for index, policy := range policies {
+		path := fmt.Sprintf("service_class_policies[%d]", index)
+		if err := validateIdentifier(policy.ID, path+".id"); err != nil {
+			return err
+		}
+		if _, exists := seen[policy.ID]; exists {
+			return fmt.Errorf("%s duplicate policy ID %q", path, policy.ID)
+		}
+		seen[policy.ID] = struct{}{}
+		classes := make(map[llm.ServiceClass]struct{}, len(policy.Classes))
+		for classIndex, class := range policy.Classes {
+			if !class.Valid() {
+				return fmt.Errorf("%s.classes[%d] must be economy, standard, or priority", path, classIndex)
+			}
+			if _, exists := classes[class]; exists {
+				return fmt.Errorf("%s.classes[%d] repeats %q", path, classIndex, class)
+			}
+			classes[class] = struct{}{}
+		}
+		if _, ok := classes[llm.ServiceClassStandard]; !ok {
+			return fmt.Errorf("%s.classes must include standard", path)
 		}
 	}
 	return nil

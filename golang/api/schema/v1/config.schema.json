@@ -30,6 +30,11 @@
     "capabilities": { "$ref": "#/$defs/capabilities" },
     "pricing": { "$ref": "#/$defs/pricing" },
     "budgets": { "$ref": "#/$defs/budgets" },
+    "service_class_policies": {
+      "type": "array",
+      "description": "Service classes a tenant or project may use. A request for a disabled class is served at standard, never failed.",
+      "items": { "$ref": "#/$defs/service_class_policy" }
+    },
     "continuation": { "$ref": "#/$defs/continuation" },
     "telemetry": { "$ref": "#/$defs/telemetry" },
     "langfuse": { "$ref": "#/$defs/langfuse" },
@@ -616,6 +621,22 @@
           }
         },
         "windows": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/budget_window" } }
+      }
+    },
+    "service_class_policy": {
+      "type": "object", "additionalProperties": false, "required": ["id", "match", "classes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "match": {
+          "type": "object", "additionalProperties": false,
+          "description": "An omitted field matches every request; an empty match applies to all requests.",
+          "properties": { "tenant": { "type": "string" }, "project": { "type": "string" } }
+        },
+        "classes": {
+          "type": "array", "uniqueItems": true,
+          "description": "Must include standard: it is the class every disabled class is served at.",
+          "items": { "enum": ["economy", "standard", "priority"] }
+        }
       }
     },
     "budgets": {
