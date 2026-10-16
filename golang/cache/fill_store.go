@@ -11,6 +11,23 @@ import (
 // Redis budget authorization is separate and must still be checked at dispatch.
 const MaxFillLease = 15 * time.Minute
 
+// StalledFillAfter bounds how long a later attempt waits on another attempt's
+// STARTED fill. A started fill never expires and only its owner request can
+// finish it, so an owner workflow that was terminated or timed out leaves it
+// started for good (#1455). Once the fill is this old, measured from its start,
+// a waiter stops waiting and makes its own paid call without the cache. It
+// never takes the fill over or dispatches the owner's call again, so a live
+// but slow owner still finishes normally. The bound matches the 24-hour
+// schedule-to-close of the request activities.
+const StalledFillAfter = 24 * time.Hour
+
+// StalledFill reports whether record is another attempt's started fill that
+// lease's attempt no longer waits on at now. See StalledFillAfter.
+func StalledFill(record FillRecord, lease FillLease, now time.Time) bool {
+	return record.State == FillStarted && record.Lease.Key == lease.Key && record.Lease.Attempt != lease.Attempt &&
+		!now.Before(record.UpdatedAt.Add(StalledFillAfter))
+}
+
 // FillLease is a stable attempt identity. Persist it before using it and retain
 // every field unchanged across retries. Attempt must be unique for each new
 // attempt, including retries of paid work whose outcome is unknown.

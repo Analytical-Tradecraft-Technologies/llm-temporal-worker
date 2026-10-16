@@ -44,6 +44,56 @@ func TestCloudCacheWaiterOwnsFillAfterOwnerEndsUnpublished(t *testing.T) {
 	}
 }
 
+// An owner workflow that ends abnormally after starting its fill leaves the
+// fill started for good (#1455). An identical request waits on it until the
+// fill is cache.StalledFillAfter old, then pays for its own uncached call. It
+// never takes the fill over, so the owner's call is not dispatched again and
+// the owner, if it ever resumes, still finishes and publishes its own fill.
+func TestCloudCacheWaiterBypassesStalledStartedFill(t *testing.T) {
+	f := boundedCloud(t, true)
+	f.request.Cache = &llm.CachePolicyV1{}
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	v = boundedState(t, v, err, llm.ExecutionPending)
+	owner := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	// The owner's workflow is terminated here: nothing polls it again.
+	waiter := f.request
+	waiter.OperationKey = "waiter"
+	f.now = f.now.Add(cache.StalledFillAfter - time.Second)
+	v, err = f.runtime.GenerateStepV1(ctx, waiter)
+	boundedState(t, v, err, llm.ExecutionCacheWait)
+	f.now = f.now.Add(time.Second)
+	v, err = f.runtime.GenerateStepV1(ctx, waiter)
+	v = boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: waiter.Context, Capability: v.Capability}
+	f.now = f.now.Add(2 * time.Second)
+	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	v = boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	ref.Capability = v.Capability
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	if v.Generate.Cache.Disposition != "miss_not_populated" || f.submits.Load() != 2 || f.polls.Load() != 1 {
+		t.Fatalf("waiter on a stalled fill: disposition=%s submits=%d polls=%d", v.Generate.Cache.Disposition, f.submits.Load(), f.polls.Load())
+	}
+	// The owner's started fill is untouched: resuming it finishes the owner's
+	// own dispatch and publishes its response, with no second submission.
+	v, err = f.runtime.PollExecutionV1(ctx, owner)
+	v = boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	owner.Capability = v.Capability
+	v, err = f.runtime.CompleteExecutionV1(ctx, owner)
+	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	if v.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 2 {
+		t.Fatalf("resumed owner: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
+	}
+	late := f.request
+	late.OperationKey = "late"
+	v, err = f.runtime.GenerateStepV1(ctx, late)
+	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 2 {
+		t.Fatalf("request after the owner published: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
+	}
+}
+
 type unstartedFills struct {
 	cache.FillRepository
 	failed bool

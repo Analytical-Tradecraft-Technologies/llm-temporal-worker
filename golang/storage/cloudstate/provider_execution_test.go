@@ -44,7 +44,7 @@ func executionFixture(t *testing.T, modes ...BudgetMode) (*Repository, *memoryTa
 
 func startExecution(t *testing.T, r *Repository, record Record, plan BudgetPlan, reservation durable.ReserveResult) SavedProviderExecution {
 	t.Helper()
-	saved, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+	saved, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 	if err != nil || !fresh {
 		t.Fatalf("begin: %t %v", fresh, err)
 	}
@@ -106,7 +106,7 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 		t.Fatal("scope leaked", err)
 	}
 	// Even a replacement reservation or changed time cannot grant a second start.
-	_, fresh, err := restarted.BeginProviderExecution(ctx, record.Request.Scope, record.Request.ID, durable.ReserveResult{}, plan.QuotedAt.Add(time.Hour))
+	_, fresh, err := restarted.BeginProviderExecution(ctx, record.Request.Scope, record.Request.ID, durable.ReserveResult{}, false, plan.QuotedAt.Add(time.Hour))
 	if err != nil || fresh {
 		t.Fatal("replay authorized submission", err)
 	}
@@ -228,7 +228,7 @@ func TestProviderExecutionConcurrentStartsAuthorizeOnlyOneWriter(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+			_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 			if err != nil {
 				t.Error(err)
 			}
@@ -261,12 +261,12 @@ func TestProviderExecutionLostStartReplyNeverAuthorizesReplay(t *testing.T) {
 				}
 				return nil, nil
 			}
-			_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+			_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 			if err == nil || fresh || !fired {
 				t.Fatalf("uncertain start authorized dispatch: %t %v", fresh, err)
 			}
 			table.hook = nil
-			loaded, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt.Add(time.Second))
+			loaded, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt.Add(time.Second))
 			if err != nil || fresh || loaded.Execution.Stage != ExecutionClaiming {
 				t.Fatalf("replay authorized dispatch: %t %v", fresh, err)
 			}
@@ -280,7 +280,7 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 	bad.Events = append(bad.Events[:0:0], bad.Events...)
 	bad.Events[1] = bad.Events[0]
 	bad.Events[1].EventID = "another"
-	if _, _, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, bad, plan.QuotedAt); !errors.Is(err, ErrInvalid) {
+	if _, _, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, bad, false, plan.QuotedAt); !errors.Is(err, ErrInvalid) {
 		t.Fatal("missing window accepted", err)
 	}
 	saved := startExecution(t, r, record, plan, reservation)
@@ -342,7 +342,7 @@ func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
 					}
 					return nil, nil
 				}
-				_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+				_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 				if err == nil || fresh {
 					t.Fatal("uncertain write authorized submission")
 				}
@@ -354,7 +354,7 @@ func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
 				group.Add(1)
 				go func() {
 					defer group.Done()
-					_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+					_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 					if err != nil {
 						t.Error(err)
 					}
