@@ -48,6 +48,31 @@ It reports `/health/live` while its listener is running and keeps
 dependencies. It is not a production worker mode; deployment manifests must
 continue to use `worker --config /etc/llmtw/config.yaml`.
 
+## `healthcheck`
+
+Probe one or more HTTP(S) health endpoints and exit non-zero unless every one
+is healthy. It does not read configuration or start runtime dependencies, so
+it can run as a container healthcheck inside the minimal image, which has no
+shell or HTTP client:
+
+```sh
+llm-temporal-worker healthcheck \
+  --url http://127.0.0.1:8080/health/live \
+  --url http://127.0.0.1:8080/health/ready
+```
+
+`--url` is required and may be repeated; each value must be an absolute
+`http` or `https` URL. The command sends a `GET` to each URL in order and
+stops at the first failure. Each request has a two-second timeout, redirects
+are not followed, and only a `2xx` response counts as healthy. The Compose
+worker service uses it with the live and ready endpoints shown above.
+
+On success it prints `healthcheck passed` and exits with status `0`. A
+connection error, timeout, or non-`2xx` response prints `healthcheck failed`
+and exits with status `1`. A missing `--url`, an extra argument, or a URL that
+is not an absolute HTTP(S) URL exits with status `2`. Response bodies are not
+read or printed.
+
 ## `worker`
 
 Attempt to start the production composition, including the configured provider
@@ -106,6 +131,53 @@ reply or a crash before the first Redis write requires operator investigation;
 do not delete the receipt or change namespaces to get past the error. See
 [budget initialization](redis-budget-leases.md#initialization-and-readiness)
 for ordering, permissions, and recovery limits.
+
+## `generation-recover`
+
+Restore the original public planning binding of a historical compacted
+Generate operation from its retained Temporal execution history. It reads the
+same configuration as `worker`, requires durable cloud storage and the trusted
+Temporal authorization configuration, and constructs only the cloud storage
+and Temporal clients. It does not start a worker, load provider catalogs,
+acquire budget, or submit LLM requests.
+
+```sh
+llm-temporal-worker generation-recover --config /etc/llmtw/config.yaml \
+  --workflow-id ORIGINAL_WORKFLOW_ID --run-id ORIGINAL_RUN_ID
+llm-temporal-worker generation-recover --config /etc/llmtw/config.yaml \
+  --workflow-id ORIGINAL_WORKFLOW_ID --run-id ORIGINAL_RUN_ID --apply
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--config PATH` | `/etc/llmtw/config.yaml` | worker configuration YAML |
+| `--workflow-id ID` | required | original public Generate workflow ID |
+| `--run-id ID` | required | explicit original run ID; the latest run is never substituted |
+| `--apply` | `false` | persist the verified planning decision and binding |
+| `--timeout DURATION` | `2m` | overall timeout; must be positive and at most two minutes |
+
+Without `--apply` the command is a dry run: every storage operation is a read.
+It prints `recovery_required` when the retained history and the durable
+Generate manifest agree but the public binding is missing, and `ready` when
+the same binding already exists. `--apply` writes the planning decision and
+binding with conditional immutable writes, reads the binding back, and reports
+`ready` with `applied: true`. An existing matching binding is left unchanged
+and reported as `ready` with `applied: false`; a conflicting or corrupt one
+fails rather than being replaced. Retry an interrupted or uncertain apply with
+the same workflow and run IDs.
+
+Successful output is one JSON object containing only `status` and `applied`,
+for example `{"status":"recovery_required","applied":false}`. It omits
+identifiers and payloads, and error messages never echo the supplied IDs.
+
+The command exits with status `0` on success. It exits with status `2`, before
+reading configuration, when `--workflow-id` or `--run-id` is missing, a flag is
+invalid, an extra argument is supplied, or `--timeout` is out of range. It
+exits with status `1` when the configuration cannot be read or is invalid, or
+when history, decryption keys, storage, authorization, or the binding cannot
+be verified. See
+[durable preparation and recovery](cloud-request-preparation.md#durable-preparation-and-recovery)
+for which operations need recovery and the history limits.
 
 ## `validate-config`
 

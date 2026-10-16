@@ -316,3 +316,33 @@ func TestValidateConfigRejectsSettingsThatFailAfterValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestUsageCommandsHaveCLIReferenceSections keeps docs/reference/cli.md from
+// drifting behind the dispatch: every command named by writeUsage, plus help,
+// must have its own heading.
+func TestUsageCommandsHaveCLIReferenceSections(t *testing.T) {
+	var usage bytes.Buffer
+	writeUsage(&usage)
+	line := strings.TrimSpace(usage.String())
+	start, end := strings.Index(line, "<"), strings.LastIndex(line, ">")
+	if start < 0 || end <= start {
+		t.Fatalf("usage line has no command list: %q", line)
+	}
+	commands := append(strings.Split(line[start+1:end], "|"), "help")
+	reference, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "cli.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	headings := make(map[string]bool)
+	for _, text := range strings.Split(string(reference), "\n") {
+		headings[strings.TrimSpace(text)] = true
+	}
+	for _, command := range commands {
+		if command == "" {
+			t.Fatalf("usage line has an empty command: %q", line)
+		}
+		if !headings["## `"+command+"`"] {
+			t.Errorf("docs/reference/cli.md has no \"## `%s`\" section", command)
+		}
+	}
+}
