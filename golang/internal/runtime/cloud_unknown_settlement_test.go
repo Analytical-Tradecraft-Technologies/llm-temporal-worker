@@ -384,3 +384,115 @@ func TestCloudExecutionRuntimeExpiredClaimRenewsAttempt(t *testing.T) {
 		t.Fatal("renewed attempt not submitted once", f.submits.Load())
 	}
 }
+
+// A worker that dies after the pre-HTTP marker leaves its attempt submitting.
+// With no provider job to poll and no idempotency recovery, waiting for a
+// compatible endpoint can never help, so a rollout that changes the bound
+// endpoint still moves the attempt to unknown and settles its claim (#1452).
+func TestCloudReloadSettlesCrashedSubmissionOnChangedEndpoint(t *testing.T) {
+	for _, step := range []string{"generate", "poll"} {
+		t.Run(step, func(t *testing.T) {
+			f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
+			f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+				f.submits.Add(1)
+				if err := o.BeforePossibleWrite(ctx); err != nil {
+					return provider.Result{}, err
+				}
+				panic("worker crashed mid-dispatch")
+			}
+			ctx := context.Background()
+			ref := crashAfterPossibleWrite(t, f)
+			f.now = f.now.Add(16 * time.Minute)
+			f.restart(t)
+			var v llm.ExecutionResultV1
+			var err error
+			if step == "generate" {
+				v, err = f.runtime.GenerateStepV1(ctx, f.request)
+			} else {
+				v, err = f.runtime.PollExecutionV1(ctx, ref)
+			}
+			boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
+			// Acquisition settles the claim, then leaves the request itself
+			// to a compatible worker until the configuration is retired.
+			_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
+			saved := f.savedExecution(t, ref)
+			if saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
+				t.Fatalf("crashed submission not settled after the endpoint changed: %+v", saved.Execution)
+			}
+			assertUnknownWorkCharged(t, saved)
+			// Repeating acquisition keeps the settlement and, once no worker
+			// on the old configuration may remain, finishes the request.
+			f.now = f.now.Add(defaultCloudReloadGrace)
+			_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			assertRecoveryError(t, err, provider.CodeConfiguration, provider.RetryNever)
+			if f.submits.Load() != 1 {
+				t.Fatal("crashed submission resubmitted", f.submits.Load())
+			}
+		})
+	}
+}
+
+// An adapter with documented idempotency recovery may still learn the
+// outcome, so its crashed submission waits for a compatible endpoint.
+func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T) {
+	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
+	f.adapter.submit = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.ResumableResult, error) {
+		f.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.ResumableResult{}, err
+		}
+		panic("worker crashed mid-dispatch")
+	}
+	recoveries := 0
+	f.cap.Adapters = engine.AdapterMap{"endpoint": &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
+		recoveries++
+		v := executionResponse(call)
+		v.Result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
+		return v, nil
+	}}}
+	f.restart(t)
+	ctx := context.Background()
+	ref := crashAfterPossibleWrite(t, f)
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	_, err := f.runtime.PollExecutionV1(ctx, ref)
+	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
+	if saved := f.savedExecution(t, ref); saved.Execution.Stage != cloudstate.ExecutionSubmitting || recoveries != 0 {
+		t.Fatalf("recoverable submission did not wait for its endpoint: %s recoveries=%d", saved.Execution.Stage, recoveries)
+	}
+	// Only the endpoint is restored; the configuration digest still differs.
+	bindReloadEndpoints(f.cap.Snapshot.(*planningSource), [32]byte{31})
+	f.restart(t)
+	v, err := f.runtime.PollExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	if recoveries != 1 || f.submits.Load() != 1 {
+		t.Fatalf("recoveries=%d submits=%d, want one each", recoveries, f.submits.Load())
+	}
+}
+
+// crashAfterPossibleWrite admits the fixture's request and runs its
+// submission into an adapter that crashes after the pre-HTTP marker. It then
+// rolls out a configuration that changes the bound endpoint.
+func crashAfterPossibleWrite(t *testing.T, f *boundedCloudFixture) llm.ExecutionReferenceV1 {
+	t.Helper()
+	ctx := context.Background()
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = f.runtime.GenerateStepV1(ctx, f.request)
+		t.Fatal("adapter did not crash")
+	}()
+	if saved := f.savedExecution(t, ref); saved.Execution.Stage != cloudstate.ExecutionSubmitting || saved.Execution.Claim == nil {
+		t.Fatalf("crash did not leave a claimed submission: %+v", saved.Execution)
+	}
+	f.cap.ConfigDigest[0]++
+	source := f.cap.Snapshot.(*planningSource)
+	source.value.ConfigDigest = f.cap.ConfigDigest
+	bindReloadEndpoints(source, [32]byte{32})
+	return ref
+}
