@@ -435,7 +435,9 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 	if callErr == nil {
 		callErr = outcome.ValidateForCall(planned.Call)
 		if callErr == nil && outcome.State == provider.ResumableCompleted {
-			if _, err := outcome.Result.Response.MarshalJSON(); err != nil {
+			// Adapters hold tool arguments to llm.MaxToolArgumentsDepth; one
+			// that does not must not leave a response no record can hold.
+			if _, err := outcome.Result.Response.MarshalJSON(); err != nil || !toolArgumentsSavable(outcome.Result.Response.Output) {
 				callErr = provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider response cannot be saved")
 			}
 		}
@@ -523,6 +525,27 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		return result, err
 	}
 	return executor.settle(ctx, scope, id, result.Saved)
+}
+
+func toolArgumentsSavable(output []llm.Item) bool {
+	for _, item := range output {
+		var arguments json.RawMessage
+		switch call := item.(type) {
+		case llm.ToolCall:
+			arguments = call.Arguments
+		case *llm.ToolCall:
+			if call == nil {
+				continue
+			}
+			arguments = call.Arguments
+		default:
+			continue
+		}
+		if _, err := llm.CanonicalToolArguments(arguments); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // executionRecordTooLarge marks a save the repository refused only because the
