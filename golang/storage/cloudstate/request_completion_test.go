@@ -188,3 +188,78 @@ func TestCacheCompletionPreservesPreviousUnknownPaidChild(t *testing.T) {
 		t.Fatal("unused cache attempt did not finish", err)
 	}
 }
+
+// A cache hit may save its handoff for an attempt that a concurrent renewal
+// has just retired. The request must still complete (#1453).
+func TestCacheCompletionAcceptsAttemptRetiredByConcurrentRenewal(t *testing.T) {
+	for _, interleaving := range []string{"renewal-root-write-fails", "renewal-loses-root-cas"} {
+		t.Run(interleaving, func(t *testing.T) {
+			r, table, blobs, root, first, template, checkpoint, handoff := completionAttemptFixture(t, "cache")
+			ctx, scope := context.Background(), root.Request.Scope
+			_, plan, _ := saveAttemptPlan(t, r, scope, first, template)
+			renewAt := plan.Reservation.ExpiresAt.Add(-UnusedAttemptRenewMargin)
+			if interleaving == "renewal-root-write-fails" {
+				failed := false
+				table.hook = func(action string, item kv.KeyValueItem) (error, error) {
+					if !failed && action == "create" && strings.Contains(item.PartitionKey, string(root.Request.ID)) {
+						failed = true
+						return contracts.ErrUnavailable, nil
+					}
+					return nil, nil
+				}
+				if _, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt); err == nil || !failed {
+					t.Fatal("renewal root write was not interrupted", err)
+				}
+				table.hook = nil
+			} else if err := reopen(t, table, blobs).retireRequestAttempt(ctx, scope, first, renewAt); err != nil {
+				// The renewal retires the child; the handoff below then wins the
+				// root revision, so the renewal's retry must give up.
+				t.Fatal(err)
+			}
+			if retired, err := r.Read(ctx, scope, first.ID); err != nil || retired.Status != StatusFailed {
+				t.Fatal("attempt was not retired", err)
+			}
+			commitCompletionHandoff(t, r, root, checkpoint, handoff, renewAt)
+			if _, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt); !errors.Is(err, contracts.ErrConflict) {
+				t.Fatal("renewal replaced an attempt after its handoff", err)
+			}
+			result := json.RawMessage(`{"version":1,"response":{}}`)
+			if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, result, renewAt); err != nil {
+				t.Fatal("retired cache attempt wedged completion", err)
+			}
+			finished, err := r.Read(ctx, scope, root.Request.ID)
+			if err != nil || finished.Status != StatusCompleted {
+				t.Fatal("request did not finish", err)
+			}
+			for _, id := range []RequestID{root.Request.ID, first.ID} {
+				shard, _ := PendingShard(id)
+				page, err := r.ListPending(ctx, shard, 100, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, pending := range page.Requests {
+					if pending.ID == id {
+						t.Fatal("finished work remained pending")
+					}
+				}
+			}
+			if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, result, renewAt); err != nil {
+				t.Fatal("completion replay", err)
+			}
+		})
+	}
+}
+
+func TestProviderCompletionRejectsRetiredAttempt(t *testing.T) {
+	r, _, _, root, first, template, checkpoint, handoff := completionAttemptFixture(t, "provider")
+	ctx, scope := context.Background(), root.Request.Scope
+	_, plan, _ := saveAttemptPlan(t, r, scope, first, template)
+	renewAt := plan.Reservation.ExpiresAt.Add(-UnusedAttemptRenewMargin)
+	if err := r.retireRequestAttempt(ctx, scope, first, renewAt); err != nil {
+		t.Fatal(err)
+	}
+	commitCompletionHandoff(t, r, root, checkpoint, handoff, renewAt)
+	if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), renewAt); !errors.Is(err, contracts.ErrConflict) {
+		t.Fatal("provider handoff completed without a provider execution", err)
+	}
+}

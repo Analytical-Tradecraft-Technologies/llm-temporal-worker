@@ -396,6 +396,13 @@ func (r *Repository) completeRequestAttempt(ctx context.Context, root Record, no
 			}
 			return r.advanceIndex(ctx, child)
 		}
+		// A concurrent renewal may retire an unused attempt after a cache hit
+		// or no-work result chose it but before the handoff fenced renewal
+		// (#1453). No provider execution exists, so the failed child is already
+		// out of recovery and the root may still complete.
+		if handoff.Mode != "provider" && unusedAttemptRetired(child, childProgress, root.Request.ID) {
+			return r.advanceIndex(ctx, child)
+		}
 		if child.Status != StatusRunning || executionFinalizing(childProgress) {
 			return contracts.ErrConflict
 		}
@@ -414,4 +421,13 @@ func (r *Repository) completeRequestAttempt(ctx context.Context, root Record, no
 		return err
 	}
 	return contracts.ErrConflict
+}
+
+// unusedAttemptRetired reports a child that renewal failed before any
+// provider execution began.
+func unusedAttemptRetired(child Record, progress map[string]json.RawMessage, rootID RequestID) bool {
+	var retired attemptRetirement
+	data := progress["attempt_retired"]
+	return child.Status == StatusFailed && data != nil && progress["provider_execution"] == nil &&
+		json.Unmarshal(data, &retired) == nil && retired.Version == 1 && retired.RootID == rootID && retired.Reason == "unused_quote_expired"
 }
