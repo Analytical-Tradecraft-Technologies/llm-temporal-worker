@@ -432,20 +432,26 @@ func (*executionObserver) OnProgress(context.Context, provider.Progress) {}
 func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, saved cloudstate.SavedProviderExecution, planned PlannedProviderCall, transcript []llm.Item, outcome provider.ResumableResult, callErr error, polling bool) (ProviderExecutionResult, error) {
 	next := saved.Execution
 	next.PollAfter, next.Failure = time.Time{}, nil
+	unsavable := false
 	if callErr == nil {
 		callErr = outcome.ValidateForCall(planned.Call)
 		if callErr == nil && outcome.State == provider.ResumableCompleted {
-			if _, err := outcome.Result.Response.MarshalJSON(); err != nil {
+			// Adapters hold tool arguments to llm.MaxToolArgumentsDepth; one
+			// that does not must not leave a response no record can hold.
+			if _, err := outcome.Result.Response.MarshalJSON(); err != nil || !toolArgumentsSavable(outcome.Result.Response.Output) {
 				callErr = provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider response cannot be saved")
+				unsavable = true
 			}
 		}
 		if saved.Execution.ProviderOperationID != "" && outcome.State != provider.ResumableNotFound && outcome.ProviderOperationID != saved.Execution.ProviderOperationID {
-			callErr = executionError(provider.CodeProviderInvalidResponse)
+			callErr, unsavable = executionError(provider.CodeProviderInvalidResponse), false
 		}
 	}
 	now := executor.now(saved)
 	if callErr != nil {
-		if polling {
+		// A polled job that completed with output no record can hold is still
+		// a paid, certain outcome. Close it rather than polling it forever.
+		if polling && !unsavable {
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderInvalidResponse)
 		}
 		next.Stage = cloudstate.ExecutionUnknown
@@ -523,6 +529,27 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		return result, err
 	}
 	return executor.settle(ctx, scope, id, result.Saved)
+}
+
+func toolArgumentsSavable(output []llm.Item) bool {
+	for _, item := range output {
+		var arguments json.RawMessage
+		switch call := item.(type) {
+		case llm.ToolCall:
+			arguments = call.Arguments
+		case *llm.ToolCall:
+			if call == nil {
+				continue
+			}
+			arguments = call.Arguments
+		default:
+			continue
+		}
+		if _, err := llm.CanonicalToolArguments(arguments); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // executionRecordTooLarge marks a save the repository refused only because the
