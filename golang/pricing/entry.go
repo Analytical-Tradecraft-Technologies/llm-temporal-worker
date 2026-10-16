@@ -48,7 +48,7 @@ type Entry struct {
 	Model        string
 	ProviderTier string
 	Prices       UnitPrices
-	// LongPrompt, when set, replaces Prices for a call whose prompt reaches
+	// LongPrompt, when set, replaces Prices for a call whose prompt exceeds
 	// its threshold, as a provider's long-context price tier does. It is
 	// omitted from the canonical encoding when unset, so single-price
 	// entries keep their digest.
@@ -63,8 +63,9 @@ type Entry struct {
 	Version           string
 }
 
-// LongPromptPrices is a price tier that applies from MinPromptTokens prompt
-// tokens (input, cache read and cache write together).
+// LongPromptPrices is a price tier that applies to a prompt (input, cache
+// read and cache write together) of more than MinPromptTokens tokens:
+// providers bill prompts "over" or "more than" the threshold at it.
 type LongPromptPrices struct {
 	MinPromptTokens int64
 	Prices          UnitPrices
@@ -83,7 +84,7 @@ func cloneLongPrompt(long *LongPromptPrices) *LongPromptPrices {
 // PricesFor returns the prices billed for a call of promptTokens prompt
 // tokens.
 func (entry Entry) PricesFor(promptTokens int64) UnitPrices {
-	if entry.LongPrompt != nil && promptTokens >= entry.LongPrompt.MinPromptTokens {
+	if entry.LongPrompt != nil && promptTokens > entry.LongPrompt.MinPromptTokens {
 		return entry.LongPrompt.Prices
 	}
 	return entry.Prices

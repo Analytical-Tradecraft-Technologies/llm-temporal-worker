@@ -875,12 +875,13 @@ providers:
             cache_read_per_million: "0.1"
             cache_write_per_million: "1.25"
             per_request: "0"
-      # Haiku 5.5, released 2026-10-07. These direct prices apply only up to
-      # 100K input tokens; keep the route below the long-prompt price band.
-      # https://platform.claude.com/docs/en/about-claude/pricing
+      # Haiku 5.5, released 2026-10-07. Its 1M window needs no beta header,
+      # and a prompt (input, cache read and cache write) over 100,000 tokens
+      # is billed at 5x every price.
+      # https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing
       # No Priority Tier: only standard_only is supported by this model.
       anthropic/claude-haiku-5.5:
-        context_tokens: 100000
+        context_tokens: 1000000
         output_tokens: 128000
         prices:
           standard_only:
@@ -889,6 +890,13 @@ providers:
             cache_read_per_million: "0.01"
             cache_write_per_million: "0.125"
             per_request: "0"
+            long_prompt:
+              min_prompt_tokens: 100000
+              input_per_million: "0.5"
+              output_per_million: "2.5"
+              cache_read_per_million: "0.05"
+              cache_write_per_million: "0.625"
+              per_request: "0"
       anthropic/claude-opus-4.5:
         context_tokens: 200000
         output_tokens: 64000

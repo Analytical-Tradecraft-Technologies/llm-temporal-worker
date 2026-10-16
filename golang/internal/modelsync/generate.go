@@ -30,6 +30,16 @@ type generatedProvider struct {
 	// provider whose window beyond that threshold needs a request option the
 	// adapters never send, so the provider itself rejects longer prompts.
 	windowAtLongPrompt bool
+	// longPromptModels lists OpenRouter IDs whose full window needs no such
+	// option although windowAtLongPrompt is set, so their long-prompt price
+	// is rendered instead.
+	longPromptModels []string
+}
+
+// capsWindowAtLongPrompt reports whether id's window is capped at its first
+// long-prompt price threshold.
+func (provider generatedProvider) capsWindowAtLongPrompt(id string) bool {
+	return provider.windowAtLongPrompt && !slices.Contains(provider.longPromptModels, id)
 }
 
 type generatedTier struct {
@@ -58,8 +68,13 @@ var generatedProviders = []generatedProvider{
 			{tier: "standard_only", tags: []string{"anthropic"}},
 			{tier: "auto", tags: []string{"anthropic"}},
 		},
-		// Anthropic's long-context window needs a beta header.
+		// Older Anthropic models' long-context window needs a beta header
+		// (Claude 4.6 and later serve 1M at one price, with no override).
+		// Haiku 5.5 serves its 1M window by default and bills prompts over
+		// 100,000 tokens at higher prices.
+		// https://platform.claude.com/docs/en/build-with-claude/context-windows
 		windowAtLongPrompt: true,
+		longPromptModels:   []string{"anthropic/claude-haiku-5.5"},
 	},
 }
 
@@ -102,9 +117,10 @@ const exaRules = `  exa:
 // GenerateDefaultRules renders the built-in rules file from an OpenRouter
 // Document. Direct prices are the first-party upstream endpoint prices
 // OpenRouter publishes (for example its "openai/flex" or "anthropic"
-// endpoint), which are those providers' list prices. A direct route's context
-// window is capped at the first long-prompt price threshold so its base price
-// always applies. Models a provider's own API no longer serves have no
+// endpoint), which are those providers' list prices. A direct route carries
+// the first long-prompt price as a long_prompt tier, or, where the provider
+// rejects longer prompts without a request option the adapters never send,
+// has its context window capped at that threshold. Models a provider's own API no longer serves have no
 // first-party endpoint and are left out. An endpoint OpenRouter lists at a
 // discount (a provider promotion) is rendered at its undiscounted price under
 // a REVIEW comment, so a temporary price is never checked in silently.
@@ -196,12 +212,13 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 		return "", false, nil
 	}
 	contextTokens, outputTokens := model.ContextLength, model.MaxCompletionTokens
+	capAtLongPrompt := provider.capsWindowAtLongPrompt(model.ID)
 	for _, value := range priced {
 		contextTokens = minPositive(contextTokens, value.endpoint.ContextLength)
 		outputTokens = minPositive(outputTokens, value.endpoint.MaxCompletionTokens)
 		// Rules carry at most one long-prompt tier; a further threshold caps
 		// the window so no request reaches a price the rules do not hold.
-		if overrides := value.endpoint.Pricing.Overrides; provider.windowAtLongPrompt && len(overrides) > 0 {
+		if overrides := value.endpoint.Pricing.Overrides; capAtLongPrompt && len(overrides) > 0 {
 			contextTokens = minPositive(contextTokens, overrides[0].MinPromptTokens)
 		} else if len(overrides) > 1 {
 			contextTokens = minPositive(contextTokens, overrides[1].MinPromptTokens)
@@ -247,7 +264,7 @@ func renderGeneratedModel(provider generatedProvider, model Model) (string, bool
 		if err := writePriceFields(&out, "            ", fields, request); err != nil {
 			return "", false, fmt.Errorf("%s %w", value.tier, err)
 		}
-		if provider.windowAtLongPrompt || len(prices.Overrides) == 0 {
+		if capAtLongPrompt || len(prices.Overrides) == 0 {
 			continue
 		}
 		// An override component it omits keeps the base price.

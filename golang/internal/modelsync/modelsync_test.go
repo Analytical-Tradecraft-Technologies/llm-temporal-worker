@@ -430,6 +430,37 @@ func TestGeneratedLongPromptKeepsBaseComponentsAnOverrideOmits(t *testing.T) {
 	}
 }
 
+// Claude Haiku 5.5 serves its 1M window without a beta header, so it carries
+// its long-prompt price, while older Anthropic models stay capped at theirs.
+func TestGeneratedAnthropicLongPromptOnlyForHaiku55(t *testing.T) {
+	endpoint := Endpoint{Tag: "anthropic", Pricing: Pricing{
+		Prompt: "0.0000001", Completion: "0.0000005", InputCacheRead: "0.00000001", InputCacheWrite: "0.000000125",
+		Overrides: []PricingOverride{{MinPromptTokens: 100_000, Prompt: "0.0000005", Completion: "0.0000025", InputCacheRead: "0.00000005", InputCacheWrite: "0.000000625"}},
+	}}
+	haiku, ok, err := renderGeneratedModel(generatedProviders[1], Model{ID: "anthropic/claude-haiku-5.5", ContextLength: 1_000_000, Endpoints: []Endpoint{endpoint}})
+	if err != nil || !ok {
+		t.Fatalf("render = %v, %v", ok, err)
+	}
+	want := `            long_prompt:
+              min_prompt_tokens: 100000
+              input_per_million: "0.5"
+              output_per_million: "2.5"
+              cache_read_per_million: "0.05"
+              cache_write_per_million: "0.625"
+              per_request: "0"
+`
+	if !strings.Contains(haiku, want) || !strings.Contains(haiku, "context_tokens: 1000000\n") {
+		t.Fatalf("rendered = %s, want the real window and long prompt\n%s", haiku, want)
+	}
+	older, ok, err := renderGeneratedModel(generatedProviders[1], Model{ID: "anthropic/claude-sonnet-4.5", ContextLength: 1_000_000, Endpoints: []Endpoint{endpoint}})
+	if err != nil || !ok {
+		t.Fatalf("render = %v, %v", ok, err)
+	}
+	if strings.Contains(older, "long_prompt") || !strings.Contains(older, "context_tokens: 100000\n") {
+		t.Fatalf("rendered = %s, want the window capped at the threshold", older)
+	}
+}
+
 func TestGenerateDefaultRulesSkipsReasoningPresets(t *testing.T) {
 	document := fetchFixture(t)
 	var base Model
@@ -811,8 +842,8 @@ func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
 		t.Fatalf("missing direct Haiku route: %+v", model)
 	}
 	route := model.Routes[0]
-	if route.Provider != "anthropic" || route.Model != "claude-haiku-5-5" || route.ContextTokens != 100000 || route.OutputTokens != 128000 {
-		t.Fatalf("wrong direct route or pricing boundary: %+v", route)
+	if route.Provider != "anthropic" || route.Model != "claude-haiku-5-5" || route.ContextTokens != 1000000 || route.OutputTokens != 128000 {
+		t.Fatalf("wrong direct route or context window: %+v", route)
 	}
 	if len(route.Classes) != 1 || route.Classes[0] != llm.ServiceClassStandard || len(route.ProviderTiers) != 1 || route.ProviderTiers[llm.ServiceClassStandard] != "standard_only" {
 		t.Fatalf("Haiku 5.5 advertised unsupported service classes: %+v", route)
@@ -827,5 +858,11 @@ func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
 			t.Fatalf("feature %s unavailable", f)
 		}
 	}
-	assertPrices(t, priceFor(t, compiled.Prices, "anthropic", "claude-haiku-5-5", "standard_only"), "0.1", "0.5", "0.01", "0.125")
+	haiku := priceFor(t, compiled.Prices, "anthropic", "claude-haiku-5-5", "standard_only")
+	assertPrices(t, haiku, "0.1", "0.5", "0.01", "0.125")
+	// Anthropic bills prompts over 100,000 tokens at 5x every price.
+	if haiku.LongPrompt == nil || haiku.LongPrompt.MinPromptTokens != 100000 {
+		t.Fatalf("Haiku 5.5 long prompt = %+v; want a tier over 100,000 prompt tokens", haiku.LongPrompt)
+	}
+	assertPrices(t, pricing.Entry{Model: haiku.Model, ProviderTier: "long_prompt", Prices: haiku.LongPrompt.Prices}, "0.5", "2.5", "0.05", "0.625")
 }
