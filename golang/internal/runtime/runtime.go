@@ -21,6 +21,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/responsesapi"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -137,6 +138,10 @@ type Runtime struct {
 
 	HealthServer  *httpserver.Server
 	MetricsServer *httpserver.Server
+	// ResponsesServer serves the OpenAI Responses API when
+	// server.responses_api_listen_address is set; it is nil otherwise.
+	ResponsesServer *httpserver.Server
+	responses       *responsesapi.Handler
 
 	shutdown *app.ShutdownCoordinator
 	timeout  time.Duration
@@ -162,6 +167,10 @@ type Runtime struct {
 	// guarded by readinessMu.
 	probeFailures int
 }
+
+// responsesAPIReadTimeout bounds reading one Responses API request,
+// including a body of inline images or files.
+const responsesAPIReadTimeout = time.Minute
 
 type runtimeState uint8
 
@@ -342,6 +351,34 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			return nil, fmt.Errorf("construct metrics server: %w", err)
 		}
 	}
+	var responsesHandler *responsesapi.Handler
+	var responsesServer *httpserver.Server
+	if configuration.Server.ResponsesAPIListenAddress != "" {
+		responsesHandler, err = responsesapi.NewHandler(responsesapi.Options{
+			Client:        temporalClient,
+			TaskQueue:     configuration.Temporal.TaskQueue,
+			Results:       &snapshotResponseResults{application: application},
+			PayloadLimits: activity.PayloadLimits{MaxInlineBytes: configuration.Server.InlinePayloadBytes},
+			// The body is OpenAI JSON, which is larger than the v1 payload it
+			// maps to; the mapped payload is checked against the limit itself.
+			MaxBodyBytes: 2 * int64(configuration.Server.InlinePayloadBytes),
+		})
+		if err == nil {
+			responsesServer, err = httpserver.New(httpserver.Options{
+				Address: configuration.Server.ResponsesAPIListenAddress,
+				Handler: responsesHandler,
+				// A create request may wait for the whole model call, so only
+				// reading the request is bounded; writes have no deadline.
+				ReadTimeout: responsesAPIReadTimeout,
+			})
+		}
+		if err != nil {
+			_ = tracer.Shutdown(context.Background())
+			temporalClient.Close()
+			_ = application.Close(context.Background())
+			return nil, fmt.Errorf("construct responses API server: %w", err)
+		}
+	}
 	timeout := time.Duration(configuration.Server.ShutdownTimeout)
 	coordinator, err := app.NewShutdownCoordinator(app.ShutdownOptions{
 		Worker: worker,
@@ -365,6 +402,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		App: application, Temporal: temporalClient, Worker: worker,
 		Health: health, Metrics: metrics, Tracer: tracer, Logger: logger,
 		HealthServer: healthServer, MetricsServer: metricsServer,
+		ResponsesServer: responsesServer, responses: responsesHandler,
 		shutdown: coordinator, timeout: timeout,
 		readinessProbeInterval: time.Duration(configuration.Server.ReadinessProbeInterval),
 		readinessProbeTimeout:  time.Duration(configuration.Server.ReadinessProbeTimeout),
@@ -505,10 +543,23 @@ func (runtime *Runtime) Start() error {
 			return err
 		}
 	}
+	if runtime.ResponsesServer != nil {
+		if err := runtime.ResponsesServer.Start(); err != nil {
+			_ = runtime.HealthServer.Shutdown(context.Background())
+			if runtime.MetricsServer != nil {
+				_ = runtime.MetricsServer.Shutdown(context.Background())
+			}
+			runtime.finishStart(runtimeClosed)
+			return fmt.Errorf("start responses API listener: %w", err)
+		}
+	}
 	if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
 		_ = runtime.HealthServer.Shutdown(context.Background())
 		if runtime.MetricsServer != nil {
 			_ = runtime.MetricsServer.Shutdown(context.Background())
+		}
+		if runtime.ResponsesServer != nil {
+			_ = runtime.ResponsesServer.Shutdown(context.Background())
 		}
 		runtime.finishStart(runtimeClosed)
 		return err
@@ -555,7 +606,17 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 		}
 	}
 	runtime.stopDependencyMonitor(ctx)
-	err := runtime.shutdown.Shutdown(ctx)
+	// The API stops first: draining ends every waiting create request, so the
+	// listener closes promptly and no new workflow starts during worker stop.
+	// Waiting callers' workflows keep running and remain pollable.
+	var responsesErr error
+	if runtime.ResponsesServer != nil {
+		runtime.responses.Drain()
+		if err := runtime.ResponsesServer.Shutdown(ctx); err != nil {
+			responsesErr = errors.New("shutdown responses API server failed")
+		}
+	}
+	err := errors.Join(responsesErr, runtime.shutdown.Shutdown(ctx))
 	runtime.Health.SetLive(false)
 	return err
 }
@@ -590,13 +651,17 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 	}
 	var healthErrors <-chan error
 	var metricsErrors <-chan error
+	var responsesErrors <-chan error
+	if runtime.ResponsesServer != nil {
+		responsesErrors = runtime.ResponsesServer.Errors()
+	}
 	if runtime.HealthServer != nil {
 		healthErrors = runtime.HealthServer.Errors()
 	}
 	if runtime.MetricsServer != nil {
 		metricsErrors = runtime.MetricsServer.Errors()
 	}
-	for healthErrors != nil || metricsErrors != nil || reloads != nil {
+	for healthErrors != nil || metricsErrors != nil || responsesErrors != nil || reloads != nil {
 		select {
 		case <-ctx.Done():
 			return runtime.gracefulShutdown()
@@ -618,6 +683,15 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 		case err, ok := <-metricsErrors:
 			if !ok {
 				metricsErrors = nil
+				continue
+			}
+			if err != nil {
+				shutdownErr := runtime.gracefulShutdown()
+				return errors.Join(err, shutdownErr)
+			}
+		case err, ok := <-responsesErrors:
+			if !ok {
+				responsesErrors = nil
 				continue
 			}
 			if err != nil {

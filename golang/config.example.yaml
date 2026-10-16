@@ -9,6 +9,7 @@ server:
   readiness_probe_interval: 5s
   readiness_probe_timeout: 2s
   inline_payload_bytes: 524288
+  # responses_api_listen_address: 0.0.0.0:8000   # opt-in OpenAI Responses API listener (plain HTTP)
 
 temporal:
   target: temporal.example.internal:7233

@@ -210,6 +210,7 @@ server:
   readiness_probe_interval: 5s
   readiness_probe_timeout: 2s
   inline_payload_bytes: 524288
+  # responses_api_listen_address: 0.0.0.0:8000   # opt-in OpenAI Responses API; see below
 
 temporal:
   target: temporal.example.internal:7233
@@ -1563,3 +1564,20 @@ Versioning does not change the configured graceful shutdown deadline. Keep old
 worker versions available until Temporal reports them drained, then stop them
 within that deadline. Drain existing unversioned workflows before retiring an
 unversioned worker; enabling versioning does not migrate those executions.
+
+## Optional OpenAI Responses API
+
+`server.responses_api_listen_address` turns on a plain-HTTP listener that
+serves a subset of the OpenAI Responses API (`POST /v1/responses` and
+`GET /v1/responses/{id}`) by starting the public Generate workflow on
+`temporal.task_queue`. It is omitted by default, and the listener does not
+exist. When set, it must be `host:port` and use a different port from
+`server.health_address` and `server.metrics_address`; port `0` is accepted for
+tests. Changing it requires a restart. An unset value is absent from the
+canonical configuration, so enabling the API is the only change that moves an
+existing digest.
+
+The listener has no TLS and no authentication: the API key names the tenant,
+project and actor. Bind it to a private interface or put it behind a network
+policy. See the [OpenAI Responses API reference](openai-responses-api.md) for
+the request mapping, polling and shutdown behaviour.

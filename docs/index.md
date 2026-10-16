@@ -76,6 +76,7 @@ worker database; the service has no deployed SQL data. See the
 - [Unknown-cost reconciliation design (#819)](architecture/unknown-cost-reconciliation.md)
 - [Configuration reference](reference/configuration.md)
 - [Command-line reference](reference/cli.md)
+- [OpenAI Responses API listener](reference/openai-responses-api.md)
 - [Catalog loader contract](reference/catalog-loaders.md)
 - [Error model](reference/error-model.md)
 - [Verified upstream contracts](reference/source-contracts.md)

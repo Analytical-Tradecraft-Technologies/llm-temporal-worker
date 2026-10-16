@@ -74,6 +74,7 @@ func (geometries *budgetWindowGeometries) validateReplacement(current, replaceme
 		{name: "environment", changed: before.Environment != after.Environment},
 		{name: "server.health_address", changed: before.Server.HealthAddress != after.Server.HealthAddress},
 		{name: "server.metrics_address", changed: before.Server.MetricsAddress != after.Server.MetricsAddress},
+		{name: "server.responses_api_listen_address", changed: before.Server.ResponsesAPIListenAddress != after.Server.ResponsesAPIListenAddress},
 		{name: "server.shutdown_timeout", changed: before.Server.ShutdownTimeout != after.Server.ShutdownTimeout},
 		{name: "server.readiness_probe_interval", changed: before.Server.ReadinessProbeInterval != after.Server.ReadinessProbeInterval},
 		{name: "server.readiness_probe_timeout", changed: before.Server.ReadinessProbeTimeout != after.Server.ReadinessProbeTimeout},
