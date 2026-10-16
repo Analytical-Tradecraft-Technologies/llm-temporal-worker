@@ -34,6 +34,9 @@ const (
 	budgetCapabilityChange  = "budget-reference-capability-v1-"
 	// asyncExportChange moves the Langfuse export into a child workflow.
 	asyncExportChange = "langfuse-export-async-v1"
+	// exportRetryChange gives the export workflow's Activity room to retry a
+	// saturated in-flight limit (#1459).
+	exportRetryChange = "langfuse-export-retry-v1"
 )
 
 // RegisterInternal registers implementation workflows, not client entry points.
@@ -314,6 +317,12 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 // unbounded retries.
 var exportActivityOptions = workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3}}
 
+// exportWorkflowActivityOptions let the export workflow, which nobody waits
+// for, ride out a burst that saturates the in-flight limit: the Activity backs
+// off between attempts without holding a slot. An open breaker and rejections
+// still end the export at once.
+var exportWorkflowActivityOptions = workflow.ActivityOptions{StartToCloseTimeout: 10 * time.Second, ScheduleToCloseTimeout: 2 * time.Minute, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, BackoffCoefficient: 2, MaximumInterval: 8 * time.Second, MaximumAttempts: 10}}
+
 // exportWorkflowTimeout bounds an export workflow that no worker picks up, for
 // example while a rolling deploy still runs workers that do not register it.
 const exportWorkflowTimeout = 5 * time.Minute
@@ -326,7 +335,11 @@ func ExportLangfuse(ctx workflow.Context, ref llm.ExecutionReferenceV1) (bool, e
 	if _, err := ref.MarshalJSON(); err != nil {
 		return false, invalidInput()
 	}
-	ctx = workflow.WithActivityOptions(ctx, exportActivityOptions)
+	options := exportActivityOptions
+	if workflow.GetVersion(ctx, exportRetryChange, workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		options = exportWorkflowActivityOptions
+	}
+	ctx = workflow.WithActivityOptions(ctx, options)
 	if err := workflow.ExecuteActivity(ctx, activity.ExportLangfuseActivityName, ref).Get(ctx, nil); err != nil {
 		// The export Activity counts each failed attempt in llmtw_langfuse_export_failures_total.
 		workflow.GetLogger(ctx).Warn("Langfuse export failed", "request_id", ref.RequestID)

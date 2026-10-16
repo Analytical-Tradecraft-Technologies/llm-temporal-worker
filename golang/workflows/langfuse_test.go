@@ -22,8 +22,8 @@ func TestLangfuseFailureIsBoundedAndPreservesOperation(t *testing.T) {
 		return errors.New("sink unavailable")
 	}, sdkactivity.RegisterOptions{Name: "llm.ExportLangfuse.v1"})
 	f.run(t)
-	if calls != 3 {
-		t.Fatalf("export attempts = %d, want bounded 3", calls)
+	if calls != 10 {
+		t.Fatalf("export attempts = %d, want bounded 10", calls)
 	}
 }
 
