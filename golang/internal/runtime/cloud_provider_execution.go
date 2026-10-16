@@ -112,9 +112,12 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	}
 	if start != nil {
 		if err := start(ctx); err != nil {
-			if errors.Is(err, errCacheFillNotStarted) && saved.Plan.RequiresReservation() {
-				// Like an expired claim, nothing was claimed or sent: close the
-				// attempt so it renews without using up a provider attempt.
+			// Like an expired claim, nothing was claimed or sent: close the
+			// attempt so it renews without using up a provider attempt. A
+			// reserved plan's uncertain start is resolved against Redis by
+			// settleUnknown instead. An unreserved plan has no claim to
+			// resolve, and any failed start stops it before the provider (#1454).
+			if errors.Is(err, errCacheFillNotStarted) || (!saved.Plan.RequiresReservation() && !errors.Is(err, cloudstate.ErrCorrupt)) {
 				return executor.save(ctx, call.scope, call.id, saved, executor.unclaimedExecution(saved))
 			}
 			next := saved.Execution
@@ -358,10 +361,11 @@ func unclaimed(err error) bool {
 	return errors.As(err, &classified) && classified.Code == provider.CodeBudgetDenied && classified.Dispatch == provider.DispatchNotDispatched
 }
 
-// unclaimedExecution closes an attempt whose claim never applied. Nothing was
-// dispatched and Redis holds no claim to settle (the unclaimed reservation
-// leaves through its expiry index), so it is a settled, immediately retryable
-// non-dispatch that does not use up a provider attempt.
+// unclaimedExecution closes an attempt whose claim never applied, or an
+// unreserved attempt stopped before its claim point. Nothing was dispatched
+// and Redis holds no claim to settle (an unclaimed reservation leaves through
+// its expiry index), so it is a settled, immediately retryable non-dispatch
+// that does not use up a provider attempt.
 func (executor *CloudProviderExecution) unclaimedExecution(saved cloudstate.SavedProviderExecution) cloudstate.ProviderExecution {
 	next := saved.Execution
 	now := executor.now(saved)
