@@ -1540,6 +1540,15 @@ executions use the version selected by Temporal's routing configuration. Provisi
 routing with Temporal's worker deployment APIs or the Temporal Worker Controller.
 Changing the version identity requires restarting the process; hot reload rejects it.
 
+Both identity fields must be non-empty, contain no whitespace or NUL, must not
+start with `__`, and must be at most 255 bytes (the default Temporal server limit
+on a build ID). `deployment_name` must also not contain `.` or `:`. The Temporal
+server rejects these forms and the SDK then stops the worker, so configuration
+validation rejects them first. The same rules apply to the controller-supplied
+`TEMPORAL_DEPLOYMENT_NAME` and `TEMPORAL_WORKER_BUILD_ID`. JSON Schema cannot
+count bytes, so the published schema is stricter for non-ASCII identities: it
+accepts them only up to 63 characters, which always fit in 255 bytes.
+
 With a `temporal.io/v1alpha1` `WorkerDeployment`, the controller supplies
 `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_DEPLOYMENT_NAME`, and
 `TEMPORAL_WORKER_BUILD_ID` at runtime. Address and namespace override YAML. Both

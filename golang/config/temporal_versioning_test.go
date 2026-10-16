@@ -1,7 +1,9 @@
 package config_test
 
 import (
+	"encoding/json"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 	"os"
 	"strings"
 	"testing"
@@ -81,6 +83,88 @@ func TestTemporalVersioningRejectsInvalidYAMLIdentity(t *testing.T) {
 		data := strings.Replace(string(exampleYAML(t)), "  worker:\n", "  worker:\n    versioning: "+setting+"\n", 1)
 		if _, err := config.Load([]byte(data)); err == nil {
 			t.Fatalf("invalid YAML identity accepted: %s", setting)
+		}
+	}
+}
+func TestTemporalVersioningRejectsIdentitiesTemporalRejects(t *testing.T) {
+	long := strings.Repeat("a", config.WorkerVersioningIdentityMaxBytes+1)
+	for _, test := range []struct {
+		name  string
+		value config.WorkerVersioningConfig
+		field string
+		echo  string
+	}{
+		{"dotted deployment", config.WorkerVersioningConfig{Enabled: true, DeploymentName: "llm.worker", BuildID: "b1"}, "deployment_name", "llm.worker"},
+		{"colon deployment", config.WorkerVersioningConfig{Enabled: true, DeploymentName: "llmtw:prod", BuildID: "b1"}, "deployment_name", "llmtw:prod"},
+		{"reserved deployment", config.WorkerVersioningConfig{Enabled: true, DeploymentName: "__internal", BuildID: "b1"}, "deployment_name", "__internal"},
+		{"reserved build", config.WorkerVersioningConfig{Enabled: true, DeploymentName: "worker", BuildID: "__b"}, "build_id", "__b"},
+		{"long deployment", config.WorkerVersioningConfig{Enabled: true, DeploymentName: long, BuildID: "b1"}, "deployment_name", long},
+		{"long build", config.WorkerVersioningConfig{Enabled: true, DeploymentName: "worker", BuildID: long}, "build_id", long},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.value.Validate()
+			if err == nil {
+				t.Fatal("identity Temporal rejects was accepted")
+			}
+			if !strings.Contains(err.Error(), "temporal.worker.versioning."+test.field) {
+				t.Fatalf("error does not name %s: %v", test.field, err)
+			}
+			if strings.Contains(err.Error(), test.echo) {
+				t.Fatalf("error echoes the configured value: %v", err)
+			}
+		})
+	}
+	limit := strings.Repeat("a", config.WorkerVersioningIdentityMaxBytes)
+	for _, valid := range []config.WorkerVersioningConfig{
+		{Enabled: true, DeploymentName: "llm-temporal-worker_prod", BuildID: "v1.2.3+abc:def"},
+		{Enabled: true, DeploymentName: limit, BuildID: limit},
+		{Enabled: true, DeploymentName: "_worker", BuildID: "_b"},
+	} {
+		if err := valid.Validate(); err != nil {
+			t.Fatalf("valid identity rejected: %v", err)
+		}
+	}
+}
+func TestTemporalVersioningSchemaMatchesTemporalRules(t *testing.T) {
+	withoutTemporalControllerEnvironment(t)
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(exampleYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("a", config.WorkerVersioningIdentityMaxBytes+1)
+	for name, test := range map[string]struct {
+		deployment, build string
+		valid             bool
+	}{
+		"valid":               {"worker", "v1.2.3", true},
+		"dotted deployment":   {"llm.worker", "b1", false},
+		"colon deployment":    {"llmtw:prod", "b1", false},
+		"reserved deployment": {"__internal", "b1", false},
+		"reserved build":      {"worker", "__b", false},
+		"long deployment":     {long, "b1", false},
+		"long build":          {"worker", long, false},
+		"long utf8 build":     {"worker", strings.Repeat("é", 128), false},
+		"short utf8 build":    {"worker", strings.Repeat("é", 63), true},
+	} {
+		value := loaded.Clone()
+		value.Temporal.Worker.Versioning = config.WorkerVersioningConfig{Enabled: true, DeploymentName: test.deployment, BuildID: test.build}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := compiled.Validate(encoded); (err == nil) != test.valid {
+			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
+		}
+		if err := value.Temporal.Worker.Versioning.Validate(); (err == nil) != test.valid {
+			t.Errorf("%s: Validate = %v, want valid=%t", name, err, test.valid)
 		}
 	}
 }
