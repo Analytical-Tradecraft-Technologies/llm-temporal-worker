@@ -408,10 +408,7 @@ func assertAnthropicDirectFixtureClassFacts(t *testing.T, profile Profile) {
 		if tier != fact.RequestedTier {
 			t.Fatalf("%s requested tier = %q, want %q", fact.Class, tier, fact.RequestedTier)
 		}
-		actual, err := fixtureProfile.actualClass(fact.ActualTier)
-		if err != nil {
-			t.Fatalf("%s actual tier %q: %v", fact.Class, fact.ActualTier, err)
-		}
+		actual := fixtureProfile.actualClass(fact.ActualTier)
 		if actual == nil || *actual != actualByClass[fact.Class] {
 			t.Fatalf("%s actual class = %#v, want %q", fact.Class, actual, actualByClass[fact.Class])
 		}

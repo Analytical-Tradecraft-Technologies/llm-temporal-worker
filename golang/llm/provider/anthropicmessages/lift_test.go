@@ -124,7 +124,7 @@ func TestLiftEmitsContinuationOnlyForReplayableProviderState(t *testing.T) {
 	}
 }
 
-func TestLiftMapsTerminalReasonsAndRejectsUnknownTier(t *testing.T) {
+func TestLiftMapsTerminalReasons(t *testing.T) {
 	profile := mustProfile(t, testProfile())
 	call := provider.Call{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "anthropic-status", ServiceClass: llm.ServiceClassStandard}
 	for _, test := range []struct {
@@ -146,11 +146,48 @@ func TestLiftMapsTerminalReasonsAndRejectsUnknownTier(t *testing.T) {
 			t.Fatalf("reason %q = %#v, %v", test.reason, got, err)
 		}
 	}
-	unknown := anthropic.Message{ID: "unknown", Model: "claude-contract", StopReason: anthropic.StopReasonEndTurn, Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTier("scale")}}
-	_, err := profile.liftResponse(call, &unknown, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("unknown tier error = %#v", err)
+}
+
+// Anthropic documents usage.service_tier as nullable. A null, missing or
+// unrecognized tier is not evidence of any class, so the paid response lifts
+// with service.actual omitted and the raw label kept for audit.
+func TestLiftAcceptsUnmappableServiceTier(t *testing.T) {
+	profile := mustProfile(t, testProfile())
+	call := provider.Call{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "anthropic-tier", ServiceClass: llm.ServiceClassStandard}
+	for _, test := range []struct {
+		name  string
+		usage string
+		want  string
+	}{
+		{name: "null", usage: `"service_tier":null`, want: ""},
+		{name: "missing", usage: `"input_tokens":1`, want: ""},
+		{name: "unrecognized", usage: `"service_tier":"scale"`, want: "scale"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var response anthropic.Message
+			if err := json.Unmarshal([]byte(`{"id":"msg-tier","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{`+test.usage+`}}`), &response); err != nil {
+				t.Fatal(err)
+			}
+			got, err := profile.liftResponse(call, &response, "req")
+			if err != nil {
+				t.Fatalf("lift: %v", err)
+			}
+			if got.Status != llm.ResponseStatusCompleted || got.Service.Actual != nil || got.Service.ProviderValue != test.want {
+				t.Fatalf("service = %#v status = %q, want no actual class and provider value %q", got.Service, got.Status, test.want)
+			}
+		})
+	}
+
+	missing := testProfile()
+	missing.MissingActualServiceClass = llm.ServiceClassStandard
+	profile = mustProfile(t, missing)
+	var response anthropic.Message
+	if err := json.Unmarshal([]byte(`{"id":"msg-tier","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"service_tier":null}}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	got, err := profile.liftResponse(call, &response, "req")
+	if err != nil || got.Service.Actual == nil || *got.Service.Actual != llm.ServiceClassStandard {
+		t.Fatalf("missing actual class = %#v, %v", got.Service, err)
 	}
 }
 
