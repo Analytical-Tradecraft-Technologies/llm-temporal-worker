@@ -344,12 +344,22 @@ func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 	}
 	// OpenRouter lists gpt-5.6-sol at a 50% promotional discount; the
 	// direct route must carry OpenAI's list prices, not the promotion.
+	// Each tier's short- and long-context prices are OpenAI's published
+	// Flex, Standard and Fast (priority) prices.
 	sol, _ := rules.Direct("openai", "openai/gpt-5.6-sol")
-	if got := sol.Prices["default"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.4" || got.CacheWrite != "5" {
-		t.Fatalf("gpt-5.6-sol default prices = %+v; want OpenAI's published $4/$20, $0.40 cache read, $5 cache write", got)
-	}
-	if got := sol.Prices["priority"]; got.Input != "8" || got.Output != "30" {
-		t.Fatalf("gpt-5.6-sol priority prices = %+v; want OpenAI's published Fast $8/$30", got)
+	for tier, want := range map[string][2]LongPromptTierPrices{
+		"flex":     {{Input: "2", Output: "10", CacheRead: "0.2", CacheWrite: "2.5"}, {Input: "4", Output: "15", CacheRead: "0.4", CacheWrite: "5"}},
+		"default":  {{Input: "4", Output: "20", CacheRead: "0.4", CacheWrite: "5"}, {Input: "8", Output: "30", CacheRead: "0.8", CacheWrite: "10"}},
+		"priority": {{Input: "8", Output: "40", CacheRead: "0.8", CacheWrite: "10"}, {Input: "16", Output: "60", CacheRead: "1.6", CacheWrite: "20"}},
+	} {
+		got := sol.Prices[tier]
+		if short := (LongPromptTierPrices{Input: got.Input, Output: got.Output, CacheRead: got.CacheRead, CacheWrite: got.CacheWrite}); short != want[0] {
+			t.Fatalf("gpt-5.6-sol %s prices = %+v; want OpenAI's published %+v", tier, got, want[0])
+		}
+		want[1].MinPromptTokens, want[1].PerRequest = 272000, "0"
+		if got.LongPrompt == nil || *got.LongPrompt != want[1] {
+			t.Fatalf("gpt-5.6-sol %s long_prompt = %+v; want OpenAI's published %+v", tier, got.LongPrompt, want[1])
+		}
 	}
 	// OpenRouter's reasoning-mode presets are not OpenAI model IDs, so they
 	// must route to OpenRouter rather than to the direct OpenAI endpoint.
