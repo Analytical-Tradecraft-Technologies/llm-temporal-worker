@@ -1525,6 +1525,10 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 // Generate settings. It intentionally has no tools, tool choice, output, or
 // provider-specific fields: compaction is a lossily summarized child and
 // application tool/structured-output configuration is restored by Generate.
+// target_tokens is only range-checked: it is merged into the parent
+// checkpoint's policy, whose trigger_tokens is not known at decode, and
+// request preparation rejects a target at or above that effective trigger as
+// invalid_argument before any provider work.
 func validateCompactPolicy(raw json.RawMessage) error {
 	fields, err := decodeObject(raw)
 	if err != nil {

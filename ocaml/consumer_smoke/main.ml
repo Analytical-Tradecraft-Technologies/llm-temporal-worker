@@ -151,6 +151,14 @@ let () =
   let settings =
     Settings.make ~service_class:Priority ~temperature ~tools:[ tool ] ~output ()
   in
+  let compaction_settings : Compaction_policy.settings =
+    match Compaction_policy.make_settings ~trigger_tokens:50000L ~target_tokens:40000L () with
+    | Ok value -> value
+    | Error message -> failwith message
+  in
+  assert (compaction_settings.trigger_tokens = Some 50000L);
+  ignore (Settings.make ~compaction_settings ());
+  ignore (Settings.Patch.set_compaction_settings compaction_settings Settings.Patch.keep);
   let cache = expect_valid (Cache_policy.accept_up_to ~max_age_seconds:60L ()) in
   let compaction_policy : Compaction_policy.t = {
     target_tokens = Some 64L;

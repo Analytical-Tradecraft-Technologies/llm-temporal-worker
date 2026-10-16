@@ -553,7 +553,23 @@ reservation for reconciliation. These allowances may make hosted requests wait
 for a larger available budget than ordinary generation.
 
 `Context.make`, `Tool.function_`, `Output.*`, `Generate.make_checked`,
-`Compact.make`, and `Compaction_policy.make` provide checked constructors.
+`Compact.make`, `Compaction_policy.make`, and `Compaction_policy.make_settings`
+provide checked constructors.
+
+The worker requires a compaction `target_tokens` below the effective
+`trigger_tokens` (12000 by default). `Compaction_policy.make` sets only the
+target and summary style. As a `Compact.make ~policy` or
+`Conversation.compact ~policy` override, its target is merged into the parent
+checkpoint's policy: a target at or above that checkpoint's trigger is
+accepted locally and the worker fails the compaction with `invalid_argument`.
+As a Generate settings policy (`Settings.make ~compaction_policy`,
+`Settings.Patch.set_compaction`) it replaces the inherited policy, so a target
+of 12000 or more is refused when the request is encoded. To raise the trigger,
+or set `recent_turns`, `output_reserve_tokens` or
+`materialization_threshold_bytes`, build the full policy with
+`Compaction_policy.make_settings` and pass it as
+`Settings.make ~compaction_settings` or `Settings.Patch.set_compaction_settings`;
+the builder rejects a target at or above the effective trigger.
 `Failure.kind` classifies worker failures without hiding the original
 `Temporal.Error.t`, including the public workflows' `provider_error`,
 `provider_rejected` and `incomplete_response` failures.

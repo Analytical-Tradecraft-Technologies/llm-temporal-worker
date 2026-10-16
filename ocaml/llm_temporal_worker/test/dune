@@ -42,3 +42,7 @@
 (test
  (name test_failure)
  (libraries llm_temporal temporal-sdk yojson))
+
+(test
+ (name test_compaction_policy)
+ (libraries llm_temporal temporal-sdk yojson))

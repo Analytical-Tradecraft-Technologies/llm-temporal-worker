@@ -309,12 +309,21 @@ type generate_response = {
   diagnostics : diagnostic list;
 }
 
+type summary_style = Concise | Balanced | Detailed
+
+type compaction_settings = {
+  trigger_tokens : int64 option;
+  target_tokens : int64 option;
+  summary_style : summary_style option;
+  recent_turns : int option;
+  output_reserve_tokens : int64 option;
+  materialization_threshold_bytes : int64 option;
+}
+
 type compaction_policy = {
   target_tokens : int64 option;
   summary_style : summary_style option;
 }
-
-and summary_style = Concise | Balanced | Detailed
 
 type compact_request = {
   api_version : string;
