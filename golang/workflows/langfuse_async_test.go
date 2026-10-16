@@ -16,6 +16,7 @@ import (
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -72,8 +73,40 @@ func TestLangfuseExportWorkflowSwallowsFailure(t *testing.T) {
 	f := workflowTest(t, "generate")
 	env.ExecuteWorkflow(LangfuseExportWorkflowName, llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability})
 	var exported bool
-	if err := env.GetWorkflowResult(&exported); err != nil || exported || calls != 3 {
+	if err := env.GetWorkflowResult(&exported); err != nil || exported || calls != 10 {
 		t.Fatalf("exported = %t, err = %v, calls = %d", exported, err, calls)
+	}
+}
+
+// A saturated in-flight limit is retried after the Activity's backoff until a
+// slot frees, rather than dropping the trace (#1459).
+func TestLangfuseExportWorkflowRetriesSaturation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version workflow.Version
+		calls   int
+		want    bool
+	}{{"current", 1, 6, true}, {"before retry change", workflow.DefaultVersion, 3, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var suite testsuite.WorkflowTestSuite
+			env := suite.NewTestWorkflowEnvironment()
+			RegisterInternal(env, activity.PayloadLimits{})
+			env.OnGetVersion(exportRetryChange, workflow.DefaultVersion, workflow.Version(1)).Return(tc.version)
+			calls := 0
+			env.RegisterActivityWithOptions(func(context.Context, llm.ExecutionReferenceV1) error {
+				calls++
+				if calls < 6 {
+					return temporal.NewApplicationErrorWithOptions("Langfuse export saturated", "langfuse_export_saturated", temporal.ApplicationErrorOptions{NextRetryDelay: 4 * time.Second})
+				}
+				return nil
+			}, sdkactivity.RegisterOptions{Name: activity.ExportLangfuseActivityName})
+			f := workflowTest(t, "generate")
+			env.ExecuteWorkflow(LangfuseExportWorkflowName, llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability})
+			var exported bool
+			if err := env.GetWorkflowResult(&exported); err != nil || exported != tc.want || calls != tc.calls {
+				t.Fatalf("exported = %t, err = %v, calls = %d", exported, err, calls)
+			}
+		})
 	}
 }
 

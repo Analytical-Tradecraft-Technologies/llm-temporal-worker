@@ -93,8 +93,8 @@ func TestExportBreakerFailsFastThenProbes(t *testing.T) {
 			t.Fatalf("attempt %d: want a delivery failure, got %v", i, err)
 		}
 	}
-	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) || !errors.Is(err, ErrExport) {
-		t.Fatalf("open breaker must fail fast: %v", err)
+	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) || !errors.Is(err, ErrExport) || errors.Is(err, ErrSaturated) {
+		t.Fatalf("open breaker must fail fast as unavailable, not saturated: %v", err)
 	}
 	if calls.Load() != breakerThreshold {
 		t.Fatalf("open breaker reached Langfuse: %d calls", calls.Load())
@@ -163,8 +163,8 @@ func TestExportLimitsRequestsWaitingOnLangfuse(t *testing.T) {
 			}
 			arrived.Wait()
 			start := time.Now()
-			if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
-				t.Fatalf("export beyond the in-flight limit must fail fast: %v", err)
+			if err := c.Export(context.Background(), op); !errors.Is(err, ErrSaturated) || !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("export beyond the in-flight limit must fail fast as saturated: %v", err)
 			}
 			if elapsed := time.Since(start); elapsed > time.Second {
 				t.Fatalf("over-limit export waited %v", elapsed)
@@ -176,5 +176,54 @@ func TestExportLimitsRequestsWaitingOnLangfuse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A burst larger than the in-flight limit against a healthy Langfuse delivers
+// every trace once callers retry ErrSaturated after a backoff, as the export
+// Activity does, while requests on the wire never exceed the limit (#1459).
+func TestExportBurstDeliversEveryTraceWithinLimit(t *testing.T) {
+	const limit, burst = 2, 5
+	var inFlight, peak, delivered atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := inFlight.Add(1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		time.Sleep(100 * time.Millisecond)
+		inFlight.Add(-1)
+		delivered.Add(1)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	c, _ := NewClient(server.URL, "public", "secret", server.Client(), limit)
+	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	var saturated atomic.Int32
+	results := make(chan error, burst)
+	for i := 0; i < burst; i++ {
+		go func() {
+			for {
+				err := c.Export(context.Background(), op)
+				if !errors.Is(err, ErrSaturated) {
+					results <- err
+					return
+				}
+				saturated.Add(1)
+				time.Sleep(20 * time.Millisecond)
+			}
+		}()
+	}
+	for i := 0; i < burst; i++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if delivered.Load() != burst || peak.Load() > limit || saturated.Load() == 0 {
+		t.Fatalf("delivered %d, peak in flight %d (limit %d), saturated refusals %d", delivered.Load(), peak.Load(), limit, saturated.Load())
+	}
+	// Saturation says nothing about Langfuse's health.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failures != 0 {
+		t.Fatalf("saturation counted %d breaker failures", c.failures)
 	}
 }
