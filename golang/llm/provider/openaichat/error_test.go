@@ -83,3 +83,26 @@ func TestPaymentRequiredIsARouteLevelDenial(t *testing.T) {
 		t.Fatalf("safe status = %q, want %q", got, want)
 	}
 }
+
+// OpenAI reports billing, spend and quota exhaustion as 429. Retrying cannot
+// restore access, so it is the same route-level credit denial as a 402, while
+// an ordinary 429 stays a rate limit (#1442).
+func TestBillingRateLimitIsARouteLevelCreditDenial(t *testing.T) {
+	for _, apiErr := range []*openai.Error{
+		{StatusCode: http.StatusTooManyRequests, Code: "credit_balance_exhausted", Type: "insufficient_quota"},
+		{StatusCode: http.StatusTooManyRequests, Code: "organization_spend_limit_exceeded"},
+		{StatusCode: http.StatusTooManyRequests, Type: "insufficient_quota"},
+	} {
+		mapped := mapAPIError(apiErr, "openai-chat")
+		if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNever {
+			t.Fatalf("429 %q/%q = %#v, want a rejected permission denial", apiErr.Code, apiErr.Type, mapped)
+		}
+		if got, want := mapped.SafeDetails["status"], "429"; got != want {
+			t.Fatalf("safe status = %q, want %q", got, want)
+		}
+	}
+	mapped := mapAPIError(&openai.Error{StatusCode: http.StatusTooManyRequests, Code: "rate_limit_exceeded"}, "openai-chat")
+	if mapped.Code != provider.CodeProviderRateLimited || mapped.Retry != provider.RetryAfter {
+		t.Fatalf("rate limit 429 = %#v, want provider_rate_limited", mapped)
+	}
+}

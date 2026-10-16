@@ -77,6 +77,8 @@ func mapAPIError(apiErr *openai.Error) *provider.Error {
 		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider permission was denied"
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
 		code, retry, safe = provider.CodeInvalidArgument, provider.RetryNever, "provider rejected request parameters"
+	case status == http.StatusTooManyRequests && creditExhausted(apiErr):
+		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, creditExhaustedMessage
 	case status == http.StatusTooManyRequests:
 		code, retry, safe = provider.CodeProviderRateLimited, provider.RetryAfter, "provider rate limited the request"
 	case status >= http.StatusInternalServerError:
@@ -104,4 +106,22 @@ func mapAPIError(apiErr *openai.Error) *provider.Error {
 		mapped.Provider.RequestID = apiErr.Response.Header.Get("x-request-id")
 	}
 	return mapped
+}
+
+// creditExhaustedMessage is the safe message for a billing 429.
+const creditExhaustedMessage = "provider account has exhausted its credit or spend limit"
+
+// creditExhausted reports an OpenAI 429 that is a billing, spend or quota
+// denial rather than a rate limit. OpenAI documents that retrying these will
+// not restore access until credits or limits change, and that error.type can
+// be insufficient_quota while error.code names the cause. Like a 402, it is an
+// account-wide denial, so it is classified as one: it holds the route and lets
+// the request move to another route instead of retrying a dead account.
+func creditExhausted(apiErr *openai.Error) bool {
+	switch apiErr.Code {
+	case "credit_balance_exhausted", "insufficient_quota", "organization_spend_limit_exceeded",
+		"project_spend_limit_exceeded", "organization_usage_limit_exceeded":
+		return true
+	}
+	return apiErr.Type == "insufficient_quota"
 }

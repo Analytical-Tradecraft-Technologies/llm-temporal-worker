@@ -96,3 +96,29 @@ func TestPaymentRequiredIsARouteLevelDenial(t *testing.T) {
 		t.Fatalf("safe status = %q, want %q", got, want)
 	}
 }
+
+// The tier spend-cap 429 shares rate_limit_error with a rate limit but keeps
+// failing until access resumes. Its documented error.details.error_code makes
+// it the same route-level credit denial as a 402, while an ordinary 429 stays
+// a rate limit (#1442).
+func TestSpendCapRateLimitIsARouteLevelCreditDenial(t *testing.T) {
+	spendCap := &anthropic.Error{StatusCode: http.StatusTooManyRequests}
+	if err := spendCap.UnmarshalJSON([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"You have reached your API usage limits","details":{"error_code":"enforced_spend_limit_reached"}},"request_id":"req_1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	mapped := mapAPIError(spendCap, "anthropic-messages")
+	if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNever {
+		t.Fatalf("spend-cap 429 = %#v, want a rejected permission denial", mapped)
+	}
+	if mapped.SafeDetails["status"] != "429" || mapped.SafeDetails["provider_code"] != "enforced_spend_limit_reached" {
+		t.Fatalf("safe details = %#v", mapped.SafeDetails)
+	}
+	rateLimit := &anthropic.Error{StatusCode: http.StatusTooManyRequests}
+	if err := rateLimit.UnmarshalJSON([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	mapped = mapAPIError(rateLimit, "anthropic-messages")
+	if mapped.Code != provider.CodeProviderRateLimited || mapped.Retry != provider.RetryAfter || mapped.SafeDetails["provider_code"] != "" {
+		t.Fatalf("rate limit 429 = %#v, want provider_rate_limited", mapped)
+	}
+}
