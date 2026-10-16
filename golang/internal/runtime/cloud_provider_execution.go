@@ -949,6 +949,16 @@ func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, f
 		result.Retryable, result.RetryNotBefore = true, now.UTC().Add(time.Second)
 		return result
 	}
+	if failure != nil && failure.Code == code && failure.Dispatch == dispatch && routeCredentialRejection(failure) {
+		result.CreditExhausted = insufficientCredit(failure)
+		// The provider refused this route's credentials or account, not the
+		// request. RetryNever keeps the attempt from retrying the same route;
+		// a replacement attempt prefers routes not yet tried and skips this
+		// one while route health holds it. When no other route remains,
+		// planning reports this failure as terminal (#1335, #1336).
+		result.Retryable, result.RetryNotBefore = true, now.UTC().Add(time.Second)
+		return result
+	}
 	if failure != nil && failure.Retry.Valid() && failure.Retry != provider.RetryNever {
 		delay := failure.RetryAfter
 		if delay < time.Second {
@@ -960,6 +970,21 @@ func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, f
 		result.Retryable, result.RetryNotBefore = true, now.UTC().Add(delay)
 	}
 	return result
+}
+
+// routeCredentialRejection reports a definite provider rejection of the
+// route's credentials (401) or of its account for insufficient credit (402).
+// Either fails every request on the route, so another route may serve it.
+func routeCredentialRejection(failure *provider.Error) bool {
+	return failure != nil && failure.Dispatch == provider.DispatchRejected &&
+		(failure.Code == provider.CodeAuthentication || insufficientCredit(failure))
+}
+
+// insufficientCredit reports a provider 402, which adapters map to a
+// permission denial that carries the HTTP status in its safe details.
+func insufficientCredit(failure *provider.Error) bool {
+	return failure != nil && failure.Code == provider.CodePermissionDenied && failure.Dispatch == provider.DispatchRejected &&
+		failure.SafeDetails["status"] == "402"
 }
 
 func preDispatchContextEnded(failure *provider.Error) bool {

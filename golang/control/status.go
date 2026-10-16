@@ -101,6 +101,12 @@ type StatusObservation struct {
 	ExpiresAt      time.Time
 }
 
+// SafeCodeInsufficientCredit is the safe error code of an inference
+// observation whose provider rejected the account for insufficient credit,
+// such as an HTTP 402. It opens the route circuit at once but, unlike a
+// documented credit provider code, does not establish a sticky incident.
+const SafeCodeInsufficientCredit = "insufficient_credit"
+
 // StatusEvent is the closed safe event written to the append-only event
 // ledger.  NewStatusEvent rejects incomplete or unsafe observations so every
 // persisted event has the same invariant.
@@ -299,7 +305,8 @@ func (status *RouteStatus) Apply(event StatusEvent) bool {
 	// Credential and configuration failures are endpoint-level and open the
 	// circuit at once. A permission denial can be specific to one request,
 	// such as a moderation rejection, so it only counts toward the threshold.
-	if event.SafeErrorCode == "authentication" || event.SafeErrorCode == "configuration" || event.Credit == CreditExhausted || event.Billing == BillingIssue {
+	// An account out of credit fails every request, so it opens at once too.
+	if event.SafeErrorCode == "authentication" || event.SafeErrorCode == "configuration" || event.SafeErrorCode == SafeCodeInsufficientCredit || event.Credit == CreditExhausted || event.Billing == BillingIssue {
 		status.Circuit = CircuitOpen
 	}
 	staleAfter := event.ExpiresAt

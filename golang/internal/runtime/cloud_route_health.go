@@ -53,6 +53,11 @@ const routeHealthCooldown = 30 * time.Second
 // credential rotated in place, without a snapshot change, recover eventually.
 const credentialFailureHold = 24 * time.Hour
 
+// creditFailureHold keeps a route open after the provider reports its account
+// out of credit. A new snapshot also clears it; the short bound lets a top-up
+// made in place recover after one probe request, which itself fails over.
+const creditFailureHold = 15 * time.Minute
+
 // Stable completion timestamps make activity replay idempotent at the Redis
 // projection. Health is best effort and cannot prevent budget settlement.
 func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cloudstate.SavedProviderExecution) {
@@ -84,10 +89,18 @@ func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cl
 			if x.Failure.Dispatch == provider.DispatchRejected {
 				o.ExpiresAt = x.CompletedAt.Add(credentialFailureHold)
 			}
-		case provider.CodeProviderUnavailable, provider.CodePermissionDenied:
+		case provider.CodePermissionDenied:
 			// A 403 can be a request-level rejection such as a moderation
 			// flag, so it counts toward the threshold instead of opening the
 			// shared circuit for every caller.
+			o.Availability = control.AvailabilityUnavailable
+			if x.Failure.CreditExhausted {
+				// A 402 is account-wide, so it holds the route at once. It is
+				// not a sticky credit incident: credit is usually topped up in
+				// place, and an inference observation could never clear one.
+				o.SafeErrorCode, o.ExpiresAt = control.SafeCodeInsufficientCredit, x.CompletedAt.Add(creditFailureHold)
+			}
+		case provider.CodeProviderUnavailable:
 			o.Availability = control.AvailabilityUnavailable
 		case provider.CodeProviderRateLimited:
 			o.Availability = control.AvailabilityDegraded
