@@ -22,6 +22,11 @@ func SummaryItem(summary string) llm.Message {
 	return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: summaryHeading + summary}}}
 }
 
+// lineBreaks maps every line terminator other than LF (CRLF, CR, VT, FF,
+// NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR) to LF. CRLF is listed before
+// CR so it becomes a single line break.
+var lineBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\v", "\n", "\f", "\n", "\u0085", "\n", " ", "\n", " ", "\n")
+
 // summarizerInput renders the prefix into the single human message the
 // summarizer receives. Replaying the prefix as provider turns would ask the
 // model to continue it: a trailing model message becomes an assistant
@@ -39,7 +44,10 @@ func summarizerInput(prefix []llm.Item, policy Policy) []llm.Item {
 		}
 		index++
 		// Every content line is indented so a caller-controlled text cannot
-		// forge an entry heading: headings alone start at column zero.
+		// forge an entry heading: headings alone start at column zero. Other
+		// line breaks a tokenizer or model may honour become LF first, so no
+		// content line escapes the indentation.
+		content = lineBreaks.Replace(content)
 		fmt.Fprintf(&body, "[%d] %s\n  %s\n\n", index, heading, strings.ReplaceAll(content, "\n", "\n  "))
 	}
 	transcript := strings.TrimRight(body.String(), "\n")
