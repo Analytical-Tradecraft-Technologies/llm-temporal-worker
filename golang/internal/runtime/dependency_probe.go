@@ -222,6 +222,9 @@ type redisDependencyProbe struct {
 	// accounting keys live on the master that owns the admission hash-tag slot.
 	budgetNode     func(context.Context) (redisProbeClient, error)
 	admissionNodes func(context.Context, func(context.Context, redisProbeClient) error) error
+	// budgetReplicas visits the replicas of the slot owner, any of which a
+	// failover can promote to hold the accounting keys.
+	budgetReplicas func(context.Context, redisProbeClient, func(context.Context, redisProbeClient) error) error
 }
 
 // redisAdmissionSlotKey is a key in the slot every admission and budget key
@@ -237,10 +240,11 @@ func redisAdmissionSlotKey(value config.RedisConfig) string {
 
 // redisProbeNodes selects where the keyless checks run. On a cluster client the
 // persistence, eviction and time checks run on the master that owns the
-// admission slot, and the admission code check runs on every master so a pass
-// holds wherever the slot moves. Other clients serve every command from one
-// server and use the client itself.
-func redisProbeNodes(client redisProbeClient, value config.RedisConfig) (func(context.Context) (redisProbeClient, error), func(context.Context, func(context.Context, redisProbeClient) error) error) {
+// admission slot, the persistence and eviction checks also run on that
+// master's replicas, and the admission code check runs on every master so a
+// pass holds wherever the slot moves. Other clients serve every command from
+// one server and use the client itself.
+func redisProbeNodes(client redisProbeClient, value config.RedisConfig) (func(context.Context) (redisProbeClient, error), func(context.Context, func(context.Context, redisProbeClient) error) error, func(context.Context, redisProbeClient, func(context.Context, redisProbeClient) error) error) {
 	if cluster, ok := client.(*redisclient.ClusterClient); ok {
 		slotKey := redisAdmissionSlotKey(value)
 		budgetNode := func(ctx context.Context) (redisProbeClient, error) {
@@ -253,13 +257,81 @@ func redisProbeNodes(client redisProbeClient, value config.RedisConfig) (func(co
 		admissionNodes := func(ctx context.Context, fn func(context.Context, redisProbeClient) error) error {
 			return cluster.ForEachMaster(ctx, func(ctx context.Context, node *redisclient.Client) error { return fn(ctx, node) })
 		}
-		return budgetNode, admissionNodes
+		budgetReplicas := func(ctx context.Context, owner redisProbeClient, fn func(context.Context, redisProbeClient) error) error {
+			return redisClusterReplicas(ctx, cluster, owner, fn)
+		}
+		return budgetNode, admissionNodes, budgetReplicas
 	}
 	budgetNode := func(context.Context) (redisProbeClient, error) { return client, nil }
 	admissionNodes := func(ctx context.Context, fn func(context.Context, redisProbeClient) error) error {
 		return fn(ctx, client)
 	}
-	return budgetNode, admissionNodes
+	budgetReplicas := func(context.Context, redisProbeClient, func(context.Context, redisProbeClient) error) error {
+		return nil
+	}
+	return budgetNode, admissionNodes, budgetReplicas
+}
+
+// redisClusterReplicas calls fn on every replica that the slot owner's own
+// CLUSTER SLOTS lists for its ranges. The client's replica connections are
+// selected by the address CLUSTER SLOTS reported, so replicas of other
+// primaries are never contacted, and each selected node must confirm its
+// node ID. Redis omits replicas it has marked as failed from CLUSTER SLOTS,
+// so a replica that is briefly unreachable fails the probe until the cluster
+// fails it or it recovers, as an unreachable master does. A listed replica
+// the client cannot reach or identify cannot be verified and fails the probe.
+func redisClusterReplicas(ctx context.Context, cluster *redisclient.ClusterClient, owner redisProbeClient, fn func(context.Context, redisProbeClient) error) error {
+	ownerNode, ok := owner.(*redisclient.Client)
+	if !ok {
+		return errors.New("Redis budget slot owner is not a cluster node")
+	}
+	ownerID, err := ownerNode.ClusterMyID(ctx).Result()
+	if err != nil {
+		return err
+	}
+	slots, err := ownerNode.ClusterSlots(ctx).Result()
+	if err != nil {
+		return err
+	}
+	replicas, err := redisSlotOwnerReplicas(ownerID, slots)
+	if err != nil {
+		return err
+	}
+	if len(replicas) == 0 {
+		return nil
+	}
+	var (
+		mu       sync.Mutex
+		verified = make(map[string]bool, len(replicas))
+	)
+	err = cluster.ForEachSlave(ctx, func(ctx context.Context, node *redisclient.Client) error {
+		id, ok := replicas[node.NodeAddress()]
+		if !ok {
+			id, ok = replicas[node.Options().Addr]
+		}
+		if !ok {
+			return nil
+		}
+		// An unreachable or reassigned replica stays unverified below.
+		if got, err := node.ClusterMyID(ctx).Result(); err != nil || got != id {
+			return nil
+		}
+		mu.Lock()
+		seen := verified[id]
+		verified[id] = true
+		mu.Unlock()
+		if seen {
+			return nil
+		}
+		return fn(ctx, node)
+	})
+	if err != nil {
+		return err
+	}
+	if len(verified) != len(replicas) {
+		return errors.New("Redis budget slot owner replica is not reachable")
+	}
+	return nil
 }
 
 // NewRedisDependencyProbe constructs a read-only Redis readiness probe. It
@@ -320,8 +392,8 @@ func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, 
 			return nil, fmt.Errorf("Redis coordination stream trim safety must be at least 1s")
 		}
 	}
-	budgetNode, admissionNodes := redisProbeNodes(client, value)
-	return &redisDependencyProbe{client: client, config: value, generation: generation, streamKey: streamKey, budgetNode: budgetNode, admissionNodes: admissionNodes}, nil
+	budgetNode, admissionNodes, budgetReplicas := redisProbeNodes(client, value)
+	return &redisDependencyProbe{client: client, config: value, generation: generation, streamKey: streamKey, budgetNode: budgetNode, admissionNodes: admissionNodes, budgetReplicas: budgetReplicas}, nil
 }
 
 func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
@@ -358,6 +430,55 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 		}
 		return redisUnavailable(err)
 	}
+	result = probe.verifyServerPolicy(ctx, node)
+	if result.Status != ProbeStatusReady {
+		return result
+	}
+	result = probe.verifyReplicas(ctx, node)
+	if result.Status != ProbeStatusReady {
+		return result
+	}
+	if coordinationStreamEnabled(probe.config) {
+		result = probe.verifyCoordinationStream(ctx, serverTime)
+		if result.Status != ProbeStatusReady {
+			return result
+		}
+	}
+	if probe.generation == nil {
+		return result
+	}
+	return probe.verifyBudgetGeneration(ctx)
+}
+
+// redisSlotOwnerReplicas maps the reported address of each replica listed for
+// the primary ownerID in a CLUSTER SLOTS reply to its node ID.
+func redisSlotOwnerReplicas(ownerID string, slots []redisclient.ClusterSlot) (map[string]string, error) {
+	if ownerID == "" {
+		return nil, errors.New("Redis returned no node ID for the budget slot owner")
+	}
+	replicas := make(map[string]string)
+	owned := false
+	for _, slot := range slots {
+		if len(slot.Nodes) == 0 || slot.Nodes[0].ID != ownerID {
+			continue
+		}
+		owned = true
+		for _, replica := range slot.Nodes[1:] {
+			if replica.ID == "" || replica.Addr == "" {
+				return nil, errors.New("Redis returned a replica without a node ID or address")
+			}
+			replicas[replica.Addr] = replica.ID
+		}
+	}
+	if !owned {
+		return nil, errors.New("Redis budget slot owner does not list itself as a primary")
+	}
+	return replicas, nil
+}
+
+// verifyServerPolicy checks the eviction and persistence settings of one node
+// that holds, or may be promoted to hold, the accounting keys.
+func (probe *redisDependencyProbe) verifyServerPolicy(ctx context.Context, node redisProbeClient) ProbeResult {
 	policy, err := redisSetting(ctx, node, "maxmemory-policy")
 	if err != nil {
 		return redisUnavailable(err)
@@ -383,16 +504,31 @@ func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
 		(!strings.EqualFold(strings.TrimSpace(appendOnly), "no") || strings.TrimSpace(save) != "") {
 		return redisPolicyMismatch()
 	}
-	if coordinationStreamEnabled(probe.config) {
-		result = probe.verifyCoordinationStream(ctx, serverTime)
-		if result.Status != ProbeStatusReady {
-			return result
+	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+}
+
+// verifyReplicas applies the slot owner's eviction and persistence checks to
+// each of its replicas, so a failover cannot promote a node that evicts or
+// loses accounting keys. As in verifyAdmission, a policy mismatch outranks a
+// transport failure whatever the fan-out order.
+func (probe *redisDependencyProbe) verifyReplicas(ctx context.Context, owner redisProbeClient) ProbeResult {
+	var (
+		mu     sync.Mutex
+		result = ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	)
+	err := probe.budgetReplicas(ctx, owner, func(ctx context.Context, node redisProbeClient) error {
+		nodeResult := probe.verifyServerPolicy(ctx, node)
+		mu.Lock()
+		defer mu.Unlock()
+		if nodeResult.Status != ProbeStatusReady && result.Status != ProbeStatusPolicy {
+			result = nodeResult
 		}
+		return nil
+	})
+	if err != nil && result.Status != ProbeStatusPolicy {
+		return redisUnavailable(err)
 	}
-	if probe.generation == nil {
-		return result
-	}
-	return probe.verifyBudgetGeneration(ctx)
+	return result
 }
 
 func coordinationStreamEnabled(value config.RedisConfig) bool {

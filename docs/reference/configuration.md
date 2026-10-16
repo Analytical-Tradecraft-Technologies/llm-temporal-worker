@@ -967,10 +967,19 @@ these server checks are keyless. Readiness and `budget-initialize` therefore
 run `PING`, `TIME` and the persistence and eviction checks on the primary that
 owns the `{<admission_hash_tag>}` slot, which holds every accounting key, and
 verify the admission Function library (or Lua script) on every primary so the
-check still holds after the slot moves. Every primary must carry the pinned
-admission code, and the slot owner must meet the persistence and eviction
-policy. Configure replicas and any primary that may take over the slot the
-same way; readiness does not inspect replicas.
+check still holds after the slot moves. The persistence and eviction checks
+also run on every replica that the slot owner's `CLUSTER SLOTS` reply lists,
+because a failover can promote any of them. Every primary must carry the
+pinned admission code, and the slot owner and its replicas must meet the
+persistence and eviction policy; any of them with another policy fails
+readiness with `policy_mismatch`. A listed replica that cannot be reached fails
+readiness as `unavailable`, as an unreachable primary does. Redis omits a
+replica it has marked as failed from `CLUSTER SLOTS`, so readiness recovers
+once the cluster fails the replica, and checks it again when it rejoins.
+Replicas are identified with `CLUSTER MYID` and `CLUSTER SLOTS`, so the Redis
+user also needs those commands and `CONFIG GET` on every replica of the slot
+owner. Configure any primary that may take over the slot the same way;
+replicas of other primaries are not contacted.
 
 `state.redis.admission_mode: function` is the preferred Redis 7+ path. Before
 starting a worker, deployment automation must provision the exact versioned
