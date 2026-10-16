@@ -187,8 +187,9 @@ func (planning *ProviderPlanning) pinnedCandidate(request llm.Request, candidate
 // recoversByIdempotencyKey reports whether the adapter serving the saved
 // route's endpoint documents idempotency-key recovery. It is the adapter a
 // compatible reconstruction would use, looked up without requiring the route
-// or endpoint configuration to be unchanged. An endpoint no longer served has
-// no adapter that could recover.
+// or endpoint configuration to be unchanged. An endpoint this worker no longer
+// serves proves nothing about the adapter that bound it, so it is reported as
+// recoverable and the attempt waits for a worker that serves it.
 func (recovery *ProviderRecovery) recoversByIdempotencyKey(ctx context.Context, route durable.RoutePlan) (bool, error) {
 	if ctx == nil || recovery == nil || recovery.providers == nil || isNilCapability(recovery.providers.adapters) {
 		return false, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
@@ -197,8 +198,8 @@ func (recovery *ProviderRecovery) recoversByIdempotencyKey(ctx context.Context, 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return false, ctxErr
 	}
-	if err != nil {
-		return false, nil
+	if err != nil || adapter == nil {
+		return true, nil
 	}
 	_, ok := adapter.(provider.IdempotencyRecovery)
 	return ok, nil

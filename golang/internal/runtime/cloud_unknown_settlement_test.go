@@ -471,6 +471,31 @@ func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T
 	}
 }
 
+// An endpoint this worker no longer serves says nothing about the adapter
+// that bound the attempt, so its crashed submission waits rather than being
+// settled as unknown here.
+func TestCloudReloadWaitsForCrashedSubmissionOnUnservedEndpoint(t *testing.T) {
+	f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		f.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.Result{}, err
+		}
+		panic("worker crashed mid-dispatch")
+	}
+	ctx := context.Background()
+	ref := crashAfterPossibleWrite(t, f)
+	f.cap.Adapters = engine.AdapterMap{"other-endpoint": f.adapter.executionSyncAdapter}
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	if _, err := f.runtime.PollExecutionV1(ctx, ref); err == nil {
+		t.Fatal("worker without the bound endpoint advanced the request")
+	}
+	if saved := f.savedExecution(t, ref); saved.Execution.Stage != cloudstate.ExecutionSubmitting || saved.Execution.Settlement != nil {
+		t.Fatalf("submission on an unserved endpoint did not wait: %+v", saved.Execution)
+	}
+}
+
 // crashAfterPossibleWrite admits the fixture's request and runs its
 // submission into an adapter that crashes after the pre-HTTP marker. It then
 // rolls out a configuration that changes the bound endpoint.
