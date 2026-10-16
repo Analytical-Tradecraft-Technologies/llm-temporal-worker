@@ -129,6 +129,37 @@ func nestedToolArguments(depth int) json.RawMessage {
 	return json.RawMessage(strings.Repeat(`{"a":`, depth-1) + `{}` + strings.Repeat(`}`, depth-1))
 }
 
+// A resumable adapter's poll is held to the same depth: a completed job with
+// too-deep arguments closes as a paid failure instead of being polled forever.
+func TestCloudPollToolArgumentsPastDepthLimitFailPaid(t *testing.T) {
+	f := boundedCloud(t, true)
+	f.adapter.poll = func(_ context.Context, call provider.Call, _ string, _ provider.Observer) (provider.ResumableResult, error) {
+		f.polls.Add(1)
+		v := executionResponse(call)
+		v.ProviderOperationID = "job"
+		v.Result = toolArgumentsResult(call, string(nestedToolArguments(llm.MaxToolArgumentsDepth+1)))
+		return v, nil
+	}
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	f.now = f.now.Add(2 * time.Second)
+	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	execution := toolArgumentsExecution(t, f, v.RequestID)
+	if v.Retryable || execution.Stage != cloudstate.ExecutionFailed || execution.Failure == nil || execution.Failure.Code != provider.CodeProviderInvalidResponse ||
+		execution.Failure.Dispatch != provider.DispatchAccepted || !execution.Settled {
+		t.Fatalf("result=%+v execution stage=%s failure=%+v settled=%t", v, execution.Stage, execution.Failure, execution.Settled)
+	}
+	f.now = f.now.Add(time.Minute)
+	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	if f.submits.Load() != 1 || f.polls.Load() != 1 {
+		t.Fatalf("submits=%d polls=%d, want one each", f.submits.Load(), f.polls.Load())
+	}
+}
+
 // A tool call at the adapter's depth limit is saved in every durable record
 // it passes through: the child execution, the root finalization plan (with
 // and without its cache entry), the checkpoint, and the parent of the next
