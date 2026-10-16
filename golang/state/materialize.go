@@ -123,6 +123,52 @@ func checkItemEncoding(item llm.Item) error {
 	}
 }
 
+// appendItemsJSON appends items exactly as json.Marshal encodes a
+// []llm.Item, with a nil slice written as null, and returns the same error.
+// json.Marshal re-scans and compacts every MarshalJSON result it embeds; for
+// the value types checkItemEncoding trusts that output is already compact
+// and HTML-escaped, so it is used as is (#1112). Other items, including nil
+// and pointer items, keep the json.Marshal path.
+func appendItemsJSON(dst []byte, items []llm.Item) ([]byte, error) {
+	err := writeItemsJSON(items, func(encoded []byte) { dst = append(dst, encoded...) })
+	if err != nil {
+		return nil, err
+	}
+	return dst, nil
+}
+
+// writeItemsJSON passes the encoding appendItemsJSON appends to write, in
+// pieces, so that a caller can hash it without buffering it.
+func writeItemsJSON(items []llm.Item, write func([]byte)) error {
+	if items == nil {
+		write([]byte("null"))
+		return nil
+	}
+	write([]byte{'['})
+	for index, item := range items {
+		if index > 0 {
+			write([]byte{','})
+		}
+		var encoded []byte
+		var err error
+		switch value := item.(type) {
+		case llm.Message, llm.ToolCall, llm.ToolResult, llm.ProviderState, llm.Reference:
+			encoded, err = value.(json.Marshaler).MarshalJSON()
+			if err != nil {
+				return &json.MarshalerError{Type: reflect.TypeOf(value), Err: err}
+			}
+		default:
+			encoded, err = json.Marshal(item)
+			if err != nil {
+				return err
+			}
+		}
+		write(encoded)
+	}
+	write([]byte{']'})
+	return nil
+}
+
 // itemValue normalizes the closed Item union without a JSON round trip.
 // It is a shallow view; cloneItem detaches mutable fields before storage.
 func itemValue(item llm.Item) llm.Item {

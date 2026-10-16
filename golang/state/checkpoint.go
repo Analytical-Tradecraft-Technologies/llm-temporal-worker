@@ -495,6 +495,18 @@ func NewCheckpointSnapshot(materialized MaterializedState) *CheckpointSnapshot {
 }
 
 func (snapshot CheckpointSnapshot) validate() error {
+	if err := snapshot.validateContent(); err != nil {
+		return err
+	}
+	if snapshot.Digest != snapshot.digest() {
+		return fmt.Errorf("checkpoint snapshot digest mismatch")
+	}
+	return nil
+}
+
+// validateContent is validate without the digest check, for a snapshot whose
+// Digest is computed from the same values afterwards.
+func (snapshot CheckpointSnapshot) validateContent() error {
 	if snapshot.Depth < 0 || snapshot.Settings.Model == "" {
 		return fmt.Errorf("checkpoint snapshot is incomplete")
 	}
@@ -504,21 +516,60 @@ func (snapshot CheckpointSnapshot) validate() error {
 	if _, err := validateItems(snapshot.Items); err != nil {
 		return err
 	}
-	if snapshot.Digest != snapshot.digest() {
-		return fmt.Errorf("checkpoint snapshot digest mismatch")
-	}
 	return nil
 }
 
+// digest hashes the bytes json.Marshal produces for
+//
+//	struct {
+//		Schema   string
+//		Items    []llm.Item
+//		Settings ModelState
+//		Depth    int32
+//		Lineage  []Handle
+//	}
+//
+// and, as before, the empty input when encoding fails. The items are hashed
+// as writeItemsJSON produces them, so the transcript is neither re-scanned
+// nor buffered (#1112).
 func (snapshot CheckpointSnapshot) digest() [32]byte {
-	data, _ := json.Marshal(struct {
-		Schema   string
-		Items    []llm.Item
-		Settings ModelState
-		Depth    int32
-		Lineage  []Handle
-	}{checkpointSchemaVersion, snapshot.Items, snapshot.Settings, snapshot.Depth, snapshot.Lineage})
-	return sha256.Sum256(data)
+	var digest [32]byte
+	hash := sha256.New()
+	if snapshot.writeDigestJSON(func(data []byte) { _, _ = hash.Write(data) }) != nil {
+		return sha256.Sum256(nil)
+	}
+	hash.Sum(digest[:0])
+	return digest
+}
+
+func (snapshot CheckpointSnapshot) writeDigestJSON(write func([]byte)) error {
+	// Encode every field before writing any, so that a failing field is
+	// found before the items are hashed.
+	schema, err := json.Marshal(checkpointSchemaVersion)
+	if err != nil {
+		return err
+	}
+	settings, err := json.Marshal(snapshot.Settings)
+	if err != nil {
+		return err
+	}
+	lineage, err := json.Marshal(snapshot.Lineage)
+	if err != nil {
+		return err
+	}
+	write([]byte(`{"Schema":`))
+	write(schema)
+	write([]byte(`,"Items":`))
+	if err := writeItemsJSON(snapshot.Items, write); err != nil {
+		return err
+	}
+	write([]byte(`,"Settings":`))
+	write(settings)
+	write(strconv.AppendInt([]byte(`,"Depth":`), int64(snapshot.Depth), 10))
+	write([]byte(`,"Lineage":`))
+	write(lineage)
+	write([]byte{'}'})
+	return nil
 }
 
 func sameHandles(left, right []Handle) bool {
