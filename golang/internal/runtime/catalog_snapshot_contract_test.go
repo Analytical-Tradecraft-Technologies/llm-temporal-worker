@@ -768,3 +768,23 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 		t.Fatal("outbound hosts must change the digest as a set, not as a list")
 	}
 }
+
+// Configured service-class policies reach every plan through the compiled
+// catalog and its planning copy.
+func TestCompileRoutesCarriesServiceClassPolicies(t *testing.T) {
+	value, bundle := testRouteInputs(t)
+	value.ServiceClassPolicies = []config.ServiceClassPolicy{{ID: "no-priority", Match: config.ServiceClassPolicyMatch{Tenant: "tenant-a"}, Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}
+	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := copyProviderCatalog(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, catalog := range []routing.Catalog{routes, copied} {
+		if len(catalog.ClassPolicies) != 1 || catalog.ClassPolicies[0].ID != "no-priority" || catalog.ClassPolicies[0].Tenant != "tenant-a" {
+			t.Fatalf("class policies = %+v", catalog.ClassPolicies)
+		}
+	}
+}

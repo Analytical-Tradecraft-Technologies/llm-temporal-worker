@@ -18,6 +18,16 @@ const (
 	defaultMaxTokens         = int64(1024)
 )
 
+// FastTier is the provider tier of Anthropic fast mode, the priority class:
+// priority buys faster output, not Priority Tier capacity. A fast request is
+// sent with service_tier "standard_only" and speed "fast" under the fast-mode
+// beta, and Anthropic bills it at its own (premium) prices. Only some models
+// offer fast mode, so a route offers priority only where the fast tier is
+// priced.
+const FastTier = "fast"
+
+const fastModeBeta = "fast-mode-2026-02-01"
+
 // ExtensionSpec describes the fields an Anthropic Messages profile permits in
 // one namespaced extension. The map key is the semantic extension field and
 // the value is the provider wire field. A blank wire name preserves the key.
@@ -91,14 +101,14 @@ func DefaultProfile(id string) Profile {
 		ServiceTiers: map[llm.ServiceClass]string{
 			llm.ServiceClassEconomy:  "",
 			llm.ServiceClassStandard: "standard_only",
-			llm.ServiceClassPriority: "auto",
+			llm.ServiceClassPriority: FastTier,
 		},
 		ActualServiceClasses: map[string]llm.ServiceClass{
 			"standard": llm.ServiceClassStandard,
 			"priority": llm.ServiceClassPriority,
 			"batch":    llm.ServiceClassEconomy,
+			FastTier:   llm.ServiceClassPriority,
 		},
-		PriorityCapacity: true,
 	}
 }
 

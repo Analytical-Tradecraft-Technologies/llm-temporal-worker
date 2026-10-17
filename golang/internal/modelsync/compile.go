@@ -185,13 +185,13 @@ func directRoute(source Source, direct DirectModel, version string) (routing.Rou
 }
 
 func openRouterRoute(source Source, model Model, version, provenance string) (routing.Route, []pricing.Entry, error) {
-	unit, err := maxPrices(model.Endpoints)
-	if err != nil {
-		return routing.Route{}, nil, err
-	}
 	classes, tiers := source.classes(func(string) bool { return true })
 	entries := make([]pricing.Entry, 0, len(tiers))
 	for _, tier := range tiers {
+		unit, err := maxPrices(tierEndpoints(model.Endpoints, tier))
+		if err != nil {
+			return routing.Route{}, nil, err
+		}
 		entries = append(entries, pricing.Entry{Provider: ProviderOpenRouter, Family: source.Family, EndpointID: source.EndpointID, Region: source.Region,
 			Model: model.ID, ProviderTier: tier, Prices: unit, Provenance: provenance + " max over upstream endpoints", Version: version})
 	}
@@ -296,6 +296,60 @@ func minPositive(current, candidate int64) int64 {
 	default:
 		return min(current, candidate)
 	}
+}
+
+// OpenRouter service tiers, named by the last segment of a tier endpoint's
+// tag (for example "openai/fast" or "google-vertex/global/flex").
+const (
+	openRouterFlex      = "flex"
+	openRouterPriority  = "priority"
+	openRouterUltrafast = "ultrafast"
+)
+
+// endpointTier names the service tier an upstream endpoint serves, or ""
+// for an endpoint in the default pool. OpenRouter accepts "fast" as a
+// spelling of priority.
+func endpointTier(tag string) string {
+	switch tier := tag[strings.LastIndex(tag, "/")+1:]; tier {
+	case openRouterFlex, openRouterPriority, openRouterUltrafast:
+		return tier
+	case "fast":
+		return openRouterPriority
+	default:
+		return ""
+	}
+}
+
+// tierEndpoints returns the upstream endpoints OpenRouter can serve a request
+// for the service tier from, so the tier's reservation covers those
+// (https://openrouter.ai/docs/guides/features/service-tiers): a flex request
+// only flex endpoints, or standard routing when there are none; any other
+// request every endpoint except ultrafast ones, which serve only a request
+// for that tier. Priority endpoints stay in the standard pool: an open-weight
+// model's tier endpoints take part in default routing, and the Document does
+// not say which models are open-weight.
+func tierEndpoints(endpoints []Endpoint, providerTier string) []Endpoint {
+	selected := make([]Endpoint, 0, len(endpoints))
+	if endpointTier(providerTier) == openRouterFlex {
+		for _, endpoint := range endpoints {
+			if endpointTier(endpoint.Tag) == openRouterFlex {
+				selected = append(selected, endpoint)
+			}
+		}
+		if len(selected) > 0 {
+			return selected
+		}
+	}
+	for _, endpoint := range endpoints {
+		if endpointTier(endpoint.Tag) != openRouterUltrafast {
+			selected = append(selected, endpoint)
+		}
+	}
+	if len(selected) == 0 {
+		// A model listed only through tier endpoints is priced at all of them.
+		return endpoints
+	}
+	return selected
 }
 
 // maxPrices is the componentwise maximum over every upstream endpoint and

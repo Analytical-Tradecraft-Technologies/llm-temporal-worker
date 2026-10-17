@@ -138,6 +138,10 @@ public value.
 - `service_class_fallbacks` defaults to an empty list.
 - Fallback entries use the same three-value enum, cannot repeat the requested
   class, cannot contain duplicates, and are attempted in order.
+- A requested or fallback class that a configured service-class policy
+  disables for the request's tenant or project, or that no route of the
+  logical model offers, is attempted at `standard` instead of failing. See
+  [service-class rules](../reference/configuration.md#service-class-rules).
 - A fallback is an authorization to try another cost/latency class, not a
   command to do so. Route and capability checks still apply.
 - Budget reservation covers the most expensive eligible class in the explicit

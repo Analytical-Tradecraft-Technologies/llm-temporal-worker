@@ -444,8 +444,9 @@ endpoints:
       standard:
         provider_value: standard_only
       priority:
-        provider_value: auto
-        requires_capability: priority_capacity
+        # Priority is fast mode: sent as speed "fast" with service_tier
+        # standard_only, and priced from the "fast" price-catalog tier.
+        provider_value: fast
     capability_profile: anthropic-messages-v4
     price_catalog: catalog-2026-07-13
 
@@ -461,11 +462,10 @@ endpoints:
       kind: aws_default_chain
     timeout: 115s
     service_classes:
+      # Claude Platform on AWS has no fast mode, so it offers only standard;
+      # a priority request routed here is served at standard.
       standard:
         provider_value: standard_only
-      priority:
-        provider_value: auto
-        requires_capability: priority_capacity
     capability_profile: anthropic-aws-us-east-1-v1
     price_catalog: catalog-2026-07-13
     provider_storage:
@@ -524,7 +524,7 @@ models:
       - id: anthropic-aws-secondary
         endpoint: anthropic-aws-us-east-1
         model: claude-example-2026-06-01
-        classes: [standard, priority]
+        classes: [standard]
       - id: bedrock-economy
         endpoint: bedrock-us-east-1
         model: anthropic.claude-example-v1
@@ -1067,9 +1067,71 @@ accepted: `service.actual` is omitted, `service.provider_value` keeps the raw
 label, and the call is priced at the attempted class. Anthropic Messages
 endpoints are the exception and require the response tier.
 
+`priority` buys faster responses, not reserved capacity:
+
+| Provider | `economy` | `standard` | `priority` |
+|---|---|---|---|
+| OpenAI (direct) | `flex` | `default` | `priority` |
+| Anthropic (direct) | — | `standard_only` | `fast` (fast mode) |
+| Anthropic on AWS (`anthropic_aws_messages`) | — | `standard_only` | — |
+| Amazon Bedrock | `flex` | `default` | `priority` |
+| OpenRouter | `flex` | `default` | `priority` |
+
+The Anthropic `fast` value is not sent as `service_tier`: the adapter sends
+`service_tier: standard_only` with `speed: "fast"` and the
+`fast-mode-2026-02-01` beta header, and a response that reports
+`usage.speed: "fast"` is classified as `priority` and priced at the `fast`
+price-catalog tier (2x standard). Fast mode exists only on some models
+(Claude Opus 4.8, 5 and 5.5), so only routes to those models should offer
+`priority`; the built-in model-sync rules price the `fast` tier for exactly
+those models. Anthropic Priority Tier capacity (`provider_value: auto` with
+`requires_capability: priority_capacity`) is still accepted for existing
+configurations but is no longer the recommended `priority` mapping.
+
+OpenRouter reports the tier that served the request, and a `priority` request
+that it serves from a default endpoint is classified and billed as `standard`.
+Model sync reserves each OpenRouter tier at the most expensive upstream
+endpoint that can serve it. `standard` and `priority` reserve over every
+endpoint except `/ultrafast` ones, which serve only that opt-in tier; priority
+endpoints stay in the `standard` pool because an open-weight model's tier
+endpoints take part in default routing. `flex` uses the endpoints tagged
+`/flex`, or the `standard` pool when there are none.
+
 A request without `service_class` becomes `standard`. There is no configurable
-provider default. `service_class_fallbacks` is request data, not a worker-wide
-default, because only the caller can authorize a cost/latency class change.
+provider default. A requested class (or explicit fallback) is served at
+`standard` instead of failing when:
+
+- a matching `service_class_policies` entry leaves it out, or
+- no route of the logical model offers it at all.
+
+Repeated classes after that adjustment are dropped. The response keeps the
+requested class in `service.requested` and reports the class actually tried in
+`service.attempted`. When at least one route offers the class, only those
+routes are tried at it; the other routes are tried at `standard` only if the
+request lists `standard` in `service_class_fallbacks`.
+
+### Service-class policies
+
+`service_class_policies` disables classes for a tenant or project:
+
+```yaml
+service_class_policies:
+  - id: acme-no-priority
+    match: {tenant: acme}
+    classes: [economy, standard]
+  - id: billing-no-economy
+    match: {tenant: acme, project: billing}
+    classes: [standard, priority]
+```
+
+`match.tenant` and `match.project` compare with the request context; an
+omitted field matches every request, so an empty `match` applies to all
+requests. Every matching policy applies: a class is enabled only when each of
+them lists it. A disabled `priority` is served at `standard` (downgraded) and
+a disabled `economy` at `standard` (upgraded). `classes` must include
+`standard`, so enabling `economy` and `priority` without `standard` is
+rejected. Policy IDs must be unique. The policies are reloadable and enter the
+configuration digest only when set.
 
 ## Route identifiers
 
@@ -1329,7 +1391,7 @@ providers:
 
 Prices are keyed by the endpoint's `service_classes` `provider_value`; the
 built-in rules price OpenAI `flex`, `default` and `priority`, Anthropic
-`standard_only` and `auto`, and Exa `standard`. A model's optional `family`
+`standard_only` and, for the models with fast mode, `fast`, and Exa `standard`. A model's optional `family`
 restricts it to endpoints of that family.
 
 The built-in Exa models are:

@@ -172,7 +172,7 @@ service-class facts already verified for that profile:
 | Azure Responses | only when deployment profile declares it | `default` | `priority` when declared |
 | OpenRouter Chat | only when pinned provider profile declares it | profile value | only when profile declares it |
 | Exa Chat | unsupported (enforced) | profile value | unsupported (enforced) |
-| Anthropic direct | unsupported synchronously | `standard_only` | `auto` only with priority-capacity claim |
+| Anthropic direct | unsupported synchronously | `standard_only` | `fast` (fast mode: `speed: "fast"`) |
 | Anthropic AWS | exact offering profile | exact offering profile | exact offering profile |
 | Bedrock Messages (`bedrock-anthropic`) | `flex` | `default` | `priority` |
 | Bedrock Converse (`bedrock-converse`) | `flex` | `default` | `priority` |

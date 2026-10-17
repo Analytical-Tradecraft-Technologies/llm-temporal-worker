@@ -64,9 +64,11 @@ var generatedProviders = []generatedProvider{
 	},
 	{
 		name: "anthropic", prefix: "anthropic/", modelID: ModelIDDotsToDashes,
+		// Priority is fast mode, which OpenRouter lists as its own endpoint
+		// on the models that offer it.
 		tiers: []generatedTier{
 			{tier: "standard_only", tags: []string{"anthropic"}},
-			{tier: "auto", tags: []string{"anthropic"}},
+			{tier: "fast", tags: []string{"anthropic/fast"}},
 		},
 		// Older Anthropic models' long-context window needs a beta header
 		// (Claude 4.6 and later serve 1M at one price, with no override).

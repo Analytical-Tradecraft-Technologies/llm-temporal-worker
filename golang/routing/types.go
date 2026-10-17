@@ -37,6 +37,9 @@ type Input struct {
 type Catalog struct {
 	Version string
 	Models  map[string]Model
+	// ClassPolicies disable service classes for matching requests; see
+	// Catalog.ServiceClasses.
+	ClassPolicies []ClassPolicy
 }
 
 type Model struct {

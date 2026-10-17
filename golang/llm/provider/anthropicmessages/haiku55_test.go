@@ -125,7 +125,7 @@ func TestHaiku55ConstraintsDoNotChangeOtherModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	wire := marshalWire(t, call.SDKParams)
-	if wire["service_tier"] != "auto" || wire["temperature"] != temperature || wire["top_k"] != float64(topK) {
+	if wire["service_tier"] != "standard_only" || wire["speed"] != "fast" || wire["temperature"] != temperature || wire["top_k"] != float64(topK) {
 		t.Fatal(wire)
 	}
 	// Manual thinking rejects modified sampling on every model, so the

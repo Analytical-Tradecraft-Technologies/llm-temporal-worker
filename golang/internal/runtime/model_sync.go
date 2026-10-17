@@ -197,6 +197,9 @@ func (syncer *modelSyncRuntime) install(document *modelsync.Document) error {
 		models[name] = model
 	}
 	routes, err := routing.CompileCatalog(syncer.base.Routes.Version, models)
+	if err == nil {
+		routes, err = routes.WithClassPolicies(syncer.base.Routes.ClassPolicies)
+	}
 	if err != nil {
 		return fmt.Errorf("compile synced routes: %w", err)
 	}

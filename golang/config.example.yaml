@@ -215,8 +215,9 @@ endpoints:
       standard:
         provider_value: standard_only
       priority:
-        provider_value: auto
-        requires_capability: priority_capacity
+        # Priority is fast mode: sent as speed "fast" with service_tier
+        # standard_only, and priced from the "fast" price-catalog tier.
+        provider_value: fast
     capability_profile: anthropic-messages-v4
     price_catalog: catalog-2026-07-13
 
@@ -232,11 +233,10 @@ endpoints:
       kind: aws_default_chain
     timeout: 115s
     service_classes:
+      # Claude Platform on AWS has no fast mode, so it offers only standard;
+      # a priority request routed here is served at standard.
       standard:
         provider_value: standard_only
-      priority:
-        provider_value: auto
-        requires_capability: priority_capacity
     capability_profile: anthropic-aws-us-east-1-v1
     price_catalog: catalog-2026-07-13
     provider_storage:
@@ -295,7 +295,7 @@ models:
       - id: anthropic-aws-secondary
         endpoint: anthropic-aws-us-east-1
         model: claude-example-2026-06-01
-        classes: [standard, priority]
+        classes: [standard]
       - id: bedrock-economy
         endpoint: bedrock-us-east-1
         model: anthropic.claude-example-v1
@@ -316,6 +316,16 @@ pricing:
     - file: /etc/llmtw/prices.yaml
       sha256: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
   require_price_when_budgeted: true
+
+# Service classes a tenant or project may use. A request for a class a
+# matching policy leaves out is served at standard rather than failed, so every
+# policy must keep standard. Every matching policy applies; a request no policy
+# matches may use any class its routes offer.
+service_class_policies:
+  - id: acme-no-priority
+    match:
+      tenant: acme
+    classes: [economy, standard]
 
 budgets:
   require_match: true

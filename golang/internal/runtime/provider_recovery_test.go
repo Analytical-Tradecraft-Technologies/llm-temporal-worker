@@ -262,7 +262,10 @@ func TestProviderRecoveryRejectsChangedBindingsBeforeAdapterLookup(t *testing.T)
 }
 
 func TestProviderRecoveryRejectsChangedSemanticInputAndEligibility(t *testing.T) {
-	for _, name := range []string{"input", "operation key", "tenant", "project", "actor", "fallbacks", "portability", "removed route", "unauthorized tenant", "region", "context limit"} {
+	// The fixture's routes offer only standard, so its priority class and
+	// standard fallback plan one standard candidate whatever the fallbacks are;
+	// a fallback change is covered where it changes the plan.
+	for _, name := range []string{"input", "operation key", "tenant", "project", "actor", "portability", "removed route", "unauthorized tenant", "region", "context limit"} {
 		t.Run(name, func(t *testing.T) {
 			capabilities, source, _, prepared, _, binding := recoveryFixture(t)
 			input, _ := llm.NormalizeRequest(prepared.Request)
@@ -280,8 +283,6 @@ func TestProviderRecoveryRejectsChangedSemanticInputAndEligibility(t *testing.T)
 				prepared.Request.Context.Project = "other"
 			case "actor":
 				prepared.Request.Context.Actor = "other"
-			case "fallbacks":
-				prepared.Request.ServiceClassFallbacks = nil
 			case "portability":
 				prepared.Request.Portability = llm.PortabilityBestEffort
 			case "removed route":

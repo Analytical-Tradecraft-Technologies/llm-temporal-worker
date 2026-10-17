@@ -93,6 +93,9 @@ type Config struct {
 	// ModelSync is omitted from canonical JSON when unset, so enabling the
 	// feature is the only change that moves an existing configuration digest.
 	ModelSync *ModelSyncConfig `yaml:"model_sync,omitempty" json:"model_sync,omitempty"`
+	// ServiceClassPolicies is omitted from canonical JSON when unset, so an
+	// existing configuration keeps its digest.
+	ServiceClassPolicies []ServiceClassPolicy `yaml:"service_class_policies,omitempty" json:"service_class_policies,omitempty"`
 }
 
 type ServerConfig struct {
@@ -401,6 +404,22 @@ type BudgetPolicy struct {
 	ID      string         `yaml:"id" json:"id"`
 	Match   BudgetMatch    `yaml:"match" json:"match"`
 	Windows []BudgetWindow `yaml:"windows" json:"windows"`
+}
+
+// ServiceClassPolicy limits the service classes requests from a tenant or
+// project may be served at. A request for a disabled class is served at
+// standard rather than failed, so Classes must include standard.
+type ServiceClassPolicy struct {
+	ID      string                  `yaml:"id" json:"id"`
+	Match   ServiceClassPolicyMatch `yaml:"match" json:"match"`
+	Classes []llm.ServiceClass      `yaml:"classes" json:"classes"`
+}
+
+// ServiceClassPolicyMatch selects requests by their context; an empty field
+// matches every request.
+type ServiceClassPolicyMatch struct {
+	Tenant  string `yaml:"tenant" json:"tenant,omitempty"`
+	Project string `yaml:"project" json:"project,omitempty"`
 }
 
 type BudgetMatch struct {

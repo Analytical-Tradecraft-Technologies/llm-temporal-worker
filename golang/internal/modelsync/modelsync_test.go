@@ -241,6 +241,9 @@ providers:
       anthropic/claude-sonnet-4.5:
         prices:
           standard_only: {input_per_million: "2.7", output_per_million: "13.5", cache_read_per_million: "0.27", cache_write_per_million: "3.375", per_request: "0"}
+      anthropic/claude-opus-4.8:
+        prices:
+          standard_only: {input_per_million: "4.5", output_per_million: "22.5", cache_read_per_million: "0.45", cache_write_per_million: "5.625", per_request: "0"}
       anthropic/claude-opus-4.5: {exclude: true}
       anthropic/claude-custom:
         model: claude-custom-20261001
@@ -251,8 +254,11 @@ providers:
 	if !ok || sonnet.Model != "claude-sonnet-4-5" || sonnet.ContextTokens != 200000 {
 		t.Fatalf("sonnet = %+v, %v; want the built-in mapping and limits kept", sonnet, ok)
 	}
-	if sonnet.Prices["standard_only"].Input != "2.7" || sonnet.Prices["auto"].Input != "3" {
-		t.Fatalf("sonnet prices = %+v; want one tier overridden and the other kept", sonnet.Prices)
+	if sonnet.Prices["standard_only"].Input != "2.7" {
+		t.Fatalf("sonnet prices = %+v; want the standard tier overridden", sonnet.Prices)
+	}
+	if opus, _ := rules.Direct("anthropic", "anthropic/claude-opus-4.8"); opus.Prices["standard_only"].Input != "4.5" || opus.Prices["fast"].Input != "10" {
+		t.Fatalf("opus prices = %+v; want one tier overridden and the other kept", opus.Prices)
 	}
 	if _, ok := rules.Direct("anthropic", "anthropic/claude-opus-4.5"); ok {
 		t.Fatal("an excluded built-in model still has a direct route")
@@ -336,11 +342,16 @@ func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 	if got := opus.Prices["standard_only"]; got.Input != "4" || got.Output != "20" || got.CacheRead != "0.2" || got.CacheWrite != "5" {
 		t.Fatalf("claude-opus-5.5 prices = %+v; want Anthropic's published $4/$20, $0.20 cache read, $5 cache write", got)
 	}
+	// Fast mode (the priority class) is billed at 2x every price.
+	if got := opus.Prices["fast"]; got.Input != "8" || got.Output != "40" || got.CacheRead != "0.4" || got.CacheWrite != "10" {
+		t.Fatalf("claude-opus-5.5 fast prices = %+v; want Anthropic's published $8/$40, $0.40 cache read, $10 cache write", got)
+	}
 	sonnet, _ := rules.Direct("anthropic", "anthropic/claude-sonnet-5.5")
-	for _, tier := range []string{"standard_only", "auto"} {
-		if got := sonnet.Prices[tier]; got.Input != "2" || got.Output != "10" || got.CacheRead != "0.1" || got.CacheWrite != "2.5" {
-			t.Fatalf("claude-sonnet-5.5 %s prices = %+v; want Anthropic's published $2/$10, $0.10 cache read, $2.50 cache write", tier, got)
-		}
+	if got := sonnet.Prices["standard_only"]; got.Input != "2" || got.Output != "10" || got.CacheRead != "0.1" || got.CacheWrite != "2.5" {
+		t.Fatalf("claude-sonnet-5.5 prices = %+v; want Anthropic's published $2/$10, $0.10 cache read, $2.50 cache write", got)
+	}
+	if _, fast := sonnet.Prices["fast"]; fast {
+		t.Fatal("claude-sonnet-5.5 has no fast mode, so it must not price the fast tier")
 	}
 	// OpenRouter lists gpt-5.6-sol at a 50% promotional discount; the
 	// direct route must carry OpenAI's list prices, not the promotion.
@@ -398,7 +409,7 @@ func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
 		t.Fatalf("generated gpt-5.4 default long_prompt = %+v", long)
 	}
 	sonnet, ok := rules.Direct("anthropic", "anthropic/claude-sonnet-4.5")
-	if !ok || sonnet.ContextTokens != 200000 || sonnet.Prices["standard_only"].CacheWrite != "3.75" || sonnet.Prices["auto"].Output != "15" {
+	if !ok || sonnet.ContextTokens != 200000 || sonnet.Prices["standard_only"].CacheWrite != "3.75" || len(sonnet.Prices) != 1 {
 		t.Fatalf("generated sonnet = %+v", sonnet)
 	}
 	if _, ok := rules.Providers["anthropic"].Models["inference-net/schematron-v2-turbo"]; ok {
@@ -619,7 +630,7 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	document := fetchFixture(t)
 	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
 	openai := testSource("openai-direct", "openai", "openai_responses", map[llm.ServiceClass]string{llm.ServiceClassEconomy: "flex", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"})
-	anthropic := testSource("anthropic-direct", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "auto"})
+	anthropic := testSource("anthropic-direct", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "fast"})
 	exa := testSource("exa-direct", "exa", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
 	exaAgent := testSource("exa-agent-direct", "exa", "openai_responses", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
 	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{openai, anthropic, exa, exaAgent},
@@ -832,7 +843,7 @@ func TestRefreshIntervalStaysWithinBounds(t *testing.T) {
 // Direct routing must work without an OpenRouter inference endpoint, including
 // before its public catalog contains the newly released model.
 func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
-	source := testSource("anthropic", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "auto"})
+	source := testSource("anthropic", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "fast"})
 	compiled, err := Compile(Input{Rules: mergedRules(t), Direct: []Source{source}})
 	if err != nil {
 		t.Fatal(err)
@@ -865,4 +876,37 @@ func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
 		t.Fatalf("Haiku 5.5 long prompt = %+v; want a tier over 100,000 prompt tokens", haiku.LongPrompt)
 	}
 	assertPrices(t, pricing.Entry{Model: haiku.Model, ProviderTier: "long_prompt", Prices: haiku.LongPrompt.Prices}, "0.5", "2.5", "0.05", "0.625")
+}
+
+// Each OpenRouter service tier reserves at the upstream endpoints that can
+// serve it: ultrafast endpoints serve only their own tier, priority endpoints
+// can serve a standard request of an open-weight model, and a flex request
+// reserves at flex prices, or standard ones with no flex endpoint.
+func TestOpenRouterRoutePricesEachTierFromItsEndpoints(t *testing.T) {
+	endpoint := func(tag, prompt string) Endpoint {
+		return Endpoint{Tag: tag, Pricing: Pricing{Prompt: prompt, Completion: prompt}}
+	}
+	source := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassEconomy: "flex", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"})
+	for _, tc := range []struct {
+		name      string
+		endpoints []Endpoint
+		want      map[string]string
+	}{
+		{name: "tiered", endpoints: []Endpoint{endpoint("azure", "0.000003"), endpoint("openai", "0.0000025"), endpoint("openai/fast", "0.000005"), endpoint("openai/flex", "0.00000125"), endpoint("openai/ultrafast", "0.00001")},
+			want: map[string]string{"flex": "1.25", "default": "5", "priority": "5"}},
+		{name: "no flex endpoint", endpoints: []Endpoint{endpoint("anthropic", "0.000004"), endpoint("anthropic/fast", "0.000008")},
+			want: map[string]string{"flex": "8", "default": "8", "priority": "8"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, entries, err := openRouterRoute(source, Model{ID: "vendor/model", ContextLength: 1000, Endpoints: tc.endpoints}, "v", "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for tier, want := range tc.want {
+				if got := priceFor(t, entries, "openrouter", "vendor/model", tier).Prices.InputPerMillion.CanonicalString(); got != want {
+					t.Fatalf("%s input = %s, want %s", tier, got, want)
+				}
+			}
+		})
+	}
 }

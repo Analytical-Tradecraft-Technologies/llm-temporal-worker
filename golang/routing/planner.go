@@ -40,7 +40,10 @@ func (planner DeterministicPlanner) Plan(ctx context.Context, input Input) (Plan
 	if !ok {
 		return Plan{Model: request.Model, Version: input.Catalog.Version}, fmt.Errorf("no configured routes for logical model %q", request.Model)
 	}
-	classes := append([]llm.ServiceClass{requested}, request.ServiceClassFallbacks...)
+	classes, err := input.Catalog.ServiceClasses(request)
+	if err != nil {
+		return Plan{}, err
+	}
 	extensionDigest := extensionDigest(request)
 	plan := Plan{Version: input.Catalog.Version, Model: request.Model}
 	for fallbackIndex, class := range classes {
@@ -285,6 +288,23 @@ func CompileCatalog(version string, models map[string]Model) (Catalog, error) {
 		copyModels[name] = model
 	}
 	return Catalog{Version: version, Models: copyModels}, nil
+}
+
+// WithClassPolicies returns a copy of the catalog that applies policies, in
+// place of any it already had.
+func (catalog Catalog) WithClassPolicies(policies []ClassPolicy) (Catalog, error) {
+	seen := make(map[string]struct{}, len(policies))
+	for _, policy := range policies {
+		if err := policy.Validate(); err != nil {
+			return Catalog{}, err
+		}
+		if _, duplicate := seen[policy.ID]; duplicate {
+			return Catalog{}, fmt.Errorf("duplicate service class policy %q", policy.ID)
+		}
+		seen[policy.ID] = struct{}{}
+	}
+	catalog.ClassPolicies = cloneClassPolicies(policies)
+	return catalog, nil
 }
 
 func cloneCapabilityMap(input map[string]Capability) map[string]Capability {

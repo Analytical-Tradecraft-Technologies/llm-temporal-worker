@@ -53,11 +53,11 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if call.Metadata.ProviderTier != "auto" || call.OperationKey != request.OperationKey {
+	if call.Metadata.ProviderTier != FastTier || call.OperationKey != request.OperationKey {
 		t.Fatalf("call metadata = %#v", call)
 	}
 	wire := marshalWire(t, call.SDKParams)
-	if wire["model"] != "claude-contract" || wire["service_tier"] != "auto" || wire["max_tokens"] != float64(maxTokens) {
+	if wire["model"] != "claude-contract" || wire["service_tier"] != "standard_only" || wire["speed"] != "fast" || wire["max_tokens"] != float64(maxTokens) {
 		t.Fatalf("wire identity = %#v", wire)
 	}
 	system := wire["system"].([]any)
@@ -128,18 +128,23 @@ func TestCompileServiceTierPolicy(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		class       llm.ServiceClass
+		tier        string
 		capacity    bool
 		wantTier    string
 		wantFailure string
 	}{
 		{name: "economy unsupported", class: llm.ServiceClassEconomy, capacity: true, wantFailure: "unsupported"},
 		{name: "standard only", class: llm.ServiceClassStandard, capacity: true, wantTier: "standard_only"},
-		{name: "priority requires capacity", class: llm.ServiceClassPriority, capacity: false, wantFailure: "priority_capacity"},
-		{name: "priority auto", class: llm.ServiceClassPriority, capacity: true, wantTier: "auto"},
+		{name: "priority fast", class: llm.ServiceClassPriority, wantTier: FastTier},
+		{name: "priority auto requires capacity", class: llm.ServiceClassPriority, tier: "auto", capacity: false, wantFailure: "priority_capacity"},
+		{name: "priority auto", class: llm.ServiceClassPriority, tier: "auto", capacity: true, wantTier: "auto"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			profile := testProfile()
 			profile.PriorityCapacity = test.capacity
+			if test.tier != "" {
+				profile.ServiceTiers[test.class] = test.tier
+			}
 			adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, profile)}
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: llm.Request{OperationKey: "tier-" + test.name, Model: "claude-contract", ServiceClass: test.class},
