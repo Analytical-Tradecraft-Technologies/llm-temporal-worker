@@ -1408,3 +1408,25 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 		b.ReportMetric(float64(stepUsed.createBytes)/n, "blob-put-B/op")
 	})
 }
+
+func TestCloudExecutionRuntimeDefaultFallsBackAndSurvivesContinuation(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		t.Run(fmt.Sprintf("async=%t", async), func(t *testing.T) {
+			f := boundedCloud(t, async, func(b *budgetPlanningFixture) {
+				b.source.value.Routes.ClassPolicies = []routing.ClassPolicy{{ID: "experiments", Classes: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard}, DefaultClass: llm.ServiceClassEconomy}}
+				b.gen.SettingsPatch.ServiceClass.Set = nil
+				b.gen.SettingsPatch.ServiceClassFallbacks.Set = nil
+			})
+			root := f.finish(t)
+			if root.Generate.Service.Requested != llm.ServiceClassEconomy || root.Generate.Service.Attempted != llm.ServiceClassStandard {
+				t.Fatalf("standard-only model did not adjust default: %+v", root.Generate.Service)
+			}
+			handle := root.Generate.Checkpoint.Handle
+			f.request = llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+			child := f.finish(t)
+			if child.Generate.Service.Requested != llm.ServiceClassEconomy || child.Generate.Service.Attempted != llm.ServiceClassStandard {
+				t.Fatalf("continuation lost default: %+v", child.Generate.Service)
+			}
+		})
+	}
+}

@@ -294,6 +294,7 @@ func CompileCatalog(version string, models map[string]Model) (Catalog, error) {
 // place of any it already had.
 func (catalog Catalog) WithClassPolicies(policies []ClassPolicy) (Catalog, error) {
 	seen := make(map[string]struct{}, len(policies))
+	defaults := make(map[[2]string]llm.ServiceClass)
 	for _, policy := range policies {
 		if err := policy.Validate(); err != nil {
 			return Catalog{}, err
@@ -302,6 +303,13 @@ func (catalog Catalog) WithClassPolicies(policies []ClassPolicy) (Catalog, error
 			return Catalog{}, fmt.Errorf("duplicate service class policy %q", policy.ID)
 		}
 		seen[policy.ID] = struct{}{}
+		if policy.DefaultClass != "" {
+			scope := [2]string{policy.Tenant, policy.Project}
+			if previous := defaults[scope]; previous != "" && previous != policy.DefaultClass {
+				return Catalog{}, fmt.Errorf("conflicting service class defaults for the same scope")
+			}
+			defaults[scope] = policy.DefaultClass
+		}
 	}
 	catalog.ClassPolicies = cloneClassPolicies(policies)
 	return catalog, nil

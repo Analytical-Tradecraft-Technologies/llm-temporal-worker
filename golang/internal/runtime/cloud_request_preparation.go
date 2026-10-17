@@ -9,6 +9,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -28,6 +29,7 @@ type CloudRequestPreparationStore interface {
 // materialized input before any budget or provider effect. A restart reads that
 // input instead of reopening a parent whose retention deadline may have passed.
 type CloudRequestPreparation struct {
+	source        engine.SnapshotSource
 	store         CloudRequestPreparationStore
 	replay        *CheckpointReplay
 	digest        [32]byte
@@ -137,7 +139,7 @@ func (capabilities V1RuntimeCapabilities) NewCloudRequestPreparation(resolve Che
 	if err != nil {
 		return nil, err
 	}
-	return &CloudRequestPreparation{store: store, replay: replay, digest: capabilities.ConfigDigest, clock: capabilities.Clock}, nil
+	return &CloudRequestPreparation{store: store, replay: replay, digest: capabilities.ConfigDigest, clock: capabilities.Clock, source: capabilities.Snapshot}, nil
 }
 
 func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.PrepareExecutionV1) (PreparedCloudRequest, error) {
@@ -305,6 +307,21 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 		return nil, err
 	}
 	preparation := cloudstate.RequestPreparation{Version: 1, ConfigDigest: p.digest, CheckpointScope: checkpointScope, PreparedAt: at, ConfigActivatedAt: p.activatedAt}
+	// Select once before admission, retaining the original public manifest for
+	// idempotency. Retries and reference steps read the saved choice.
+	if record.Request.Kind == "generate" && parent == "" && p.source != nil {
+		var request llm.GenerateRequestV1
+		if json.Unmarshal(record.Request.Manifest, &request) != nil {
+			return nil, cloudRuntimeError(cloudstate.ErrCorrupt, false)
+		}
+		if request.SettingsPatch.ServiceClass.Set == nil && !request.SettingsPatch.ServiceClass.Clear {
+			snapshot, err := p.source.Current(ctx)
+			if err != nil {
+				return nil, checkpointReplayError(provider.CodeConfiguration)
+			}
+			preparation.DefaultServiceClass = snapshot.Routes.DefaultServiceClass(caller)
+		}
+	}
 	if parent != "" {
 		codec := state.CheckpointBlobCodec{MaxBytes: cloudstate.MaxPreparedParentBytes}
 		preparation.ParentSnapshot, err = codec.EncodeSnapshot(*state.NewCheckpointSnapshot(materialized))
@@ -539,6 +556,7 @@ func (p *CloudRequestPreparation) restoreLoaded(ctx context.Context, record clou
 			ProviderStateProvenance: append([]state.ProviderStateProvenance(nil), preparation.ParentProvenance...)}
 	}
 	result.GenerateReplay.State, result.CompactReplay.State = materialized, materialized
+	result.GenerateReplay.DefaultServiceClass = preparation.DefaultServiceClass
 	// Prepare the input once for the whole step; later stages reuse it.
 	input := &cloudPreparedInput{manifest: record.Request.Manifest}
 	if result.Generate != nil {

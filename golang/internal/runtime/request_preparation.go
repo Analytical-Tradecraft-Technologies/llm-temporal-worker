@@ -48,6 +48,12 @@ func PrepareGenerateInput(ctx context.Context, request llm.GenerateRequestV1, re
 	base := replay.State.Settings
 	if request.Parent == nil {
 		base = state.RootModelState("")
+		if replay.DefaultServiceClass != "" {
+			if !replay.DefaultServiceClass.Valid() {
+				return PreparedGenerateInput{}, preparationError(provider.CodeStateCorrupt)
+			}
+			base.ServiceClass = replay.DefaultServiceClass
+		}
 	}
 	settings, err := state.ApplySettingsPatchV1(base, request.SettingsPatch)
 	if err != nil {

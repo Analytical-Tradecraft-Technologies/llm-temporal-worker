@@ -11,6 +11,7 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -38,10 +39,13 @@ const MaxExtendableParentBytes = MaxPreparedParentBytes - MaxPreparedParentBytes
 // so rewriting progress does not rewrite the transcript (#1112). Loading
 // accepts both forms whatever the option says.
 type RequestPreparation struct {
-	Version         int             `json:"version"`
-	ConfigDigest    [32]byte        `json:"config_digest"`
-	CheckpointScope string          `json:"checkpoint_scope"`
-	ParentSnapshot  json.RawMessage `json:"parent_snapshot,omitempty"`
+	// DefaultServiceClass pins the configured default for an omitted tier on a
+	// new root. Empty preserves preparations written before defaults existed.
+	DefaultServiceClass llm.ServiceClass `json:"default_service_class,omitempty"`
+	Version             int              `json:"version"`
+	ConfigDigest        [32]byte         `json:"config_digest"`
+	CheckpointScope     string           `json:"checkpoint_scope"`
+	ParentSnapshot      json.RawMessage  `json:"parent_snapshot,omitempty"`
 	// ParentProvenance pins provider state in the parent snapshot's items.
 	// It is additive: a preparation saved without it restores with none.
 	ParentProvenance []state.ProviderStateProvenance `json:"parent_provenance,omitempty"`
@@ -80,6 +84,9 @@ func (p RequestPreparation) ValidateParent() (*state.CheckpointSnapshot, error) 
 func (p RequestPreparation) validateFields(hasParent bool) error {
 	if p.Version != 1 || p.ConfigDigest == ([32]byte{}) || !safeText(p.CheckpointScope, 512) || !validTime(p.PreparedAt) ||
 		(!p.ConfigActivatedAt.IsZero() && !validTime(p.ConfigActivatedAt)) {
+		return ErrInvalid
+	}
+	if p.DefaultServiceClass != "" && (!p.DefaultServiceClass.Valid() || hasParent) {
 		return ErrInvalid
 	}
 	if (len(p.ParentProvenance) != 0 && !hasParent) || state.ValidateProviderStateProvenance(p.ParentProvenance) != nil {

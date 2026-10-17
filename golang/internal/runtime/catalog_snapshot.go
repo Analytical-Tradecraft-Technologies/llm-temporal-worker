@@ -227,7 +227,7 @@ func classPolicies(policies []config.ServiceClassPolicy) []routing.ClassPolicy {
 	}
 	result := make([]routing.ClassPolicy, 0, len(policies))
 	for _, policy := range policies {
-		result = append(result, routing.ClassPolicy{ID: policy.ID, Tenant: policy.Match.Tenant, Project: policy.Match.Project, Classes: append([]llm.ServiceClass(nil), policy.Classes...)})
+		result = append(result, routing.ClassPolicy{ID: policy.ID, Tenant: policy.Match.Tenant, Project: policy.Match.Project, Classes: append([]llm.ServiceClass(nil), policy.Classes...), DefaultClass: policy.DefaultClass})
 	}
 	return result
 }

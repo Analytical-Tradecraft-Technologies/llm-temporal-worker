@@ -10,8 +10,10 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
@@ -451,5 +453,87 @@ func TestCloudExecutionRuntimeRejectedPrepareLeavesNothingPending(t *testing.T) 
 			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &valid})
 			boundedState(t, v, err, llm.ExecutionBudgetRequired)
 		})
+	}
+}
+
+func TestCloudProjectDefaultIsPinnedWithoutChangingCallerInput(t *testing.T) {
+	for _, kind := range []string{"root", "generate", "compact"} {
+		t.Run(kind, func(t *testing.T) {
+			p, store, _, input := cloudPreparationFixture(t, kind)
+			catalog, err := (routing.Catalog{}).WithClassPolicies([]routing.ClassPolicy{{ID: "experiments", Classes: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard}, DefaultClass: llm.ServiceClassEconomy}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: catalog}}
+			original, _ := json.Marshal(input)
+			first, err := p.Prepare(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "root" {
+				prepared, err := first.generateInput(context.Background())
+				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
+					t.Fatalf("root default = %+v, %v", prepared.Request, err)
+				}
+				if first.Preparation.DefaultServiceClass != llm.ServiceClassEconomy {
+					t.Fatal("default was not retained")
+				}
+				// A new configuration cannot change an already prepared operation.
+				p.source = engine.StaticSnapshot{Value: engine.Snapshot{}}
+				again, err := p.Prepare(context.Background(), input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, err = again.generateInput(context.Background())
+				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
+					t.Fatal("retry changed default")
+				}
+				loaded, err := p.Load(context.Background(), referenceFor(first))
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, err = loaded.generateInput(context.Background())
+				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
+					t.Fatal("load changed default")
+				}
+			} else if first.Preparation.DefaultServiceClass != "" {
+				t.Fatal("default replaced inherited settings")
+			}
+			after, _ := json.Marshal(input)
+			if !bytes.Equal(original, after) || store.saves != 1 {
+				t.Fatal("default changed caller input or rewrote preparation")
+			}
+		})
+	}
+}
+
+func TestCloudProjectDefaultPreservesExplicitTier(t *testing.T) {
+	for _, class := range []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassEconomy, llm.ServiceClassPriority} {
+		p, _, _, input := cloudPreparationFixture(t, "root")
+		p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: routing.Catalog{ClassPolicies: []routing.ClassPolicy{{DefaultClass: llm.ServiceClassEconomy}}}}}
+		input.Generate.SettingsPatch.ServiceClass.Set = &class
+		prepared, err := p.Prepare(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		semantic, err := prepared.generateInput(context.Background())
+		if err != nil || semantic.Request.ServiceClass != class || prepared.Preparation.DefaultServiceClass != "" {
+			t.Fatalf("explicit %s replaced: %v", class, err)
+		}
+	}
+}
+
+func TestCloudProjectDefaultPreservesExplicitClear(t *testing.T) {
+	p, _, _, input := cloudPreparationFixture(t, "root")
+	p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: routing.Catalog{ClassPolicies: []routing.ClassPolicy{{DefaultClass: llm.ServiceClassEconomy}}}}}
+	input.Generate.SettingsPatch.ServiceClass.Set = nil
+	input.Generate.SettingsPatch.ServiceClass.Clear = true
+	prepared, err := p.Prepare(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semantic, err := prepared.generateInput(context.Background())
+	if err != nil || semantic.Request.ServiceClass != llm.ServiceClassStandard || prepared.Preparation.DefaultServiceClass != "" {
+		t.Fatalf("explicit clear replaced: %v", err)
 	}
 }
