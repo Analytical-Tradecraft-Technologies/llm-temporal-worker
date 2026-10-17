@@ -25,6 +25,12 @@ func TestOpenRouterServerSearchOnWire(t *testing.T) {
 			if parameters["engine"] != "auto" || parameters["max_uses"] != float64(llm.MaxWebSearchCalls) || wire["max_tool_calls"] != float64(llm.MaxWebSearchCalls) {
 				t.Fatalf("server search controls lost: %#v", wire)
 			}
+			// With require_parameters, OpenRouter drops every upstream that
+			// does not list parallel_tool_calls, which strands models such
+			// as x-ai/grok when there are no function tools for it to govern.
+			if _, sent := wire["parallel_tool_calls"]; sent {
+				t.Fatalf("parallel_tool_calls sent without function tools: %#v", wire)
+			}
 			request.WebSearch = false
 			request.CodeExecution = true
 			if _, err := lowerRequest(request, profile.profile, ""); err == nil {

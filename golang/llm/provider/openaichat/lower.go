@@ -97,7 +97,11 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 	if (len(request.Tools) > 0 || request.WebSearch) && policy != nil {
 		requestMap["tool_choice"] = policy
 	}
-	if len(request.Tools) > 0 || request.WebSearch {
+	// parallel_tool_calls only governs caller function calls. OpenRouter
+	// counts it as a routing parameter, and with require_parameters it
+	// excludes every upstream that does not list it (all xAI endpoints, for
+	// example), so a search-only request would have no endpoint at all.
+	if len(request.Tools) > 0 {
 		requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
 	}
 	if request.Continuation != nil {
