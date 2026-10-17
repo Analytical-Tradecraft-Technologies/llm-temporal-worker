@@ -66,10 +66,13 @@ explicitly does not change `config_version`. The setting may change on reload.
 ### Optional multi-region storage
 
 The AWS provider is pinned to cloud-storage commit
-`a61f746a491e0575835034b7a7eddd3f485de63e`, which adds optional DynamoDB
-multi-Region strong consistency (MRSC). `allow_mrsc` defaults to false and
-preserves existing single-region behavior. Enabling it permits global tables
-only when DynamoDB reports `STRONG` consistency; local tables remain allowed.
+`0f5cf21fd0fdbe931871dcf3cf2708c7f4882b33`, which supports optional DynamoDB
+multi-Region strong consistency (MRSC) and opens single-region tables that are
+`UPDATING` as well as `ACTIVE`, so startup and configuration reload succeed
+during capacity, billing-mode, SSE or stream changes. `allow_mrsc` defaults to
+false and preserves existing single-region behavior. Enabling it permits global
+tables only when DynamoDB reports `STRONG` consistency; local tables remain
+allowed.
 
 To also handle regional outages, configure worker-owned `failover` settings.
 This fragment illustrates configurable DynamoDB replicas and S3 fallback

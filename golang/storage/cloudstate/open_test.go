@@ -178,10 +178,11 @@ func (p awsTableProvider) OpenBlobStore(context.Context, string) (blob.BlobStore
 	return p.blobs, nil
 }
 
-func TestOpenProbeToleratesUpdatingTable(t *testing.T) {
-	var status, queryError atomic.Value
-	status.Store("ACTIVE")
-	queryError.Store("")
+// awsTableFixture opens a repository through the real AWS provider against a
+// fake DynamoDB endpoint whose DescribeTable status and Query error the caller
+// controls.
+func awsTableFixture(t *testing.T, status, queryError *atomic.Value) func(context.Context) (*Repository, error) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 		switch target := r.Header.Get("X-Amz-Target"); target {
@@ -200,7 +201,7 @@ func TestOpenProbeToleratesUpdatingTable(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	t.Setenv("AWS_ENDPOINT_URL_DYNAMODB", server.URL)
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
@@ -218,9 +219,19 @@ func TestOpenProbeToleratesUpdatingTable(t *testing.T) {
 		}
 		return awsTableProvider{StorageProvider: backend, blobs: blobs}, nil
 	}
+	return func(ctx context.Context) (*Repository, error) {
+		return open(ctx, config, bytes.Repeat([]byte{7}, 32), initialize)
+	}
+}
+
+func TestOpenProbeToleratesUpdatingTable(t *testing.T) {
+	var status, queryError atomic.Value
+	status.Store("ACTIVE")
+	queryError.Store("")
+	openRepository := awsTableFixture(t, &status, &queryError)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	r, err := open(ctx, config, bytes.Repeat([]byte{7}, 32), initialize)
+	r, err := openRepository(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,6 +249,30 @@ func TestOpenProbeToleratesUpdatingTable(t *testing.T) {
 		queryError.Store(kind)
 		if err := r.Probe(ctx); err == nil {
 			t.Fatalf("%s table reported ready", state)
+		}
+	}
+}
+
+// Startup and configuration reload open the table while UpdateTable may be in
+// progress; an UPDATING table must open, while unusable statuses still fail.
+func TestOpenAcceptsUpdatingTable(t *testing.T) {
+	var status, queryError atomic.Value
+	status.Store("UPDATING")
+	queryError.Store("")
+	openRepository := awsTableFixture(t, &status, &queryError)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := openRepository(ctx)
+	if err != nil {
+		t.Fatalf("UPDATING table failed to open: %v", err)
+	}
+	if err := r.Probe(ctx); err != nil {
+		t.Fatalf("UPDATING table reported unready after open: %v", err)
+	}
+	for _, state := range []string{"CREATING", "DELETING", "ARCHIVING", "ARCHIVED", "INACCESSIBLE_ENCRYPTION_CREDENTIALS"} {
+		status.Store(state)
+		if _, err := openRepository(ctx); !errors.Is(err, contracts.ErrUnavailable) {
+			t.Fatalf("%s table opened: %v", state, err)
 		}
 	}
 }
