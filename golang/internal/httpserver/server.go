@@ -73,9 +73,12 @@ func probeMethodAllowed(writer http.ResponseWriter, request *http.Request) bool 
 }
 
 type Options struct {
-	Address           string
-	Health            *HealthState
-	Metrics           http.Handler
+	Address string
+	Health  *HealthState
+	Metrics http.Handler
+	// Handler, when set, replaces the probe surface. The Responses API uses it
+	// to share this listener lifecycle; probes and metrics are then not served.
+	Handler           http.Handler
 	ReadTimeout       time.Duration
 	ReadHeaderTimeout time.Duration
 }
@@ -114,10 +117,14 @@ func New(options Options) (*Server, error) {
 	if options.ReadTimeout <= 0 {
 		options.ReadTimeout = options.ReadHeaderTimeout
 	}
+	handler := options.Handler
+	if handler == nil {
+		handler = Handler(options.Health, options.Metrics)
+	}
 	return &Server{
 		httpServer: &http.Server{
 			Addr:              options.Address,
-			Handler:           Handler(options.Health, options.Metrics),
+			Handler:           handler,
 			ReadTimeout:       options.ReadTimeout,
 			ReadHeaderTimeout: options.ReadHeaderTimeout,
 		},

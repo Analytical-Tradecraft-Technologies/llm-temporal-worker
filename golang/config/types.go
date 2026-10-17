@@ -103,6 +103,10 @@ type ServerConfig struct {
 	ReadinessProbeInterval Duration `yaml:"readiness_probe_interval" json:"readiness_probe_interval"`
 	ReadinessProbeTimeout  Duration `yaml:"readiness_probe_timeout" json:"readiness_probe_timeout"`
 	InlinePayloadBytes     int      `yaml:"inline_payload_bytes" json:"inline_payload_bytes"`
+	// ResponsesAPIListenAddress enables the plain-HTTP OpenAI Responses API
+	// listener. It is omitted from canonical JSON when unset, so enabling it
+	// is the only change that moves an existing configuration digest.
+	ResponsesAPIListenAddress string `yaml:"responses_api_listen_address,omitempty" json:"responses_api_listen_address,omitempty"`
 }
 
 type TemporalConfig struct {

@@ -198,6 +198,15 @@ func (server ServerConfig) validate() error {
 			return fmt.Errorf("server.health_address and server.metrics_address must be identical to share a listener, or use different ports")
 		}
 	}
+	if server.ResponsesAPIListenAddress != "" {
+		if err := validateAddress(server.ResponsesAPIListenAddress, "server.responses_api_listen_address"); err != nil {
+			return err
+		}
+		apiPort := addressPort(server.ResponsesAPIListenAddress)
+		if apiPort != 0 && (apiPort == addressPort(server.HealthAddress) || apiPort == addressPort(server.MetricsAddress)) {
+			return fmt.Errorf("server.responses_api_listen_address must use a different port from server.health_address and server.metrics_address")
+		}
+	}
 	if err := validatePositiveDuration(server.ShutdownTimeout, "server.shutdown_timeout"); err != nil {
 		return err
 	}
@@ -937,6 +946,13 @@ func (telemetry TelemetryConfig) validate(environment string) error {
 		}
 	}
 	return nil
+}
+
+// addressPort returns the numeric port of an already validated address.
+func addressPort(value string) int {
+	_, text, _ := net.SplitHostPort(value)
+	port, _ := strconv.Atoi(text)
+	return port
 }
 
 func validateAddress(value, path string) error {

@@ -116,7 +116,10 @@ controller:
   or other hosted tools.
 - Embeddings, reranking, moderation, fine-tuning, batch APIs, file stores,
   image generation, speech, video, and realtime sessions.
-- A public HTTP inference gateway.
+- A public HTTP inference gateway. The optional
+  [OpenAI Responses API listener](reference/openai-responses-api.md) is a
+  private, plain-HTTP wrapper over the Generate workflow, not a gateway: it
+  has no TLS, no authentication and no streaming.
 - Automatic model substitution based on model-name similarity.
 - Automatic service-class escalation or downgrade.
 - Cross-region active-active Redis budget accounting.

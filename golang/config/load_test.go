@@ -658,6 +658,40 @@ func TestValidateMatchesRuntimeParsersForStartupSettings(t *testing.T) {
 	}
 }
 
+func TestResponsesAPIListenAddressIsOptionalAndNeedsItsOwnPort(t *testing.T) {
+	example := string(exampleYAML(t))
+	loaded, err := config.Load([]byte(example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Server.ResponsesAPIListenAddress != "" {
+		t.Fatalf("the example enables the responses API: %q", loaded.Server.ResponsesAPIListenAddress)
+	}
+	withAddress := func(address string) []byte {
+		return []byte(strings.Replace(example, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:9090\n  responses_api_listen_address: "+address, 1))
+	}
+	enabled, err := config.Load(withAddress("0.0.0.0:8000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.Server.ResponsesAPIListenAddress != "0.0.0.0:8000" {
+		t.Fatalf("address = %q", enabled.Server.ResponsesAPIListenAddress)
+	}
+	// Unset, the field is absent from the canonical JSON the digest covers.
+	if canonical, err := json.Marshal(loaded); err != nil || strings.Contains(string(canonical), "responses_api_listen_address") {
+		t.Fatalf("an unset responses API address is in the canonical JSON (err %v)", err)
+	}
+	for address, want := range map[string]string{
+		"127.0.0.1:8080": "must use a different port",
+		"127.0.0.1:9090": "must use a different port",
+		"no-port":        "server.responses_api_listen_address must be host:port",
+	} {
+		if _, err := config.Load(withAddress(address)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load(%s) error = %v, want %q", address, err, want)
+		}
+	}
+}
+
 func TestWorkloadIdentityPathsListsEveryReference(t *testing.T) {
 	loaded, err := config.Load(exampleYAML(t))
 	if err != nil {

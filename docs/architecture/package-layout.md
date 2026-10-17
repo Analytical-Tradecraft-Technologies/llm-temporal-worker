@@ -59,6 +59,7 @@ current-layout reference.
 │   │   ├── documentationtest/      Markdown link and documentation invariant tests
 │   │   ├── httpserver/             Health, readiness, and metrics HTTP server
 │   │   ├── observability/          slog, metrics, and trace wiring
+│   │   ├── responsesapi/           Optional OpenAI Responses API over Generate
 │   │   ├── runtime/                CLI process composition and Temporal client wiring
 │   │   └── secrets/                Environment/file secret resolution
 │   ├── deploy/                     Deployment manifests and local test assets
@@ -81,6 +82,7 @@ The permitted dependency direction is:
 
 ```text
 cmd -> internal/runtime -> internal/app
+internal/runtime -> internal/responsesapi -> llm/activity/workflows + Temporal SDK
 internal/app -> activity/engine/config/storage/provider/observability
 activity -> engine + Temporal SDK
 temporalcodec -> Temporal SDK + Go standard library
