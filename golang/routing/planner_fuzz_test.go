@@ -11,10 +11,13 @@ import (
 // FuzzPlannerNeverSelectsUnauthorizedClasses exercises the class-major
 // expansion with arbitrary route ordering and fallback lists. Every generated
 // byte is reduced to one of the three public classes before normalization, so
-// the property tests planner behavior rather than the request validator.
+// the property tests planner behavior rather than the request validator. A
+// requested or fallback class that no route offers is served at standard, so
+// standard is authorized whenever one of them is unoffered.
 func FuzzPlannerNeverSelectsUnauthorizedClasses(f *testing.F) {
 	f.Add([]byte{0, 1, 2}, byte(1), []byte{2, 0})
 	f.Add([]byte{2, 2, 0, 1}, byte(2), []byte{1, 1, 0})
+	f.Add([]byte{1}, byte(2), []byte{0})
 	f.Fuzz(func(t *testing.T, routeBytes []byte, requestedByte byte, fallbackBytes []byte) {
 		if len(routeBytes) == 0 || len(routeBytes) > 32 || len(fallbackBytes) > 32 {
 			t.Skip()
@@ -33,8 +36,10 @@ func FuzzPlannerNeverSelectsUnauthorizedClasses(f *testing.F) {
 
 		routes := make([]Route, len(routeBytes))
 		configured := make(map[string]Route, len(routeBytes))
+		offered := make(map[llm.ServiceClass]struct{}, 3)
 		for index, value := range routeBytes {
 			class := fuzzClass(value)
+			offered[class] = struct{}{}
 			route := Route{
 				ID: "route-" + string(rune('a'+index)), EndpointID: "endpoint-" + string(rune('a'+index)),
 				Provider: "provider", Family: "family", Region: "region", AccountRegion: "region",
@@ -60,8 +65,11 @@ func FuzzPlannerNeverSelectsUnauthorizedClasses(f *testing.F) {
 		if err != nil && len(plan.Candidates) != 0 {
 			t.Fatalf("failed plan returned candidates: %#v (%v)", plan.Candidates, err)
 		}
-		allowedClasses := map[llm.ServiceClass]struct{}{requested: {}}
-		for _, class := range fallbacks {
+		allowedClasses := make(map[llm.ServiceClass]struct{}, 3)
+		for _, class := range append([]llm.ServiceClass{requested}, fallbacks...) {
+			if _, ok := offered[class]; !ok {
+				class = llm.ServiceClassStandard
+			}
 			allowedClasses[class] = struct{}{}
 		}
 		for index, candidate := range plan.Candidates {
