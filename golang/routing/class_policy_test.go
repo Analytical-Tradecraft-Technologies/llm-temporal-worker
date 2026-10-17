@@ -94,3 +94,29 @@ func TestClassPoliciesMustKeepStandard(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectServiceClassDefaults(t *testing.T) {
+	all := []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}
+	catalog := classPolicyCatalog(t,
+		ClassPolicy{ID: "global", Classes: all, DefaultClass: llm.ServiceClassPriority},
+		ClassPolicy{ID: "tenant", Tenant: "acme", Classes: all, DefaultClass: llm.ServiceClassStandard},
+		ClassPolicy{ID: "project", Tenant: "acme", Project: "experiments", Classes: all, DefaultClass: llm.ServiceClassEconomy})
+	for _, tc := range []struct {
+		caller llm.RequestContext
+		want   llm.ServiceClass
+	}{
+		{llm.RequestContext{Tenant: "other"}, llm.ServiceClassPriority},
+		{llm.RequestContext{Tenant: "acme", Project: "billing"}, llm.ServiceClassStandard},
+		{llm.RequestContext{Tenant: "acme", Project: "experiments"}, llm.ServiceClassEconomy},
+	} {
+		if got := catalog.DefaultServiceClass(tc.caller); got != tc.want {
+			t.Fatalf("default for %+v = %s, want %s", tc.caller, got, tc.want)
+		}
+	}
+	if _, err := catalog.WithClassPolicies([]ClassPolicy{
+		{ID: "a", Tenant: "acme", Classes: all, DefaultClass: llm.ServiceClassEconomy},
+		{ID: "b", Tenant: "acme", Classes: all, DefaultClass: llm.ServiceClassPriority},
+	}); err == nil {
+		t.Fatal("accepted conflicting defaults for identical scope")
+	}
+}

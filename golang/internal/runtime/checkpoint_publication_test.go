@@ -420,3 +420,23 @@ func publishedSummaryText(t *testing.T, result llm.Response) string {
 	}
 	return summary
 }
+
+func TestPublicationRetainsConfiguredRootClassInCheckpoint(t *testing.T) {
+	p, replay, store, identity, request, response := publicationFixture(t)
+	cp, published, err := p.Generate(context.Background(), identity, request, durable.GenerateReplay{DefaultServiceClass: llm.ServiceClassEconomy}, response, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.rows[cp.ID] = cp
+	request.Parent = &published.Checkpoint.Handle
+	request.OperationKey = "next"
+	request.SettingsPatch = llm.SettingsPatchV1{}
+	inherited, err := replay.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareGenerateInput(context.Background(), request, inherited)
+	if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
+		t.Fatalf("checkpoint lost configured default: %+v, %v", prepared.Request, err)
+	}
+}

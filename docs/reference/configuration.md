@@ -1097,8 +1097,9 @@ endpoints stay in the `standard` pool because an open-weight model's tier
 endpoints take part in default routing. `flex` uses the endpoints tagged
 `/flex`, or the `standard` pool when there are none.
 
-A request without `service_class` becomes `standard`. There is no configurable
-provider default. A requested class (or explicit fallback) is served at
+A canonical request without `service_class` becomes `standard`. New v1 roots
+can use a matching policy default as described below. A requested class
+(or explicit fallback) is served at
 `standard` instead of failing when:
 
 - a matching `service_class_policies` entry leaves it out, or
@@ -1119,6 +1120,7 @@ service_class_policies:
   - id: acme-no-priority
     match: {tenant: acme}
     classes: [economy, standard]
+    default_class: economy
   - id: billing-no-economy
     match: {tenant: acme, project: billing}
     classes: [standard, priority]
@@ -1132,6 +1134,25 @@ a disabled `economy` at `standard` (upgraded). `classes` must include
 `standard`, so enabling `economy` and `priority` without `standard` is
 rejected. Policy IDs must be unique. The policies are reloadable and enter the
 configuration digest only when set.
+
+Optional `default_class` selects the service class for a new v1 Generate root
+whose `settings_patch.service_class` is omitted. This also applies to a new
+Responses API conversation with an omitted or `auto` service tier. Without a
+matching default, the root uses `standard`. Explicit tier settings (including
+an explicit clear to standard) take precedence; continuations and compactions
+keep their inherited settings. Canonical requests retain their existing
+standard default.
+
+Defaults must be valid classes listed in that policy's `classes`. When several
+policies specify a default, the most specific match wins: tenant and project,
+then project alone, then tenant alone, then global. Conflicting defaults for
+the same match are rejected. All matching class restrictions still apply;
+a disabled default or one unsupported by the model is served at `standard`.
+
+The chosen default is saved during request preparation and in the root's
+checkpoint settings. Retrying a prepared request or continuing its checkpoint
+retains that choice after configuration changes. Previously prepared requests
+without a saved default retain the old standard behavior.
 
 ## Route identifiers
 

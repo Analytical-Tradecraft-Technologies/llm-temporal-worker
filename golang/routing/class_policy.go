@@ -13,9 +13,10 @@ type ClassPolicy struct {
 	ID string
 	// Tenant and Project select the requests the policy applies to; an empty
 	// value matches every request.
-	Tenant  string
-	Project string
-	Classes []llm.ServiceClass
+	Tenant       string
+	Project      string
+	Classes      []llm.ServiceClass
+	DefaultClass llm.ServiceClass
 }
 
 // Validate rejects a policy that could leave a request without a class.
@@ -36,7 +37,34 @@ func (policy ClassPolicy) Validate() error {
 	if _, ok := seen[llm.ServiceClassStandard]; !ok {
 		return fmt.Errorf("service class policy %q must enable standard", policy.ID)
 	}
+	if policy.DefaultClass != "" && (!policy.DefaultClass.Valid() || !containsClass(policy.Classes, policy.DefaultClass)) {
+		return fmt.Errorf("service class policy %q default_class must be a valid enabled class", policy.ID)
+	}
 	return nil
+}
+
+// DefaultServiceClass selects the default for a new v1 root. Project matches
+// take precedence over tenant-only matches, then global matches. Within a
+// project match, a tenant-qualified match wins. No default keeps legacy behavior.
+func (catalog Catalog) DefaultServiceClass(caller llm.RequestContext) llm.ServiceClass {
+	var selected llm.ServiceClass
+	best := -1
+	for _, policy := range catalog.ClassPolicies {
+		if policy.DefaultClass == "" || !policy.matches(caller) {
+			continue
+		}
+		specificity := 0
+		if policy.Tenant != "" {
+			specificity++
+		}
+		if policy.Project != "" {
+			specificity += 2
+		}
+		if specificity > best {
+			selected, best = policy.DefaultClass, specificity
+		}
+	}
+	return selected
 }
 
 func (policy ClassPolicy) matches(context llm.RequestContext) bool {
