@@ -537,3 +537,43 @@ func TestCloudProjectDefaultPreservesExplicitClear(t *testing.T) {
 		t.Fatalf("explicit clear replaced: %v", err)
 	}
 }
+
+type preparationSnapshotFunc func(context.Context) (engine.Snapshot, error)
+
+func (f preparationSnapshotFunc) Current(ctx context.Context) (engine.Snapshot, error) {
+	return f(ctx)
+}
+
+func TestCloudProjectDefaultSnapshotErrorsRemainRetryable(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "transient", true: "canceled"}[canceled], func(t *testing.T) {
+			p, store, _, input := cloudPreparationFixture(t, "root")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			p.source = preparationSnapshotFunc(func(context.Context) (engine.Snapshot, error) {
+				if canceled {
+					cancel()
+				}
+				return engine.Snapshot{}, errors.New("snapshot temporarily unavailable")
+			})
+			_, err := p.Prepare(ctx, input)
+			if canceled {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("lost cancellation: %v", err)
+				}
+			} else {
+				var mapped *provider.Error
+				if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+					t.Fatalf("transient failure became permanent: %v", err)
+				}
+			}
+			if store.begins != 0 || store.saves != 0 {
+				t.Fatal("failed snapshot created an operation")
+			}
+			p.source = engine.StaticSnapshot{Value: engine.Snapshot{}}
+			if _, err := p.Prepare(context.Background(), input); err != nil {
+				t.Fatalf("same operation could not retry: %v", err)
+			}
+		})
+	}
+}

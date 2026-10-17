@@ -316,8 +316,11 @@ func (p *CloudRequestPreparation) materialize(ctx context.Context, record clouds
 		}
 		if request.SettingsPatch.ServiceClass.Set == nil && !request.SettingsPatch.ServiceClass.Clear {
 			snapshot, err := p.source.Current(ctx)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			if err != nil {
-				return nil, checkpointReplayError(provider.CodeConfiguration)
+				return nil, checkpointReplayError(provider.CodeStateUnavailable)
 			}
 			preparation.DefaultServiceClass = snapshot.Routes.DefaultServiceClass(caller)
 		}
