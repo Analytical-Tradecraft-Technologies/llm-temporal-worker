@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -565,6 +566,391 @@ func TestReleasePreflightScanRejectsInvalidRequestsBeforeScanning(t *testing.T) 
 	}
 }
 
+// TestReleasePreflightTagSourceScanAppliesMasterPolicyToReadOnlyTagWorktree
+// runs preflight-scan.sh tag-source in a fixture checkout with stand-in Go
+// tools (#1326). govulncheck must run in a read-only worktree of the tag with
+// the tag's pinned toolchain, and master's baseline exception policy, not
+// govulncheck's text exit status (which ignores imported but uncalled
+// packages), decides the result without printing raw scanner output.
+func TestReleasePreflightTagSourceScanAppliesMasterPolicyToReadOnlyTagWorktree(t *testing.T) {
+	verifier := buildReleaseTagSupplyChainVerifier(t)
+
+	for _, test := range []struct {
+		name      string
+		findings  []string
+		exitCode  int
+		wantError bool
+		want      []string
+	}{
+		{
+			name: "called and imported unreviewed findings",
+			findings: []string{
+				`{"finding":{"osv":"GO-2026-6599","trace":[{"module":"stdlib","version":"v1.26.7","package":"net/http","function":"Serve"}]}}`,
+				`{"finding":{"osv":"GO-2099-0002","trace":[{"module":"example.test/one","version":"v1.2.3","package":"example.test/one/vulnerable"}]}}`,
+			},
+			wantError: true,
+			want:      []string{"GO-2026-6599 (unreviewed)", "GO-2099-0002 (unreviewed)", "outside the reviewed baseline exceptions"},
+		},
+		{
+			name:      "reachable trace outside a module-only exception",
+			findings:  []string{`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3","package":"example.test/one/vulnerable","function":"Use"}]}}`},
+			wantError: true,
+			want:      []string{"GO-2099-0001 (reachable outside its module_only exception)"},
+		},
+		{
+			name:     "reviewed module-only finding with an exception the tag does not use",
+			findings: []string{`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`},
+			want:     []string{"supply chain verification passed"},
+		},
+		{
+			name:      "scanner did not complete",
+			exitCode:  1,
+			wantError: true,
+			want:      []string{"govulncheck did not complete on the tag commit; raw output withheld", "component vulnerability did not pass"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPreflightScanFixture(t, "1.26.7", verifier)
+			writeFixtureFile(t, filepath.Join(fixture.logs, "govulncheck.json"), strings.Join(test.findings, "\n"))
+			writeFixtureFile(t, filepath.Join(fixture.logs, "govulncheck.exit"), fmt.Sprint(test.exitCode))
+
+			result := runPreflightScanFixture(t, fixture, "tag-source", "--tag-commit", fixture.tagCommit, "--worktree", fixture.worktree)
+			if (result.err != nil) != test.wantError {
+				t.Fatalf("tag-source error = %v, want error %t\n%s", result.err, test.wantError, result.output)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(result.output, want) {
+					t.Fatalf("tag-source output does not contain %q:\n%s", want, result.output)
+				}
+			}
+			if strings.Contains(result.output, "raw-govulncheck-diagnostic-marker") {
+				t.Fatalf("tag-source printed raw govulncheck output:\n%s", result.output)
+			}
+
+			environment := readGuardOutputs(t, filepath.Join(fixture.logs, "govulncheck.env"))
+			for name, want := range map[string]string{
+				"pwd":         filepath.Join(fixture.worktree, "golang"),
+				"args":        "-format json ./...",
+				"GOTOOLCHAIN": "go1.26.7",
+				"GOWORK":      "off",
+				"CGO_ENABLED": "0",
+				"GOFLAGS":     "-mod=readonly",
+			} {
+				if environment[name] != want {
+					t.Fatalf("govulncheck %s = %q, want %q", name, environment[name], want)
+				}
+			}
+			if strings.Contains(environment["mode"], "w") {
+				t.Fatalf("govulncheck ran in a writable tag worktree: %q", environment["mode"])
+			}
+			builds := strings.Split(strings.TrimSpace(readRepositoryFile(t, fixture.logs, "go.log")), "\n")
+			wantBuilds := []string{
+				"-C " + filepath.Join(fixture.root, "golang") + " build -o ",
+				"-C " + filepath.Join(fixture.root, "golang") + " build -o ",
+			}
+			if len(builds) != len(wantBuilds) || !strings.HasSuffix(builds[0], " golang.org/x/vuln/cmd/govulncheck") || !strings.HasSuffix(builds[1], " ./tools/supplychainverify") {
+				t.Fatalf("tag-source tool builds = %q, want govulncheck and supplychainverify from the master module", builds)
+			}
+			for index, build := range builds {
+				if !strings.HasPrefix(build, wantBuilds[index]) {
+					t.Fatalf("tag-source built %q outside the trusted master module", build)
+				}
+			}
+			assertPreflightTagWorktreeRemoved(t, fixture)
+		})
+	}
+
+	t.Run("inexact tag toolchain", func(t *testing.T) {
+		fixture := newPreflightScanFixture(t, "1.26", verifier)
+		result := runPreflightScanFixture(t, fixture, "tag-source", "--tag-commit", fixture.tagCommit, "--worktree", fixture.worktree)
+		if result.err == nil || !strings.Contains(result.output, "tag golang/.go-version is not an exact Go release") {
+			t.Fatalf("tag-source accepted an inexact tag toolchain: %v\n%s", result.err, result.output)
+		}
+		if _, err := os.Stat(filepath.Join(fixture.logs, "go.log")); !os.IsNotExist(err) {
+			t.Fatalf("tag-source built tools before validating the tag toolchain: %v", err)
+		}
+		assertPreflightTagWorktreeRemoved(t, fixture)
+	})
+}
+
+// TestReleasePreflightImageScanRescansBothPlatformsWithMasterOptions runs
+// preflight-scan.sh image with a stand-in Trivy (#1326). Both platforms of the
+// requested index are pulled by digest and scanned with master's container
+// gate options and an initially empty cache; a failure prints only the
+// sanitized finding summary.
+func TestReleasePreflightImageScanRescansBothPlatformsWithMasterOptions(t *testing.T) {
+	const image = "registry.example.com/team/llm-temporal-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	platforms := []string{"linux/amd64", "linux/arm64"}
+
+	for _, test := range []struct {
+		name          string
+		failPlatforms []string
+		wantCalls     int
+	}{
+		{name: "both platforms clean", wantCalls: 2},
+		{name: "arm64 has a fixable HIGH finding", failPlatforms: []string{"linux/arm64"}, wantCalls: 2},
+		{name: "amd64 failure stops the scan", failPlatforms: []string{"linux/amd64"}, wantCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPreflightScanFixture(t, "1.26.8", "")
+			writeFixtureFile(t, filepath.Join(fixture.logs, "fail-platforms"), strings.Join(test.failPlatforms, "\n"))
+
+			result := runPreflightScanFixture(t, fixture, "image", "--image-reference", image)
+			if (result.err != nil) != (len(test.failPlatforms) != 0) {
+				t.Fatalf("image scan error = %v, want error %t\n%s", result.err, len(test.failPlatforms) != 0, result.output)
+			}
+
+			calls := strings.Split(strings.TrimSpace(readRepositoryFile(t, fixture.logs, "trivy.args")), "\n")
+			if len(calls) != test.wantCalls {
+				t.Fatalf("Trivy calls = %d, want %d: %q", len(calls), test.wantCalls, calls)
+			}
+			for index, call := range calls {
+				for _, want := range []string{
+					"image ",
+					"--image-src remote",
+					"--platform " + platforms[index],
+					"--format json",
+					"--config " + filepath.Join(fixture.root, "scripts", "release", "trivy.yaml"),
+					"--exit-code 1",
+				} {
+					if !strings.Contains(call, want) {
+						t.Fatalf("Trivy call %q does not contain %q", call, want)
+					}
+				}
+				if !strings.HasSuffix(call, " "+image) {
+					t.Fatalf("Trivy call %q does not scan the requested digest", call)
+				}
+			}
+			caches := strings.Split(strings.TrimSpace(readRepositoryFile(t, fixture.logs, "trivy.cache")), "\n")
+			if caches[0] != "linux/amd64 empty" {
+				t.Fatalf("first Trivy scan did not start from an empty cache: %q", caches)
+			}
+
+			if len(test.failPlatforms) == 0 {
+				return
+			}
+			for _, want := range []string{
+				test.failPlatforms[0] + " image scan failed; sanitized finding summary follows",
+				`"id": "CVE-2099-12345"`,
+				`"severity": "HIGH"`,
+				test.failPlatforms[0] + " image has fixable HIGH or CRITICAL findings",
+			} {
+				if !strings.Contains(result.output, want) {
+					t.Fatalf("image scan output does not contain %q:\n%s", want, result.output)
+				}
+			}
+			for _, raw := range []string{"raw-target-marker", "raw-path-marker", "raw-title-marker"} {
+				if strings.Contains(result.output, raw) {
+					t.Fatalf("image scan printed raw scanner output %q:\n%s", raw, result.output)
+				}
+			}
+		})
+	}
+}
+
+// TestReleaseEvidenceAgeBoundIsSharedAndDocumented keeps the run and bundle
+// age limits equal, documented, and shorter than the evidence retention.
+func TestReleaseEvidenceAgeBoundIsSharedAndDocumented(t *testing.T) {
+	root := repositoryRoot(t)
+	evidenceAge := regexp.MustCompile(`(?m)^MAX_EVIDENCE_AGE = timedelta\(days=([1-9][0-9]*)\)$`).FindStringSubmatch(readRepositoryFile(t, root, "scripts", "release", "guard.sh"))
+	runAge := regexp.MustCompile(`(?m)^MAX_RUN_AGE = timedelta\(days=([1-9][0-9]*)\)$`).FindStringSubmatch(readRepositoryFile(t, root, "scripts", "release", "verify-public-run.py"))
+	if evidenceAge == nil || runAge == nil {
+		t.Fatal("guard.sh and verify-public-run.py must each define a named evidence age bound in days")
+	}
+	if evidenceAge[1] != runAge[1] {
+		t.Fatalf("bundle age bound %s days differs from run age bound %s days", evidenceAge[1], runAge[1])
+	}
+	days, err := strconv.Atoi(evidenceAge[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runbook := readRepositoryFile(t, root, "docs", "release", "runbook.md")
+	if !strings.Contains(runbook, fmt.Sprintf("within the last %d days", days)) {
+		t.Fatalf("release runbook does not document the %d-day evidence age bound", days)
+	}
+
+	master := readWorkflow(t, "master.yml")
+	upload := artifactUploadStep(t, master, "release-evidence", "release-evidence")
+	retention, err := strconv.Atoi(fmt.Sprint(nestedMapping(t, master.name, upload, "with")["retention-days"]))
+	if err != nil {
+		t.Fatalf("release-evidence artifact retention is not a day count: %v", err)
+	}
+	if days >= retention {
+		t.Fatalf("evidence age bound %d days must be shorter than the %d-day artifact retention", days, retention)
+	}
+}
+
+type preflightScanFixture struct {
+	// root is a fixture master checkout holding the scan script and policy.
+	root      string
+	bin       string
+	logs      string
+	tagCommit string
+	worktree  string
+}
+
+// newPreflightScanFixture creates a Git checkout whose tag commit pins
+// tagGoVersion and whose master has since moved to another toolchain, plus
+// stand-in go, govulncheck, and Trivy commands that record how they ran.
+func newPreflightScanFixture(t *testing.T, tagGoVersion, verifier string) preflightScanFixture {
+	t.Helper()
+	repository := repositoryRoot(t)
+	directory := t.TempDir()
+	fixture := preflightScanFixture{
+		root:     filepath.Join(directory, "master"),
+		bin:      filepath.Join(directory, "bin"),
+		logs:     filepath.Join(directory, "logs"),
+		worktree: filepath.Join(directory, "release-tag"),
+	}
+	tools := filepath.Join(directory, "tools")
+	for _, path := range []string{fixture.bin, fixture.logs, tools} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Restore write access if a failing scan left the read-only worktree.
+	t.Cleanup(func() {
+		_ = filepath.Walk(fixture.worktree, func(path string, info os.FileInfo, err error) error {
+			if err == nil {
+				_ = os.Chmod(path, info.Mode().Perm()|0o700)
+			}
+			return nil
+		})
+	})
+
+	for _, path := range [][]string{
+		{"scripts", "release", "preflight-scan.sh"},
+		{"scripts", "release", "trivy.yaml"},
+		{"scripts", "ci", "summarize-image-scan.py"},
+	} {
+		writeFixtureFile(t, filepath.Join(append([]string{fixture.root}, path...)...), readRepositoryFile(t, repository, path...))
+	}
+	writeFixtureFile(t, filepath.Join(fixture.root, "golang", "tools", "supplychainverify", "baseline.json"), `{
+  "version": 2,
+  "allowed_licenses": ["MIT"],
+  "trusted_module_roots": [{"path": "example.test/one", "license": "MIT", "source": "https://example.test/one"}],
+  "vulnerability_exceptions": [
+    {"id": "GO-2099-0001", "owner": "security@example.test", "expires": "2099-01-01T00:00:00Z", "remediation": "https://example.test/GO-2099-0001", "scope": "module_only"},
+    {"id": "GO-2099-0009", "owner": "security@example.test", "expires": "2099-01-01T00:00:00Z", "remediation": "https://example.test/GO-2099-0009", "scope": "module_only"}
+  ]
+}
+`)
+	writeFixtureFile(t, filepath.Join(fixture.root, "golang", "go.mod"), "module example.test/release\n\ngo 1.26.0\n")
+	writeFixtureFile(t, filepath.Join(fixture.root, "golang", ".go-version"), tagGoVersion+"\n")
+	runGuardGit(t, fixture.root, "init", "--quiet")
+	runGuardGit(t, fixture.root, "config", "user.email", "guard@example.test")
+	runGuardGit(t, fixture.root, "config", "user.name", "Release Guard")
+	runGuardGit(t, fixture.root, "config", "commit.gpgsign", "false")
+	runGuardGit(t, fixture.root, "add", "-A")
+	runGuardGit(t, fixture.root, "commit", "--quiet", "-m", "release tag")
+	fixture.tagCommit = guardGitCommitID(t, runGuardGit(t, fixture.root, "rev-parse", "HEAD"))
+	// Master moves past the tag, so the scan must read the tag's own pin.
+	writeFixtureFile(t, filepath.Join(fixture.root, "golang", ".go-version"), "1.26.9\n")
+	runGuardGit(t, fixture.root, "commit", "--quiet", "-am", "later master")
+
+	writeFixtureExecutable(t, filepath.Join(fixture.bin, "go"), fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf '%%s\n' "$*" >> '%[1]s/go.log'
+if [[ "$#" -ne 6 || "$1" != -C || "$3" != build || "$4" != -o ]]; then
+  echo "unexpected go invocation" >&2
+  exit 97
+fi
+case "$6" in
+  golang.org/x/vuln/cmd/govulncheck) cp '%[2]s/govulncheck' "$5" ;;
+  ./tools/supplychainverify) cp '%[3]s' "$5" ;;
+  *) echo "unexpected go package" >&2; exit 98 ;;
+esac
+`, fixture.logs, tools, verifier))
+	writeFixtureExecutable(t, filepath.Join(tools, "govulncheck"), fmt.Sprintf(`#!/usr/bin/env bash
+{
+  printf 'pwd=%%s\n' "$PWD"
+  printf 'args=%%s\n' "$*"
+  printf 'GOTOOLCHAIN=%%s\n' "${GOTOOLCHAIN-}"
+  printf 'GOWORK=%%s\n' "${GOWORK-}"
+  printf 'CGO_ENABLED=%%s\n' "${CGO_ENABLED-}"
+  printf 'GOFLAGS=%%s\n' "${GOFLAGS-}"
+  printf 'mode=%%s\n' "$(ls -ld . | cut -c1-10)"
+} > '%[1]s/govulncheck.env'
+echo 'raw-govulncheck-diagnostic-marker' >&2
+cat '%[1]s/govulncheck.json'
+exit "$(cat '%[1]s/govulncheck.exit')"
+`, fixture.logs))
+	writeFixtureExecutable(t, filepath.Join(fixture.bin, "trivy"), fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+printf '%%s\n' "$*" >> '%[1]s/trivy.args'
+output=""
+platform=""
+cache=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --platform) platform="$2"; shift 2 ;;
+    --cache-dir) cache="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -n "$(ls -A "$cache")" ]]; then state=warm; else state=empty; fi
+printf '%%s %%s\n' "$platform" "$state" >> '%[1]s/trivy.cache'
+: > "$cache/db"
+echo 'trivy progress' >&2
+if grep -qxF -- "$platform" '%[1]s/fail-platforms'; then
+  printf '%%s\n' '{"Results":[{"Target":"raw-target-marker","Vulnerabilities":[{"VulnerabilityID":"CVE-2099-12345","Severity":"HIGH","FixedVersion":"1.2.4","PkgPath":"raw-path-marker","Title":"raw-title-marker"}]}]}' > "$output"
+  exit 1
+fi
+printf '%%s\n' '{"Results":[]}' > "$output"
+`, fixture.logs))
+	return fixture
+}
+
+func buildReleaseTagSupplyChainVerifier(t *testing.T) string {
+	t.Helper()
+	output := filepath.Join(t.TempDir(), "supplychainverify")
+	command := exec.Command("go", "build", "-o", output, "./tools/supplychainverify")
+	command.Dir = filepath.Join(repositoryRoot(t), "golang")
+	if combined, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build supplychainverify: %v\n%s", err, combined)
+	}
+	return output
+}
+
+func runPreflightScanFixture(t *testing.T, fixture preflightScanFixture, arguments ...string) releaseGuardResult {
+	t.Helper()
+	command := exec.Command("bash", append([]string{filepath.Join(fixture.root, "scripts", "release", "preflight-scan.sh")}, arguments...)...)
+	command.Dir = t.TempDir()
+	command.Env = append(os.Environ(), "PATH="+fixture.bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := command.CombinedOutput()
+	return releaseGuardResult{output: string(output), err: err}
+}
+
+func assertPreflightTagWorktreeRemoved(t *testing.T, fixture preflightScanFixture) {
+	t.Helper()
+	if _, err := os.Lstat(fixture.worktree); !os.IsNotExist(err) {
+		t.Fatalf("tag-source left the tag worktree behind: %v", err)
+	}
+	if worktrees := runGuardGit(t, fixture.root, "worktree", "list", "--porcelain"); strings.Contains(worktrees, fixture.worktree) {
+		t.Fatalf("tag-source left the tag worktree registered:\n%s", worktrees)
+	}
+}
+
+func writeFixtureFile(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFixtureExecutable(t *testing.T, path, contents string) {
+	t.Helper()
+	writeFixtureFile(t, path, contents)
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func trustedPublicEvidenceRunMetadata(repository, commit string) map[string]any {
 	return map[string]any{
 		"id":          int64(29386817789),
@@ -617,11 +1003,19 @@ func assertPreflightRescansTheReleaseSubject(t *testing.T, workflow workflowDocu
 	for _, want := range []string{
 		`git -C "$root" worktree add --quiet --detach "$worktree" "$tag_commit"`,
 		`chmod -R a-w "$worktree"`,
-		`go -C "$root/golang" build -o "$tools/govulncheck" golang.org/x/vuln/cmd/govulncheck`,
-		`GOTOOLCHAIN="go$go_version" CGO_ENABLED=0 GOFLAGS=-mod=readonly "$tools/govulncheck" ./...`,
+		// Both tools come from the trusted master module, never the tag.
+		`go -C "$root/golang" build -o "$work/govulncheck" golang.org/x/vuln/cmd/govulncheck`,
+		`go -C "$root/golang" build -o "$work/supplychainverify" ./tools/supplychainverify`,
+		`GOTOOLCHAIN="go$go_version" GOWORK=off CGO_ENABLED=0 GOFLAGS=-mod=readonly "$work/govulncheck" -format json ./...`,
+		// The master baseline's exception policy decides, as in security-verify.
+		`"$work/supplychainverify" -release-tag`,
+		`-baseline "$root/golang/tools/supplychainverify/baseline.json"`,
+		`-vulnerability-status "$vulnerability_status"`,
 		"--image-src remote",
+		"--format json",
 		`--config "$root/scripts/release/trivy.yaml"`,
 		"--exit-code 1",
+		`python3 "$root/scripts/ci/summarize-image-scan.py" "$report"`,
 		"readonly platforms=(linux/amd64 linux/arm64)",
 	} {
 		if !strings.Contains(scan, want) {
@@ -631,6 +1025,7 @@ func assertPreflightRescansTheReleaseSubject(t *testing.T, workflow workflowDocu
 	for _, forbidden := range []string{
 		"--skip-db-update",
 		"--offline-scan",
+		"--format table",
 		"make ",
 		"go run",
 		"go test",
@@ -648,7 +1043,7 @@ func assertPreflightRescansTheReleaseSubject(t *testing.T, workflow workflowDocu
 		"git checkout",
 	} {
 		if strings.Contains(strings.ToLower(scan), forbidden) {
-			t.Fatalf("release preflight scan uses stale data, executes tag code, or reaches a write sink: %q", forbidden)
+			t.Fatalf("release preflight scan uses stale data, prints raw scanner output, executes tag code, or reaches a write sink: %q", forbidden)
 		}
 	}
 }

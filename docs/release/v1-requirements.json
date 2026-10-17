@@ -625,7 +625,10 @@
       "implementation_paths": [
         ".github/workflows/release.yml",
         "golang/internal/architecturetest/release_publication_test.go",
-        "scripts/release/guard.sh"
+        "golang/tools/supplychainverify/main.go",
+        "scripts/release/guard.sh",
+        "scripts/release/preflight-scan.sh",
+        "scripts/release/verify-public-run.py"
       ],
       "verification": {
         "make_targets": [

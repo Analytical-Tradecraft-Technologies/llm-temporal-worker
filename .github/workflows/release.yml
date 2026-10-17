@@ -165,23 +165,30 @@ jobs:
             --tag-commit "$TAG_COMMIT" \
             --image-reference "$IMAGE_REFERENCE"
 
-      - name: Set up pinned Trivy
-        run: bash scripts/ci/setup-trivy.sh
-
       # The gates above check master's tree and the retained evidence, whose
       # scans date from the evidence run. Re-evaluate the tag commit and the
       # exact publication digest against current vulnerability data, without
-      # executing tag code, so a stale but retained bundle cannot pass.
-      - name: Rescan the tag commit and publication digest
+      # executing tag code, so a stale but retained bundle cannot pass. Both
+      # rescans apply the same policy as the corresponding master gate.
+      - name: Rescan the tag commit for Go vulnerabilities
         shell: bash
         env:
-          IMAGE_REFERENCE: ${{ inputs.image_reference }}
           TAG_COMMIT: ${{ steps.request.outputs.tag_commit }}
         run: |
           set -euo pipefail
           bash scripts/release/preflight-scan.sh tag-source \
             --tag-commit "$TAG_COMMIT" \
             --worktree "$RUNNER_TEMP/release-tag"
+
+      - name: Set up pinned Trivy
+        run: bash scripts/ci/setup-trivy.sh
+
+      - name: Rescan both platforms of the publication digest
+        shell: bash
+        env:
+          IMAGE_REFERENCE: ${{ inputs.image_reference }}
+        run: |
+          set -euo pipefail
           bash scripts/release/preflight-scan.sh image \
             --image-reference "$IMAGE_REFERENCE"
 

@@ -208,8 +208,11 @@ INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
 PLATFORMS = ("linux/amd64", "linux/arm64")
 PLATFORM_ARTIFACTS = ("image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64")
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
-# Retained scans go stale as vulnerability data changes, so publication only
-# accepts recently generated evidence; preflight-scan.sh rescans the subject.
+# Retained scans go stale as vulnerability data changes, and the bundle's
+# tests, fuzzing, and stack checks cannot be rerun without executing tag code,
+# so publication only accepts recently generated evidence; preflight-scan.sh
+# rescans the subject. docs/release/runbook.md explains the bound. Keep it
+# equal to MAX_RUN_AGE in verify-public-run.py.
 MAX_EVIDENCE_AGE = timedelta(days=7)
 MAX_CLOCK_SKEW = timedelta(minutes=5)
 
@@ -237,7 +240,7 @@ if generated.tzinfo is None:
     raise SystemExit("guarded release: evidence generated_at has no time zone")
 age = datetime.now(timezone.utc) - generated
 if age > MAX_EVIDENCE_AGE or age < -MAX_CLOCK_SKEW:
-    raise SystemExit("guarded release: evidence is older than 7 days or dated in the future")
+    raise SystemExit(f"guarded release: evidence is older than {MAX_EVIDENCE_AGE.days} days or dated in the future")
 # The publication subject must be the multi-platform image index that master
 # scanned and published. A schema-v1 bundle bound only the linux/amd64
 # manifest, so it cannot authorize publishing the index.

@@ -20,6 +20,10 @@ import (
 
 const baselineVersion = 2
 
+// releaseTagSkippedComponent marks report components that release tag
+// verification does not run.
+const releaseTagSkippedComponent = "skipped"
+
 type baseline struct {
 	Version                 int                      `json:"version"`
 	AllowedLicenses         []string                 `json:"allowed_licenses"`
@@ -95,25 +99,33 @@ func main() {
 	sourceStatus := flag.String("source-status", "pass", "source verification status: pass or fail")
 	goModStatus := flag.String("go-mod-status", "pass", "go.mod inventory status: pass or fail")
 	vulnerabilityStatus := flag.String("vulnerability-status", "pass", "govulncheck execution status: pass or fail")
+	releaseTag := flag.Bool("release-tag", false, "evaluate a release tag commit's govulncheck output against the baseline's vulnerability exceptions only; used by the guarded release preflight")
 	flag.Parse()
 
-	if *baselinePath == "" || *goModPath == "" || *vulnerabilityOutputPath == "" || *reportPath == "" {
-		fmt.Fprintln(os.Stderr, "supply chain verification requires -baseline, -go-mod, -vulnerability-output, and -report")
-		os.Exit(2)
-	}
-
-	components := componentStatus{
-		Test:          *testStatus,
-		Source:        *sourceStatus,
-		GoMod:         *goModStatus,
-		Vulnerability: *vulnerabilityStatus,
-	}
 	var report verificationReport
 	var err error
-	if *baseVulnerabilityOutputPath == "" {
-		report, err = execute(*baselinePath, *goModPath, *vulnerabilityOutputPath, components, time.Now().UTC())
+	if *releaseTag {
+		if *baselinePath == "" || *vulnerabilityOutputPath == "" || *reportPath == "" || *goModPath != "" || *baseVulnerabilityOutputPath != "" {
+			fmt.Fprintln(os.Stderr, "release tag verification requires -baseline, -vulnerability-output, and -report, and accepts neither -go-mod nor -base-vulnerability-output")
+			os.Exit(2)
+		}
+		report, err = executeReleaseTag(*baselinePath, *vulnerabilityOutputPath, *vulnerabilityStatus, time.Now().UTC())
 	} else {
-		report, err = executePullRequest(*baselinePath, *goModPath, *baseVulnerabilityOutputPath, *vulnerabilityOutputPath, components, time.Now().UTC())
+		if *baselinePath == "" || *goModPath == "" || *vulnerabilityOutputPath == "" || *reportPath == "" {
+			fmt.Fprintln(os.Stderr, "supply chain verification requires -baseline, -go-mod, -vulnerability-output, and -report")
+			os.Exit(2)
+		}
+		components := componentStatus{
+			Test:          *testStatus,
+			Source:        *sourceStatus,
+			GoMod:         *goModStatus,
+			Vulnerability: *vulnerabilityStatus,
+		}
+		if *baseVulnerabilityOutputPath == "" {
+			report, err = execute(*baselinePath, *goModPath, *vulnerabilityOutputPath, components, time.Now().UTC())
+		} else {
+			report, err = executePullRequest(*baselinePath, *goModPath, *baseVulnerabilityOutputPath, *vulnerabilityOutputPath, components, time.Now().UTC())
+		}
 	}
 	if writeErr := writeReportFile(*reportPath, report); writeErr != nil {
 		fmt.Fprintln(os.Stderr, "supply chain verification cannot write redacted report")
@@ -136,14 +148,9 @@ func execute(baselinePath, goModPath, vulnerabilityOutputPath string, components
 		ApprovedFindings:   []string{},
 	}
 
-	baselineFile, err := os.Open(baselinePath)
+	value, err := readBaselineFile(baselinePath)
 	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read baseline"))
-	}
-	defer baselineFile.Close()
-	var value baseline
-	if err := json.NewDecoder(baselineFile).Decode(&value); err != nil {
-		return reportWithError(report, errors.New("supply chain verification baseline is not valid JSON"))
+		return reportWithError(report, err)
 	}
 
 	goModFile, err := os.Open(goModPath)
@@ -183,14 +190,9 @@ func executePullRequest(baselinePath, goModPath, baseVulnerabilityOutputPath, vu
 		ApprovedFindings:   []string{},
 	}
 
-	baselineFile, err := os.Open(baselinePath)
+	value, err := readBaselineFile(baselinePath)
 	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read baseline"))
-	}
-	defer baselineFile.Close()
-	var value baseline
-	if err := json.NewDecoder(baselineFile).Decode(&value); err != nil {
-		return reportWithError(report, errors.New("supply chain verification baseline is not valid JSON"))
+		return reportWithError(report, err)
 	}
 
 	goModFile, err := os.Open(goModPath)
@@ -224,6 +226,60 @@ func executePullRequest(baselinePath, goModPath, baseVulnerabilityOutputPath, vu
 	}
 	report.Status = "pass"
 	return report, nil
+}
+
+// executeReleaseTag evaluates govulncheck output for a release tag commit
+// against the trusted baseline. Only the vulnerability scan ran, so the other
+// components are reported as skipped and only its status is checked.
+func executeReleaseTag(baselinePath, vulnerabilityOutputPath, vulnerabilityStatus string, now time.Time) (verificationReport, error) {
+	components := componentStatus{
+		Test:          releaseTagSkippedComponent,
+		Source:        releaseTagSkippedComponent,
+		GoMod:         releaseTagSkippedComponent,
+		Vulnerability: vulnerabilityStatus,
+	}
+	report := verificationReport{
+		Version:            baselineVersion,
+		Status:             "fail",
+		Components:         components,
+		Findings:           []string{},
+		IntroducedFindings: []string{},
+		ApprovedFindings:   []string{},
+	}
+
+	value, err := readBaselineFile(baselinePath)
+	if err != nil {
+		return reportWithError(report, err)
+	}
+	vulnerabilityFile, err := os.Open(vulnerabilityOutputPath)
+	if err != nil {
+		return reportWithError(report, errors.New("supply chain verification cannot read vulnerability output"))
+	}
+	defer vulnerabilityFile.Close()
+
+	report, err = verifyReleaseTag(value, vulnerabilityFile, now)
+	report.Components = components
+	if err != nil {
+		return reportWithError(report, err)
+	}
+	if err := validateComponentStatus(componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: vulnerabilityStatus}); err != nil {
+		return reportWithError(report, err)
+	}
+	report.Status = "pass"
+	return report, nil
+}
+
+func readBaselineFile(path string) (baseline, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return baseline{}, errors.New("supply chain verification cannot read baseline")
+	}
+	defer file.Close()
+	var value baseline
+	if err := json.NewDecoder(file).Decode(&value); err != nil {
+		return baseline{}, errors.New("supply chain verification baseline is not valid JSON")
+	}
+	return value, nil
 }
 
 func reportWithError(report verificationReport, err error) (verificationReport, error) {
@@ -372,6 +428,52 @@ func verifyPullRequest(value baseline, requirements []moduleRequirement, baseVul
 	}
 	sort.Strings(approved)
 	report.ApprovedFindings = approved
+	report.Status = "pass"
+	return report, nil
+}
+
+// verifyReleaseTag applies the baseline's per-finding exception rules to a
+// release tag commit for the guarded publication preflight (#1326). Every
+// finding needs a current exception, and a reachable package or function trace
+// needs a reachable-scope one, exactly as in the full gate. The trusted master
+// baseline may list exceptions for findings an older tag does not have, so
+// unused exceptions are not an error here, and the tag's go.mod inventory was
+// already checked when it merged. Every rejected finding is named so one
+// preflight run reports the complete set.
+func verifyReleaseTag(value baseline, vulnerabilityOutput io.Reader, now time.Time) (verificationReport, error) {
+	report := verificationReport{
+		Version:            baselineVersion,
+		Status:             "fail",
+		Findings:           []string{},
+		IntroducedFindings: []string{},
+		ApprovedFindings:   []string{},
+	}
+	exceptions, err := validateBaseline(value, now)
+	if err != nil {
+		return report, err
+	}
+	findings, err := readFindings(vulnerabilityOutput)
+	if err != nil {
+		return report, err
+	}
+	report.Findings = findingIDs(findings)
+	approved := make([]string, 0, len(findings))
+	rejected := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		exception, ok := exceptions[finding.ID]
+		switch {
+		case !ok:
+			rejected = append(rejected, finding.ID+" (unreviewed)")
+		case finding.HasReachableTrace && exception.Scope != "reachable":
+			rejected = append(rejected, finding.ID+" (reachable outside its module_only exception)")
+		default:
+			approved = append(approved, finding.ID)
+		}
+	}
+	report.ApprovedFindings = approved
+	if len(rejected) != 0 {
+		return report, fmt.Errorf("supply chain verification rejected %d release tag vulnerabilities: %s", len(rejected), strings.Join(rejected, ", "))
+	}
 	report.Status = "pass"
 	return report, nil
 }
