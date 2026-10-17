@@ -44,7 +44,7 @@ func executionFixture(t *testing.T, modes ...BudgetMode) (*Repository, *memoryTa
 
 func startExecution(t *testing.T, r *Repository, record Record, plan BudgetPlan, reservation durable.ReserveResult) SavedProviderExecution {
 	t.Helper()
-	saved, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+	saved, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 	if err != nil || !fresh {
 		t.Fatalf("begin: %t %v", fresh, err)
 	}
@@ -106,7 +106,7 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 		t.Fatal("scope leaked", err)
 	}
 	// Even a replacement reservation or changed time cannot grant a second start.
-	_, fresh, err := restarted.BeginProviderExecution(ctx, record.Request.Scope, record.Request.ID, durable.ReserveResult{}, plan.QuotedAt.Add(time.Hour))
+	_, fresh, err := restarted.BeginProviderExecution(ctx, record.Request.Scope, record.Request.ID, durable.ReserveResult{}, false, plan.QuotedAt.Add(time.Hour))
 	if err != nil || fresh {
 		t.Fatal("replay authorized submission", err)
 	}
@@ -228,7 +228,7 @@ func TestProviderExecutionConcurrentStartsAuthorizeOnlyOneWriter(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+			_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 			if err != nil {
 				t.Error(err)
 			}
@@ -261,12 +261,12 @@ func TestProviderExecutionLostStartReplyNeverAuthorizesReplay(t *testing.T) {
 				}
 				return nil, nil
 			}
-			_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+			_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 			if err == nil || fresh || !fired {
 				t.Fatalf("uncertain start authorized dispatch: %t %v", fresh, err)
 			}
 			table.hook = nil
-			loaded, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt.Add(time.Second))
+			loaded, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt.Add(time.Second))
 			if err != nil || fresh || loaded.Execution.Stage != ExecutionClaiming {
 				t.Fatalf("replay authorized dispatch: %t %v", fresh, err)
 			}
@@ -280,7 +280,7 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 	bad.Events = append(bad.Events[:0:0], bad.Events...)
 	bad.Events[1] = bad.Events[0]
 	bad.Events[1].EventID = "another"
-	if _, _, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, bad, plan.QuotedAt); !errors.Is(err, ErrInvalid) {
+	if _, _, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, bad, false, plan.QuotedAt); !errors.Is(err, ErrInvalid) {
 		t.Fatal("missing window accepted", err)
 	}
 	saved := startExecution(t, r, record, plan, reservation)
@@ -342,7 +342,7 @@ func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
 					}
 					return nil, nil
 				}
-				_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+				_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 				if err == nil || fresh {
 					t.Fatal("uncertain write authorized submission")
 				}
@@ -354,7 +354,7 @@ func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
 				group.Add(1)
 				go func() {
 					defer group.Done()
-					_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, plan.QuotedAt)
+					_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 					if err != nil {
 						t.Error(err)
 					}
@@ -372,5 +372,63 @@ func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
 				t.Fatal("duplicate start permission", winners.Load())
 			}
 		})
+	}
+}
+
+func TestProviderExecutionKeepsUnknownCostReasonOutsideTheResponse(t *testing.T) {
+	execution := ProviderExecution{StartToken: "token", Version: 1, Stage: ExecutionSucceeded,
+		Response: &llm.Response{APIVersion: llm.APIVersion, OperationKey: "op", Status: llm.ResponseStatusCompleted, Cost: llm.Cost{Status: llm.CostStatusUnknown, UnknownReason: llm.CostUnknownCatalogIncomplete}}}
+	encoded, err := json.Marshal(execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil || string(fields["cost_unknown_reason"]) != `"catalog_incomplete"` || fields["start_token"] == nil {
+		t.Fatalf("encoded execution = %s, %v", encoded, err)
+	}
+	// An earlier worker decodes the response cost strictly, so the response
+	// encoding must not change.
+	if strings.Contains(string(fields["response"]), "catalog_incomplete") {
+		t.Fatalf("response encoding carries the reason: %s", fields["response"])
+	}
+	var decoded ProviderExecution
+	if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.StartToken != "token" || decoded.Response == nil || decoded.Response.Cost.UnknownReason != llm.CostUnknownCatalogIncomplete {
+		t.Fatalf("decoded = %#v, %v", decoded, err)
+	}
+	if !equalExecution(execution, decoded) {
+		t.Fatal("round-tripped execution is not equal")
+	}
+
+	delete(fields, "cost_unknown_reason")
+	stored, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacy ProviderExecution
+	if err := json.Unmarshal(stored, &legacy); err != nil || legacy.Response == nil || legacy.Response.Cost.Status != llm.CostStatusUnknown || legacy.Response.Cost.UnknownReason != "" {
+		t.Fatalf("stored execution without a reason = %#v, %v", legacy, err)
+	}
+}
+
+// An unreserved attempt has no claim, so only one closed before reaching the
+// provider as an unclaimed non-dispatch renews without using up an attempt
+// (#1454). Its other pre-dispatch failures still count.
+func TestProviderExecutionUnclaimedUnreservedPlans(t *testing.T) {
+	for _, mode := range []BudgetMode{BudgetReserved, BudgetUnmatched, BudgetFree} {
+		plan := BudgetPlan{Mode: mode}
+		for _, tc := range []struct {
+			code     provider.Code
+			dispatch provider.DispatchCertainty
+			want     bool
+		}{
+			{provider.CodeBudgetDenied, provider.DispatchNotDispatched, true},
+			{provider.CodeStateUnavailable, provider.DispatchNotDispatched, mode == BudgetReserved},
+			{provider.CodeBudgetDenied, provider.DispatchAmbiguous, false},
+		} {
+			execution := ProviderExecution{Stage: ExecutionFailed, Failure: &ExecutionFailure{Code: tc.code, Dispatch: tc.dispatch}}
+			if got := execution.Unclaimed(plan); got != tc.want {
+				t.Fatalf("%s %s/%s unclaimed = %v", mode, tc.code, tc.dispatch, got)
+			}
+		}
 	}
 }

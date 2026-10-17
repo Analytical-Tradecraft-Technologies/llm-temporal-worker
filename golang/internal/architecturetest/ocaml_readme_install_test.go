@@ -4,20 +4,50 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
 const ocamlReadmeInstallScript = "bash scripts/ci/run-ocaml-readme-install.sh"
 
+// TestWorkflowOCamlReadmeInstallRunsUncachedWithoutPrefetch covers both the
+// pull-request lane and its master counterpart, which reruns the documented
+// install on every push and on the nightly schedule (#1449).
 func TestWorkflowOCamlReadmeInstallRunsUncachedWithoutPrefetch(t *testing.T) {
-	workflow := readWorkflow(t, "pull-request.yml")
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		assertOCamlReadmeInstallJobRunsUncachedWithoutPrefetch(t, workflow)
+	}
+}
+
+// TestWorkflowMasterOCamlReadmeInstallRunsOnEveryMasterEvent requires the
+// master lane to run unconditionally, so a scheduled run exercises it and its
+// failure reaches report-scheduled-failure.
+func TestWorkflowMasterOCamlReadmeInstallRunsOnEveryMasterEvent(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	job := workflowJob(t, master, "ocaml-readme-install")
+	if got := scalarString(t, master.name, job, "name"); got != "OCaml README install" {
+		t.Fatalf("master ocaml-readme-install name = %q, want the pull-request check name", got)
+	}
+	if condition, ok := job["if"]; ok {
+		t.Fatalf("master ocaml-readme-install has condition %v; it must run on push and schedule", condition)
+	}
+	if !slices.Contains(jobNeeds(t, master, "report-scheduled-failure"), "ocaml-readme-install") {
+		t.Fatal("report-scheduled-failure does not depend on ocaml-readme-install")
+	}
+}
+
+func assertOCamlReadmeInstallJobRunsUncachedWithoutPrefetch(t *testing.T, workflow workflowDocument) {
+	t.Helper()
 	assertJobRunPrecedesRunContains(t, workflow, "ocaml-readme-install", "sudo apt-get install --yes protobuf-compiler bubblewrap", "bash scripts/ci/setup-opam.sh")
 	assertJobRunPrecedesRunContains(t, workflow, "ocaml-readme-install", "bash scripts/ci/setup-opam.sh", ocamlReadmeInstallScript)
 	job := workflowJob(t, workflow, "ocaml-readme-install")
 	steps, ok := job["steps"].([]any)
 	if !ok {
-		t.Fatal("OCaml README install job has no steps")
+		t.Fatalf("%s OCaml README install job has no steps", workflow.name)
 	}
 	for _, rawStep := range steps {
 		step, ok := rawStep.(map[string]any)
@@ -25,12 +55,12 @@ func TestWorkflowOCamlReadmeInstallRunsUncachedWithoutPrefetch(t *testing.T) {
 			continue
 		}
 		if actionName(step["uses"]) == cacheAction {
-			t.Fatal("OCaml README install job restores a cache; it must start from a clean switch")
+			t.Fatalf("%s OCaml README install job restores a cache; it must start from a clean switch", workflow.name)
 		}
 		run, _ := step["run"].(string)
 		for _, forbidden := range []string{"prefetch-temporal-sdk-cargo.sh", "CARGO_NET_OFFLINE", "CARGO_HOME"} {
 			if strings.Contains(run, forbidden) {
-				t.Fatalf("OCaml README install job configures %q outside the README commands:\n%s", forbidden, run)
+				t.Fatalf("%s OCaml README install job configures %q outside the README commands:\n%s", workflow.name, forbidden, run)
 			}
 		}
 	}

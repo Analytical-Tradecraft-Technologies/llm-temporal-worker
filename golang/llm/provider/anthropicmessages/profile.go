@@ -262,19 +262,20 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 	return value, nil
 }
 
-func (profile Profile) actualClass(providerTier string) (*llm.ServiceClass, error) {
-	if providerTier == "" {
-		if profile.MissingActualServiceClass != "" {
-			class := profile.MissingActualServiceClass
-			return &class, nil
-		}
-		return nil, fmt.Errorf("provider response omitted service tier")
-	}
+// actualClass maps the tier a response reported to a public class. Anthropic
+// documents usage.service_tier as nullable, so a missing or unrecognized tier
+// is not evidence of any class: it yields nil rather than a guess or a
+// failure, because the response is already paid for, and the raw label is
+// kept in the service facts for audit.
+func (profile Profile) actualClass(providerTier string) *llm.ServiceClass {
 	class, ok := profile.ActualServiceClasses[providerTier]
-	if !ok {
-		return nil, fmt.Errorf("provider returned unsupported service tier %q", providerTier)
+	if providerTier == "" {
+		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
 	}
-	return &class, nil
+	if !ok {
+		return nil
+	}
+	return &class
 }
 
 func publicServiceClasses() []llm.ServiceClass {

@@ -280,6 +280,19 @@ const (
 	CostStatusUnknown CostStatus = "unknown"
 )
 
+// Unknown-cost reasons a worker records on a Cost, from the v1 unknown_reason
+// set. A cost with no reason, such as one stored before the field, reports
+// CostUnknownProviderDidNotReport.
+const (
+	// CostUnknownProviderDidNotReport: the provider omitted the usage, cost or
+	// tool charge needed to settle the call.
+	CostUnknownProviderDidNotReport = "provider_did_not_report_cost"
+	// CostUnknownCatalogIncomplete: the provider reported usage the catalog
+	// cannot price (no quote, an unpriced component or an unmodeled billing
+	// multiplier).
+	CostUnknownCatalogIncomplete = "catalog_incomplete"
+)
+
 func (status CostStatus) Valid() bool {
 	switch status {
 	case CostStatusKnown, CostStatusUnknown:
@@ -297,6 +310,10 @@ type Cost struct {
 	ActualCostUSD   *pricing.USD
 	Method          string
 	CatalogVersion  string
+	// UnknownReason says why an unknown cost is unknown; it is empty for a
+	// known cost. It is not part of the Cost encoding, which earlier workers
+	// decode strictly: storage that keeps it saves it beside the response.
+	UnknownReason string
 }
 
 func (cost Cost) MarshalJSON() ([]byte, error) {

@@ -53,15 +53,53 @@ func TestCloudExecutionRuntimeRenewsAttemptBeforeLeaseExpiry(t *testing.T) {
 	}
 }
 
+// failingStartFills fails the fill start with a transient storage error
+// before it applies.
+type failingStartFills struct {
+	cache.FillRepository
+}
+
+func (failingStartFills) Start(context.Context, cache.FillLease, time.Time) (bool, error) {
+	return false, errors.New("fill storage unavailable")
+}
+
 // A fill start refused because the lease expired mid-step is a definite
 // non-dispatch: the attempt is closed as unclaimed, not as an unknown
 // dispatch, its fill is not left started, and it renews at once (#1360).
+// Unreserved plans have no claim but are closed the same way (#1454).
 func TestCloudExecutionRuntimeExpiredFillStartRenewsAttempt(t *testing.T) {
-	f := boundedCloud(t, false)
+	for _, mode := range []string{"reserved", "unmatched", "free"} {
+		t.Run(mode, func(t *testing.T) {
+			var configure []func(*budgetPlanningFixture)
+			if mode != "reserved" {
+				configure = append(configure, unreservedPlanning(t, mode))
+			}
+			f := boundedCloud(t, false, configure...)
+			fills := f.cap.ResponseFills
+			f.cap.ResponseFills = lateStartFills{FillRepository: fills, f: f}
+			checkUnclaimedFillStartRenews(t, f, fills, mode != "reserved")
+		})
+	}
+}
+
+// An unreserved plan's fill start that fails transiently also stops before
+// the provider, so it is a definite non-dispatch rather than an unknown
+// dispatch waiting out RecoverAfter (#1454).
+func TestCloudExecutionRuntimeUnreservedFailedFillStartRenewsAttempt(t *testing.T) {
+	for _, mode := range []string{"unmatched", "free"} {
+		t.Run(mode, func(t *testing.T) {
+			f := boundedCloud(t, false, unreservedPlanning(t, mode))
+			fills := f.cap.ResponseFills
+			f.cap.ResponseFills = failingStartFills{FillRepository: fills}
+			checkUnclaimedFillStartRenews(t, f, fills, true)
+		})
+	}
+}
+
+func checkUnclaimedFillStartRenews(t *testing.T, f *boundedCloudFixture, fills cache.FillRepository, unreserved bool) {
+	t.Helper()
 	f.options.MaxAttempts = 1
 	f.request.Cache = &llm.CachePolicyV1{}
-	fills := f.cap.ResponseFills
-	f.cap.ResponseFills = lateStartFills{FillRepository: fills, f: f}
 	f.restart(t)
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
@@ -75,7 +113,7 @@ func TestCloudExecutionRuntimeExpiredFillStartRenewsAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
-	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
+	if err != nil || saved.Plan.RequiresReservation() == unreserved || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
 		t.Fatalf("expired fill start = %+v, %v", saved.Execution, err)
 	}
 	f.cap.ResponseFills = fills

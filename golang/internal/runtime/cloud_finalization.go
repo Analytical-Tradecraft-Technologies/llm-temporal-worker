@@ -378,7 +378,8 @@ func validateFinalizationPayload(kind, key string, index int64, handoff cloudsta
 			return "", invalid
 		}
 		if paid.Uncached {
-			if paid.AttemptID == "" || disposition != "disabled" || paid.Entry != nil ||
+			// An attempt that bypassed a stalled fill reports a miss (#1455).
+			if paid.AttemptID == "" || (disposition != "disabled" && disposition != "miss_not_populated") || paid.Entry != nil ||
 				!equalFinalizationValue(paid.Lease, cache.FillLease{}) || paid.Completion.Outcome != cache.FillNotCacheable || paid.Completion.EntryID != "" {
 				return "", invalid
 			}
@@ -495,7 +496,7 @@ func (f *CloudFinalizer) verifyUnreserved(ctx context.Context, scope cloudstate.
 		}
 		cost = response.Cost
 	}
-	if !equalFinalizationValue(cost, publicationCost(execution.Response.Cost)) {
+	if !publishedCostMatches(cost, execution.Response.Cost) {
 		return cloudstate.ErrCorrupt
 	}
 	return nil

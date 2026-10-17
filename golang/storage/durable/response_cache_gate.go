@@ -24,6 +24,9 @@ type responseCachePreparation struct {
 	entry       *cache.ResponseEntry
 	disposition CacheDisposition
 	preparedAt  time.Time
+	// stalled marks a recovery decision on another attempt's started fill
+	// that has outlived cache.StalledFillAfter.
+	stalled bool
 }
 
 func (p *responseCachePreparation) validate(disposition CacheDisposition) error {

@@ -1557,30 +1557,38 @@ are omitted and their accounting status retained. Model names are qualified by
 provider, so direct OpenAI and OpenRouter are distinguishable. Langfuse's own
 model pricing configuration is separate from the worker's authoritative ledger.
 
-Export uses the dedicated final `llm.ExportLangfuse.v1` activity: 10-second
-start-to-close, 30-second schedule-to-close, at most three attempts. Rejection
-errors are nonretryable; outages retry within those bounds. The request
+Export uses the dedicated final `llm.ExportLangfuse.v1` activity. The request
 workflow runs it in a separate `llm.langfuse.export.v1` workflow that it starts
 as an abandoned child and does not wait for, so export adds only the time to
 start that child (one workflow task) to a Generate or Compact result, and a
 compaction-backed Generate starts its model call without waiting for the
-compaction's export. Requests already running the export inline when a worker
-is upgraded finish it inline. The export still runs on the request task queue
-and shares the worker's Activity slots with model calls, so each worker bounds
-it: each HTTP request times out after 5 seconds, at most `max_in_flight`
-requests wait on Langfuse at once, and three consecutive transport or server
-failures open a breaker. While the breaker is open, or the in-flight limit is
-reached, export fails immediately without retry and without sending. After 30
-seconds one probe request decides whether the breaker closes. During a Langfuse
-outage, export therefore holds at most `max_in_flight` slots per worker, for up
-to 5 seconds per attempt. Failed export logs a
-safe warning, preserving the operation's original result or error. Each failed
-export Activity attempt increments the worker's
+compaction's export. In that workflow the activity has a 10-second
+start-to-close, a 2-minute schedule-to-close and at most ten attempts.
+Rejection errors are nonretryable; outages retry within those bounds. Requests
+already running the export inline when a worker is upgraded finish it inline,
+and export workflows started before the upgrade keep the earlier bounds
+(30-second schedule-to-close, at most three attempts). The export still runs on
+the request task queue and shares the worker's Activity slots with model
+calls, so each worker bounds it: each HTTP request times out after 5 seconds,
+at most `max_in_flight` requests wait on Langfuse at once, and three
+consecutive transport or server failures open a breaker. An export that finds
+every in-flight slot taken sends nothing and is retried after a jittered
+backoff (about 1, 2 and 4 seconds, then 4 to 8 seconds) that holds no Activity
+slot, so a burst larger than `max_in_flight` on a healthy Langfuse is delivered
+rather than dropped. While the breaker is open, export fails immediately
+without retry and without sending. After 30 seconds one probe request decides
+whether the breaker closes. During a Langfuse outage, export therefore holds at
+most `max_in_flight` slots per worker, for up to 5 seconds per attempt. Failed
+export logs a safe warning, preserving the operation's original result or
+error. Each failed export Activity attempt increments the worker's
 `llmtw_langfuse_export_failures_total{reason}` counter on `/metrics`, where
 `reason` is `rejected` (Langfuse refused the batch, such as bad credentials),
-`unavailable` (breaker open or concurrency limit reached; nothing was sent) or
-`failed` (any other failure, retried up to three attempts). Every reason is
-exported at zero from startup. Capture failures also log a safe warning; missing paid
+`saturated` (the in-flight limit was reached; nothing was sent and the attempt
+is retried), `unavailable` (breaker open; nothing was sent and the export is
+dropped) or `failed` (any other failure, retried within the attempt bounds).
+A steadily rising `saturated` count means `max_in_flight` is too low for the
+worker's export rate; `unavailable` counts traces lost to a Langfuse outage.
+Every reason is exported at zero from startup. Capture failures also log a safe warning; missing paid
 captures prevent acknowledgement of an incomplete trace. Content stays in the
 existing encrypted blob store before export. No credentials or opaque provider
 continuation state are exported, and caller-owned tools are represented in I/O

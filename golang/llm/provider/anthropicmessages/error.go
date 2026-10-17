@@ -2,6 +2,7 @@ package anthropicmessages
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -77,6 +78,8 @@ func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {
 		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider permission was denied"
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
 		code, retry, safe = provider.CodeInvalidArgument, provider.RetryNever, "provider rejected request parameters"
+	case status == http.StatusTooManyRequests && spendCapReached(apiErr):
+		code, retry, safe = provider.CodePermissionDenied, provider.RetryNextRoute, "provider account reached its monthly spend cap"
 	case status == http.StatusTooManyRequests:
 		code, retry, safe = provider.CodeProviderRateLimited, provider.RetryAfter, "provider rate limited the request"
 	case status >= http.StatusInternalServerError:
@@ -91,6 +94,9 @@ func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {
 	mapped.SafeDetails = map[string]string{"provider": profileName, "status": fmt.Sprintf("%d", status)}
 	if errorType := string(apiErr.Type()); errorType != "" {
 		mapped.SafeDetails["provider_type"] = errorType
+	}
+	if code == provider.CodePermissionDenied && status == http.StatusTooManyRequests {
+		mapped.SafeDetails["provider_code"] = spendCapErrorCode
 	}
 	if retry == provider.RetryAfter && apiErr.Response != nil {
 		if retryAfter := apiErr.Response.Header.Get("retry-after"); retryAfter != "" {
@@ -108,4 +114,25 @@ func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {
 		}
 	}
 	return mapped
+}
+
+// spendCapErrorCode is the error.details.error_code Anthropic documents for a
+// 429 sent while the organization is over its usage tier's monthly spend cap.
+const spendCapErrorCode = "enforced_spend_limit_reached"
+
+// spendCapReached reports the tier spend-cap 429. It shares rate_limit_error
+// with a rate limit but carries no retry-after and keeps failing until the
+// month resets or the tier is raised, so retrying it every second would only
+// burn attempts. Like a 402 it is an account-wide denial, so it is classified
+// as one: it holds the route and lets the request move to another route.
+func spendCapReached(apiErr *anthropic.Error) bool {
+	var body struct {
+		Error struct {
+			Details struct {
+				ErrorCode string `json:"error_code"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	raw := apiErr.RawJSON()
+	return raw != "" && json.Unmarshal([]byte(raw), &body) == nil && body.Error.Details.ErrorCode == spendCapErrorCode
 }

@@ -26,7 +26,7 @@ import (
 
 type CloudProviderExecutionStore interface {
 	Read(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.Record, error)
-	BeginProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID, durable.ReserveResult, time.Time) (cloudstate.SavedProviderExecution, bool, error)
+	BeginProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID, durable.ReserveResult, bool, time.Time) (cloudstate.SavedProviderExecution, bool, error)
 	LoadProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.SavedProviderExecution, error)
 	SaveProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID, uint64, cloudstate.ProviderExecution) error
 }
@@ -85,13 +85,15 @@ func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.
 // durable fence is written before Claim, and BeforePossibleWrite persists the
 // claim before allowing HTTP. A saved claim is never reused as a dispatch grant.
 func (executor *CloudProviderExecution) Submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult) (ProviderExecutionResult, error) {
-	return executor.submit(ctx, call, reservation, nil)
+	return executor.submit(ctx, call, reservation, nil, false)
 }
 
 // The optional cache gate runs only for the durable execution-fence winner,
 // before a budget claim or HTTP request. A crash or uncertain gate reply stays
 // recoverable as an unknown child; retries cannot regain dispatch permission.
-func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult, start func(context.Context) error) (ProviderExecutionResult, error) {
+// uncached marks a cached request's attempt that bypasses a stalled fill
+// without a gate of its own; it is saved with the execution.
+func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudBudgetCall, reservation durable.ReserveResult, start func(context.Context) error, uncached bool) (ProviderExecutionResult, error) {
 	if executor == nil || call == nil || call.owner != executor.admission || ctx == nil {
 		return ProviderExecutionResult{}, executionError(provider.CodeConfiguration)
 	}
@@ -100,7 +102,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	}
 	// An already-started attempt is resumed through Resume, including after a
 	// lost acknowledgement of Begin. It can never enter initial admission.
-	saved, fresh, err := executor.store.BeginProviderExecution(ctx, call.scope, call.id, reservation, executor.clock())
+	saved, fresh, err := executor.store.BeginProviderExecution(ctx, call.scope, call.id, reservation, uncached, executor.clock())
 	if err != nil {
 		return ProviderExecutionResult{}, cloudRuntimeError(err, false)
 	}
@@ -112,9 +114,12 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	}
 	if start != nil {
 		if err := start(ctx); err != nil {
-			if errors.Is(err, errCacheFillNotStarted) && saved.Plan.RequiresReservation() {
-				// Like an expired claim, nothing was claimed or sent: close the
-				// attempt so it renews without using up a provider attempt.
+			// Like an expired claim, nothing was claimed or sent: close the
+			// attempt so it renews without using up a provider attempt. A
+			// reserved plan's uncertain start is resolved against Redis by
+			// settleUnknown instead. An unreserved plan has no claim to
+			// resolve, and any failed start stops it before the provider (#1454).
+			if errors.Is(err, errCacheFillNotStarted) || (!saved.Plan.RequiresReservation() && !errors.Is(err, cloudstate.ErrCorrupt)) {
 				return executor.save(ctx, call.scope, call.id, saved, executor.unclaimedExecution(saved))
 			}
 			next := saved.Execution
@@ -358,10 +363,11 @@ func unclaimed(err error) bool {
 	return errors.As(err, &classified) && classified.Code == provider.CodeBudgetDenied && classified.Dispatch == provider.DispatchNotDispatched
 }
 
-// unclaimedExecution closes an attempt whose claim never applied. Nothing was
-// dispatched and Redis holds no claim to settle (the unclaimed reservation
-// leaves through its expiry index), so it is a settled, immediately retryable
-// non-dispatch that does not use up a provider attempt.
+// unclaimedExecution closes an attempt whose claim never applied, or an
+// unreserved attempt stopped before its claim point. Nothing was dispatched
+// and Redis holds no claim to settle (an unclaimed reservation leaves through
+// its expiry index), so it is a settled, immediately retryable non-dispatch
+// that does not use up a provider attempt.
 func (executor *CloudProviderExecution) unclaimedExecution(saved cloudstate.SavedProviderExecution) cloudstate.ProviderExecution {
 	next := saved.Execution
 	now := executor.now(saved)
@@ -864,11 +870,11 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 	// A provider-reported amount is not promoted to a known cost without a
 	// catalog quote (docs/architecture/pricing-and-budgets.md).
 	if plan.Unpriced {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownCatalogIncomplete
 		return
 	}
 	if response.Cost.ActualCostUSD != nil && response.Cost.ActualCostUSD.Validate() == nil {
-		response.Cost.Status, response.Cost.Method = llm.CostStatusKnown, string(pricing.CostProviderReported)
+		response.Cost.Status, response.Cost.Method, response.Cost.UnknownReason = llm.CostStatusKnown, string(pricing.CostProviderReported), ""
 		return
 	}
 	usage := response.Usage
@@ -876,7 +882,7 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 	// provider omitted usage, so pricing it would settle a near-zero exact
 	// cost and release the reservation; keep the cost unknown instead.
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningTokens == 0 && usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0 {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownProviderDidNotReport
 		return
 	}
 	priceUsage := pricing.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
@@ -894,9 +900,16 @@ func priceExecutionResponse(plan cloudstate.BudgetPlan, response *llm.Response) 
 			}
 		}
 	}
+	// A provider method without a valid amount means the provider's cost
+	// report was missing or unusable; usage the entry cannot price means the
+	// catalog is incomplete.
+	if response.Cost.Method != "" {
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownProviderDidNotReport
+		return
+	}
 	cost, err := pricing.CostFromUsage(plan.Quote.Entry, priceUsage)
-	if err != nil || response.Cost.Method != "" {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+	if err != nil {
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownCatalogIncomplete
 		return
 	}
 	applyHostedToolCharge(response, cost)
@@ -1007,10 +1020,16 @@ func routeCredentialRejection(failure *provider.Error) bool {
 }
 
 // insufficientCredit reports a provider 402, which adapters map to a
-// permission denial that carries the HTTP status in its safe details.
+// permission denial that carries the HTTP status in its safe details. A 429 is
+// mapped to a permission denial only for a documented billing signal, such as
+// OpenAI credit_balance_exhausted or the Anthropic tier spend cap, which is the
+// same account-wide credit denial (#1442).
 func insufficientCredit(failure *provider.Error) bool {
-	return failure != nil && failure.Code == provider.CodePermissionDenied && failure.Dispatch == provider.DispatchRejected &&
-		failure.SafeDetails["status"] == "402"
+	if failure == nil || failure.Code != provider.CodePermissionDenied || failure.Dispatch != provider.DispatchRejected {
+		return false
+	}
+	status := failure.SafeDetails["status"]
+	return status == "402" || status == "429"
 }
 
 func preDispatchContextEnded(failure *provider.Error) bool {
@@ -1020,9 +1039,11 @@ func preDispatchContextEnded(failure *provider.Error) bool {
 }
 
 func applyHostedToolCharge(response *llm.Response, cost pricing.Cost) {
+	// HostedToolCharge fails only when the provider did not report the tool
+	// usage or charge separately.
 	fee, err := llm.HostedToolCharge(response.Usage, response.Route.ResolvedModel)
 	if err != nil {
-		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
+		response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.UnknownReason = llm.CostStatusUnknown, nil, llm.CostUnknownProviderDidNotReport
 		return
 	}
 	total, err := cost.USD.Add(fee)
@@ -1030,5 +1051,5 @@ func applyHostedToolCharge(response *llm.Response, cost pricing.Cost) {
 		response.Cost.Status, response.Cost.ActualCostUSD = llm.CostStatusUnknown, nil
 		return
 	}
-	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method = llm.CostStatusKnown, &total, string(cost.Method)
+	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method, response.Cost.UnknownReason = llm.CostStatusKnown, &total, string(cost.Method), ""
 }

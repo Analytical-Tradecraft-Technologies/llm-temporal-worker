@@ -52,7 +52,7 @@ Phases are `decode`, `normalize`, `state_load`, `plan`, `price`,
 | `unsupported_capability` | no strict semantic conversion: an otherwise eligible route declined the request | never without request/config change |
 | `no_route` | no configured eligible candidate, or every candidate was passed over for context, adapter, price or budget-policy reasons | never without config/health change |
 | `authentication` | invalid provider/store credentials | never on the same route within the same snapshot; a provider 401 lets the request try another route |
-| `permission_denied` | account/model/region denied, or provider account out of credit (HTTP 402) | never within same snapshot; a provider 402 lets the request try another route |
+| `permission_denied` | account/model/region denied, or provider account out of credit (HTTP 402, or a documented billing 429 such as OpenAI `credit_balance_exhausted` or the Anthropic tier spend cap `enforced_spend_limit_reached`) | never within same snapshot; a provider credit denial lets the request try another route |
 | `budget_denied` | matching limit would be exceeded | at calculated time when horizon permits |
 | `operation_conflict` | operation key reused with different digest | never |
 | `ambiguous_dispatch` | provider may have accepted request | never automatically |

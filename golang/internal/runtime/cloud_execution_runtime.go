@@ -300,6 +300,8 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	if err != nil {
 		return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
 	}
+	// renewed is the unused attempt this step replaced, whose fill it releases.
+	var renewed *cloudstate.RequestAttempt
 	saved, loadErr := r.store.LoadProviderExecution(ctx, root.Scope, attempt.ID)
 	if loadErr == nil {
 		// Only explicit acquisition can replace an unresolved paid attempt.
@@ -360,9 +362,15 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 				}
 				return failure, nil
 			}
+			previous := attempt
 			attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
 			if err != nil {
 				return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
+			}
+			if saved.Execution.Unclaimed(saved.Plan) {
+				// Its fill may still be held, never started, before its lease
+				// expires; release it like an unused renewal's (#1454).
+				renewed = &previous
 			}
 		} else {
 			return r.resumeAttempt(ctx, p, attempt, saved, step)
@@ -372,7 +380,6 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	}
 	// An unused quote/fill can expire while a workflow waits for capacity.
 	// Renew the child, never mutate the original quote or reservation identity.
-	var renewed *cloudstate.RequestAttempt
 	if !r.now().Before(attempt.CreatedAt.Add(cache.MaxFillLease - cloudstate.UnusedAttemptRenewMargin)) {
 		previous := attempt
 		attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, attempt.ID, r.now())
@@ -406,11 +413,16 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
+	// uncached is decided again by every step, so the submitting step's own
+	// observation decides whether its dispatch starts a fill.
+	uncached := false
 	if lease != nil {
 		if renewed != nil {
 			r.releaseRenewedFill(ctx, *lease, *renewed)
 		}
-		status, found, err := r.prepareCache(ctx, p, *lease)
+		var status llm.ExecutionResultV1
+		var found bool
+		status, found, uncached, err = r.prepareCache(ctx, p, *lease)
 		if err != nil || found {
 			return status, err
 		}
@@ -429,7 +441,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		return cloudStatus(p, llm.ExecutionAcquired, 0), nil
 	}
 	var start func(context.Context) error
-	if lease != nil {
+	if lease != nil && !uncached {
 		start = func(ctx context.Context) error {
 			// The lease was stamped by the quoting worker; a lagging clock starts
 			// the fill as of acquisition rather than failing the paid attempt.
@@ -452,7 +464,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 			return nil
 		}
 	}
-	result, err := r.execution.submit(ctx, call, reservation, start)
+	result, err := r.execution.submit(ctx, call, reservation, start, uncached)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}

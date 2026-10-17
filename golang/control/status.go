@@ -177,6 +177,8 @@ func validateStatusObservation(observation StatusObservation) error {
 func documentedCreditProviderCode(code string) bool {
 	switch code {
 	case "insufficient_quota", "billing_hard_limit", "payment_required",
+		"credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
+		"organization_usage_limit_exceeded", "enforced_spend_limit_reached",
 		"quota_low", "billing_warning", "quota_restored", "billing_restored":
 		return true
 	default:

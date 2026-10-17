@@ -90,7 +90,7 @@ request kind, and one closed state:
 | `budget_required` | Call budget acquisition. |
 | `acquired` | Admission is ready for submission, including an authorized free call. |
 | `budget_wait` | Capacity is unavailable; wait before trying acquisition again. |
-| `cache_wait` | Another request owns the cache fill; wait before preparing again. |
+| `cache_wait` | Another request owns the cache fill; wait before preparing again. Once another request's dispatched fill is 24 hours old, the request stops waiting and makes its own paid call without the cache (`miss_not_populated`). |
 | `pending` | Paid provider work is still running; wait before polling once. |
 | `provider_completed` | Provider work is complete; publish the durable result. |
 | `completed` | The matching typed Generate or Compact response is present. |

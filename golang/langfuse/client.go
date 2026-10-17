@@ -25,6 +25,11 @@ var ErrRejected = errors.New("Langfuse export rejected")
 // treat every export failure alike keep working.
 var ErrUnavailable = fmt.Errorf("%w: exporter unavailable", ErrExport)
 
+// ErrSaturated is the ErrUnavailable returned when every in-flight slot is
+// taken. Unlike an open breaker it says nothing about Langfuse's health, so a
+// caller can retry it after a short backoff.
+var ErrSaturated = fmt.Errorf("%w: in-flight limit reached", ErrUnavailable)
+
 const maxBody = 16 << 20
 
 // Export shares the worker's Activity slots with model calls, so a slow or
@@ -75,11 +80,11 @@ func NewClient(base, public, secret string, transport *http.Client, maxInFlight 
 // admit claims an in-flight slot unless the breaker is open. Once the cooldown
 // elapses, the first caller becomes the probe and re-arms the cooldown so
 // concurrent callers keep failing fast until the probe reports.
-func (c *Client) admit() bool {
+func (c *Client) admit() error {
 	select {
 	case c.slots <- struct{}{}:
 	default:
-		return false
+		return ErrSaturated
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -87,11 +92,11 @@ func (c *Client) admit() bool {
 		now := c.now()
 		if now.Before(c.openUntil) {
 			<-c.slots
-			return false
+			return ErrUnavailable
 		}
 		c.openUntil = now.Add(breakerCooldown)
 	}
-	return true
+	return nil
 }
 
 // release returns the slot and records the outcome. A rejection proves
@@ -187,8 +192,8 @@ func (c *Client) Export(ctx context.Context, o Operation) error {
 	if err != nil {
 		return err
 	}
-	if !c.admit() {
-		return ErrUnavailable
+	if err := c.admit(); err != nil {
+		return err
 	}
 	err = c.send(ctx, body)
 	c.release(err)

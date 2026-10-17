@@ -15,12 +15,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 	if response == nil {
 		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
 	}
-	actual, err := profile.actualClass(responseTier(response))
-	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
-	}
+	actual := profile.actualClass(responseTier(response))
 	output, states, hasToolCalls, hasRefusal, err := liftContent(response.Content)
 	if err != nil {
 		mapped := invalidResponseError(call, requestID, err.Error())
@@ -116,7 +111,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		result.Cost.Status = llm.CostStatusUnknown
 	}
 	if priceModifiedUsage(usage.ProviderRaw, call.Metadata.ProviderTier) {
-		result.Cost.Status = llm.CostStatusUnknown
+		result.Cost.Status, result.Cost.UnknownReason = llm.CostStatusUnknown, llm.CostUnknownCatalogIncomplete
 	}
 	return result, nil
 }

@@ -5,8 +5,11 @@ import (
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
+	"math/rand/v2"
+	"time"
 )
 
 const ExportLangfuseActivityName = "llm.ExportLangfuse.v1"
@@ -29,8 +32,16 @@ func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter
 		return nil
 	}
 	if err := runtime.ExportLangfuseV1(ctx, ref); err != nil {
-		// A local fast-fail sent nothing; retrying would only reoccupy a slot
-		// and delay the workflow's return by the retry backoff.
+		// A full in-flight limit only means other exports are on the wire. The
+		// export workflow waits for nobody and a retry holds no slot while it
+		// backs off, so retry after a jittered delay rather than drop the trace
+		// (#1459). The jitter spreads a burst that hit the limit together.
+		if errors.Is(err, langfuse.ErrSaturated) {
+			a.Metrics.RecordLangfuseExportFailure("saturated")
+			return temporal.NewApplicationErrorWithOptions("Langfuse export saturated", "langfuse_export_saturated", temporal.ApplicationErrorOptions{NextRetryDelay: saturatedRetryDelay(sdkactivity.GetInfo(ctx).Attempt)})
+		}
+		// An open breaker sent nothing and signals a Langfuse outage; it stays
+		// a fast-fail so an outage cannot pile retries up behind the cooldown.
 		if errors.Is(err, langfuse.ErrUnavailable) {
 			a.Metrics.RecordLangfuseExportFailure("unavailable")
 			return temporal.NewNonRetryableApplicationError("Langfuse export unavailable", "langfuse_export_unavailable", nil)
@@ -43,4 +54,14 @@ func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter
 		return temporal.NewApplicationError("Langfuse export failed", "langfuse_export_failed")
 	}
 	return nil
+}
+
+// saturatedRetryDelay doubles from about one second per attempt up to about
+// eight, choosing uniformly within the upper half of each step.
+func saturatedRetryDelay(attempt int32) time.Duration {
+	step := 8 * time.Second
+	if attempt >= 1 && attempt <= 4 {
+		step = time.Second << (attempt - 1)
+	}
+	return step/2 + rand.N(step/2+1)
 }

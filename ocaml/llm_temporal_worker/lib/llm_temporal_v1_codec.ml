@@ -301,6 +301,12 @@ let validate_settings_patch (value : settings_patch) =
   let* () = check "top_p" validate_top_p value.top_p in
   let* () = check "stop_sequences" validate_stop_sequences value.stop_sequences in
   let* () = check "seed" validate_seed value.seed in
+  (* A set compaction policy replaces the inherited one, so the worker's
+     target-below-trigger rule is decidable here: refuse it before the child
+     is scheduled rather than at request preparation. *)
+  let compaction context policy = match Llm_temporal_compaction_policy.check_settings_json policy with
+    | Ok () -> Ok policy | Error message -> Error (errorf "%s: %s" context message) in
+  let* () = check "compaction_policy" compaction value.compaction_policy in
   check "reasoning_token_budget" validate_reasoning_token_budget value.reasoning_token_budget
 
 let output_to_json = Llm_temporal_codec.output_to_json

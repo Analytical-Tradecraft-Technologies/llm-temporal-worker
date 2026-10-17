@@ -26,8 +26,13 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 			{llm.ServiceClassPriority, "auto", "priority", llm.ServiceClassPriority},
 			{llm.ServiceClassPriority, "auto", "standard", llm.ServiceClassStandard},
 			{llm.ServiceClassStandard, "standard_only", "unknown", ""},
+			{llm.ServiceClassStandard, "standard_only", "", ""},
 		} {
-			t.Run(family+"/"+tc.wire+"/"+tc.actual, func(t *testing.T) {
+			name := tc.actual
+			if name == "" {
+				name = "null"
+			}
+			t.Run(family+"/"+tc.wire+"/"+name, func(t *testing.T) {
 				ctx := context.Background()
 				endpoint := config.EndpointConfig{Family: family, BaseURL: "https://anthropic.example.test", ServiceClasses: map[llm.ServiceClass]config.TierConfig{
 					llm.ServiceClassStandard: {ProviderValue: "standard_only"},
@@ -48,7 +53,11 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 					if wire["service_tier"] != tc.wire {
 						t.Fatalf("request tier = %v, want %s", wire["service_tier"], tc.wire)
 					}
-					body := fmt.Sprintf(`{"id":"msg_test","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1,"service_tier":%q}}`, tc.actual)
+					tier := "null"
+					if tc.actual != "" {
+						tier = fmt.Sprintf("%q", tc.actual)
+					}
+					body := fmt.Sprintf(`{"id":"msg_test","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1,"service_tier":%s}}`, tier)
 					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
 				})}
 				var client *anthropicmessages.Client
@@ -76,17 +85,17 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 				if calls != 1 {
 					t.Fatalf("calls = %d, want 1", calls)
 				}
-				if tc.want == "" {
-					if err == nil {
-						t.Fatal("unknown response tier accepted")
-					}
-					return
-				}
 				if err != nil {
 					t.Fatal(err)
 				}
 				response := result.Response
-				if response.Service.Actual == nil || *response.Service.Actual != tc.want || response.Service.Attempted != tc.requested || response.Service.ProviderValue != tc.actual {
+				// A null or unrecognized tier is accepted with no actual class;
+				// the raw label is kept for audit.
+				if tc.want == "" {
+					if response.Service.Actual != nil || response.Service.Attempted != tc.requested || response.Service.ProviderValue != tc.actual {
+						t.Fatalf("service facts = %+v", response.Service)
+					}
+				} else if response.Service.Actual == nil || *response.Service.Actual != tc.want || response.Service.Attempted != tc.requested || response.Service.ProviderValue != tc.actual {
 					t.Fatalf("service facts = %+v", response.Service)
 				}
 				if response.Status != llm.ResponseStatusCompleted || response.Usage.InputTokens != 2 || response.Usage.OutputTokens != 1 {

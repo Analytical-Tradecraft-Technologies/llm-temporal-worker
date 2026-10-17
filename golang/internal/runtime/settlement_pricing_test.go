@@ -73,3 +73,58 @@ func TestHostedToolsSettlement(t *testing.T) {
 		})
 	}
 }
+
+func TestPublishedUnknownCostReason(t *testing.T) {
+	partial := settlementPricingPlan(false)
+	partial.Quote.Entry.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentOutput}
+	usage := llm.Usage{InputTokens: 10, OutputTokens: 5}
+	for _, tc := range []struct {
+		name     string
+		plan     cloudstate.BudgetPlan
+		response llm.Response
+		want     string
+	}{
+		{name: "unpriced route", plan: settlementPricingPlan(true), response: llm.Response{Usage: usage}, want: "catalog_incomplete"},
+		{name: "unpriceable usage", plan: partial, response: llm.Response{Usage: usage}, want: "catalog_incomplete"},
+		{name: "missing usage", plan: settlementPricingPlan(false), response: llm.Response{}, want: "provider_did_not_report_cost"},
+		{name: "missing tool charge", plan: settlementPricingPlan(false), response: llm.Response{Usage: llm.Usage{InputTokens: 10, ProviderRaw: map[string]json.RawMessage{"hosted_execution_used": json.RawMessage("true")}}}, want: "provider_did_not_report_cost"},
+		{name: "unusable provider cost", plan: settlementPricingPlan(false), response: llm.Response{Usage: usage, Cost: llm.Cost{Method: "openrouter_reported"}}, want: "provider_did_not_report_cost"},
+		{name: "adapter reason kept", plan: settlementPricingPlan(false), response: llm.Response{Usage: usage, Cost: llm.Cost{Status: llm.CostStatusUnknown, UnknownReason: llm.CostUnknownCatalogIncomplete}}, want: "catalog_incomplete"},
+		{name: "stored without reason", plan: settlementPricingPlan(false), response: llm.Response{Usage: usage, Cost: llm.Cost{Status: llm.CostStatusUnknown}}, want: "provider_did_not_report_cost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			priceExecutionResponse(tc.plan, &tc.response)
+			published := publicationCost(tc.response.Cost)
+			if published.Status != "unknown" || published.UnknownReason != tc.want || published.Method != "" {
+				t.Fatalf("published cost = %#v, want unknown %s", published, tc.want)
+			}
+		})
+	}
+
+	priced := llm.Response{Usage: usage, Cost: llm.Cost{UnknownReason: llm.CostUnknownCatalogIncomplete}}
+	priceExecutionResponse(settlementPricingPlan(false), &priced)
+	if priced.Cost.Status != llm.CostStatusKnown || priced.Cost.UnknownReason != "" {
+		t.Fatalf("known cost kept an unknown reason: %#v", priced.Cost)
+	}
+}
+
+func TestPublishedCostMatchesReasonOrPreviousLabel(t *testing.T) {
+	cost := llm.Cost{Status: llm.CostStatusUnknown, UnknownReason: llm.CostUnknownCatalogIncomplete}
+	for _, tc := range []struct {
+		reason string
+		want   bool
+	}{
+		{reason: "catalog_incomplete", want: true},
+		// A worker on the previous release publishes every unknown cost with
+		// this label for the same saved execution.
+		{reason: "provider_did_not_report_cost", want: true},
+		{reason: "state_unavailable", want: false},
+	} {
+		if got := publishedCostMatches(llm.CostV1{Status: "unknown", UnknownReason: tc.reason}, cost); got != tc.want {
+			t.Fatalf("published %s matches = %v, want %v", tc.reason, got, tc.want)
+		}
+	}
+	if publishedCostMatches(llm.CostV1{Status: "unknown", UnknownReason: "catalog_incomplete"}, llm.Cost{Status: llm.CostStatusUnknown}) {
+		t.Fatal("a reasonless cost matched a published catalog_incomplete")
+	}
+}

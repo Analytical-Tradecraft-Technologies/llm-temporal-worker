@@ -2,29 +2,49 @@ package openaichat
 
 import (
 	"encoding/json"
+	"testing"
+
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	openai "github.com/openai/openai-go/v3"
-	"testing"
 )
 
-func TestOpenRouterNativeSearchOnWire(t *testing.T) {
-	profile := wireAuditProfiles(t)[2]
-	profile.model = "openai/gpt-test"
-	profile.profile.ExpectedModel = profile.model
-	request := llm.Request{OperationKey: "search", Model: profile.model, WebSearch: true, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "search"}}}}}
-	wire := captureWireBody(t, profile, request)
-	tools := wire["tools"].([]any)
-	if len(tools) != 1 || tools[0].(map[string]any)["type"] != "openrouter:web_search" {
-		t.Fatalf("tools=%#v", tools)
+func TestOpenRouterServerSearchOnWire(t *testing.T) {
+	for _, model := range []string{"openai/gpt-test", "anthropic/claude-test", "google/gemini-test", "x-ai/grok-test", "deepseek/deepseek-test", "qwen/qwen-test", "z-ai/glm-test", "other/model"} {
+		t.Run(model, func(t *testing.T) {
+			profile := wireAuditProfiles(t)[2]
+			profile.model = model
+			profile.profile.ExpectedModel = model
+			request := llm.Request{OperationKey: "search", Model: model, WebSearch: true, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "search"}}}}}
+			wire := captureWireBody(t, profile, request)
+			tools := wire["tools"].([]any)
+			if len(tools) != 1 || tools[0].(map[string]any)["type"] != "openrouter:web_search" {
+				t.Fatalf("tools=%#v", tools)
+			}
+			parameters := tools[0].(map[string]any)["parameters"].(map[string]any)
+			if parameters["engine"] != "auto" || parameters["max_uses"] != float64(llm.MaxWebSearchCalls) || wire["max_tool_calls"] != float64(llm.MaxWebSearchCalls) {
+				t.Fatalf("server search controls lost: %#v", wire)
+			}
+			request.WebSearch = false
+			request.CodeExecution = true
+			if _, err := lowerRequest(request, profile.profile, ""); err == nil {
+				t.Fatal("unsupported OpenRouter execution accepted")
+			}
+		})
 	}
-	if tools[0].(map[string]any)["parameters"].(map[string]any)["engine"] != "native" || wire["max_tool_calls"] != float64(3) {
-		t.Fatal("native search controls lost")
-	}
-	request.WebSearch = false
-	request.CodeExecution = true
-	if _, err := lowerRequest(request, profile.profile, ""); err == nil {
-		t.Fatal("unsupported OpenRouter execution accepted")
+}
+
+func TestSearchRejectsOtherChatProfiles(t *testing.T) {
+	for _, profile := range wireAuditProfiles(t) {
+		if profile.profile.ExpectedBaseURL == openRouterBaseURL {
+			continue
+		}
+		t.Run(profile.id, func(t *testing.T) {
+			request := llm.Request{OperationKey: "search", Model: profile.model, WebSearch: true}
+			if _, err := lowerRequest(request, profile.profile, ""); err == nil {
+				t.Fatal("server search accepted by a non-OpenRouter profile")
+			}
+		})
 	}
 }
 func TestOpenRouterSearchReportedTotalIncludesTools(t *testing.T) {

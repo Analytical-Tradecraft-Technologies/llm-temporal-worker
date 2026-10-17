@@ -136,14 +136,14 @@ func TestRequestAttemptExpiredQuoteUsesNewBudgetAndFencesOldStart(t *testing.T) 
 	if err != nil || retired.Status != StatusFailed {
 		t.Fatal("old attempt was not fenced", err)
 	}
-	if _, fresh, err := r.BeginProviderExecution(ctx, scope, first.ID, accepted, plan.Reservation.ExpiresAt); err == nil || fresh {
+	if _, fresh, err := r.BeginProviderExecution(ctx, scope, first.ID, accepted, false, plan.Reservation.ExpiresAt); err == nil || fresh {
 		t.Fatal("retired attempt authorized dispatch")
 	}
 	newChild, newPlan, newBudget := saveAttemptPlan(t, r, scope, next, template)
 	if newPlan.Route.OperationID == plan.Route.OperationID {
 		t.Fatal("reused budget operation")
 	}
-	if _, fresh, err := r.BeginProviderExecution(ctx, scope, next.ID, accepted, newPlan.QuotedAt); err == nil || fresh {
+	if _, fresh, err := r.BeginProviderExecution(ctx, scope, next.ID, accepted, false, newPlan.QuotedAt); err == nil || fresh {
 		t.Fatal("accepted old budget for new attempt")
 	}
 	_ = startExecution(t, r, newChild, newPlan, newBudget)
@@ -207,7 +207,7 @@ func TestRequestAttemptUnknownPaidWorkRemainsDiscoverableAfterRootCompletion(t *
 	if !found {
 		t.Fatal("root completion hid unknown paid work")
 	}
-	if _, fresh, err := r.BeginProviderExecution(ctx, scope, first.ID, budget, next.CreatedAt); err != nil || fresh {
+	if _, fresh, err := r.BeginProviderExecution(ctx, scope, first.ID, budget, false, next.CreatedAt); err != nil || fresh {
 		t.Fatal("unknown replay authorized resubmission", err)
 	}
 }
@@ -296,7 +296,7 @@ func TestRequestAttemptRenewalRacesWithStart(t *testing.T) {
 		renew := make(chan result, 1)
 		go func() {
 			<-gate
-			_, fresh, err := r.BeginProviderExecution(ctx, scope, first.ID, accepted, plan.Reservation.ExpiresAt)
+			_, fresh, err := r.BeginProviderExecution(ctx, scope, first.ID, accepted, false, plan.Reservation.ExpiresAt)
 			start <- result{fresh, err}
 		}()
 		go func() {

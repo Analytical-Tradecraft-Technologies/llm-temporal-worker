@@ -100,37 +100,55 @@ func cacheSemanticDigest(request llm.Request, temperature, topP *llm.DecimalV1, 
 	return request, sha256.Sum256(canonical), nil
 }
 
-func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedCloudRequest, lease cache.FillLease) (llm.ExecutionResultV1, bool, error) {
+// prepareCache returns found when the step ends with status. Otherwise the
+// attempt proceeds: as the fill's owner, or uncached when another attempt's
+// started fill has stalled past cache.StalledFillAfter (#1455).
+func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedCloudRequest, lease cache.FillLease) (status llm.ExecutionResultV1, found, uncached bool, err error) {
 	helper, err := durable.NewResponseCache(r.capabilities.Responses, r.capabilities.ResponseFills, r.capabilities.Clock)
 	if err != nil {
-		return llm.ExecutionResultV1{}, false, err
+		return llm.ExecutionResultV1{}, false, false, err
 	}
 	var disposition durable.CacheDisposition
 	var origin *cache.ResponseEntry
+	var stalled bool
 	if p.Generate != nil {
 		decision, lookupErr := helper.PrepareGenerate(ctx, lease, cacheMaximumAge(cloudCachePolicy(p)))
-		err, disposition, origin = lookupErr, decision.Disposition, decision.Entry()
+		err, disposition, origin, stalled = lookupErr, decision.Disposition, decision.Entry(), decision.StalledFill()
 	} else {
 		// Artifact reuse is content/policy based; generation freshness does not
 		// expire an otherwise compatible compaction artifact.
 		decision, lookupErr := helper.PrepareCompact(ctx, lease, nil)
-		err, disposition, origin = lookupErr, decision.Disposition, decision.Entry()
+		err, disposition, origin, stalled = lookupErr, decision.Disposition, decision.Entry(), decision.StalledFill()
 	}
 	if err != nil {
-		return llm.ExecutionResultV1{}, false, responseCacheLookupError(err)
+		return llm.ExecutionResultV1{}, false, false, responseCacheLookupError(err)
 	}
 	switch disposition {
 	case durable.CacheHit:
 		result, err := r.finishCache(ctx, p, *origin)
-		return result, true, err
+		return result, true, false, err
 	case durable.CacheMiss:
-		return llm.ExecutionResultV1{}, false, nil
+		return llm.ExecutionResultV1{}, false, false, nil
 	case durable.CacheWait, durable.CacheRecoveryRequired:
+		if stalled {
+			// The owner request may never finish its fill. Stop waiting and
+			// pay for this attempt's own call, leaving that fill untouched.
+			return llm.ExecutionResultV1{}, false, true, nil
+		}
 		observability.MetricsFromContext(ctx).RecordCache("fill_busy")
-		return cloudStatus(p, llm.ExecutionCacheWait, 5*time.Second), true, nil
+		return cloudStatus(p, llm.ExecutionCacheWait, 5*time.Second), true, false, nil
 	default:
-		return llm.ExecutionResultV1{}, false, executionError(provider.CodeStateCorrupt)
+		return llm.ExecutionResultV1{}, false, false, executionError(provider.CodeStateCorrupt)
 	}
+}
+
+// executionCacheLease is cacheLease for a saved execution: nil when the
+// attempt bypassed a stalled fill and so owns no fill.
+func (r *CloudExecutionRuntime) executionCacheLease(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution) (*cache.FillLease, error) {
+	if saved.Execution.Uncached {
+		return nil, nil
+	}
+	return r.cacheLease(ctx, p, attempt, saved.Plan)
 }
 
 // errCacheFillNotStarted reports a fill start that definitely did not apply
@@ -151,7 +169,7 @@ func (r *CloudExecutionRuntime) releaseRenewedFill(ctx context.Context, lease ca
 }
 
 func (r *CloudExecutionRuntime) finishUnknownFill(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution) error {
-	lease, err := r.cacheLease(ctx, p, attempt, saved.Plan)
+	lease, err := r.executionCacheLease(ctx, p, attempt, saved)
 	if err != nil || lease == nil {
 		return err
 	}
@@ -184,7 +202,7 @@ func (r *CloudExecutionRuntime) finishTerminalFill(ctx context.Context, p Prepar
 	if !saved.Execution.Settled {
 		return executionError(provider.CodeStateCorrupt)
 	}
-	lease, err := r.cacheLease(ctx, p, attempt, saved.Plan)
+	lease, err := r.executionCacheLease(ctx, p, attempt, saved)
 	if err != nil || lease == nil {
 		return err
 	}
@@ -264,7 +282,7 @@ func (r *CloudExecutionRuntime) finishAttempt(ctx context.Context, p PreparedClo
 	if result.Attempt.ID != attempt.ID {
 		return llm.ExecutionResultV1{}, executionError(provider.CodeStateCorrupt)
 	}
-	lease, err := r.cacheLease(ctx, p, attempt, saved.Plan)
+	lease, err := r.executionCacheLease(ctx, p, attempt, saved)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
@@ -278,6 +296,10 @@ func (r *CloudExecutionRuntime) finishAttempt(ctx context.Context, p PreparedClo
 		effects.Budget = *saved.Execution.Settlement
 	}
 	disposition := llm.CacheDispositionV1{Disposition: "disabled", Variant: int32(p.Record.Request.RequestIndex)}
+	if saved.Execution.Uncached {
+		// Caching was requested, but this attempt bypassed a stalled fill.
+		disposition.Disposition = "miss_not_populated"
+	}
 	if lease != nil {
 		effects.Lease = *lease
 		disposition.Disposition = "miss_not_populated"

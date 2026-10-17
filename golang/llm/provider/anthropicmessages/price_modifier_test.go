@@ -49,6 +49,11 @@ func TestLiftKeepsPriceModifiedUsageUnknown(t *testing.T) {
 			if unknown := got.Cost.Status == llm.CostStatusUnknown; unknown != tc.unknown {
 				t.Fatalf("cost = %#v, want unknown %v", got.Cost, tc.unknown)
 			}
+			// The provider reported the usage; the catalog does not model the
+			// multiplier.
+			if tc.unknown && got.Cost.UnknownReason != llm.CostUnknownCatalogIncomplete {
+				t.Fatalf("unknown reason = %q, want catalog_incomplete", got.Cost.UnknownReason)
+			}
 		})
 	}
 }

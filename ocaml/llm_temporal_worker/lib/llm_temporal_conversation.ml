@@ -36,6 +36,7 @@ module Settings = struct
       ?web_fetch
       ?code_execution
       ?compaction_policy
+      ?compaction_settings
       ?temperature
       ?top_p
       ?stop_sequences
@@ -46,7 +47,11 @@ module Settings = struct
       ?reasoning_summary
       ?(extensions = [])
       () =
-    { web_search; web_fetch; code_execution; compaction_policy = Option.map Llm_temporal_compaction_policy.to_json compaction_policy; service_class; service_class_fallbacks; portability; instructions; tools;
+    let compaction_policy = match compaction_settings, compaction_policy with
+      | Some _, Some _ -> invalid_arg "Settings.make: pass at most one of ~compaction_policy and ~compaction_settings"
+      | Some policy, None -> Some (Llm_temporal_compaction_policy.settings_to_json policy)
+      | None, policy -> Option.map Llm_temporal_compaction_policy.to_json policy in
+    { web_search; web_fetch; code_execution; compaction_policy; service_class; service_class_fallbacks; portability; instructions; tools;
       tool_policy; output; temperature; top_p; stop_sequences; seed; reasoning_mode; reasoning_token_budget;
       reasoning_effort; reasoning_summary; extensions }
 
@@ -71,6 +76,7 @@ module Settings = struct
     let set_web_search value (patch : t) = { patch with web_search = Set value }
     let clear_web_search (patch : t) = { patch with web_search = Clear }
     let set_compaction value (patch : t) = { patch with compaction_policy = Set (Llm_temporal_compaction_policy.to_json value) }
+    let set_compaction_settings value (patch : t) = { patch with compaction_policy = Set (Llm_temporal_compaction_policy.settings_to_json value) }
     let set_model value (patch : t) = { patch with model = (Set value : Model_selector.t patch) }
     let clear_model (patch : t) = { patch with model = Clear }
     let set_service_class value (patch : t) = { patch with service_class = (Set value : service_class patch) }

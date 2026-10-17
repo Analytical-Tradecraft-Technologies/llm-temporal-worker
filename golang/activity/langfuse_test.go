@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
@@ -39,6 +40,7 @@ func TestExportLangfuseRetriesOnlyDeliveryFailures(t *testing.T) {
 		{langfuse.ErrExport, "langfuse_export_failed", false},
 		{langfuse.ErrRejected, "langfuse_export_rejected", true},
 		{langfuse.ErrUnavailable, "langfuse_export_unavailable", true},
+		{langfuse.ErrSaturated, "langfuse_export_saturated", false},
 	} {
 		activities := &Activities{V1Runtime: &langfuseRuntimeStub{err: tc.err}}
 		var suite testsuite.WorkflowTestSuite
@@ -75,7 +77,7 @@ func TestExportLangfuseFailureIsVisibleOnMetrics(t *testing.T) {
 	if body := scrape(); !strings.Contains(body, `llmtw_langfuse_export_failures_total{reason="rejected"} 0`) {
 		t.Fatalf("missing zero series:\n%s", body)
 	}
-	for _, exportErr := range []error{nil, langfuse.ErrRejected, langfuse.ErrUnavailable, langfuse.ErrExport} {
+	for _, exportErr := range []error{nil, langfuse.ErrRejected, langfuse.ErrUnavailable, langfuse.ErrSaturated, langfuse.ErrExport} {
 		activities := &Activities{Metrics: metrics, V1Runtime: &langfuseRuntimeStub{err: exportErr}}
 		var suite testsuite.WorkflowTestSuite
 		environment := suite.NewTestActivityEnvironment()
@@ -83,9 +85,24 @@ func TestExportLangfuseFailureIsVisibleOnMetrics(t *testing.T) {
 		_, _ = environment.ExecuteActivity(ExportLangfuseActivityName, rawJSONArgument(t, payload))
 	}
 	body := scrape()
-	for _, reason := range []string{"rejected", "unavailable", "failed"} {
+	for _, reason := range []string{"rejected", "unavailable", "saturated", "failed"} {
 		if want := `llmtw_langfuse_export_failures_total{reason="` + reason + `"} 1`; !strings.Contains(body, want) {
 			t.Fatalf("missing %s:\n%s", want, body)
+		}
+	}
+}
+
+// A saturated export backs off with jitter that grows per attempt and stays
+// within the export workflow's retry window.
+func TestExportLangfuseSaturatedRetryDelay(t *testing.T) {
+	for _, tc := range []struct {
+		attempt  int32
+		min, max time.Duration
+	}{{1, 500 * time.Millisecond, time.Second}, {2, time.Second, 2 * time.Second}, {4, 4 * time.Second, 8 * time.Second}, {9, 4 * time.Second, 8 * time.Second}, {0, 4 * time.Second, 8 * time.Second}} {
+		for i := 0; i < 100; i++ {
+			if delay := saturatedRetryDelay(tc.attempt); delay < tc.min || delay > tc.max {
+				t.Fatalf("attempt %d: delay %v outside [%v, %v]", tc.attempt, delay, tc.min, tc.max)
+			}
 		}
 	}
 }
