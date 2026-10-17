@@ -55,14 +55,19 @@ func (catalog Catalog) ServiceClasses(request llm.Request) ([]llm.ServiceClass, 
 		return nil, err
 	}
 	model, known := catalog.Models[request.Model]
-	classes := make([]llm.ServiceClass, 0, 1+len(request.ServiceClassFallbacks))
-	for _, class := range append([]llm.ServiceClass{requested}, request.ServiceClassFallbacks...) {
+	// Repeats are dropped, so there are at most as many classes as public ones.
+	classes := make([]llm.ServiceClass, 0, 3)
+	add := func(class llm.ServiceClass) {
 		if !catalog.classEnabled(request.Context, class) || (known && !model.offers(class)) {
 			class = llm.ServiceClassStandard
 		}
 		if !containsClass(classes, class) {
 			classes = append(classes, class)
 		}
+	}
+	add(requested)
+	for _, class := range request.ServiceClassFallbacks {
+		add(class)
 	}
 	return classes, nil
 }

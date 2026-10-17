@@ -879,8 +879,9 @@ func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
 }
 
 // Each OpenRouter service tier reserves at the upstream endpoints that can
-// serve it: priority endpoints never raise the standard reservation, and a
-// flex request reserves at flex prices, or standard ones with no flex endpoint.
+// serve it: ultrafast endpoints serve only their own tier, priority endpoints
+// can serve a standard request of an open-weight model, and a flex request
+// reserves at flex prices, or standard ones with no flex endpoint.
 func TestOpenRouterRoutePricesEachTierFromItsEndpoints(t *testing.T) {
 	endpoint := func(tag, prompt string) Endpoint {
 		return Endpoint{Tag: tag, Pricing: Pricing{Prompt: prompt, Completion: prompt}}
@@ -892,9 +893,9 @@ func TestOpenRouterRoutePricesEachTierFromItsEndpoints(t *testing.T) {
 		want      map[string]string
 	}{
 		{name: "tiered", endpoints: []Endpoint{endpoint("azure", "0.000003"), endpoint("openai", "0.0000025"), endpoint("openai/fast", "0.000005"), endpoint("openai/flex", "0.00000125"), endpoint("openai/ultrafast", "0.00001")},
-			want: map[string]string{"flex": "1.25", "default": "3", "priority": "5"}},
+			want: map[string]string{"flex": "1.25", "default": "5", "priority": "5"}},
 		{name: "no flex endpoint", endpoints: []Endpoint{endpoint("anthropic", "0.000004"), endpoint("anthropic/fast", "0.000008")},
-			want: map[string]string{"flex": "4", "default": "4", "priority": "8"}},
+			want: map[string]string{"flex": "8", "default": "8", "priority": "8"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, entries, err := openRouterRoute(source, Model{ID: "vendor/model", ContextLength: 1000, Endpoints: tc.endpoints}, "v", "test")

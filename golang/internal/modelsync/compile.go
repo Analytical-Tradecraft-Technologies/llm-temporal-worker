@@ -321,15 +321,16 @@ func endpointTier(tag string) string {
 }
 
 // tierEndpoints returns the upstream endpoints OpenRouter can serve a request
-// for the service tier from, so the tier's reservation covers only those
+// for the service tier from, so the tier's reservation covers those
 // (https://openrouter.ai/docs/guides/features/service-tiers): a flex request
-// only flex endpoints, or standard routing when there are none; a priority
-// request priority endpoints and then the default pool; any other request the
-// default pool alone.
+// only flex endpoints, or standard routing when there are none; any other
+// request every endpoint except ultrafast ones, which serve only a request
+// for that tier. Priority endpoints stay in the standard pool: an open-weight
+// model's tier endpoints take part in default routing, and the Document does
+// not say which models are open-weight.
 func tierEndpoints(endpoints []Endpoint, providerTier string) []Endpoint {
-	requested := endpointTier(providerTier)
 	selected := make([]Endpoint, 0, len(endpoints))
-	if requested == openRouterFlex {
+	if endpointTier(providerTier) == openRouterFlex {
 		for _, endpoint := range endpoints {
 			if endpointTier(endpoint.Tag) == openRouterFlex {
 				selected = append(selected, endpoint)
@@ -338,16 +339,10 @@ func tierEndpoints(endpoints []Endpoint, providerTier string) []Endpoint {
 		if len(selected) > 0 {
 			return selected
 		}
-		requested = ""
 	}
 	for _, endpoint := range endpoints {
-		switch endpointTier(endpoint.Tag) {
-		case "":
+		if endpointTier(endpoint.Tag) != openRouterUltrafast {
 			selected = append(selected, endpoint)
-		case openRouterPriority:
-			if requested == openRouterPriority {
-				selected = append(selected, endpoint)
-			}
 		}
 	}
 	if len(selected) == 0 {

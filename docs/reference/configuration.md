@@ -1090,10 +1090,11 @@ configurations but is no longer the recommended `priority` mapping.
 OpenRouter reports the tier that served the request, and a `priority` request
 that it serves from a default endpoint is classified and billed as `standard`.
 Model sync reserves each OpenRouter tier at the most expensive upstream
-endpoint that can serve it: `standard` excludes OpenRouter's tier endpoints
-(tags ending in `/fast`, `/priority`, `/ultrafast` or `/flex`), `priority` adds
-the priority endpoints, and `flex` uses the flex endpoints, or the `standard`
-pool when there are none.
+endpoint that can serve it. `standard` and `priority` reserve over every
+endpoint except `/ultrafast` ones, which serve only that opt-in tier; priority
+endpoints stay in the `standard` pool because an open-weight model's tier
+endpoints take part in default routing. `flex` uses the endpoints tagged
+`/flex`, or the `standard` pool when there are none.
 
 A request without `service_class` becomes `standard`. There is no configurable
 provider default. A requested class (or explicit fallback) is served at
