@@ -90,7 +90,12 @@ and warns when a new dependency has an OpenSSF Scorecard below 5. A separate
 scheduled workflow runs `make security-verify` against current `master` and
 enforces the full exception inventory. Routine master builds do not run either
 PR comparison or the scheduled scan; guarded release preflight retains the full
-gate.
+gate. The preflight also scans the release tag commit, on the Go toolchain the
+tag pins, and evaluates that output with `supplychainverify -release-tag`. That
+mode applies the same per-finding exception rules against this baseline, but
+does not require every exception to be used, because an older tag can lack a
+finding that the current baseline covers. See the
+[release runbook](../release/runbook.md#guarded-manual-publication-boundary).
 
 The race job captures Go test output before publishing it and runs the bounded
 test-output scanner against that file. It rejects project-specific provider
