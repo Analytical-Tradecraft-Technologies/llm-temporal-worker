@@ -69,9 +69,9 @@ type Endpoint struct {
 	Pricing             Pricing `json:"pricing"`
 }
 
-// Pricing holds OpenRouter's per-token (and per-request) USD decimal strings
-// exactly as published. An empty string means OpenRouter did not list the
-// component.
+// Pricing holds OpenRouter's per-token (and per-request) USD decimal strings.
+// Scheduled prices are collapsed to a conservative all-window envelope; other
+// prices retain their published spelling. An empty string is unlisted.
 type Pricing struct {
 	Prompt            string            `json:"prompt"`
 	Completion        string            `json:"completion"`
@@ -182,10 +182,13 @@ func (prices Pricing) validate() error {
 	if prices.Prompt == "" || prices.Completion == "" {
 		return fmt.Errorf("prompt and completion prices are required")
 	}
-	for _, value := range []string{prices.Prompt, prices.Completion, prices.InputCacheRead, prices.InputCacheWrite, prices.InputCacheWrite1h, prices.Request} {
+	for _, value := range []string{prices.Prompt, prices.Completion, prices.InputCacheRead, prices.InputCacheWrite, prices.InputCacheWrite1h} {
 		if err := validatePrice(value); err != nil {
 			return err
 		}
+	}
+	if err := validateRequestPrice(prices.Request); err != nil {
+		return err
 	}
 	if len(prices.Overrides) > MaxOverrides {
 		return fmt.Errorf("more than %d price overrides", MaxOverrides)
@@ -213,6 +216,14 @@ func validatePrice(value string) error {
 		return nil
 	}
 	_, err := perMillion(value)
+	return err
+}
+
+func validateRequestPrice(value string) error {
+	if value == "" {
+		return nil
+	}
+	_, err := pricing.ParseDecimalUSD(value)
 	return err
 }
 
@@ -273,12 +284,19 @@ func Digest(encoded []byte) string {
 // perMillion converts OpenRouter's per-token USD decimal to the exact
 // per-million decimal the price catalog uses, by moving the decimal point.
 func perMillion(perToken string) (pricing.DecimalUSD, error) {
-	parsed, err := pricing.ParseDecimalUSD(perToken)
-	if err != nil {
-		return pricing.DecimalUSD{}, err
+	// Per-token prices can need more than 18 fractional digits while their
+	// per-million representation still fits NUMERIC(38,18). Validate syntax
+	// here, then enforce the catalog's precision after the exact scale shift.
+	whole, fraction, dotted := strings.Cut(perToken, ".")
+	if whole == "" || (dotted && fraction == "") {
+		return pricing.DecimalUSD{}, fmt.Errorf("price must be a non-negative plain decimal")
 	}
-	canonical := parsed.CanonicalString()
-	whole, fraction, _ := strings.Cut(canonical, ".")
+	for _, digit := range whole + fraction {
+		if digit < '0' || digit > '9' {
+			return pricing.DecimalUSD{}, fmt.Errorf("price must be a non-negative plain decimal")
+		}
+	}
+	fraction = strings.TrimRight(fraction, "0")
 	for len(fraction) < 6 {
 		fraction += "0"
 	}
