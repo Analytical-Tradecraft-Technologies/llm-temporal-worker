@@ -48,6 +48,25 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 	}
 }
 
+func TestDockerfileStatesTheOpenRouterUpstreamPolicy(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := string(data)
+	for _, want := range []string{
+		"ARG OPENROUTER_COUNTRIES=Core5",
+		"ENV LLMTW_OPENROUTER_COUNTRIES=\"${OPENROUTER_COUNTRIES}\"",
+		"LLMTW_OPENROUTER_REQUIRE_NATIVE_PRECISION=false",
+		"LLMTW_OPENROUTER_REQUIRE_ZERO_RETENTION=false",
+		"LLMTW_OPENROUTER_DENY_PROMPT_TRAINING=false",
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Errorf("Dockerfile does not set %q", want)
+		}
+	}
+}
+
 func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
 	dockerfileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
 	if err != nil {

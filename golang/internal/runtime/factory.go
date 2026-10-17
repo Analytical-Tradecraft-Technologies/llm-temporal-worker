@@ -1225,7 +1225,8 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 		}
 		return adapter, nil
 	case "openai_chat":
-		chatProfile, err := factory.chatProfile(endpointID, endpoint, capabilities, profile, value.ModelSync != nil && value.ModelSync.OpenRouter.Endpoint == endpointID)
+		chatProfile, err := factory.chatProfile(endpointID, endpoint, capabilities, profile, value.ModelSync != nil && value.ModelSync.OpenRouter.Endpoint == endpointID,
+			openRouterUpstreams(syncRuntime), value.OpenRouterUpstreamSettings())
 		if err != nil {
 			return nil, err
 		}
@@ -1437,7 +1438,18 @@ func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
 
 var allProviderFeatures = []provider.Feature{provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall, provider.FeatureStructuredOutput, provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage}
 
-func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile, selectUpstream bool) (*openaichat.Profile, error) {
+// openRouterUpstreams is the allowed-endpoint table of a configuration's
+// model sync. Without model sync no endpoint has been checked against the
+// upstream policy, so the table allows nothing.
+func openRouterUpstreams(syncRuntime *modelSyncRuntime) openaichat.OpenRouterUpstreams {
+	if syncRuntime == nil {
+		return &openRouterUpstreamTable{}
+	}
+	return syncRuntime.upstreams
+}
+
+func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile, selectUpstream bool,
+	upstreams openaichat.OpenRouterUpstreams, upstream config.OpenRouterUpstreamConfig) (*openaichat.Profile, error) {
 	if supplied.Chat != nil {
 		copy := *supplied.Chat
 		if supplied.ChatDialect == "" || supplied.ChatDialect == ChatDialectGeneric {
@@ -1466,8 +1478,10 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 			}
 		}
 		// The model_sync OpenRouter endpoint lets OpenRouter select the
-		// upstream; model sync reserves at the most expensive upstream price.
-		value, err := openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ProviderOrder: order, SelectUpstream: selectUpstream, AllowFallbacks: false, RequireParameters: true})
+		// upstream among the allowed endpoints; model sync reserves at the
+		// most expensive allowed upstream price.
+		value, err := openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ProviderOrder: order, SelectUpstream: selectUpstream, AllowFallbacks: false, RequireParameters: true,
+			Upstreams: upstreams, ZeroRetention: upstream.RequireZeroRetention, DenyPromptTraining: upstream.DenyPromptTraining})
 		if err != nil {
 			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
 		}

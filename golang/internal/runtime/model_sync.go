@@ -18,6 +18,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openaichat"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
@@ -35,6 +36,10 @@ type modelSyncRuntime struct {
 	openrouter modelsync.Source
 	direct     []modelsync.Source
 	reserved   map[string]struct{}
+	policy     modelsync.UpstreamPolicy
+	// upstreams are the allowed OpenRouter endpoints of the installed
+	// Document, read by the OpenRouter adapter for every request.
+	upstreams *openRouterUpstreamTable
 	// enabled holds the sync endpoints whose adapter was built; an optional
 	// endpoint without its credential is absent and never routed to.
 	enabled map[string]struct{}
@@ -59,7 +64,11 @@ func newModelSyncRuntime(value config.Config, loaded loadedCatalogs, options cat
 	if err != nil {
 		return nil, fmt.Errorf("model_sync built-in rules: %w", err)
 	}
-	documents = append(documents, builtIn)
+	precision, err := modelsync.ParseRules(modelsync.NativePrecisionRulesDocument())
+	if err != nil {
+		return nil, fmt.Errorf("model_sync built-in native precision rules: %w", err)
+	}
+	documents = append(documents, builtIn, precision)
 	for index, ref := range settings.Rules {
 		data, err := catalog.ReadVerified(ref, options)
 		if err != nil {
@@ -75,7 +84,13 @@ func newModelSyncRuntime(value config.Config, loaded loadedCatalogs, options cat
 	if err != nil {
 		return nil, fmt.Errorf("model_sync rules: %w", err)
 	}
-	runtime := &modelSyncRuntime{base: loaded.snapshot, basePrices: loaded.prices, rules: rules, reserved: make(map[string]struct{}, len(value.Models))}
+	upstream := value.OpenRouterUpstreamSettings()
+	policy, err := modelsync.NewUpstreamPolicy(upstream.Countries, upstream.RequireNativePrecision, upstream.RequireZeroRetention, upstream.DenyPromptTraining)
+	if err != nil {
+		return nil, fmt.Errorf("openrouter_upstream: %w", err)
+	}
+	runtime := &modelSyncRuntime{base: loaded.snapshot, basePrices: loaded.prices, rules: rules, reserved: make(map[string]struct{}, len(value.Models)),
+		policy: policy, upstreams: &openRouterUpstreamTable{}}
 	for name := range value.Models {
 		runtime.reserved[name] = struct{}{}
 	}
@@ -175,7 +190,7 @@ func (syncer *modelSyncRuntime) Current(ctx context.Context) (engine.Snapshot, e
 
 // install compiles one Document over the base snapshot and publishes it.
 func (syncer *modelSyncRuntime) install(document *modelsync.Document) error {
-	input := modelsync.Input{Document: document, Rules: syncer.rules, Reserved: syncer.reserved}
+	input := modelsync.Input{Document: document, Rules: syncer.rules, Reserved: syncer.reserved, Policy: syncer.policy}
 	if _, ok := syncer.enabled[syncer.openrouter.EndpointID]; ok {
 		source := syncer.openrouter
 		input.OpenRouter = &source
@@ -231,8 +246,39 @@ func (syncer *modelSyncRuntime) install(document *modelsync.Document) error {
 	next := syncer.base
 	next.Routes = routes
 	next.Prices = pricing.NewResolver(prices)
+	// Publish the allowed endpoints before the routes that use them, so a
+	// newly routable model is never refused for want of its endpoints.
+	syncer.upstreams.store(compiled.Upstreams)
 	syncer.current.Store(&next)
 	return nil
+}
+
+// openRouterUpstreamTable is the allowed-endpoint table of the installed
+// Document. Before any Document is installed it allows nothing, so no
+// OpenRouter request is sent to an endpoint the policy has not checked.
+type openRouterUpstreamTable struct {
+	current atomic.Pointer[map[string]modelsync.Upstream]
+}
+
+var _ openaichat.OpenRouterUpstreams = (*openRouterUpstreamTable)(nil)
+
+func (table *openRouterUpstreamTable) store(upstreams map[string]modelsync.Upstream) {
+	table.current.Store(&upstreams)
+}
+
+func (table *openRouterUpstreamTable) OpenRouterUpstream(model string) (openaichat.OpenRouterUpstream, bool) {
+	if table == nil {
+		return openaichat.OpenRouterUpstream{}, false
+	}
+	current := table.current.Load()
+	if current == nil {
+		return openaichat.OpenRouterUpstream{}, false
+	}
+	upstream, ok := (*current)[model]
+	if !ok {
+		return openaichat.OpenRouterUpstream{}, false
+	}
+	return openaichat.OpenRouterUpstream{Tags: append([]string(nil), upstream.Tags...), Quantizations: append([]string(nil), upstream.Quantizations...)}, true
 }
 
 func priceIdentity(entry pricing.Entry) string {

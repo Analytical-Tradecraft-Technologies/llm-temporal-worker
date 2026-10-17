@@ -54,6 +54,30 @@ func NewOpenRouterClient(config OpenRouterClientConfig) (*Client, error) {
 	return &Client{sdk: openai.NewClient(options...), baseURL: baseURL}, nil
 }
 
+// OpenRouterUpstream is the set of upstream endpoints OpenRouter may serve
+// one model from.
+type OpenRouterUpstream struct {
+	// Tags are OpenRouter endpoint tags, for example "deepinfra/fp8".
+	Tags []string
+	// Quantizations, when set, are the only quantizations OpenRouter may
+	// serve the model at.
+	Quantizations []string
+}
+
+// OpenRouterUpstreams reports the upstream endpoints a model may be sent to.
+// A model it does not know is never sent to OpenRouter.
+type OpenRouterUpstreams interface {
+	OpenRouterUpstream(model string) (OpenRouterUpstream, bool)
+}
+
+// StaticOpenRouterUpstreams is a fixed OpenRouterUpstreams keyed by model.
+type StaticOpenRouterUpstreams map[string]OpenRouterUpstream
+
+func (upstreams StaticOpenRouterUpstreams) OpenRouterUpstream(model string) (OpenRouterUpstream, bool) {
+	upstream, ok := upstreams[model]
+	return upstream, ok
+}
+
 type OpenRouterProfileConfig struct {
 	ID                        string
 	CapabilityVersion         string
@@ -71,6 +95,69 @@ type OpenRouterProfileConfig struct {
 	AllowFallbacks    bool
 	RequireParameters bool
 	AllowedExtensions map[string]ExtensionSpec
+	// Upstreams names the endpoints each model may be sent to. Every request
+	// restricts OpenRouter to them; a model with none is refused.
+	Upstreams OpenRouterUpstreams
+	// ZeroRetention restricts OpenRouter to endpoints that retain no prompts
+	// or completions.
+	ZeroRetention bool
+	// DenyPromptTraining restricts OpenRouter to providers that do not
+	// collect prompts for training.
+	DenyPromptTraining bool
+}
+
+// openRouterRouting builds the provider routing object of each request.
+type openRouterRouting struct {
+	upstreams          OpenRouterUpstreams
+	order              []string
+	selectUpstream     bool
+	zeroRetention      bool
+	denyPromptTraining bool
+}
+
+// providerField returns the provider object for one request. It always names
+// the allowed endpoints in only. When OpenRouter selects the upstream, it
+// sorts them by price, or by throughput for the priority class; a pinned
+// provider order keeps that order and never falls back outside it.
+func (routing openRouterRouting) providerField(model string, class llm.ServiceClass) (json.RawMessage, error) {
+	upstream, ok := routing.upstreams.OpenRouterUpstream(model)
+	if !ok || len(upstream.Tags) == 0 {
+		return nil, fmt.Errorf("model %q has no allowed OpenRouter upstream endpoint", model)
+	}
+	field := map[string]any{"require_parameters": true}
+	if routing.selectUpstream {
+		field["only"] = append([]string(nil), upstream.Tags...)
+		field["sort"] = "price"
+		if class == llm.ServiceClassPriority {
+			field["sort"] = "throughput"
+		}
+	} else {
+		only := make([]string, 0, len(upstream.Tags))
+		for _, tag := range upstream.Tags {
+			for _, name := range routing.order {
+				if tag == name || strings.HasPrefix(tag, name+"/") {
+					only = append(only, tag)
+					break
+				}
+			}
+		}
+		if len(only) == 0 {
+			return nil, fmt.Errorf("model %q has no allowed OpenRouter upstream endpoint in the provider order", model)
+		}
+		field["order"] = append([]string(nil), routing.order...)
+		field["only"] = only
+		field["allow_fallbacks"] = false
+	}
+	if len(upstream.Quantizations) > 0 {
+		field["quantizations"] = append([]string(nil), upstream.Quantizations...)
+	}
+	if routing.zeroRetention {
+		field["zdr"] = true
+	}
+	if routing.denyPromptTraining {
+		field["data_collection"] = "deny"
+	}
+	return json.Marshal(field)
 }
 
 func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
@@ -81,8 +168,16 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 	if baseURL != openRouterBaseURL {
 		return Profile{}, fmt.Errorf("openrouter chat profile: base URL must be exactly %q", openRouterBaseURL)
 	}
+	if config.Upstreams == nil {
+		return Profile{}, fmt.Errorf("openrouter chat profile: upstreams are required")
+	}
+	if !config.RequireParameters {
+		return Profile{}, fmt.Errorf("openrouter chat profile: require_parameters must be true")
+	}
+	routing := openRouterRouting{upstreams: config.Upstreams, selectUpstream: config.SelectUpstream,
+		zeroRetention: config.ZeroRetention, denyPromptTraining: config.DenyPromptTraining}
 	if config.SelectUpstream {
-		return newOpenRouterUpstreamProfile(config, baseURL)
+		return newOpenRouterUpstreamProfile(config, baseURL, routing)
 	}
 	if len(config.ProviderOrder) == 0 {
 		return Profile{}, fmt.Errorf("openrouter chat profile: provider order is required")
@@ -103,18 +198,7 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 	if config.AllowFallbacks {
 		return Profile{}, fmt.Errorf("openrouter chat profile: allow_fallbacks must be false")
 	}
-	if !config.RequireParameters {
-		return Profile{}, fmt.Errorf("openrouter chat profile: require_parameters must be true")
-	}
-	providerField := map[string]any{
-		"order":              order,
-		"allow_fallbacks":    false,
-		"require_parameters": true,
-	}
-	providerRaw, err := json.Marshal(providerField)
-	if err != nil {
-		return Profile{}, fmt.Errorf("openrouter chat profile: provider defaults: %w", err)
-	}
+	routing.order = order
 	allowed := cloneExtensions(config.AllowedExtensions)
 	if allowed == nil {
 		allowed = map[string]ExtensionSpec{}
@@ -126,7 +210,7 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 			"require_parameters": "provider",
 		}}
 	}
-	return NewProfile(Profile{
+	profile, err := NewProfile(Profile{
 		// The developer role is not accepted by every API version or
 		// compatible server; system is.
 		ApplicationInstructionRole: "system",
@@ -139,33 +223,29 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 		AllowedExtensions:          allowed,
 		ExpectedBaseURL:            baseURL,
 		ExpectedModel:              config.Model,
-		WireDefaults: map[string]json.RawMessage{
-			"provider": providerRaw,
-		},
-		ReservedWireFields: map[string]struct{}{"provider": {}},
-		ResponseAugment:    augmentOpenRouter,
-		ResponseError:      openRouterResponseError,
+		ReservedWireFields:         map[string]struct{}{"provider": {}},
+		ResponseAugment:            augmentOpenRouter,
+		ResponseError:              openRouterResponseError,
 	})
+	if err != nil {
+		return Profile{}, err
+	}
+	profile.providerField = routing.providerField
+	return profile, nil
 }
 
 // newOpenRouterUpstreamProfile builds the profile for an endpoint on which
-// OpenRouter selects the upstream provider. Only require_parameters is sent,
-// so OpenRouter never routes to an upstream that would drop a request field.
-// Callers cannot steer the upstream through the openrouter extension.
-func newOpenRouterUpstreamProfile(config OpenRouterProfileConfig, baseURL string) (Profile, error) {
+// OpenRouter selects the upstream provider among the allowed endpoints.
+// require_parameters keeps OpenRouter from routing to an upstream that would
+// drop a request field. Callers cannot steer the upstream through the
+// openrouter extension.
+func newOpenRouterUpstreamProfile(config OpenRouterProfileConfig, baseURL string, routing openRouterRouting) (Profile, error) {
 	if len(config.ProviderOrder) != 0 {
 		return Profile{}, fmt.Errorf("openrouter chat profile: provider order must be empty when OpenRouter selects the upstream")
 	}
-	if !config.RequireParameters {
-		return Profile{}, fmt.Errorf("openrouter chat profile: require_parameters must be true")
-	}
-	providerRaw, err := json.Marshal(map[string]any{"require_parameters": true})
-	if err != nil {
-		return Profile{}, fmt.Errorf("openrouter chat profile: provider defaults: %w", err)
-	}
 	allowed := cloneExtensions(config.AllowedExtensions)
 	delete(allowed, "openrouter")
-	return NewProfile(Profile{
+	profile, err := NewProfile(Profile{
 		ApplicationInstructionRole: "system",
 		ID:                         config.ID,
 		CapabilityVersion:          config.CapabilityVersion,
@@ -176,11 +256,15 @@ func newOpenRouterUpstreamProfile(config OpenRouterProfileConfig, baseURL string
 		AllowedExtensions:          allowed,
 		ExpectedBaseURL:            baseURL,
 		ExpectedModel:              config.Model,
-		WireDefaults:               map[string]json.RawMessage{"provider": providerRaw},
 		ReservedWireFields:         map[string]struct{}{"provider": {}},
 		ResponseAugment:            augmentOpenRouter,
 		ResponseError:              openRouterResponseError,
 	})
+	if err != nil {
+		return Profile{}, err
+	}
+	profile.providerField = routing.providerField
+	return profile, nil
 }
 
 func NewOpenRouterAdapter(client *Client, endpointID string, config OpenRouterProfileConfig) (*Adapter, error) {

@@ -79,6 +79,17 @@ ENV LLMTW_BUILD_VERSION="${VERSION}" \
     LLMTW_BUILD_SOURCE="${SOURCE}" \
     LLMTW_BUILD_GO_VERSION="${GO_VERSION}"
 
+# OpenRouter upstream policy. Every OpenRouter request names the endpoints it
+# may be served by: providers whose headquarters and every listed datacenter
+# are in the country list (US, EU, Core1, Core2, Core3, Core4 or Core5), and,
+# when enabled, only native-precision, zero-retention or no-prompt-training
+# endpoints. Override any of these when running the container.
+ARG OPENROUTER_COUNTRIES=Core5
+ENV LLMTW_OPENROUTER_COUNTRIES="${OPENROUTER_COUNTRIES}" \
+    LLMTW_OPENROUTER_REQUIRE_NATIVE_PRECISION=false \
+    LLMTW_OPENROUTER_REQUIRE_ZERO_RETENTION=false \
+    LLMTW_OPENROUTER_DENY_PROMPT_TRAINING=false
+
 COPY --from=build /out/llm-temporal-worker /usr/local/bin/llm-temporal-worker
 
 USER 65532:65532

@@ -22,7 +22,7 @@ func TestEndpointProfilesRejectExtensionNamespacesSharingAWireField(t *testing.T
 
 	chat := func(extensions map[string]map[string]any) error {
 		endpoint := config.EndpointConfig{Family: "openai_chat", BaseURL: "https://chat.example.test/v1", ServiceClasses: classes, Extensions: extensions}
-		_, err := factory.chatProfile("chat", endpoint, completeCapabilities(provider.CapabilitySet{Version: "cap-v1"}), EndpointProfile{}, false)
+		_, err := factory.chatProfile("chat", endpoint, completeCapabilities(provider.CapabilitySet{Version: "cap-v1"}), EndpointProfile{}, false, openRouterUpstreams(nil), config.OpenRouterUpstreamConfig{})
 		return err
 	}
 	anthropic := func(extensions map[string]map[string]any) error {

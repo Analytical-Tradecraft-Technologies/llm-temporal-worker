@@ -73,7 +73,11 @@ func TestChatContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			params, err := lowerRequest(normalized, profile.profile, tier)
+			lowering, err := profile.profile.forRequest(normalized.Model, serviceClass)
+			if err != nil {
+				t.Fatal(err)
+			}
+			params, err := lowerRequest(normalized, lowering, tier)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -334,6 +338,7 @@ func chatFixtureProfiles(t *testing.T) []chatFixtureProfile {
 		MissingActualServiceClass: llm.ServiceClassStandard,
 		ProviderOrder:             []string{"fixture-provider"},
 		RequireParameters:         true,
+		Upstreams:                 allModelsUpstreams{"fixture-provider"},
 	})
 	if err != nil {
 		t.Fatal(err)

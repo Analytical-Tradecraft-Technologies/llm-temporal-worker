@@ -81,6 +81,9 @@ type Profile struct {
 	ResponseError             func(call provider.Call, response *openai.ChatCompletion, requestID string) *provider.Error
 	StructuredOutputTransform string
 	directOpenAI              bool
+	// providerField, when set, builds the reserved provider wire field of
+	// each request from its model and service class.
+	providerField func(model string, class llm.ServiceClass) (json.RawMessage, error)
 }
 
 // NewOpenAIProfile verifies and marks a profile for the direct OpenAI API.
@@ -118,6 +121,25 @@ func NewProfile(profile Profile) (Profile, error) {
 		copy.ReservedWireFields[wire] = struct{}{}
 	}
 	return copy, nil
+}
+
+// forRequest returns the profile one request lowers with: the profile itself,
+// or a copy carrying the request's provider wire field.
+func (profile Profile) forRequest(model string, class llm.ServiceClass) (Profile, error) {
+	if profile.providerField == nil {
+		return profile, nil
+	}
+	field, err := profile.providerField(model, class)
+	if err != nil {
+		return Profile{}, err
+	}
+	defaults := cloneRawMessages(profile.WireDefaults)
+	if defaults == nil {
+		defaults = map[string]json.RawMessage{}
+	}
+	defaults["provider"] = field
+	profile.WireDefaults = defaults
+	return profile, nil
 }
 
 func (profile Profile) applicationInstructionRole() string {

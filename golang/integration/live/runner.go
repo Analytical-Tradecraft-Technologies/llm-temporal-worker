@@ -99,6 +99,7 @@ func chatProfileFor(liveProfile Profile) (openaichat.Profile, error) {
 			ProviderOrder:     []string{"openai"},
 			AllowFallbacks:    false,
 			RequireParameters: true,
+			Upstreams:         liveOpenRouterUpstreams{},
 		})
 	case "exa-chat":
 		return openaichat.NewExaProfile(openaichat.ExaProfileConfig{
@@ -485,7 +486,16 @@ func openRouterProfileConfig(profile Profile) openaichat.OpenRouterProfileConfig
 		ProviderOrder:     []string{"openai"},
 		AllowFallbacks:    false,
 		RequireParameters: true,
+		Upstreams:         liveOpenRouterUpstreams{},
 	}
+}
+
+// liveOpenRouterUpstreams allows the first-party OpenAI endpoint for every
+// live OpenRouter model, matching the pinned provider order.
+type liveOpenRouterUpstreams struct{}
+
+func (liveOpenRouterUpstreams) OpenRouterUpstream(string) (openaichat.OpenRouterUpstream, bool) {
+	return openaichat.OpenRouterUpstream{Tags: []string{"openai"}}, true
 }
 
 func exaProfileConfig(profile Profile) openaichat.ExaProfileConfig {

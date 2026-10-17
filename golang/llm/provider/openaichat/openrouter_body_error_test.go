@@ -29,6 +29,7 @@ func invokeOpenRouterWithBody(t *testing.T, body string) error {
 		MissingActualServiceClass: llm.ServiceClassStandard,
 		ProviderOrder:             []string{"ProviderA"},
 		RequireParameters:         true,
+		Upstreams:                 allModelsUpstreams{"ProviderA"},
 	})
 	if err != nil {
 		t.Fatal(err)

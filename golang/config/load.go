@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -218,6 +219,9 @@ func applyEnvironmentOverrides(config *Config) error {
 	if value, ok := os.LookupEnv("TEMPORAL_NAMESPACE"); ok {
 		config.Temporal.Namespace = value
 	}
+	if err := applyOpenRouterUpstreamEnvironment(config); err != nil {
+		return err
+	}
 	name, hasName := os.LookupEnv("TEMPORAL_DEPLOYMENT_NAME")
 	build, hasBuild := os.LookupEnv("TEMPORAL_WORKER_BUILD_ID")
 	if hasName != hasBuild {
@@ -225,6 +229,54 @@ func applyEnvironmentOverrides(config *Config) error {
 	}
 	if hasName {
 		config.Temporal.Worker.Versioning = WorkerVersioningConfig{Enabled: true, DeploymentName: name, BuildID: build}
+	}
+	return nil
+}
+
+// OpenRouter upstream environment variables. The image sets all four, so a
+// container always states its upstream policy.
+const (
+	EnvOpenRouterCountries              = "LLMTW_OPENROUTER_COUNTRIES"
+	EnvOpenRouterRequireNativePrecision = "LLMTW_OPENROUTER_REQUIRE_NATIVE_PRECISION"
+	EnvOpenRouterRequireZeroRetention   = "LLMTW_OPENROUTER_REQUIRE_ZERO_RETENTION"
+	EnvOpenRouterDenyPromptTraining     = "LLMTW_OPENROUTER_DENY_PROMPT_TRAINING"
+)
+
+// applyOpenRouterUpstreamEnvironment overrides the openrouter_upstream
+// settings from the environment. A present variable must be set: a country
+// list must not be empty and a boolean must parse.
+func applyOpenRouterUpstreamEnvironment(config *Config) error {
+	countries, hasCountries := os.LookupEnv(EnvOpenRouterCountries)
+	flags := []struct {
+		name   string
+		target func(*OpenRouterUpstreamConfig) *bool
+	}{
+		{EnvOpenRouterRequireNativePrecision, func(value *OpenRouterUpstreamConfig) *bool { return &value.RequireNativePrecision }},
+		{EnvOpenRouterRequireZeroRetention, func(value *OpenRouterUpstreamConfig) *bool { return &value.RequireZeroRetention }},
+		{EnvOpenRouterDenyPromptTraining, func(value *OpenRouterUpstreamConfig) *bool { return &value.DenyPromptTraining }},
+	}
+	ensure := func() *OpenRouterUpstreamConfig {
+		if config.OpenRouterUpstream == nil {
+			config.OpenRouterUpstream = &OpenRouterUpstreamConfig{}
+		}
+		return config.OpenRouterUpstream
+	}
+	if hasCountries {
+		if countries == "" {
+			return fmt.Errorf("%s must not be empty", EnvOpenRouterCountries)
+		}
+		ensure().Countries = countries
+	}
+	for _, flag := range flags {
+		raw, present := os.LookupEnv(flag.name)
+		if !present {
+			continue
+		}
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("%s must be true or false", flag.name)
+		}
+		*flag.target(ensure()) = value
 	}
 	return nil
 }

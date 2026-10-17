@@ -20,8 +20,15 @@ const RulesVersion = "model-sync-rules/v1"
 //go:embed rules/default.yaml
 var defaultRules []byte
 
+//go:embed rules/native_precision.yaml
+var nativePrecisionRules []byte
+
 // DefaultRulesDocument returns the built-in rules file shipped in the binary.
 func DefaultRulesDocument() []byte { return append([]byte(nil), defaultRules...) }
+
+// NativePrecisionRulesDocument returns the built-in, hand-maintained native
+// precision rules, layered after DefaultRulesDocument.
+func NativePrecisionRulesDocument() []byte { return append([]byte(nil), nativePrecisionRules...) }
 
 // Model ID transforms from the OpenRouter name (after the provider prefix) to
 // the provider's own model ID.
@@ -37,6 +44,11 @@ type RulesDocument struct {
 	// routable, on OpenRouter or directly.
 	Exclude   []string                 `yaml:"exclude"`
 	Providers map[string]ProviderRules `yaml:"providers"`
+	// NativePrecision maps path.Match patterns of OpenRouter IDs to the
+	// quantizations, as OpenRouter names them, that serve the model at the
+	// precision its weights were released in (or a lossless widening of it).
+	// When several patterns match, the longest wins.
+	NativePrecision map[string][]string `yaml:"native_precision,omitempty"`
 }
 
 // ProviderRules declares one provider's direct models. Every direct model is
@@ -103,8 +115,9 @@ type LongPromptTierPrices struct {
 
 // Rules is the merged, validated rule set.
 type Rules struct {
-	Exclude   []string
-	Providers map[string]ProviderRules
+	Exclude         []string
+	Providers       map[string]ProviderRules
+	NativePrecision map[string][]string
 	// Digest identifies the merged rule set; it versions extra-model prices.
 	Digest string
 }
@@ -137,6 +150,7 @@ func MergeRules(documents ...RulesDocument) (Rules, error) {
 		}
 		digest.Write(encoded)
 		merged.Exclude = append(merged.Exclude, document.Exclude...)
+		merged.NativePrecision = mergeMap(merged.NativePrecision, document.NativePrecision)
 		names := make([]string, 0, len(document.Providers))
 		for name := range document.Providers {
 			names = append(names, name)
@@ -214,6 +228,19 @@ func (rules Rules) validate() error {
 	for _, pattern := range rules.Exclude {
 		if _, err := path.Match(pattern, ""); err != nil || pattern == "" {
 			return fmt.Errorf("model-sync rules exclude pattern %q is invalid", pattern)
+		}
+	}
+	for pattern, quantizations := range rules.NativePrecision {
+		if _, err := path.Match(pattern, ""); err != nil || validateIdentifier(pattern) != nil {
+			return fmt.Errorf("model-sync rules native_precision pattern %q is invalid", pattern)
+		}
+		if len(quantizations) == 0 {
+			return fmt.Errorf("model-sync rules native_precision %q lists no quantizations", pattern)
+		}
+		for _, quantization := range quantizations {
+			if validateIdentifier(quantization) != nil || quantization != strings.ToLower(quantization) || quantization == "unknown" {
+				return fmt.Errorf("model-sync rules native_precision %q quantization %q is invalid", pattern, quantization)
+			}
 		}
 	}
 	prefixes := map[string]string{}
@@ -303,6 +330,27 @@ func (prices TierPrices) longPrompt() (*pricing.LongPromptPrices, error) {
 		return nil, fmt.Errorf("long_prompt %w", err)
 	}
 	return &pricing.LongPromptPrices{MinPromptTokens: long.MinPromptTokens, Prices: unit}, nil
+}
+
+// NativeQuantizations returns the quantizations that serve OpenRouter ID id
+// at its native precision, from the longest matching pattern; false when no
+// pattern matches. Equal-length matches resolve to the lexically first
+// pattern so the result never depends on map order.
+func (rules Rules) NativeQuantizations(id string) ([]string, bool) {
+	best := ""
+	found := false
+	for pattern := range rules.NativePrecision {
+		if matched, _ := path.Match(pattern, id); !matched {
+			continue
+		}
+		if !found || len(pattern) > len(best) || (len(pattern) == len(best) && pattern < best) {
+			best, found = pattern, true
+		}
+	}
+	if !found {
+		return nil, false
+	}
+	return append([]string(nil), rules.NativePrecision[best]...), true
 }
 
 // Excluded reports whether an OpenRouter ID is excluded from routing.

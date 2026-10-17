@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 	"io"
 	"math/big"
 	"net"
@@ -276,7 +277,11 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "tier-test/v1"}, ProviderFeatures: features}}},
 	}}}
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: family.endpoint}}
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
+	// Model sync's allowed-endpoint table admits the pinned OpenRouter
+	// provider; no other family reads it.
+	syncRuntime := &modelSyncRuntime{upstreams: &openRouterUpstreamTable{}}
+	syncRuntime.upstreams.store(map[string]modelsync.Upstream{family.model: {Tags: []string{"ProviderA"}}})
+	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, syncRuntime)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}

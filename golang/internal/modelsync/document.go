@@ -27,7 +27,7 @@ import (
 
 // DocumentSchema versions the stored Document. A reader rejects any other
 // value instead of guessing at a different shape.
-const DocumentSchema = "openrouter-catalog/v1"
+const DocumentSchema = "openrouter-catalog/v2"
 
 // Document bounds. OpenRouter lists a few hundred models with a handful of
 // endpoints each; the bounds leave room for growth while keeping one stored
@@ -35,6 +35,7 @@ const DocumentSchema = "openrouter-catalog/v1"
 const (
 	MaxDocumentBytes  = 8 << 20
 	MaxModels         = 4096
+	MaxProviders      = 1024
 	MaxEndpoints      = 64
 	MaxOverrides      = 8
 	MaxIdentifierSize = 256
@@ -46,6 +47,17 @@ type Document struct {
 	Schema    string    `json:"schema"`
 	FetchedAt time.Time `json:"fetched_at"`
 	Models    []Model   `json:"models"`
+	// Providers are the upstream providers OpenRouter lists, with the
+	// countries it publishes for each.
+	Providers []Provider `json:"providers"`
+}
+
+// Provider is one upstream provider. Headquarters and Datacenters are ISO
+// 3166-1 alpha-2 codes; an empty value means OpenRouter publishes none.
+type Provider struct {
+	Slug         string   `json:"slug"`
+	Headquarters string   `json:"headquarters,omitempty"`
+	Datacenters  []string `json:"datacenters,omitempty"`
 }
 
 // Model is one OpenRouter model and the upstream endpoints serving it.
@@ -62,7 +74,16 @@ type Model struct {
 // Tag is OpenRouter's stable endpoint identifier, for example "openai" or
 // "openai/flex".
 type Endpoint struct {
-	Tag                 string  `json:"tag"`
+	Tag string `json:"tag"`
+	// Provider is the slug of the provider serving the endpoint; empty when
+	// OpenRouter names a provider it does not list.
+	Provider string `json:"provider,omitempty"`
+	// Quantization is the weight precision OpenRouter publishes, for example
+	// "bf16" or "fp8"; empty when it publishes none.
+	Quantization string `json:"quantization,omitempty"`
+	// ZeroRetention reports that OpenRouter lists the endpoint as retaining
+	// no prompts or completions.
+	ZeroRetention       bool    `json:"zero_retention,omitempty"`
 	ContextLength       int64   `json:"context_length,omitempty"`
 	MaxCompletionTokens int64   `json:"max_completion_tokens,omitempty"`
 	MaxPromptTokens     int64   `json:"max_prompt_tokens,omitempty"`
@@ -104,6 +125,10 @@ type PricingOverride struct {
 func (document *Document) Normalize() {
 	document.FetchedAt = document.FetchedAt.UTC()
 	sort.Slice(document.Models, func(i, j int) bool { return document.Models[i].ID < document.Models[j].ID })
+	sort.Slice(document.Providers, func(i, j int) bool { return document.Providers[i].Slug < document.Providers[j].Slug })
+	for index := range document.Providers {
+		sort.Strings(document.Providers[index].Datacenters)
+	}
 	for index := range document.Models {
 		model := &document.Models[index]
 		sort.Strings(model.InputModalities)
@@ -128,12 +153,51 @@ func (document Document) Validate() error {
 	if len(document.Models) == 0 || len(document.Models) > MaxModels {
 		return fmt.Errorf("model catalog must list between 1 and %d models", MaxModels)
 	}
+	if len(document.Providers) > MaxProviders {
+		return fmt.Errorf("model catalog lists more than %d providers", MaxProviders)
+	}
+	providers := make(map[string]struct{}, len(document.Providers))
+	for index, provider := range document.Providers {
+		if index > 0 && document.Providers[index-1].Slug >= provider.Slug {
+			return fmt.Errorf("model catalog providers are not sorted and unique at %q", provider.Slug)
+		}
+		if err := provider.validate(); err != nil {
+			return fmt.Errorf("provider %q: %w", provider.Slug, err)
+		}
+		providers[provider.Slug] = struct{}{}
+	}
 	for index, model := range document.Models {
+		for _, endpoint := range model.Endpoints {
+			if _, listed := providers[endpoint.Provider]; endpoint.Provider != "" && !listed {
+				return fmt.Errorf("model %q endpoint %q names unlisted provider %q", model.ID, endpoint.Tag, endpoint.Provider)
+			}
+		}
 		if index > 0 && document.Models[index-1].ID >= model.ID {
 			return fmt.Errorf("model catalog models are not sorted and unique at %q", model.ID)
 		}
 		if err := model.validate(); err != nil {
 			return fmt.Errorf("model %q: %w", model.ID, err)
+		}
+	}
+	return nil
+}
+
+func (provider Provider) validate() error {
+	if err := validateIdentifier(provider.Slug); err != nil {
+		return err
+	}
+	if provider.Headquarters != "" && normalizeCountry(provider.Headquarters) != provider.Headquarters {
+		return fmt.Errorf("headquarters %q is not a country code", provider.Headquarters)
+	}
+	if len(provider.Datacenters) > maxListEntries {
+		return fmt.Errorf("provider lists more than %d datacenters", maxListEntries)
+	}
+	for index, country := range provider.Datacenters {
+		if normalizeCountry(country) != country {
+			return fmt.Errorf("datacenter %q is not a country code", country)
+		}
+		if index > 0 && provider.Datacenters[index-1] >= country {
+			return fmt.Errorf("datacenters are not sorted and unique at %q", country)
 		}
 	}
 	return nil
@@ -171,6 +235,13 @@ func (model Model) validate() error {
 func (endpoint Endpoint) validate() error {
 	if err := validateIdentifier(endpoint.Tag); err != nil {
 		return err
+	}
+	for _, value := range []string{endpoint.Provider, endpoint.Quantization} {
+		if value != "" {
+			if err := validateIdentifier(value); err != nil {
+				return err
+			}
+		}
 	}
 	if endpoint.ContextLength < 0 || endpoint.MaxCompletionTokens < 0 || endpoint.MaxPromptTokens < 0 {
 		return fmt.Errorf("token limits must not be negative")

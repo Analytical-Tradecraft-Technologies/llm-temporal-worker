@@ -70,6 +70,9 @@ func TestFetchedCatalogRetainsPrecisionAndScheduledPrices(t *testing.T) {
 		"vendor/calendar":  {"prompt": "0.000001", "completion": "0.000002", "overrides": []any{map[string]any{"utc_days": []string{"monday", "tuesday"}, "prompt": "0.000003"}}},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveUpstreamLists(w, r) {
+			return
+		}
 		if r.URL.Path == "/models" {
 			var models []map[string]any
 			for id, price := range prices {
