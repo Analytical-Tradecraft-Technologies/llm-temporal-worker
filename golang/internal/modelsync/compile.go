@@ -2,6 +2,7 @@ package modelsync
 
 import (
 	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 
@@ -413,9 +414,11 @@ func maxPrice(left, right string) string {
 	if right == "" {
 		return left
 	}
-	leftValue, leftErr := pricing.ParseUSD(left)
-	rightValue, rightErr := pricing.ParseUSD(right)
-	if leftErr != nil || rightErr != nil {
+	// Compare in the published per-token scale without imposing the
+	// NUMERIC(38,18) limit that applies after conversion to per million.
+	leftValue, leftOK := new(big.Rat).SetString(left)
+	rightValue, rightOK := new(big.Rat).SetString(right)
+	if !leftOK || !rightOK {
 		// Validation already rejected malformed prices; keep the left value
 		// so an impossible error cannot lower a price.
 		return left

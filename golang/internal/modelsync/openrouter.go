@@ -314,16 +314,22 @@ func decodePricing(raw map[string]json.RawMessage) (Pricing, error) {
 	if scaled, err := perMillion(discount); err == nil && scaled.CanonicalString() != "0" {
 		prices.Discount = discount
 	}
+	// A conditional price cannot supply an unknown unconditional base rate.
+	if err := prices.validate(); err != nil {
+		return Pricing{}, err
+	}
 	if overrides, present := raw["overrides"]; present && string(overrides) != "null" {
 		var wire []map[string]json.RawMessage
 		if err := json.Unmarshal(overrides, &wire); err != nil {
 			return Pricing{}, fmt.Errorf("price overrides: %w", err)
 		}
+		if len(wire) > MaxOverrides {
+			return Pricing{}, fmt.Errorf("more than %d price overrides", MaxOverrides)
+		}
+		var scheduled PricingOverride
+		var scheduledRequest string
 		for _, item := range wire {
 			var override PricingOverride
-			if err := json.Unmarshal(item["min_prompt_tokens"], &override.MinPromptTokens); err != nil {
-				return Pricing{}, fmt.Errorf("price override min_prompt_tokens: %w", err)
-			}
 			targets := []struct {
 				name   string
 				target *string
@@ -340,13 +346,98 @@ func decodePricing(raw map[string]json.RawMessage) (Pricing, error) {
 					return Pricing{}, fmt.Errorf("price override %s: %w", field.name, err)
 				}
 			}
+			_, days := item["utc_days"]
+			_, start := item["utc_start"]
+			_, end := item["utc_end"]
+			if days || start || end {
+				if err := validatePriceSchedule(item); err != nil {
+					return Pricing{}, err
+				}
+				if rawMin, present := item["min_prompt_tokens"]; present {
+					if err := json.Unmarshal(rawMin, &override.MinPromptTokens); err != nil || override.MinPromptTokens <= 0 {
+						return Pricing{}, fmt.Errorf("scheduled price min_prompt_tokens must be positive")
+					}
+				}
+				// Reservations must remain safe when a queued request crosses a
+				// price window. Cover every window rather than consulting a clock.
+				scheduled = maxOverridePrices(scheduled, override)
+				if rawRequest, present := item["request"]; present && string(rawRequest) != "null" {
+					request, err := decimalLiteral(rawRequest)
+					if err != nil || validateRequestPrice(request) != nil {
+						return Pricing{}, fmt.Errorf("invalid scheduled request price")
+					}
+					scheduledRequest = maxPrice(scheduledRequest, request)
+				}
+				continue
+			}
+			if err := json.Unmarshal(item["min_prompt_tokens"], &override.MinPromptTokens); err != nil {
+				return Pricing{}, fmt.Errorf("price override min_prompt_tokens: %w", err)
+			}
+			if request, present := item["request"]; present && string(request) != "null" {
+				return Pricing{}, fmt.Errorf("long-prompt request price overrides are not supported")
+			}
 			prices.Overrides = append(prices.Overrides, override)
+		}
+		prices.Prompt = maxPrice(prices.Prompt, scheduled.Prompt)
+		prices.Completion = maxPrice(prices.Completion, scheduled.Completion)
+		prices.InputCacheRead = maxPrice(prices.InputCacheRead, scheduled.InputCacheRead)
+		prices.InputCacheWrite = maxPrice(prices.InputCacheWrite, scheduled.InputCacheWrite)
+		prices.InputCacheWrite1h = maxPrice(prices.InputCacheWrite1h, scheduled.InputCacheWrite1h)
+		prices.Request = maxPrice(prices.Request, scheduledRequest)
+		for index := range prices.Overrides {
+			prices.Overrides[index] = maxOverridePrices(prices.Overrides[index], scheduled)
 		}
 	}
 	if err := prices.validateUnsorted(); err != nil {
 		return Pricing{}, err
 	}
 	return prices, nil
+}
+
+// maxOverridePrices preserves the first override's threshold and covers every
+// listed token-price component. Omitted components still inherit the base.
+func maxOverridePrices(left, right PricingOverride) PricingOverride {
+	left.Prompt = maxPrice(left.Prompt, right.Prompt)
+	left.Completion = maxPrice(left.Completion, right.Completion)
+	left.InputCacheRead = maxPrice(left.InputCacheRead, right.InputCacheRead)
+	left.InputCacheWrite = maxPrice(left.InputCacheWrite, right.InputCacheWrite)
+	left.InputCacheWrite1h = maxPrice(left.InputCacheWrite1h, right.InputCacheWrite1h)
+	return left
+}
+
+func validatePriceSchedule(item map[string]json.RawMessage) error {
+	if raw, present := item["utc_days"]; present {
+		var days []string
+		if err := json.Unmarshal(raw, &days); err != nil || len(days) == 0 || len(days) > 7 {
+			return fmt.Errorf("price schedule utc_days must list 1-7 weekdays")
+		}
+		seen := make(map[string]bool, len(days))
+		for _, day := range days {
+			switch day {
+			case "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday":
+			default:
+				return fmt.Errorf("invalid price schedule weekday")
+			}
+			if seen[day] {
+				return fmt.Errorf("duplicate price schedule weekday")
+			}
+			seen[day] = true
+		}
+	}
+	start, hasStart := item["utc_start"]
+	end, hasEnd := item["utc_end"]
+	if hasStart != hasEnd {
+		return fmt.Errorf("price schedule requires both utc_start and utc_end")
+	}
+	if hasStart {
+		for _, raw := range []json.RawMessage{start, end} {
+			var hhmm int
+			if string(raw) == "null" || json.Unmarshal(raw, &hhmm) != nil || hhmm < 0 || hhmm > 2359 || hhmm%100 >= 60 {
+				return fmt.Errorf("price schedule time must be a UTC HHMM integer")
+			}
+		}
+	}
+	return nil
 }
 
 // validateUnsorted validates fetched prices before Normalize orders overrides.
