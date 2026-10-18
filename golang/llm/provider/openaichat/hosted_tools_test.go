@@ -80,3 +80,60 @@ func TestOpenRouterSearchReportedTotalIncludesTools(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenRouterSearchCountReadsBothServerToolUseShapes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		server string
+		calls  string
+	}{
+		{name: "server_tool_use", server: `,"server_tool_use":{"web_search_requests":4}`, calls: "4"},
+		{name: "server_tool_use_details", server: `,"server_tool_use_details":{"tool_calls_executed":2,"tool_calls_requested":2,"web_search_requests":2}`, calls: "2"},
+		{name: "both agree", server: `,"server_tool_use":{"web_search_requests":3},"server_tool_use_details":{"web_search_requests":3}`, calls: "3"},
+		{name: "details without count", server: `,"server_tool_use":{"web_search_requests":1},"server_tool_use_details":{"tool_calls_executed":1}`, calls: "1"},
+		{name: "zero searches", server: `,"server_tool_use_details":{"web_search_requests":0}`, calls: "0"},
+		{name: "both disagree", server: `,"server_tool_use":{"web_search_requests":1},"server_tool_use_details":{"web_search_requests":2}`, calls: "null"},
+		{name: "negative", server: `,"server_tool_use_details":{"web_search_requests":-1}`, calls: "null"},
+		{name: "malformed", server: `,"server_tool_use_details":{"web_search_requests":"2"}`, calls: "null"},
+		{name: "not reported", calls: "null"},
+	} {
+		for _, reported := range []bool{false, true} {
+			name := test.name
+			if reported {
+				name += " with reported cost"
+			}
+			t.Run(name, func(t *testing.T) {
+				body := `{"id":"generation","model":"openai/gpt-test","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":2,"completion_tokens":2` + test.server
+				if reported {
+					body += `,"cost":0.060018`
+				}
+				body += `}}`
+				var raw openai.ChatCompletion
+				if err := json.Unmarshal([]byte(body), &raw); err != nil {
+					t.Fatal(err)
+				}
+				got := llm.Response{}
+				if err := augmentOpenRouter(provider.Call{Model: "openai/gpt-test", Metadata: provider.CallMetadata{WebSearch: true}}, &raw, &got); err != nil {
+					t.Fatal(err)
+				}
+				if calls := string(got.Usage.ProviderRaw["web_search_calls"]); calls != test.calls {
+					t.Fatalf("web_search_calls = %s, want %s", calls, test.calls)
+				}
+				switch {
+				case reported:
+					// The reported total already includes search; it is kept
+					// exactly and the count never adds a second charge.
+					if got.Cost.ActualCostUSD == nil || got.Cost.ActualCostUSD.String() != "0.060018000000000000" || got.Cost.Method != "openrouter_reported" {
+						t.Fatalf("cost = %#v", got.Cost)
+					}
+				default:
+					// The auto engine's per-search rate is not reported, so a
+					// count alone never makes the cost known.
+					if got.Cost.Status != llm.CostStatusUnknown || got.Cost.ActualCostUSD != nil {
+						t.Fatalf("search without a reported total settled as known: %#v", got.Cost)
+					}
+				}
+			})
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -122,6 +123,41 @@ func TestCloudExecutionDuplicateKeyToolArgumentsAreTerminal(t *testing.T) {
 				t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
 			}
 		})
+	}
+}
+
+// A provider that reports a mid-generation failure in a received response
+// (OpenRouter's choice with finish_reason "error") has a certain, possibly
+// billed outcome. It is terminal with the provider's code, not an unknown
+// outcome that waits out the recovery lease and buys a replacement attempt.
+func TestCloudExecutionMidGenerationFailureIsTerminal(t *testing.T) {
+	f, budgets := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) {
+		return provider.Result{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider failed during generation (reported in a successful response body)")
+	})
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	if v.Retryable || v.FailureCode != "provider_error" || v.ErrorCode != string(provider.CodeProviderUnavailable) || v.Dispatch != string(provider.DispatchAccepted) {
+		t.Fatalf("failure=%+v", v)
+	}
+	execution := toolArgumentsExecution(t, f, v.RequestID)
+	if execution.Stage != cloudstate.ExecutionFailed || execution.Failure == nil || execution.Failure.Code != provider.CodeProviderUnavailable ||
+		execution.Failure.Dispatch != provider.DispatchAccepted || execution.Failure.Retryable || execution.Settlement == nil || !execution.Settled || budgets.calls.Load() != 1 {
+		t.Fatalf("execution stage=%s failure=%+v settled=%t reconciles=%d", execution.Stage, execution.Failure, execution.Settled, budgets.calls.Load())
+	}
+	// The possibly billed attempt is accounted at its reservation.
+	for _, event := range execution.Settlement.Events {
+		if event.CostStatus != budget.CostUnknown || event.AccountedIncreaseUSD.String() != event.ReservedDecreaseUSD.String() {
+			t.Fatalf("settlement event=%+v", event)
+		}
+	}
+	// Past the recovery deadline the request is still terminal.
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
+		t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
 	}
 }
 
