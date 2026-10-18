@@ -1,0 +1,4 @@
+{"data":[
+ {"name":"OpenAI | openai/gpt-5.4","model_id":"openai/gpt-5.4","provider_name":"OpenAI","tag":"openai","quantization":"unknown"},
+ {"name":"Azure | openai/gpt-5.4","model_id":"openai/gpt-5.4","provider_name":"Azure","tag":"azure","quantization":"unknown"}
+]}

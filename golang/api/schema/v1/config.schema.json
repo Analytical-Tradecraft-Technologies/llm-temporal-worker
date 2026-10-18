@@ -38,7 +38,8 @@
     "continuation": { "$ref": "#/$defs/continuation" },
     "telemetry": { "$ref": "#/$defs/telemetry" },
     "langfuse": { "$ref": "#/$defs/langfuse" },
-    "model_sync": { "$ref": "#/$defs/model_sync" }
+    "model_sync": { "$ref": "#/$defs/model_sync" },
+    "openrouter_upstream": { "$ref": "#/$defs/openrouter_upstream" }
   },
   "allOf": [
     {
@@ -586,6 +587,16 @@
         "rules": { "type": "array", "items": { "$ref": "#/$defs/catalog" } },
         "refresh_interval_min": { "$ref": "#/$defs/duration" },
         "refresh_interval_max": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "openrouter_upstream": {
+      "type": "object", "additionalProperties": false,
+      "description": "Upstream providers OpenRouter may send any request to. Every OpenRouter request names the allowed endpoints. The LLMTW_OPENROUTER_* environment variables override these fields.",
+      "properties": {
+        "countries": { "enum": ["US", "EU", "Core1", "Core2", "Core3", "Core4", "Core5"], "description": "Country list a provider's headquarters and every datacenter it lists must be in. A provider that publishes no datacenter never qualifies. Defaults to Core5." },
+        "require_native_precision": { "type": "boolean", "description": "Allow only endpoints that serve a model at the precision its weights were released in." },
+        "require_zero_retention": { "type": "boolean", "description": "Allow only endpoints that retain no prompts or completions." },
+        "deny_prompt_training": { "type": "boolean", "description": "Allow only providers that do not collect prompts for training." }
       }
     },
     "catalog": {

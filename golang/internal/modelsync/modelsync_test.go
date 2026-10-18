@@ -30,6 +30,12 @@ func fixtureServer(t *testing.T, requests *atomic.Int64) *httptest.Server {
 			requests.Add(1)
 		}
 		name := "models.json"
+		switch request.URL.Path {
+		case "/providers":
+			name = "providers.json"
+		case "/endpoints/zdr":
+			name = "endpoints-zdr.json"
+		}
 		if path := strings.TrimPrefix(request.URL.Path, "/models/"); path != request.URL.Path {
 			name = "endpoints-" + strings.ReplaceAll(strings.TrimSuffix(path, "/endpoints"), "/", "__") + ".json"
 		}
@@ -43,6 +49,34 @@ func fixtureServer(t *testing.T, requests *atomic.Int64) *httptest.Server {
 	}))
 	t.Cleanup(server.Close)
 	return server
+}
+
+// testUpstreamProvider is the provider ad-hoc test servers attribute every
+// endpoint to; it qualifies for every country list.
+const testUpstreamProvider = "Upstream"
+
+// serveUpstreamLists answers the provider and zero-retention lists for an
+// ad-hoc test server, reporting whether it handled the request.
+func serveUpstreamLists(writer http.ResponseWriter, request *http.Request) bool {
+	switch request.URL.Path {
+	case "/providers":
+		_ = json.NewEncoder(writer).Encode(map[string]any{"data": []map[string]any{{"name": testUpstreamProvider, "slug": "upstream", "headquarters": "US", "datacenters": []string{"US"}}}})
+		return true
+	case "/endpoints/zdr":
+		_ = json.NewEncoder(writer).Encode(map[string]any{"data": []any{}})
+		return true
+	}
+	return false
+}
+
+// testPolicy allows every provider in the Core5 countries.
+func testPolicy(t *testing.T) UpstreamPolicy {
+	t.Helper()
+	policy, err := NewUpstreamPolicy(CountryListCore5, false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
 }
 
 func fetchFixture(t *testing.T) Document {
@@ -123,6 +157,9 @@ func TestRefreshCarriesForwardModelsWhoseEndpointLookupFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		mutex.Lock()
 		defer mutex.Unlock()
+		if serveUpstreamLists(writer, request) {
+			return
+		}
 		if request.URL.Path == "/models" {
 			var data []map[string]any
 			for _, id := range listed {
@@ -140,7 +177,7 @@ func TestRefreshCarriesForwardModelsWhoseEndpointLookupFails(t *testing.T) {
 		}
 		endpoints := []map[string]any{}
 		if !empty[id] {
-			endpoints = append(endpoints, map[string]any{"tag": "upstream", "context_length": 1000, "pricing": map[string]string{"prompt": "0.000001", "completion": "0.000002"}})
+			endpoints = append(endpoints, map[string]any{"tag": "upstream", "provider_name": testUpstreamProvider, "context_length": 1000, "pricing": map[string]string{"prompt": "0.000001", "completion": "0.000002"}})
 		}
 		_ = json.NewEncoder(writer).Encode(map[string]any{"data": map[string]any{"endpoints": endpoints}})
 	}))
@@ -181,7 +218,7 @@ func TestRefreshCarriesForwardModelsWhoseEndpointLookupFails(t *testing.T) {
 			len(installed.Models), present["openai/m07"], present["openai/m20"], present["openai/m11"], present["openai/m19"])
 	}
 	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
-	compiled, err := Compile(Input{Document: &installed, Rules: mergedRules(t), OpenRouter: &openrouter})
+	compiled, err := Compile(Input{Document: &installed, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +670,7 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	anthropic := testSource("anthropic-direct", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "fast"})
 	exa := testSource("exa-direct", "exa", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
 	exaAgent := testSource("exa-agent-direct", "exa", "openai_responses", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
-	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{openai, anthropic, exa, exaAgent},
+	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t), Direct: []Source{openai, anthropic, exa, exaAgent},
 		Reserved: map[string]struct{}{"inference-net/schematron-v2-turbo": {}}})
 	if err != nil {
 		t.Fatal(err)
@@ -700,7 +737,7 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 func TestCompileNarrowsFeaturesTheModelCannotAccept(t *testing.T) {
 	document := fetchFixture(t)
 	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
-	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter})
+	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

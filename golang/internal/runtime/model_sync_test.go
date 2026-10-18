@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,11 +63,14 @@ func modelSyncTestCatalogs(t *testing.T) loadedCatalogs {
 
 func modelSyncTestDocument() modelsync.Document {
 	return modelsync.Document{Schema: modelsync.DocumentSchema, FetchedAt: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), Models: []modelsync.Model{
-		{ID: "openai/gpt-5.4", ContextLength: 1050000, Endpoints: []modelsync.Endpoint{{Tag: "openai", Pricing: modelsync.Pricing{Prompt: "0.0000025", Completion: "0.000015"}}}},
+		{ID: "openai/gpt-5.4", ContextLength: 1050000, Endpoints: []modelsync.Endpoint{{Tag: "openai", Provider: "openai", Pricing: modelsync.Pricing{Prompt: "0.0000025", Completion: "0.000015"}}}},
 		{ID: "openai/gpt-5.4-mini", ContextLength: 400000, Endpoints: []modelsync.Endpoint{
-			{Tag: "azure", Pricing: modelsync.Pricing{Prompt: "0.0000008", Completion: "0.0000048"}},
-			{Tag: "openai", Pricing: modelsync.Pricing{Prompt: "0.00000075", Completion: "0.0000045"}},
+			{Tag: "azure", Provider: "azure", Pricing: modelsync.Pricing{Prompt: "0.0000008", Completion: "0.0000048"}},
+			{Tag: "openai", Provider: "openai", Pricing: modelsync.Pricing{Prompt: "0.00000075", Completion: "0.0000045"}},
 		}},
+	}, Providers: []modelsync.Provider{
+		{Slug: "azure", Headquarters: "US", Datacenters: []string{"US"}},
+		{Slug: "openai", Headquarters: "US", Datacenters: []string{"US"}},
 	}}
 }
 
@@ -208,5 +212,57 @@ func TestModelSyncRoutesCarryTheEndpointDigest(t *testing.T) {
 	}
 	if syncedEndpointDigest(t, func(endpoint *config.EndpointConfig) { endpoint.BaseURL = "https://other.example/api/v1" }) == got {
 		t.Fatal("changing the endpoint kept its synced digest")
+	}
+}
+
+func TestModelSyncPublishesAllowedUpstreamsForEveryOpenRouterModel(t *testing.T) {
+	value := modelSyncTestConfig()
+	syncRuntime, err := newModelSyncRuntime(value, modelSyncTestCatalogs(t), catalog.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syncRuntime.enable(map[string]provider.Adapter{"openrouter": nil, "configured": nil}); err != nil {
+		t.Fatal(err)
+	}
+	// Before a Document is installed no endpoint has been checked.
+	if _, ok := syncRuntime.upstreams.OpenRouterUpstream("openai/gpt-5.4-mini"); ok {
+		t.Fatal("upstreams are allowed before any Document is installed")
+	}
+	document := modelSyncTestDocument()
+	if err := syncRuntime.install(&document); err != nil {
+		t.Fatal(err)
+	}
+	if upstream, ok := syncRuntime.upstreams.OpenRouterUpstream("openai/gpt-5.4-mini"); !ok || strings.Join(upstream.Tags, ",") != "azure,openai" {
+		t.Fatalf("synced model upstreams = %+v %v", upstream, ok)
+	}
+	// The configured model is not synced, but a pinned OpenRouter endpoint
+	// serving it still needs its allowed upstreams.
+	if upstream, ok := syncRuntime.upstreams.OpenRouterUpstream("openai/gpt-5.4"); !ok || strings.Join(upstream.Tags, ",") != "openai" {
+		t.Fatalf("configured model upstreams = %+v %v", upstream, ok)
+	}
+	if _, ok := openRouterUpstreams(nil).OpenRouterUpstream("openai/gpt-5.4"); ok {
+		t.Fatal("without model sync an OpenRouter model has allowed upstreams")
+	}
+
+	value.OpenRouterUpstream = &config.OpenRouterUpstreamConfig{Countries: "EU"}
+	europe, err := newModelSyncRuntime(value, modelSyncTestCatalogs(t), catalog.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := europe.enable(map[string]provider.Adapter{"openrouter": nil, "configured": nil}); err != nil {
+		t.Fatal(err)
+	}
+	if err := europe.install(&document); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := europe.upstreams.OpenRouterUpstream("openai/gpt-5.4-mini"); ok {
+		t.Fatal("a US provider is allowed under the EU list")
+	}
+	snapshot, err := europe.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routes := snapshot.Routes.Models["openai/gpt-5.4-mini"].Routes; len(routes) != 0 {
+		t.Fatalf("synced model routes = %+v, want none without an allowed upstream", routes)
 	}
 }

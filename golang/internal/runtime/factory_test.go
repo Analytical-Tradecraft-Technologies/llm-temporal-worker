@@ -545,7 +545,7 @@ func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
 func TestChatProfileRequiresSpecializedDialect(t *testing.T) {
 	factory := &ProductionEngineFactory{}
 	endpoint := config.EndpointConfig{Family: "openai_chat", BaseURL: "https://openrouter.ai/api/v1"}
-	_, err := factory.chatProfile("openrouter", endpoint, provider.CapabilitySet{Version: "cap-v1"}, EndpointProfile{}, false)
+	_, err := factory.chatProfile("openrouter", endpoint, provider.CapabilitySet{Version: "cap-v1"}, EndpointProfile{}, false, openRouterUpstreams(nil), config.OpenRouterUpstreamConfig{})
 	if err == nil || !strings.Contains(err.Error(), "specialized chat dialect must be explicit") {
 		t.Fatalf("error = %v, want explicit dialect failure", err)
 	}

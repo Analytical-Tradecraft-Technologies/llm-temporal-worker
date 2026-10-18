@@ -1,0 +1,58 @@
+# Built-in native precision rules, maintained by hand and layered after
+# default.yaml. Operators extend or override them with model_sync.rules files.
+#
+# Each key is a path.Match pattern of OpenRouter model IDs; the longest
+# matching pattern wins. Each value lists the quantizations, as OpenRouter
+# names them, that serve the model unchanged: the format its weights were
+# released in, or a 16- or 32-bit float format. When native precision is
+# required, OpenRouter only routes a model to endpoints that publish one of
+# these quantizations; a model with no entry here, and an endpoint that
+# publishes no quantization, are never used.
+#
+# Only list a model after checking the precision of its released weights.
+version: model-sync-rules/v1
+
+native_precision:
+  # Released in FP8.
+  deepseek/deepseek-chat-v3-0324: [fp8, bf16, fp16, fp32]
+  deepseek/deepseek-chat-v3.1: [fp8, bf16, fp16, fp32]
+  deepseek/deepseek-v3.1-terminus: [fp8, bf16, fp16, fp32]
+  deepseek/deepseek-v3.2: [fp8, bf16, fp16, fp32]
+  deepseek/deepseek-v3.2-exp: [fp8, bf16, fp16, fp32]
+  deepseek/deepseek-r1: [fp8, bf16, fp16, fp32]
+  deepseek/deepseek-r1-0528: [fp8, bf16, fp16, fp32]
+  moonshotai/kimi-k2: [fp8, bf16, fp16, fp32]
+  moonshotai/kimi-k2-0905: [fp8, bf16, fp16, fp32]
+  minimax/minimax-m2: [fp8, bf16, fp16, fp32]
+  minimax/minimax-m2.1: [fp8, bf16, fp16, fp32]
+
+  # Released in INT4 (quantization-aware trained).
+  moonshotai/kimi-k2-thinking: [int4, bf16, fp16, fp32]
+
+  # Released with MXFP4 expert weights. OpenRouter's plain "fp4" label does
+  # not say which FP4 format an endpoint serves, so it is not accepted.
+  openai/gpt-oss-*: [mxfp4, bf16, fp16, fp32]
+
+  # Released in BF16.
+  google/gemma-*: [bf16, fp16, fp32]
+  meta-llama/llama-3.1-*: [bf16, fp16, fp32]
+  meta-llama/llama-3.2-*: [bf16, fp16, fp32]
+  meta-llama/llama-3.3-*: [bf16, fp16, fp32]
+  meta-llama/llama-4-*: [bf16, fp16, fp32]
+  meta-llama/llama-guard-4-*: [bf16, fp16, fp32]
+  microsoft/phi-4: [bf16, fp16, fp32]
+  mistralai/mistral-nemo: [bf16, fp16, fp32]
+  mistralai/mistral-small-24b-instruct-2501: [bf16, fp16, fp32]
+  mistralai/mistral-small-3.1-24b-instruct: [bf16, fp16, fp32]
+  mistralai/mistral-small-3.2-24b-instruct: [bf16, fp16, fp32]
+  mistralai/mixtral-8x22b-instruct: [bf16, fp16, fp32]
+  nousresearch/hermes-3-llama-3.1-*: [bf16, fp16, fp32]
+  qwen/qwen-2.5-*: [bf16, fp16, fp32]
+  qwen/qwen2.5-vl-*: [bf16, fp16, fp32]
+  qwen/qwen3-*: [bf16, fp16, fp32]
+  z-ai/glm-4.5: [bf16, fp16, fp32]
+  z-ai/glm-4.5-air: [bf16, fp16, fp32]
+  z-ai/glm-4.5v: [bf16, fp16, fp32]
+  z-ai/glm-4.6: [bf16, fp16, fp32]
+  z-ai/glm-4.6v: [bf16, fp16, fp32]
+  z-ai/glm-4.7: [bf16, fp16, fp32]

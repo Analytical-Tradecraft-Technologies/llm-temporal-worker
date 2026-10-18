@@ -182,7 +182,11 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
 		return provider.Call{}, provider.NewStrictPortabilityError(fmt.Sprintf("tool result %q output starts with the reserved tool-error prefix and cannot be distinguished from a failed result in strict portability mode", callID))
 	}
-	params, err := lowerRequest(normalized, adapter.profile, providerTier)
+	profile, err := adapter.profile.forRequest(normalized.Model, serviceClass, input.Metadata.PriceCeiling)
+	if err != nil {
+		return provider.Call{}, compileError(err.Error())
+	}
+	params, err := lowerRequest(normalized, profile, providerTier)
 	if err != nil {
 		return provider.Call{}, lowerError(err)
 	}

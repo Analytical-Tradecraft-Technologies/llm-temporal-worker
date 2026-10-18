@@ -1,0 +1,10 @@
+{"data":[
+ {"name":"OpenAI","slug":"openai","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":"US","datacenters":["US"]},
+ {"name":"Azure","slug":"azure","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":"US","datacenters":["US","NL"]},
+ {"name":"Amazon Bedrock","slug":"amazon-bedrock","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":"US","datacenters":["US"]},
+ {"name":"Anthropic","slug":"anthropic","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":"US","datacenters":["US"]},
+ {"name":"Claude Platform on AWS","slug":"claude-on-aws","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":"US","datacenters":["US"]},
+ {"name":"Google","slug":"google-vertex","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":"US","datacenters":["US"]},
+ {"name":"InferenceNet","slug":"inference-net","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":"US","datacenters":["US"]},
+ {"name":"Unlisted Countries","slug":"unlisted","privacy_policy_url":null,"terms_of_service_url":null,"status_page_url":null,"headquarters":null,"datacenters":null}
+]}

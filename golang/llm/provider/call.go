@@ -45,6 +45,18 @@ type CallMetadata struct {
 	// provider none of the request's extensions because the adapter has no
 	// extension allowlist. The lift reports it as a response diagnostic.
 	ExtensionsDropped bool
+	// PriceCeiling, when set, holds the unit prices the call's budget
+	// reservation was quoted at. An adapter that can bound the upstream
+	// price sends it, so the provider never serves the call above them.
+	PriceCeiling *PriceCeiling
+}
+
+// PriceCeiling is the most a call may cost per unit, as exact USD decimals:
+// per million prompt tokens, per million completion tokens and per request.
+type PriceCeiling struct {
+	PromptPerMillion     string
+	CompletionPerMillion string
+	PerRequest           string
 }
 
 type Result struct {

@@ -96,6 +96,43 @@ type Config struct {
 	// ServiceClassPolicies is omitted from canonical JSON when unset, so an
 	// existing configuration keeps its digest.
 	ServiceClassPolicies []ServiceClassPolicy `yaml:"service_class_policies,omitempty" json:"service_class_policies,omitempty"`
+	// OpenRouterUpstream restricts the upstream providers OpenRouter may send
+	// any request to. It is omitted from canonical JSON when unset, so an
+	// existing configuration keeps its digest; unset applies the defaults.
+	OpenRouterUpstream *OpenRouterUpstreamConfig `yaml:"openrouter_upstream,omitempty" json:"openrouter_upstream,omitempty"`
+}
+
+// OpenRouterUpstreamConfig selects the upstream endpoints OpenRouter may
+// serve a request from. Every OpenRouter request names the allowed endpoints.
+type OpenRouterUpstreamConfig struct {
+	// Countries names the country list a provider's headquarters and every
+	// datacenter it lists must be in: US, EU, Core1, Core2, Core3, Core4 or
+	// Core5. Empty means Core5.
+	Countries string `yaml:"countries,omitempty" json:"countries,omitempty"`
+	// RequireNativePrecision allows only endpoints that serve a model at the
+	// precision its weights were released in.
+	RequireNativePrecision bool `yaml:"require_native_precision,omitempty" json:"require_native_precision,omitempty"`
+	// RequireZeroRetention allows only endpoints that retain no prompts or
+	// completions.
+	RequireZeroRetention bool `yaml:"require_zero_retention,omitempty" json:"require_zero_retention,omitempty"`
+	// DenyPromptTraining allows only providers that do not collect prompts
+	// for training.
+	DenyPromptTraining bool `yaml:"deny_prompt_training,omitempty" json:"deny_prompt_training,omitempty"`
+}
+
+// DefaultOpenRouterCountries applies when no country list is configured.
+const DefaultOpenRouterCountries = "Core5"
+
+// OpenRouterUpstreamSettings returns the effective upstream settings.
+func (config Config) OpenRouterUpstreamSettings() OpenRouterUpstreamConfig {
+	var settings OpenRouterUpstreamConfig
+	if config.OpenRouterUpstream != nil {
+		settings = *config.OpenRouterUpstream
+	}
+	if settings.Countries == "" {
+		settings.Countries = DefaultOpenRouterCountries
+	}
+	return settings
 }
 
 type ServerConfig struct {

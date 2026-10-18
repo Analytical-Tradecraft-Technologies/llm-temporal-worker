@@ -94,6 +94,7 @@ func wireAuditProfiles(t *testing.T) []wireAuditProfile {
 		MissingActualServiceClass: llm.ServiceClassStandard,
 		ProviderOrder:             []string{"ProviderA", "ProviderB"},
 		RequireParameters:         true,
+		Upstreams:                 allModelsUpstreams{"ProviderA", "ProviderB"},
 		AllowedExtensions:         wireAuditExtensions(),
 	})
 	if err != nil {
@@ -190,7 +191,11 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestMap, err := lowerRequestMap(normalized, profile.profile, tier)
+	lowering, err := profile.profile.forRequest(normalized.Model, serviceClass, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestMap, err := lowerRequestMap(normalized, lowering, tier)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +424,7 @@ func TestCapturedWireBodyKeepsNamedToolChoiceFunctionName(t *testing.T) {
 // must still reach the wire unchanged alongside a full request.
 func TestCapturedWireBodyKeepsProfileWireDefaults(t *testing.T) {
 	want := map[string]map[string]any{
-		"openrouter": {"provider": map[string]any{"order": []any{"ProviderA", "ProviderB"}, "allow_fallbacks": false, "require_parameters": true}},
+		"openrouter": {"provider": map[string]any{"order": []any{"ProviderA", "ProviderB"}, "only": []any{"ProviderA", "ProviderB"}, "allow_fallbacks": false, "require_parameters": true}},
 		// Exa reads text as a root field; extra_body never appears on the wire.
 		"exa": {"text": true},
 	}

@@ -1320,7 +1320,7 @@ endpoints:
     capability_profile: openrouter-chat-v1
     # No price_catalog: model sync prices this endpoint.
     extensions:
-      openrouter: {}          # no provider_order: OpenRouter selects the upstream
+      openrouter: {}          # no provider_order: OpenRouter selects among the allowed upstreams
   openai-direct:
     family: openai_responses
     base_url: https://api.openai.com/v1
@@ -1459,6 +1459,79 @@ Claude Haiku 5.5 rules carry the provider's long-prompt prices with the real
 context window; built-in context limits of Anthropic models before Claude 4.6
 stay capped at the long-prompt threshold, because their longer window needs a
 beta header the adapters never send.
+
+### OpenRouter upstream policy
+
+Every OpenRouter request names the upstream endpoints it may be served by in
+the `provider.only` field, so OpenRouter never sends a request to an endpoint
+the policy has not allowed. The allowed endpoints are computed from the
+published model catalog each time it is installed:
+
+- **Countries.** A provider is allowed only when its headquarters and every
+  datacenter country OpenRouter lists for it are in the configured country
+  list. A provider that lists no headquarters or no datacenter is never
+  allowed.
+- **Native precision** (optional). Only endpoints whose published quantization
+  serves the model at the precision its weights were released in, or in a
+  16- or 32-bit float format. The precision of each model comes from the
+  `native_precision` rules (below); a model without one, and an endpoint that
+  publishes no quantization, is never used. The request also sends
+  `provider.quantizations`.
+- **Zero retention** (optional). Only endpoints OpenRouter lists as retaining
+  no prompts or completions; the request also sends `provider.zdr: true`.
+- **No prompt training** (optional). The request sends
+  `provider.data_collection: "deny"`. OpenRouter does not publish this per
+  endpoint, so OpenRouter enforces it.
+
+A model with no allowed endpoint has no OpenRouter route. A synced route is
+priced at its most expensive allowed endpoint, and its context and output
+limits are the largest any allowed endpoint publishes. A budgeted request
+also sends the prices its reservation was quoted at as `provider.max_price`,
+so OpenRouter never serves it above them, even from an endpoint allowed after
+the quote. When OpenRouter selects the
+upstream, a request sorts the allowed endpoints by price, or by throughput for
+the `priority` class. An endpoint with a pinned `provider_order` keeps its order,
+limited to the allowed endpoints of the order's providers; a request whose
+order has none is refused. Without `model_sync` no endpoint has been checked,
+so every OpenRouter request is refused.
+
+The country lists are:
+
+| List | Countries (ISO 3166-1 alpha-2) |
+|---|---|
+| `US` | US |
+| `EU` | AT, BE, BG, CY, CZ, DE, DK, EE, ES, FI, FR, GR, HR, HU, IE, IT, LT, LU, LV, MT, NL, PL, PT, RO, SE, SI, SK |
+| `Core1` | US, GB, AU, NZ, CA |
+| `Core2` | `Core1` and DK, FR, NL, NO |
+| `Core3` | `Core2` and DE, BE, IT, ES, SE |
+| `Core4` | `Core3` and AL, BG, CZ, EE, FI, GR, HR, HU, IS, LT, LU, LV, ME, MK, PL, PT, RO, SI, SK, TR |
+| `Core5` | `Core4` and JP, KR |
+
+```yaml
+openrouter_upstream:              # optional; these are the defaults
+  countries: Core5
+  require_native_precision: false
+  require_zero_retention: false
+  deny_prompt_training: false
+```
+
+The environment overrides each field: `LLMTW_OPENROUTER_COUNTRIES`,
+`LLMTW_OPENROUTER_REQUIRE_NATIVE_PRECISION`,
+`LLMTW_OPENROUTER_REQUIRE_ZERO_RETENTION` and
+`LLMTW_OPENROUTER_DENY_PROMPT_TRAINING` (`true` or `false`). The image sets
+all four, with `Core5` (the `OPENROUTER_COUNTRIES` build argument) and every
+filter off.
+
+The built-in native precision rules,
+`golang/internal/modelsync/rules/native_precision.yaml`, list only models whose
+released precision has been checked. A rules file extends or overrides them;
+keys are `path.Match` patterns and the longest match wins:
+
+```yaml
+version: model-sync-rules/v1
+native_precision:
+  vendor/model-*: [fp8, bf16, fp16, fp32]
+```
 
 ## Validation
 

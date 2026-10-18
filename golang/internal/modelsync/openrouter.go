@@ -83,6 +83,14 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 	if err != nil {
 		return Document{}, err
 	}
+	providers, slugs, err := fetcher.listProviders(ctx)
+	if err != nil {
+		return Document{}, err
+	}
+	retention, err := fetcher.listZeroRetention(ctx)
+	if err != nil {
+		return Document{}, err
+	}
 	concurrency := fetcher.Concurrency
 	if concurrency <= 0 {
 		concurrency = defaultFetchConcurrency
@@ -101,7 +109,7 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 		go func() {
 			defer group.Done()
 			for index := range work {
-				endpoints, skippedPrice, err := fetcher.listEndpoints(ctx, listed[index].ID)
+				endpoints, skippedPrice, err := fetcher.listEndpoints(ctx, listed[index].ID, slugs, retention)
 				if err != nil {
 					results[index] = result{err: err}
 					continue
@@ -123,7 +131,7 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 	if err := ctx.Err(); err != nil {
 		return Document{}, err
 	}
-	document := Document{Schema: DocumentSchema, FetchedAt: clock().UTC(), Models: make([]Model, 0, len(listed))}
+	document := Document{Schema: DocumentSchema, FetchedAt: clock().UTC(), Models: make([]Model, 0, len(listed)), Providers: providers}
 	published := make(map[string]Model, len(previous.Models))
 	for _, model := range previous.Models {
 		published[model.ID] = model
@@ -152,6 +160,7 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 	if len(document.Models) > MaxModels {
 		return Document{}, fmt.Errorf("OpenRouter lists more than %d priced models", MaxModels)
 	}
+	dropUnlistedProviders(&document)
 	document.Normalize()
 	if err := document.Validate(); err != nil {
 		return Document{}, err
@@ -160,6 +169,26 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 		fetcher.OnSkipped(skipped)
 	}
 	return document, nil
+}
+
+// dropUnlistedProviders clears the provider of every endpoint naming one the
+// Document does not list. A model carried forward from the previous Document
+// may name a provider this fetch no longer lists; its endpoint then has no
+// provider, so no upstream policy allows it.
+func dropUnlistedProviders(document *Document) {
+	listed := make(map[string]struct{}, len(document.Providers))
+	for _, provider := range document.Providers {
+		listed[provider.Slug] = struct{}{}
+	}
+	for modelIndex := range document.Models {
+		endpoints := append([]Endpoint(nil), document.Models[modelIndex].Endpoints...)
+		for endpointIndex := range endpoints {
+			if _, ok := listed[endpoints[endpointIndex].Provider]; !ok {
+				endpoints[endpointIndex].Provider = ""
+			}
+		}
+		document.Models[modelIndex].Endpoints = endpoints
+	}
 }
 
 type wireModel struct {
@@ -214,6 +243,9 @@ func (fetcher Fetcher) listModels(ctx context.Context) ([]Model, []SkippedModel,
 }
 
 type wireEndpoint struct {
+	ModelID             string                     `json:"model_id"`
+	ProviderName        string                     `json:"provider_name"`
+	Quantization        string                     `json:"quantization"`
 	Tag                 string                     `json:"tag"`
 	ContextLength       int64                      `json:"context_length"`
 	MaxCompletionTokens *int64                     `json:"max_completion_tokens"`
@@ -221,9 +253,84 @@ type wireEndpoint struct {
 	Pricing             map[string]json.RawMessage `json:"pricing"`
 }
 
+// listProviders returns OpenRouter's provider list with normalized country
+// codes, and a map from each provider's display name, which endpoint lists
+// use, to its slug. A country value that is not a two-letter code is
+// dropped, so a provider never qualifies for a country list on a value the
+// worker cannot read.
+func (fetcher Fetcher) listProviders(ctx context.Context) ([]Provider, map[string]string, error) {
+	var body struct {
+		Data []struct {
+			Name         string   `json:"name"`
+			Slug         string   `json:"slug"`
+			Headquarters *string  `json:"headquarters"`
+			Datacenters  []string `json:"datacenters"`
+		} `json:"data"`
+	}
+	if err := fetcher.get(ctx, "/providers", &body); err != nil {
+		return nil, nil, fmt.Errorf("list OpenRouter providers: %w", err)
+	}
+	providers := make([]Provider, 0, len(body.Data))
+	slugs := make(map[string]string, len(body.Data))
+	seen := make(map[string]struct{}, len(body.Data))
+	for _, wire := range body.Data {
+		if validateIdentifier(wire.Slug) != nil {
+			continue
+		}
+		if _, duplicate := seen[wire.Slug]; duplicate {
+			continue
+		}
+		seen[wire.Slug] = struct{}{}
+		provider := Provider{Slug: wire.Slug}
+		if wire.Headquarters != nil {
+			provider.Headquarters = normalizeCountry(*wire.Headquarters)
+		}
+		datacenters := map[string]struct{}{}
+		for _, country := range wire.Datacenters {
+			if code := normalizeCountry(country); code != "" {
+				datacenters[code] = struct{}{}
+			}
+		}
+		for country := range datacenters {
+			provider.Datacenters = append(provider.Datacenters, country)
+		}
+		sort.Strings(provider.Datacenters)
+		if len(provider.Datacenters) > maxListEntries {
+			provider.Datacenters = nil
+		}
+		providers = append(providers, provider)
+		if wire.Name != "" {
+			slugs[wire.Name] = wire.Slug
+		}
+		if len(providers) == MaxProviders {
+			break
+		}
+	}
+	if len(providers) == 0 {
+		return nil, nil, fmt.Errorf("list OpenRouter providers: no providers")
+	}
+	return providers, slugs, nil
+}
+
+// listZeroRetention returns the endpoints OpenRouter lists as zero data
+// retention, keyed by model ID and endpoint tag.
+func (fetcher Fetcher) listZeroRetention(ctx context.Context) (map[[2]string]struct{}, error) {
+	var body struct {
+		Data []wireEndpoint `json:"data"`
+	}
+	if err := fetcher.get(ctx, "/endpoints/zdr", &body); err != nil {
+		return nil, fmt.Errorf("list OpenRouter zero-retention endpoints: %w", err)
+	}
+	retention := make(map[[2]string]struct{}, len(body.Data))
+	for _, wire := range body.Data {
+		retention[[2]string{wire.ModelID, wire.Tag}] = struct{}{}
+	}
+	return retention, nil
+}
+
 // listEndpoints also reports whether an endpoint was left out because its
 // price is unusable.
-func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]Endpoint, bool, error) {
+func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string, slugs map[string]string, retention map[[2]string]struct{}) ([]Endpoint, bool, error) {
 	segments := strings.Split(modelID, "/")
 	for index, segment := range segments {
 		segments[index] = url.PathEscape(segment)
@@ -271,7 +378,11 @@ func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]End
 			skippedPrice = true
 			continue
 		}
-		endpoint := Endpoint{Tag: wire.Tag, ContextLength: wire.ContextLength, Pricing: prices}
+		endpoint := Endpoint{Tag: wire.Tag, Provider: slugs[wire.ProviderName], ContextLength: wire.ContextLength, Pricing: prices}
+		if quantization := strings.ToLower(strings.TrimSpace(wire.Quantization)); validateIdentifier(quantization) == nil && quantization != "unknown" {
+			endpoint.Quantization = quantization
+		}
+		_, endpoint.ZeroRetention = retention[[2]string{modelID, wire.Tag}]
 		if wire.MaxCompletionTokens != nil {
 			endpoint.MaxCompletionTokens = *wire.MaxCompletionTokens
 		}

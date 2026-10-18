@@ -266,7 +266,7 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	}
 	call, err := adapter.Compile(ctx, provider.CompileInput{Request: resolved, Query: query,
 		Capability: capability, Strict: semantic.Portability != llm.PortabilityBestEffort,
-		Metadata: provider.CallMetadata{SchemaDigest: digest, CapabilityVersion: candidate.CapabilityVersion, ProviderTier: candidate.ProviderTier}})
+		Metadata: provider.CallMetadata{SchemaDigest: digest, CapabilityVersion: candidate.CapabilityVersion, ProviderTier: candidate.ProviderTier, PriceCeiling: planning.priceCeiling(candidate)}})
 	if ctx.Err() != nil {
 		return PlannedProviderCall{}, nil, ctx.Err()
 	}
@@ -279,6 +279,20 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	return PlannedProviderCall{Candidate: candidate, CacheIdentity: providerCacheIdentity(candidate),
 		CapabilityVersion: capability.Version, ConfigDigest: planning.configDigest, ConfigEpoch: planning.configEpoch,
 		Call: call, Adapter: adapter, Semantic: resolved, LogicalModel: semantic.Model}, nil, nil
+}
+
+// priceCeiling is the per-unit ceiling of the price budget planning quotes
+// for candidate from the same snapshot, or nil when it has no price.
+func (planning *ProviderPlanning) priceCeiling(candidate routing.Candidate) *provider.PriceCeiling {
+	if planning.budgetSnapshot.Prices == nil {
+		return nil
+	}
+	quote, err := planning.budgetSnapshot.Prices.Resolve(pricing.Query{Provider: candidate.Provider, Family: candidate.Family, EndpointID: candidate.EndpointID,
+		Region: candidate.Region, Model: candidate.Model, ProviderTier: candidate.ProviderTier, At: planning.clock().UTC()})
+	if err != nil {
+		return nil
+	}
+	return engine.PriceCeiling(&quote.Entry)
 }
 
 func copyBudgetSnapshot(source engine.Snapshot) engine.Snapshot {

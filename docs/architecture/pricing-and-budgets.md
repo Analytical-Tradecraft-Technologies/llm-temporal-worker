@@ -101,7 +101,8 @@ Catalog precedence is explicit:
 
 A synced price never replaces a configured entry with the same identity. An
 OpenRouter route on which OpenRouter selects the upstream is priced at the
-componentwise maximum over every upstream endpoint and long-prompt override.
+componentwise maximum over every upstream endpoint the upstream policy allows
+and their long-prompt overrides.
 
 There is no guessed price. A candidate with any matching monetary budget is
 ineligible without a current price. `pricing.require_price_when_budgeted: true`

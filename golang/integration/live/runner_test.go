@@ -14,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openaichat"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -240,12 +241,41 @@ func TestChatProfilesRequireReportedActualTier(t *testing.T) {
 			t.Errorf("%s continuation capability = %q, want unsupported", liveProfile.ID, profile.Capabilities.Features[provider.FeatureContinuation].State)
 		}
 		if liveProfile.ID == "openrouter-chat" {
-			var providerDefaults map[string]any
-			if err := json.Unmarshal(profile.WireDefaults["provider"], &providerDefaults); err != nil {
-				t.Fatalf("decode OpenRouter provider defaults: %v", err)
+			// The provider object is built per request, so read it from a
+			// compiled call; compiling sends nothing.
+			client, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: liveOpenRouterBaseURL, APIKey: "live-test-key", HTTPClient: &http.Client{}})
+			if err != nil {
+				t.Fatal(err)
 			}
-			if providerDefaults["allow_fallbacks"] != false || providerDefaults["require_parameters"] != true {
-				t.Errorf("OpenRouter provider defaults are not fail-closed")
+			adapter, err := openaichat.New(client, liveProfile.ID, profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			capabilities := provider.CapabilitySet{Version: profile.Capabilities.Version, Features: map[provider.Feature]provider.Capability{}}
+			for feature, capability := range profile.Capabilities.Features {
+				capabilities.Features[feature] = capability
+			}
+			capabilities.Features[provider.FeatureToolCall] = provider.Capability{State: provider.CapabilityNative}
+			call, err := adapter.Compile(context.Background(), provider.CompileInput{
+				Capability: capabilities,
+				Request:    llm.Request{OperationKey: "live-profile", Model: liveProfile.Model, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}},
+				Query:      provider.CapabilityQuery{EndpointID: liveProfile.ID, Family: provider.FamilyOpenAIChat, Model: liveProfile.Model},
+			})
+			if err != nil {
+				t.Fatalf("compile OpenRouter request: %v", err)
+			}
+			encoded, err := json.Marshal(call.SDKParams)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				Provider map[string]any `json:"provider"`
+			}
+			if err := json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatalf("decode OpenRouter provider object: %v", err)
+			}
+			if wire.Provider["allow_fallbacks"] != false || wire.Provider["require_parameters"] != true || wire.Provider["only"] == nil {
+				t.Errorf("OpenRouter provider object %v is not fail-closed", wire.Provider)
 			}
 		}
 	}

@@ -63,10 +63,13 @@ prices.
 - **Only configured credentials are used.** An endpoint marked `optional` is
   disabled when its environment credential is unset, and model sync never
   routes to it. Only model sync may reference an optional endpoint.
-- **OpenRouter selects the upstream.** The sync endpoint sends only
-  `provider.require_parameters: true`; callers cannot steer the upstream. Its
-  price is the componentwise maximum over every upstream endpoint and
-  long-prompt override, so a reservation never undercounts. OpenRouter's
+- **OpenRouter selects the upstream among the allowed endpoints.** The sync
+  endpoint sends `provider.require_parameters: true` and names the endpoints
+  the upstream policy allows in `provider.only` (see the
+  [configuration reference](../reference/configuration.md#openrouter-upstream-policy));
+  callers cannot steer the upstream. Its price is the componentwise maximum
+  over every allowed upstream endpoint and long-prompt override, so a
+  reservation never undercounts. OpenRouter's
   reported cost (`usage.cost`) settles the call. That is only the amount
   charged to the OpenRouter account, so a BYOK response (`usage.is_byok:
   true`), whose inference the upstream provider bills to the operator's own

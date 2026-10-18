@@ -1,6 +1,6 @@
 {
   "messages": [{"content": [{"text": "fixture openrouter chat", "type": "text"}], "role": "user"}],
   "model": "router-model",
-  "provider": {"allow_fallbacks": false, "order": ["fixture-provider"], "require_parameters": true},
+  "provider": {"allow_fallbacks": false, "only": ["fixture-provider"], "order": ["fixture-provider"], "require_parameters": true},
   "service_tier": "standard"
 }

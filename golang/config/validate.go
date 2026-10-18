@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 	"math"
 	"math/big"
 	"net"
@@ -40,6 +41,11 @@ func (config Config) Validate() error {
 	}
 	if config.Version != APIVersion {
 		return fmt.Errorf("version must be %q", APIVersion)
+	}
+	if config.OpenRouterUpstream != nil && config.OpenRouterUpstream.Countries != "" {
+		if _, err := modelsync.CountryList(config.OpenRouterUpstream.Countries); err != nil {
+			return fmt.Errorf("openrouter_upstream.countries: %w", err)
+		}
 	}
 	if err := validateIdentifier(config.Environment, "environment"); err != nil {
 		return err
