@@ -41,6 +41,9 @@ type ExecutionFailure struct {
 	// credit, such as an OpenRouter 402. Credit is account-wide, so route
 	// health holds the route instead of counting toward the threshold.
 	CreditExhausted bool `json:"credit_exhausted,omitempty"`
+	// ProviderStatus is the upstream HTTP status the provider reported for
+	// the failure, when it reported one.
+	ProviderStatus int `json:"provider_status,omitempty"`
 }
 
 // ProviderExecution is one provider attempt, never permission to submit it again.

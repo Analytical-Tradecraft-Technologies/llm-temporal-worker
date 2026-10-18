@@ -413,11 +413,14 @@ func invalidState() error {
 type ExecutionFailureDetails struct {
 	ErrorCode string `json:"error_code,omitempty"`
 	Dispatch  string `json:"dispatch,omitempty"`
+	// ProviderStatus is the upstream HTTP status, when the result carries one.
+	ProviderStatus int `json:"provider_status,omitempty"`
 }
 
 func failedExecutionError(result llm.ExecutionResultV1) error {
-	if result.ErrorCode == "" && result.Dispatch == "" {
+	if result.ErrorCode == "" && result.Dispatch == "" && result.ProviderStatus == 0 {
 		return temporal.NewNonRetryableApplicationError("model request failed", result.FailureCode, nil)
 	}
-	return temporal.NewNonRetryableApplicationError("model request failed", result.FailureCode, nil, ExecutionFailureDetails{ErrorCode: result.ErrorCode, Dispatch: result.Dispatch})
+	return temporal.NewNonRetryableApplicationError("model request failed", result.FailureCode, nil,
+		ExecutionFailureDetails{ErrorCode: result.ErrorCode, Dispatch: result.Dispatch, ProviderStatus: result.ProviderStatus})
 }

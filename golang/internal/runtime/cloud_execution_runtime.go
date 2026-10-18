@@ -666,6 +666,10 @@ func providerFailureResult(p PreparedCloudRequest, failure cloudstate.ExecutionF
 		result.FailureCode = "provider_rejected"
 	}
 	result.ErrorCode, result.Dispatch, result.Retryable = string(failure.Code), string(failure.Dispatch), failure.Retryable
+	// failure.ProviderStatus is saved but not yet copied to the result:
+	// ExecutionResultV1 decoding is closed, and a worker that predates the
+	// field would reject a result carrying it during a rollout. Copy it once
+	// every running worker accepts provider_status.
 	return result
 }
 func cloudStatus(p PreparedCloudRequest, status llm.ExecutionStateV1, wait time.Duration) llm.ExecutionResultV1 {

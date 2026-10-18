@@ -159,3 +159,30 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 		t.Fatal("oversize capability marshalled")
 	}
 }
+
+// provider_status is accepted on a failed result so a later worker can report
+// the upstream HTTP status, and rejected in any other state or out of range.
+func TestExecutionResultAcceptsProviderStatusOnlyOnFailure(t *testing.T) {
+	failed := `{"request_id":"` + requestID + `","kind":"generate","state":"failed","failure_code":"provider_error","error_code":"provider_unavailable","dispatch":"accepted","provider_status":502}`
+	var decoded llm.ExecutionResultV1
+	if err := json.Unmarshal([]byte(failed), &decoded); err != nil || decoded.ProviderStatus != 502 {
+		t.Fatalf("decoded %+v, %v", decoded, err)
+	}
+	if data, err := json.Marshal(decoded); err != nil || !strings.Contains(string(data), `"provider_status":502`) {
+		t.Fatalf("encoded %s, %v", data, err)
+	}
+	for _, data := range []string{
+		strings.Replace(failed, `502}`, `99}`, 1),
+		strings.Replace(failed, `502}`, `600}`, 1),
+		strings.Replace(failed, `502}`, `"502"}`, 1),
+		`{"request_id":"` + requestID + `","kind":"generate","state":"pending","retry_after_seconds":3,"provider_status":502}`,
+	} {
+		value := llm.ExecutionResultV1{}
+		if err := json.Unmarshal([]byte(data), &value); err == nil {
+			t.Fatalf("accepted %s", data)
+		}
+	}
+	if _, err := json.Marshal(llm.ExecutionResultV1{RequestID: requestID, Kind: "generate", State: llm.ExecutionOutcomeUnknown, ProviderStatus: 502}); err == nil {
+		t.Fatal("provider status accepted outside a failure")
+	}
+}

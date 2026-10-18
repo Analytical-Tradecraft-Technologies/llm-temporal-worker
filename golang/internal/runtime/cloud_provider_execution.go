@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -495,6 +497,9 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched || (received && acceptedLiftFailure(classified))) {
 			next.Stage = cloudstate.ExecutionFailed
 			next.Failure = executionFailure(classified.Code, classified.Dispatch, classified, now)
+		} else if !polling && unrecoverableDeadline(callErr, saved, outcome, planned) {
+			next.Stage = cloudstate.ExecutionFailed
+			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeDeadlineExceeded, Dispatch: provider.DispatchAmbiguous}
 		}
 	} else {
 		if outcome.ProviderOperationID != "" {
@@ -535,6 +540,16 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			next.Stage = cloudstate.ExecutionUnknown
 			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		}
+	}
+	switch {
+	case callErr != nil:
+		logProviderAttemptFailure(ctx, saved, next, callErr, "")
+	case outcome.State == provider.ResumableFailed && outcome.Failure != nil:
+		logProviderAttemptFailure(ctx, saved, next, outcome.Failure, "")
+	case outcome.State == provider.ResumableNotFound:
+		// A poll or idempotency recovery that finds no provider job leaves
+		// the attempt unknown without any provider error to classify.
+		logProviderAttemptFailure(ctx, saved, next, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider job not found"), "provider_job_not_found")
 	}
 	next.UpdatedAt = now
 	if next.Stage == cloudstate.ExecutionSucceeded || next.Stage == cloudstate.ExecutionFailed {
@@ -973,6 +988,66 @@ func acceptedLiftFailure(failure *provider.Error) bool {
 	return failure.Phase == provider.PhaseLift && failure.Dispatch == provider.DispatchAccepted && failure.Retry == provider.RetryNever
 }
 
+// logProviderAttemptFailure records why a paid provider attempt failed or
+// became unknown. Without it an operator sees only the request's final code
+// (often ambiguous_dispatch) and cannot tell an upstream error from a timeout.
+// It logs safe enums and the upstream HTTP status, never provider text.
+func logProviderAttemptFailure(ctx context.Context, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution, callErr error, cause string) {
+	attrs := []slog.Attr{
+		slog.String("route_id", saved.Plan.Route.RouteID), slog.String("endpoint", saved.Plan.Route.EndpointID),
+		slog.String("model", saved.Plan.Route.Model), slog.String("outcome", string(next.Stage)),
+	}
+	var classified *provider.Error
+	if errors.As(callErr, &classified) {
+		attrs = append(attrs, slog.String("error_code", string(classified.Code)), slog.String("phase", string(classified.Phase)),
+			slog.String("dispatch", string(classified.Dispatch)), slog.String("retry", string(classified.Retry)))
+		if status := classified.SafeDetails["status"]; providerHTTPStatus(status) != 0 {
+			attrs = append(attrs, slog.String("status", status))
+		}
+		if cause == "" && errors.Is(callErr, context.DeadlineExceeded) {
+			cause = "deadline_exceeded"
+		}
+	} else {
+		attrs = append(attrs, slog.String("error_code", string(provider.CodeInternal)))
+	}
+	if cause != "" {
+		attrs = append(attrs, slog.String("cause", cause))
+	}
+	observability.LoggerFromContext(ctx).Warn(ctx, "provider attempt failed", attrs...)
+}
+
+// providerHTTPStatus returns a provider's reported HTTP status, or zero when
+// the detail is not a status code.
+func providerHTTPStatus(value string) int {
+	status, err := strconv.Atoi(value)
+	if err != nil || status < 100 || status > 599 || strconv.Itoa(status) != value {
+		return 0
+	}
+	return status
+}
+
+// unrecoverableDeadline reports a call the worker's own deadline (the
+// endpoint's HTTP timeout or the Activity bound) cut off after a possible
+// write, on a route with nothing to recover: no provider job to poll and no
+// idempotency recovery. Its outcome stays unknown, but waiting out the start
+// lease cannot learn it, and a replacement attempt runs under the same bound,
+// so each one would pay again for a result it never receives. It is a
+// terminal deadline failure accounted at the reservation. Cancellation
+// (worker shutdown) is not a deadline and still recovers as unknown.
+func unrecoverableDeadline(callErr error, saved cloudstate.SavedProviderExecution, outcome provider.ResumableResult, planned PlannedProviderCall) bool {
+	if !errors.Is(callErr, context.DeadlineExceeded) {
+		var classified *provider.Error
+		if !errors.As(callErr, &classified) || classified.Code != provider.CodeDeadlineExceeded {
+			return false
+		}
+	}
+	if saved.Execution.ProviderOperationID != "" || outcome.ProviderOperationID != "" {
+		return false
+	}
+	_, recoverable := planned.Adapter.(provider.IdempotencyRecovery)
+	return !recoverable
+}
+
 // maxProviderRetryDelay caps how long a provider's Retry-After can hold a
 // request back from the route that returned it.
 const maxProviderRetryDelay = 24 * time.Hour
@@ -981,6 +1056,9 @@ const maxProviderRetryDelay = 24 * time.Hour
 // errors remain outcome_unknown; they never become a free or immediate retry.
 func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, failure *provider.Error, now time.Time) *cloudstate.ExecutionFailure {
 	result := &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch}
+	if failure != nil {
+		result.ProviderStatus = providerHTTPStatus(failure.SafeDetails["status"])
+	}
 	if preDispatchContextEnded(failure) {
 		// The worker's own context ended (shutdown or Activity deadline) before
 		// any provider write. Nothing was sent, so this is a zero-cost retryable

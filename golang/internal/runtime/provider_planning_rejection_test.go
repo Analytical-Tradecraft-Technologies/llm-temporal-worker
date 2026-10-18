@@ -114,7 +114,8 @@ func TestProviderPlanningClassifiesExhaustedSelection(t *testing.T) {
 			details: map[string]string{"rejected_routes": "1", "route_1": "route", "reason_1": routing.RejectHealth}},
 		{name: "model has no route", configure: func(_ *planningSource, _ *planningAdapter, request *llm.GenerateRequestV1) {
 			request.SettingsPatch.Model.Set = preparationPointer("unknown")
-		}, code: provider.CodeNoRoute, phase: provider.PhasePlan},
+		}, code: provider.CodeNoRoute, phase: provider.PhasePlan,
+			details: map[string]string{"reason_1": "model_not_in_catalog"}},
 		{name: "custom planner rejects with request text", configure: func(_ *planningSource, _ *planningAdapter, _ *llm.GenerateRequestV1) {
 			customPlanner = planningPlannerFunc(func(context.Context, routing.Input) (routing.Plan, error) {
 				return routing.Plan{Rejections: []routing.Rejection{

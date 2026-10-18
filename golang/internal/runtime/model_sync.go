@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -241,11 +242,11 @@ func priceIdentity(entry pricing.Entry) string {
 
 // start installs the published Document, if any, and then runs the refresher
 // until stop. httpClient must enforce the OpenRouter endpoint's egress policy.
-func (syncer *modelSyncRuntime) start(ctx context.Context, value config.Config, store modelsync.Store, httpClient *http.Client, apiKey string, observe func(modelsync.Event)) {
+func (syncer *modelSyncRuntime) start(ctx context.Context, value config.Config, store modelsync.Store, httpClient *http.Client, apiKey string, observe func(modelsync.Event), skipped func([]modelsync.SkippedModel)) {
 	minimum, maximum := value.ModelSync.RefreshIntervalMin, value.ModelSync.RefreshIntervalMax
 	syncer.refresher = &modelsync.Refresher{
 		Store: store,
-		Fetch: modelsync.Fetcher{Client: httpClient, BaseURL: value.Endpoints[value.ModelSync.OpenRouter.Endpoint].BaseURL, APIKey: apiKey}.Fetch,
+		Fetch: modelsync.Fetcher{Client: httpClient, BaseURL: value.Endpoints[value.ModelSync.OpenRouter.Endpoint].BaseURL, APIKey: apiKey, OnSkipped: skipped}.Fetch,
 		Install: func(document modelsync.Document) error {
 			return syncer.install(&document)
 		},
@@ -299,4 +300,26 @@ func (log *modelSyncLogger) observe(event modelsync.Event) {
 		return
 	}
 	logger.Info(context.Background(), "model catalog sync step completed", attrs...)
+}
+
+// maxSkippedModelLogs bounds the per-fetch warnings for models left out of
+// the catalog; the rest are counted in the last line's outcome.
+const maxSkippedModelLogs = 16
+
+// skipped warns about OpenRouter models and endpoints a fetch left out
+// because their price was unusable. Model IDs are public catalog names.
+func (log *modelSyncLogger) skipped(models []modelsync.SkippedModel) {
+	logger := log.logger.Load()
+	if logger == nil {
+		return
+	}
+	for index, model := range models {
+		if index == maxSkippedModelLogs {
+			logger.Warn(context.Background(), "model catalog sync left out more models", slog.String("source", "model_sync"),
+				slog.String("outcome", strconv.Itoa(len(models)-maxSkippedModelLogs)+"_more"))
+			return
+		}
+		logger.Warn(context.Background(), "model catalog sync left out a model", slog.String("source", "model_sync"),
+			slog.String("model", model.ID), slog.String("cause", model.Cause))
+	}
 }
