@@ -10,8 +10,10 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
@@ -450,6 +452,128 @@ func TestCloudExecutionRuntimeRejectedPrepareLeavesNothingPending(t *testing.T) 
 			// Nothing was bound to the key, so corrected input can still use it.
 			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &valid})
 			boundedState(t, v, err, llm.ExecutionBudgetRequired)
+		})
+	}
+}
+
+func TestCloudProjectDefaultIsPinnedWithoutChangingCallerInput(t *testing.T) {
+	for _, kind := range []string{"root", "generate", "compact"} {
+		t.Run(kind, func(t *testing.T) {
+			p, store, _, input := cloudPreparationFixture(t, kind)
+			catalog, err := (routing.Catalog{}).WithClassPolicies([]routing.ClassPolicy{{ID: "experiments", Classes: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard}, DefaultClass: llm.ServiceClassEconomy}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: catalog}}
+			original, _ := json.Marshal(input)
+			first, err := p.Prepare(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "root" {
+				prepared, err := first.generateInput(context.Background())
+				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
+					t.Fatalf("root default = %+v, %v", prepared.Request, err)
+				}
+				if first.Preparation.DefaultServiceClass != llm.ServiceClassEconomy {
+					t.Fatal("default was not retained")
+				}
+				// A new configuration cannot change an already prepared operation.
+				p.source = engine.StaticSnapshot{Value: engine.Snapshot{}}
+				again, err := p.Prepare(context.Background(), input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, err = again.generateInput(context.Background())
+				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
+					t.Fatal("retry changed default")
+				}
+				loaded, err := p.Load(context.Background(), referenceFor(first))
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, err = loaded.generateInput(context.Background())
+				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
+					t.Fatal("load changed default")
+				}
+			} else if first.Preparation.DefaultServiceClass != "" {
+				t.Fatal("default replaced inherited settings")
+			}
+			after, _ := json.Marshal(input)
+			if !bytes.Equal(original, after) || store.saves != 1 {
+				t.Fatal("default changed caller input or rewrote preparation")
+			}
+		})
+	}
+}
+
+func TestCloudProjectDefaultPreservesExplicitTier(t *testing.T) {
+	for _, class := range []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassEconomy, llm.ServiceClassPriority} {
+		p, _, _, input := cloudPreparationFixture(t, "root")
+		p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: routing.Catalog{ClassPolicies: []routing.ClassPolicy{{DefaultClass: llm.ServiceClassEconomy}}}}}
+		input.Generate.SettingsPatch.ServiceClass.Set = &class
+		prepared, err := p.Prepare(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		semantic, err := prepared.generateInput(context.Background())
+		if err != nil || semantic.Request.ServiceClass != class || prepared.Preparation.DefaultServiceClass != "" {
+			t.Fatalf("explicit %s replaced: %v", class, err)
+		}
+	}
+}
+
+func TestCloudProjectDefaultPreservesExplicitClear(t *testing.T) {
+	p, _, _, input := cloudPreparationFixture(t, "root")
+	p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: routing.Catalog{ClassPolicies: []routing.ClassPolicy{{DefaultClass: llm.ServiceClassEconomy}}}}}
+	input.Generate.SettingsPatch.ServiceClass.Set = nil
+	input.Generate.SettingsPatch.ServiceClass.Clear = true
+	prepared, err := p.Prepare(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semantic, err := prepared.generateInput(context.Background())
+	if err != nil || semantic.Request.ServiceClass != llm.ServiceClassStandard || prepared.Preparation.DefaultServiceClass != "" {
+		t.Fatalf("explicit clear replaced: %v", err)
+	}
+}
+
+type preparationSnapshotFunc func(context.Context) (engine.Snapshot, error)
+
+func (f preparationSnapshotFunc) Current(ctx context.Context) (engine.Snapshot, error) {
+	return f(ctx)
+}
+
+func TestCloudProjectDefaultSnapshotErrorsRemainRetryable(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "transient", true: "canceled"}[canceled], func(t *testing.T) {
+			p, store, _, input := cloudPreparationFixture(t, "root")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			p.source = preparationSnapshotFunc(func(context.Context) (engine.Snapshot, error) {
+				if canceled {
+					cancel()
+				}
+				return engine.Snapshot{}, errors.New("snapshot temporarily unavailable")
+			})
+			_, err := p.Prepare(ctx, input)
+			if canceled {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("lost cancellation: %v", err)
+				}
+			} else {
+				var mapped *provider.Error
+				if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+					t.Fatalf("transient failure became permanent: %v", err)
+				}
+			}
+			if store.begins != 0 || store.saves != 0 {
+				t.Fatal("failed snapshot created an operation")
+			}
+			p.source = engine.StaticSnapshot{Value: engine.Snapshot{}}
+			if _, err := p.Prepare(context.Background(), input); err != nil {
+				t.Fatalf("same operation could not retry: %v", err)
+			}
 		})
 	}
 }

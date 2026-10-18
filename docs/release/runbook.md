@@ -105,18 +105,25 @@ verification job it aggregates succeed on a `push` to `master`.
 Pull-request, scheduled, and manual workflow executions do not collect or
 retain this bundle. The job has only `contents: read` permission.
 
-Trusted master CI does not runtime-test the published digest. Its
-`release-evidence` job passes `--verified-inputs`, so the collector skips its
-local image build; the job scans and inventories the published platform
-manifests downloaded by digest, as described above. The image runtime checks
-run in the separate `verify-image` job against its own local linux/amd64 build
-of the same commit, and the linux/arm64 image is never executed. The published
-bytes are bound by their digests, SBOMs, and scans, not by a runtime test.
+### Runtime tests and scans
 
-Local collection without `--verified-inputs` builds one Linux OCI layout
-directory at `$RUNNER_TEMP/image.oci`, outside `release-artifacts/`,
-runtime-tests the image loaded by the same Buildx solve, then obtains the
-immutable image subject from the layout's single OCI manifest descriptor:
+No CI job runs the published image digest. The published bytes are bound by
+their digests, SBOMs, and scans, not by a runtime test. Each job that touches
+an image either runtime-tests its own build or scans exact bytes:
+
+| Job | Image bytes | Runtime-tested | Scanned |
+| --- | --- | --- | --- |
+| Pull-request `container` | A linux/amd64 OCI archive that `make image-verify` exports with `IMAGE_VERIFY_OCI_LAYOUT` | Yes, that archive after import into the containerd image store | Merge-queue runs only: both platforms of a separate build, as master's `container` job does, without publishing |
+| Master `container` | Each platform built on Docker Build Cloud by `scripts/ci/build-scanned-image.sh`, then assembled and published as the index | No | Yes, both platforms with Trivy before anything is published |
+| Master `verify-image` | Its own linux/amd64 `make image-verify` build of the same commit | Yes, but these are not the published bytes, and linux/arm64 is never executed | No |
+| Master `release-evidence` | The published index and both platform manifests, downloaded by digest | No: `--verified-inputs` skips the collector's image build and runtime test | Yes, both platforms with Syft and Trivy, retained in this bundle |
+| Guarded release preflight | Both platforms of the requested index, pulled by digest | No | Yes, rescanned with a current vulnerability database (see [Guarded manual publication boundary](#guarded-manual-publication-boundary)) |
+
+Local collection without `--verified-inputs` builds one linux/amd64 OCI layout
+directory at `$RUNNER_TEMP/image.oci`, outside `release-artifacts/`, through
+`make image-verify`. It runtime-tests the image loaded from that same archive,
+then obtains the immutable image subject from the layout's single OCI manifest
+descriptor:
 
 ```sh
 digest="$(go -C golang run ./tools/releaseverify layout-digest -layout "$RUNNER_TEMP/image.oci")"
@@ -126,21 +133,19 @@ reference="llm-temporal-worker@$digest"
 The descriptor, rather than a local image ID or mutable tag, is the source of
 truth. The retained CycloneDX SBOM and Trivy JSON scan are both bound to the
 same `reference` and `digest`; the verifier rejects stale or mismatched
-subjects. The raw OCI layout directory is CI-temporary only: the descriptor,
+subjects. The raw OCI layout directory is temporary only: the descriptor,
 Syft, and Trivy consume that exact directory; it is never recorded or uploaded
-and is removed after artifact upload. Master uses the pinned Buildx Cloud helper
-and a single `type=oci,tar=true` exporter; the Cloud driver does not support
-explicit `type=docker` archive exports. The job enables Docker's containerd
-image store before starting any containers, loads the temporary OCI archive for
-runtime tests, and extracts that same archive for scanning. The archive is
-removed on success or failure. PR and merge-queue container jobs exercise this
-archive import and descriptor verification with the uncredentialed local builder.
-For local collection, enable the containerd image store in Docker first.
-Failures report a fixed image-verification stage; raw command output remains
-private and is discarded. Trusted CI uses
-explicit Syft `v1.44.0` and Trivy `v0.72.0` inputs, with the checked-in
-[Trivy configuration](../../scripts/release/trivy.yaml) applied to that
-temporary directory.
+and is removed after artifact upload. `make image-verify` exports a single
+`type=oci,tar=true` archive, loads it into Docker's containerd image store for
+the runtime tests, and extracts that same archive for scanning. The archive is
+removed on success or failure. The pull-request `container` job exercises this
+archive import and descriptor verification with the uncredentialed local
+builder. For local collection, enable the containerd image store in Docker
+first. Failures report a fixed image-verification stage; raw command output
+remains private and is discarded. Trusted CI uses explicit Syft `v1.44.0` and
+Trivy `v0.72.0` inputs, with the checked-in
+[Trivy configuration](../../scripts/release/trivy.yaml) applied to the
+temporary OCI directories it scans.
 
 Before compact manifest collection, trusted CI installs `kubectl v1.32.6` with
 the immutable `azure/setup-kubectl` `v4.0.1` action commit. The collector
@@ -453,23 +458,55 @@ boundary without widening the token's scope.
 
 Retained evidence records scans from when the image was built, so the
 preflight bounds its age and rescans the release subject. The evidence run must
-have started, and the bundle's `generated_at` must fall, within the last 7 days.
+have started, and the bundle's `generated_at` must fall, within the last 7 days
+(`MAX_RUN_AGE` in `scripts/release/verify-public-run.py` and
+`MAX_EVIDENCE_AGE` in `guard.sh verify-evidence`). Both are checked because a
+re-run attempt resets the run's start time, while the bundle's own timestamp
+records when its evidence was generated. The bound is half the 14-day
+retention of the `release-evidence` artifact, so the bound, not artifact
+expiry, decides. It is short because the rescans below renew only the
+vulnerability verdict: the bundle's test, race, fuzz, benchmark, Redis,
+Temporal, and Compose results and its SBOMs cannot be reproduced without
+executing tag code, so they must come from a recent master build. A week still
+leaves time to choose, review, and tag a commit after its master run. Older
+evidence cannot authorize publication; tag a more recent master commit instead.
+
 After the evidence checks, `scripts/release/preflight-scan.sh` runs two fresh
-scans without executing tag code:
+scans without executing tag code. Each applies the policy of the corresponding
+master gate and keeps raw scanner output in private temporary files:
 
 - `tag-source` adds a read-only Git worktree of the tag commit and runs
-  `govulncheck`, built from the trusted master module, on its `golang/` module
-  with the Go toolchain the tag pins in `golang/.go-version` (the version its
-  image was built with). Any reachable vulnerability fails the preflight.
+  `govulncheck -format json`, built from the trusted master module, on its
+  `golang/` module. It uses the Go toolchain the tag pins in
+  `golang/.go-version` (the version master's `container` job built its image
+  with), `CGO_ENABLED=0`, `GOWORK=off`, and `-mod=readonly`, and fetches the
+  current Go vulnerability database. `supplychainverify -release-tag`, also
+  built from master, then applies the exception rules of master's
+  [dependency baseline](../reference/dependency-baseline.md), as
+  `security-verify` does: every finding needs a current exception, and an
+  imported package or called function needs a `reachable`-scope exception.
+  That also rejects a vulnerable package that is imported but never called,
+  which `govulncheck`'s own exit status ignores. An exception the tag does not
+  use is allowed, because master's baseline can cover findings an older tag
+  lacks. A failure names every rejected `GO-*` identifier. The worktree is
+  removed afterwards.
 - `image` uses the pinned Trivy with an empty cache, and therefore a current
   vulnerability database, to pull the linux/amd64 and linux/arm64 manifests of
-  the requested image index from the registry and rescan them with the
-  checked-in [Trivy configuration](../../scripts/release/trivy.yaml). A fixable
-  HIGH or CRITICAL finding on either platform fails the preflight.
+  the requested image index from the registry by digest. It rescans each with
+  the options of master's `container` gate (`scripts/ci/build-scanned-image.sh`):
+  the checked-in [Trivy configuration](../../scripts/release/trivy.yaml), which
+  selects HIGH and CRITICAL findings and ignores unfixed ones, JSON output, and
+  `--exit-code 1`. A fixable HIGH or CRITICAL finding on either platform fails
+  the preflight, which prints only the sanitized finding summary. The workflow
+  supplies no registry credentials, so a registry that requires them to read
+  the image fails the preflight closed.
 
+Neither rescan runs the image, so the preflight does not runtime-test the
+published digest either; see [Runtime tests and scans](#runtime-tests-and-scans).
 The other preflight gates (`security-verify`, `workflow-verify`,
 `deployment-policy-verify`, and `image-verify`) still check the protected
-master tree that runs the workflow, not the tag.
+master tree that runs the workflow, not the tag; `image-verify` builds and
+runtime-tests master's own linux/amd64 image, not the publication digest.
 
 The downstream job names the `release-publication` protected environment and
 is the only job with `id-token: write`. Repository administrators must create

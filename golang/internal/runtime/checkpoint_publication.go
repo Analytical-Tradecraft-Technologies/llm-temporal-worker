@@ -132,7 +132,14 @@ func (p *CheckpointPublication) generate(ctx context.Context, identity Checkpoin
 	if _, err := response.MarshalJSON(); err != nil {
 		return zero, llm.GenerateResponseV1{}, checkpointPublicationError(provider.CodeStateCorrupt)
 	}
-	patch, err := p.codec.EncodeSettingsPatchV1(request.SettingsPatch)
+	settingsPatch := request.SettingsPatch
+	// Persist a root's configured default so descendants reconstruct the same
+	// settings without consulting current configuration.
+	if request.Parent == nil && replay.DefaultServiceClass != "" && settingsPatch.ServiceClass.Set == nil && !settingsPatch.ServiceClass.Clear {
+		class := prepared.Settings.ServiceClass
+		settingsPatch.ServiceClass.Set = &class
+	}
+	patch, err := p.codec.EncodeSettingsPatchV1(settingsPatch)
 	if err != nil {
 		return zero, llm.GenerateResponseV1{}, checkpointPublicationError(provider.CodeStateCorrupt)
 	}

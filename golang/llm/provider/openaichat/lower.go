@@ -32,6 +32,13 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 		}
 		messages = append(messages, message)
 	}
+	if text, ok := searchOutputInstruction(request, profile); ok {
+		message, err := lowerInstruction(llm.Instruction{Level: llm.InstructionLevelApplication, Content: []llm.Part{llm.TextPart{Text: text}}}, profile.applicationInstructionRole())
+		if err != nil {
+			return nil, fmt.Errorf("search output instruction: %w", err)
+		}
+		messages = append(messages, message)
+	}
 	for index, item := range request.Input {
 		if err := appendInputItem(&messages, item, toolCalls); err != nil {
 			return nil, fmt.Errorf("input item %d: %w", index, err)
@@ -97,7 +104,11 @@ func lowerRequestMap(request llm.Request, profile Profile, serviceTier string) (
 	if (len(request.Tools) > 0 || request.WebSearch) && policy != nil {
 		requestMap["tool_choice"] = policy
 	}
-	if len(request.Tools) > 0 || request.WebSearch {
+	// parallel_tool_calls only governs caller function calls. OpenRouter
+	// counts it as a routing parameter, and with require_parameters it
+	// excludes every upstream that does not list it (all xAI endpoints, for
+	// example), so a search-only request would have no endpoint at all.
+	if len(request.Tools) > 0 {
 		requestMap["parallel_tool_calls"] = request.ToolPolicy.Parallel
 	}
 	if request.Continuation != nil {
@@ -538,6 +549,22 @@ func lowerOutput(output llm.OutputSpec, target map[string]any) error {
 	default:
 		return fmt.Errorf("output format %q is not supported", output.Format.Kind)
 	}
+}
+
+// searchOutputInstruction restates a JSON output contract as an instruction
+// when OpenRouter runs server web search. For a model without native search,
+// OpenRouter answers through its own search loop and does not apply
+// response_format to the final answer: a strict-schema request that relies on
+// response_format alone comes back as prose, while the same request whose
+// prompt asks for the JSON succeeds. The instruction is added only to the wire
+// request, so request digests and cache keys are unchanged, and the lift still
+// validates the answer against the caller's schema. Admission counts it
+// through routing.AdapterTextOverheadBytes.
+func searchOutputInstruction(request llm.Request, profile Profile) (string, bool) {
+	if profile.ExpectedBaseURL != openRouterBaseURL {
+		return "", false
+	}
+	return llm.SearchOutputInstruction(request)
 }
 
 // lowerOutputSchema returns the wire schema. A strict schema is lowered to

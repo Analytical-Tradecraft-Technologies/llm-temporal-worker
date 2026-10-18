@@ -28,8 +28,11 @@ var (
 // phase.  It contains no ancestor transcript in the Activity payload; the
 // materialized view is held only in the worker process.
 type GenerateReplay struct {
-	State     state.MaterializedState
-	Completed *llm.GenerateResponseV1
+	// DefaultServiceClass is pinned by root preparation, before applying the
+	// caller's sparse settings patch. It never replaces inherited settings.
+	DefaultServiceClass llm.ServiceClass
+	State               state.MaterializedState
+	Completed           *llm.GenerateResponseV1
 	// ReconciliationPending is populated when checkpoint finalization committed
 	// but budget settlement or cache receipts remain pending. A Temporal retry
 	// must reconcile the committed identities before returning the response;

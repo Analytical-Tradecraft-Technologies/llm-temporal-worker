@@ -198,7 +198,7 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 		}
 		// The byte check counts the text this candidate's family adds when
 		// lowering failed tool results, as route planning does.
-		if err != nil || (route.ContextBytes > 0 && len(encoded)+routing.ToolResultErrorOverheadBytes(input.Request, string(route.Family)) >= route.ContextBytes) {
+		if err != nil || (route.ContextBytes > 0 && len(encoded)+routing.AdapterTextOverheadBytes(input.Request, string(route.Family)) >= route.ContextBytes) {
 			limited = true
 		}
 	}

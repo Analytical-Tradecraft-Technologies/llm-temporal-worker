@@ -55,9 +55,38 @@ not diagnostic causes or arbitrary provider error text.
 
 A response that arrived in full but could not be lifted is an accepted
 `provider_invalid_response`. Tool-call arguments with a duplicate JSON key are
-one example; every adapter rejects them while lifting. The attempt is a terminal
-failure settled at the conservative charge. It is not `outcome_unknown`, so it
-does not wait for the recovery time or lead to another submission.
+one example; every adapter rejects them while lifting. A response that reports
+a failure during generation is another: OpenRouter returns a choice with
+`finish_reason: "error"`, which keeps the provider's code (for example
+`provider_unavailable`). Either way the attempt is a terminal failure settled at
+the conservative charge. It is not `outcome_unknown`, so it does not wait for
+the recovery time or lead to another submission.
+
+Every failed or unknown attempt is logged as `provider attempt failed` with
+`route_id`, `endpoint`, `model`, `outcome` (the saved stage), `error_code`,
+`phase`, `dispatch`, `retry`, the upstream HTTP `status` when the provider
+reported one, and a `cause`: `deadline_exceeded` when the worker's own deadline
+ended the call, or `provider_job_not_found` when a poll or idempotency recovery
+found no provider job. A response the Chat Completions adapter rejected while
+lifting also logs its closed cause (`response_empty`, `choices_missing`,
+`choices_multiple`, `json_text_missing`, `json_text_empty`,
+`json_fenced`, `json_leading_text`, `json_trailing_text`, `json_invalid`,
+`json_schema_violation`, `finish_reason_without_tool_call`,
+`finish_reason_unknown`, `tool_call_type_unsupported`, `tool_call_incomplete`,
+`tool_call_arguments_invalid`, `usage_invalid`, `response_metadata_invalid` or
+`response_invalid`) and the provider's `finish_reason` when it is a lowercase
+token. Provider messages and causes are never logged.
+
+A call the worker's own deadline cuts off after a possible write (the
+endpoint's HTTP `timeout` or the Activity bound) is a terminal
+`deadline_exceeded` failure with `ambiguous` dispatch when the route has nothing
+to recover: no provider job to poll and no idempotency recovery, as with
+OpenRouter Chat Completions. Waiting out the recovery time cannot learn its
+outcome, and a replacement would run under the same deadline, so each
+replacement would be charged for a result it never receives. It is settled at
+the conservative charge. Give such an endpoint a `timeout` that covers its
+longest expected request. A canceled call (worker shutdown) is not a deadline:
+it still becomes `outcome_unknown`.
 
 A saved terminal result is immutable; only its settlement acknowledgement may
 follow. Results are compared in canonical JSON form, so the key order a provider

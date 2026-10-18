@@ -80,13 +80,16 @@ module Failure : sig
   type dispatch = Not_dispatched | Rejected | Accepted | Ambiguous
 
   (** The details of a [provider_error], [provider_rejected] or
-      [incomplete_response] public workflow failure. *)
-  type execution_details = { error_code : string option; dispatch : dispatch option }
+      [incomplete_response] public workflow failure. [provider_status] is the
+      upstream HTTP status, when the worker reports one. *)
+  type execution_details = { error_code : string option; dispatch : dispatch option; provider_status : int option }
 
-  (** The bounded details of an [llm_*] Activity failure. *)
+  (** The bounded details of an [llm_*] Activity failure. [reason] is the
+      first closed-vocabulary planning cause when planning found no route, for
+      example [model_not_in_catalog] or [capability:web_search]. *)
   type safe_details = {
     code : string; phase : string; dispatch : dispatch; operation_id : string option;
-    retry_after_ms : int option; provider_request_id : string option }
+    retry_after_ms : int option; provider_request_id : string option; reason : string option }
 
   (** Classifies the retained application failure type; never discards the
       SDK error or invents a retry policy for paid work. A provider failure

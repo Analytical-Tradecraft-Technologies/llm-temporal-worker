@@ -45,7 +45,7 @@ let () =
     failure "provider_rejected" ~details:{|{"error_code":"permission_denied","dispatch":"rejected"}|} in
   expect_kind "permission denied" Authentication rejected_auth;
   expect_execution "permission denied"
-    (Some { error_code = Some "permission_denied"; dispatch = Some Rejected }) rejected_auth;
+    (Some { error_code = Some "permission_denied"; dispatch = Some Rejected; provider_status = None }) rejected_auth;
   expect "permission denied dispatch" (Failure.dispatch rejected_auth = Some Rejected);
   expect_kind "authentication" Authentication
     (failure "provider_error" ~details:{|{"error_code":"authentication","dispatch":"not_dispatched"}|});
@@ -76,8 +76,11 @@ let () =
   let legacy = failure "provider_error" in
   expect_kind "legacy" Provider_error legacy;
   expect_execution "legacy" None legacy;
-  expect_execution "code only" (Some { error_code = Some "internal"; dispatch = None })
+  expect_execution "code only" (Some { error_code = Some "internal"; dispatch = None; provider_status = None })
     (failure "provider_error" ~details:{|{"error_code":"internal"}|});
+  expect_execution "upstream status"
+    (Some { error_code = Some "provider_unavailable"; dispatch = Some Accepted; provider_status = Some 502 })
+    (failure "provider_error" ~details:{|{"error_code":"provider_unavailable","dispatch":"accepted","provider_status":502}|});
   (* Activity failures. *)
   let activity_auth =
     failure "llm_authentication"
@@ -85,7 +88,7 @@ let () =
   expect_kind "activity auth" Authentication activity_auth;
   expect_safe "activity auth"
     (Some { code = "permission_denied"; phase = "dispatch"; dispatch = Rejected;
-            operation_id = Some "op-1"; retry_after_ms = None; provider_request_id = Some "req-1" })
+            operation_id = Some "op-1"; retry_after_ms = None; provider_request_id = Some "req-1"; reason = None })
     activity_auth;
   expect_execution "activity has no execution details" None activity_auth;
   expect "activity auth dispatch" (Failure.dispatch activity_auth = Some Rejected);
@@ -95,12 +98,16 @@ let () =
   expect_kind "transient" Provider_transient transient;
   expect_safe "transient"
     (Some { code = "provider_rate_limited"; phase = "dispatch"; dispatch = Not_dispatched;
-            operation_id = None; retry_after_ms = Some 1500; provider_request_id = None })
+            operation_id = None; retry_after_ms = Some 1500; provider_request_id = None; reason = None })
     transient;
   expect_safe "decode"
     (Some { code = "invalid_argument"; phase = "decode"; dispatch = Not_dispatched;
-            operation_id = None; retry_after_ms = None; provider_request_id = None })
+            operation_id = None; retry_after_ms = None; provider_request_id = None; reason = None })
     (failure "llm_invalid_argument" ~details:{|{"code":"invalid_argument","phase":"decode","dispatch":"not_dispatched"}|});
+  expect_safe "planning reason"
+    (Some { code = "no_route"; phase = "plan"; dispatch = Not_dispatched;
+            operation_id = None; retry_after_ms = None; provider_request_id = None; reason = Some "model_not_in_catalog" })
+    (failure "llm_invalid_argument" ~details:{|{"code":"no_route","phase":"plan","dispatch":"not_dispatched","reason":"model_not_in_catalog"}|});
   expect_safe "state corrupt without details" None (failure "llm_state_corrupt");
   expect_safe "workflow failure has no safe details" None rejected_auth;
   (* Malformed details are errors and never upgrade or downgrade the kind. *)

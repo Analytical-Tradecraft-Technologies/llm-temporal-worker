@@ -2,6 +2,7 @@ package openaichat
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,7 +16,7 @@ import (
 
 func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCompletion, requestID string) (llm.Response, error) {
 	if response == nil {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
+		return llm.Response{}, liftFailure(call, requestID, "", "", withLiftCause("response_empty", errors.New("provider returned an empty response")))
 	}
 	if profile.ResponseError != nil {
 		if mapped := profile.ResponseError(call, response, requestID); mapped != nil {
@@ -24,28 +25,22 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 	}
 	actual := profile.actualClass(string(response.ServiceTier))
 	if len(response.Choices) == 0 {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider response contained no choices")
+		return llm.Response{}, liftFailure(call, requestID, response.ID, "", withLiftCause("choices_missing", errors.New("provider response contained no choices")))
 	}
 	if len(response.Choices) > 1 {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider returned multiple choices")
+		return llm.Response{}, liftFailure(call, requestID, response.ID, "", withLiftCause("choices_multiple", errors.New("provider returned multiple choices")))
 	}
 	choice := response.Choices[0]
 	output, hasToolCalls, hasRefusal, err := liftChoice(choice)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, liftFailure(call, requestID, response.ID, choice.FinishReason, err)
 	}
 	status, err := liftStatus(choice.FinishReason, hasToolCalls, hasRefusal)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, liftFailure(call, requestID, response.ID, choice.FinishReason, err)
 	}
 	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, liftFailure(call, requestID, response.ID, choice.FinishReason, err)
 	}
 	providerRaw := map[string]json.RawMessage{}
 	if response.SystemFingerprint != "" {
@@ -58,9 +53,7 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 	}
 	usage, err := liftUsage(response.Usage)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, liftFailure(call, requestID, response.ID, choice.FinishReason, withLiftCause("usage_invalid", err))
 	}
 	providerFacts := llm.ProviderFacts{
 		ResponseID:   response.ID,
@@ -92,9 +85,7 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 	}
 	if profile.ResponseAugment != nil {
 		if err := profile.ResponseAugment(call, response, &result); err != nil {
-			mapped := invalidResponseError(call, requestID, err.Error())
-			mapped.Provider.ResponseID = response.ID
-			return llm.Response{}, mapped
+			return llm.Response{}, liftFailure(call, requestID, response.ID, choice.FinishReason, withLiftCause("response_metadata_invalid", err))
 		}
 	}
 	return result, nil
@@ -142,12 +133,12 @@ func validateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 	}
 	content, ok := firstModelText(output)
 	if !ok {
-		return fmt.Errorf("provider response did not contain JSON text content")
+		return withLiftCause("json_text_missing", fmt.Errorf("provider response did not contain JSON text content"))
 	}
 	switch format.Type {
 	case "json_object":
 		if !json.Valid([]byte(content)) {
-			return fmt.Errorf("provider JSON response is invalid")
+			return withLiftCause(jsonContentShape(content), fmt.Errorf("provider JSON response is invalid"))
 		}
 	case "json_schema":
 		compiled, err := llmschema.Parse(validationSchema(call, format.JSONSchema.Schema))
@@ -155,7 +146,7 @@ func validateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 			return fmt.Errorf("response schema validation setup: %w", err)
 		}
 		if err := compiled.Validate([]byte(content)); err != nil {
-			return fmt.Errorf("provider JSON response does not satisfy schema: %w", err)
+			return withLiftCause(jsonContentShape(content), fmt.Errorf("provider JSON response does not satisfy schema: %w", err))
 		}
 	default:
 		return fmt.Errorf("provider returned unsupported response format %q", format.Type)
@@ -213,11 +204,11 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 	hasToolCalls := false
 	for index, union := range message.ToolCalls {
 		if union.Type != "function" {
-			return nil, false, false, fmt.Errorf("choice tool call %d has unsupported type %q", index, union.Type)
+			return nil, false, false, withLiftCause("tool_call_type_unsupported", fmt.Errorf("choice tool call %d has unsupported type %q", index, union.Type))
 		}
 		call := union.AsFunction()
 		if call.ID == "" || call.Function.Name == "" {
-			return nil, false, false, fmt.Errorf("choice tool call %d is missing ID or name", index)
+			return nil, false, false, withLiftCause("tool_call_incomplete", fmt.Errorf("choice tool call %d is missing ID or name", index))
 		}
 		arguments := call.Function.Arguments
 		// Some providers send an empty string for a zero-argument tool. That
@@ -236,7 +227,7 @@ func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, err
 			if choice.FinishReason == "length" {
 				continue
 			}
-			return nil, false, false, fmt.Errorf("tool call %q arguments are invalid JSON", call.ID)
+			return nil, false, false, withLiftCause("tool_call_arguments_invalid", fmt.Errorf("tool call %q arguments are invalid JSON", call.ID))
 		}
 		hasToolCalls = true
 		output = append(output, llm.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: []byte(arguments)})
@@ -258,7 +249,7 @@ func liftStatus(finishReason string, hasToolCalls, hasRefusal bool) (llm.Respons
 		return llm.ResponseStatusCompleted, nil
 	case "tool_calls", "function_call":
 		if !hasToolCalls {
-			return "", fmt.Errorf("finish reason %q did not contain a tool call", finishReason)
+			return "", withLiftCause("finish_reason_without_tool_call", fmt.Errorf("finish reason %q did not contain a tool call", finishReason))
 		}
 		return llm.ResponseStatusToolCalls, nil
 	case "length":
@@ -266,7 +257,7 @@ func liftStatus(finishReason string, hasToolCalls, hasRefusal bool) (llm.Respons
 	case "content_filter":
 		return llm.ResponseStatusContentFiltered, nil
 	default:
-		return "", fmt.Errorf("provider returned unknown finish reason %q", finishReason)
+		return "", withLiftCause("finish_reason_unknown", fmt.Errorf("provider returned unknown finish reason %q", finishReason))
 	}
 }
 
@@ -292,4 +283,75 @@ func liftUsage(usage openai.CompletionUsage) (llm.Usage, error) {
 		result.ProviderRaw["total_tokens"] = encoded
 	}
 	return result, nil
+}
+
+// liftCauseError tags a lift failure with a closed, worker-defined cause. The
+// cause, unlike the message, is safe to report: it never carries provider
+// text.
+type liftCauseError struct {
+	cause string
+	err   error
+}
+
+func (err liftCauseError) Error() string { return err.err.Error() }
+
+func (err liftCauseError) Unwrap() error { return err.err }
+
+func withLiftCause(cause string, err error) error {
+	return liftCauseError{cause: cause, err: err}
+}
+
+// liftFailure is the accepted invalid response for a lift error. Its safe
+// details name the cause and the provider's finish reason when that is a
+// short token, so a rejected response is diagnosable without its content.
+func liftFailure(call provider.Call, requestID, responseID, finishReason string, err error) *provider.Error {
+	mapped := invalidResponseError(call, requestID, err.Error())
+	mapped.Provider.ResponseID = responseID
+	cause := "response_invalid"
+	var tagged liftCauseError
+	if errors.As(err, &tagged) {
+		cause = tagged.cause
+	}
+	mapped.SafeDetails = map[string]string{"lift_cause": cause}
+	if safeFinishReason(finishReason) {
+		mapped.SafeDetails["finish_reason"] = finishReason
+	}
+	return mapped
+}
+
+func safeFinishReason(value string) bool {
+	if value == "" || len(value) > 32 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// jsonContentShape classifies JSON text that failed validation without
+// reporting any of it: empty, wrapped in a code fence, preceded or followed by
+// other text, not JSON at all, or valid JSON the schema rejects.
+func jsonContentShape(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "json_text_empty"
+	}
+	if strings.HasPrefix(trimmed, "```") {
+		return "json_fenced"
+	}
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	var value json.RawMessage
+	if err := decoder.Decode(&value); err != nil {
+		if index := strings.IndexAny(trimmed, "{["); index > 0 && json.Valid([]byte(trimmed[index:])) {
+			return "json_leading_text"
+		}
+		return "json_invalid"
+	}
+	if decoder.InputOffset() < int64(len(trimmed)) {
+		return "json_trailing_text"
+	}
+	return "json_schema_violation"
 }

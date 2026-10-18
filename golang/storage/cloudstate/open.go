@@ -81,11 +81,11 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 		return nil, err
 	}
 	repository.probeStores = func(ctx context.Context) error {
-		// The provider reports any non-ACTIVE table status as unavailable, but an
-		// UPDATING table (capacity, billing, SSE or stream changes) still serves
-		// reads and writes. Readiness already holds an open handle, so let the
-		// data-plane read in Probe decide; deleted, archived or key-inaccessible
-		// tables fail that read. Other revalidation failures remain fatal.
+		// The provider opens ACTIVE and UPDATING tables and reports other
+		// statuses as unavailable. Readiness already holds an open handle, so
+		// let the data-plane read in Probe decide; deleted, archived or
+		// key-inaccessible tables fail that read. Other revalidation failures
+		// remain fatal.
 		if _, err := backend.OpenKeyValueStore(ctx, config.RequestTable); err != nil && !errors.Is(err, contracts.ErrUnavailable) {
 			return err
 		}

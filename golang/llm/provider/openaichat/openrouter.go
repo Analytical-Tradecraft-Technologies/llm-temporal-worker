@@ -313,15 +313,13 @@ func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lift
 	if err := json.Unmarshal(usageRaw, &usage); err != nil || usage == nil {
 		return fmt.Errorf("openrouter usage metadata is invalid")
 	}
+	// The search count is recorded but never settles the cost: the auto
+	// engine bills at the selected engine's or native provider's rate, which
+	// the response does not report. Only OpenRouter's total (usage.cost,
+	// below) makes a search call's cost known.
 	if call.Metadata.WebSearch {
-		var server struct {
-			WebSearchRequests *int64 `json:"web_search_requests"`
-		}
-		if raw := usage["server_tool_use"]; len(raw) > 0 && json.Unmarshal(raw, &server) == nil && server.WebSearchRequests != nil {
-			lifted.Usage.ProviderRaw["web_search_calls"], _ = json.Marshal(*server.WebSearchRequests)
-			if _, err := llm.HostedToolCharge(lifted.Usage, call.Model); err == nil {
-				lifted.Cost.Status = ""
-			}
+		if calls, ok := openRouterWebSearchRequests(usage); ok {
+			lifted.Usage.ProviderRaw["web_search_calls"], _ = json.Marshal(calls)
 		}
 	}
 	if costRaw, ok := usage["cost"]; ok {
@@ -336,6 +334,37 @@ func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lift
 	addOpenRouterBYOKCost(lifted, usage)
 	_ = call
 	return nil
+}
+
+// openRouterWebSearchRequests reads the hosted search count OpenRouter reports
+// as usage.server_tool_use.web_search_requests or, for some upstreams,
+// usage.server_tool_use_details.web_search_requests. Both objects count the
+// same searches, so the count is never summed: when both are present they must
+// agree. A malformed, negative or disagreeing count is unknown.
+func openRouterWebSearchRequests(usage map[string]json.RawMessage) (int64, bool) {
+	var count int64
+	found := false
+	for _, field := range []string{"server_tool_use", "server_tool_use_details"} {
+		raw, present := usage[field]
+		if !present || string(raw) == "null" {
+			continue
+		}
+		var server struct {
+			WebSearchRequests *int64 `json:"web_search_requests"`
+		}
+		if json.Unmarshal(raw, &server) != nil {
+			return 0, false
+		}
+		if server.WebSearchRequests == nil {
+			continue
+		}
+		value := *server.WebSearchRequests
+		if value < 0 || (found && value != count) {
+			return 0, false
+		}
+		count, found = value, true
+	}
+	return count, found
 }
 
 // addOpenRouterBYOKCost settles a BYOK call at OpenRouter's fee plus the

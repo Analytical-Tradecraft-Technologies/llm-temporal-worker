@@ -166,6 +166,32 @@ func decodeToolCall(data []byte) (ToolCall, error) {
 // the provider packages.
 const ToolResultErrorTextPrefix = "[is_error=true] The tool call failed; its output follows.\n"
 
+// SearchOutputInstruction is the instruction the Chat Completions adapter adds
+// when an OpenRouter request with server web search asks for JSON output.
+// OpenRouter does not apply response_format to the final answer of its search
+// loop for a model without native search, so the output contract is also
+// stated as text. It lives here so admission can count it without importing
+// the provider packages.
+func SearchOutputInstruction(request Request) (string, bool) {
+	if !request.WebSearch || request.Output == nil {
+		return "", false
+	}
+	const prefix = "Reply with only "
+	const suffix = ", with no other text, Markdown or citations before or after it."
+	switch request.Output.Format.Kind {
+	case OutputKindJSON:
+		return prefix + "a single JSON object" + suffix, true
+	case OutputKindJSONSchema:
+		var schema bytes.Buffer
+		if err := json.Compact(&schema, request.Output.Format.Schema); err != nil {
+			return "", false
+		}
+		return prefix + "a JSON value that conforms to this JSON Schema" + suffix + " Schema: " + schema.String(), true
+	default:
+		return "", false
+	}
+}
+
 type ToolResult struct {
 	CallID  string
 	Name    string

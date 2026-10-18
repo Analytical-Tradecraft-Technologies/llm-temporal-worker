@@ -450,6 +450,8 @@ type ServiceClassPolicy struct {
 	ID      string                  `yaml:"id" json:"id"`
 	Match   ServiceClassPolicyMatch `yaml:"match" json:"match"`
 	Classes []llm.ServiceClass      `yaml:"classes" json:"classes"`
+	// DefaultClass applies to new v1 roots that omit a service class.
+	DefaultClass llm.ServiceClass `yaml:"default_class,omitempty" json:"default_class,omitempty"`
 }
 
 // ServiceClassPolicyMatch selects requests by their context; an empty field

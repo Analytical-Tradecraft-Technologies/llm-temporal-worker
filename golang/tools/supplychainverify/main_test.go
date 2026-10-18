@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -716,6 +717,193 @@ func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
 				t.Fatalf("execute error = %#v, %v; want %q", report, err, test.want)
 			}
 		})
+	}
+}
+
+func TestReleaseTagVerificationAppliesExceptionScopesWithoutRequiringUse(t *testing.T) {
+	t.Parallel()
+
+	baseline := testBaseline()
+	baseline.VulnerabilityExceptions = []vulnerabilityException{
+		{ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z", Remediation: "https://example.test/security/GO-2099-0001", Scope: "module_only"},
+		{ID: "GO-2099-0002", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z", Remediation: "https://example.test/security/GO-2099-0002", Scope: "reachable"},
+		// The trusted master baseline may cover findings an older tag lacks.
+		{ID: "GO-2099-0003", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z", Remediation: "https://example.test/security/GO-2099-0003", Scope: "module_only"},
+	}
+	output := strings.Join([]string{
+		`{"config":{"scanner_name":"govulncheck"}}`,
+		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`,
+		`{"finding":{"osv":"GO-2099-0002","trace":[{"module":"stdlib","version":"v1.26.7","package":"net/http","function":"Serve"}]}}`,
+	}, "\n")
+
+	report, err := verifyReleaseTag(baseline, strings.NewReader(output), time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Status != "pass" {
+		t.Fatalf("report status = %q, want pass", report.Status)
+	}
+	if want := []string{"GO-2099-0001", "GO-2099-0002"}; !reflect.DeepEqual(report.Findings, want) || !reflect.DeepEqual(report.ApprovedFindings, want) {
+		t.Fatalf("report findings = %#v, approved = %#v, want %#v", report.Findings, report.ApprovedFindings, want)
+	}
+	if report.DirectModuleCount != 0 {
+		t.Fatalf("release tag verification must not claim a go.mod inventory, got %d direct modules", report.DirectModuleCount)
+	}
+}
+
+func TestReleaseTagVerificationNamesEveryRejectedFinding(t *testing.T) {
+	t.Parallel()
+
+	baseline := testBaseline()
+	baseline.VulnerabilityExceptions = []vulnerabilityException{{
+		ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z",
+		Remediation: "https://example.test/security/GO-2099-0001", Scope: "module_only",
+	}}
+	output := strings.Join([]string{
+		// An imported package is reachable for the baseline, not only a called
+		// function; govulncheck's text exit status counts only the latter.
+		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3","package":"example.test/one/vulnerable"}]}}`,
+		`{"finding":{"osv":"GO-2099-0003","trace":[{"module":"example.test/two","version":"v2.3.4"}]}}`,
+		`{"finding":{"osv":"GO-2099-0002","trace":[{"module":"stdlib","version":"v1.26.7","package":"net/http","function":"Serve"}]}}`,
+	}, "\n")
+
+	report, err := verifyReleaseTag(baseline, strings.NewReader(output), time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC))
+	if err == nil {
+		t.Fatal("release tag verification accepted unreviewed and out-of-scope findings")
+	}
+	for _, want := range []string{
+		"rejected 3 release tag vulnerabilities",
+		"GO-2099-0001 (reachable outside its module_only exception)",
+		"GO-2099-0002 (unreviewed)",
+		"GO-2099-0003 (unreviewed)",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("release tag verification error = %q, want %q", err, want)
+		}
+	}
+	if report.Status != "fail" || len(report.ApprovedFindings) != 0 || len(report.Findings) != 3 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestReleaseTagVerificationRejectsInvalidPolicyAndOutput(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
+	expired := testBaseline()
+	expired.VulnerabilityExceptions = []vulnerabilityException{{
+		ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2026-10-16T00:00:00Z",
+		Remediation: "https://example.test/security/GO-2099-0001", Scope: "reachable",
+	}}
+	wrongVersion := testBaseline()
+	wrongVersion.Version = 1
+
+	for _, test := range []struct {
+		name     string
+		baseline baseline
+		output   string
+		want     string
+	}{
+		{name: "expired exception", baseline: expired, output: "", want: "expired"},
+		{name: "baseline version drift", baseline: wrongVersion, output: "", want: "baseline version"},
+		{name: "malformed output", baseline: testBaseline(), output: "{", want: "not valid JSON"},
+		{name: "invalid identifier", baseline: testBaseline(), output: `{"finding":{"osv":"CVE-2099-0001"}}`, want: "invalid finding identifier"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := verifyReleaseTag(test.baseline, strings.NewReader(test.output), now); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("verifyReleaseTag error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestExecuteReleaseTagRequiresTheScanToCompleteAndSkipsOtherComponents(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	write := func(name, contents string) string {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	baselinePath := write("baseline.json", `{"version":2,"allowed_licenses":["MIT"],"trusted_module_roots":[{"path":"example.test/one","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`)
+	vulnerabilityPath := write("vulnerabilities.json", "")
+	now := time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
+
+	report, err := executeReleaseTag(baselinePath, vulnerabilityPath, "pass", now)
+	if err != nil || report.Status != "pass" {
+		t.Fatalf("executeReleaseTag success = %#v, %v", report, err)
+	}
+	want := componentStatus{Test: "skipped", Source: "skipped", GoMod: "skipped", Vulnerability: "pass"}
+	if report.Components != want {
+		t.Fatalf("release tag components = %#v, want %#v", report.Components, want)
+	}
+
+	for _, test := range []struct {
+		name          string
+		baseline      string
+		vulnerability string
+		status        string
+		want          string
+	}{
+		// A partial or empty stream from a failed scan must not pass.
+		{name: "scan did not complete", baseline: baselinePath, vulnerability: vulnerabilityPath, status: "fail", want: "component vulnerability did not pass"},
+		{name: "invalid scan status", baseline: baselinePath, vulnerability: vulnerabilityPath, status: "unknown", want: "component vulnerability has an invalid status"},
+		{name: "missing baseline", baseline: filepath.Join(root, "missing.json"), vulnerability: vulnerabilityPath, status: "pass", want: "cannot read baseline"},
+		{name: "invalid baseline", baseline: write("invalid-baseline.json", "{"), vulnerability: vulnerabilityPath, status: "pass", want: "baseline is not valid JSON"},
+		{name: "missing vulnerability output", baseline: baselinePath, vulnerability: filepath.Join(root, "missing-vulnerabilities.json"), status: "pass", want: "cannot read vulnerability output"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			report, err := executeReleaseTag(test.baseline, test.vulnerability, test.status, now)
+			if err == nil || report.Status != "fail" || !strings.Contains(err.Error(), test.want) || report.Error != err.Error() {
+				t.Fatalf("executeReleaseTag = %#v, %v; want %q", report, err, test.want)
+			}
+		})
+	}
+}
+
+func TestCommandReleaseTagModeRejectsInventoryInputs(t *testing.T) {
+	root := t.TempDir()
+	binaryPath := filepath.Join(root, "supplychainverify")
+	moduleDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	build.Dir = moduleDirectory
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, output)
+	}
+	baselinePath := filepath.Join(root, "baseline.json")
+	if err := os.WriteFile(baselinePath, []byte(`{"version":2,"allowed_licenses":["MIT"],"trusted_module_roots":[{"path":"example.test/one","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vulnerabilityPath := filepath.Join(root, "vulnerabilities.json")
+	if err := os.WriteFile(vulnerabilityPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(root, "report.json")
+
+	passed := exec.Command(binaryPath, "-release-tag", "-baseline", baselinePath, "-vulnerability-output", vulnerabilityPath, "-report", reportPath)
+	if output, err := passed.CombinedOutput(); err != nil || !strings.Contains(string(output), "supply chain verification passed") {
+		t.Fatalf("release tag command = %v\n%s", err, output)
+	}
+
+	for _, extra := range [][]string{
+		{"-go-mod", baselinePath},
+		{"-base-vulnerability-output", vulnerabilityPath},
+	} {
+		arguments := append([]string{"-release-tag", "-baseline", baselinePath, "-vulnerability-output", vulnerabilityPath, "-report", reportPath}, extra...)
+		output, err := exec.Command(binaryPath, arguments...).CombinedOutput()
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) || exitError.ExitCode() != 2 || !strings.Contains(string(output), "release tag verification requires") {
+			t.Fatalf("release tag command with %v = %v\n%s", extra, err, output)
+		}
 	}
 }
 

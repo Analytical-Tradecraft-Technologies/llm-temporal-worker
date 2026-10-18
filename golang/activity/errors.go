@@ -29,6 +29,10 @@ type SafeErrorDetails struct {
 	Dispatch          string `json:"dispatch"`
 	RetryAfterMillis  int64  `json:"retry_after_ms,omitempty"`
 	ProviderRequestID string `json:"provider_request_id,omitempty"`
+	// Reason is the first closed-vocabulary planning cause, such as
+	// model_not_in_catalog or capability:web_search, when planning found no
+	// route. It never carries provider or caller text.
+	Reason string `json:"reason,omitempty"`
 }
 
 const maxSafeErrorIdentifierBytes = 128
@@ -71,7 +75,24 @@ func normalizeSafeErrorDetails(err *provider.Error) SafeErrorDetails {
 		Dispatch:          string(dispatch),
 		RetryAfterMillis:  retryAfterMillis,
 		ProviderRequestID: safeErrorIdentifier(err.Provider.RequestID),
+		Reason:            safeErrorReason(err.SafeDetails["reason_1"]),
 	}
+}
+
+const maxSafeErrorReasonBytes = 64
+
+// safeErrorReason keeps a planning cause only when it is a bounded lowercase
+// token, so a route or feature name can never smuggle other text.
+func safeErrorReason(value string) string {
+	if len(value) > maxSafeErrorReasonBytes {
+		return ""
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != ':' && r != '-' && r != '.' {
+			return ""
+		}
+	}
+	return value
 }
 
 func safeErrorIdentifier(value string) string {

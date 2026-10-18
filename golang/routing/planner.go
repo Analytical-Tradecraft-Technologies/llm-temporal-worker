@@ -147,7 +147,7 @@ func (planner DeterministicPlanner) evaluate(request llm.Request, continuation s
 	}
 	if route.ContextBytes > 0 {
 		requestBytes, _ := llm.CanonicalJSON(mustRequestJSON(request))
-		if len(requestBytes)+ToolResultErrorOverheadBytes(request, string(route.Family)) > route.ContextBytes {
+		if len(requestBytes)+AdapterTextOverheadBytes(request, string(route.Family)) > route.ContextBytes {
 			return reject(RejectContext, "request", "request exceeds route context limit")
 		}
 	}
@@ -209,10 +209,24 @@ func extensionDigest(request llm.Request) string {
 	return fmt.Sprintf("%x", digest[:])
 }
 
-// ToolResultErrorOverheadBytes is the size of the text the OpenAI Responses
-// and Chat adapters add when lowering failed tool results. The serialized
-// request does not contain it, so context checks add it for those families.
-func ToolResultErrorOverheadBytes(request llm.Request, family string) int {
+// AdapterTextOverheadBytes is the size of text adapters add while lowering
+// that the serialized request does not contain, so context checks and budget
+// estimates add it: the failed-tool-result prefix for the OpenAI Responses and
+// Chat families, and for Chat (whose server web search is only served through
+// OpenRouter) the JSON output instruction added to search requests.
+func AdapterTextOverheadBytes(request llm.Request, family string) int {
+	overhead := toolResultErrorOverheadBytes(request, family)
+	if family == "openai_chat" {
+		if instruction, ok := llm.SearchOutputInstruction(request); ok {
+			// The instruction travels as one more JSON-escaped message.
+			escaped, _ := json.Marshal(instruction)
+			overhead += len(escaped) + len(`{"role":"system","content":[{"type":"text","text":}]},`)
+		}
+	}
+	return overhead
+}
+
+func toolResultErrorOverheadBytes(request llm.Request, family string) int {
 	if family != "openai_responses" && family != "openai_chat" {
 		return 0
 	}
@@ -294,6 +308,7 @@ func CompileCatalog(version string, models map[string]Model) (Catalog, error) {
 // place of any it already had.
 func (catalog Catalog) WithClassPolicies(policies []ClassPolicy) (Catalog, error) {
 	seen := make(map[string]struct{}, len(policies))
+	defaults := make(map[[2]string]llm.ServiceClass)
 	for _, policy := range policies {
 		if err := policy.Validate(); err != nil {
 			return Catalog{}, err
@@ -302,6 +317,13 @@ func (catalog Catalog) WithClassPolicies(policies []ClassPolicy) (Catalog, error
 			return Catalog{}, fmt.Errorf("duplicate service class policy %q", policy.ID)
 		}
 		seen[policy.ID] = struct{}{}
+		if policy.DefaultClass != "" {
+			scope := [2]string{policy.Tenant, policy.Project}
+			if previous := defaults[scope]; previous != "" && previous != policy.DefaultClass {
+				return Catalog{}, fmt.Errorf("conflicting service class defaults for the same scope")
+			}
+			defaults[scope] = policy.DefaultClass
+		}
 	}
 	catalog.ClassPolicies = cloneClassPolicies(policies)
 	return catalog, nil

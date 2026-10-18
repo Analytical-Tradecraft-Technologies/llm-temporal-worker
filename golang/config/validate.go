@@ -824,6 +824,7 @@ func validateCatalogs(catalogs []CatalogRef, path string) error {
 // is the class no request can be left without.
 func validateServiceClassPolicies(policies []ServiceClassPolicy) error {
 	seen := make(map[string]struct{}, len(policies))
+	defaults := make(map[ServiceClassPolicyMatch]llm.ServiceClass)
 	for index, policy := range policies {
 		path := fmt.Sprintf("service_class_policies[%d]", index)
 		if err := validateIdentifier(policy.ID, path+".id"); err != nil {
@@ -845,6 +846,18 @@ func validateServiceClassPolicies(policies []ServiceClassPolicy) error {
 		}
 		if _, ok := classes[llm.ServiceClassStandard]; !ok {
 			return fmt.Errorf("%s.classes must include standard", path)
+		}
+		if policy.DefaultClass != "" {
+			if !policy.DefaultClass.Valid() {
+				return fmt.Errorf("%s.default_class must be economy, standard, or priority", path)
+			}
+			if _, enabled := classes[policy.DefaultClass]; !enabled {
+				return fmt.Errorf("%s.default_class must be enabled in classes", path)
+			}
+			if previous := defaults[policy.Match]; previous != "" && previous != policy.DefaultClass {
+				return fmt.Errorf("%s.default_class conflicts with another default for the same scope", path)
+			}
+			defaults[policy.Match] = policy.DefaultClass
 		}
 	}
 	return nil

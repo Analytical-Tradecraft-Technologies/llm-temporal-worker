@@ -810,6 +810,7 @@ func newProductionRuntime(ctx context.Context, data []byte) (*Runtime, error) {
 		Resolver:          secretResolver,
 		SnapshotLoader:    CatalogSnapshotLoader{},
 		ModelSyncObserver: syncLog.observe,
+		ModelSyncSkipped:  syncLog.skipped,
 	})
 	if err != nil {
 		return nil, err

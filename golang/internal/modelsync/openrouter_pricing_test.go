@@ -142,3 +142,39 @@ func TestPricingRejectsMalformedOrUnrepresentableOverrides(t *testing.T) {
 		t.Fatal("a schedule cannot fill an unlisted base price")
 	}
 }
+
+// A fetch reports the models and endpoints it leaves out for an unusable
+// price, so a model dropped from the catalog is visible before a request
+// fails planning with no_route.
+func TestFetchReportsModelsLeftOutForUnusablePrices(t *testing.T) {
+	usable := map[string]any{"prompt": "0.000001", "completion": "0.000002"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveUpstreamLists(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{
+				map[string]any{"id": "vendor/priced", "architecture": map[string]any{"output_modalities": []string{"text"}}, "pricing": usable},
+				map[string]any{"id": "vendor/router", "architecture": map[string]any{"output_modalities": []string{"text"}}, "pricing": map[string]any{"prompt": "-1", "completion": "-1"}},
+			}})
+		case "/models/vendor/priced/endpoints":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"endpoints": []any{
+				map[string]any{"tag": "good", "pricing": usable},
+				map[string]any{"tag": "bad", "pricing": map[string]any{"prompt": "1e-6", "completion": "0.000002"}},
+			}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	var skipped []SkippedModel
+	document, err := (Fetcher{Client: server.Client(), BaseURL: server.URL, OnSkipped: func(models []SkippedModel) { skipped = models }}).Fetch(context.Background(), Document{})
+	if err != nil || len(document.Models) != 1 || len(document.Models[0].Endpoints) != 1 {
+		t.Fatalf("Fetch = %+v, %v; want the priced model with its usable endpoint", document.Models, err)
+	}
+	want := []SkippedModel{{ID: "vendor/router", Cause: SkipModelPrice}, {ID: "vendor/priced", Cause: SkipEndpointPrice}}
+	if len(skipped) != len(want) || skipped[0] != want[0] || skipped[1] != want[1] {
+		t.Fatalf("skipped = %+v, want %+v", skipped, want)
+	}
+}

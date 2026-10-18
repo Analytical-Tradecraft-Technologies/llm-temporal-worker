@@ -41,6 +41,9 @@ var allowedLogAttrs = map[string]struct{}{
 	// cause is a bounded failure class and config_field a configuration schema
 	// path; neither carries a configured value.
 	"cause": {}, "config_field": {},
+	// finish_reason is a provider's short finish token, such as stop or
+	// tool_calls, admitted only as a lowercase identifier.
+	"finish_reason": {},
 }
 
 var unsafeMessageWords = []string{

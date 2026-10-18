@@ -222,7 +222,9 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
 - A dedicated scheduled workflow runs `make security-verify` against current
   `master`, including transitive dependencies, and enforces the complete
   vulnerability-exception inventory. Routine master verification does not
-  repeat this scan; guarded release preflight retains it.
+  repeat this scan; guarded release preflight retains it, applies the same
+  exception rules to the release tag commit, and rescans both platforms of the
+  publication digest with a current Trivy database.
 - License inventory and vulnerability exceptions are explicit, reviewed files;
   an exception requires an owner, future expiry, remediation reference, and
   trace scope. A module-only exception cannot suppress a later reachable

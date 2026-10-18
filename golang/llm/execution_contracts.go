@@ -164,8 +164,11 @@ type ExecutionResultV1 struct {
 	// ErrorCode and Dispatch carry the provider failure's stable error code
 	// (for example invalid_argument or rate_limited) and dispatch certainty,
 	// so callers can tell failures apart without the provider's message.
-	ErrorCode         string              `json:"error_code,omitempty"`
-	Dispatch          string              `json:"dispatch,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Dispatch  string `json:"dispatch,omitempty"`
+	// ProviderStatus is the upstream HTTP status the provider reported for
+	// the failure, when it reported one.
+	ProviderStatus    int                 `json:"provider_status,omitempty"`
 	Retryable         bool                `json:"retryable,omitempty"`
 	RetryAfterSeconds int32               `json:"retry_after_seconds,omitempty"`
 	Generate          *GenerateResponseV1 `json:"generate,omitempty"`
@@ -199,7 +202,10 @@ func (result ExecutionResultV1) Validate() error {
 		if result.FailureCode == "provider_rejected" && result.Dispatch != "not_dispatched" && result.Dispatch != "rejected" {
 			return fmt.Errorf("provider_rejected requires a definite dispatch")
 		}
-	} else if result.FailureCode != "" || result.ErrorCode != "" || result.Dispatch != "" || result.Retryable {
+		if result.ProviderStatus != 0 && (result.ProviderStatus < 100 || result.ProviderStatus > 599) {
+			return fmt.Errorf("execution provider status is invalid")
+		}
+	} else if result.FailureCode != "" || result.ErrorCode != "" || result.Dispatch != "" || result.ProviderStatus != 0 || result.Retryable {
 		return fmt.Errorf("execution state cannot contain failure details")
 	}
 	wait := false
@@ -244,7 +250,7 @@ func (result ExecutionResultV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire(result))
 }
 func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "error_code", "dispatch", "retryable", "generate", "compact", "capability"); err != nil {
+	if err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "error_code", "dispatch", "provider_status", "retryable", "generate", "compact", "capability"); err != nil {
 		return err
 	}
 	type wire ExecutionResultV1
@@ -262,7 +268,7 @@ func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
 		forbidden = append(forbidden, "retry_after_seconds")
 	}
 	if candidate.State != ExecutionFailed {
-		forbidden = append(forbidden, "failure_code", "error_code", "dispatch", "retryable")
+		forbidden = append(forbidden, "failure_code", "error_code", "dispatch", "provider_status", "retryable")
 	}
 	for _, name := range forbidden {
 		if _, present := fields[name]; present {
