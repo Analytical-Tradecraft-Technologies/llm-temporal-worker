@@ -65,8 +65,9 @@ the recovery time or lead to another submission.
 Every failed or unknown attempt is logged as `provider attempt failed` with
 `route_id`, `endpoint`, `model`, `outcome` (the saved stage), `error_code`,
 `phase`, `dispatch`, `retry`, the upstream HTTP `status` when the provider
-reported one, and `cause=deadline_exceeded` when the worker's own deadline
-ended the call. Provider messages and causes are never logged.
+reported one, and a `cause`: `deadline_exceeded` when the worker's own deadline
+ended the call, or `provider_job_not_found` when a poll or idempotency recovery
+found no provider job. Provider messages and causes are never logged.
 
 A call the worker's own deadline cuts off after a possible write (the
 endpoint's HTTP `timeout` or the Activity bound) is a terminal

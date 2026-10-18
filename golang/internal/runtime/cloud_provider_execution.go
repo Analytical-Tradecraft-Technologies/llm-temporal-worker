@@ -541,10 +541,15 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		}
 	}
-	if callErr != nil {
-		logProviderAttemptFailure(ctx, saved, next, callErr)
-	} else if outcome.State == provider.ResumableFailed && outcome.Failure != nil {
-		logProviderAttemptFailure(ctx, saved, next, outcome.Failure)
+	switch {
+	case callErr != nil:
+		logProviderAttemptFailure(ctx, saved, next, callErr, "")
+	case outcome.State == provider.ResumableFailed && outcome.Failure != nil:
+		logProviderAttemptFailure(ctx, saved, next, outcome.Failure, "")
+	case outcome.State == provider.ResumableNotFound:
+		// A poll or idempotency recovery that finds no provider job leaves
+		// the attempt unknown without any provider error to classify.
+		logProviderAttemptFailure(ctx, saved, next, provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider job not found"), "provider_job_not_found")
 	}
 	next.UpdatedAt = now
 	if next.Stage == cloudstate.ExecutionSucceeded || next.Stage == cloudstate.ExecutionFailed {
@@ -987,7 +992,7 @@ func acceptedLiftFailure(failure *provider.Error) bool {
 // became unknown. Without it an operator sees only the request's final code
 // (often ambiguous_dispatch) and cannot tell an upstream error from a timeout.
 // It logs safe enums and the upstream HTTP status, never provider text.
-func logProviderAttemptFailure(ctx context.Context, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution, callErr error) {
+func logProviderAttemptFailure(ctx context.Context, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution, callErr error, cause string) {
 	attrs := []slog.Attr{
 		slog.String("route_id", saved.Plan.Route.RouteID), slog.String("endpoint", saved.Plan.Route.EndpointID),
 		slog.String("model", saved.Plan.Route.Model), slog.String("outcome", string(next.Stage)),
@@ -999,11 +1004,14 @@ func logProviderAttemptFailure(ctx context.Context, saved cloudstate.SavedProvid
 		if status := classified.SafeDetails["status"]; providerHTTPStatus(status) != 0 {
 			attrs = append(attrs, slog.String("status", status))
 		}
-		if errors.Is(callErr, context.DeadlineExceeded) {
-			attrs = append(attrs, slog.String("cause", "deadline_exceeded"))
+		if cause == "" && errors.Is(callErr, context.DeadlineExceeded) {
+			cause = "deadline_exceeded"
 		}
 	} else {
 		attrs = append(attrs, slog.String("error_code", string(provider.CodeInternal)))
+	}
+	if cause != "" {
+		attrs = append(attrs, slog.String("cause", cause))
 	}
 	observability.LoggerFromContext(ctx).Warn(ctx, "provider attempt failed", attrs...)
 }

@@ -104,3 +104,34 @@ func TestCloudExecutionLogsProviderAttemptFailure(t *testing.T) {
 		t.Fatalf("provider text logged: %s", output.String())
 	}
 }
+
+// A poll that finds no provider job leaves the attempt unknown with no
+// provider error, and is still logged so it is diagnosable.
+func TestCloudExecutionLogsProviderJobNotFound(t *testing.T) {
+	f := newProviderExecutionFixture(t, "generate", true)
+	if _, err := f.submit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(time.Minute)
+	f.adapter.poll = func(context.Context, provider.Call, string, provider.Observer) (provider.ResumableResult, error) {
+		return provider.ResumableResult{State: provider.ResumableNotFound, Dispatch: provider.DispatchAmbiguous}, nil
+	}
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.resume(observability.WithLogger(context.Background(), logger))
+	if err != nil || result.Saved.Execution.Stage != cloudstate.ExecutionUnknown {
+		t.Fatalf("resume = %+v, %v", result.Saved.Execution, err)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &entry); err != nil {
+		t.Fatalf("log %q: %v", output.String(), err)
+	}
+	for key, want := range map[string]string{"msg": "provider attempt failed", "cause": "provider_job_not_found", "dispatch": "ambiguous", "outcome": string(cloudstate.ExecutionUnknown)} {
+		if entry[key] != want {
+			t.Fatalf("log %s = %v, want %s (entry %v)", key, entry[key], want, entry)
+		}
+	}
+}
