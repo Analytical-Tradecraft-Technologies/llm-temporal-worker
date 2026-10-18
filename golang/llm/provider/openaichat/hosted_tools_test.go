@@ -6,6 +6,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	openai "github.com/openai/openai-go/v3"
 )
 
@@ -135,5 +136,72 @@ func TestOpenRouterSearchCountReadsBothServerToolUseShapes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// OpenRouter does not apply response_format to the final answer of its search
+// loop for a model without native search, so a search request that asks for
+// JSON also states the contract as an instruction, after the caller's
+// instructions and before the conversation. Without search nothing is added.
+func TestOpenRouterSearchStatesJSONOutputAsInstruction(t *testing.T) {
+	schema := json.RawMessage(`{"type": "object", "additionalProperties": false, "required": ["url"], "properties": {"url": {"type": "string"}}}`)
+	base := llm.Request{OperationKey: "search", Model: "deepseek/deepseek-test", WebSearch: true,
+		Instructions: []llm.Instruction{{Level: llm.InstructionLevelApplication, Content: []llm.Part{llm.TextPart{Text: "be brief"}}}},
+		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find the page"}}}}}
+	for _, test := range []struct {
+		name   string
+		search bool
+		format llm.OutputFormat
+		want   string
+	}{
+		{"strict schema", true, llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema},
+			`Reply with only a JSON value that conforms to this JSON Schema, with no other text, Markdown or citations before or after it. Schema: {"type":"object","additionalProperties":false,"required":["url"],"properties":{"url":{"type":"string"}}}`},
+		{"json mode", true, llm.OutputFormat{Kind: llm.OutputKindJSON}, "Reply with only a single JSON object, with no other text, Markdown or citations before or after it."},
+		{"text", true, llm.OutputFormat{Kind: llm.OutputKindText}, ""},
+		{"schema without search", false, llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile := wireAuditProfiles(t)[2]
+			profile.model = base.Model
+			profile.profile.ExpectedModel = base.Model
+			request := base
+			request.WebSearch = test.search
+			request.Output = &llm.OutputSpec{Format: test.format}
+			messages := captureWireBody(t, profile, request)["messages"].([]any)
+			want := 2
+			if test.want != "" {
+				want = 3
+			}
+			if len(messages) != want {
+				t.Fatalf("messages = %#v", messages)
+			}
+			if test.want == "" {
+				return
+			}
+			text := func(message any) (string, any) {
+				fields := message.(map[string]any)
+				parts, _ := fields["content"].([]any)
+				if len(parts) != 1 {
+					return "", fields["role"]
+				}
+				value, _ := parts[0].(map[string]any)["text"].(string)
+				return value, fields["role"]
+			}
+			if added, role := text(messages[1]); role != "system" || added != test.want {
+				t.Fatalf("instruction = %#v", messages[1])
+			}
+			if first, _ := text(messages[0]); first != "be brief" {
+				t.Fatalf("caller instruction moved: %#v", messages)
+			}
+			// Admission counts the added message, so budgets and context
+			// checks cover it.
+			added, _ := json.Marshal(messages[1])
+			if overhead := routing.AdapterTextOverheadBytes(request, "openai_chat"); overhead < len(added)+1 {
+				t.Fatalf("admission overhead %d bytes does not cover the %d-byte instruction", overhead, len(added)+1)
+			}
+			if routing.AdapterTextOverheadBytes(request, "openai_responses") != 0 {
+				t.Fatal("instruction counted for a family that does not add it")
+			}
+		})
 	}
 }
