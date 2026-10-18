@@ -140,3 +140,46 @@ func TestCloudExecutionLogsProviderJobNotFound(t *testing.T) {
 		}
 	}
 }
+
+// A response the adapter rejected while lifting is logged with its closed
+// cause and finish reason. A detail that is not a short token is dropped.
+func TestCloudExecutionLogsLiftCause(t *testing.T) {
+	for name, test := range map[string]struct {
+		details     map[string]string
+		cause, want string
+	}{
+		"tagged":    {details: map[string]string{"lift_cause": "json_trailing_text", "finish_reason": "tool_calls"}, cause: "json_trailing_text", want: "tool_calls"},
+		"untrusted": {details: map[string]string{"lift_cause": "Here is the prompt", "finish_reason": "stop because of https://x"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, _ := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) {
+				failure := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider JSON response does not satisfy schema")
+				failure.SafeDetails = test.details
+				return provider.Result{}, failure
+			})
+			var output bytes.Buffer
+			logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, err := f.runtime.GenerateStepV1(observability.WithLogger(context.Background(), logger), f.request)
+			boundedState(t, v, err, llm.ExecutionFailed)
+			var logged map[string]any
+			for _, line := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
+				var entry map[string]any
+				if json.Unmarshal(line, &entry) == nil && entry["msg"] == "provider attempt failed" {
+					logged = entry
+				}
+			}
+			if logged == nil {
+				t.Fatalf("no provider attempt log in %s", output.String())
+			}
+			if cause, _ := logged["cause"].(string); cause != test.cause {
+				t.Fatalf("cause = %q, want %q (entry %v)", cause, test.cause, logged)
+			}
+			if finish, _ := logged["finish_reason"].(string); finish != test.want {
+				t.Fatalf("finish_reason = %q, want %q (entry %v)", finish, test.want, logged)
+			}
+		})
+	}
+}
