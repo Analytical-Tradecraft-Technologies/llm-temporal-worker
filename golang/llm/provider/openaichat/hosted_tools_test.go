@@ -126,13 +126,11 @@ func TestOpenRouterSearchCountReadsBothServerToolUseShapes(t *testing.T) {
 					if got.Cost.ActualCostUSD == nil || got.Cost.ActualCostUSD.String() != "0.060018000000000000" || got.Cost.Method != "openrouter_reported" {
 						t.Fatalf("cost = %#v", got.Cost)
 					}
-				case test.calls == "null":
-					if got.Cost.Status != llm.CostStatusUnknown {
-						t.Fatalf("unknown search count settled as known: %#v", got.Cost)
-					}
 				default:
-					if got.Cost.Status == llm.CostStatusUnknown {
-						t.Fatalf("reported search count left the cost unknown: %#v", got.Cost)
+					// The auto engine's per-search rate is not reported, so a
+					// count alone never makes the cost known.
+					if got.Cost.Status != llm.CostStatusUnknown || got.Cost.ActualCostUSD != nil {
+						t.Fatalf("search without a reported total settled as known: %#v", got.Cost)
 					}
 				}
 			})
