@@ -495,6 +495,9 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched || (received && acceptedLiftFailure(classified))) {
 			next.Stage = cloudstate.ExecutionFailed
 			next.Failure = executionFailure(classified.Code, classified.Dispatch, classified, now)
+		} else if !polling && unrecoverableDeadline(callErr, saved, outcome, planned) {
+			next.Stage = cloudstate.ExecutionFailed
+			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeDeadlineExceeded, Dispatch: provider.DispatchAmbiguous}
 		}
 	} else {
 		if outcome.ProviderOperationID != "" {
@@ -971,6 +974,28 @@ func executionSettlement(execution cloudstate.ProviderExecution) *durable.Reconc
 // provider call. The provider's code is kept so the failure stays actionable.
 func acceptedLiftFailure(failure *provider.Error) bool {
 	return failure.Phase == provider.PhaseLift && failure.Dispatch == provider.DispatchAccepted && failure.Retry == provider.RetryNever
+}
+
+// unrecoverableDeadline reports a call the worker's own deadline (the
+// endpoint's HTTP timeout or the Activity bound) cut off after a possible
+// write, on a route with nothing to recover: no provider job to poll and no
+// idempotency recovery. Its outcome stays unknown, but waiting out the start
+// lease cannot learn it, and a replacement attempt runs under the same bound,
+// so each one would pay again for a result it never receives. It is a
+// terminal deadline failure accounted at the reservation. Cancellation
+// (worker shutdown) is not a deadline and still recovers as unknown.
+func unrecoverableDeadline(callErr error, saved cloudstate.SavedProviderExecution, outcome provider.ResumableResult, planned PlannedProviderCall) bool {
+	if !errors.Is(callErr, context.DeadlineExceeded) {
+		var classified *provider.Error
+		if !errors.As(callErr, &classified) || classified.Code != provider.CodeDeadlineExceeded {
+			return false
+		}
+	}
+	if saved.Execution.ProviderOperationID != "" || outcome.ProviderOperationID != "" {
+		return false
+	}
+	_, recoverable := planned.Adapter.(provider.IdempotencyRecovery)
+	return !recoverable
 }
 
 // maxProviderRetryDelay caps how long a provider's Retry-After can hold a
