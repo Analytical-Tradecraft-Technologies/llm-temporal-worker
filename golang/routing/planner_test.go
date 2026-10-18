@@ -135,7 +135,7 @@ func TestPlannerContextLimitCountsToolResultErrorPrefix(t *testing.T) {
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
 		llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "timed out"}}, IsError: true},
 	}}
-	if ToolResultErrorOverheadBytes(request, "openai_chat") != len(llm.ToolResultErrorTextPrefix)+1 || ToolResultErrorOverheadBytes(request, "bedrock_converse") != 0 {
+	if AdapterTextOverheadBytes(request, "openai_chat") != len(llm.ToolResultErrorTextPrefix)+1 || AdapterTextOverheadBytes(request, "bedrock_converse") != 0 {
 		t.Fatal("unexpected tool-result error overhead")
 	}
 	encoded, err := llm.CanonicalJSON(mustRequestJSON(request))
