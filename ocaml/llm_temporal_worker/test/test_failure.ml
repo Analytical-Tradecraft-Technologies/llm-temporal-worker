@@ -85,7 +85,7 @@ let () =
   expect_kind "activity auth" Authentication activity_auth;
   expect_safe "activity auth"
     (Some { code = "permission_denied"; phase = "dispatch"; dispatch = Rejected;
-            operation_id = Some "op-1"; retry_after_ms = None; provider_request_id = Some "req-1" })
+            operation_id = Some "op-1"; retry_after_ms = None; provider_request_id = Some "req-1"; reason = None })
     activity_auth;
   expect_execution "activity has no execution details" None activity_auth;
   expect "activity auth dispatch" (Failure.dispatch activity_auth = Some Rejected);
@@ -95,12 +95,16 @@ let () =
   expect_kind "transient" Provider_transient transient;
   expect_safe "transient"
     (Some { code = "provider_rate_limited"; phase = "dispatch"; dispatch = Not_dispatched;
-            operation_id = None; retry_after_ms = Some 1500; provider_request_id = None })
+            operation_id = None; retry_after_ms = Some 1500; provider_request_id = None; reason = None })
     transient;
   expect_safe "decode"
     (Some { code = "invalid_argument"; phase = "decode"; dispatch = Not_dispatched;
-            operation_id = None; retry_after_ms = None; provider_request_id = None })
+            operation_id = None; retry_after_ms = None; provider_request_id = None; reason = None })
     (failure "llm_invalid_argument" ~details:{|{"code":"invalid_argument","phase":"decode","dispatch":"not_dispatched"}|});
+  expect_safe "planning reason"
+    (Some { code = "no_route"; phase = "plan"; dispatch = Not_dispatched;
+            operation_id = None; retry_after_ms = None; provider_request_id = None; reason = Some "model_not_in_catalog" })
+    (failure "llm_invalid_argument" ~details:{|{"code":"no_route","phase":"plan","dispatch":"not_dispatched","reason":"model_not_in_catalog"}|});
   expect_safe "state corrupt without details" None (failure "llm_state_corrupt");
   expect_safe "workflow failure has no safe details" None rejected_auth;
   (* Malformed details are errors and never upgrade or downgrade the kind. *)

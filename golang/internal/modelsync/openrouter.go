@@ -43,7 +43,27 @@ type Fetcher struct {
 	// RetryDelay is the first wait before retrying a lookup OpenRouter
 	// answered with 429 or 5xx; it doubles per attempt. Zero uses 500ms.
 	RetryDelay time.Duration
+	// OnSkipped, when set, receives once per fetch the listed models and
+	// endpoints left out because their price could not be used. A dropped
+	// model is otherwise only visible as a no_route planning failure.
+	OnSkipped func([]SkippedModel)
 }
+
+// SkippedModel names a listed OpenRouter model, or one of its endpoints, that
+// a fetch left out, with a bounded cause.
+type SkippedModel struct {
+	ID    string
+	Cause string
+}
+
+const (
+	// SkipModelPrice is a model whose listed price cannot be decoded or
+	// represented; the model is not routable.
+	SkipModelPrice = "model_price_unusable"
+	// SkipEndpointPrice is an endpoint whose price cannot be decoded or
+	// represented; the model stays routable through its other endpoints.
+	SkipEndpointPrice = "endpoint_price_unusable"
+)
 
 // Fetch returns a complete, normalized Document. Models whose output is not
 // text-only (image and audio generators), models OpenRouter lists without a
@@ -59,7 +79,7 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 	if clock == nil {
 		clock = time.Now
 	}
-	listed, err := fetcher.listModels(ctx)
+	listed, skipped, err := fetcher.listModels(ctx)
 	if err != nil {
 		return Document{}, err
 	}
@@ -68,9 +88,10 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 		concurrency = defaultFetchConcurrency
 	}
 	type result struct {
-		model Model
-		ok    bool
-		err   error
+		model   Model
+		ok      bool
+		skipped bool
+		err     error
 	}
 	results := make([]result, len(listed))
 	work := make(chan int)
@@ -80,14 +101,14 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 		go func() {
 			defer group.Done()
 			for index := range work {
-				endpoints, err := fetcher.listEndpoints(ctx, listed[index].ID)
+				endpoints, skippedPrice, err := fetcher.listEndpoints(ctx, listed[index].ID)
 				if err != nil {
 					results[index] = result{err: err}
 					continue
 				}
 				model := listed[index]
 				model.Endpoints = endpoints
-				results[index] = result{model: model, ok: len(endpoints) > 0}
+				results[index] = result{model: model, ok: len(endpoints) > 0, skipped: skippedPrice}
 			}
 		}()
 	}
@@ -121,6 +142,9 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 		case value.ok:
 			document.Models = append(document.Models, value.model)
 		}
+		if value.err == nil && value.skipped {
+			skipped = append(skipped, SkippedModel{ID: listed[index].ID, Cause: SkipEndpointPrice})
+		}
 	}
 	if len(listed) > 0 && float64(failures) > float64(len(listed))*maxEndpointFailureRatio {
 		return Document{}, fmt.Errorf("OpenRouter endpoint lookup failed for %d of %d models", failures, len(listed))
@@ -131,6 +155,9 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 	document.Normalize()
 	if err := document.Validate(); err != nil {
 		return Document{}, err
+	}
+	if fetcher.OnSkipped != nil && len(skipped) > 0 {
+		fetcher.OnSkipped(skipped)
 	}
 	return document, nil
 }
@@ -149,13 +176,14 @@ type wireModel struct {
 	Pricing             map[string]json.RawMessage `json:"pricing"`
 }
 
-func (fetcher Fetcher) listModels(ctx context.Context) ([]Model, error) {
+func (fetcher Fetcher) listModels(ctx context.Context) ([]Model, []SkippedModel, error) {
 	var body struct {
 		Data []wireModel `json:"data"`
 	}
 	if err := fetcher.get(ctx, "/models", &body); err != nil {
-		return nil, fmt.Errorf("list OpenRouter models: %w", err)
+		return nil, nil, fmt.Errorf("list OpenRouter models: %w", err)
 	}
+	var skipped []SkippedModel
 	models := make([]Model, 0, len(body.Data))
 	seen := make(map[string]struct{}, len(body.Data))
 	for _, wire := range body.Data {
@@ -168,6 +196,7 @@ func (fetcher Fetcher) listModels(ctx context.Context) ([]Model, error) {
 		// The model-level price is only a filter here: a model OpenRouter
 		// cannot price (for example a router quoted at -1) is never routable.
 		if _, err := decodePricing(wire.Pricing); err != nil {
+			skipped = append(skipped, SkippedModel{ID: wire.ID, Cause: SkipModelPrice})
 			continue
 		}
 		model := Model{ID: wire.ID, ContextLength: wire.ContextLength, MaxCompletionTokens: wire.TopProvider.MaxCompletionTokens,
@@ -179,9 +208,9 @@ func (fetcher Fetcher) listModels(ctx context.Context) ([]Model, error) {
 		models = append(models, model)
 	}
 	if len(models) == 0 {
-		return nil, fmt.Errorf("list OpenRouter models: no priced models")
+		return nil, nil, fmt.Errorf("list OpenRouter models: no priced models")
 	}
-	return models, nil
+	return models, skipped, nil
 }
 
 type wireEndpoint struct {
@@ -192,7 +221,9 @@ type wireEndpoint struct {
 	Pricing             map[string]json.RawMessage `json:"pricing"`
 }
 
-func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]Endpoint, error) {
+// listEndpoints also reports whether an endpoint was left out because its
+// price is unusable.
+func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]Endpoint, bool, error) {
 	segments := strings.Split(modelID, "/")
 	for index, segment := range segments {
 		segments[index] = url.PathEscape(segment)
@@ -214,19 +245,20 @@ func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]End
 		}
 		var status statusError
 		if attempt == endpointLookupAttempts || !errors.As(err, &status) || !status.transient() {
-			return nil, err
+			return nil, false, err
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, false, ctx.Err()
 		case <-timer.C:
 		}
 		delay *= 2
 	}
 	endpoints := make([]Endpoint, 0, len(body.Data.Endpoints))
 	seen := make(map[string]struct{}, len(body.Data.Endpoints))
+	skippedPrice := false
 	for _, wire := range body.Data.Endpoints {
 		if validateIdentifier(wire.Tag) != nil {
 			continue
@@ -236,6 +268,7 @@ func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]End
 		}
 		prices, err := decodePricing(wire.Pricing)
 		if err != nil {
+			skippedPrice = true
 			continue
 		}
 		endpoint := Endpoint{Tag: wire.Tag, ContextLength: wire.ContextLength, Pricing: prices}
@@ -254,7 +287,7 @@ func (fetcher Fetcher) listEndpoints(ctx context.Context, modelID string) ([]End
 			break
 		}
 	}
-	return endpoints, nil
+	return endpoints, skippedPrice, nil
 }
 
 // textOutputOnly keeps models whose only output is text. Image, audio and

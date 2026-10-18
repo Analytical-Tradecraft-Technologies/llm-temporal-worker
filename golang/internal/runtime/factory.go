@@ -160,6 +160,9 @@ type ProductionFactoryOptions struct {
 	DurableCompositionFactory DurableCompositionFactory
 	// ModelSyncObserver, when set, receives every model-sync refresher step.
 	ModelSyncObserver func(modelsync.Event)
+	// ModelSyncSkipped, when set, receives the OpenRouter models and
+	// endpoints each fetch left out because their price was unusable.
+	ModelSyncSkipped func([]modelsync.SkippedModel)
 }
 
 // ProductionEngineFactory composes the full provider-neutral engine from one
@@ -1098,7 +1101,7 @@ func (factory *ProductionEngineFactory) startModelSync(ctx context.Context, valu
 		}
 		apiKey = string(key)
 	}
-	syncRuntime.start(ctx, value, store, client, apiKey, factory.options.ModelSyncObserver)
+	syncRuntime.start(ctx, value, store, client, apiKey, factory.options.ModelSyncObserver, factory.options.ModelSyncSkipped)
 	return nil
 }
 

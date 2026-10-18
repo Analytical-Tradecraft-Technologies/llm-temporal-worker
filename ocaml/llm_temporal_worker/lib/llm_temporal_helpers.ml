@@ -139,7 +139,7 @@ module Failure = struct
   type execution_details = { error_code : string option; dispatch : dispatch option }
   type safe_details = {
     code : string; phase : string; dispatch : dispatch; operation_id : string option;
-    retry_after_ms : int option; provider_request_id : string option }
+    retry_after_ms : int option; provider_request_id : string option; reason : string option }
 
   let activity_kind = function
     | "llm_invalid_argument" -> Some Invalid_argument
@@ -205,11 +205,12 @@ module Failure = struct
           let* dispatch = dispatch_of_string dispatch in
           let* operation_id = optional_string "operation_id" fields in
           let* provider_request_id = optional_string "provider_request_id" fields in
+          let* reason = optional_string "reason" fields in
           let* retry_after_ms = match List.assoc_opt "retry_after_ms" fields with
             | None -> Ok None
             | Some (`Int value) when value > 0 -> Ok (Some value)
             | Some _ -> error "failure details retry_after_ms must be a positive integer" in
-          Ok { code; phase; dispatch; operation_id; retry_after_ms; provider_request_id })
+          Ok { code; phase; dispatch; operation_id; retry_after_ms; provider_request_id; reason })
 
   let dispatch failure =
     match execution_details failure, safe_details failure with

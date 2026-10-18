@@ -154,6 +154,9 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	}
 	rejections := planning.plannerRejections(semantic.Model, plan.Rejections)
 	if err != nil || len(plan.Candidates) == 0 {
+		if _, known := catalog.Models[semantic.Model]; !known {
+			return PlannedProviderCall{}, modelNotInCatalogError(ctx, semantic.Model)
+		}
 		return PlannedProviderCall{}, selectionError(ctx, rejections, false, provider.PhasePlan)
 	}
 	healthBlocked := false
@@ -479,6 +482,18 @@ func selectionError(ctx context.Context, rejections []planningRejection, healthB
 				slog.String("error_code", string(code)), slog.String("phase", string(phase)))
 		}
 	}
+	return failure
+}
+
+// modelNotInCatalogError reports a request for a model the route catalog does
+// not list at all. Planning records no route rejection for it, so without this
+// reason a model that model sync dropped (for example for a price it could not
+// decode) is indistinguishable from one whose routes all declined the request.
+func modelNotInCatalogError(ctx context.Context, model string) error {
+	failure := provider.NewError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "provider planning failed")
+	failure.SafeDetails = map[string]string{"reason_1": "model_not_in_catalog"}
+	observability.LoggerFromContext(ctx).Warn(ctx, "requested model is not in the route catalog", slog.String("model", model),
+		slog.String("cause", "model_not_in_catalog"), slog.String("error_code", string(provider.CodeNoRoute)), slog.String("phase", string(provider.PhasePlan)))
 	return failure
 }
 

@@ -1,12 +1,15 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -62,5 +65,42 @@ func TestCloudExecutionCanceledCallStaysUnknown(t *testing.T) {
 	boundedState(t, v, err, llm.ExecutionPending)
 	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Stage != cloudstate.ExecutionUnknown {
 		t.Fatalf("execution stage=%s failure=%+v", execution.Stage, execution.Failure)
+	}
+}
+
+// A failed attempt is logged with its safe classification and upstream HTTP
+// status, so an operator can tell an upstream error from a timeout. Provider
+// text never reaches the log.
+func TestCloudExecutionLogsProviderAttemptFailure(t *testing.T) {
+	f, _ := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) {
+		failure := provider.NewError(provider.CodeProviderUnavailable, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider failed during generation")
+		failure.SafeDetails = map[string]string{"provider": "openrouter", "status": "502"}
+		failure.Cause = fmt.Errorf("upstream said: secret prompt text")
+		return provider.Result{}, failure
+	})
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := f.runtime.GenerateStepV1(observability.WithLogger(context.Background(), logger), f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	var logged map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
+		var entry map[string]any
+		if json.Unmarshal(line, &entry) == nil && entry["msg"] == "provider attempt failed" {
+			logged = entry
+		}
+	}
+	if logged == nil {
+		t.Fatalf("no provider attempt log in %s", output.String())
+	}
+	for key, want := range map[string]string{"level": "WARN", "error_code": "provider_unavailable", "phase": "lift", "dispatch": "accepted", "status": "502", "outcome": string(cloudstate.ExecutionFailed)} {
+		if logged[key] != want {
+			t.Fatalf("log %s = %v, want %s (entry %v)", key, logged[key], want, logged)
+		}
+	}
+	if bytes.Contains(output.Bytes(), []byte("secret prompt")) {
+		t.Fatalf("provider text logged: %s", output.String())
 	}
 }

@@ -220,3 +220,30 @@ func TestOperationContentionRetriesOnlyBeforeDispatch(t *testing.T) {
 		}
 	}
 }
+
+// A planning failure names its first closed-vocabulary cause, so a caller can
+// tell a model missing from the catalog from a route that declined the
+// request. Anything that is not a bounded token is dropped.
+func TestErrorMappingCarriesPlanningReason(t *testing.T) {
+	for reason, want := range map[string]string{
+		"model_not_in_catalog":  "model_not_in_catalog",
+		"capability:web_search": "capability:web_search",
+		"Sensitive prompt text": "",
+		strings.Repeat("a", 65): "",
+		"":                      "",
+	} {
+		failure := provider.NewError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "provider planning failed")
+		failure.SafeDetails = map[string]string{"reason_1": reason}
+		var application *temporal.ApplicationError
+		if !errors.As(ToTemporalError(failure), &application) {
+			t.Fatal("not an application error")
+		}
+		var details SafeErrorDetails
+		if err := application.Details(&details); err != nil {
+			t.Fatal(err)
+		}
+		if details.Reason != want || details.Code != string(provider.CodeNoRoute) {
+			t.Fatalf("reason %q: details = %#v, want reason %q", reason, details, want)
+		}
+	}
+}

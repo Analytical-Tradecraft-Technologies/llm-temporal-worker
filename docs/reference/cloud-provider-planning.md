@@ -53,8 +53,15 @@ one of the routing planner's rejection codes, `route_compile_rejected`,
 `route_adapter_unavailable` or `route_quote_unavailable`, suffixed with
 `:<feature>` when the feature is known. Each rejection is also logged as
 `route rejected during provider planning` with `route_id`, `cause`,
-`error_code` and `phase`. These details never leave the worker: the Temporal
-error carries only the code, phase and dispatch certainty.
+`error_code` and `phase`. A requested model the route catalog does not list at
+all records no rejection; it is `no_route` at the `plan` phase with
+`reason_1=model_not_in_catalog`, logged as `requested model is not in the route
+catalog` with `model`. Model sync logs each OpenRouter model it leaves out for
+an unusable price as `model catalog sync left out a model` with `model` and
+`cause` (`model_price_unusable`, or `endpoint_price_unusable` when only some
+endpoints were dropped), up to 16 per fetch. Route IDs and the other details
+never leave the worker: the Temporal error carries the code, phase, dispatch
+certainty and, as `reason`, `reason_1` when it is a bounded lowercase token.
 
 A Generate whose parent recorded provider-state provenance is pinned as
 described in [routing and continuation](../architecture/routing-and-continuation.md#portable-and-pinned-continuation).

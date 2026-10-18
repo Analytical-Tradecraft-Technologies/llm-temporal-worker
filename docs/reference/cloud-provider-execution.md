@@ -62,6 +62,12 @@ a failure during generation is another: OpenRouter returns a choice with
 the conservative charge. It is not `outcome_unknown`, so it does not wait for
 the recovery time or lead to another submission.
 
+Every failed or unknown attempt is logged as `provider attempt failed` with
+`route_id`, `endpoint`, `model`, `outcome` (the saved stage), `error_code`,
+`phase`, `dispatch`, `retry`, the upstream HTTP `status` when the provider
+reported one, and `cause=deadline_exceeded` when the worker's own deadline
+ended the call. Provider messages and causes are never logged.
+
 A call the worker's own deadline cuts off after a possible write (the
 endpoint's HTTP `timeout` or the Activity bound) is a terminal
 `deadline_exceeded` failure with `ambiguous` dispatch when the route has nothing

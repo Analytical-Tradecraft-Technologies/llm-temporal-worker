@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -539,6 +541,11 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 		}
 	}
+	if callErr != nil {
+		logProviderAttemptFailure(ctx, saved, next, callErr)
+	} else if outcome.State == provider.ResumableFailed && outcome.Failure != nil {
+		logProviderAttemptFailure(ctx, saved, next, outcome.Failure)
+	}
 	next.UpdatedAt = now
 	if next.Stage == cloudstate.ExecutionSucceeded || next.Stage == cloudstate.ExecutionFailed {
 		next.CompletedAt = next.UpdatedAt
@@ -974,6 +981,41 @@ func executionSettlement(execution cloudstate.ProviderExecution) *durable.Reconc
 // provider call. The provider's code is kept so the failure stays actionable.
 func acceptedLiftFailure(failure *provider.Error) bool {
 	return failure.Phase == provider.PhaseLift && failure.Dispatch == provider.DispatchAccepted && failure.Retry == provider.RetryNever
+}
+
+// logProviderAttemptFailure records why a paid provider attempt failed or
+// became unknown. Without it an operator sees only the request's final code
+// (often ambiguous_dispatch) and cannot tell an upstream error from a timeout.
+// It logs safe enums and the upstream HTTP status, never provider text.
+func logProviderAttemptFailure(ctx context.Context, saved cloudstate.SavedProviderExecution, next cloudstate.ProviderExecution, callErr error) {
+	attrs := []slog.Attr{
+		slog.String("route_id", saved.Plan.Route.RouteID), slog.String("endpoint", saved.Plan.Route.EndpointID),
+		slog.String("model", saved.Plan.Route.Model), slog.String("outcome", string(next.Stage)),
+	}
+	var classified *provider.Error
+	if errors.As(callErr, &classified) {
+		attrs = append(attrs, slog.String("error_code", string(classified.Code)), slog.String("phase", string(classified.Phase)),
+			slog.String("dispatch", string(classified.Dispatch)), slog.String("retry", string(classified.Retry)))
+		if status := classified.SafeDetails["status"]; providerHTTPStatus(status) != 0 {
+			attrs = append(attrs, slog.String("status", status))
+		}
+		if errors.Is(callErr, context.DeadlineExceeded) {
+			attrs = append(attrs, slog.String("cause", "deadline_exceeded"))
+		}
+	} else {
+		attrs = append(attrs, slog.String("error_code", string(provider.CodeInternal)))
+	}
+	observability.LoggerFromContext(ctx).Warn(ctx, "provider attempt failed", attrs...)
+}
+
+// providerHTTPStatus returns a provider's reported HTTP status, or zero when
+// the detail is not a status code.
+func providerHTTPStatus(value string) int {
+	status, err := strconv.Atoi(value)
+	if err != nil || status < 100 || status > 599 || strconv.Itoa(status) != value {
+		return 0
+	}
+	return status
 }
 
 // unrecoverableDeadline reports a call the worker's own deadline (the
