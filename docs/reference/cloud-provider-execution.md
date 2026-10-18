@@ -67,7 +67,14 @@ Every failed or unknown attempt is logged as `provider attempt failed` with
 `phase`, `dispatch`, `retry`, the upstream HTTP `status` when the provider
 reported one, and a `cause`: `deadline_exceeded` when the worker's own deadline
 ended the call, or `provider_job_not_found` when a poll or idempotency recovery
-found no provider job. Provider messages and causes are never logged.
+found no provider job. A response the Chat Completions adapter rejected while
+lifting also logs its closed cause (`json_text_missing`, `json_text_empty`,
+`json_fenced`, `json_leading_text`, `json_trailing_text`, `json_invalid`,
+`json_schema_violation`, `finish_reason_without_tool_call`,
+`finish_reason_unknown`, `tool_call_type_unsupported`, `tool_call_incomplete`,
+`tool_call_arguments_invalid`, `usage_invalid`, `response_metadata_invalid` or
+`response_invalid`) and the provider's `finish_reason` when it is a lowercase
+token. Provider messages and causes are never logged.
 
 A call the worker's own deadline cuts off after a possible write (the
 endpoint's HTTP `timeout` or the Activity bound) is a terminal

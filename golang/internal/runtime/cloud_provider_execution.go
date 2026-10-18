@@ -1007,6 +1007,14 @@ func logProviderAttemptFailure(ctx context.Context, saved cloudstate.SavedProvid
 		if cause == "" && errors.Is(callErr, context.DeadlineExceeded) {
 			cause = "deadline_exceeded"
 		}
+		// An adapter that rejected a received response names a closed cause,
+		// such as json_trailing_text, and the provider's finish reason.
+		if lift := classified.SafeDetails["lift_cause"]; cause == "" && safeLogToken(lift) {
+			cause = lift
+		}
+		if finish := classified.SafeDetails["finish_reason"]; safeLogToken(finish) {
+			attrs = append(attrs, slog.String("finish_reason", finish))
+		}
 	} else {
 		attrs = append(attrs, slog.String("error_code", string(provider.CodeInternal)))
 	}
@@ -1014,6 +1022,20 @@ func logProviderAttemptFailure(ctx context.Context, saved cloudstate.SavedProvid
 		attrs = append(attrs, slog.String("cause", cause))
 	}
 	observability.LoggerFromContext(ctx).Warn(ctx, "provider attempt failed", attrs...)
+}
+
+// safeLogToken accepts a short lowercase identifier, so a detail an adapter
+// copied from a response can never put other text in a log line.
+func safeLogToken(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // providerHTTPStatus returns a provider's reported HTTP status, or zero when
