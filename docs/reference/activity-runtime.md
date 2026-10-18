@@ -114,7 +114,13 @@ stable provider error code (for example `invalid_argument`, `rate_limited` or
 workflows raise a non-retryable `ApplicationError` whose type is the failure
 code and whose details hold `{"error_code", "dispatch"}`, so callers can tell an
 invalid request from an outage without the provider's message. Failures saved
-before these fields existed carry no details.
+before these fields existed carry no details. Results and failure details also
+accept an optional `provider_status`, the upstream HTTP status (100-599), and
+the worker saves it with each failure. This release does not yet report it:
+results are decoded against a closed field list, so it is emitted only once
+every running worker accepts the field.
+A planning failure's `llm_invalid_argument` details may carry `reason`, the
+first closed-vocabulary planning cause such as `model_not_in_catalog`.
 Retrying failed or unknown paid work requires a separate
 attempt and fresh budget; `retryable` never authorizes reusing its reservation.
 Completion includes exactly one response matching the request kind. All other

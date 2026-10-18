@@ -85,6 +85,11 @@ func TestCloudExecutionLogsProviderAttemptFailure(t *testing.T) {
 	}
 	v, err := f.runtime.GenerateStepV1(observability.WithLogger(context.Background(), logger), f.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
+	// The upstream status is saved with the failure for a later release to
+	// report; this one does not put it in the result yet.
+	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Failure == nil || execution.Failure.ProviderStatus != 502 || v.ProviderStatus != 0 {
+		t.Fatalf("saved failure=%+v result status=%d", execution.Failure, v.ProviderStatus)
+	}
 	var logged map[string]any
 	for _, line := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
 		var entry map[string]any

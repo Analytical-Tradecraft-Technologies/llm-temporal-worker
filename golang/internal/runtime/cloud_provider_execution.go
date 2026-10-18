@@ -1056,6 +1056,9 @@ const maxProviderRetryDelay = 24 * time.Hour
 // errors remain outcome_unknown; they never become a free or immediate retry.
 func executionFailure(code provider.Code, dispatch provider.DispatchCertainty, failure *provider.Error, now time.Time) *cloudstate.ExecutionFailure {
 	result := &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch}
+	if failure != nil {
+		result.ProviderStatus = providerHTTPStatus(failure.SafeDetails["status"])
+	}
 	if preDispatchContextEnded(failure) {
 		// The worker's own context ended (shutdown or Activity deadline) before
 		// any provider write. Nothing was sent, so this is a zero-cost retryable

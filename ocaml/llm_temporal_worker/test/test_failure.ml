@@ -45,7 +45,7 @@ let () =
     failure "provider_rejected" ~details:{|{"error_code":"permission_denied","dispatch":"rejected"}|} in
   expect_kind "permission denied" Authentication rejected_auth;
   expect_execution "permission denied"
-    (Some { error_code = Some "permission_denied"; dispatch = Some Rejected }) rejected_auth;
+    (Some { error_code = Some "permission_denied"; dispatch = Some Rejected; provider_status = None }) rejected_auth;
   expect "permission denied dispatch" (Failure.dispatch rejected_auth = Some Rejected);
   expect_kind "authentication" Authentication
     (failure "provider_error" ~details:{|{"error_code":"authentication","dispatch":"not_dispatched"}|});
@@ -76,8 +76,11 @@ let () =
   let legacy = failure "provider_error" in
   expect_kind "legacy" Provider_error legacy;
   expect_execution "legacy" None legacy;
-  expect_execution "code only" (Some { error_code = Some "internal"; dispatch = None })
+  expect_execution "code only" (Some { error_code = Some "internal"; dispatch = None; provider_status = None })
     (failure "provider_error" ~details:{|{"error_code":"internal"}|});
+  expect_execution "upstream status"
+    (Some { error_code = Some "provider_unavailable"; dispatch = Some Accepted; provider_status = Some 502 })
+    (failure "provider_error" ~details:{|{"error_code":"provider_unavailable","dispatch":"accepted","provider_status":502}|});
   (* Activity failures. *)
   let activity_auth =
     failure "llm_authentication"

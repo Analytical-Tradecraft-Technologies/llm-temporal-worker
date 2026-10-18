@@ -136,7 +136,7 @@ module Failure = struct
     | Ambiguous_dispatch | Operation_conflict | State_corrupt | Internal
     | Provider_error | Provider_rejected | Incomplete_response | Other of string option
   type dispatch = Not_dispatched | Rejected | Accepted | Ambiguous
-  type execution_details = { error_code : string option; dispatch : dispatch option }
+  type execution_details = { error_code : string option; dispatch : dispatch option; provider_status : int option }
   type safe_details = {
     code : string; phase : string; dispatch : dispatch; operation_id : string option;
     retry_after_ms : int option; provider_request_id : string option; reason : string option }
@@ -191,7 +191,11 @@ module Failure = struct
           let* dispatch = match dispatch with
             | None -> Ok None
             | Some value -> Result.map Option.some (dispatch_of_string value) in
-          Ok { error_code; dispatch })
+          let* provider_status = match List.assoc_opt "provider_status" fields with
+            | None -> Ok None
+            | Some (`Int value) when value >= 100 && value <= 599 -> Ok (Some value)
+            | Some _ -> error "failure details provider_status must be an HTTP status" in
+          Ok { error_code; dispatch; provider_status })
     | _ -> Ok None
 
   let safe_details failure =
@@ -225,7 +229,7 @@ module Failure = struct
     match execution_details failure with
     | Ok (Some { dispatch = Some Ambiguous; _ }) -> Ambiguous_dispatch
     | Ok (Some { error_code = Some ("authentication" | "permission_denied");
-                 dispatch = Some (Not_dispatched | Rejected) }) -> Authentication
+                 dispatch = Some (Not_dispatched | Rejected); _ }) -> Authentication
     | Ok _ | Error _ -> fallback
 
   let kind failure = match Temporal.Error.error_type failure with

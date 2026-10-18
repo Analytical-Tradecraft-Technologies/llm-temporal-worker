@@ -81,7 +81,9 @@ module Failure : sig
 
   (** The details of a [provider_error], [provider_rejected] or
       [incomplete_response] public workflow failure. *)
-  type execution_details = { error_code : string option; dispatch : dispatch option }
+  (** [provider_status] is the upstream HTTP status, when the worker reports
+      one. *)
+  type execution_details = { error_code : string option; dispatch : dispatch option; provider_status : int option }
 
   (** The bounded details of an [llm_*] Activity failure. [reason] is the
       first closed-vocabulary planning cause when planning found no route, for
