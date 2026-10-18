@@ -2,79 +2,65 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
-func TestCloudProviderDeadlineMatchesActivityWindow(t *testing.T) {
-	// A live one-shot call and its outcome saves must finish before another
-	// observer is allowed to classify submission as unrecoverable.
-	if config.ActivityStartToClose+executionSaveBudget >= durable.BudgetStartLease {
-		t.Fatal("provider Activity overlaps uncertain-submission recovery")
+// A call the worker's own HTTP timeout cuts off after the request was sent,
+// on a route with no provider job and no idempotency recovery, cannot be
+// learned by waiting out the start lease, and a replacement would run under
+// the same timeout. It is a terminal, possibly billed deadline failure rather
+// than an unknown outcome that buys a new attempt after every lease.
+func TestCloudExecutionUnrecoverableDeadlineIsTerminal(t *testing.T) {
+	for name, callErr := range map[string]error{
+		"classified deadline": provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request deadline exceeded"),
+		"unclassified client timeout": &provider.Error{Code: provider.CodeProviderUnavailable, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetrySameOperation,
+			SafeMessage: "provider request failed before a response was classified", Cause: fmt.Errorf("read body: %w", context.DeadlineExceeded)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, budgets := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) { return provider.Result{}, callErr })
+			ctx := context.Background()
+			v, err := f.runtime.GenerateStepV1(ctx, f.request)
+			boundedState(t, v, err, llm.ExecutionFailed)
+			if v.Retryable || v.FailureCode != "provider_error" || v.ErrorCode != string(provider.CodeDeadlineExceeded) || v.Dispatch != string(provider.DispatchAmbiguous) {
+				t.Fatalf("failure=%+v", v)
+			}
+			execution := toolArgumentsExecution(t, f, v.RequestID)
+			if execution.Stage != cloudstate.ExecutionFailed || execution.Failure == nil || execution.Failure.Retryable || execution.Settlement == nil || !execution.Settled || budgets.calls.Load() != 1 {
+				t.Fatalf("execution stage=%s failure=%+v settled=%t reconciles=%d", execution.Stage, execution.Failure, execution.Settled, budgets.calls.Load())
+			}
+			// The provider may have billed the request: account the reservation.
+			for _, event := range execution.Settlement.Events {
+				if event.CostStatus != budget.CostUnknown || event.AccountedIncreaseUSD.String() != event.ReservedDecreaseUSD.String() {
+					t.Fatalf("settlement event=%+v", event)
+				}
+			}
+			f.now = f.now.Add(16 * time.Minute)
+			f.restart(t)
+			v, err = f.runtime.GenerateStepV1(ctx, f.request)
+			boundedState(t, v, err, llm.ExecutionFailed)
+			if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
+				t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
+			}
+		})
 	}
-	for _, shorterParent := range []bool{false, true} {
-		for _, async := range []bool{false, true} {
-			t.Run(map[bool]string{false: "activity", true: "parent"}[shorterParent]+map[bool]string{false: "/sync", true: "/async"}[async], func(t *testing.T) {
-				f := newProviderExecutionFixture(t, "generate", async)
-				ctx := context.Background()
-				if shorterParent {
-					var cancel context.CancelFunc
-					ctx, cancel = context.WithTimeout(ctx, time.Minute)
-					defer cancel()
-				}
-				observed := 0
-				checkDeadline := func(callCtx context.Context) {
-					t.Helper()
-					observed++
-					deadline, ok := callCtx.Deadline()
-					if !ok {
-						t.Fatal("provider call is unbounded")
-					}
-					if parentDeadline, ok := ctx.Deadline(); ok {
-						if !deadline.Equal(parentDeadline) {
-							t.Fatal("provider call extended its parent deadline")
-						}
-					} else if remaining := time.Until(deadline); remaining < 9*time.Minute || remaining > config.ActivityStartToClose {
-						t.Fatalf("provider deadline = %s; need the longer Activity window", remaining)
-					}
-				}
-				invoke, submit, poll := f.adapter.invoke, f.adapter.submit, f.adapter.poll
-				f.adapter.invoke = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
-					checkDeadline(ctx)
-					return invoke(ctx, call, observer)
-				}
-				f.adapter.submit = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.ResumableResult, error) {
-					checkDeadline(ctx)
-					return submit(ctx, call, observer)
-				}
-				f.adapter.poll = func(ctx context.Context, call provider.Call, id string, observer provider.Observer) (provider.ResumableResult, error) {
-					checkDeadline(ctx)
-					return poll(ctx, call, id, observer)
-				}
-				result, err := f.submit(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if async {
-					f.now = f.now.Add(3 * time.Second)
-					result, err = f.resume(ctx)
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				wantObserved := 1
-				if async {
-					wantObserved = 2
-				}
-				if observed != wantObserved || result.Saved.Execution.Stage != cloudstate.ExecutionSucceeded || f.submits.Load() != 1 || f.settlements.Load() != 1 {
-					t.Fatalf("completion did not retain one attempt and settlement: observed=%d result=%+v", observed, result)
-				}
-			})
-		}
+}
+
+// Cancellation, such as a worker shutdown, is not the route's deadline: the
+// attempt stays unknown and is recovered or replaced after the start lease.
+func TestCloudExecutionCanceledCallStaysUnknown(t *testing.T) {
+	f, _ := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) {
+		return provider.Result{}, provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request canceled")
+	})
+	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Stage != cloudstate.ExecutionUnknown {
+		t.Fatalf("execution stage=%s failure=%+v", execution.Stage, execution.Failure)
 	}
 }

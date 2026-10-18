@@ -55,9 +55,23 @@ not diagnostic causes or arbitrary provider error text.
 
 A response that arrived in full but could not be lifted is an accepted
 `provider_invalid_response`. Tool-call arguments with a duplicate JSON key are
-one example; every adapter rejects them while lifting. The attempt is a terminal
-failure settled at the conservative charge. It is not `outcome_unknown`, so it
-does not wait for the recovery time or lead to another submission.
+one example; every adapter rejects them while lifting. A response that reports
+a failure during generation is another: OpenRouter returns a choice with
+`finish_reason: "error"`, which keeps the provider's code (for example
+`provider_unavailable`). Either way the attempt is a terminal failure settled at
+the conservative charge. It is not `outcome_unknown`, so it does not wait for
+the recovery time or lead to another submission.
+
+A call the worker's own deadline cuts off after a possible write (the
+endpoint's HTTP `timeout` or the Activity bound) is a terminal
+`deadline_exceeded` failure with `ambiguous` dispatch when the route has nothing
+to recover: no provider job to poll and no idempotency recovery, as with
+OpenRouter Chat Completions. Waiting out the recovery time cannot learn its
+outcome, and a replacement would run under the same deadline, so each
+replacement would be charged for a result it never receives. It is settled at
+the conservative charge. Give such an endpoint a `timeout` that covers its
+longest expected request. A canceled call (worker shutdown) is not a deadline:
+it still becomes `outcome_unknown`.
 
 A saved terminal result is immutable; only its settlement acknowledgement may
 follow. Results are compared in canonical JSON form, so the key order a provider
