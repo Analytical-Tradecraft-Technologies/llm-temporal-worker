@@ -33,6 +33,8 @@ func TestOpenRouterLiftFailuresNameTheirCause(t *testing.T) {
 		{"schema violation", choice("stop", `{"link":"https://example.com"}`), "json_schema_violation", "stop"},
 		{"empty answer", choice("stop", ""), "json_text_missing", "stop"},
 		{"tool finish without a call", choice("tool_calls", `{"url":"https://example.com"}`), "finish_reason_without_tool_call", "tool_calls"},
+		{"no choices", `{"id":"gen-1","model":"router-model","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`, "choices_missing", ""},
+		{"multiple choices", `{"id":"gen-1","model":"router-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"{}"}},{"index":1,"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}]}`, "choices_multiple", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := invokeOpenRouterRequest(t, llm.Request{OperationKey: "or-op", Model: "router-model", Output: output}, test.body)

@@ -68,7 +68,8 @@ Every failed or unknown attempt is logged as `provider attempt failed` with
 reported one, and a `cause`: `deadline_exceeded` when the worker's own deadline
 ended the call, or `provider_job_not_found` when a poll or idempotency recovery
 found no provider job. A response the Chat Completions adapter rejected while
-lifting also logs its closed cause (`json_text_missing`, `json_text_empty`,
+lifting also logs its closed cause (`response_empty`, `choices_missing`,
+`choices_multiple`, `json_text_missing`, `json_text_empty`,
 `json_fenced`, `json_leading_text`, `json_trailing_text`, `json_invalid`,
 `json_schema_violation`, `finish_reason_without_tool_call`,
 `finish_reason_unknown`, `tool_call_type_unsupported`, `tool_call_incomplete`,

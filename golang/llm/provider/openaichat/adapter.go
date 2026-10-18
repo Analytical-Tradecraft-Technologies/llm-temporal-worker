@@ -272,7 +272,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {
-		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
+		return provider.Result{}, liftFailure(call, "", "", "", withLiftCause("response_empty", errors.New("provider returned an empty response")))
 	}
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.ServiceTier)}
 	if rawResponse != nil {

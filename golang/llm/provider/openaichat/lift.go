@@ -16,7 +16,7 @@ import (
 
 func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCompletion, requestID string) (llm.Response, error) {
 	if response == nil {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
+		return llm.Response{}, liftFailure(call, requestID, "", "", withLiftCause("response_empty", errors.New("provider returned an empty response")))
 	}
 	if profile.ResponseError != nil {
 		if mapped := profile.ResponseError(call, response, requestID); mapped != nil {
@@ -25,10 +25,10 @@ func (profile Profile) liftResponse(call provider.Call, response *openai.ChatCom
 	}
 	actual := profile.actualClass(string(response.ServiceTier))
 	if len(response.Choices) == 0 {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider response contained no choices")
+		return llm.Response{}, liftFailure(call, requestID, response.ID, "", withLiftCause("choices_missing", errors.New("provider response contained no choices")))
 	}
 	if len(response.Choices) > 1 {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider returned multiple choices")
+		return llm.Response{}, liftFailure(call, requestID, response.ID, "", withLiftCause("choices_multiple", errors.New("provider returned multiple choices")))
 	}
 	choice := response.Choices[0]
 	output, hasToolCalls, hasRefusal, err := liftChoice(choice)
