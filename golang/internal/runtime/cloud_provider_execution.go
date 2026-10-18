@@ -492,7 +492,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		// A one-shot Invoke always reports a completed outcome. A resumable
 		// submission that failed may still have a running job to recover.
 		received := outcome.State == provider.ResumableCompleted
-		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched || (received && acceptedInvalidResponse(classified))) {
+		if errors.As(callErr, &classified) && classified.Code.Valid() && (classified.Dispatch == provider.DispatchRejected || classified.Dispatch == provider.DispatchNotDispatched || (received && acceptedLiftFailure(classified))) {
 			next.Stage = cloudstate.ExecutionFailed
 			next.Failure = executionFailure(classified.Code, classified.Dispatch, classified, now)
 		}
@@ -964,12 +964,13 @@ func executionSettlement(execution cloudstate.ProviderExecution) *durable.Reconc
 }
 
 // A response that was received in full and then rejected while lifting has a
-// certain outcome: the provider did the work and its output is unusable. It is
-// a terminal failure accounted at the reservation, never an unknown outcome
-// that stalls and then buys a second provider call.
-func acceptedInvalidResponse(failure *provider.Error) bool {
-	return failure.Code == provider.CodeProviderInvalidResponse && failure.Phase == provider.PhaseLift &&
-		failure.Dispatch == provider.DispatchAccepted && failure.Retry == provider.RetryNever
+// certain outcome: the provider did the work and its output is unusable, or
+// it reported in that response that generation failed (an OpenRouter choice
+// with finish_reason "error"). It is a terminal failure accounted at the
+// reservation, never an unknown outcome that stalls and then buys a second
+// provider call. The provider's code is kept so the failure stays actionable.
+func acceptedLiftFailure(failure *provider.Error) bool {
+	return failure.Phase == provider.PhaseLift && failure.Dispatch == provider.DispatchAccepted && failure.Retry == provider.RetryNever
 }
 
 // maxProviderRetryDelay caps how long a provider's Retry-After can hold a
