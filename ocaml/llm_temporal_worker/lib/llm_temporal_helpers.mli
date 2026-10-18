@@ -80,9 +80,8 @@ module Failure : sig
   type dispatch = Not_dispatched | Rejected | Accepted | Ambiguous
 
   (** The details of a [provider_error], [provider_rejected] or
-      [incomplete_response] public workflow failure. *)
-  (** [provider_status] is the upstream HTTP status, when the worker reports
-      one. *)
+      [incomplete_response] public workflow failure. [provider_status] is the
+      upstream HTTP status, when the worker reports one. *)
   type execution_details = { error_code : string option; dispatch : dispatch option; provider_status : int option }
 
   (** The bounded details of an [llm_*] Activity failure. [reason] is the
