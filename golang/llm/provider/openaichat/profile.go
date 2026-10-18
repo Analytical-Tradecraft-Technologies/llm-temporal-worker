@@ -83,7 +83,7 @@ type Profile struct {
 	directOpenAI              bool
 	// providerField, when set, builds the reserved provider wire field of
 	// each request from its model and service class.
-	providerField func(model string, class llm.ServiceClass) (json.RawMessage, error)
+	providerField func(model string, class llm.ServiceClass, ceiling *provider.PriceCeiling) (json.RawMessage, error)
 }
 
 // NewOpenAIProfile verifies and marks a profile for the direct OpenAI API.
@@ -125,11 +125,11 @@ func NewProfile(profile Profile) (Profile, error) {
 
 // forRequest returns the profile one request lowers with: the profile itself,
 // or a copy carrying the request's provider wire field.
-func (profile Profile) forRequest(model string, class llm.ServiceClass) (Profile, error) {
+func (profile Profile) forRequest(model string, class llm.ServiceClass, ceiling *provider.PriceCeiling) (Profile, error) {
 	if profile.providerField == nil {
 		return profile, nil
 	}
-	field, err := profile.providerField(model, class)
+	field, err := profile.providerField(model, class, ceiling)
 	if err != nil {
 		return Profile{}, err
 	}

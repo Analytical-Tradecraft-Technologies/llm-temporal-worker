@@ -187,8 +187,9 @@ func (engine *Engine) resumeDispatching(ctx context.Context, request, providerRe
 	}
 	call, err := adapter.Compile(ctx, provider.CompileInput{
 		Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability,
-		Strict:   request.Portability != llm.PortabilityBestEffort,
-		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
+		Strict: request.Portability != llm.PortabilityBestEffort,
+		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
+			PriceCeiling: PriceCeiling(candidate.entry)},
 	})
 	if err != nil {
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching call could not be compiled", err)
@@ -256,8 +257,9 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	}
 	call, err := adapter.Compile(ctx, provider.CompileInput{
 		Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability,
-		Strict:   request.Portability != llm.PortabilityBestEffort,
-		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
+		Strict: request.Portability != llm.PortabilityBestEffort,
+		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
+			PriceCeiling: PriceCeiling(candidate.entry)},
 	})
 	if err != nil {
 		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "provider pending call could not be compiled", err)

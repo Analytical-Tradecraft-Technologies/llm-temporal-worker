@@ -118,8 +118,11 @@ type openRouterRouting struct {
 // providerField returns the provider object for one request. It always names
 // the allowed endpoints in only. When OpenRouter selects the upstream, it
 // sorts them by price, or by throughput for the priority class; a pinned
-// provider order keeps that order and never falls back outside it.
-func (routing openRouterRouting) providerField(model string, class llm.ServiceClass) (json.RawMessage, error) {
+// provider order keeps that order and never falls back outside it. A price
+// ceiling becomes max_price, so OpenRouter never serves the request above
+// the prices its reservation was quoted at, even from an endpoint allowed
+// after the quote.
+func (routing openRouterRouting) providerField(model string, class llm.ServiceClass, ceiling *provider.PriceCeiling) (json.RawMessage, error) {
 	upstream, ok := routing.upstreams.OpenRouterUpstream(model)
 	if !ok || len(upstream.Tags) == 0 {
 		return nil, fmt.Errorf("model %q has no allowed OpenRouter upstream endpoint", model)
@@ -150,6 +153,17 @@ func (routing openRouterRouting) providerField(model string, class llm.ServiceCl
 	}
 	if len(upstream.Quantizations) > 0 {
 		field["quantizations"] = append([]string(nil), upstream.Quantizations...)
+	}
+	if ceiling != nil {
+		maxPrice := map[string]any{}
+		for name, value := range map[string]string{"prompt": ceiling.PromptPerMillion, "completion": ceiling.CompletionPerMillion, "request": ceiling.PerRequest} {
+			number := json.Number(value)
+			if _, err := number.Float64(); err != nil || value == "" {
+				return nil, fmt.Errorf("model %q price ceiling %s %q is not a number", model, name, value)
+			}
+			maxPrice[name] = number
+		}
+		field["max_price"] = maxPrice
 	}
 	if routing.zeroRetention {
 		field["zdr"] = true

@@ -191,7 +191,7 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	if err != nil {
 		t.Fatal(err)
 	}
-	lowering, err := profile.profile.forRequest(normalized.Model, serviceClass)
+	lowering, err := profile.profile.forRequest(normalized.Model, serviceClass, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

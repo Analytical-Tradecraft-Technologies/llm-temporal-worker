@@ -264,3 +264,26 @@ func TestDropUnlistedProvidersClearsCarriedForwardProviders(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileTakesRouteLimitsFromAllowedEndpoints(t *testing.T) {
+	document := upstreamDocument()
+	for index := range document.Models[0].Endpoints {
+		endpoint := &document.Models[0].Endpoints[index]
+		endpoint.ContextLength, endpoint.MaxCompletionTokens = 64000, 8000
+		if endpoint.Tag == "abroad-dc/fp8" {
+			// Only an excluded endpoint serves the largest window.
+			endpoint.ContextLength, endpoint.MaxCompletionTokens = 1000000, 100000
+		}
+	}
+	document.Models[0].ContextLength, document.Models[0].MaxCompletionTokens = 1000000, 100000
+	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
+	policy, _ := NewUpstreamPolicy(CountryListCore5, false, false, false)
+	compiled, err := Compile(Input{Document: document, Rules: mergedPrecisionRules(t), OpenRouter: &openrouter, Policy: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := compiled.Models["deepseek/deepseek-v3.2"].Routes[0]
+	if route.ContextTokens != 64000 || route.OutputTokens != 8000 {
+		t.Fatalf("route limits = %d/%d, want the allowed endpoints' 64000/8000", route.ContextTokens, route.OutputTokens)
+	}
+}

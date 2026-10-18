@@ -99,7 +99,7 @@ func TestOpenRouterRejectsCallerProviderOverride(t *testing.T) {
 
 func openRouterProviderBody(t *testing.T, profile Profile, model string, class llm.ServiceClass) map[string]any {
 	t.Helper()
-	lowering, err := profile.forRequest(model, class)
+	lowering, err := profile.forRequest(model, class, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,12 +139,12 @@ func TestOpenRouterUpstreamSelectionNamesAllowedEndpointsAndSortsByClass(t *test
 		}
 	}
 	// A model without allowed endpoints is never sent.
-	if _, err := profile.forRequest("vendor/unchecked", llm.ServiceClassStandard); err == nil {
+	if _, err := profile.forRequest("vendor/unchecked", llm.ServiceClassStandard, nil); err == nil {
 		t.Fatal("a model without allowed upstream endpoints was lowered")
 	}
 	// Callers cannot steer the upstream: an explicit order would bypass the
 	// allowed endpoints and the price reservation.
-	lowering, err := profile.forRequest("deepseek/deepseek-v3.2", llm.ServiceClassStandard)
+	lowering, err := profile.forRequest("deepseek/deepseek-v3.2", llm.ServiceClassStandard, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestOpenRouterPinnedOrderIsLimitedToAllowedEndpoints(t *testing.T) {
 	if !reflect.DeepEqual(body, want) {
 		t.Fatalf("provider body = %#v, want %#v", body, want)
 	}
-	if _, err := profile.forRequest("vendor/excluded", llm.ServiceClassStandard); err == nil {
+	if _, err := profile.forRequest("vendor/excluded", llm.ServiceClassStandard, nil); err == nil {
 		t.Fatal("a pinned order with no allowed endpoint was lowered")
 	}
 }
@@ -185,4 +185,32 @@ type allModelsUpstreams []string
 
 func (tags allModelsUpstreams) OpenRouterUpstream(string) (OpenRouterUpstream, bool) {
 	return OpenRouterUpstream{Tags: append([]string(nil), tags...)}, true
+}
+
+func TestOpenRouterSendsTheReservedPriceCeiling(t *testing.T) {
+	tiers := map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: ""}
+	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: tiers, SelectUpstream: true, RequireParameters: true,
+		Upstreams: StaticOpenRouterUpstreams{"vendor/model": {Tags: []string{"provider-a"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowering, err := profile.forRequest("vendor/model", llm.ServiceClassStandard, &provider.PriceCeiling{PromptPerMillion: "0.26", CompletionPerMillion: "1.5", PerRequest: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	params, err := lowerRequest(llm.Request{Model: "vendor/model"}, lowering, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exact decimals travel as JSON numbers, never through a float.
+	if !strings.Contains(string(encoded), `"max_price":{"completion":1.5,"prompt":0.26,"request":0}`) {
+		t.Fatalf("wire body %s lacks the price ceiling", encoded)
+	}
+	if _, err := profile.forRequest("vendor/model", llm.ServiceClassStandard, &provider.PriceCeiling{PromptPerMillion: "x", CompletionPerMillion: "1", PerRequest: "0"}); err == nil {
+		t.Fatal("a malformed price ceiling was sent")
+	}
 }

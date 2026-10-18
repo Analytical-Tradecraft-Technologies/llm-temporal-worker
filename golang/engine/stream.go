@@ -295,7 +295,8 @@ func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerR
 		}
 		call, err := adapter.Compile(ctx, provider.CompileInput{
 			Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability, Strict: request.Portability != llm.PortabilityBestEffort,
-			Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil},
+			Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
+				PriceCeiling: PriceCeiling(candidate.entry)},
 		})
 		if err != nil {
 			if mapped, ok := err.(*provider.Error); ok && mapped.Dispatch != provider.DispatchNotDispatched {

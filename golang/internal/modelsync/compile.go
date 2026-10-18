@@ -139,7 +139,7 @@ func Compile(input Input) (Compiled, error) {
 			}
 		}
 		if upstream, allowed := compiled.Upstreams[id]; input.OpenRouter != nil && isListed && allowed {
-			model.Endpoints = upstream.Allowed(model.Endpoints)
+			model = allowedModel(model, upstream)
 			route, entries, err := openRouterRoute(*input.OpenRouter, model, documentVersion, documentProvenance)
 			if err != nil {
 				return Compiled{}, fmt.Errorf("model %q: %w", id, err)
@@ -207,6 +207,26 @@ func openRouterRoute(source Source, model Model, version, provenance string) (ro
 	route.ID = "sync-" + source.EndpointID
 	narrowCapabilities(&route, model)
 	return route, entries, nil
+}
+
+// allowedModel narrows a model to its allowed endpoints. Its limits become
+// the largest any allowed endpoint publishes, so planning never accepts a
+// request that only an excluded endpoint could serve; a limit no allowed
+// endpoint publishes keeps the model-level value.
+func allowedModel(model Model, upstream Upstream) Model {
+	model.Endpoints = upstream.Allowed(model.Endpoints)
+	var contextLength, completionTokens int64
+	for _, endpoint := range model.Endpoints {
+		contextLength = max(contextLength, endpoint.ContextLength)
+		completionTokens = max(completionTokens, endpoint.MaxCompletionTokens)
+	}
+	if contextLength > 0 {
+		model.ContextLength = contextLength
+	}
+	if completionTokens > 0 {
+		model.MaxCompletionTokens = completionTokens
+	}
+	return model
 }
 
 // classes returns the endpoint's service classes in canonical order, keeping

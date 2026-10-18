@@ -1484,7 +1484,11 @@ published model catalog each time it is installed:
   endpoint, so OpenRouter enforces it.
 
 A model with no allowed endpoint has no OpenRouter route. A synced route is
-priced at its most expensive allowed endpoint. When OpenRouter selects the
+priced at its most expensive allowed endpoint, and its context and output
+limits are the largest any allowed endpoint publishes. A budgeted request
+also sends the prices its reservation was quoted at as `provider.max_price`,
+so OpenRouter never serves it above them, even from an endpoint allowed after
+the quote. When OpenRouter selects the
 upstream, a request sorts the allowed endpoints by price, or by throughput for
 the `priority` class. An endpoint with a pinned `provider_order` keeps its order,
 limited to the allowed endpoints of the order's providers; a request whose
