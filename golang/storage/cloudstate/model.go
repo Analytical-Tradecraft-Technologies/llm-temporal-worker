@@ -28,6 +28,9 @@ var (
 	// ErrRecordTooLarge is an ErrInvalid refused only because the encoded
 	// record exceeds its size or nesting limit; nothing was written.
 	ErrRecordTooLarge = fmt.Errorf("%w: record exceeds its size limit", ErrInvalid)
+	// ErrPayloadTooLarge is an ErrInvalid refused only because the blob
+	// exceeds maxPayloadBytes; nothing was written.
+	ErrPayloadTooLarge = fmt.Errorf("%w: payload exceeds its size limit", ErrInvalid)
 	// ErrIndexPending means the event committed but its recovery-index update
 	// did not. Retry the SAME update, including token, revision and timestamp.
 	ErrIndexPending = errors.New("durable request committed; recovery index update pending")

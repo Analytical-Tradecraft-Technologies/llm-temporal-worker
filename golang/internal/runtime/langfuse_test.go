@@ -2,6 +2,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
@@ -60,6 +63,97 @@ func TestLangfuseContentPreservesToolArgumentsButExcludesOpaqueState(t *testing.
 	data := langfuseContent(map[string]any{"continuation": map[string]any{"handle": "secret-handle"}, "input": []any{map[string]any{"kind": "provider_state", "opaque": "private-state"}, map[string]any{"kind": "tool_call", "arguments": map[string]any{"operation_key": "user-key", "authorization": "user-content", "kind": "provider_state"}}}})
 	if strings.Contains(string(data), "secret-handle") || strings.Contains(string(data), "private-state") || !strings.Contains(string(data), "user-key") || !strings.Contains(string(data), "user-content") {
 		t.Fatalf("incorrect content scrub: %s", data)
+	}
+}
+
+// Inline media is represented by a digest so captures and the OTLP body never
+// carry base64 media, once per attempt (#1536).
+func TestLangfuseContentReplacesInlineMedia(t *testing.T) {
+	media := []byte(strings.Repeat("inline-media-payload", 64))
+	encoded := base64.StdEncoding.EncodeToString(media)
+	sum := sha256.Sum256(media)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	data := langfuseContent(map[string]any{"input": []any{
+		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "describe"}, llm.ImagePart{Bytes: media, MediaType: "image/png", Detail: "low"}, llm.DocumentPart{Bytes: media, MediaType: "application/pdf", Title: "report"}}},
+		llm.ToolResult{CallID: "call-1", Name: "render", Content: []llm.Part{llm.ImagePart{Bytes: media, MediaType: "image/jpeg"}}},
+		map[string]any{"kind": "message", "actor": "human", "content": []any{map[string]any{"kind": "audio", "media_type": "audio/wav", "bytes": encoded}}},
+		llm.ToolCall{ID: "call-2", Name: "store", Arguments: json.RawMessage(`{"kind":"image","bytes":"` + encoded + `"}`)},
+	}})
+	var tree struct {
+		Input []struct {
+			Content []map[string]any `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(data, &tree); err != nil || len(tree.Input) != 4 {
+		t.Fatalf("unexpected content: %v %s", err, data)
+	}
+	for _, part := range append(append(tree.Input[0].Content[1:], tree.Input[1].Content...), tree.Input[2].Content...) {
+		inline, _ := part["inline"].(map[string]any)
+		if _, found := part["bytes"]; found || inline["digest"] != digest || inline["byte_length"] != float64(len(media)) || inline["media_type"] != part["media_type"] {
+			t.Fatalf("inline media not replaced: %v", part)
+		}
+	}
+	if !strings.Contains(string(data), `"detail":"low"`) || !strings.Contains(string(data), `"title":"report"`) {
+		t.Fatalf("media metadata lost: %s", data)
+	}
+	// Caller-owned tool arguments are not media parts and stay verbatim.
+	if strings.Count(string(data), encoded) != 1 {
+		t.Fatalf("base64 media survived outside tool arguments: %s", data)
+	}
+}
+
+func TestCloudLangfuseExportOmitsInlineMediaBytes(t *testing.T) {
+	f := boundedCloud(t, false)
+	media := []byte(strings.Repeat("inline-image-bytes", 256))
+	f.request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "what is this"}, llm.ImagePart{Bytes: media, MediaType: "image/png"}}}}
+	var payload string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		payload = string(b)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
+	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
+	f.restart(t)
+	result := f.finish(t)
+	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}); err != nil {
+		t.Fatal(err)
+	}
+	// The OTLP body nests content as JSON strings, so check the raw base64 run
+	// that survives any level of string escaping.
+	encoded := base64.StdEncoding.EncodeToString(media)
+	if payload == "" || strings.Contains(payload, encoded[:64]) || !strings.Contains(payload, "what is this") || !strings.Contains(payload, "sha256:") {
+		t.Fatalf("inline media reached the OTLP body: %s", payload)
+	}
+}
+
+type oversizedLangfuseCapture struct{ *cloudstate.Repository }
+
+// Behaves like the 8 MB blob cap for any capture still carrying content.
+func (s oversizedLangfuseCapture) SaveLangfuseCapture(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, attempt string, data json.RawMessage) error {
+	if !strings.Contains(string(data), `"oversized":true`) {
+		return cloudstate.ErrPayloadTooLarge
+	}
+	return s.Repository.SaveLangfuseCapture(ctx, scope, id, attempt, data)
+}
+
+func TestCloudLangfuseOversizedCaptureFailsExportAsOversized(t *testing.T) {
+	f := boundedCloud(t, false)
+	calls := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
+	defer server.Close()
+	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
+	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
+	f.cap.Requests = oversizedLangfuseCapture{f.repository}
+	f.restart(t)
+	result := f.finish(t)
+	err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability})
+	if !errors.Is(err, langfuse.ErrOversized) || errors.Is(err, langfuse.ErrExport) {
+		t.Fatalf("oversized capture not reported as oversized: %v", err)
+	}
+	if calls != 0 || f.submits.Load() != 1 {
+		t.Fatal("oversized capture changed model execution or sent a trace")
 	}
 }
 

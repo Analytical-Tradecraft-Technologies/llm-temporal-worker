@@ -39,6 +39,7 @@ func TestExportLangfuseRetriesOnlyDeliveryFailures(t *testing.T) {
 	}{
 		{langfuse.ErrExport, "langfuse_export_failed", false},
 		{langfuse.ErrRejected, "langfuse_export_rejected", true},
+		{langfuse.ErrOversized, "langfuse_export_oversized", true},
 		{langfuse.ErrUnavailable, "langfuse_export_unavailable", true},
 		{langfuse.ErrSaturated, "langfuse_export_saturated", false},
 	} {
@@ -77,7 +78,7 @@ func TestExportLangfuseFailureIsVisibleOnMetrics(t *testing.T) {
 	if body := scrape(); !strings.Contains(body, `llmtw_langfuse_export_failures_total{reason="rejected"} 0`) {
 		t.Fatalf("missing zero series:\n%s", body)
 	}
-	for _, exportErr := range []error{nil, langfuse.ErrRejected, langfuse.ErrUnavailable, langfuse.ErrSaturated, langfuse.ErrExport} {
+	for _, exportErr := range []error{nil, langfuse.ErrRejected, langfuse.ErrOversized, langfuse.ErrUnavailable, langfuse.ErrSaturated, langfuse.ErrExport} {
 		activities := &Activities{Metrics: metrics, V1Runtime: &langfuseRuntimeStub{err: exportErr}}
 		var suite testsuite.WorkflowTestSuite
 		environment := suite.NewTestActivityEnvironment()
@@ -85,7 +86,7 @@ func TestExportLangfuseFailureIsVisibleOnMetrics(t *testing.T) {
 		_, _ = environment.ExecuteActivity(ExportLangfuseActivityName, rawJSONArgument(t, payload))
 	}
 	body := scrape()
-	for _, reason := range []string{"rejected", "unavailable", "saturated", "failed"} {
+	for _, reason := range []string{"rejected", "oversized", "unavailable", "saturated", "failed"} {
 		if want := `llmtw_langfuse_export_failures_total{reason="` + reason + `"} 1`; !strings.Contains(body, want) {
 			t.Fatalf("missing %s:\n%s", want, body)
 		}

@@ -42,7 +42,7 @@ func (r *Repository) blobKey(stream string, data []byte) string {
 
 func (r *Repository) writeBlob(ctx context.Context, stream string, data []byte) (string, error) {
 	if len(data) > maxPayloadBytes {
-		return "", ErrInvalid
+		return "", ErrPayloadTooLarge
 	}
 	key := r.blobKey(stream, data)
 	nonce := make([]byte, r.cipher.NonceSize())
