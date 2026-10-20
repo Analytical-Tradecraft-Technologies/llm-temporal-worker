@@ -1,6 +1,6 @@
 # Local-only deterministic fixture. Production deployments must use a reviewed
 # provider endpoint and the pinned worker image; this image is never published.
-FROM python:3.14-alpine
+FROM python:3.15-alpine
 WORKDIR /srv
 RUN apk add --no-cache openssl \
     && openssl req -x509 -newkey rsa:2048 -nodes \
