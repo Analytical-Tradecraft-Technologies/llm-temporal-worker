@@ -662,6 +662,18 @@ options: `heartbeat_keepalive_interval` may be at most `10s` (one third of the
 `10m` Activity start-to-close timeout, and `server.inline_payload_bytes` may be
 at most 2 MiB, Temporal's default payload blob limit.
 
+Raise `server.inline_payload_bytes` freely, but lower it only after draining:
+stop starting new Generate and Compact workflows and let every open one finish
+(or the older workers finish them) before workers with the smaller limit poll
+the task queue. Workers apply the limit to every workflow input, Activity
+argument and recorded result they decode or encode, including when they
+replay an open workflow's history after a restart. A history recorded under a
+larger limit can therefore hold a payload the new limit refuses, and replaying
+it fails the workflow with a non-determinism error rather than a typed
+`llm_invalid_argument`; a provider attempt it had paid for is then recoverable
+only through the pending-request index or `generation-recover`. A reload
+cannot change the limit; it takes a restart.
+
 Provider execution uses that same ten-minute Activity bound, including resumable
 polls, while preserving any shorter parent deadline. Choose endpoint and global
 provider timeouts below this bound with room to save the outcome. The durable
