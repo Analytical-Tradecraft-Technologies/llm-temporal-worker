@@ -480,8 +480,20 @@ func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) *fanoutNode {
 // It returns nil when the pointer names no schema object or boolean.
 func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 	var value any = graph.root
-	for _, token := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
-		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+	prefix := ""
+	// The target belongs to the nearest enclosing $id on its own path, which
+	// may lie below the referring node's resource.
+	enclosing := func(value any) {
+		if object, ok := value.(map[string]any); ok {
+			if id, ok := object["$id"].(string); ok && id != "" {
+				resource = prefix
+			}
+		}
+	}
+	enclosing(value)
+	for _, raw := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+		token := strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
+		prefix += "/" + raw
 		switch current := value.(type) {
 		case map[string]any:
 			value = current[token]
@@ -493,6 +505,9 @@ func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 			value = current[index]
 		default:
 			return nil
+		}
+		if prefix != path {
+			enclosing(value)
 		}
 	}
 	switch target := value.(type) {
