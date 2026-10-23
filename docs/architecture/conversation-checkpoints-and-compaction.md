@@ -448,7 +448,13 @@ fits the target, so a summary is never bought for a request it cannot bring
 below the trigger.
 
 The generation workflow's automatic compaction uses unrestricted-age summary
-caching with sample index zero. Explicit Compact requests can choose another
+caching with sample index zero, independent of the Generate's own `cache`: the
+compaction child reads and publishes the tenant/project compaction cache even
+when the Generate omitted `cache`, and it ignores the Generate's `variant` and
+`max_age_seconds`, which govern only the Generate's final response. A reused
+summary reports `provenance.source=worker_cache`. The summary stays inside the
+caller's scope and encryption, and reuse only avoids buying an identical
+summary again. Explicit Compact requests can choose another
 non-negative sample index. Final-answer freshness and sample indexes do not
 change automatic summary identity; source content and policy versions do.
 
