@@ -223,7 +223,10 @@ content; the reload then publishes only that content. A file that is still
 being written in place is therefore not reloaded until the write has finished,
 and an atomic rename or ConfigMap symlink swap is reloaded about two seconds
 after it lands. `SIGHUP` is an explicit request and reloads the file as it is
-at that moment, without waiting for it to settle.
+at that moment, without waiting for it to settle. A `SIGHUP` that arrives
+while the worker is still starting (dialing Redis, storage or Temporal) does
+not stop the process: it is held and becomes the first reload once the worker
+runs. Further signals during startup coalesce into that one reload.
 
 An unreadable or invalid replacement leaves the active snapshot and readiness
 state unchanged. The worker records `llmtw_config_reload_total{outcome="failure"}`
