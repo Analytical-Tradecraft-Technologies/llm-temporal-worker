@@ -131,7 +131,7 @@ func TestExportLocalRejectionDoesNotResetBreaker(t *testing.T) {
 	for i := 0; i < breakerThreshold-1; i++ {
 		c.Export(context.Background(), op)
 	}
-	if err := c.Export(context.Background(), oversized); err != ErrRejected {
+	if err := c.Export(context.Background(), oversized); !errors.Is(err, ErrOversized) || !errors.Is(err, ErrRejected) || errors.Is(err, ErrExport) {
 		t.Fatalf("oversized payload must be rejected locally: %v", err)
 	}
 	c.Export(context.Background(), op)

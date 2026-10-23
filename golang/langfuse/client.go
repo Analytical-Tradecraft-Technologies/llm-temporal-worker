@@ -20,6 +20,10 @@ import (
 var ErrExport = errors.New("Langfuse export failed")
 var ErrRejected = errors.New("Langfuse export rejected")
 
+// ErrOversized is the ErrRejected for a trace that exceeds the OTLP body or
+// capture size limit. Retrying cannot shrink it, and nothing was sent.
+var ErrOversized = fmt.Errorf("%w: payload too large", ErrRejected)
+
 // ErrUnavailable is a local fast-fail: the breaker is open or the in-flight
 // limit is reached, so nothing was sent. It wraps ErrExport so callers that
 // treat every export failure alike keep working.
@@ -215,8 +219,11 @@ func encode(o Operation) ([]byte, error) {
 	}
 	payload := map[string]any{"resourceSpans": []any{map[string]any{"resource": map[string]any{"attributes": []attribute{attr("service.name", "llm-temporal-worker")}}, "scopeSpans": []any{map[string]any{"scope": map[string]string{"name": "llmtw.langfuse"}, "spans": spans}}}}}
 	body, err := json.Marshal(payload)
-	if err != nil || len(body) > maxBody {
+	if err != nil {
 		return nil, ErrRejected
+	}
+	if len(body) > maxBody {
+		return nil, ErrOversized
 	}
 	return body, nil
 }
