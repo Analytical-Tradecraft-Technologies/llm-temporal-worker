@@ -485,7 +485,10 @@ func liftStatus(reason types.StopReason, hasToolCalls bool) (llm.ResponseStatus,
 		// the raw stop reason stays in the provider facts.
 		return llm.ResponseStatusLength, nil
 	case types.StopReasonGuardrailIntervened, types.StopReasonContentFiltered:
-		return llm.ResponseStatusRefused, nil
+		// A service content filter or a configured Bedrock guardrail stopped
+		// the output; the model did not refuse. Report it as the Chat and
+		// Responses lifters report provider content filtering (#1505).
+		return llm.ResponseStatusContentFiltered, nil
 	default:
 		return "", fmt.Errorf("provider returned unknown stop reason %q", reason)
 	}
