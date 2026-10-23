@@ -78,6 +78,8 @@ func TestStructuredOutputSendsProviderValidSchemaAndValidatesCallerSchema(t *tes
 		{name: "conforming", text: `{"name":"abc","age":1,"tags":["a"]}`, valid: true},
 		{name: "string shorter than minLength", text: `{"name":"ab"}`},
 		{name: "number below minimum", text: `{"name":"abc","age":-1}`},
+		// The validator would dereference a nil big.Rat for this number (#1522).
+		{name: "number with an unbounded exponent", text: `{"name":"abc","age":1e3000000}`},
 		{name: "array longer than maxItems", text: `{"name":"abc","tags":["a","b","c"]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {

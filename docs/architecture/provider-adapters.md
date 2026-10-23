@@ -352,6 +352,17 @@ response tier as optional evidence:
 Pricing and cost metrics use the attempted class whenever no actual class is
 reported, and the actual-class metric records `unknown`.
 
+Structured output is validated against the caller's JSON Schema only after
+its numbers are bounded: each JSON number may have at most 1000 integer and
+fraction digits and an explicit decimal exponent of at most ±1000
+(`schema.MaxNumberDigits` and `schema.MaxNumberExponent`). The third-party
+validator converts numbers to `big.Rat` and dereferences a failed conversion,
+so a model answer such as `1e3000000` would otherwise panic the Activity after
+payment. A number outside the bound is a provider invalid-response error at
+lift, and any other validator panic is recovered into a validation failure. The
+same bound applies to every number in a caller's output schema, which is
+rejected rather than compiled with the constraint silently dropped.
+
 Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
 a string, and some compatible providers send an empty string for a tool that
 takes no arguments; an empty or whitespace-only string lifts as the empty
