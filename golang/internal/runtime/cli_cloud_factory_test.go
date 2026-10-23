@@ -20,6 +20,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -485,5 +486,43 @@ func TestKubernetesBaseCatalogsLoadThroughSnapshotLoader(t *testing.T) {
 	model, ok := loaded.Routes.Models["default"]
 	if !ok || len(model.Routes) != 1 || model.Routes[0].Model != "replace-with-model" || model.Routes[0].Provider != "openai" || !model.Routes[0].PriceAvailable {
 		t.Fatalf("Kubernetes base routes = %#v", loaded.Routes)
+	}
+}
+
+// A denied scope is logged without its identifiers and reported as a
+// not-dispatched, never-retried caller error (#1535).
+func TestTrustedTemporalScopeDenialIsLoggedAndNotDispatched(t *testing.T) {
+	options, err := trustedTemporalCloudOptions(trustedTemporalTestConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithLogger(context.Background(), logger)
+	if _, err := options.ResolveScope(ctx, llm.RequestContext{Tenant: "intruder-tenant", Project: "intruder-project", Actor: "intruder-actor"}); err == nil {
+		t.Fatal("unlisted scope allowed")
+	} else {
+		var mapped *provider.Error
+		if !errors.As(err, &mapped) || mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+			t.Fatalf("denial = %#v, want a not-dispatched permission denial", err)
+		}
+	}
+	line := output.String()
+	for _, want := range []string{`"msg":"request scope access decision"`, `"level":"WARN"`, `"outcome":"denied"`, `"tenant_hash":"`, `"project_hash":"`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log %q lacks %s", line, want)
+		}
+	}
+	for _, leaked := range []string{"intruder-tenant", "intruder-project", "intruder-actor"} {
+		if strings.Contains(line, leaked) {
+			t.Fatalf("log %q leaks %s", line, leaked)
+		}
+	}
+	output.Reset()
+	if _, err := options.ResolveScope(ctx, llm.RequestContext{Tenant: "tenant", Project: "project"}); err != nil || output.Len() != 0 {
+		t.Fatalf("allowed scope: err=%v log=%q", err, output.String())
 	}
 }

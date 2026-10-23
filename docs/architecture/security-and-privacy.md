@@ -165,9 +165,11 @@ provider state are sensitive by default. The worker:
 - records retention/expiry metadata; automatic production cleanup is deferred;
 - records provider storage/retention choices in endpoint profiles;
 - is intended to provide content-free audit events for access and deletion;
-  these are not yet emitted for Generate/Compact access or scope denials (only
-  query audit, configuration reloads and route rejections during provider
-  planning, with route ID and a bounded cause, are logged today).
+  these are not yet emitted for allowed Generate/Compact access (#1541). A
+  request-scope denial logs one warn line, `request scope access decision`,
+  with `outcome=denied`, truncated hashes of the tenant and project and the
+  Activity type (`activity_type`); query audit, configuration reloads and route rejections
+  during provider planning (route ID and a bounded cause) are logged too.
 
 The cloud Generate contract stores bounded content-free metadata and references
 for recovery and cache verification. Prompt, tool, output and provider-state
