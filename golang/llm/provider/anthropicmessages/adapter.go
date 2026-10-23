@@ -89,25 +89,12 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err := provider.ValidateCapabilityQuery(input.Query, "anthropic messages", provider.FamilyAnthropicMessages, adapter.endpointID); err != nil {
 		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
-	normalized, err := llm.NormalizeRequest(input.Request)
 	input.Metadata.WebSearch = input.Request.WebSearch
 	input.Metadata.WebFetch = input.Request.WebFetch
 	input.Metadata.CodeExecution = input.Request.CodeExecution
+	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, adapter.profile.ExpectedModel)
 	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if err := llm.ValidateServiceClassFallbacks(serviceClass, normalized.ServiceClassFallbacks); err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if input.Query.Model != "" && input.Query.Model != normalized.Model {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
-	}
-	if adapter.profile.ExpectedModel != "" && adapter.profile.ExpectedModel != normalized.Model {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q is not the pinned profile model %q", normalized.Model, adapter.profile.ExpectedModel))
+		return provider.Call{}, err
 	}
 	if continuation := normalized.Continuation; continuation != nil && continuation.Pinned && continuation.EndpointID != "" && continuation.EndpointID != adapter.endpointID {
 		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("continuation endpoint %q is not pinned endpoint %q", continuation.EndpointID, adapter.endpointID))
@@ -116,24 +103,14 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err != nil {
 		return provider.Call{}, provider.NewUnsupportedCapabilityError(err.Error())
 	}
-	set := input.Capability
-	if set.Version == "" && len(set.Features) == 0 {
-		set, err = adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
-		if err != nil {
-			return provider.Call{}, provider.NewCompileError(err.Error())
-		}
+	set, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
+		return adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
+	}, adapter.profile.capabilityVersion())
+	if err != nil {
+		return provider.Call{}, err
 	}
-	if set.Version == "" {
-		set.Version = adapter.profile.capabilityVersion()
-	}
-	for _, feature := range requiredFeatures(normalized) {
-		capability, resolveErr := set.Resolve(feature, input.Strict)
-		if resolveErr != nil {
-			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, resolveErr.Error())
-		}
-		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
-			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
-		}
+	if err := provider.RequireFeatures(set, requiredFeatures(normalized), input.Strict, nil); err != nil {
+		return provider.Call{}, err
 	}
 	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)
 	if err != nil {
@@ -147,24 +124,9 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		}
 		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
-	digest := input.Metadata.SchemaDigest
-	if digest == ([32]byte{}) {
-		digest, err = llm.RequestDigest(normalized)
-		if err != nil {
-			return provider.Call{}, provider.NewCompileError(err.Error())
-		}
-	}
-	metadata := input.Metadata
-	metadata.SchemaDigest = digest
-	metadata.CapabilityVersion = set.Version
-	metadata.ProviderTier = providerTier
-	metadata.OpaqueStateRequired = normalized.Continuation != nil
-	if metadata.EstimatedBytes == 0 {
-		canonical, canonicalErr := provider.CanonicalRequestBytes(normalized)
-		if canonicalErr != nil {
-			return provider.Call{}, provider.NewCompileError(canonicalErr.Error())
-		}
-		metadata.EstimatedBytes = len(canonical)
+	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, providerTier)
+	if err != nil {
+		return provider.Call{}, err
 	}
 	return provider.Call{
 		EndpointID:   adapter.endpointID,

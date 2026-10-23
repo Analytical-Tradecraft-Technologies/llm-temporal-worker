@@ -164,32 +164,18 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if (input.Request.WebSearch || input.Request.CodeExecution || input.Request.WebFetch) && !adapter.client.directOpenAI {
 		return provider.Call{}, provider.NewCompileError("hosted tools require the direct OpenAI Responses transport")
 	}
-	normalized, err := llm.NormalizeRequest(input.Request)
 	input.Metadata.WebSearch = input.Request.WebSearch
 	input.Metadata.WebFetch = input.Request.WebFetch
 	input.Metadata.CodeExecution = input.Request.CodeExecution
+	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, "")
 	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
+		return provider.Call{}, err
 	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+	set, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
+		return adapter.capabilities(ctx, input.Query)
+	}, adapter.capabilityVersion)
 	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if err := llm.ValidateServiceClassFallbacks(serviceClass, normalized.ServiceClassFallbacks); err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if input.Query.Model != "" && input.Query.Model != normalized.Model {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
-	}
-	set := input.Capability
-	if set.Version == "" && len(set.Features) == 0 {
-		set, err = adapter.capabilities(ctx, input.Query)
-		if err != nil {
-			return provider.Call{}, provider.NewCompileError(err.Error())
-		}
-	}
-	if set.Version == "" {
-		set.Version = adapter.capabilityVersion
+		return provider.Call{}, err
 	}
 	for _, feature := range requiredFeatures(normalized) {
 		capability, err := set.Resolve(feature, input.Strict)
@@ -216,24 +202,9 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err := adapter.enforceStoragePolicy(&params); err != nil {
 		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
-	digest := input.Metadata.SchemaDigest
-	if digest == ([32]byte{}) {
-		digest, err = llm.RequestDigest(normalized)
-		if err != nil {
-			return provider.Call{}, provider.NewCompileError(err.Error())
-		}
-	}
-	metadata := input.Metadata
-	metadata.SchemaDigest = digest
-	metadata.CapabilityVersion = set.Version
-	metadata.ProviderTier = tier
-	metadata.OpaqueStateRequired = normalized.Continuation != nil
-	if metadata.EstimatedBytes == 0 {
-		canonical, canonicalErr := provider.CanonicalRequestBytes(normalized)
-		if canonicalErr != nil {
-			return provider.Call{}, provider.NewCompileError(canonicalErr.Error())
-		}
-		metadata.EstimatedBytes = len(canonical)
+	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, tier)
+	if err != nil {
+		return provider.Call{}, err
 	}
 	return provider.Call{
 		EndpointID:   adapter.endpointID,
