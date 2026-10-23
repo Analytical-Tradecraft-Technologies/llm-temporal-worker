@@ -274,6 +274,11 @@ usage/cost lifter.
   does not accept URL sources and the worker does not fetch URLs, so a URL
   image or document is an `unsupported_capability` compile error in strict
   and best-effort mode alike. Bedrock Converse accepts text parts only.
+- Bedrock Converse lifts the `content_filtered` and `guardrail_intervened`
+  stop reasons as status `content_filtered`, as the Chat and Responses
+  adapters lift provider content filtering: a service filter or a configured
+  guardrail stopped the output, not the model. The raw stop reason stays in
+  the provider facts.
 - The service tier is a Bedrock InvokeModel parameter, not an Anthropic body
   field: the resolved tier (`flex`, `default` or `priority`) is sent as the
   `X-Amzn-Bedrock-Service-Tier` request header, which the AWS API model binds
