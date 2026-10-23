@@ -139,93 +139,46 @@ func main() {
 }
 
 func execute(baselinePath, goModPath, vulnerabilityOutputPath string, components componentStatus, now time.Time) (verificationReport, error) {
-	report := verificationReport{
-		Version:            baselineVersion,
-		Status:             "fail",
-		Components:         components,
-		Findings:           []string{},
-		IntroducedFindings: []string{},
-		ApprovedFindings:   []string{},
-	}
-
+	report := newReport(components)
 	value, err := readBaselineFile(baselinePath)
 	if err != nil {
 		return reportWithError(report, err)
 	}
-
-	goModFile, err := os.Open(goModPath)
-	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read go.mod inventory"))
-	}
-	defer goModFile.Close()
-	requirements, err := readGoMod(goModFile)
+	requirements, err := readGoModFile(goModPath)
 	if err != nil {
 		return reportWithError(report, err)
 	}
-
-	vulnerabilityFile, err := os.Open(vulnerabilityOutputPath)
+	vulnerabilityFile, err := openInput(vulnerabilityOutputPath, "vulnerability output")
 	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read vulnerability output"))
+		return reportWithError(report, err)
 	}
 	defer vulnerabilityFile.Close()
 	report, err = verify(value, requirements, vulnerabilityFile, now)
-	report.Components = components
-	if err != nil {
-		return reportWithError(report, err)
-	}
-	if err := validateComponentStatus(components); err != nil {
-		return reportWithError(report, err)
-	}
-	report.Status = "pass"
-	return report, nil
+	return finishReport(report, err, components, components)
 }
 
 func executePullRequest(baselinePath, goModPath, baseVulnerabilityOutputPath, vulnerabilityOutputPath string, components componentStatus, now time.Time) (verificationReport, error) {
-	report := verificationReport{
-		Version:            baselineVersion,
-		Status:             "fail",
-		Components:         components,
-		Findings:           []string{},
-		IntroducedFindings: []string{},
-		ApprovedFindings:   []string{},
-	}
-
+	report := newReport(components)
 	value, err := readBaselineFile(baselinePath)
 	if err != nil {
 		return reportWithError(report, err)
 	}
-
-	goModFile, err := os.Open(goModPath)
-	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read go.mod inventory"))
-	}
-	defer goModFile.Close()
-	requirements, err := readGoMod(goModFile)
+	requirements, err := readGoModFile(goModPath)
 	if err != nil {
 		return reportWithError(report, err)
 	}
-
-	baseFile, err := os.Open(baseVulnerabilityOutputPath)
+	baseFile, err := openInput(baseVulnerabilityOutputPath, "base vulnerability output")
 	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read base vulnerability output"))
+		return reportWithError(report, err)
 	}
 	defer baseFile.Close()
-	headFile, err := os.Open(vulnerabilityOutputPath)
+	headFile, err := openInput(vulnerabilityOutputPath, "vulnerability output")
 	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read vulnerability output"))
+		return reportWithError(report, err)
 	}
 	defer headFile.Close()
-
 	report, err = verifyPullRequest(value, requirements, baseFile, headFile, now)
-	report.Components = components
-	if err != nil {
-		return reportWithError(report, err)
-	}
-	if err := validateComponentStatus(components); err != nil {
-		return reportWithError(report, err)
-	}
-	report.Status = "pass"
-	return report, nil
+	return finishReport(report, err, components, components)
 }
 
 // executeReleaseTag evaluates govulncheck output for a release tag commit
@@ -238,7 +191,23 @@ func executeReleaseTag(baselinePath, vulnerabilityOutputPath, vulnerabilityStatu
 		GoMod:         releaseTagSkippedComponent,
 		Vulnerability: vulnerabilityStatus,
 	}
-	report := verificationReport{
+	report := newReport(components)
+	value, err := readBaselineFile(baselinePath)
+	if err != nil {
+		return reportWithError(report, err)
+	}
+	vulnerabilityFile, err := openInput(vulnerabilityOutputPath, "vulnerability output")
+	if err != nil {
+		return reportWithError(report, err)
+	}
+	defer vulnerabilityFile.Close()
+	report, err = verifyReleaseTag(value, vulnerabilityFile, now)
+	return finishReport(report, err, components, componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: vulnerabilityStatus})
+}
+
+// newReport starts a failing report; it passes only through finishReport.
+func newReport(components componentStatus) verificationReport {
+	return verificationReport{
 		Version:            baselineVersion,
 		Status:             "fail",
 		Components:         components,
@@ -246,27 +215,38 @@ func executeReleaseTag(baselinePath, vulnerabilityOutputPath, vulnerabilityStatu
 		IntroducedFindings: []string{},
 		ApprovedFindings:   []string{},
 	}
+}
 
-	value, err := readBaselineFile(baselinePath)
-	if err != nil {
-		return reportWithError(report, err)
-	}
-	vulnerabilityFile, err := os.Open(vulnerabilityOutputPath)
-	if err != nil {
-		return reportWithError(report, errors.New("supply chain verification cannot read vulnerability output"))
-	}
-	defer vulnerabilityFile.Close()
-
-	report, err = verifyReleaseTag(value, vulnerabilityFile, now)
+// finishReport records the CI components on a verified report and passes it
+// only when verification succeeded and checked reports every component passed.
+func finishReport(report verificationReport, err error, components, checked componentStatus) (verificationReport, error) {
 	report.Components = components
 	if err != nil {
 		return reportWithError(report, err)
 	}
-	if err := validateComponentStatus(componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: vulnerabilityStatus}); err != nil {
+	if err := validateComponentStatus(checked); err != nil {
 		return reportWithError(report, err)
 	}
 	report.Status = "pass"
 	return report, nil
+}
+
+// openInput opens one verifier input; what names it in the error.
+func openInput(path, what string) (*os.File, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("supply chain verification cannot read " + what)
+	}
+	return file, nil
+}
+
+func readGoModFile(path string) ([]moduleRequirement, error) {
+	file, err := openInput(path, "go.mod inventory")
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return readGoMod(file)
 }
 
 func readBaselineFile(path string) (baseline, error) {
@@ -334,14 +314,8 @@ func readGoMod(reader io.Reader) ([]moduleRequirement, error) {
 }
 
 func verify(value baseline, requirements []moduleRequirement, vulnerabilityOutput io.Reader, now time.Time) (verificationReport, error) {
-	report := verificationReport{
-		Version:            baselineVersion,
-		Status:             "fail",
-		DirectModuleCount:  len(requirements),
-		Findings:           []string{},
-		IntroducedFindings: []string{},
-		ApprovedFindings:   []string{},
-	}
+	report := newReport(componentStatus{})
+	report.DirectModuleCount = len(requirements)
 	exceptions, err := validateBaseline(value, now)
 	if err != nil {
 		return report, err
@@ -379,14 +353,8 @@ func verify(value baseline, requirements []moduleRequirement, vulnerabilityOutpu
 }
 
 func verifyPullRequest(value baseline, requirements []moduleRequirement, baseVulnerabilityOutput, vulnerabilityOutput io.Reader, now time.Time) (verificationReport, error) {
-	report := verificationReport{
-		Version:            baselineVersion,
-		Status:             "fail",
-		DirectModuleCount:  len(requirements),
-		Findings:           []string{},
-		IntroducedFindings: []string{},
-		ApprovedFindings:   []string{},
-	}
+	report := newReport(componentStatus{})
+	report.DirectModuleCount = len(requirements)
 	exceptions, err := validateBaseline(value, now)
 	if err != nil {
 		return report, err
@@ -441,13 +409,7 @@ func verifyPullRequest(value baseline, requirements []moduleRequirement, baseVul
 // already checked when it merged. Every rejected finding is named so one
 // preflight run reports the complete set.
 func verifyReleaseTag(value baseline, vulnerabilityOutput io.Reader, now time.Time) (verificationReport, error) {
-	report := verificationReport{
-		Version:            baselineVersion,
-		Status:             "fail",
-		Findings:           []string{},
-		IntroducedFindings: []string{},
-		ApprovedFindings:   []string{},
-	}
+	report := newReport(componentStatus{})
 	exceptions, err := validateBaseline(value, now)
 	if err != nil {
 		return report, err
