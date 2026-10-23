@@ -16,6 +16,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
+	workerruntime "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/runtime"
 )
 
 const (
@@ -202,6 +203,10 @@ func executeConfigCommand(ctx context.Context, args []string, options CommandOpt
 		writeCommandError(options.ErrOut, err)
 		return 1
 	}
+	if err := workerruntime.ValidateCLIConfig(snapshot.Config()); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
 	if printEffective {
 		_, _ = options.Out.Write(snapshot.Canonical())
 		_, _ = io.WriteString(options.Out, "\n")
@@ -229,6 +234,10 @@ func executeWorkerCommand(ctx context.Context, args []string, options CommandOpt
 		return 1
 	}
 	if err := unsupportedByWorkerBinary(snapshot); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	if err := workerruntime.ValidateCLIConfig(snapshot.Config()); err != nil {
 		writeCommandError(options.ErrOut, err)
 		return 1
 	}
