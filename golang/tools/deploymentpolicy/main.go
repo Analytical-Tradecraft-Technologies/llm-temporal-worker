@@ -493,8 +493,16 @@ func verifyReplicaSpread(deployment, podSpec map[string]any) error {
 	// The selector must be plain matchLabels, every one of which the pod
 	// template carries, and must include the deployment's own selector, so it
 	// matches exactly the worker pods; matchExpressions cannot be checked here.
+	// A term that names namespaces or a namespaceSelector may exclude the
+	// worker's own namespace, so only the default (the pod's namespace) counts.
 	selectsWorkers := func(term map[string]any) bool {
 		if stringAt(term, "topologyKey") != "kubernetes.io/hostname" {
+			return false
+		}
+		if _, scoped := term["namespaces"]; scoped {
+			return false
+		}
+		if _, scoped := term["namespaceSelector"]; scoped {
 			return false
 		}
 		labelSelector, _ := mapAt(term, "labelSelector")
