@@ -1380,7 +1380,24 @@ entries:
     reasoning_per_million: "0"
     per_request: "0"
     source: operator-verified
+    # Optional: a long-context price tier.
+    long_prompt:
+      min_prompt_tokens: 272000
+      input_per_million: "2.500000"
+      output_per_million: "15.000000"
+      cache_read_per_million: "0.250000"
+      cache_write_per_million: "0"
+      reasoning_per_million: "0"
+      per_request: "0"
 ```
+
+An entry's optional `long_prompt` replaces its prices for a call whose prompt
+(input, cache read and cache write tokens together) exceeds
+`min_prompt_tokens`, as a provider's long-context tier does. It must price
+exactly the components the entry prices: one the entry leaves unknown stays
+unknown for long prompts too. Without it, a long prompt to a model that has
+such a tier is reserved and settled at the base price, below the provider's
+bill.
 
 Prices in examples are illustrative. Production catalogs require provenance and
 review; they never refresh silently from an untrusted endpoint. The one opt-in

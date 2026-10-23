@@ -2,6 +2,19 @@
 # Replace every entry with the provider's published prices for the model
 # configured in config.yaml, then update the sha256 pin there. A route whose
 # model has no matching price entry is not usable.
+#
+# A model with a long-context price tier needs a long_prompt block on each
+# entry, or prompts above the threshold are reserved and settled at the base
+# price. It prices exactly the components its entry prices:
+#
+#    long_prompt:
+#      min_prompt_tokens: 200000
+#      input_per_million: "0"
+#      output_per_million: "0"
+#      cache_read_per_million: "0"
+#      cache_write_per_million: "0"
+#      reasoning_per_million: "0"
+#      per_request: "0"
 version: production-v1
 entries:
   - provider: openai

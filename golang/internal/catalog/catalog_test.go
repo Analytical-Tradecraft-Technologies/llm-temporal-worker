@@ -222,6 +222,91 @@ entries:
 	}
 }
 
+// A direct long-context route priced in YAML is billed at its long-prompt
+// tier above the threshold, as the model-sync path already was (#1502).
+func TestLoadPricingAppliesALongPromptTier(t *testing.T) {
+	ref := writeCatalog(t, `version: llmtw-prices/v1
+id: catalog-long-prompt
+entries:
+  - provider: anthropic
+    endpoint_id: anthropic-production
+    endpoint_family: anthropic_messages
+    region: global
+    model: claude-example
+    provider_tier: standard
+    input_per_million: "3"
+    output_per_million: "15"
+    cache_read_per_million: "0.3"
+    cache_write_per_million: "3.75"
+    reasoning_per_million: "0"
+    per_request: "0"
+    long_prompt:
+      min_prompt_tokens: 200000
+      input_per_million: "6"
+      output_per_million: "22.5"
+      cache_read_per_million: "0.6"
+      cache_write_per_million: "7.5"
+      reasoning_per_million: "0"
+      per_request: "0"
+`)
+	catalog, err := LoadPricing(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := catalog.Catalog.Entries[0]
+	if entry.LongPrompt == nil || entry.LongPrompt.MinPromptTokens != 200000 {
+		t.Fatalf("long prompt = %#v", entry.LongPrompt)
+	}
+	for _, test := range []struct {
+		name  string
+		usage pricing.Usage
+		want  string
+	}{
+		// 200000 input tokens is at, not over, the threshold.
+		{name: "at threshold", usage: pricing.Usage{InputTokens: 200000, OutputTokens: 1000}, want: "0.615"},
+		// Cache reads count toward the prompt that selects the tier.
+		{name: "over threshold", usage: pricing.Usage{InputTokens: 200000, CacheReadTokens: 1, OutputTokens: 1000}, want: "1.2225006"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cost, err := pricing.CostFromUsage(entry, test.usage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := pricing.MustUSD(test.want); cost.USD.Cmp(want) != 0 {
+				t.Fatalf("cost = %s, want %s", cost.USD, want)
+			}
+		})
+	}
+}
+
+func TestLoadPricingRejectsAMismatchedLongPromptTier(t *testing.T) {
+	entry := `version: llmtw-prices/v1
+id: catalog-long-prompt
+entries:
+  - provider: anthropic
+    endpoint_id: anthropic-production
+    endpoint_family: anthropic_messages
+    region: global
+    model: claude-example
+    provider_tier: standard
+    input_per_million: "3"
+    output_per_million: "15"
+    long_prompt:
+`
+	for name, test := range map[string]struct{ tier, want string }{
+		"non-positive threshold":       {tier: "      min_prompt_tokens: 0\n      input_per_million: \"6\"\n      output_per_million: \"22.5\"\n", want: "min_prompt_tokens must be positive"},
+		"missing a priced component":   {tier: "      min_prompt_tokens: 200000\n      input_per_million: \"6\"\n", want: "output_per_million is required"},
+		"pricing an unknown component": {tier: "      min_prompt_tokens: 200000\n      input_per_million: \"6\"\n      output_per_million: \"22.5\"\n      cache_read_per_million: \"0.6\"\n", want: "cache_read_per_million is set but the entry leaves it unknown"},
+		"unknown long-prompt field":    {tier: "      min_prompt_tokens: 200000\n      input_per_million: \"6\"\n      output_per_million: \"22.5\"\n      surcharge: \"1\"\n", want: "surcharge"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadPricing(writeCatalog(t, entry+test.tier)); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("LoadPricing() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLoadPricingPreservesAuditLinkageAcrossRotation(t *testing.T) {
 	body := `version: llmtw-prices/v2
 id: catalog-rotating
