@@ -1,11 +1,11 @@
-# Check at 00:00, 08:00 and 16:00 Sydney every calendar day.
+# Check at 06:00 Sydney every calendar day.
 version: 2
 updates:
 - package-ecosystem: gomod
   directory: /golang
   schedule:
     interval: cron
-    cronjob: 0 */8 * * *
+    cronjob: 0 6 * * *
     timezone: Australia/Sydney
   cooldown:
     default-days: 3
@@ -24,7 +24,7 @@ updates:
   - /golang/deploy/local/provider-mock
   schedule:
     interval: cron
-    cronjob: 0 */8 * * *
+    cronjob: 0 6 * * *
     timezone: Australia/Sydney
   cooldown:
     default-days: 3
@@ -37,7 +37,7 @@ updates:
   directory: /golang
   schedule:
     interval: cron
-    cronjob: 0 */8 * * *
+    cronjob: 0 6 * * *
     timezone: Australia/Sydney
   cooldown:
     default-days: 3
@@ -45,7 +45,7 @@ updates:
   directory: /
   schedule:
     interval: cron
-    cronjob: 0 */8 * * *
+    cronjob: 0 6 * * *
     timezone: Australia/Sydney
   cooldown:
     default-days: 3
