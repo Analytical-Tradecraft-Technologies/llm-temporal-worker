@@ -274,6 +274,10 @@ usage/cost lifter.
   does not accept URL sources and the worker does not fetch URLs, so a URL
   image or document is an `unsupported_capability` compile error in strict
   and best-effort mode alike. Bedrock Converse accepts text parts only.
+- Provider-hosted tools (`web_search`, `web_fetch`, `code_execution`) are not
+  offered on Amazon Bedrock. Both Bedrock adapters reject them at compile as
+  `unsupported_capability` in strict and best-effort mode, rather than relying
+  only on the planner to keep such requests off Bedrock routes.
 - Bedrock Converse lifts the `content_filtered` and `guardrail_intervened`
   stop reasons as status `content_filtered`, as the Chat and Responses
   adapters lift provider content filtering: a service filter or a configured

@@ -16,6 +16,11 @@ import (
 )
 
 func lowerRequest(request llm.Request, profile Profile, serviceTier string, strict bool) (bedrockruntime.ConverseInput, error) {
+	// An adapter never drops a request parameter it cannot honour; the
+	// planner also keeps such requests off Bedrock routes (#1506).
+	if hosted := hostedToolFlag(request); hosted != "" {
+		return bedrockruntime.ConverseInput{}, provider.NewUnsupportedCapabilityError(hosted + " is not supported by the Bedrock Converse adapter")
+	}
 	if strict && hasMixedInstructionLevels(request.Instructions) {
 		return bedrockruntime.ConverseInput{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Converse in strict portability mode")
 	}
@@ -317,4 +322,17 @@ func reasoningIsProviderDefault(reasoning llm.ReasoningSpec) bool {
 	return (reasoning.Mode == "" || reasoning.Mode == llm.ReasoningModeProviderDefault) &&
 		(reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && reasoning.TokenBudget == nil &&
 		(reasoning.Summary == "" || reasoning.Summary == llm.ReasoningSummaryProviderDefault)
+}
+
+// hostedToolFlag names the first provider-hosted tool the request asks for.
+func hostedToolFlag(request llm.Request) string {
+	switch {
+	case request.WebSearch:
+		return "web_search"
+	case request.WebFetch:
+		return "web_fetch"
+	case request.CodeExecution:
+		return "code_execution"
+	}
+	return ""
 }
