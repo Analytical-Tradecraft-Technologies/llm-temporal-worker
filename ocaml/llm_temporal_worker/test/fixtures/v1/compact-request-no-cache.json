@@ -1,0 +1,7 @@
+{
+  "api_version": "llm.temporal/compact/v1",
+  "operation_key": "compact-no-cache",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "parent": "ckp_v1.child",
+  "policy": {"target_tokens": 2000, "summary_style": "concise"}
+}

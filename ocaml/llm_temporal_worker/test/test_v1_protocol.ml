@@ -258,3 +258,79 @@ let () =
   let compact_plain = ok (V1_codec.encode_compaction_response { compact with usage = Some { usage with provider_raw = None } }) in
   error (V1_codec.decode_compaction_response (with_usage_field "provider_raw" `Null compact_plain));
   error (V1_codec.decode_compaction_response (with_diagnostic_details `Null compact_plain))
+
+(* Every fixture in golang/llm/testdata/v1 has a copy here (the Go schema
+   parity test fails otherwise), so this reads the whole shared corpus: each
+   positive fixture round-trips through the codec its name selects, and each
+   negative fixture is rejected by the decoder for the record it corrupts.
+   This codec writes defaults, decimals and offsets differently from Go, so
+   its encoding of each positive fixture is pinned in fixtures/v1-encoded,
+   which the Go parity test validates against the published schemas and the
+   Go codec (#1517).  Set LLMTW_WRITE_ENCODED_FIXTURES to a directory to
+   regenerate those files there. *)
+let starts_with prefix name = String.starts_with ~prefix name
+let ends_with suffix name = String.ends_with ~suffix name
+let round_trip decode encode name =
+  let input = fixture_in "v1" name in
+  match decode (Bytes.of_string input) with
+  | Error error -> failf "shared fixture %s rejected: %s" name (Temporal.Error.message error)
+  | Ok value ->
+    let output = ok (encode value) |> Bytes.to_string in
+    (match Sys.getenv_opt "LLMTW_WRITE_ENCODED_FIXTURES" with
+     | Some directory -> Out_channel.with_open_bin (Filename.concat directory name) (fun channel -> output_string channel output)
+     | None -> ());
+    let pinned = fixture_in "v1-encoded" name in
+    if output <> pinned then failf "encoding of shared fixture %s differs from fixtures/v1-encoded/%s" name name;
+    let again = ok (encode (ok (decode (Bytes.of_string output)))) |> Bytes.to_string in
+    if again <> output then failf "encoding of shared fixture %s is not stable" name
+let assert_positive name =
+  if starts_with "generate-response" name then round_trip V1_codec.decode_generate_response V1_codec.encode_generate_response name
+  else if starts_with "compact-response" name then round_trip V1_codec.decode_compaction_response V1_codec.encode_compaction_response name
+  else if starts_with "generate-" name then round_trip V1_codec.decode_generate_request V1_codec.encode_generate_request name
+  else if starts_with "compact-" name then round_trip V1_codec.decode_compact_request V1_codec.encode_compact_request name
+  else if starts_with "query-" name && ends_with "-response.json" name then round_trip V1_codec.decode_query_response V1_codec.encode_query_response name
+  else if starts_with "query-" name then round_trip V1_codec.decode_query_envelope V1_codec.encode_query_envelope name
+  else failf "shared fixture %s does not name a v1 contract" name
+let negative_decoder = function
+  | "negative-unknown-field.json"
+  | "negative-generate-cache-field.json"
+  | "negative-generate-null-append.json"
+  | "negative-generate-enum-patch.json"
+  | "negative-generate-empty-reasoning-patch.json"
+  | "negative-generate-compaction-scalar.json"
+  | "negative-generate-extensions-null.json"
+  | "negative-generate-output-name.json" -> fun bytes -> Result.is_ok (V1_codec.decode_generate_request bytes)
+  | "negative-query-mismatched-result.json" -> fun bytes -> Result.is_ok (V1_codec.decode_query_response bytes)
+  | name when starts_with "negative-generate" name || starts_with "negative-currency" name || starts_with "negative-numeric" name ->
+    fun bytes -> Result.is_ok (V1_codec.decode_generate_response bytes)
+  | name when starts_with "negative-compact" name -> fun bytes -> Result.is_ok (V1_codec.decode_compact_request bytes)
+  | name when starts_with "negative-query" name -> fun bytes -> Result.is_ok (V1_codec.decode_query_envelope bytes)
+  | name -> failf "negative fixture %s does not name a v1 contract" name
+let fixture_directory directory =
+  let candidates =
+    [ Filename.concat (Sys.getcwd ()) ("fixtures/" ^ directory);
+      (match Sys.getenv_opt "DUNE_SOURCEROOT" with
+       | None -> ""
+       | Some root -> Filename.concat root ("ocaml/llm_temporal_worker/test/fixtures/" ^ directory)) ]
+  in
+  match List.find_opt Sys.file_exists candidates with
+  | Some path -> path
+  | None -> failf "fixture directory not found: %s" directory
+let () =
+  let names =
+    Sys.readdir (fixture_directory "v1") |> Array.to_list |> List.filter (ends_with ".json") |> List.sort compare
+  in
+  if List.length names < 50 then failf "shared fixture corpus has only %d fixtures" (List.length names);
+  let failures =
+    List.filter_map
+      (fun name ->
+        try
+          if starts_with "negative-" name then begin
+            if negative_decoder name (Bytes.of_string (fixture_in "v1" name)) then failf "negative fixture %s was accepted" name
+          end
+          else assert_positive name;
+          None
+        with Failure message -> Some message)
+      names
+  in
+  if failures <> [] then failwith (String.concat "\n" failures)

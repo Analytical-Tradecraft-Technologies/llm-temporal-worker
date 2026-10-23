@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"response-hit","operation_id":"op-hit","status":"completed","output":[],"checkpoint":{"handle":"ckp_v1.hit","parent":null,"kind":"cache_replay","depth":1},"cache":{"disposition":"hit","variant":2,"entry_age_seconds":12},"cost":{"status":"exact","actual_cost_usd":"0","method":"provider_reported"}}

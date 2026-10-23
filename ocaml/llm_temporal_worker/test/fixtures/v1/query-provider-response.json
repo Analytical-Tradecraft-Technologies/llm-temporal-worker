@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/query/v1","operation_key":"query-1","query_execution_id":"qry-1","kind":"provider_status","observed_at":"2026-07-18T03:14:15.926535Z","source":"persisted_and_refreshed","freshness":"current","complete":true,"next_cursor":null,"result":{"routes":[]},"cost_status":"exact","actual_cost_usd":"0.000000000000000000","cost_method":"control_query_zero"}

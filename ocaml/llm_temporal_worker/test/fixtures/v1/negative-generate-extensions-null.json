@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"null-extensions","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"append":[],"settings_patch":{"extensions":{"set":null}}}

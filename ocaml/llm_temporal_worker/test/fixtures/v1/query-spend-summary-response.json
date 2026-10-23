@@ -1,0 +1,18 @@
+{
+  "api_version": "llm.temporal/query/v1",
+  "operation_key": "query-spend",
+  "query_execution_id": "qry-spend",
+  "kind": "spend_summary",
+  "observed_at": "2026-07-18T03:14:15.926535Z",
+  "source": "persisted",
+  "freshness": "current",
+  "complete": true,
+  "result": {
+    "start_time": "2026-07-18T00:00:00Z",
+    "end_time": "2026-07-19T00:00:00Z",
+    "buckets": []
+  },
+  "cost_status": "exact",
+  "actual_cost_usd": "0",
+  "cost_method": "control_query_zero"
+}

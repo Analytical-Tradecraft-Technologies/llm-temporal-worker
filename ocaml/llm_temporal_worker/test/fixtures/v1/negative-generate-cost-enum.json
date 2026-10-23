@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"response-cost","operation_id":"op-cost","status":"completed","output":[],"checkpoint":{"handle":"ckp_v1.cost","parent":null,"kind":"generation","depth":1},"cache":{"disposition":"miss_populated","variant":0},"cost":{"status":"exact","actual_cost_usd":"0","method":"estimate"}}

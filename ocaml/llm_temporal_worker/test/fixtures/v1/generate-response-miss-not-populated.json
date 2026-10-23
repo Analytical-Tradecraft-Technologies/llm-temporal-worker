@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"response-miss","operation_id":"op-miss","status":"completed","output":[],"checkpoint":{"handle":"ckp_v1.miss","parent":null,"kind":"generation","depth":1},"cache":{"disposition":"miss_not_populated","variant":0},"cost":{"status":"exact","actual_cost_usd":"0","method":"provider_reported"}}
