@@ -1,6 +1,6 @@
 # v1 Activity runtime boundary
 
-The worker registers eight exact names on its configured Temporal task queue:
+The worker registers nine exact names on its configured Temporal task queue:
 
 | Name | Input | Output |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ The worker registers eight exact names on its configured Temporal task queue:
 | `llm.poll.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
 | `llm.complete.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
 | `llm.generate.plan.v1` | `llm.GenerateRequestV1` | `llm.GenerationPlanV1` |
+| `llm.ExportLangfuse.v1` | `llm.ExecutionReferenceV1` | none |
 
 The Go adapter exposes these same bindings through
 `activity.V1ActivityDescriptors(taskQueue)`. Each descriptor carries the
@@ -22,7 +23,7 @@ Temporal worker or adding any handler to its registry. The registry is still
 bound to one queue by
 the Temporal worker itself, so descriptors are an inspection and startup
 guard rather than a second payload codec. A configured v1 runtime registers
-all eight descriptors in the order above; the checked-in
+all nine descriptors in the order above; the checked-in
 development fixture may retain only the legacy Generate helper while the
 durable runtime is intentionally absent.
 
@@ -336,9 +337,26 @@ seconds; zero and null are invalid. Omitting `cache` still disables reuse.
 
 ## Worker registration
 
-Worker startup registers the public `llm.generate.workflow.v1` and
-`llm.compact.workflow.v1` workflows together with the internal
-`llm.request.execute.v1` and `llm.budget.wait.v1` workflows. They share the
-configured task queue with the eight v1 activities. After a dependency outage,
-resume creates a fresh worker and registers the same complete set before polling.
+Worker startup registers six workflows on the configured task queue, shared
+with the nine v1 activities:
+
+| Workflow | Kind | Role |
+| --- | --- | --- |
+| `llm.generate.workflow.v1` | public | One Generate turn; plans compaction first |
+| `llm.compact.workflow.v1` | public | One Compact |
+| `llm.query.workflow.v1` | public | One persisted-state query |
+| `llm.request.execute.v1` | internal | Prepare, acquire, generate or poll, and complete one request |
+| `llm.budget.wait.v1` | internal | Wait for budget capacity |
+| `llm.langfuse.export.v1` | internal | Best-effort Langfuse export of one finished request |
+
+When a request finishes, the request workflow starts the export workflow as an
+abandoned child (`PARENT_CLOSE_POLICY_ABANDON`) and waits only for it to start;
+with no Langfuse sink configured its Activity does nothing. A slow or
+unreachable Langfuse therefore never delays the caller's result. The export
+workflow has a five-minute execution timeout, which also bounds one that no
+worker picks up during a rolling deploy. It runs `llm.ExportLangfuse.v1` with a
+10-second start-to-close timeout, a two-minute schedule-to-close timeout and at
+most ten attempts; a failed export is logged and the workflow still completes.
+
+After a dependency outage, resume creates a fresh worker and registers the same complete set before polling.
 The factory's registry must support both workflows and activities.
