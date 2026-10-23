@@ -289,7 +289,8 @@ func sortedRejections(values []Rejection) {
 
 // SupportsOutputLimit requires an explicit positive cap when the route declares
 // a ceiling. Runtime callers materialize the budget estimator's default before
-// planning, so provider defaults cannot bypass the catalog limit.
+// planning, so provider defaults cannot bypass the catalog limit, and lower a
+// materialized default to each candidate route's ceiling.
 func (route Route) SupportsOutputLimit(request llm.Request) bool {
 	if route.OutputTokens == 0 {
 		return true

@@ -113,6 +113,7 @@ func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.
 		!binding.RequestedClass.Valid() || !binding.AttemptedClass.Valid() {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
+	defaulted := planning.outputDefaulted(request)
 	semantic, err := planning.normalizeRequest(request)
 	if err != nil || semantic.Continuation != nil {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
@@ -123,7 +124,15 @@ func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.
 	// Recheck configured eligibility, including tenant/region, capabilities and
 	// authorized classes, without the selection planner or transient health.
 	// Candidate ID binds route/fallback order as well as extension/pinning facts.
-	candidates, err := (routing.DeterministicPlanner{}).Plan(ctx, routing.Input{Request: semantic, Catalog: planning.catalog})
+	catalog := planning.catalog
+	if defaulted {
+		// Selection lowered the default to the bound route's ceiling.
+		if catalog, err = copyProviderCatalog(planning.catalog); err != nil {
+			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
+		}
+		catalog = withoutOutputCeilings(catalog)
+	}
+	candidates, err := (routing.DeterministicPlanner{}).Plan(ctx, routing.Input{Request: semantic, Catalog: catalog})
 	if ctx.Err() != nil {
 		return PlannedProviderCall{}, ctx.Err()
 	}
@@ -145,6 +154,7 @@ func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.
 		// Changed input is rejected before any adapter lookup. Which form of a
 		// summarizer request was bound is an endpoint fact, so this accepts
 		// either and the compiled call settles it below.
+		semantic := planning.candidateSemantic(semantic, candidate, defaulted)
 		resolution := newCandidateResolution(semantic, pins, candidate)
 		if !resolution.plausible(binding.RequestDigest) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)

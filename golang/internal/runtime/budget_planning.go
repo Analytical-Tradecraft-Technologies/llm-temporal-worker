@@ -136,13 +136,17 @@ func (planning *BudgetPlanning) plan(ctx context.Context, request llm.Request, p
 		!safeQuoteTime(attempt.QuotedAt) || !safeQuoteTime(attempt.ExpiresAt) || !attempt.ExpiresAt.After(attempt.QuotedAt) {
 		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeInvalidArgument)
 	}
+	defaulted := planning.providers.outputDefaulted(request)
 	semantic, err := planning.estimator.PrepareRequest(request)
 	if err != nil || semantic.Continuation != nil {
 		return PlannedBudgetCall{}, budgetPlanningError(provider.CodeInvalidArgument)
 	}
 	var result PlannedBudgetCall
 	oversized := false
-	_, err = planning.providers.selectCall(ctx, semantic, pins, func(call PlannedProviderCall) (bool, error) {
+	// Selection normalizes the caller's request itself, so it can still tell
+	// a worker-inserted output limit from the caller's own.
+	_, err = planning.providers.selectCall(ctx, request, pins, func(call PlannedProviderCall) (bool, error) {
+		semantic := planning.providers.candidateSemantic(semantic, call.Candidate, defaulted)
 		quoted, usable, err := planning.quote(ctx, semantic, pins, call, attempt, &oversized)
 		if err == nil && usable {
 			result = quoted
