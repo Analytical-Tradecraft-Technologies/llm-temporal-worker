@@ -65,6 +65,13 @@ A sampling spec left with no control after this filtering is omitted, so a
 parent that set only `stop_sequences` or `seed` produces the same summarizer
 request as one that set neither.
 
+Automatic compaction always opts in to the compaction cache, with sample index
+0 and no age bound, whatever the triggering Generate's `cache` says: a
+Generate that omitted `cache` still reads and publishes summaries in its
+tenant/project scope, and the Generate's `variant` and `max_age_seconds` apply
+only to its final response. An explicit `llm.compact.workflow.v1` request
+chooses its own `cache` policy.
+
 The compaction cache fingerprint hashes the filtered summarizer request.
 Parents that set none of `stop_sequences` or `seed` keep their existing cache
 keys. Before issue #1245 the summarizer also received the parent's stop
