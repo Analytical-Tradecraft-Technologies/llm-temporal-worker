@@ -418,4 +418,30 @@ func TestLiveRedisBudgetHintPortRetention(t *testing.T) {
 	if result, err := tailer.Poll(ctx); err != nil || result.Records != 1 {
 		t.Fatalf("publication during reload lost = %#v, %v", result, err)
 	}
+	// Lose and recreate the stream again, then exceed retention between the
+	// authoritative reload and the next poll from its recovered zero cursor.
+	if err := client.Del(ctx, space.EventsKey()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := tailer.Poll(ctx); err != nil || !result.Reloaded || result.State.Cursor != "0-0" {
+		t.Fatalf("second eviction recovery = %#v, %v", result, err)
+	}
+	payload, err := event.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipe = client.Pipeline()
+	for range 12000 {
+		pipe.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), MaxLen: 10000, Approx: true,
+			Values: map[string]any{"event": string(payload)}})
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := tailer.Poll(ctx); err != nil || !result.Reloaded || result.Records != 0 || result.State.Cursor == "0-0" {
+		t.Fatalf("zero cursor silently skipped discarded hints = %#v, %v", result, err)
+	}
+	if result, err := tailer.Poll(ctx); err != nil || result.Records != 1 {
+		t.Fatalf("post-trim recovery missed concurrent publication = %#v, %v", result, err)
+	}
 }
