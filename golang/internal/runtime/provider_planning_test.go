@@ -549,6 +549,8 @@ func TestProviderPlanningEnforcesOutputCeilingWithCustomPlanner(t *testing.T) {
 		capabilities, source, adapter, request, _, _ := planningFixture()
 		source.value.Routes.Models["alias"].Routes[0].OutputTokens = limit
 		capabilities.BudgetEstimator.MaxOutput = 1000
+		// The caller's own cap is never lowered to fit a route.
+		request.SettingsPatch.Output.Set = &llm.OutputSpec{MaxTokens: preparationPointer(1000), Format: llm.OutputFormat{Kind: llm.OutputKindText}}
 		capabilities.Planner = planningPlannerFunc(func(ctx context.Context, input routing.Input) (routing.Plan, error) {
 			// An injected planner cannot remove the snapshot's admission ceiling.
 			input.Catalog.Models["alias"].Routes[0].OutputTokens = 0
@@ -573,6 +575,62 @@ func TestProviderPlanningEnforcesOutputCeilingWithCustomPlanner(t *testing.T) {
 	}
 }
 
+// A worker-inserted default output limit is lowered to each route's ceiling
+// rather than rejecting the route, while a caller's own limit above the
+// ceiling still rejects it (#1523).
+func TestProviderPlanningCapsDefaultOutputLimitAtRouteCeiling(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		ceiling   int64
+		explicit  *int
+		wantCap   int
+		wantError bool
+	}{
+		{name: "default above ceiling is capped", ceiling: 8192, wantCap: 8192},
+		{name: "default within ceiling is unchanged", ceiling: 65536, wantCap: 32768},
+		{name: "default with no ceiling is unchanged", wantCap: 32768},
+		{name: "explicit cap above ceiling still rejects", ceiling: 8192, explicit: preparationPointer(32768), wantError: true},
+		{name: "explicit cap within ceiling is kept", ceiling: 8192, explicit: preparationPointer(4096), wantCap: 4096},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capabilities, source, adapter, request, _, _ := planningFixture()
+			source.value.Routes.Models["alias"].Routes[0].OutputTokens = test.ceiling
+			capabilities.BudgetEstimator.MaxOutput = 32768
+			if test.explicit != nil {
+				request.SettingsPatch.Output.Set = &llm.OutputSpec{MaxTokens: test.explicit, Format: llm.OutputFormat{Kind: llm.OutputKindText}}
+			}
+			planning, err := capabilities.NewProviderPlanning(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			planned, err := planning.Generate(context.Background(), prepared)
+			if test.wantError {
+				var mapped *provider.Error
+				if !errors.As(err, &mapped) || len(adapter.inputs) != 0 {
+					t.Fatalf("Generate = %v with %d compiles, want a rejection before compile", err, len(adapter.inputs))
+				}
+				return
+			}
+			if err != nil || len(adapter.inputs) != 1 {
+				t.Fatalf("Generate = %v with %d compiles", err, len(adapter.inputs))
+			}
+			compiled := adapter.inputs[0].Request
+			if compiled.Output == nil || compiled.Output.MaxTokens == nil || *compiled.Output.MaxTokens != test.wantCap {
+				t.Fatalf("compiled output = %+v, want max_tokens %d", compiled.Output, test.wantCap)
+			}
+			// The bound digest covers the capped request.
+			digest, err := llm.RequestDigest(compiled)
+			if err != nil || digest != planned.Call.Metadata.SchemaDigest || *planned.Semantic.Output.MaxTokens != test.wantCap {
+				t.Fatalf("digest mismatch or semantic not capped: %v", err)
+			}
+		})
+	}
+}
+
 func TestProviderPlanningContextLimitFallbackBeforeCompile(t *testing.T) {
 	capabilities, source, adapter, request, _, _ := planningFixture()
 	model := source.value.Routes.Models["alias"]
@@ -588,6 +646,8 @@ func TestProviderPlanningContextLimitFallbackBeforeCompile(t *testing.T) {
 	source.value.Routes.Models["alias"] = model
 	capabilities.BudgetEstimator.MaxOutput = 20
 	capabilities.BudgetEstimator.Tokenizer = func(llm.Request, routing.Candidate) (int64, error) { return 10, nil }
+	// An explicit cap keeps the output-ceiling rejection of small-output.
+	request.SettingsPatch.Output.Set = &llm.OutputSpec{MaxTokens: preparationPointer(20), Format: llm.OutputFormat{Kind: llm.OutputKindText}}
 	planning, err := capabilities.NewProviderPlanning(context.Background())
 	if err != nil {
 		t.Fatal(err)
