@@ -29,7 +29,10 @@ prices.
   interval. The result is one canonical, size-bounded, schema-versioned
   document in one Redis hash, replaced only by a strictly later fetch. Every
   worker polls its digest each minute and installs a new document. Memory state
-  uses an in-process store. Only OpenRouter API data is stored; rules and
+  uses an in-process store. Readiness does not wait for the first fetch. Until
+  a document is installed, a failed refresh is retried after 30 seconds,
+  doubling to 5 minutes, so a fresh deployment whose boot-time fetch fails
+  gains its catalog within minutes rather than an hour. Only OpenRouter API data is stored; rules and
   endpoint configuration are applied by each worker on install.
 - **Text models only.** A model whose output is not text-only (image, audio
   and music generators) is never routable, on OpenRouter or directly; models
