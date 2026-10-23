@@ -65,6 +65,22 @@ Where this document says "production", it means any environment other than
 `development`. Validation and runtime composition share one rule
 (`config.IsProductionEnvironment`), so a misspelt name cannot skip hardening.
 
+### Durable scope identity
+
+`environment` and `temporal.namespace` are part of every caller's durable
+scope. The production worker derives each tenant/project scope as
+`sha256(["llmtw:trusted-temporal-scope:v1", environment, temporal.namespace,
+tenant, project])`, and that scope keys every checkpoint row, is the HMAC scope
+of every checkpoint handle, and is the response cache's scope. Do not change
+either value for a running deployment. A reload that changes them is
+rejected, but a restart with a new value is accepted: every outstanding
+checkpoint handle then fails verification as `invalid_argument`, and every
+cached response is a miss, while operation replay (keyed on the raw
+tenant/project scope) keeps working. There is no migration tool; renaming an
+environment or moving to a new Temporal namespace starts every conversation
+afresh. Treat both like `state.redis.key_secret` and `state.requests.secret`:
+choose them once per deployment.
+
 ## Caller authorization
 
 The production CLI requires `authorization.mode: trusted_temporal` and a
@@ -207,7 +223,7 @@ they are not claims that a particular deployment currently supports a feature.
 
 ```yaml
 version: llm-temporal-worker/v1
-environment: production
+environment: production   # part of the durable scope identity; never change it
 
 server:
   health_address: 0.0.0.0:8080
@@ -221,7 +237,7 @@ server:
 
 temporal:
   target: temporal.example.internal:7233
-  namespace: production
+  namespace: production   # part of the durable scope identity; never change it
   task_queue: llm-inference
   identity_prefix: llmtw
   tls:
