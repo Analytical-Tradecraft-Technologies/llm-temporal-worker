@@ -72,6 +72,9 @@ and Compact require a successful claim before provider dispatch.
    a retry hint, including when the request exceeds the current limit. It does
    not store a permanent denial. The budget workflow waits with a Temporal
    timer and tries again; this boundary does not sleep while waiting for budget.
+   A quote whose lease has already expired by Redis `TIME` is refused as a
+   lease expiry (`durable.ErrLeaseExpired`), exactly as in the reference model,
+   so the attempt is renewed rather than retried in place.
 2. `Claim` consumes the authorization once, immediately before submission. Redis
    time limits the start deadline to 15 minutes from acquisition. An explicit
    shorter deadline is supported. Replaying acquisition never renews it.
@@ -130,6 +133,17 @@ recovery policy rather than treating missing reservations as unused budget.
 Budget policies come from worker settings, using `budgets_json` or the existing
 `budgets` YAML field. See [configuration](configuration.md#pricing-and-budget-matching).
 Changing limits under stable policy/window identities preserves existing usage.
+### Clock agreement
+
+Workers renew a quote's lease from their own clock, one minute
+(`UnusedAttemptRenewMargin`) before it expires, while Redis judges every lease
+against its own `TIME`. Keep each worker's clock within well under a minute of
+the Redis primary's, for example with NTP on both. A worker behind Redis by
+more than that margin has its reservations refused as lease expiries for the
+last part of every lease, and at a skew of 15 minutes or more (the start
+deadline) every reservation it makes expires on arrival. Readiness does not
+measure this skew, so monitor host clock synchronization alongside Redis.
+
 The runtime uses stable Redis budget identities across configuration reloads.
 Changing the Redis namespace or policy/window identities is not a limit update:
 it selects different accounting keys. A window identity is
