@@ -150,8 +150,11 @@ the exact identity and epoch and no expiry. A missing, malformed, or mismatched
 marker keeps readiness false; readiness never initializes or rebuilds state.
 Each budget mutation also checks the marker atomically. Run the explicit
 [`budget-initialize`](../reference/cli.md#budget-initialize) command with workers
-stopped before first installation. This does not recover individual lost budget
-keys or validate an older restored snapshot. Development and Redis-only fixtures
+stopped before first installation. The same command, run before each worker
+starts, recovers lost Redis accounting from durable cloud records behind a
+`recovering` fence; `--recover` also reconciles after a failover or an older
+restored snapshot. See
+[recovery after Redis data loss](../reference/redis-budget-leases.md#recovery-after-redis-data-loss). Development and Redis-only fixtures
 continue to omit this production authority check. The default Function
 path is provisioned by deployment automation before the worker starts; the
 runtime only verifies and calls it. Durable deployments also use an enabled

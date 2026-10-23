@@ -85,9 +85,11 @@ the request's attempt limit.
   [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817).
   Missing capabilities return typed unsupported errors; no fabricated results
   substitute for a reader.
-- Complete Redis data-loss reconciliation is [#856](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/856).
-  The initialization receipt detects a missing authority marker, not arbitrary
-  partial loss or restoration of an older accounting snapshot.
+- Redis data-loss recovery rebuilds accounting from durable cloud execution
+  records when the authority marker is missing. Partial loss behind a surviving
+  marker (failover or an older restored snapshot) is not detected automatically;
+  operators run `budget-initialize --apply --recover`. See
+  [recovery after Redis data loss](redis-budget-leases.md#recovery-after-redis-data-loss).
 - Automatic retention/blob deletion and unknown-cost reconciliation are deferred
   in [#818](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/818)
   and [#819](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/819).

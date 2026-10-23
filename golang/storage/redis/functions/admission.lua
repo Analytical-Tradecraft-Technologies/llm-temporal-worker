@@ -1123,4 +1123,268 @@ if ACTION == 'durable_reconcile' then
     return {'ok', encoded}
 end
 
+-- Recovery after Redis data loss rebuilds operation records and balances from
+-- durable cloud execution records. A persistent 'recovering:' marker fences
+-- every reserve, claim and settlement (they require 'ready:') until the
+-- recovery commit. Merges only ever add or advance accounting: a missing key
+-- is never read as unused budget, and a surviving record is never rolled back.
+local RECOVERY_LEASE_SUFFIX = 'budget:recovery-lease'
+local RECOVERY_PROGRESS_SUFFIX = 'budget:recovery-progress'
+
+local function recovery_namespace(authority_key)
+    return string.match(authority_key or '', '^(.*:{[^{}]+}:)budget:authority$')
+end
+
+local function valid_recovery_marker(marker)
+    return bounded_string(marker, 256, true) and string.match(marker, '^budget%-initialization/v1:[a-f0-9%-]+:[a-f0-9]+:[a-f0-9]+$') ~= nil
+end
+
+-- Returns the marker value, or nil when the authority key is absent. A key of
+-- another type or with an expiry is never a usable authority.
+local function recovery_authority(key)
+    local key_type = redis.call('TYPE', key).ok
+    if key_type == 'none' then return nil, nil end
+    if key_type ~= 'string' or redis.call('PTTL', key) ~= -1 then return nil, 'authority_unavailable' end
+    return redis.call('GET', key), nil
+end
+
+if ACTION == 'durable_authority_recover_begin' or ACTION == 'durable_authority_recover_commit' then
+    if not valid_invocation(3, 3, 3) then return {'invalid_request', ''} end
+    local namespace = recovery_namespace(KEYS[1])
+    local marker = ARGV[2]
+    if not namespace or KEYS[2] ~= namespace .. 'budget:events' or KEYS[3] ~= namespace .. RECOVERY_PROGRESS_SUFFIX or
+        not valid_recovery_marker(marker) then
+        return {'invalid_request', ''}
+    end
+    local current, failure = recovery_authority(KEYS[1])
+    if failure then return {failure, ''} end
+    if ACTION == 'durable_authority_recover_begin' then
+        if ARGV[3] ~= 'missing' and ARGV[3] ~= 'force' then return {'invalid_request', ''} end
+        if current == 'recovering:' .. marker then return {'recovering', ''} end
+        if current == 'ready:' .. marker and ARGV[3] ~= 'force' then return {'ready', ''} end
+        -- A preparing or foreign marker is not this receipt's lost authority.
+        if current and current ~= 'ready:' .. marker then return {'authority_unavailable', ''} end
+        if not redis.acl_check_cmd('SET', KEYS[1], 'recovering:' .. marker) then return {'authority_unavailable', ''} end
+        redis.call('SET', KEYS[1], 'recovering:' .. marker)
+        -- Progress belongs to the interrupted attempt it was written by.
+        redis.call('DEL', KEYS[3])
+        return {'recovering', ''}
+    end
+    if current == 'ready:' .. marker then return {'ready', ''} end
+    if current ~= 'recovering:' .. marker then return {'authority_unavailable', ''} end
+    local stream_type = redis.call('TYPE', KEYS[2]).ok
+    if (stream_type ~= 'none' and stream_type ~= 'stream') or not bounded_string(ARGV[3], 8192, true) or
+        not redis.acl_check_cmd('XADD', KEYS[2], 'MAXLEN', '~', 10000, '*', 'event', ARGV[3]) or
+        not redis.acl_check_cmd('EXPIRE', KEYS[2], 86400) or
+        not redis.acl_check_cmd('SET', KEYS[1], 'ready:' .. marker) then
+        return {'authority_unavailable', ''}
+    end
+    publish_budget_hint(KEYS[2], ARGV[3])
+    redis.call('SET', KEYS[1], 'ready:' .. marker)
+    redis.call('DEL', KEYS[3])
+    return {'ready', ''}
+end
+
+-- The lease and progress cursor are disposable coordination state with an
+-- expiry, so volatile eviction may drop them. Losing either only costs a
+-- repeated, idempotent merge; neither ever grants budget.
+local function recovery_fence(marker_key, lease_key, marker, token)
+    local current, failure = recovery_authority(marker_key)
+    if failure then return failure end
+    if current == 'ready:' .. marker then return 'ready' end
+    if current ~= 'recovering:' .. marker then return 'authority_unavailable' end
+    local lease_type = redis.call('TYPE', lease_key).ok
+    if lease_type ~= 'none' and lease_type ~= 'string' then return 'state_unavailable' end
+    local holder = redis.call('GET', lease_key)
+    if holder and holder ~= token then return 'busy' end
+    return nil
+end
+
+if ACTION == 'durable_recovery_lease' then
+    if not valid_invocation(3, 3, 6) then return {'invalid_request', ''} end
+    local namespace = recovery_namespace(KEYS[1])
+    local ttl = integer(ARGV[4])
+    if not namespace or KEYS[2] ~= namespace .. RECOVERY_LEASE_SUFFIX or KEYS[3] ~= namespace .. RECOVERY_PROGRESS_SUFFIX or
+        not valid_recovery_marker(ARGV[2]) or not bounded_string(ARGV[3], 64, true) or
+        not ttl or ttl < 1000 or ttl > 600000 or not bounded_string(ARGV[6], 4096, false) then
+        return {'invalid_request', ''}
+    end
+    local fenced = recovery_fence(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
+    if fenced then return {fenced, ''} end
+    local progress_type = redis.call('TYPE', KEYS[3]).ok
+    if progress_type ~= 'none' and progress_type ~= 'string' then return {'state_unavailable', ''} end
+    if ARGV[5] == 'release' then
+        if redis.call('GET', KEYS[2]) == ARGV[3] then redis.call('DEL', KEYS[2]) end
+        return {'released', ''}
+    end
+    if ARGV[5] ~= 'hold' then return {'invalid_request', ''} end
+    redis.call('SET', KEYS[2], ARGV[3], 'PX', decimal(ttl))
+    if ARGV[6] ~= '' then
+        redis.call('SET', KEYS[3], ARGV[6], 'PX', '86400000')
+    end
+    return {'held', redis.call('GET', KEYS[3]) or ''}
+end
+
+local function recovery_reservation_amounts(reservation)
+    local reserved = durable_int(reservation.reserved_nano or reservation.amount_nano)
+    local accounted = durable_int(reservation.accounted_nano or '0')
+    if not reserved or not accounted or reserved > MAX_SAFE - accounted then return nil end
+    return reserved, accounted
+end
+
+-- The aggregate a reservation currently holds in its bucket hash: a member of
+-- the expiry index, or a claimed unsettled reservation retained without one.
+local function recovery_current(record, reservation, expiry_key)
+    local reserved, accounted = recovery_reservation_amounts(reservation)
+    if not reserved then return nil end
+    local total = reserved + accounted
+    local member = durable_expiry_member(record.fingerprint, reservation.bucket, decimal(total))
+    if total > 0 and redis.call('ZSCORE', expiry_key, member) then return total, member end
+    if record.claimed and reserved > 0 then return total, nil end
+    return 0, nil
+end
+
+-- The aggregate a restored reservation must hold and its expiry score. Spend
+-- whose retention already ended is not re-added; retained claimed work is.
+local function recovery_target(claimed, reservation, start_by, now_millis)
+    local reserved, accounted = recovery_reservation_amounts(reservation)
+    if not reserved then return nil end
+    local total = reserved + accounted
+    if total == 0 then return 0, nil end
+    if claimed and reserved > 0 then return total, nil end
+    local score = reserved > 0 and start_by or durable_int(reservation.window_expires_millis)
+    if not score then return nil end
+    if score <= now_millis then return 0, nil end
+    return total, score
+end
+
+if ACTION == 'durable_recover_operation' then
+    if not valid_invocation(5, 3 + 2 * MAX_DURABLE_RESERVATIONS, 4) or #KEYS % 2 ~= 1 then return {'invalid_request', ''} end
+    local namespace = recovery_namespace(KEYS[1])
+    if not namespace or KEYS[2] ~= namespace .. RECOVERY_LEASE_SUFFIX or
+        not string.match(KEYS[3], '^' .. string.gsub(namespace, '%p', '%%%0') .. 'durable%-budget%-operation:[a-f0-9]+$') or
+        not valid_recovery_marker(ARGV[2]) or not bounded_string(ARGV[3], 64, true) then
+        return {'invalid_request', ''}
+    end
+    local fenced = recovery_fence(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
+    if fenced then return {fenced, ''} end
+    for index = 3, #KEYS do
+        local expected = index == 3 and 'string' or (index % 2 == 0 and 'hash' or 'zset')
+        local kind = redis.call('TYPE', KEYS[index]).ok
+        if kind ~= 'none' and kind ~= expected then return {'state_unavailable', ''} end
+    end
+    local desired_ok, desired = pcall(cjson.decode, ARGV[4])
+    if not desired_ok or type(desired) ~= 'table' or desired.schema ~= DURABLE_SCHEMA or desired.status ~= 'accepted' or
+        not bounded_string(desired.operation_id, 128, true) or not bounded_string(desired.generation_id, 128, true) or
+        not bounded_string(desired.incarnation_id, 128, true) or not bounded_string(desired.fingerprint, 64, true) or
+        #desired.fingerprint ~= 64 or type(desired.claimed) ~= 'boolean' or not durable_int(desired.start_by_millis) or
+        type(desired.reservations) ~= 'table' or #desired.reservations == 0 or
+        #desired.reservations > MAX_DURABLE_RESERVATIONS or #KEYS ~= 3 + 2 * #desired.reservations then
+        return {'invalid_request', ''}
+    end
+    if desired.events ~= nil and type(desired.events) ~= 'table' then return {'invalid_request', ''} end
+    for _, reservation in ipairs(desired.reservations) do
+        if type(reservation) ~= 'table' or not bounded_string(reservation.bucket, 64, true) or
+            not bounded_string(reservation.limit_nano, 64, true) or not durable_int(reservation.window_expires_millis) or
+            not durable_int(reservation.reservation_revision) or not recovery_reservation_amounts(reservation) or
+            (reservation.status ~= 'reserved' and reservation.status ~= 'ambiguous' and reservation.status ~= 'finalized') then
+            return {'invalid_request', ''}
+        end
+    end
+    local now = redis.call('TIME')
+    local now_millis = durable_int(now[1]) * 1000 + math.floor(durable_int(now[2]) / 1000)
+    local start_by = durable_int(desired.start_by_millis)
+    local record = desired
+    local existing_raw = redis.call('GET', KEYS[3])
+    local existing = nil
+    if existing_raw then
+        local ok, decoded = pcall(cjson.decode, existing_raw)
+        if not ok or type(decoded) ~= 'table' or decoded.schema ~= DURABLE_SCHEMA or type(decoded.reservations) ~= 'table' then
+            return {'state_unavailable', ''}
+        end
+        if decoded.generation_id ~= desired.generation_id or decoded.incarnation_id ~= desired.incarnation_id or
+            decoded.operation_id ~= desired.operation_id or decoded.fingerprint ~= desired.fingerprint or
+            decoded.status ~= 'accepted' or #decoded.reservations ~= #desired.reservations then
+            return {'conflict', ''}
+        end
+        existing = decoded
+        record = decoded
+        if type(record.events) ~= 'table' then record.events = {} end
+        for event_id, fingerprint in pairs(desired.events or {}) do
+            if record.events[event_id] and record.events[event_id] ~= fingerprint then return {'conflict', ''} end
+        end
+    end
+    -- Stage every reservation before the first write: Redis does not roll back
+    -- earlier script writes after a later failure.
+    local claimed = desired.claimed or (existing ~= nil and existing.claimed == true)
+    local staged = {}
+    for index, target in ipairs(desired.reservations) do
+        local bucket_key = KEYS[3 + (index - 1) * 2 + 1]
+        local expiry_key = KEYS[3 + (index - 1) * 2 + 2]
+        local current_total, current_member = 0, nil
+        local keep = false
+        if existing then
+            local surviving = existing.reservations[index]
+            if type(surviving) ~= 'table' or surviving.policy_id ~= target.policy_id or surviving.window_id ~= target.window_id or
+                surviving.bucket ~= target.bucket then
+                return {'conflict', ''}
+            end
+            local surviving_revision = durable_int(surviving.reservation_revision or '1')
+            local target_revision = durable_int(target.reservation_revision)
+            if not surviving_revision then return {'state_unavailable', ''} end
+            keep = surviving_revision > target_revision or
+                (surviving_revision == target_revision and (existing.claimed == true or not desired.claimed))
+            if not keep then
+                current_total, current_member = recovery_current(existing, surviving, expiry_key)
+                if not current_total then return {'state_unavailable', ''} end
+            end
+        end
+        if not keep then
+            local target_total, score = recovery_target(claimed, target, start_by, now_millis)
+            if not target_total then return {'invalid_request', ''} end
+            local sum = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(target.bucket)) or '0')
+            if not sum or sum < current_total or sum - current_total > MAX_SAFE - target_total then
+                return {'state_unavailable', ''}
+            end
+            staged[#staged + 1] = {
+                index = index, bucket_key = bucket_key, expiry_key = expiry_key, target = target,
+                current_total = current_total, current_member = current_member, target_total = target_total, score = score,
+            }
+        end
+    end
+    if existing and #staged == 0 and claimed == (existing.claimed == true) then
+        local missing_event = false
+        for event_id in pairs(desired.events or {}) do
+            if not existing.events or not existing.events[event_id] then missing_event = true end
+        end
+        if not missing_event then return {'unchanged', ''} end
+    end
+    for _, item in ipairs(staged) do
+        local field = durable_bucket_field(item.target.bucket)
+        if item.current_member then redis.call('ZREM', item.expiry_key, item.current_member) end
+        local delta = item.target_total - item.current_total
+        if delta ~= 0 then
+            local next_value = redis.call('HINCRBY', item.bucket_key, field, decimal(delta))
+            if durable_int(next_value) == 0 then
+                redis.call('HDEL', item.bucket_key, field, durable_limit_field(item.target.bucket))
+            end
+        end
+        if item.target_total > 0 then
+            redis.call('HSET', item.bucket_key, durable_limit_field(item.target.bucket), item.target.limit_nano)
+            if item.score then
+                redis.call('ZADD', item.expiry_key, decimal(item.score),
+                    durable_expiry_member(desired.fingerprint, item.target.bucket, decimal(item.target_total)))
+            end
+        end
+        record.reservations[item.index] = item.target
+    end
+    if existing then
+        for event_id, fingerprint in pairs(desired.events or {}) do record.events[event_id] = fingerprint end
+    end
+    record.claimed = claimed
+    -- Persistent, like every operation record: it is the duplicate-charge fence.
+    redis.call('SET', KEYS[3], durable_encode(record))
+    return {'restored', ''}
+end
+
 return {'invalid_request', ''}
