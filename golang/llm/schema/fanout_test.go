@@ -97,6 +97,9 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		// A $ref may name a schema inside an annotation value.
 		"reference into default":  `{"$ref":"#/default","default":{"type":"string"}}`,
 		"reference into examples": `{"$ref":"#/examples/0","examples":[{"type":"string"}]}`,
+		// An anchor indexed through an annotation reference resolves for a
+		// node linked before it.
+		"anchor reached through an annotation": `{"allOf":[{"$ref":"#/default"},{"properties":{"x":{"$ref":"#foo"}}}],"default":{"$anchor":"foo","type":"object"}}`,
 		// Tuple positions and trailing items are disjoint array indices.
 		"recursive tuple":       `{"type":"array","prefixItems":[{"$ref":"#"},{"$ref":"#"}]}`,
 		"recursive tuple items": `{"type":"array","prefixItems":[{"$ref":"#"},{"type":"string"}],"items":{"$ref":"#"}}`,

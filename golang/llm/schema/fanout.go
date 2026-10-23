@@ -81,10 +81,24 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 		return 0, &FanoutError{Path: graph.aliased, Reason: "declares a $id that names another schema resource"}
 	}
 	rootNode := graph.node("")
-	for len(graph.pending) > 0 {
-		node := graph.pending[len(graph.pending)-1]
-		graph.pending = graph.pending[:len(graph.pending)-1]
-		graph.link(node)
+	graph.linkPending()
+	// Linking can index a reference target inside an annotation, and with it
+	// an anchor that a node linked earlier already failed to find. Retry the
+	// unresolved references until none resolves, so traversal order cannot
+	// reject a schema.
+	for progress := true; progress; {
+		progress = false
+		for _, node := range graph.nodes {
+			if !node.unresolved {
+				continue
+			}
+			if target := graph.resolve(node, node.value["$ref"].(string)); target != nil {
+				node.inPlace = append(node.inPlace, target)
+				node.unresolved = false
+				progress = true
+			}
+		}
+		graph.linkPending()
 	}
 	limit := MaxSchemaApplications
 	worst := 0
@@ -358,6 +372,15 @@ func (closures *inPlaceClosures) of(node *fanoutNode) (*inPlaceClosure, error) {
 	}
 	closures.memo[node] = closure
 	return closure, nil
+}
+
+// linkPending links every indexed node not yet linked.
+func (graph *fanoutGraph) linkPending() {
+	for len(graph.pending) > 0 {
+		node := graph.pending[len(graph.pending)-1]
+		graph.pending = graph.pending[:len(graph.pending)-1]
+		graph.link(node)
+	}
 }
 
 func (graph *fanoutGraph) node(path string) *fanoutNode {
